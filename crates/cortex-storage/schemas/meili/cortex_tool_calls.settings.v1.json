@@ -1,0 +1,16 @@
+{
+  "searchableAttributes": ["tool_name", "summary", "command_or_input", "output_excerpt", "topics", "repo"],
+  "filterableAttributes": ["tool_name", "topics", "repo", "occurred_at", "outcome"],
+  "sortableAttributes": ["occurred_at", "duration_ms"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness", "occurred_at:desc"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "refactor": ["rewrite", "refactoring"],
+    "bug": ["issue", "defect", "error"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

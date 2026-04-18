@@ -1,0 +1,15 @@
+{
+  "searchableAttributes": ["title", "body", "applies_to"],
+  "filterableAttributes": ["severity", "applies_to"],
+  "sortableAttributes": ["severity"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "law": ["policy", "rule"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

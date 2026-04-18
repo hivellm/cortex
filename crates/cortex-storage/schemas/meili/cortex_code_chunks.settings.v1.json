@@ -1,0 +1,13 @@
+{
+  "searchableAttributes": ["content", "symbol", "file_path", "language"],
+  "filterableAttributes": ["repo", "branch", "commit", "language", "file_path"],
+  "sortableAttributes": ["repo", "file_path"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness"],
+  "stopWords": [],
+  "synonyms": {},
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 5, "twoTypos": 9 }
+  }
+}

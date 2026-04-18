@@ -30,6 +30,7 @@ CLAUDE.local.md
 .rulebook/handoff/.urgent
 
 # Rust
+target
 /target/
 **/target/
 *.rs.bk

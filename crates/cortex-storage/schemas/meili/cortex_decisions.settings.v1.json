@@ -1,0 +1,15 @@
+{
+  "searchableAttributes": ["title", "body", "topics", "repo"],
+  "filterableAttributes": ["status", "topics", "repo", "occurred_at"],
+  "sortableAttributes": ["occurred_at"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness", "occurred_at:desc"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "adr": ["decision", "architecture decision record"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

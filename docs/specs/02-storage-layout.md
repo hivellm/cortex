@@ -1,6 +1,8 @@
 # 02 — Storage Layout
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01
+>
+> Implementation: [`crates/cortex-storage/`](../../crates/cortex-storage/) — namespace constants, declarative Vectorizer/Nexus/Meili schemas, Synap stream topology, Parquet partition helpers, SQLite metadata store, SQLite-backed CAS. Runtime `ensure_*()` helpers that talk to external services live in the worker specs (04, 06, 07, 08).
 
 ## Goal
 

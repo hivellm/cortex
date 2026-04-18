@@ -1,0 +1,16 @@
+{
+  "searchableAttributes": ["summary", "user_message", "assistant_message", "topics", "repo"],
+  "filterableAttributes": ["topics", "repo", "occurred_at", "tool", "model"],
+  "sortableAttributes": ["occurred_at"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness", "occurred_at:desc"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "refactor": ["rewrite", "refactoring"],
+    "bug": ["issue", "defect", "error"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

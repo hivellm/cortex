@@ -1,0 +1,13 @@
+{
+  "searchableAttributes": ["content", "section_path", "file_path"],
+  "filterableAttributes": ["repo", "file_path"],
+  "sortableAttributes": ["repo", "file_path"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {},
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

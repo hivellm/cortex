@@ -1,0 +1,26 @@
+[package]
+name = "cortex-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex storage layout: namespace constants, schema bootstrap files, metadata + CAS stores."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+rusqlite = { workspace = true }
+zstd = { workspace = true }
+sha2 = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

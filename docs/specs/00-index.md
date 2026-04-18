@@ -7,7 +7,7 @@
 | #  | Spec                                                            | Status | Depends on        | Maps to architecture §       |
 |----|-----------------------------------------------------------------|:------:|-------------------|------------------------------|
 | 01 | [Event schema (wire format)](01-event-schema.md)                |   🟢   | —                 | §4.3                         |
-| 02 | [Storage layout](02-storage-layout.md)                          |   🟡   | 01                | §3, §6, §7 (storage)         |
+| 02 | [Storage layout](02-storage-layout.md)                          |   🟢   | 01                | §3, §6, §7 (storage)         |
 | 03 | [Local stack (docker-compose)](03-local-stack.md)               |   🟡   | 02                | §11 Phase 0                  |
 | 04 | [Cortex Core — types, redactor, ingestion router](04-cortex-core.md) | 🟡 | 01, 02         | §5.1, §5.2                   |
 | 05 | [Classifier — Haiku via CLI/SDK](05-classifier.md)              |   🟡   | 01, 04            | §5.2.1                       |
