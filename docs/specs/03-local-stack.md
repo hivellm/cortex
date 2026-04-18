@@ -1,6 +1,8 @@
 # 03 — Local Stack (docker-compose)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 02
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 02
+>
+> Implementation: [`docker-compose.yml`](../../docker-compose.yml), [`.env.example`](../../.env.example), [`bin/`](../../bin/) (bash + PowerShell wrappers), [`Makefile`](../../Makefile), and [`crates/cortex-ops/`](../../crates/cortex-ops/) which emits the bootstrap plan JSON consumed by `bin/cortex-init.sh`. `cortex-api` / `cortex-workers` container stanzas land with spec 04.
 
 ## Goal
 

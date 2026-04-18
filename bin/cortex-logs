@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Tail logs for one (or all) service(s).
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+docker compose logs -f "$@"

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Destroy data volumes and re-bootstrap.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "!! destroying all Cortex data volumes."
+docker compose down -v
+docker volume rm -f cortex_vec-data cortex_nexus-data cortex_synap-data cortex_meili-data 2>/dev/null || true
+
+bin/cortex-up

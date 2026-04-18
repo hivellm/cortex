@@ -253,6 +253,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-ops"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "cortex-core",
+ "cortex-storage",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cortex-storage"
 version = "0.1.0"
 dependencies = [

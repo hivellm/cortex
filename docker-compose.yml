@@ -1,0 +1,113 @@
+services:
+  vectorizer:
+    image: hivehub/vectorizer:latest
+    container_name: cortex-vectorizer
+    networks: [cortex-net]
+    ports:
+      - "${VECTORIZER_HOST_PORT:-15001}:15002"
+    volumes:
+      - vec-data:/data
+    environment:
+      VECTORIZER_HOST: 0.0.0.0
+      VECTORIZER_PORT: "15002"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:15002/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4g
+
+  nexus:
+    build:
+      context: ../Nexus
+      dockerfile: Dockerfile
+    image: hivellm/nexus:local
+    container_name: cortex-nexus
+    networks: [cortex-net]
+    ports:
+      - "${NEXUS_HOST_PORT:-15002}:15474"
+    volumes:
+      - nexus-data:/data
+    environment:
+      NEXUS_HOST: 0.0.0.0
+      NEXUS_PORT: "15474"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:15474/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 2g
+
+  synap:
+    build:
+      context: ../Synap
+      dockerfile: Dockerfile
+    image: hivellm/synap:local
+    container_name: cortex-synap
+    networks: [cortex-net]
+    ports:
+      - "${SYNAP_HOST_PORT:-15003}:15500"
+    volumes:
+      - synap-data:/data
+    environment:
+      SYNAP_HOST: 0.0.0.0
+      SYNAP_PORT: "15500"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z localhost 15500 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1g
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.10
+    container_name: cortex-meilisearch
+    networks: [cortex-net]
+    ports:
+      - "${MEILI_HOST_PORT:-15004}:7700"
+    volumes:
+      - meili-data:/meili_data
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+      MEILI_ENV: development
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+
+networks:
+  cortex-net:
+    name: cortex-net
+    driver: bridge
+
+volumes:
+  vec-data:
+  nexus-data:
+  synap-data:
+  meili-data:
