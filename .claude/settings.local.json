@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//e/HiveLLM/**)",
+      "Read(//c/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/memory/**)"
+    ]
+  }
+}

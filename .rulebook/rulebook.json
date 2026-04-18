@@ -1,0 +1,114 @@
+{
+  "version": "5.3.3",
+  "installedAt": "2026-04-17T23:10:27.539Z",
+  "updatedAt": "2026-04-17T23:10:27.541Z",
+  "projectId": "fd273bb4-8292-4701-a30f-b48873fbcda4",
+  "mode": "full",
+  "features": {
+    "watcher": true,
+    "agent": true,
+    "logging": true,
+    "telemetry": true,
+    "notifications": false,
+    "dryRun": false,
+    "gitHooks": false,
+    "repl": false,
+    "templates": false,
+    "context": false,
+    "health": false,
+    "plugins": false,
+    "parallel": false,
+    "smartContinue": false
+  },
+  "coverageThreshold": 95,
+  "language": "en",
+  "outputLanguage": "en",
+  "cliTools": [],
+  "maxParallelTasks": 1,
+  "timeouts": {
+    "taskExecution": 300000,
+    "cliResponse": 60000,
+    "testRun": 120000
+  },
+  "memory": {
+    "enabled": false,
+    "dbPath": ".rulebook/memory/memory.db",
+    "maxSizeBytes": 524288000,
+    "autoCapture": false,
+    "vectorDimensions": 256
+  },
+  "ralph": {
+    "enabled": true,
+    "maxIterations": 10,
+    "tool": "claude",
+    "maxContextLoss": 3,
+    "securityGate": {
+      "enabled": true,
+      "failOn": "high",
+      "tool": "auto"
+    },
+    "contextCompression": {
+      "enabled": true,
+      "recentCount": 3,
+      "threshold": 5
+    },
+    "parallel": {
+      "enabled": false,
+      "maxWorkers": 3
+    },
+    "planCheckpoint": {
+      "enabled": false,
+      "autoApproveAfterSeconds": 0,
+      "requireApprovalForStories": "all"
+    }
+  },
+  "agentsMode": "lean",
+  "monorepo": {
+    "detected": false,
+    "tool": null,
+    "packages": []
+  },
+  "languages": [],
+  "frameworks": [],
+  "modules": [],
+  "modular": true,
+  "rulebookDir": ".rulebook",
+  "skills": {
+    "enabled": [
+      "core/agent-automation",
+      "core/dag-workflow",
+      "core/documentation-rules",
+      "core/quality-enforcement",
+      "core/rulebook-task-management",
+      "core/accessibility",
+      "core/analysis",
+      "core/api-design",
+      "core/architect",
+      "core/build-fix",
+      "core/db-design",
+      "core/debug",
+      "core/deploy",
+      "core/docs",
+      "core/handoff",
+      "core/migrate",
+      "core/perf",
+      "core/refactor",
+      "core/research",
+      "core/review",
+      "core/security-audit",
+      "core/agents-lean",
+      "core/agents-override",
+      "core/claude-md-v2",
+      "core/dag",
+      "core/decisions",
+      "core/knowledge",
+      "core/multi-agent",
+      "core/plans",
+      "core/ralph",
+      "core/rulebook",
+      "core/tier1-prohibitions",
+      "core/token-optimization",
+      "core/workspace"
+    ]
+  }
+}

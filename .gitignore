@@ -1,0 +1,30 @@
+# Rulebook - ignore runtime data, keep specs and tasks
+/.rulebook/*
+!/.rulebook/specs/
+!/.rulebook/tasks/
+!/.rulebook/tasks/**/*.md
+!/.rulebook/rulebook.json
+
+# Patterns added by @hivellm/rulebook
+# Added at: 2026-04-17T23:10:27.856Z
+
+*.log
+*.swo
+*.swp
+*~
+.DS_Store
+.cache/
+.env
+.env.*.local
+.env.local
+.idea/
+.vscode/
+Thumbs.db
+logs/
+temp/
+tmp/
+
+CLAUDE.local.md
+.rulebook/backup/
+.rulebook/handoff/_pending.md
+.rulebook/handoff/.urgent
