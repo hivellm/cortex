@@ -135,13 +135,13 @@ This project is governed by [@hivellm/rulebook](https://github.com/hivellm/ruleb
 
 ## References
 
-- **Vectorizer** — [`e:/HiveLLM/Vectorizer`](../Vectorizer) — vector DB, MCP, embeddings.
-- **Nexus** — [`e:/HiveLLM/Nexus`](../Nexus) — graph DB, Cypher, KNN.
-- **Synap** — [`e:/HiveLLM/Synap`](../Synap) — KV, streams, pub/sub.
-- **Rulebook** — [`e:/HiveLLM/Rulebook`](../Rulebook) — rules, memory, MCP for task management.
+- **Vectorizer** — https://github.com/hivellm/vectorizer — vector DB, MCP, embeddings.
+- **Nexus** — https://github.com/hivellm/nexus — graph DB, Cypher, KNN.
+- **Synap** — https://github.com/hivellm/synap — KV, streams, pub/sub.
+- **Rulebook** — https://github.com/hivellm/rulebook — rules, memory, MCP for task management.
 - **Meilisearch** — https://www.meilisearch.com — full-text search.
 - **Claude Haiku** — https://www.anthropic.com/claude/haiku — classification backend via Claude Code CLI.
 
 ## License
 
-_TBD — to be set before the first public tag._
+Licensed under the [Apache License, Version 2.0](LICENSE).
