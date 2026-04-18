@@ -25,7 +25,7 @@ pub mod metadata;
 pub mod names;
 pub mod streams;
 
-pub use archive::{archive_partition, ArchiveLayout};
+pub use archive::{archive_filename, archive_partition, ArchiveLayout, ArchiveRotation};
 pub use cas::{CasBlob, CasContentType, CasError, CasStore};
 pub use collections::{CollectionSchema, CollectionTier, COLLECTIONS};
 pub use metadata::{MetadataError, MetadataStore};

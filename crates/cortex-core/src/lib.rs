@@ -12,6 +12,7 @@ pub mod canonical_json;
 pub mod content_hash;
 pub mod events;
 pub mod ids;
+pub mod redact;
 pub mod validate;
 pub mod vocab;
 
@@ -22,4 +23,5 @@ pub use events::{
     LawViolationPayload, MemoryPayload, Stream, ToolCall, Turn,
 };
 pub use ids::{event_id, session_id, EventId, SessionId, Ulid};
+pub use redact::{redact, Pattern, RedactReport, PATTERN_CATALOG_V1};
 pub use validate::{validate_event, validate_envelope, ValidationError, Validator};

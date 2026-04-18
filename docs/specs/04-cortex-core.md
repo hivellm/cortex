@@ -1,6 +1,8 @@
 # 04 — Cortex Core (types, redactor, ingestion router)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01, 02
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01, 02
+>
+> Implementation split across two crates: [`crates/cortex-core/`](../../crates/cortex-core/) (types + schema + validator + redactor, no runtime deps) and [`crates/cortex-ingestion/`](../../crates/cortex-ingestion/) (Axum router, Synap publisher via `synap-sdk`, Zstd-compressed NDJSON archive, Prometheus metrics). Separation keeps library consumers dep-light.
 
 ## Goal
 

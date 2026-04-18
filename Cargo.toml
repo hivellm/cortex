@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/cortex-core", "crates/cortex-storage", "crates/cortex-ops"]
+members = [
+    "crates/cortex-core",
+    "crates/cortex-storage",
+    "crates/cortex-ops",
+    "crates/cortex-ingestion",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,6 +29,16 @@ regex = "1.10"
 tempfile = "3.10"
 rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
 zstd = "0.13"
+tokio = { version = "1.48", features = ["full"] }
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+async-trait = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
+
+synap-sdk = { path = "../Synap/sdks/rust" }
 
 [profile.release]
 opt-level = 3
