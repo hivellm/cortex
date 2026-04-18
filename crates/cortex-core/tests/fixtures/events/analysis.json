@@ -1,0 +1,23 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD4",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T13:30:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "cortex-cli",
+  "kind": "analysis",
+  "context": { "platform": "linux", "repo": "e:/HiveLLM/Cortex" },
+  "payload": {
+    "analysis_id": "01HXYZABCDEF0123456789ABD4",
+    "question": "Why does HNSW recall drop above 1M vectors on the Vectorizer corpus?",
+    "status": "resolved",
+    "scope": { "repo": "Vectorizer", "topics": ["hnsw", "recall"], "files": ["src/index/hnsw/**"] },
+    "panel": ["claude-opus-4-7", "claude-sonnet-4-6", "gemini-pro-2"],
+    "rounds_planned": 3,
+    "rounds_completed": 3,
+    "decision_id": "DEC-0042",
+    "budget_usd": 5.0,
+    "spent_usd": 1.32
+  },
+  "content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+}

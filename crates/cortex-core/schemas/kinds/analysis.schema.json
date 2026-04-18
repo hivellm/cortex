@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/analysis.schema.json",
+  "title": "AnalysisPayload",
+  "description": "Deep-analysis report (often the parent of many turn events).",
+  "type": "object",
+  "required": ["analysis_id", "question", "status"],
+  "additionalProperties": false,
+  "properties": {
+    "analysis_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "status": {
+      "type": "string",
+      "enum": ["open", "in_progress", "resolved", "cancelled", "timed_out", "awaiting_decision"]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repo": { "type": ["string", "null"] },
+        "topics": { "type": "array", "items": { "type": "string" } },
+        "files": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "panel": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "rounds_planned": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "rounds_completed": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "decision_id": {
+      "type": ["string", "null"],
+      "pattern": "^(DEC-[0-9]{4,}|[0-9A-HJ-KM-NP-TV-Z]{26})$"
+    },
+    "budget_usd": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "spent_usd": {
+      "type": ["number", "null"],
+      "minimum": 0
+    }
+  }
+}

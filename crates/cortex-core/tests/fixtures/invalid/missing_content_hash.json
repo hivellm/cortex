@@ -1,0 +1,11 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABDA",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T15:00:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "kind": "turn",
+  "context": { "platform": "linux" },
+  "payload": { "user_message": "hello" }
+}

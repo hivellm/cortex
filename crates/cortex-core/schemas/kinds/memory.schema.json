@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/memory.schema.json",
+  "title": "MemoryPayload",
+  "description": "Persisted memory write/update/delete.",
+  "type": "object",
+  "required": ["op", "memory_type", "name"],
+  "additionalProperties": false,
+  "properties": {
+    "op": {
+      "type": "string",
+      "enum": ["write", "update", "delete"]
+    },
+    "memory_type": {
+      "type": "string",
+      "enum": ["user", "feedback", "project", "reference"]
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "body": {
+      "type": ["string", "null"],
+      "maxLength": 1048576
+    },
+    "memory_path": {
+      "type": ["string", "null"]
+    },
+    "description": {
+      "type": ["string", "null"]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD5",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T13:45:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-sonnet-4-6",
+  "kind": "law_violation",
+  "context": { "platform": "win32", "repo": "e:/HiveLLM/Cortex" },
+  "payload": {
+    "violation_id": "01HXYZABCDEF0123456789ABD5",
+    "law_id": "LAW-007",
+    "law_version": 2,
+    "severity": "critical",
+    "tier": 3,
+    "message": "LAW-007: --no-verify is not authorized in this session.",
+    "evidence": {
+      "command": "git commit --no-verify -m 'wip'",
+      "tool_call_id": "01HXYZABCDEF0123456789ABCF"
+    },
+    "observed_event_id": "01HXYZABCDEF0123456789ABCF",
+    "detector_latency_ms": 18
+  },
+  "parent_event_id": "01HXYZABCDEF0123456789ABCD",
+  "content_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+}

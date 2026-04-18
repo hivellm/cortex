@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/envelope.schema.json",
+  "title": "Envelope",
+  "description": "Top-level Cortex event envelope. Every event on the bus MUST validate against this schema and the matching per-kind payload schema.",
+  "type": "object",
+  "required": [
+    "event_id",
+    "schema_version",
+    "occurred_at",
+    "session_id",
+    "stream",
+    "tool",
+    "kind",
+    "context",
+    "payload",
+    "content_hash"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$",
+      "description": "ULID; 26 chars Crockford base32; lex-sortable by time."
+    },
+    "schema_version": {
+      "type": "string",
+      "const": "1"
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339, UTC, millisecond precision."
+    },
+    "ingested_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Set by the ingestion router; never trust adapter-supplied value."
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+    },
+    "stream": {
+      "type": "string",
+      "enum": ["live", "bootstrap"]
+    },
+    "tool": {
+      "type": "string",
+      "enum": [
+        "claude-code",
+        "cursor",
+        "codex",
+        "gemini",
+        "copilot",
+        "windsurf",
+        "cortex-cli",
+        "cortex-bootstrap",
+        "git-hook",
+        "fs-watcher"
+      ]
+    },
+    "model": {
+      "type": ["string", "null"],
+      "description": "Model id; null for non-LLM events. Free-form, soft-validated against cortex-core/registries/models.json."
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "turn",
+        "tool_call",
+        "agent_call",
+        "memory",
+        "decision",
+        "analysis",
+        "law_violation",
+        "artifact"
+      ]
+    },
+    "context": {
+      "$ref": "context.schema.json"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Shape determined by kind; validated against the matching per-kind schema."
+    },
+    "redactions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^secret:[a-z_]+:.+$"
+      }
+    },
+    "content_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "parent_event_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+    }
+  }
+}

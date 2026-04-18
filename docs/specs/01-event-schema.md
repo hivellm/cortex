@@ -1,6 +1,8 @@
 # 01 — Event Schema (wire format)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** —
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** —
+>
+> Implementation: [`crates/cortex-core/`](../../crates/cortex-core/). Schemas under `crates/cortex-core/schemas/`; validator at `crates/cortex-core/src/validate.rs`; fixtures at `crates/cortex-core/tests/fixtures/`.
 
 ## Goal
 

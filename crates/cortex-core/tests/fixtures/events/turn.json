@@ -1,0 +1,26 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABCD",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T12:34:56.789Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-opus-4-7",
+  "kind": "turn",
+  "context": {
+    "repo": "e:/HiveLLM/Cortex",
+    "branch": "main",
+    "commit": "abc123d",
+    "cwd": "e:/HiveLLM/Cortex/docs",
+    "user": "andre@hivellm",
+    "platform": "win32",
+    "ide": "vscode-claude-code"
+  },
+  "payload": {
+    "user_message": "refactor the HNSW configurator",
+    "assistant_message": "I'll start by reading the current implementation...",
+    "tokens": { "in": 1234, "out": 567, "cache_read": 8000, "cache_write": 1000, "streamed_chunks": 42 },
+    "tool_call_event_ids": ["01HXYZABCDEF0123456789ABCF"]
+  },
+  "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

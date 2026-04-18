@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/decision.schema.json",
+  "title": "DecisionPayload",
+  "description": "Formalized ADR-style decision record.",
+  "type": "object",
+  "required": ["decision_id", "title", "status", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "decision_id": {
+      "type": "string",
+      "pattern": "^(DEC-[0-9]{4,}|[0-9A-HJ-KM-NP-TV-Z]{26})$"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "accepted", "superseded", "deprecated"]
+    },
+    "body": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "supersedes": {
+      "type": ["string", "null"],
+      "pattern": "^(DEC-[0-9]{4,}|[0-9A-HJ-KM-NP-TV-Z]{26})$"
+    },
+    "cas_ref": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

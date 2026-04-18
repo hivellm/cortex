@@ -1,0 +1,12 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABDB",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T15:05:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "unknown-tool",
+  "kind": "turn",
+  "context": { "platform": "linux" },
+  "payload": { "user_message": "hello" },
+  "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

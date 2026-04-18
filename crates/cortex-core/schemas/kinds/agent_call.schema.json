@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/agent_call.schema.json",
+  "title": "AgentCallPayload",
+  "description": "Invocation of a sub-agent (Task tool, code-reviewer, researcher, etc.).",
+  "type": "object",
+  "required": ["agent_type", "description", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "agent_type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": ["string", "null"],
+      "maxLength": 1048576
+    },
+    "model": {
+      "type": ["string", "null"]
+    },
+    "team_name": {
+      "type": ["string", "null"]
+    },
+    "child_event_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+      }
+    },
+    "result": {
+      "type": ["object", "null"],
+      "additionalProperties": true
+    },
+    "duration_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "error", "cancelled", "timeout"]
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD3",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T13:00:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "cortex-cli",
+  "kind": "decision",
+  "context": { "platform": "linux", "repo": "e:/HiveLLM/Cortex" },
+  "payload": {
+    "decision_id": "DEC-0042",
+    "title": "Raise HNSW ef_search default to 128",
+    "status": "accepted",
+    "supersedes": "DEC-0031",
+    "body": "# DEC-0042\n\nWe raise the HNSW ef_search default from 64 to 128 after benchmarking on 2M-vector collections...",
+    "tags": ["hnsw", "vectorizer", "performance"]
+  },
+  "content_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+}

@@ -1,0 +1,31 @@
+[package]
+name = "cortex-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex core: event schema, canonical JSON, ULID, content hash, validator."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cortex-core"
+path = "src/bin/cli.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+ulid = { workspace = true }
+jsonschema = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+regex = { workspace = true }

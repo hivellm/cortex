@@ -1,0 +1,20 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD2",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T12:36:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-opus-4-7",
+  "kind": "memory",
+  "context": { "platform": "win32" },
+  "payload": {
+    "op": "write",
+    "memory_type": "project",
+    "name": "Cortex early decisions",
+    "description": "Meilisearch chosen over Lexum; bootstrap of 17 repos mandatory.",
+    "body": "Meilisearch (not Lexum) for v1 full-text; bootstrap of 17 HiveLLM repos is mandatory before opening the live firehose.",
+    "memory_path": "C:/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/memory/project_cortex_decisions.md"
+  },
+  "content_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+}

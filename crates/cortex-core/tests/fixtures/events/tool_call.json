@@ -1,0 +1,31 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABCF",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T12:34:57.012Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-opus-4-7",
+  "kind": "tool_call",
+  "context": {
+    "repo": "e:/HiveLLM/Cortex",
+    "branch": "main",
+    "commit": "abc123d",
+    "cwd": "e:/HiveLLM/Cortex",
+    "user": "andre@hivellm",
+    "platform": "win32",
+    "ide": "vscode-claude-code"
+  },
+  "payload": {
+    "tool_name": "Bash",
+    "input": { "command": "git status", "description": "Inspect tree state" },
+    "output": { "stdout": "On branch main\nnothing to commit\n", "stderr": "", "exit_code": 0, "truncated": false },
+    "duration_ms": 142,
+    "touched": [
+      { "kind": "file_read", "path": "e:/HiveLLM/Cortex/docs/architecture.md" }
+    ],
+    "outcome": "success"
+  },
+  "parent_event_id": "01HXYZABCDEF0123456789ABCD",
+  "content_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+}

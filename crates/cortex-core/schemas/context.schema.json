@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/context.schema.json",
+  "title": "Context",
+  "description": "Capture-time metadata attached to every event.",
+  "type": "object",
+  "required": ["platform"],
+  "additionalProperties": false,
+  "properties": {
+    "repo": {
+      "type": ["string", "null"],
+      "description": "Absolute path, normalized to forward slashes."
+    },
+    "branch": {
+      "type": ["string", "null"]
+    },
+    "commit": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "cwd": {
+      "type": ["string", "null"]
+    },
+    "user": {
+      "type": ["string", "null"],
+      "description": "Local OS user @ org tag, e.g. \"andre@hivellm\"."
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["win32", "darwin", "linux"]
+    },
+    "ide": {
+      "type": ["string", "null"],
+      "description": "Free-form IDE / host identifier."
+    },
+    "extras": {
+      "type": "object",
+      "description": "Adapter-specific bag. `traceparent` lives here when present.",
+      "additionalProperties": true
+    }
+  }
+}

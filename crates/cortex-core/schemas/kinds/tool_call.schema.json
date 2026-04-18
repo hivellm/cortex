@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/tool_call.schema.json",
+  "title": "ToolCallPayload",
+  "description": "Invocation of a tool (Bash, Edit, Read, MCP tool, etc.).",
+  "type": "object",
+  "required": ["tool_name", "input", "outcome"],
+  "additionalProperties": false,
+  "properties": {
+    "tool_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "output": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "stdout": { "type": ["string", "null"] },
+        "stderr": { "type": ["string", "null"] },
+        "exit_code": { "type": ["integer", "null"] },
+        "truncated": { "type": "boolean" },
+        "cas_ref": {
+          "type": ["string", "null"],
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "size": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "duration_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "touched": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["kind", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["file_read", "file_write", "file_create", "file_delete", "file_rename", "url_fetch", "shell_spawn"]
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "outcome": {
+      "type": "string",
+      "pattern": "^(success|error|blocked_by_law:[A-Z]+-[0-9]+)$"
+    }
+  }
+}

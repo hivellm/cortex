@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/turn.schema.json",
+  "title": "TurnPayload",
+  "description": "One user <-> assistant exchange.",
+  "type": "object",
+  "required": ["user_message"],
+  "additionalProperties": false,
+  "properties": {
+    "user_message": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "assistant_message": {
+      "type": ["string", "null"],
+      "maxLength": 1048576
+    },
+    "tokens": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "in": { "type": "integer", "minimum": 0 },
+        "out": { "type": "integer", "minimum": 0 },
+        "cache_read": { "type": "integer", "minimum": 0 },
+        "cache_write": { "type": "integer", "minimum": 0 },
+        "streamed_chunks": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "tool_call_event_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+      }
+    }
+  }
+}

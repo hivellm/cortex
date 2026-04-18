@@ -1,0 +1,24 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD0",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T12:35:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-opus-4-7",
+  "kind": "agent_call",
+  "context": { "platform": "win32", "repo": "e:/HiveLLM/Cortex" },
+  "payload": {
+    "agent_type": "code-reviewer",
+    "description": "Review recent changes",
+    "prompt": "Review the staged diff for correctness and maintainability.",
+    "model": "claude-sonnet-4-6",
+    "team_name": null,
+    "child_event_ids": ["01HXYZABCDEF0123456789ABD1"],
+    "result": { "summary": "Looks good; two nits raised." },
+    "duration_ms": 12345,
+    "outcome": "success"
+  },
+  "parent_event_id": "01HXYZABCDEF0123456789ABCD",
+  "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+}

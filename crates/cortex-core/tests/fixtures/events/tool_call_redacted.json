@@ -1,0 +1,23 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD7",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T14:15:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-opus-4-7",
+  "kind": "tool_call",
+  "context": { "platform": "win32" },
+  "payload": {
+    "tool_name": "Bash",
+    "input": { "command": "curl -H 'Authorization: [REDACTED:bearer_token]' https://api.example.com/secrets" },
+    "output": { "stdout": "[REDACTED:api_response]", "exit_code": 0, "truncated": false },
+    "duration_ms": 321,
+    "outcome": "success"
+  },
+  "redactions": [
+    "secret:bearer_token:payload.input.command:offset=22:length=28",
+    "secret:api_response:payload.output.stdout"
+  ],
+  "content_hash": "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/artifact.schema.json",
+  "title": "ArtifactPayload",
+  "description": "Stand-alone artifact reference (file, diff, snippet, URL).",
+  "type": "object",
+  "required": ["artifact_type"],
+  "additionalProperties": false,
+  "properties": {
+    "artifact_type": {
+      "type": "string",
+      "enum": ["file", "diff", "snippet", "url", "binary"]
+    },
+    "path": {
+      "type": ["string", "null"]
+    },
+    "url": {
+      "type": ["string", "null"],
+      "format": "uri"
+    },
+    "language": {
+      "type": ["string", "null"]
+    },
+    "body": {
+      "type": ["string", "null"],
+      "maxLength": 1048576
+    },
+    "cas_ref": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "size": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "truncated": {
+      "type": "boolean"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

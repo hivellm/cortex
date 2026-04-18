@@ -1,0 +1,19 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABDC",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T15:10:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "kind": "tool_call",
+  "context": { "platform": "linux" },
+  "payload": {
+    "tool_name": "Edit",
+    "input": { "file_path": "src/lib.rs" },
+    "touched": [
+      { "kind": "file_write" }
+    ],
+    "outcome": "success"
+  },
+  "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+}

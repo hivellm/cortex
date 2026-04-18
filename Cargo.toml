@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/cortex-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+repository = "https://github.com/hivellm/cortex"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+ulid = { version = "1.1", features = ["serde"] }
+jsonschema = { version = "0.30", default-features = false }
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+once_cell = "1.19"
+regex = "1.10"
+tempfile = "3.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.dev]
+opt-level = 0

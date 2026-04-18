@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/law_violation.schema.json",
+  "title": "LawViolationPayload",
+  "description": "Detector fired; emitted by governance engine (spec 14).",
+  "type": "object",
+  "required": ["violation_id", "law_id", "severity", "message"],
+  "additionalProperties": false,
+  "properties": {
+    "violation_id": {
+      "type": "string",
+      "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+    },
+    "law_id": {
+      "type": "string",
+      "pattern": "^[A-Z]+-[0-9]+$"
+    },
+    "law_version": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "notable", "critical"]
+    },
+    "tier": {
+      "type": ["integer", "null"],
+      "minimum": 1,
+      "maximum": 4
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "observed_event_id": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
+    },
+    "detector_latency_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    }
+  }
+}

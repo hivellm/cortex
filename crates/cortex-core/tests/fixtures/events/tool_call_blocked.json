@@ -1,0 +1,17 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD9",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T14:45:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "live",
+  "tool": "claude-code",
+  "model": "claude-sonnet-4-6",
+  "kind": "tool_call",
+  "context": { "platform": "win32", "repo": "e:/HiveLLM/Cortex" },
+  "payload": {
+    "tool_name": "Bash",
+    "input": { "command": "git commit --no-verify -m 'wip'" },
+    "outcome": "blocked_by_law:LAW-007"
+  },
+  "content_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

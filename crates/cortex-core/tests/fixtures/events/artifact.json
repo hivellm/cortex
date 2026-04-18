@@ -1,0 +1,26 @@
+{
+  "event_id": "01HXYZABCDEF0123456789ABD6",
+  "schema_version": "1",
+  "occurred_at": "2026-04-17T14:00:00.000Z",
+  "session_id": "01HXYZABCDEF0123456789ABCE",
+  "stream": "bootstrap",
+  "tool": "cortex-bootstrap",
+  "kind": "artifact",
+  "context": {
+    "platform": "linux",
+    "repo": "Vectorizer",
+    "branch": "main",
+    "commit": "abc123d",
+    "extras": { "git_ref": "abc123d" }
+  },
+  "payload": {
+    "artifact_type": "file",
+    "path": "src/index/hnsw/mod.rs",
+    "language": "rust",
+    "body": "pub fn hnsw_search(query: &[f32], ef: usize) -> Vec<(usize, f32)> { /* ... */ }",
+    "size": 78,
+    "truncated": false,
+    "metadata": { "symbol": "hnsw_search", "byte_range": [120, 198] }
+  },
+  "content_hash": "sha256:7777777777777777777777777777777777777777777777777777777777777777"
+}
