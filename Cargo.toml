@@ -5,6 +5,7 @@ members = [
     "crates/cortex-storage",
     "crates/cortex-ops",
     "crates/cortex-ingestion",
+    "crates/cortex-classifier",
 ]
 
 [workspace.package]

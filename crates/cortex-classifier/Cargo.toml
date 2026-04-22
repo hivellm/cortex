@@ -1,0 +1,27 @@
+[package]
+name = "cortex-classifier"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex event classifier: Haiku (CLI + SDK) + cache + budget + static fallback."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

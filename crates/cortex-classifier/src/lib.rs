@@ -1,0 +1,32 @@
+//! Cortex event classifier.
+//!
+//! The pipeline takes a redacted event, emits `ClassifierOutput` with
+//! topics, severity, PII risk, and (for oversize payloads) a summary.
+//! Default composition: `Budgeted ← Cached ← (HaikuCli | HaikuSdk)`
+//! with `StaticClassifier` as budget-exhausted / offline fallback.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+pub mod budget;
+pub mod cache;
+pub mod composer;
+pub mod errors;
+pub mod haiku_cli;
+pub mod prompt;
+pub mod stats;
+pub mod statics;
+pub mod types;
+
+pub use budget::{BudgetTracker, BudgetedClassifier};
+pub use cache::{CacheError, CachedClassifier, ClassifierCache, InMemoryCache};
+pub use composer::ClassifierStack;
+pub use errors::ClassifierError;
+pub use haiku_cli::{HaikuCliClassifier, HaikuCliConfig};
+pub use prompt::{PromptTemplate, TOPIC_VOCAB_V1};
+pub use stats::{ClassifierSpend, PricingTable};
+pub use statics::StaticClassifier;
+pub use types::{
+    Classifier, ClassifierMode, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk,
+    RedactionSuggestion, Severity,
+};
