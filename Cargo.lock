@@ -2004,7 +2004,9 @@ dependencies = [
 
 [[package]]
 name = "synap-sdk"
-version = "0.11.1"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4c0679f332b1ebf7edc2198da12776b383a92dc2da0649a7919035dd6b940b6"
 dependencies = [
  "async-stream",
  "async-trait",

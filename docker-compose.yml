@@ -1,27 +1,19 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:latest
+    image: hivehub/vectorizer:3.0.0
     container_name: cortex-vectorizer
     networks: [cortex-net]
     ports:
       - "${VECTORIZER_HOST_PORT:-15001}:15002"
     volumes:
       - vec-data:/data
-    environment:
-      VECTORIZER_HOST: 0.0.0.0
-      VECTORIZER_PORT: "15002"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:15002/health"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:15002/health || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
       start_period: 30s
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: "2.0"
-          memory: 4g
 
   nexus:
     build:
@@ -34,48 +26,31 @@ services:
       - "${NEXUS_HOST_PORT:-15002}:15474"
     volumes:
       - nexus-data:/data
-    environment:
-      NEXUS_HOST: 0.0.0.0
-      NEXUS_PORT: "15474"
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:15474/health"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:15474/health || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
       start_period: 30s
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: 2g
 
   synap:
-    build:
-      context: ../Synap
-      dockerfile: Dockerfile
-    image: hivellm/synap:local
+    image: hivehub/synap:latest
     container_name: cortex-synap
     networks: [cortex-net]
     ports:
       - "${SYNAP_HOST_PORT:-15003}:15500"
+      - "${SYNAP_WS_HOST_PORT:-15013}:15501"
+      - "${SYNAP_RESP_HOST_PORT:-16379}:6379"
     volumes:
       - synap-data:/data
-    environment:
-      SYNAP_HOST: 0.0.0.0
-      SYNAP_PORT: "15500"
     healthcheck:
-      test: ["CMD", "sh", "-c", "nc -z localhost 15500 || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:15500/health || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 10
-      start_period: 30s
+      retries: 20
+      start_period: 20s
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1g
 
   meilisearch:
     image: getmeili/meilisearch:v1.10
@@ -89,17 +64,12 @@ services:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
       MEILI_ENV: development
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7700/health || exit 1"]
       interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 20
       start_period: 20s
     restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
-          memory: 1g
 
 networks:
   cortex-net:
