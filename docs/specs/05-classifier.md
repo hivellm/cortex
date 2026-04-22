@@ -1,6 +1,8 @@
 # 05 — Classifier (Haiku via CLI / SDK)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01, 04
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01, 04
+>
+> Implementation: [`crates/cortex-classifier/`](../../crates/cortex-classifier/). `Classifier` trait, `StaticClassifier` (pure-Rust rule table), `CachedClassifier`, `BudgetedClassifier` (threshold ladder → static fallback), `HaikuCliClassifier` (spawns `claude -p ... --output-format json`), prompt template v1 + topic vocabulary v1. Worker binary wiring + Synap-backed cache arrive with the ingestion consumer in a follow-up pass.
 
 ## Goal
 

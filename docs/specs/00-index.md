@@ -10,7 +10,7 @@
 | 02 | [Storage layout](02-storage-layout.md)                          |   🟢   | 01                | §3, §6, §7 (storage)         |
 | 03 | [Local stack (docker-compose)](03-local-stack.md)               |   🟢   | 02                | §11 Phase 0                  |
 | 04 | [Cortex Core — types, redactor, ingestion router](04-cortex-core.md) | 🟢 | 01, 02         | §5.1, §5.2                   |
-| 05 | [Classifier — Haiku via CLI/SDK](05-classifier.md)              |   🟡   | 01, 04            | §5.2.1                       |
+| 05 | [Classifier — Haiku via CLI/SDK](05-classifier.md)              |   🟢   | 01, 04            | §5.2.1                       |
 | 06 | [Embedder — chunking + Vectorizer client](06-embedder.md)       |   🟡   | 01, 02            | §5.2                         |
 | 07 | [Graph writer — Nexus client](07-graph-writer.md)               |   🟡   | 01, 02            | §4.2, §5.2                   |
 | 08 | [Full-text indexer — Meilisearch client](08-fulltext-indexer.md)|   🟡   | 01, 02            | §5.2                         |
