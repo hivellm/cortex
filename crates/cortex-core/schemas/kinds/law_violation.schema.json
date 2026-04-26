@@ -41,9 +41,30 @@
       "type": ["string", "null"],
       "pattern": "^[0-9A-HJ-KM-NP-TV-Z]{26}$"
     },
+    "observed_event_kind": {
+      "type": ["string", "null"],
+      "enum": ["turn", "tool_call", null],
+      "description": "Discriminator for observed_event_id. Required when observed_event_id is set so the cortex-graph writer can pick the right MERGE label without phantom-node risk."
+    },
     "detector_latency_ms": {
       "type": ["integer", "null"],
       "minimum": 0
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["observed_event_id"],
+        "properties": {
+          "observed_event_id": { "type": "string" }
+        }
+      },
+      "then": {
+        "required": ["observed_event_kind"],
+        "properties": {
+          "observed_event_kind": { "type": "string" }
+        }
+      }
+    }
+  ]
 }

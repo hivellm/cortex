@@ -20,6 +20,7 @@
       "tool_call_id": "01HXYZABCDEF0123456789ABCF"
     },
     "observed_event_id": "01HXYZABCDEF0123456789ABCF",
+    "observed_event_kind": "tool_call",
     "detector_latency_ms": 18
   },
   "parent_event_id": "01HXYZABCDEF0123456789ABCD",

@@ -287,6 +287,93 @@ fn law_violation_emits_of_edge_and_law_node() {
     );
 }
 
+#[test]
+fn law_violation_with_observed_kind_tool_call_emits_observed_in_edge() {
+    let payload = json!({
+        "violation_id": "01HXVIO00000000000000000A1",
+        "law_id": "LAW-007",
+        "severity": "critical",
+        "message": "no --no-verify",
+        "evidence": null,
+        "observed_event_id": "01HXTC0000000000000000000Z",
+        "observed_event_kind": "tool_call"
+    });
+    let evt = event("lv-with-tc", Kind::LawViolation, payload, None, None, None);
+    let patch = map_event_to_patch(&evt);
+
+    let observed_in = patch
+        .edges
+        .iter()
+        .find(|e| e.edge_type == "OBSERVED_IN")
+        .expect("OBSERVED_IN edge for tool_call kind");
+    assert_eq!(observed_in.from_label, "LawViolation");
+    assert_eq!(observed_in.from_key, "01HXVIO00000000000000000A1");
+    assert_eq!(observed_in.to_label, "ToolCall");
+    assert_eq!(observed_in.to_key, "01HXTC0000000000000000000Z");
+}
+
+#[test]
+fn law_violation_with_observed_kind_turn_picks_turn_label() {
+    let payload = json!({
+        "violation_id": "01HXVIO00000000000000000A2",
+        "law_id": "LAW-014",
+        "severity": "notable",
+        "message": "scope drift",
+        "evidence": null,
+        "observed_event_id": "01HXTURN0000000000000000Z",
+        "observed_event_kind": "turn"
+    });
+    let evt = event("lv-with-turn", Kind::LawViolation, payload, None, None, None);
+    let patch = map_event_to_patch(&evt);
+
+    let observed_in = patch
+        .edges
+        .iter()
+        .find(|e| e.edge_type == "OBSERVED_IN")
+        .expect("OBSERVED_IN edge for turn kind");
+    assert_eq!(observed_in.to_label, "Turn");
+    assert_eq!(observed_in.to_key, "01HXTURN0000000000000000Z");
+}
+
+#[test]
+fn law_violation_without_observed_event_omits_observed_in_edge() {
+    let payload = json!({
+        "violation_id": "01HXVIO00000000000000000A3",
+        "law_id": "LAW-019",
+        "severity": "info",
+        "message": "soft notice",
+        "evidence": null
+    });
+    let evt = event("lv-bare", Kind::LawViolation, payload, None, None, None);
+    let patch = map_event_to_patch(&evt);
+    assert!(
+        patch.edges.iter().all(|e| e.edge_type != "OBSERVED_IN"),
+        "no OBSERVED_IN edge expected when observed_event_id is unset"
+    );
+}
+
+#[test]
+fn law_violation_with_unknown_observed_kind_drops_edge_safely() {
+    // Defensive: even though the spec-04 schema's allOf/if-then
+    // enforces the discriminator, the mapper must still degrade
+    // gracefully on unexpected values that slip past validation.
+    let payload = json!({
+        "violation_id": "01HXVIO00000000000000000A4",
+        "law_id": "LAW-099",
+        "severity": "info",
+        "message": "guard test",
+        "evidence": null,
+        "observed_event_id": "01HXOTHER000000000000000Z",
+        "observed_event_kind": "agent_call"
+    });
+    let evt = event("lv-bad-kind", Kind::LawViolation, payload, None, None, None);
+    let patch = map_event_to_patch(&evt);
+    assert!(
+        patch.edges.iter().all(|e| e.edge_type != "OBSERVED_IN"),
+        "unknown observed_event_kind must skip the edge, not pick a phantom label"
+    );
+}
+
 // ---------- Robustness ----------
 
 #[test]

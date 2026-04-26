@@ -91,7 +91,7 @@ Examples:
 - **`tool_call.*`** → upsert `ToolCall`, upsert `HAS_TOOL_CALL(Turn→ToolCall)`, upsert `TOUCHED(ToolCall→Artifact)` for each affected file, upsert `Artifact` and `IN_REPO`.
 - **`turn.*`** → upsert `Turn`, upsert `HAS_TURN(Session→Turn)`, create `Session` if missing.
 - **`decision.created`** → upsert `Decision`, add `LINKED_TO(Turn→Decision, role=proposed)`.
-- **`law.violation`** → upsert `LawViolation`, upsert `OF(→Law)`, upsert `OBSERVED_IN(→Turn|ToolCall)`. `Law` node must already exist (seeded by spec 13).
+- **`law.violation`** → upsert `LawViolation`, upsert `OF(→Law)`, upsert `OBSERVED_IN(→Turn|ToolCall)`. The target label of `OBSERVED_IN` is picked from the payload's `observed_event_kind` discriminator (`turn` | `tool_call`); the spec-04 schema's `allOf/if-then` enforces that the discriminator is set whenever `observed_event_id` is set, so the writer never has to guess (no phantom-node risk via MERGE). `Law` node must already exist (seeded by spec 13).
 
 Mapping lives in `cortex-workers/src/graph/mapper.rs`; one `fn map(&EnrichedEvent) -> GraphPatch` with an exhaustive match on `kind`.
 

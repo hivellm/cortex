@@ -353,6 +353,12 @@ pub struct LawViolationPayload {
     /// Event where the violation was observed.
     pub observed_event_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Discriminator for `observed_event_id` — `"turn"` or
+    /// `"tool_call"`. Required when `observed_event_id` is set so the
+    /// cortex-graph writer can MERGE the OBSERVED_IN edge under the
+    /// right label without phantom-node risk.
+    pub observed_event_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Detector latency in ms.
     pub detector_latency_ms: Option<u64>,
 }

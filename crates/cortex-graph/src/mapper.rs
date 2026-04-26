@@ -387,19 +387,41 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
         patch.edges.push(EdgeOp {
             edge_type: "OF".to_string(),
             from_label: "LawViolation".to_string(),
-            from_key: violation_key,
+            from_key: violation_key.clone(),
             to_label: "Law".to_string(),
             to_key: law_id,
             props: BTreeMap::new(),
         });
     }
 
-    // OBSERVED_IN(LawViolation → Turn|ToolCall) deferred — schema gap:
-    // `LawViolationPayload.observed_event_id` is just an id with no
-    // kind discriminator, so the writer cannot pick the right target
-    // label without risking phantom Turn / ToolCall nodes via MERGE.
-    // Tracked under graph-writer task §4.5; lands once the payload
-    // gains an `observed_event_kind` field.
+    // OBSERVED_IN(LawViolation → Turn|ToolCall) — picks the right
+    // MERGE label from the payload's `observed_event_kind`
+    // discriminator (added by phase2_graph-observed-in-edge). The
+    // schema's allOf/if-then guarantees the discriminator is set
+    // whenever `observed_event_id` is set, so we never have to
+    // guess — no phantom-node risk via MERGE.
+    if let Some(p) = payload.as_ref() {
+        if let (Some(observed_id), Some(observed_kind)) = (
+            p.observed_event_id.as_deref(),
+            p.observed_event_kind.as_deref(),
+        ) {
+            let to_label = match observed_kind {
+                "turn" => Some("Turn"),
+                "tool_call" => Some("ToolCall"),
+                _ => None,
+            };
+            if let Some(label) = to_label {
+                patch.edges.push(EdgeOp {
+                    edge_type: "OBSERVED_IN".to_string(),
+                    from_label: "LawViolation".to_string(),
+                    from_key: violation_key,
+                    to_label: label.to_string(),
+                    to_key: observed_id.to_string(),
+                    props: BTreeMap::new(),
+                });
+            }
+        }
+    }
 }
 
 /// Best-effort session id derivation. The

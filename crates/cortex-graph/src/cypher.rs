@@ -100,6 +100,8 @@ pub const REQUIRED_TEMPLATES: &[&str] = &[
     "edge_turn__linked_to__decision",
     "edge_decision__supersedes__decision",
     "edge_law_violation__of__law",
+    "edge_law_violation__observed_in__turn",
+    "edge_law_violation__observed_in__tool_call",
 ];
 
 /// Read-only registry of Cypher templates keyed by name.
