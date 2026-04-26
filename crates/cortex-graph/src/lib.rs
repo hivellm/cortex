@@ -49,5 +49,10 @@ pub use nexus_client::{
 };
 pub use patch::{EdgeOp, GraphPatch, GraphWriteReport, NodeOp};
 pub use schema::SCHEMA_STATEMENTS;
-pub use worker::Worker;
+pub use worker::{
+    BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher,
+    MemorySynapConsumer, MemorySynapPublisher, OffsetTracker, OutOfOrderBuffer, ReadyBatch,
+    SynapConsumer, SynapHandle, SynapPublisher, Worker, BACKPRESSURE_SOAK, STREAM_ENRICHED,
+    STREAM_GRAPHED, STREAM_INVALID,
+};
 pub use writer::{GraphWriter, NexusGraphWriter};

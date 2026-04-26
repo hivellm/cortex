@@ -34,6 +34,17 @@ pub trait GraphWriter: Send + Sync {
         &self,
         events: &[EnrichedEvent],
     ) -> Result<GraphWriteReport, GraphClientError>;
+
+    /// Write a list of pre-computed patches in one transaction. Used by
+    /// the worker's out-of-order recovery path to inject synthetic
+    /// orphan-Turn nodes alongside the regular per-event patches.
+    /// Default implementations may delegate to `write_batch` after
+    /// reconstructing events; concrete implementations override to
+    /// avoid the round-trip.
+    async fn write_patches(
+        &self,
+        patches: Vec<crate::patch::GraphPatch>,
+    ) -> Result<GraphWriteReport, GraphClientError>;
 }
 
 /// Production [`GraphWriter`] backed by a [`GraphClient`] +
@@ -80,8 +91,15 @@ impl GraphWriter for NexusGraphWriter {
         &self,
         events: &[EnrichedEvent],
     ) -> Result<GraphWriteReport, GraphClientError> {
-        let start = Instant::now();
         let patches: Vec<_> = events.iter().map(map_event_to_patch).collect();
+        self.write_patches(patches).await
+    }
+
+    async fn write_patches(
+        &self,
+        patches: Vec<crate::patch::GraphPatch>,
+    ) -> Result<GraphWriteReport, GraphClientError> {
+        let start = Instant::now();
         let (patch, stats) = coalesce(patches);
 
         let mut by_label: BTreeMap<String, u32> = BTreeMap::new();

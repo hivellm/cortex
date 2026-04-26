@@ -12,6 +12,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use cortex_graph::{
     cypher::{load_from_dir, REQUIRED_TEMPLATES},
+    worker::{LiveSynapConsumer, LiveSynapPublisher, SynapHandle},
     GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter, Worker,
 };
 use tracing_subscriber::{fmt, EnvFilter};
@@ -48,7 +49,20 @@ async fn main() -> Result<()> {
         metrics.clone(),
     ));
 
-    let worker = Arc::new(Worker::new(config, writer, metrics));
+    let synap = Arc::new(
+        SynapHandle::new(&config.synap_url)
+            .with_context(|| format!("failed to connect to Synap at {}", config.synap_url))?,
+    );
+    let consumer = Arc::new(LiveSynapConsumer::new(synap.clone()));
+    let publisher = Arc::new(LiveSynapPublisher::new(synap));
+
+    let worker = Arc::new(Worker::new(
+        config,
+        writer,
+        consumer,
+        publisher,
+        metrics,
+    ));
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_handle = shutdown.clone();

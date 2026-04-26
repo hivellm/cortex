@@ -22,10 +22,10 @@
 - [ ] 4.5 `OBSERVED_IN` (LawViolation → Turn|ToolCall) — blocked by upstream schema: `LawViolationPayload.observed_event_id` carries no kind discriminator, so the writer cannot choose the target label without phantom-node risk via Cypher `MERGE`. Unblocks once the payload gains `observed_event_kind`.
 
 ## 5. Worker loop
-- [ ] 5.1 Consume `cortex.events.enriched` from Synap; batch 256 graph-patch entries / 500 ms flush
-- [ ] 5.2 Run coalesced patch as single Cypher transaction and publish report on `cortex.events.graphed`
-- [ ] 5.3 Out-of-order handling: buffer ≤30 s for missing Turn; fabricate `Orphan:true` Turn on timeout
-- [ ] 5.4 Failure routing: constraint violation → `cortex.events.invalid`; transient 5xx → retry + consumer pause
+- [x] 5.1 Consume `cortex.events.enriched` from Synap; batch 256 graph-patch entries / 500 ms flush (`SynapConsumer`/`SynapPublisher` traits + `LiveSynapConsumer`/`MemorySynapConsumer`, `OffsetTracker`)
+- [x] 5.2 Run coalesced patch as single Cypher transaction and publish report on `cortex.events.graphed` (via `GraphWriter::write_patches` with orphan injection)
+- [x] 5.3 Out-of-order handling: `OutOfOrderBuffer` holds `tool_call`/`agent_call` events whose parent Turn is unseen, sweep emits orphan-Turn nodes (`orphan: true`) past `out_of_order_buffer_secs`
+- [x] 5.4 Failure routing: `ConstraintViolation` → `cortex.events.invalid` per event; `TransientError` → backpressure gauge + soak-pause; deserialize failures route to invalid stream
 
 ## 6. Observability
 - [x] 6.1 Counters + histograms per spec 07 §Observability (`Metrics` registry: nodes/edges upserted, dedup hits, tx latency, tx size)
