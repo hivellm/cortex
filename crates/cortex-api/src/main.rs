@@ -39,6 +39,27 @@ async fn main() -> Result<()> {
     let vector = Arc::new(MemoryVectorLane::new());
     let keyword = Arc::new(MemoryKeywordLane::new());
     let graph = Arc::new(MemoryGraphLane::new());
+
+    // Pragmatic boot-time seed: when CORTEX_ARCHIVE_ROOT is set, walk
+    // the cortex-ingestion archive and pre-populate the keyword lane
+    // with every captured turn / tool_call / agent_call envelope.
+    // Closes the "captured events are queryable" gap until the live
+    // spec-06 / spec-07 / spec-08 indexers ship.
+    if let Ok(root) = std::env::var("CORTEX_ARCHIVE_ROOT") {
+        let report = cortex_api::load_into_keyword_lane(
+            std::path::Path::new(&root),
+            &keyword,
+        );
+        tracing::info!(
+            archive_root = %root,
+            files_visited = report.files_visited,
+            envelopes_parsed = report.envelopes_parsed,
+            hits_seeded = report.hits_seeded,
+            lines_dropped = report.lines_dropped,
+            "archive loader: keyword lane seeded"
+        );
+    }
+
     let orchestrator = Orchestrator::new(vector, keyword, graph);
     let service = Arc::new(QueryService::with_memory_defaults(orchestrator));
 
