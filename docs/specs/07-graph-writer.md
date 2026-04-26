@@ -1,6 +1,6 @@
 # 07 — Graph writer (Nexus client)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01, 02
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01, 02
 
 ## Goal
 

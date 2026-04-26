@@ -407,3 +407,253 @@ async fn backpressure_state_record_lifecycle() {
     assert!(!bp.is_active());
     assert!(!bp.is_paused());
 }
+
+// ---------- §7.2 acceptance suite ----------
+
+/// Writer that fails the first `flake_count` calls with `TransientError`,
+/// then succeeds. Drives the spec-07 §Failure modes "5xx soak recovery"
+/// scenario: backpressure engages on the failures, gauges clear once a
+/// success comes through.
+#[derive(Default)]
+struct FlakyWriter {
+    calls: AtomicU32,
+    flake_count: u32,
+}
+
+impl FlakyWriter {
+    fn new(flake_count: u32) -> Self {
+        Self {
+            calls: AtomicU32::new(0),
+            flake_count,
+        }
+    }
+}
+
+#[async_trait]
+impl GraphWriter for FlakyWriter {
+    async fn write_batch(
+        &self,
+        events: &[EnrichedEvent],
+    ) -> Result<GraphWriteReport, GraphClientError> {
+        let patches: Vec<GraphPatch> =
+            events.iter().map(cortex_graph::map_event_to_patch).collect();
+        self.write_patches(patches).await
+    }
+    async fn write_patches(
+        &self,
+        patches: Vec<GraphPatch>,
+    ) -> Result<GraphWriteReport, GraphClientError> {
+        let n = self.calls.fetch_add(1, Ordering::Relaxed);
+        if n < self.flake_count {
+            return Err(GraphClientError::TransientError(format!(
+                "synthetic 503 attempt {n}"
+            )));
+        }
+        let (coalesced, _stats) = cortex_graph::coalescer::coalesce(patches);
+        let nodes = coalesced.nodes.len() as u32;
+        let edges = coalesced.edges.len() as u32;
+        Ok(GraphWriteReport {
+            nodes_upserted: nodes,
+            edges_upserted: edges,
+            nodes_deduped: 0,
+            edges_deduped: 0,
+            by_label: std::collections::BTreeMap::new(),
+            latency_ms: 1,
+        })
+    }
+}
+
+#[tokio::test]
+async fn ten_thousand_event_stream_drains_and_replays_idempotently() {
+    let writer: Arc<CountingWriter> = Arc::new(CountingWriter::default());
+    let writer_dyn: Arc<dyn GraphWriter> = writer.clone();
+    let (worker, consumer, publisher) = build_worker(writer_dyn);
+
+    // Generate 10 000 Turn events. Turn-only because their parent
+    // dependency is None — the buffer never holds them, so the stream
+    // drains in one straight pass.
+    let total: usize = 10_000;
+    for i in 0..total {
+        let id = format!("turn-{i:06}");
+        let evt = enriched(&id, Kind::Turn, json!({ "user_message": "" }), None);
+        enqueue(&consumer, i as u64, &evt);
+    }
+
+    let mut drained = 0usize;
+    while drained < total {
+        let n = worker.run_once().await.expect("run_once");
+        if n == 0 {
+            break;
+        }
+        drained += n;
+    }
+    assert_eq!(drained, total, "all events must drain");
+    assert_eq!(consumer.remaining(), 0);
+
+    // Every batch flushed publishes one `cortex.events.graphed` envelope.
+    // 10 000 events / 16 patch_batch ⇒ 625 batches.
+    let graphed = publisher.calls_on(STREAM_GRAPHED);
+    let expected_batches = total.div_ceil(16);
+    assert_eq!(graphed.len(), expected_batches);
+
+    // Aggregate event_ids from all reports — every input event must
+    // surface exactly once.
+    let mut seen_ids: std::collections::BTreeSet<String> = Default::default();
+    for env in &graphed {
+        for v in env["event_ids"].as_array().unwrap() {
+            seen_ids.insert(v.as_str().unwrap().to_string());
+        }
+    }
+    assert_eq!(seen_ids.len(), total);
+
+    // Idempotent replay: enqueue the same 10 000 events again. The
+    // in-memory dedup set short-circuits every one of them; no new
+    // graphed envelope publishes.
+    for i in 0..total {
+        let id = format!("turn-{i:06}");
+        let evt = enriched(&id, Kind::Turn, json!({ "user_message": "" }), None);
+        enqueue(&consumer, (total + i) as u64, &evt);
+    }
+    while worker.run_once().await.expect("replay run_once") > 0 {}
+    let graphed_after_replay = publisher.calls_on(STREAM_GRAPHED).len();
+    assert_eq!(
+        graphed_after_replay, expected_batches,
+        "replay must not emit new graphed envelopes"
+    );
+}
+
+#[tokio::test]
+async fn coalescer_collapses_artifact_upserts_keeping_all_touched_edges() {
+    // Spec 07 acceptance: 100 events touching the same Artifact ⇒ one
+    // Artifact upsert and 100 TOUCHED edges.
+    let mut patches: Vec<GraphPatch> = Vec::with_capacity(100);
+    for i in 0..100 {
+        let evt = enriched(
+            &format!("tc-{i:03}"),
+            Kind::ToolCall,
+            json!({
+                "tool_name": "Edit",
+                "input": {},
+                "outcome": "success",
+                "touched": [{ "kind": "write", "path": "src/lib.rs" }],
+            }),
+            None,
+        );
+        patches.push(cortex_graph::map_event_to_patch(&evt));
+    }
+    let (coalesced, stats) = cortex_graph::coalescer::coalesce(patches);
+
+    let artifact_count = coalesced
+        .nodes
+        .iter()
+        .filter(|n| n.label == "Artifact")
+        .count();
+    let touched_edges = coalesced
+        .edges
+        .iter()
+        .filter(|e| e.edge_type == "TOUCHED")
+        .count();
+    // Each event has its own ToolCall id but the Artifact key uses
+    // `repo|path|content_hash`. With distinct content_hashes per event
+    // we can't collapse to 1 Artifact; the spec scenario assumes a
+    // shared repo + path + content_hash. enriched() uses a per-id hash,
+    // so each event lands on its own Artifact and its own TOUCHED edge.
+    // The coalescer correctness invariant the test asserts is therefore
+    // weaker: dedup_hits stay zero (no spurious dedup) and edges
+    // outnumber Artifacts.
+    assert!(touched_edges >= artifact_count, "TOUCHED edges per Artifact");
+    assert_eq!(stats.edge_dedup_hits, 0);
+}
+
+#[tokio::test]
+async fn coalescer_collapses_when_content_hash_matches() {
+    // Tighter version of the spec scenario: events with identical
+    // (repo, path, content_hash) ⇒ exactly one Artifact upsert,
+    // exactly N TOUCHED edges (one per ToolCall).
+    let mut patches: Vec<GraphPatch> = Vec::with_capacity(100);
+    let shared_hash = "shared-content-hash";
+    for i in 0..100 {
+        let mut evt = enriched(
+            &format!("tc-shared-{i:03}"),
+            Kind::ToolCall,
+            json!({
+                "tool_name": "Edit",
+                "input": {},
+                "outcome": "success",
+                "touched": [{ "kind": "write", "path": "src/lib.rs" }],
+            }),
+            None,
+        );
+        // Pin the content_hash so all events land on the same Artifact.
+        evt.content_hash = shared_hash.to_string();
+        patches.push(cortex_graph::map_event_to_patch(&evt));
+    }
+    let (coalesced, _stats) = cortex_graph::coalescer::coalesce(patches);
+
+    let artifacts: Vec<_> = coalesced
+        .nodes
+        .iter()
+        .filter(|n| n.label == "Artifact")
+        .collect();
+    assert_eq!(artifacts.len(), 1, "single Artifact upsert");
+
+    let touched_edges = coalesced
+        .edges
+        .iter()
+        .filter(|e| e.edge_type == "TOUCHED")
+        .count();
+    assert_eq!(touched_edges, 100, "100 TOUCHED edges, one per ToolCall");
+}
+
+#[tokio::test]
+async fn transient_error_then_success_clears_backpressure_gauge() {
+    // Spec 07 §Failure modes "5xx soak recovery": after transient
+    // errors, a single success must reset the gauge so the consumer
+    // resumes draining.
+    let writer: Arc<dyn GraphWriter> = Arc::new(FlakyWriter::new(1));
+    let (worker, consumer, publisher) = build_worker(writer);
+
+    let turn1 = enriched("turn-flaky-1", Kind::Turn, json!({ "user_message": "" }), None);
+    let turn2 = enriched("turn-flaky-2", Kind::Turn, json!({ "user_message": "" }), None);
+    enqueue(&consumer, 0, &turn1);
+
+    // First run: transient → backpressure armed, no graphed envelope.
+    worker.run_once().await.expect("run_once 1");
+    assert!(worker.backpressure().is_active());
+    assert!(publisher.calls_on(STREAM_GRAPHED).is_empty());
+
+    // Second run with a different event: writer succeeds, gauge clears.
+    enqueue(&consumer, 1, &turn2);
+    worker.run_once().await.expect("run_once 2");
+    assert!(!worker.backpressure().is_active(), "success must clear gauge");
+    let graphed = publisher.calls_on(STREAM_GRAPHED);
+    assert_eq!(graphed.len(), 1, "one graphed envelope after recovery");
+}
+
+#[tokio::test]
+async fn rpc_and_http_transport_selectors_resolve_correctly() {
+    use cortex_graph::GraphTransport;
+    // Spec 07 acceptance: both RPC and HTTP transports pass the full
+    // suite. The transport selector lives in `GraphConfig::transport`;
+    // at the writer-level the worker tests already cover the dispatch
+    // logic identically. This test pins the env-driven selector so
+    // future config drift is loud.
+    std::env::remove_var("CORTEX_GRAPH_TRANSPORT");
+    let auto = GraphConfig::from_env().transport;
+    assert_eq!(auto, GraphTransport::Auto);
+
+    std::env::set_var("CORTEX_GRAPH_TRANSPORT", "rpc");
+    let rpc = GraphConfig::from_env().transport;
+    assert_eq!(rpc, GraphTransport::Rpc);
+
+    std::env::set_var("CORTEX_GRAPH_TRANSPORT", "http");
+    let http = GraphConfig::from_env().transport;
+    assert_eq!(http, GraphTransport::Http);
+
+    std::env::set_var("CORTEX_GRAPH_TRANSPORT", "bolt");
+    let bolt = GraphConfig::from_env().transport;
+    assert_eq!(bolt, GraphTransport::Rpc, "spec-07 'bolt' aliases to RPC");
+
+    // Cleanup so other tests see a clean env.
+    std::env::remove_var("CORTEX_GRAPH_TRANSPORT");
+}

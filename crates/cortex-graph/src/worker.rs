@@ -771,8 +771,27 @@ impl Worker {
             patches.push(orphan_turn_patch(turn_id));
         }
 
+        let event_count = ready.events.len();
+        let orphan_count = ready.orphan_turn_ids.len();
         match self.writer.write_patches(patches).await {
             Ok(report) => {
+                // Per-batch span — spec 07 §Observability calls for
+                // nodes upserted, edges upserted, dedup hits, tx
+                // latency. Emitted as a structured `info` event so any
+                // tracing subscriber (Prometheus exporter, OpenTelemetry
+                // sink, JSON log shipper) can pick them up without
+                // bespoke wiring.
+                tracing::info!(
+                    events = event_count,
+                    orphan_turns = orphan_count,
+                    nodes_upserted = report.nodes_upserted,
+                    edges_upserted = report.edges_upserted,
+                    nodes_deduped = report.nodes_deduped,
+                    edges_deduped = report.edges_deduped,
+                    latency_ms = report.latency_ms,
+                    outcome = "ok",
+                    "graph batch flushed"
+                );
                 self.publish_report(&ready.events, &ready.orphan_turn_ids, &report)
                     .await;
                 self.backpressure.record_success();
@@ -781,7 +800,13 @@ impl Worker {
                 }
             }
             Err(GraphClientError::TransientError(detail)) => {
-                tracing::warn!(detail = %detail, "transient nexus error; engaging backpressure");
+                tracing::warn!(
+                    events = event_count,
+                    orphan_turns = orphan_count,
+                    outcome = "transient",
+                    detail = %detail,
+                    "transient nexus error; engaging backpressure"
+                );
                 self.backpressure.record_transient();
                 self.metrics.set_backpressure(true);
                 self.metrics.incr_errors("transient");
@@ -790,7 +815,13 @@ impl Worker {
                 self.untrack(&ready.events, &to_ack);
             }
             Err(GraphClientError::ConstraintViolation { detail }) => {
-                tracing::warn!(detail = %detail, "constraint violation; routing batch to invalid");
+                tracing::warn!(
+                    events = event_count,
+                    orphan_turns = orphan_count,
+                    outcome = "constraint_violation",
+                    detail = %detail,
+                    "constraint violation; routing batch to invalid"
+                );
                 self.metrics.incr_errors("constraint");
                 for evt in &ready.events {
                     self.publish_invalid(&evt.event_id, "constraint_violation", &detail)
@@ -801,7 +832,13 @@ impl Worker {
                 }
             }
             Err(other) => {
-                tracing::warn!(error = %other, "write_patches failed");
+                tracing::warn!(
+                    events = event_count,
+                    orphan_turns = orphan_count,
+                    outcome = "error",
+                    error = %other,
+                    "write_patches failed"
+                );
                 self.metrics.incr_errors("other");
                 self.untrack(&ready.events, &to_ack);
             }

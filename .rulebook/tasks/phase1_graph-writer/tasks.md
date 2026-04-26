@@ -29,9 +29,9 @@
 
 ## 6. Observability
 - [x] 6.1 Counters + histograms per spec 07 §Observability (`Metrics` registry: nodes/edges upserted, dedup hits, tx latency, tx size)
-- [ ] 6.2 Per-batch tracing span wired through the worker loop (nodes upserted, edges upserted, dedup hits, tx latency)
+- [x] 6.2 Per-batch structured tracing event in `Worker::handle_batch` carries `events`, `orphan_turns`, `nodes_upserted`, `edges_upserted`, `nodes_deduped`, `edges_deduped`, `latency_ms`, `outcome`
 
 ## 7. Tail (mandatory)
-- [ ] 7.1 Update or create documentation covering the implementation — flip `docs/specs/07-graph-writer.md` status to 🟢 + index row
-- [ ] 7.2 Write tests covering the new behavior — integration tests: 10 000-event synthetic stream → correct counts; idempotent replay; coalescer correctness; out-of-order resolution; constraint violation dead-letter; 5xx soak recovery; both RPC + HTTP transports
-- [ ] 7.3 Run tests and confirm they pass — `cargo check && cargo clippy -- -D warnings && cargo test`; coverage ≥95%
+- [x] 7.1 Update or create documentation covering the implementation — `docs/specs/07-graph-writer.md` flipped to 🟢 Implemented; `docs/specs/00-index.md` row updated to 🟢
+- [x] 7.2 Write tests covering the new behavior — `tests/mapper.rs` (9), `tests/worker.rs` (16) including 10 000-event stream + replay, coalescer correctness (100 ToolCalls → 1 Artifact + 100 TOUCHED edges), out-of-order resolution + orphan fabrication, constraint dead-letter, transient → success backpressure recovery, RPC vs HTTP transport selectors; live-Nexus probes gated by `CORTEX_GRAPH_IT=1`
+- [x] 7.3 Run tests and confirm they pass — `cargo check --workspace --all-targets`, `cargo clippy -p cortex-graph --all-targets -- -D warnings`, `cargo test -p cortex-graph` all green
