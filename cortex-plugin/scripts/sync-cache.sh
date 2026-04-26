@@ -53,7 +53,7 @@ fi
 
 echo "syncing $PLUGIN_SRC → $CACHE_DIR"
 
-for asset in hooks hooks.json skills agents commands README.md .claude-plugin .mcp.json; do
+for asset in hooks skills agents commands README.md .claude-plugin .mcp.json; do
     src="$PLUGIN_SRC/$asset"
     if [ -e "$src" ]; then
         cp -r "$src" "$CACHE_DIR/"

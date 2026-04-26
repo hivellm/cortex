@@ -70,8 +70,11 @@ after editing the plugin assets in the source tree), run
 bash cortex-plugin/scripts/sync-cache.sh
 ```
 
-The script copies the missing assets (hooks, hooks.json, skills,
-agents, commands, README, .claude-plugin, .mcp.json) into the cache.
+The script copies the missing assets (hooks/, skills/, agents/,
+commands/, README, .claude-plugin/, .mcp.json) into the cache.
+The `hooks.json` descriptor lives **inside** `hooks/` per the
+official Claude Code plugin convention (verified against the
+`hookify` and `claude-net-marketplace` reference plugins).
 Restart Claude Code so the loader picks up the new files —
 `~/.claude/settings.json` should then list `cortex-*` hook entries
 under the `hooks` key.
