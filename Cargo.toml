@@ -13,6 +13,7 @@ members = [
     "crates/cortex-adapter-claude-code",
     "crates/cortex-api",
     "crates/cortex-pre-thinking",
+    "crates/cortex-mcp-server",
 ]
 
 [workspace.package]

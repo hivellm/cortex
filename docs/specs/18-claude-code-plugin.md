@@ -1,0 +1,302 @@
+# 18 — Claude Code plugin (skills + agents + commands + MCP server)
+
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 10, 11, 12
+
+## Goal
+
+Ship Cortex as a first-class **Claude Code plugin** so the assistant can call into Cortex from inside a session — querying for decisions, surfacing active laws, refreshing pre-thinking context, auditing past turns. Spec 10 covers capture (hooks shovelling events into Cortex). This spec covers the inverse direction: surfaces the model itself reaches for.
+
+A Claude Code plugin is a **directory of text + config**, not a Rust crate. The Cortex plugin ships:
+
+- A `.claude-plugin/plugin.json` manifest.
+- An `.mcp.json` that registers our **MCP server binary** (Rust, lives in this repo) so the model can call `cortex.query`, `cortex.pre_thinking`, `cortex.status` mid-turn.
+- Markdown **skills** (`skills/cortex-*/SKILL.md`) the model can invoke.
+- Markdown **sub-agents** (`agents/cortex-*.md`) for focused tasks.
+- Markdown **slash commands** (`commands/cortex-*.md`) the human runs verbatim.
+- A `.claude-plugin/marketplace.json` so users install via `/plugin marketplace add hivellm/cortex` → `/plugin install cortex@hivellm`.
+
+## Scope
+
+**In:**
+- `cortex-plugin/` directory at the workspace root with the canonical Claude Code plugin layout.
+- `cortex-mcp-server` Rust crate — language-agnostic MCP server binary referenced from `cortex-plugin/.mcp.json`. JSON-RPC 2.0 over stdio (canonical MCP transport).
+- Three MCP tools backed by existing services: `cortex.query` (spec 11), `cortex.pre_thinking` (spec 12), `cortex.status` (Cortex daemon health).
+- Three skills authored as Markdown: `cortex-context`, `cortex-audit`, `cortex-laws`.
+- Three sub-agents authored as Markdown: `cortex-historian`, `cortex-lawkeeper`, `cortex-context-curator`.
+- Six slash commands authored as Markdown: `cortex-status`, `cortex-query`, `cortex-laws`, `cortex-decisions`, `cortex-pre-thinking`, `cortex-audit`.
+- Distribution via a Cortex marketplace JSON pointing back at this Git repo.
+
+**Out:**
+- VS Code marketplace extension — separate Phase-3 effort.
+- Non-Claude-Code MCP hosts (Cursor / Codex / Gemini) — spec 17 covers those.
+- Refactoring spec 10's hooks into the plugin's `hooks/hooks.json` (possible follow-up; current install path stays at `~/.claude/hooks/`).
+- Re-implementing the query API or pre-thinking pipeline — the plugin is a thin adapter.
+
+## Inputs / Outputs
+
+### Plugin directory layout
+
+```
+cortex-plugin/                          # workspace-root plugin directory
+├── .claude-plugin/
+│   ├── plugin.json                    # required manifest (per Claude Code docs)
+│   └── marketplace.json               # marketplace listing (used when this repo is added as a marketplace)
+├── README.md                          # user docs surfaced by `/plugin info`
+├── .mcp.json                          # MCP server registrations
+├── skills/
+│   ├── cortex-context/SKILL.md
+│   ├── cortex-audit/SKILL.md
+│   └── cortex-laws/SKILL.md
+├── agents/
+│   ├── cortex-historian.md
+│   ├── cortex-lawkeeper.md
+│   └── cortex-context-curator.md
+└── commands/
+    ├── cortex-status.md
+    ├── cortex-query.md
+    ├── cortex-laws.md
+    ├── cortex-decisions.md
+    ├── cortex-pre-thinking.md
+    └── cortex-audit.md
+```
+
+Per the Claude Code plugin reference, every component is auto-discovered from this layout. A single `plugin.json` is the only required manifest; subdirectories carry their own component-level metadata (YAML frontmatter for agents, `.mcp.json` for MCP, etc).
+
+### `plugin.json` manifest
+
+```jsonc
+{
+  "name": "cortex",
+  "description": "Cortex retrieval, pre-thinking context, law check, and audit surfaces for Claude Code sessions.",
+  "version": "0.1.0",
+  "author": { "name": "HiveLLM", "email": "hello@hivellm.org" },
+  "homepage": "https://github.com/hivellm/cortex",
+  "repository": { "type": "git", "url": "https://github.com/hivellm/cortex" },
+  "license": "Apache-2.0"
+}
+```
+
+### `.mcp.json` (MCP server registration)
+
+```jsonc
+{
+  "mcpServers": {
+    "cortex": {
+      "command": "cortex-mcp-server",
+      "args": ["serve"],
+      "env": {
+        "CORTEX_API_URL": "http://127.0.0.1:15011",
+        "CORTEX_ADAPTER_SOCK": "~/.cortex/adapter-claude.sock"
+      }
+    }
+  }
+}
+```
+
+The `cortex-mcp-server` binary ships from this repo (Rust crate `cortex-mcp-server`). Once the user runs `cargo install --path crates/cortex-mcp-server` (or grabs a release artifact), the binary is on `PATH` and Claude Code spawns it on plugin activation.
+
+### MCP wire protocol
+
+JSON-RPC 2.0 over stdio (Anthropic's MCP spec, revision `2024-11-05`). Standard methods:
+
+```jsonc
+// initialize handshake
+→ { "jsonrpc": "2.0", "id": 1, "method": "initialize",
+    "params": { "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {...} } }
+← { "jsonrpc": "2.0", "id": 1, "result": {
+      "protocolVersion": "2024-11-05",
+      "capabilities": { "tools": {} },
+      "serverInfo": { "name": "cortex-mcp-server", "version": "0.1.0" }
+    } }
+
+// notifications/initialized (notification, no id)
+→ { "jsonrpc": "2.0", "method": "notifications/initialized", "params": {} }
+
+// tools/list
+→ { "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} }
+← { "jsonrpc": "2.0", "id": 2, "result": { "tools": [ <descriptor>, ... ] } }
+
+// tools/call
+→ { "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+    "params": { "name": "cortex.query", "arguments": { "intent": "free_search", "query": "ef_search" } } }
+← { "jsonrpc": "2.0", "id": 3, "result": {
+      "content": [ { "type": "text", "text": "<JSON or formatted bundle>" } ],
+      "isError": false
+    } }
+```
+
+Errors use the standard JSON-RPC codes (`-32700` parse, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal) plus a `data` field carrying the spec-11 reason (`empty_query`, `scope_forbidden`, `rate_limited`).
+
+### Tool descriptors
+
+`cortex.query` reuses `cortex_api::tool_descriptor()` byte-for-byte (spec 11 §MCP tool binding) so the schema source-of-truth stays in `cortex-api`.
+
+`cortex.pre_thinking`:
+```jsonc
+{
+  "name": "cortex.pre_thinking",
+  "description": "Run the spec-12 pre-thinking pipeline against the configured cortex-api and return the deterministic Markdown bundle.",
+  "input_schema": {
+    "type": "object",
+    "required": ["user_prompt", "cwd"],
+    "properties": {
+      "user_prompt": { "type": "string" },
+      "cwd": { "type": "string" },
+      "session_id": { "type": "string" },
+      "turn_id": { "type": "string" },
+      "budget_bytes": { "type": "integer", "default": 32768 },
+      "budget_ms": { "type": "integer", "default": 600 }
+    }
+  }
+}
+```
+
+`cortex.status`:
+```jsonc
+{
+  "name": "cortex.status",
+  "description": "Cortex daemon health snapshot: pid, queue depth, recent publisher errors, overflow WAL bytes.",
+  "input_schema": { "type": "object", "properties": {} }
+}
+```
+
+### Skills (`skills/cortex-*/SKILL.md`)
+
+Each skill is a Markdown file with YAML frontmatter declaring the skill's name, description, and tool requirements. The model invokes them when the user describes a matching intent:
+
+- `cortex-context` — refresh the system-prompt context bundle by calling `cortex.pre_thinking`.
+- `cortex-audit` — fetch the audit envelope for a turn id.
+- `cortex-laws` — list active laws in scope via `cortex.query` with `intent=law_check`.
+
+### Sub-agents (`agents/cortex-*.md`)
+
+Each sub-agent is a Markdown file with YAML frontmatter (per Claude Code agent reference) declaring the model + system prompt + allowed tools:
+
+- `cortex-historian` — specialised at `decision_lookup`; emphasises supersession chains + dates.
+- `cortex-lawkeeper` — runs `intent=law_check` + reasons about whether the proposed action triggers any active law.
+- `cortex-context-curator` — picks the right intent + scope + returns a focused bundle.
+
+### Slash commands (`commands/cortex-*.md`)
+
+User-invoked. Each Markdown file is a prompt template the slash command expands to.
+
+### Marketplace JSON
+
+```jsonc
+{
+  "name": "hivellm-cortex",
+  "owner": { "name": "HiveLLM" },
+  "plugins": [
+    {
+      "name": "cortex",
+      "description": "...",
+      "version": "0.1.0",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/hivellm/cortex",
+        "path": "cortex-plugin"
+      }
+    }
+  ]
+}
+```
+
+Users add the marketplace once (`/plugin marketplace add hivellm/cortex`) and install via `/plugin install cortex@hivellm-cortex`.
+
+## Design
+
+### Plugin directory at workspace root
+
+The plugin directory lives at `cortex-plugin/` — separate from `crates/` since it's not a Rust crate. Authored as text + JSON, no build step. CI lints it via a small Rust binary (`cortex-mcp-server` ships a `validate` sub-command that checks every asset against the Claude Code reference schema).
+
+### `cortex-mcp-server` Rust crate
+
+Location: `crates/cortex-mcp-server/`. Single binary, three tools, stdio transport. The binary is **the only Rust artifact** in this spec — everything else is text the plugin directory carries. The binary is referenced by the plugin's `.mcp.json` and must be on `PATH`; users install it via `cargo install --path` or a release artifact.
+
+```
+crates/cortex-mcp-server/
+├── Cargo.toml
+├── src/
+│   ├── main.rs               (binary entry — clap sub-commands: serve, validate, print-tool-descriptors)
+│   ├── lib.rs
+│   ├── rpc.rs                (JSON-RPC 2.0 framing + Request / Response / Error)
+│   ├── server.rs             (handshake state, dispatch loop)
+│   ├── tools.rs              (Tool trait + registry + 3 concrete tools)
+│   ├── transport_stdio.rs    (newline-delimited JSON over stdin/stdout)
+│   ├── validate.rs           (lint cortex-plugin/ against the Claude Code reference)
+│   └── metrics.rs            (cortex.plugin.* counters)
+└── tests/
+```
+
+### Tool implementations
+
+- `QueryTool` — wraps `cortex_api::QueryService` via HTTP POST to `<api_url>/v1/query`.
+- `PreThinkingTool` — calls `cortex_pre_thinking::pipeline::run` with a `QueryFn` that POSTs to `<api_url>/v1/query`.
+- `StatusTool` — reads `<api_url>/v1/status` (or the adapter's overflow WAL gauge file directly when the API is unreachable).
+
+### Failure modes
+
+| Failure                                        | Handling                                                                |
+|------------------------------------------------|-------------------------------------------------------------------------|
+| `cortex-api` unreachable                       | Tool returns `result.isError = true` with `reason=api_unreachable`      |
+| `cortex-api` 4xx                                | Mirrored as JSON-RPC error with the spec-11 reason in `data`            |
+| Malformed JSON-RPC frame                        | Server emits `-32700 parse error` and stays alive                       |
+| Unknown tool name                               | Server emits `-32601 method not found`                                  |
+| Tool panic                                      | Caught by the dispatch wrapper; returns `-32603 internal error`          |
+| Plugin asset corruption                          | `cortex-mcp-server validate` fails CI; the plugin doesn't ship           |
+
+### Observability
+
+```
+cortex.plugin.tool.invocations         counter, labels: tool
+cortex.plugin.tool.latency_ms          histogram, labels: tool
+cortex.plugin.tool.errors              counter, labels: tool, reason
+cortex.plugin.session.handshakes       counter
+```
+
+Every tool invocation also emits a structured tracing event with `tool`, `latency_ms`, `outcome`.
+
+## Acceptance criteria
+
+- [ ] `cortex-plugin/.claude-plugin/plugin.json` parses as a valid Claude Code plugin manifest (`name`, `description`, `version`, `author`).
+- [ ] `cortex-plugin/.mcp.json` references `cortex-mcp-server` with the documented env vars.
+- [ ] `cortex-plugin/skills/`, `cortex-plugin/agents/`, `cortex-plugin/commands/` each contain the documented files; YAML frontmatter parses on every agent.
+- [ ] `cortex-mcp-server validate ./cortex-plugin` exits 0 on a clean tree and non-zero with a clear message when a required file is missing or malformed.
+- [ ] Spawning `cortex-mcp-server serve` and sending an `initialize` over stdio returns a valid response with `tools` capability advertised.
+- [ ] `tools/list` returns three descriptors; `cortex.query`'s descriptor matches `cortex_api::tool_descriptor()` byte-for-byte.
+- [ ] `tools/call` for `cortex.query` against a wiremock'd `cortex-api` returns the spec-11 response shape.
+- [ ] `tools/call` for `cortex.pre_thinking` returns a Markdown bundle with the spec-12 `<!-- cortex: ... query_id=... -->` leading comment.
+- [ ] `tools/call` for `cortex.status` returns daemon pid + queue depth + WAL bytes.
+- [ ] Unknown tool name → JSON-RPC `-32601 method not found`.
+- [ ] Malformed JSON frame → `-32700 parse error` and the server stays alive for the next message.
+- [ ] Local install drill: `claude --plugin-dir ./cortex-plugin` boots, `/plugin list` shows `cortex`, `tools/list` over the embedded MCP server returns the three tools.
+- [ ] Marketplace listing: `cortex-plugin/.claude-plugin/marketplace.json` parses and points at this repo's `cortex-plugin/` path.
+- [ ] Telemetry counters non-zero after a 5-tool-call recorded session.
+
+## Decisions
+
+1. **Plugin = text directory, server = Rust binary.** Plugins are not language-coupled; the only Rust artifact is the MCP server binary referenced from `.mcp.json`. Skills / agents / commands are authored as Markdown the model interprets directly.
+2. **Stdio is canonical.** SSE is reserved for future browser-side scenarios; v1 ships stdio only.
+3. **Tool descriptors live in `cortex-api`.** `cortex.query` reuses `cortex_api::tool_descriptor()` so the schema source-of-truth stays in one crate.
+4. **Plugin lives at workspace root, not under `crates/`.** It's an artifact, not a Rust package.
+5. **CI validates the asset tree.** `cortex-mcp-server validate ./cortex-plugin` runs in CI; the plugin can't ship with a missing file or a malformed agent frontmatter.
+6. **Distribution via a Cortex marketplace.** `cortex-plugin/.claude-plugin/marketplace.json` lets users `/plugin marketplace add hivellm/cortex` and pull updates from this repo.
+7. **JSON-RPC errors carry the spec-11 reason in `data`.** Hosts that surface error messages to the user get a deterministic string they can pattern-match on.
+
+## Open questions
+
+1. **Hook migration.** Spec 10 installs hooks at `~/.claude/hooks/cortex-*.sh`. The plugin model supports `hooks/hooks.json` inside the plugin directory; should we migrate? Defer until the spec-10 install path has eaten a year of operator feedback.
+2. **MCP stateful resources.** Should `cortex.session` expose the active turn / decisions / laws as MCP resources (URIs the host can subscribe to)? Defer to Phase 3.
+
+## References
+
+- Claude Code plugin reference: https://code.claude.com/docs/en/plugins.md
+- Claude Code plugin reference (full schema): https://code.claude.com/docs/en/plugins-reference.md
+- Claude Code marketplaces: https://code.claude.com/docs/en/plugin-marketplaces.md
+- Claude Code MCP integration: https://code.claude.com/docs/en/mcp.md
+- Anthropic MCP spec: https://modelcontextprotocol.io
+- JSON-RPC 2.0: https://www.jsonrpc.org/specification
+- Spec 10 — Claude Code adapter (hook-based capture).
+- Spec 11 — Query API (tool descriptor source).
+- Spec 12 — Pre-thinking injection (the `cortex.pre_thinking` tool wrap).
+- Spec 17 — Additional adapters (this plugin is the reference for non-hook integration).

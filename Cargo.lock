@@ -699,6 +699,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-mcp-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "cortex-api",
+ "cortex-pre-thinking",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "cortex-ops"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,15 @@
+{
+  "name": "cortex",
+  "description": "Cortex retrieval, pre-thinking context, law check, and audit surfaces for Claude Code sessions. Adds three MCP tools (cortex.query, cortex.pre_thinking, cortex.status), three skills, three sub-agents, and six slash commands backed by the local Cortex daemon.",
+  "version": "0.1.0",
+  "author": {
+    "name": "HiveLLM",
+    "email": "hello@hivellm.org"
+  },
+  "homepage": "https://github.com/hivellm/cortex",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hivellm/cortex"
+  },
+  "license": "Apache-2.0"
+}
