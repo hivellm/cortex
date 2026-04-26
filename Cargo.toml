@@ -8,6 +8,7 @@ members = [
     "crates/cortex-classifier",
     "crates/cortex-embedder",
     "crates/cortex-graph",
+    "crates/cortex-fulltext",
 ]
 
 [workspace.package]

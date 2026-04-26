@@ -1,0 +1,44 @@
+{
+  "version": "v1",
+  "searchableAttributes": [
+    "title",
+    "body",
+    "summary",
+    "path",
+    "topics",
+    "ext.tool_call.tool_name"
+  ],
+  "filterableAttributes": [
+    "kind",
+    "repo",
+    "path",
+    "topics",
+    "severity",
+    "pii_risk",
+    "ts",
+    "language",
+    "ext.decision.status",
+    "ext.law_violation.law_id"
+  ],
+  "sortableAttributes": ["ts"],
+  "displayedAttributes": ["*"],
+  "rankingRules": [
+    "words",
+    "typo",
+    "proximity",
+    "attribute",
+    "sort",
+    "exactness",
+    "ts:desc"
+  ],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "refactor": ["rewrite", "refactoring"],
+    "bug": ["issue", "defect"],
+    "law": ["policy", "rule"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

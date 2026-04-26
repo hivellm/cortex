@@ -546,6 +546,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-fulltext"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "cortex-classifier",
+ "cortex-core",
+ "cortex-embedder",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "synap-sdk",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
 name = "cortex-graph"
 version = "0.1.0"
 dependencies = [

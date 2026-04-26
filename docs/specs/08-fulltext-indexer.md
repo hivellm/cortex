@@ -1,6 +1,6 @@
 # 08 — Full-text indexer (Meilisearch client)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01, 02
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01, 02
 
 ## Goal
 
