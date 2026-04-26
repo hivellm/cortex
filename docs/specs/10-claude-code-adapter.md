@@ -1,6 +1,6 @@
 # 10 — Claude Code adapter (hooks + local daemon)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 04
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 04
 
 ## Goal
 

@@ -15,7 +15,7 @@
 | 07 | [Graph writer — Nexus client](07-graph-writer.md)               |   🟢   | 01, 02            | §4.2, §5.2                   |
 | 08 | [Full-text indexer — Meilisearch client](08-fulltext-indexer.md)|   🟢   | 01, 02            | §5.2                         |
 | 09 | [Bootstrap CLI — index existing HiveLLM repos](09-bootstrap-cli.md) | 🟢 | 04, 05, 06, 07, 08 | §6                       |
-| 10 | [Claude Code adapter — hooks + daemon](10-claude-code-adapter.md)|  🟡   | 04                | §5.1                         |
+| 10 | [Claude Code adapter — hooks + daemon](10-claude-code-adapter.md)|  🟢   | 04                | §5.1                         |
 | 11 | [Query API — hybrid retrieval + RRF](11-query-api.md)           |   🟡   | 06, 07, 08        | §5.3                         |
 | 12 | [Pre-thinking injection](12-pre-thinking-injection.md)          |   🟡   | 10, 11            | §5.3, §8                     |
 | 13 | [Laws DSL + detector contract](13-laws-dsl.md)                  |   🟡   | 01, 04            | §5.4                         |

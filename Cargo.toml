@@ -10,6 +10,7 @@ members = [
     "crates/cortex-graph",
     "crates/cortex-fulltext",
     "crates/cortex-bootstrap",
+    "crates/cortex-adapter-claude-code",
 ]
 
 [workspace.package]
