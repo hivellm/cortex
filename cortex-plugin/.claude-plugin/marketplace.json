@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "cortex",
-      "source": "./.claude-plugin",
+      "source": "./",
       "description": "Cortex retrieval, pre-thinking context, law check, and audit surfaces for Claude Code sessions.",
       "version": "0.1.0",
       "repository": "https://github.com/hivellm/cortex",
