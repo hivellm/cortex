@@ -22,7 +22,79 @@ pub enum CypherLoadError {
     /// The `cypher/` directory does not exist or cannot be read.
     #[error("cypher template directory unreadable: {0}")]
     Io(#[from] std::io::Error),
+    /// One or more required templates were missing from the loaded
+    /// registry. Surfaced at startup so the worker refuses to consume
+    /// events without the Cypher it needs.
+    #[error("missing required cypher templates: {0:?}")]
+    MissingRequired(Vec<String>),
 }
+
+/// Canonical template name for a node-upsert template, derived from the
+/// node label. Spec 07 §Cypher generation calls for one template per
+/// label; this helper computes the registry key so callers never
+/// hand-roll the convention.
+///
+/// Convention: `node_<label_snake>` — e.g. `Session` → `node_session`,
+/// `ToolCall` → `node_tool_call`, `LawViolation` → `node_law_violation`.
+pub fn node_template_name(label: &str) -> String {
+    format!("node_{}", to_snake_case(label))
+}
+
+/// Canonical template name for an edge-upsert template, derived from
+/// the (from-label, relationship type, to-label) triple. Mirrors
+/// `node_template_name` but for edges so the registry key is stable
+/// across mapper, writer, and on-disk filename.
+///
+/// Convention: `edge_<from_snake>__<rel_lower>__<to_snake>` — e.g.
+/// (`Session`, `HAS_TURN`, `Turn`) → `edge_session__has_turn__turn`.
+pub fn edge_template_name(from_label: &str, rel_type: &str, to_label: &str) -> String {
+    format!(
+        "edge_{}__{}__{}",
+        to_snake_case(from_label),
+        rel_type.to_ascii_lowercase(),
+        to_snake_case(to_label),
+    )
+}
+
+/// Convert a CamelCase label to snake_case. Pure ASCII because every
+/// label in the Cortex graph schema (architecture §4.2) is ASCII.
+fn to_snake_case(label: &str) -> String {
+    let mut out = String::with_capacity(label.len() + 4);
+    for (idx, ch) in label.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if idx != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// Required template names the worker must have loaded before it will
+/// accept events. Mirrors the (label × incoming-edge) patterns the
+/// mapper currently emits — additions to the mapper bring matching
+/// additions to this list, otherwise the worker fails fast at startup.
+pub const REQUIRED_TEMPLATES: &[&str] = &[
+    // Nodes — one entry per Label currently emitted by `mapper.rs`.
+    "node_session",
+    "node_turn",
+    "node_tool_call",
+    "node_artifact",
+    "node_decision",
+    "node_memory",
+    "node_analysis",
+    "node_law_violation",
+    "node_repo",
+    // Edges — one entry per (from, rel, to) currently emitted by
+    // `mapper.rs`. Keep in lockstep with the mapper.
+    "edge_session__has_turn__turn",
+    "edge_session__has_tool_call__tool_call",
+    "edge_session__remembers__memory",
+    "edge_artifact__in_repo__repo",
+];
 
 /// Read-only registry of Cypher templates keyed by name.
 ///
@@ -61,6 +133,33 @@ impl CypherTemplates {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
     }
+
+    /// Fail-fast check that every name in `required` is present.
+    ///
+    /// Returns the list of missing names — the worker is expected to
+    /// abort startup when this list is non-empty so production never
+    /// runs against a half-loaded template registry.
+    pub fn missing_required<'a>(&self, required: &'a [&'a str]) -> Vec<&'a str> {
+        required
+            .iter()
+            .copied()
+            .filter(|name| !self.templates.contains_key(*name))
+            .collect()
+    }
+
+    /// Convenience wrapper that turns [`Self::missing_required`] into a
+    /// [`CypherLoadError::MissingRequired`] error so the binary can
+    /// `?`-propagate the failure straight out of `main`.
+    pub fn ensure_required(&self, required: &[&str]) -> Result<(), CypherLoadError> {
+        let missing = self.missing_required(required);
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(CypherLoadError::MissingRequired(
+                missing.into_iter().map(String::from).collect(),
+            ))
+        }
+    }
 }
 
 /// Load all `*.cypher` files from `path` into a registry.
@@ -94,4 +193,86 @@ pub fn load_from_dir(path: &Path) -> Result<CypherTemplates, CypherLoadError> {
         templates.insert(name, body);
     }
     Ok(CypherTemplates { templates })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snake_case_handles_camel_and_already_snake() {
+        assert_eq!(to_snake_case("Session"), "session");
+        assert_eq!(to_snake_case("ToolCall"), "tool_call");
+        assert_eq!(to_snake_case("LawViolation"), "law_violation");
+        assert_eq!(to_snake_case("Repo"), "repo");
+    }
+
+    #[test]
+    fn node_template_name_uses_label_snake_case() {
+        assert_eq!(node_template_name("Session"), "node_session");
+        assert_eq!(node_template_name("ToolCall"), "node_tool_call");
+        assert_eq!(node_template_name("LawViolation"), "node_law_violation");
+    }
+
+    #[test]
+    fn edge_template_name_uses_endpoints_and_rel() {
+        assert_eq!(
+            edge_template_name("Session", "HAS_TURN", "Turn"),
+            "edge_session__has_turn__turn"
+        );
+        assert_eq!(
+            edge_template_name("Artifact", "IN_REPO", "Repo"),
+            "edge_artifact__in_repo__repo"
+        );
+        assert_eq!(
+            edge_template_name("Session", "HAS_TOOL_CALL", "ToolCall"),
+            "edge_session__has_tool_call__tool_call"
+        );
+    }
+
+    #[test]
+    fn missing_required_lists_absent_names() {
+        let mut map = BTreeMap::new();
+        map.insert("node_session".to_string(), "MERGE (n:Session)".to_string());
+        let reg = CypherTemplates::from_map(map);
+        let missing = reg.missing_required(&["node_session", "node_turn"]);
+        assert_eq!(missing, vec!["node_turn"]);
+    }
+
+    #[test]
+    fn ensure_required_errors_when_anything_missing() {
+        let reg = CypherTemplates::default();
+        let err = reg.ensure_required(&["node_session"]).unwrap_err();
+        match err {
+            CypherLoadError::MissingRequired(names) => {
+                assert_eq!(names, vec!["node_session".to_string()]);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ensure_required_passes_with_full_registry() {
+        let mut map = BTreeMap::new();
+        for name in REQUIRED_TEMPLATES {
+            map.insert((*name).to_string(), "MERGE (n)".to_string());
+        }
+        let reg = CypherTemplates::from_map(map);
+        reg.ensure_required(REQUIRED_TEMPLATES)
+            .expect("registry should satisfy REQUIRED_TEMPLATES");
+    }
+
+    #[test]
+    fn shipped_cypher_dir_satisfies_required_set() {
+        // The on-disk template set in `crates/cortex-graph/cypher/`
+        // must always satisfy `REQUIRED_TEMPLATES` — otherwise the
+        // worker fails fast at startup. This test catches regressions
+        // before they reach runtime.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let registry =
+            load_from_dir(&manifest_dir.join("cypher")).expect("load shipped cypher dir");
+        registry
+            .ensure_required(REQUIRED_TEMPLATES)
+            .expect("shipped cypher/ must satisfy REQUIRED_TEMPLATES");
+    }
 }

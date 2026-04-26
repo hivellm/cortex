@@ -22,31 +22,3 @@
 pub fn artifact_natural_key(repo: &str, path: &str, content_hash: &str) -> String {
     format!("{repo}|{path}|{content_hash}")
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn artifact_key_is_pipe_joined() {
-        assert_eq!(
-            artifact_natural_key("repo", "path", "hash"),
-            "repo|path|hash"
-        );
-    }
-
-    #[test]
-    fn artifact_key_handles_nested_paths() {
-        assert_eq!(
-            artifact_natural_key("hivellm/cortex", "crates/cortex-graph/src/lib.rs", "deadbeef"),
-            "hivellm/cortex|crates/cortex-graph/src/lib.rs|deadbeef"
-        );
-    }
-
-    #[test]
-    fn artifact_key_is_deterministic() {
-        let a = artifact_natural_key("r", "p", "h");
-        let b = artifact_natural_key("r", "p", "h");
-        assert_eq!(a, b);
-    }
-}

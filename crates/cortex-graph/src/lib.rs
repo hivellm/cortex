@@ -35,7 +35,9 @@ pub mod writer;
 
 pub use config::{GraphConfig, GraphTransport};
 pub use coalescer::{CoalesceStats, PatchCoalescer};
-pub use cypher::CypherTemplates;
+pub use cypher::{
+    edge_template_name, node_template_name, CypherLoadError, CypherTemplates, REQUIRED_TEMPLATES,
+};
 // Reuse the enriched-event payload defined by the sibling embedder crate so
 // both workers stay in lockstep on the schema of `cortex.events.enriched`.
 pub use cortex_embedder::EnrichedEvent;

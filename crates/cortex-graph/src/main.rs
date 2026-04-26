@@ -11,7 +11,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use cortex_graph::{
-    cypher::load_from_dir, GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter, Worker,
+    cypher::{load_from_dir, REQUIRED_TEMPLATES},
+    GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter, Worker,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -27,10 +28,12 @@ async fn main() -> Result<()> {
     let cypher_dir = std::env::var("CORTEX_GRAPH_CYPHER_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("crates/cortex-graph/cypher"));
-    let templates = Arc::new(
-        load_from_dir(&cypher_dir)
-            .with_context(|| format!("failed to load cypher templates from {:?}", cypher_dir))?,
-    );
+    let templates_loaded = load_from_dir(&cypher_dir)
+        .with_context(|| format!("failed to load cypher templates from {:?}", cypher_dir))?;
+    templates_loaded
+        .ensure_required(REQUIRED_TEMPLATES)
+        .with_context(|| format!("required cypher templates missing under {:?}", cypher_dir))?;
+    let templates = Arc::new(templates_loaded);
     tracing::info!(template_count = templates.len(), "loaded cypher templates");
 
     let client = Arc::new(
