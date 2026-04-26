@@ -1,6 +1,6 @@
 # 12 — Pre-thinking injection
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 10, 11
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 10, 11
 
 ## Goal
 

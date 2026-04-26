@@ -12,6 +12,7 @@ members = [
     "crates/cortex-bootstrap",
     "crates/cortex-adapter-claude-code",
     "crates/cortex-api",
+    "crates/cortex-pre-thinking",
 ]
 
 [workspace.package]

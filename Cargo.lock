@@ -711,6 +711,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-pre-thinking"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "cortex-api",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "cortex-storage"
 version = "0.1.0"
 dependencies = [

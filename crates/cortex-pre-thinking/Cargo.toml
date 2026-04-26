@@ -1,0 +1,27 @@
+[package]
+name = "cortex-pre-thinking"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex pre-thinking injection: turns query API bundles into compact, deterministic Markdown blocks for adapter system prompts (spec 12)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cortex-api = { path = "../cortex-api" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
