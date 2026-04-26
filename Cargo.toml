@@ -11,6 +11,7 @@ members = [
     "crates/cortex-fulltext",
     "crates/cortex-bootstrap",
     "crates/cortex-adapter-claude-code",
+    "crates/cortex-api",
 ]
 
 [workspace.package]

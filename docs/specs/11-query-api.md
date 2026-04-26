@@ -1,6 +1,6 @@
 # 11 — Query API (hybrid retrieval + RRF)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 06, 07, 08
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 06, 07, 08
 
 ## Goal
 

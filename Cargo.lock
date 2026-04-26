@@ -506,6 +506,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum 0.7.9",
+ "chrono",
+ "clap",
+ "cortex-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "synap-sdk",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "wiremock",
+]
+
+[[package]]
 name = "cortex-bootstrap"
 version = "0.1.0"
 dependencies = [

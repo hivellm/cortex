@@ -1,0 +1,47 @@
+//! Cortex query API — hybrid retrieval (vector + keyword + graph)
+//! with RRF fusion (spec 11).
+//!
+//! The crate exposes both an Axum HTTP service (`POST /v1/query`)
+//! and an MCP tool binding (`cortex.query`) that share the same
+//! request/response types so behaviour stays identical between
+//! transports. Lane traits are defined here; live wiring against
+//! Vectorizer / Meilisearch / Nexus drops in behind the same
+//! traits and is selected at daemon startup.
+
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+pub mod acl;
+pub mod audit;
+pub mod cache;
+pub mod fusion;
+pub mod http;
+pub mod lanes;
+pub mod mcp;
+pub mod orchestrator;
+pub mod rate_limit;
+pub mod redaction;
+pub mod service;
+pub mod strategies;
+pub mod types;
+
+pub use acl::{AclDecision, AclStore};
+pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
+pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
+pub use fusion::{rrf_fuse, RRF_K};
+pub use http::{build_router, CALLER_HEADER};
+pub use lanes::{
+    GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit, MemoryGraphLane,
+    MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
+};
+pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
+pub use orchestrator::Orchestrator;
+pub use rate_limit::{RateConfig, RateDecision, RateLimiter};
+pub use redaction::redact_response;
+pub use service::{ErrorBody, QueryService, ServiceOutcome};
+pub use strategies::{build_plan, BudgetSplit, Overlay, Plan};
+pub use types::{
+    empty_response, BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, IncludeField, Intent,
+    LaneTimings, LawRef, Props, QueryRequest, QueryResponse, ResultsBag, Scope, SimilarTurn,
+    Snippet, ViolationRef,
+};
