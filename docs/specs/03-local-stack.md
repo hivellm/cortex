@@ -30,7 +30,7 @@ Provide a single `docker-compose.yml` (plus a small `bin/cortex-up` wrapper) tha
 | Service           | Image                                                  | Ports (host:container) | Volume                 | Health |
 |-------------------|--------------------------------------------------------|------------------------|------------------------|--------|
 | `vectorizer`      | `hivellm/vectorizer:2.5.1`                             | `15001:15001`          | `vec-data:/data`       | `/health` |
-| `nexus`           | `hivellm/nexus:0.12.0`                                 | `15002:15002`          | `nexus-data:/data`     | `/health` |
+| `nexus`           | `hivehub/nexus:v1.14.0`                                | `15002:15474`          | `nexus-data:/data`     | `/health` |
 | `synap`           | `hivellm/synap:0.11.0`                                 | `15003:15003`          | `synap-data:/data`     | `PING`    |
 | `meilisearch`     | `getmeili/meilisearch:v1.10`                           | `15004:7700`           | `meili-data:/meili_data`| `/health`|
 | `cortex-api`      | (built locally from `./cortex-api/Dockerfile`)         | `15000:15000`          | `cortex-cas:/cas`, `cortex-archive:/archive`, `cortex-meta:/meta` | `/healthz` |
@@ -177,7 +177,7 @@ cortex-api:
 
 ### Image strategy
 
-- Hive services (`vectorizer`, `nexus`, `synap`) pulled from `hivellm/*` Docker Hub. Versions pinned in `.env`.
+- Hive services (`vectorizer`, `nexus`, `synap`) pulled from `hivehub/*` Docker Hub. Versions pinned in `.env`.
 - `meilisearch` from official upstream, version pinned.
 - `cortex-api` and `cortex-workers` are multi-stage Rust builds (`rust:1.92` → `gcr.io/distroless/cc-debian12`); ~30 MB final image.
 - The Claude Code CLI is baked into the `cortex-workers` image when `CORTEX_CLASSIFIER_MODE=cli` (separate Dockerfile target `cortex-workers-with-cli` since it adds ~200 MB).

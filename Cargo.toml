@@ -6,6 +6,7 @@ members = [
     "crates/cortex-ops",
     "crates/cortex-ingestion",
     "crates/cortex-classifier",
+    "crates/cortex-embedder",
 ]
 
 [workspace.package]
@@ -40,7 +41,8 @@ async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
 
 synap-sdk = "0.11"
-vectorizer-sdk = "3.0"
+vectorizer-sdk = "3.0.3"
+nexus-graph-sdk = "1.14"
 
 [profile.release]
 opt-level = 3

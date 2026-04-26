@@ -1,6 +1,6 @@
 # 06 — Embedder (chunking + Vectorizer client)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01, 02
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01, 02
 
 ## Goal
 
@@ -87,13 +87,23 @@ pub struct ChunkMetadata {
 
 ### Chunk identity
 
-```
-chunk_id = ulid_from_hash(parent_event_id || ':' || chunk_ordinal || ':' || chunk_content_hash)
-```
+- **Primary id**: server-assigned UUID. Vectorizer's `POST /insert_texts`
+  ignores any client-supplied `id` and returns a server-generated UUID
+  per entry in the `BatchResponse`. The embedder treats this UUID as
+  the canonical chunk id and carries it in `UpsertedChunk::server_id`
+  for downstream consumers (graph writer, query API).
+- **Dedup key** (client-side, metadata): a deterministic string stored
+  as `metadata.dedup_key` on every vector:
 
-- Deterministic for the same input → re-runs are idempotent.
-- `chunk_ordinal` is the 0-based index within the event so a single event always maps to a stable sequence.
-- Re-chunking the same event with the same chunker version produces the exact same `chunk_id` set, so Vectorizer sees no-op writes.
+  ```
+  dedup_key = ulid_from_hash(parent_event_id || ':' || chunk_ordinal
+                             || ':' || chunk_content_hash)
+  ```
+
+  The orchestrator does a `list_vectors`-paginated scan before upsert
+  to collect the present `dedup_key` set for each target collection,
+  filtering out already-embedded chunks. Re-runs produce the same
+  `dedup_key` set → zero new upserts → idempotent re-runs.
 
 ### Collections (per-kind)
 
@@ -152,14 +162,25 @@ pub struct VectorizerClient {
 impl VectorizerClient {
     async fn ensure_collection(&self, name: &str, schema: &CollectionSchema) -> Result<()>;
     async fn upsert_chunks(&self, collection: &str, chunks: &[Chunk]) -> Result<UpsertReport>;
-    async fn exists(&self, collection: &str, chunk_ids: &[String]) -> Result<BitSet>;
+    async fn exists_by_dedup_key(&self, collection: &str, dedup_keys: &[String]) -> Result<BTreeSet<String>>;
+}
+
+pub struct UpsertReport {
+    pub written: u32,
+    pub deduped: u32,
+    pub new_entries: Vec<UpsertedChunk>,   // dedup_key → server-assigned UUID
+}
+
+pub struct UpsertedChunk {
+    pub dedup_key: String,
+    pub server_id: String,                 // opaque primary id (UUID on the v3 server)
 }
 ```
 
-- **Transport:** HTTP POST `/v1/collections/{name}/upsert` with JSON body. gRPC path is an optimization flag (see Decisions §3).
+- **Transport:** HTTP POST `/insert_texts` via the SDK (v3.0.3+); `exists_by_dedup_key` paginates `GET /collections/{c}/vectors` until the SDK grows a `list_vectors` surface.
 - **Batch size:** 64 chunks per upsert call. Vectorizer handles embedding internally (the client sends `text` + metadata, never precomputed vectors).
-- **Idempotency:** driven by `chunk_id`. Vectorizer upsert is key-based, so re-sends are no-ops at the vector store level.
-- **Dedup pre-check (optional):** before sending a large batch, the worker calls `/v1/collections/{name}/exists?ids=...` and filters. Reduces Vectorizer embed-call volume by ~30% during bootstrap re-runs.
+- **Idempotency:** driven by `metadata.dedup_key`. The orchestrator pre-scans the target collection's `dedup_key` set and filters already-embedded chunks before calling `upsert_chunks` — the server itself does no dedup.
+- **Dedup pre-check (mandatory):** every `embed_batch` call runs the scan so re-runs produce zero new upserts. Reduces Vectorizer embed-call volume to zero during bootstrap re-runs.
 
 ### Worker concurrency
 
@@ -238,6 +259,7 @@ Span per event: `event_id`, `chunks.emitted`, `chunks.deduped`, `collections.tou
 4. **No precomputed vectors on the wire.** We always send text to Vectorizer and let it embed. Keeps the boundary clean and lets Vectorizer swap models without Cortex redeploys.
 5. **Schema drift is fail-fast.** Silent migrations corrupt retrieval. A human must run `cortex embedder migrate <collection>` (tooling lives in `cortex-cli`, out of scope here).
 6. **Raw-oversize text stays in Vectorizer metadata, not on disk.** Vectorizer is the system of record for chunk text in v1. Parquet archive (spec 02) is the durable copy; Vectorizer is the queryable copy.
+7. **Server-assigned UUIDs, client-side dedup keys.** The server rejects client-supplied primary ids (`hivehub/vectorizer:3.0.x` reassigns a UUID per stored vector regardless of the caller's `id`). Instead of forking the server or faking ids on our side, we adopt the server's UUID as canonical (surfaced through `UpsertedChunk::server_id` / `EmbedReport::new_records`) and carry our deterministic identifier as `metadata.dedup_key`. Idempotency is enforced by a pre-upsert scan of `metadata.dedup_key` rather than by the key-based upsert the original spec assumed. Downstream consumers that need to reference a stored vector join on the server-assigned UUID.
 
 ## Open questions
 

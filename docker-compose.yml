@@ -2,24 +2,20 @@ services:
   vectorizer:
     image: hivehub/vectorizer:3.0.0
     container_name: cortex-vectorizer
+    user: "0:0"
+    working_dir: /data
+    command: ["--auto-generate-jwt-secret"]
+    environment:
+      VECTORIZER_ADMIN_PASSWORD: ${VECTORIZER_ADMIN_PASSWORD:-cortex-dev-admin}
     networks: [cortex-net]
     ports:
       - "${VECTORIZER_HOST_PORT:-15001}:15002"
     volumes:
       - vec-data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:15002/health || exit 1"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 30s
     restart: unless-stopped
 
   nexus:
-    build:
-      context: ../Nexus
-      dockerfile: Dockerfile
-    image: hivellm/nexus:local
+    image: hivehub/nexus:v1.14.0
     container_name: cortex-nexus
     networks: [cortex-net]
     ports:
@@ -27,7 +23,7 @@ services:
     volumes:
       - nexus-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:15474/health || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:15474/health >/dev/null || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
