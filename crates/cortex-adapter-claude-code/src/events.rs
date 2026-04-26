@@ -249,9 +249,20 @@ fn build_turn_payload(redacted: &Value) -> Value {
 
 fn build_tool_call_payload(redacted: &Value) -> Value {
     let tool_name = read_string_field(redacted, "tool_name").unwrap_or_else(|| "unknown".into());
-    let input = redacted.get("input").cloned().unwrap_or(json!({}));
+    // Claude Code's PostToolUse hook payload uses `tool_input` /
+    // `tool_response` field names (not `input` / `output`); fall back
+    // to the canonical names so the same builder works for any
+    // upstream that sends the cleaner shape.
+    let input = redacted
+        .get("tool_input")
+        .or_else(|| redacted.get("input"))
+        .cloned()
+        .unwrap_or(json!({}));
     let input_obj = input.as_object().cloned().unwrap_or_default();
-    let raw_output = redacted.get("output").or_else(|| redacted.get("response"));
+    let raw_output = redacted
+        .get("tool_response")
+        .or_else(|| redacted.get("output"))
+        .or_else(|| redacted.get("response"));
     let output = raw_output.map(|v| ToolCallOutput {
         stdout: read_optional_string(v, "stdout"),
         stderr: read_optional_string(v, "stderr"),

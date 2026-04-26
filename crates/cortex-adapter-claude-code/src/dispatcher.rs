@@ -93,15 +93,43 @@ impl Dispatcher {
 
         // Resolve correlation IDs before sync path so PreToolUse can
         // reference the in-flight turn even though it doesn't publish.
+        // Claude Code passes the canonical Claude session id INSIDE
+        // the hook stdin JSON (`payload.session_id`) — fall back to
+        // it when the shim couldn't read CLAUDE_SESSION_ID from the
+        // env. Without this fallback every concurrent Claude Code
+        // window collapses onto the daemon's pid-keyed default and
+        // sessions stop being distinguishable.
+        let resolved_hint = match frame.session_id.as_deref().filter(|s| !s.is_empty()) {
+            Some(s) => Some(s.to_string()),
+            None => frame
+                .payload
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from),
+        };
         let session_id = self
             .sessions
-            .resolve_or_synthesize(frame.session_id.as_deref(), self.pid);
+            .resolve_or_synthesize(resolved_hint.as_deref(), self.pid);
         self.sessions.ensure(&session_id);
+
+        // build_event sees the same effective hint via the same
+        // SessionManager cache, so the envelope's session_id matches
+        // the one we computed here.
+        let mut frame_for_build = frame.clone();
+        if frame_for_build
+            .session_id
+            .as_deref()
+            .map(|s| s.is_empty())
+            .unwrap_or(true)
+        {
+            frame_for_build.session_id = resolved_hint;
+        }
 
         // build_event updates correlation tables (open turn / open tool
         // call) and returns Some(envelope) only for the publishable
         // hooks (UserPromptSubmit, PostToolUse, SubagentStop).
-        let envelope = build_event(kind, &frame, &self.sessions, self.pid);
+        let envelope = build_event(kind, &frame_for_build, &self.sessions, self.pid);
         let turn_id = self.sessions.current_turn(&session_id);
 
         let response = self

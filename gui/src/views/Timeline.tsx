@@ -25,9 +25,16 @@ const KIND_LABEL: Record<string, string> = {
 
 function TimelineRow({ ev }: { ev: TimelineEvent }) {
   const detail = ev.detail || "";
-  const [first, ...rest] = detail.split(" ");
-  const tail = rest.join(" ");
-  const isToolCall = ev.kind === "tool_call";
+  // Strip the leading `[ToolName] ` prefix from the detail so the
+  // detail line doesn't repeat the title. Same idea for `Task:` /
+  // turn rows whose detail equals the title — drop the row entirely.
+  let body = detail;
+  if (ev.kind === "tool_call" && body.startsWith(ev.title)) {
+    body = body.slice(ev.title.length).trimStart();
+  }
+  if (body === ev.title) {
+    body = "";
+  }
   return (
     <button
       className="timeline__row"
@@ -42,11 +49,12 @@ function TimelineRow({ ev }: { ev: TimelineEvent }) {
       <span className="timeline__main">
         <span className="timeline__title">
           <span>{ev.title}</span>
-          {isToolCall && first ? <span className="mono">· {first}</span> : null}
         </span>
-        <span className="timeline__detail">
-          <span className="muted">{isToolCall ? tail || detail : detail}</span>
-        </span>
+        {body ? (
+          <span className="timeline__detail">
+            <span className="muted">{body}</span>
+          </span>
+        ) : null}
       </span>
       <span className="timeline__meta">
         <span>{ev.repo ?? "—"}</span>
