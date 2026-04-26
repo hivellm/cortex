@@ -1,6 +1,6 @@
 # 09 — Bootstrap CLI (`cortex-bootstrap`)
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 04, 05, 06, 07, 08
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 04, 05, 06, 07, 08
 
 ## Goal
 
