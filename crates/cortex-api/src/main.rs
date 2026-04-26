@@ -10,7 +10,9 @@
 //! before the live SDK wiring lands.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
@@ -40,24 +42,46 @@ async fn main() -> Result<()> {
     let keyword = Arc::new(MemoryKeywordLane::new());
     let graph = Arc::new(MemoryGraphLane::new());
 
-    // Pragmatic boot-time seed: when CORTEX_ARCHIVE_ROOT is set, walk
-    // the cortex-ingestion archive and pre-populate the keyword lane
-    // with every captured turn / tool_call / agent_call envelope.
-    // Closes the "captured events are queryable" gap until the live
-    // spec-06 / spec-07 / spec-08 indexers ship.
+    // Pragmatic boot-time seed + periodic re-scan: when
+    // CORTEX_ARCHIVE_ROOT is set, walk the cortex-ingestion archive
+    // and pre-populate the keyword lane with every captured turn /
+    // tool_call / agent_call envelope. The same scan re-runs on the
+    // CORTEX_ARCHIVE_REFRESH_SECS interval (default 30 s) so a
+    // freshly-captured prompt becomes queryable without a daemon
+    // restart. Closes the "captured events are queryable" gap until
+    // the live spec-06 / spec-07 / spec-08 indexers ship.
     if let Ok(root) = std::env::var("CORTEX_ARCHIVE_ROOT") {
-        let report = cortex_api::load_into_keyword_lane(
-            std::path::Path::new(&root),
-            &keyword,
-        );
+        let archive_root = PathBuf::from(&root);
+        let initial = cortex_api::load_into_keyword_lane(&archive_root, &keyword);
         tracing::info!(
             archive_root = %root,
-            files_visited = report.files_visited,
-            envelopes_parsed = report.envelopes_parsed,
-            hits_seeded = report.hits_seeded,
-            lines_dropped = report.lines_dropped,
-            "archive loader: keyword lane seeded"
+            files_visited = initial.files_visited,
+            envelopes_parsed = initial.envelopes_parsed,
+            hits_seeded = initial.hits_seeded,
+            lines_dropped = initial.lines_dropped,
+            "archive loader: keyword lane seeded (boot)"
         );
+
+        let refresh_secs = std::env::var("CORTEX_ARCHIVE_REFRESH_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(30)
+            .max(1);
+        let lane = keyword.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(refresh_secs);
+            loop {
+                tokio::time::sleep(interval).await;
+                let report = cortex_api::load_into_keyword_lane(&archive_root, &lane);
+                tracing::debug!(
+                    archive_root = %archive_root.display(),
+                    files_visited = report.files_visited,
+                    hits_seeded = report.hits_seeded,
+                    lines_dropped = report.lines_dropped,
+                    "archive loader: keyword lane refreshed"
+                );
+            }
+        });
     }
 
     let orchestrator = Orchestrator::new(vector, keyword, graph);

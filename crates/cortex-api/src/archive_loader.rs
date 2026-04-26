@@ -100,8 +100,28 @@ fn visit_dir(dir: &Path, report: &mut LoadReport, hits: &mut Vec<LaneHit>) {
             continue;
         }
         report.files_visited += 1;
+        let envelopes_before = report.envelopes_parsed;
         if let Err(e) = read_one_file(&path, report, hits) {
-            tracing::warn!(path = %path.display(), error = %e, "archive loader: skipping file");
+            let recovered = report.envelopes_parsed - envelopes_before;
+            // Partial frames are normal: cortex-ingestion holds the
+            // current-hour file open, so its zstd stream is still
+            // unfinished. We log at debug when at least one envelope
+            // came through, warn when nothing was recoverable (which
+            // usually means a truly corrupt file).
+            if recovered > 0 {
+                tracing::debug!(
+                    path = %path.display(),
+                    recovered_envelopes = recovered,
+                    error = %e,
+                    "archive loader: partial frame (live file or trailing corruption)"
+                );
+            } else {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "archive loader: file unreadable, no envelopes recovered"
+                );
+            }
         }
     }
 }
@@ -327,6 +347,48 @@ mod tests {
         assert_eq!(report.files_visited, 0);
         assert_eq!(report.envelopes_parsed, 0);
         assert_eq!(hits.len(), 0);
+    }
+
+    #[test]
+    fn re_seed_after_archive_grows_replaces_lane_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let lane = MemoryKeywordLane::new();
+
+        // First scan: one envelope.
+        write_archive_file(dir.path(), &[turn_envelope("v1 only")]);
+        let r1 = load_into_keyword_lane(dir.path(), &lane);
+        assert_eq!(r1.hits_seeded, 1);
+        let hits1 = lane.hits.lock().unwrap()["cortex-code"].len();
+        drop(lane.hits.lock().unwrap()); // release mutex
+        assert_eq!(hits1, 1);
+
+        // Second hour rolls over with two more envelopes; the loader
+        // walks both directories and replaces the lane contents.
+        let dir2 =
+            dir.path().join("events/year=2026/month=04/day=26/hour=20");
+        std::fs::create_dir_all(&dir2).unwrap();
+        let path2 = dir2.join("raw-00000.parquet");
+        let file2 = File::create(&path2).unwrap();
+        let mut enc = zstd::stream::write::Encoder::new(file2, 3).unwrap();
+        use std::io::Write;
+        for prompt in ["v2 first", "v2 second"] {
+            let env = turn_envelope(prompt);
+            enc.write_all(serde_json::to_string(&env).unwrap().as_bytes())
+                .unwrap();
+            enc.write_all(b"\n").unwrap();
+        }
+        enc.finish().unwrap();
+
+        let r2 = load_into_keyword_lane(dir.path(), &lane);
+        assert_eq!(r2.files_visited, 2);
+        assert_eq!(r2.hits_seeded, 3);
+        let hits2 = lane.hits.lock().unwrap();
+        let cortex_code = hits2.get("cortex-code").unwrap();
+        assert_eq!(cortex_code.len(), 3);
+        let texts: Vec<_> = cortex_code.iter().map(|h| h.text.as_str()).collect();
+        assert!(texts.contains(&"v1 only"));
+        assert!(texts.contains(&"v2 first"));
+        assert!(texts.contains(&"v2 second"));
     }
 
     #[test]
