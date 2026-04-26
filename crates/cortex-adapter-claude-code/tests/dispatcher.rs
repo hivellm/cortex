@@ -4,10 +4,20 @@
 use std::sync::Arc;
 
 use cortex_adapter_claude_code::{
-    dispatch_inline, AdapterSection, Dispatcher, MemoryPublisher, Metrics, SessionManager,
-    SyncClient,
+    dispatch_inline, AdapterSection, ClaudeCodeExtras, Dispatcher, MemoryPublisher, Metrics,
+    SessionManager, SyncClient,
 };
+use cortex_core::events::{Kind, ToolCall};
 use serde_json::{json, Value};
+
+fn cc_extras(e: &cortex_core::events::Envelope) -> ClaudeCodeExtras {
+    e.context
+        .extras
+        .get("claude_code")
+        .cloned()
+        .map(|v| serde_json::from_value(v).unwrap_or_default())
+        .unwrap_or_default()
+}
 
 fn build_dispatcher(cfg: AdapterSection) -> (Arc<Dispatcher>, Arc<MemoryPublisher>) {
     let metrics = Arc::new(Metrics::new());
@@ -49,10 +59,10 @@ async fn user_prompt_returns_empty_additional_context_on_unreachable_api() {
     // Empty fail-open ⇒ {} reply ⇒ no additionalContext field.
     assert!(resp.additional_context.is_none());
     assert!(resp.permission_decision.is_none());
-    // Async publish always happens.
+    // UserPromptSubmit is publishable as a canonical `turn` event.
     assert_eq!(publisher.count().await, 1);
     let snap = publisher.snapshot().await;
-    assert_eq!(snap[0].kind, "turn.user");
+    assert_eq!(snap[0].kind, Kind::Turn);
 }
 
 #[tokio::test]
@@ -79,8 +89,9 @@ async fn pre_tool_use_allows_when_law_check_unreachable() {
     )
     .await;
     // Fail-open: no permission_decision means Claude Code proceeds.
+    // PreToolUse is sync-only — no canonical event published.
     assert!(resp.permission_decision.is_none());
-    assert_eq!(publisher.count().await, 1);
+    assert_eq!(publisher.count().await, 0);
 }
 
 #[tokio::test]
@@ -127,9 +138,9 @@ async fn pre_tool_use_denies_on_critical_violation_from_mock_api() {
     let reason = resp.permission_decision_reason.unwrap_or_default();
     assert!(reason.contains("LAW-007"));
     assert!(reason.contains("no --no-verify"));
-    // Async publish still happens — the violation is captured even
-    // though the call was denied synchronously.
-    assert_eq!(publisher.count().await, 1);
+    // PreToolUse is sync-only; the deny is recorded by the law-check
+    // path, not by an envelope event.
+    assert_eq!(publisher.count().await, 0);
 }
 
 #[tokio::test]
@@ -220,17 +231,30 @@ async fn session_correlation_pairs_pre_and_post_tool_events() {
     )
     .await;
     let snap = publisher.snapshot().await;
-    let pre = snap.iter().find(|e| e.kind == "tool_call.requested").unwrap();
-    let post = snap.iter().find(|e| e.kind == "tool_call.completed").unwrap();
-    assert_eq!(pre.tool_call_id, post.tool_call_id);
-    assert_eq!(pre.session_id, post.session_id);
-    assert_eq!(pre.turn_id, post.turn_id);
+    // Only Turn (UserPromptSubmit) and ToolCall (PostToolUse) publish.
+    // PreToolUse is sync-only and does not appear here.
+    let turn = snap.iter().find(|e| e.kind == Kind::Turn).unwrap();
+    let tool_call = snap.iter().find(|e| e.kind == Kind::ToolCall).unwrap();
+    assert_eq!(turn.session_id, tool_call.session_id);
+    let tc_extras = cc_extras(tool_call);
+    let turn_extras = cc_extras(turn);
+    assert_eq!(turn_extras.turn_id, tc_extras.turn_id);
+    assert!(tc_extras.tool_call_id.is_some());
+    assert_eq!(tc_extras.tool_use_id.as_deref(), Some("tu-7"));
+    assert!(!tc_extras.orphan);
 }
 
 #[tokio::test]
 async fn redaction_strips_secrets_before_publish() {
     let cfg = AdapterSection::default();
     let (dispatcher, publisher) = build_dispatcher(cfg);
+    // Open a turn first so the PreToolUse correlation isn't orphaned.
+    dispatch_inline(
+        frame("UserPromptSubmit", json!({ "prompt": "go" })),
+        dispatcher.clone(),
+    )
+    .await;
+    // PreToolUse opens the tool_call slot but doesn't publish.
     dispatch_inline(
         frame(
             "PreToolUse",
@@ -240,16 +264,29 @@ async fn redaction_strips_secrets_before_publish() {
                 "input": { "command": "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE0000" }
             }),
         ),
+        dispatcher.clone(),
+    )
+    .await;
+    // PostToolUse carries the canonical record — also redacted.
+    dispatch_inline(
+        frame(
+            "PostToolUse",
+            json!({
+                "tool_name": "Bash",
+                "tool_use_id": "tu-secret",
+                "input": { "command": "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE0000" },
+                "output": { "stdout": "", "exit_code": 0 }
+            }),
+        ),
         dispatcher,
     )
     .await;
     let snap = publisher.snapshot().await;
-    let evt = snap.iter().find(|e| e.kind == "tool_call.requested").unwrap();
-    let body = evt.redacted_payload["input"]["command"]
-        .as_str()
-        .unwrap_or_default();
+    let evt = snap.iter().find(|e| e.kind == Kind::ToolCall).unwrap();
+    let tc: ToolCall = serde_json::from_value(evt.payload.clone()).unwrap();
+    let body = tc.input["command"].as_str().unwrap_or_default();
     assert!(!body.contains("AKIAIOSFODNN7EXAMPLE0000"));
-    assert!(evt.redactions >= 1);
+    assert!(!evt.redactions.is_empty());
 }
 
 #[tokio::test]

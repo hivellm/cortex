@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use crate::events::ClaudeEvent;
+use cortex_core::events::Envelope;
 use crate::metrics::Metrics;
 use crate::wal::OverflowWal;
 
@@ -25,7 +25,7 @@ use crate::wal::OverflowWal;
 pub trait Publisher: Send + Sync {
     /// Push an event onto the publisher. Returns the queue depth
     /// after enqueue. Implementations may drop oldest under pressure.
-    async fn publish(&self, event: ClaudeEvent) -> usize;
+    async fn publish(&self, event: Envelope) -> usize;
 
     /// Force-drain whatever is queued. Returns the number of events
     /// the drain attempted to write. Used at shutdown / tests.
@@ -39,7 +39,7 @@ pub trait Publisher: Send + Sync {
 pub struct HttpPublisher {
     client: Client,
     endpoint: String,
-    queue: Arc<tokio::sync::Mutex<std::collections::VecDeque<ClaudeEvent>>>,
+    queue: Arc<tokio::sync::Mutex<std::collections::VecDeque<Envelope>>>,
     queue_bounded: usize,
     batch_size: usize,
     max_retry: u32,
@@ -76,6 +76,11 @@ impl HttpPublisher {
     /// publisher: WAL is drained at startup. Each replayed event goes
     /// straight into the publisher queue so the normal drain machinery
     /// handles the retry semantics.
+    ///
+    /// Lines that don't deserialize as a canonical [`Envelope`] are
+    /// dropped — typically these are legacy `ClaudeEvent` lines from
+    /// the pre-spec-04 build. The drop count is logged once at
+    /// `WARN`.
     pub async fn replay_wal(&self) -> usize {
         let entries = match self.wal.drain() {
             Ok(v) => v,
@@ -85,17 +90,27 @@ impl HttpPublisher {
             }
         };
         let mut count = 0usize;
+        let mut dropped = 0usize;
         for value in entries {
-            if let Ok(event) = serde_json::from_value::<ClaudeEvent>(value) {
-                self.enqueue_internal(event).await;
-                count += 1;
+            match serde_json::from_value::<Envelope>(value) {
+                Ok(event) => {
+                    self.enqueue_internal(event).await;
+                    count += 1;
+                }
+                Err(_) => dropped += 1,
             }
+        }
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "dropped legacy WAL lines from pre-spec-04 build (no canonical envelope)"
+            );
         }
         count
     }
 
     /// Enqueue without metric noise; used by replay.
-    async fn enqueue_internal(&self, event: ClaudeEvent) {
+    async fn enqueue_internal(&self, event: Envelope) {
         let mut q = self.queue.lock().await;
         if q.len() >= self.queue_bounded {
             // Drop oldest, mirror to WAL.
@@ -113,13 +128,13 @@ impl HttpPublisher {
 
     async fn flush_locked(
         &self,
-        q: &mut std::collections::VecDeque<ClaudeEvent>,
+        q: &mut std::collections::VecDeque<Envelope>,
     ) -> usize {
         if q.is_empty() {
             return 0;
         }
         let take = q.len().min(self.batch_size);
-        let mut batch: Vec<ClaudeEvent> = Vec::with_capacity(take);
+        let mut batch: Vec<Envelope> = Vec::with_capacity(take);
         for _ in 0..take {
             if let Some(e) = q.pop_front() {
                 batch.push(e);
@@ -129,7 +144,7 @@ impl HttpPublisher {
         match self.post_batch(&batch).await {
             Ok(()) => {
                 for e in &batch {
-                    self.metrics.incr_events_total(&e.kind);
+                    self.metrics.incr_events_total(e.kind.schema_stem());
                 }
             }
             Err(e) => {
@@ -147,7 +162,7 @@ impl HttpPublisher {
         n
     }
 
-    async fn post_batch(&self, batch: &[ClaudeEvent]) -> Result<(), reqwest::Error> {
+    async fn post_batch(&self, batch: &[Envelope]) -> Result<(), reqwest::Error> {
         let body: Value = json!({
             "events": batch
                 .iter()
@@ -195,7 +210,7 @@ impl HttpPublisher {
 
 #[async_trait]
 impl Publisher for HttpPublisher {
-    async fn publish(&self, event: ClaudeEvent) -> usize {
+    async fn publish(&self, event: Envelope) -> usize {
         let mut q = self.queue.lock().await;
         if q.len() >= self.queue_bounded {
             if let Some(dropped) = q.pop_front() {
@@ -236,7 +251,7 @@ impl Publisher for HttpPublisher {
 #[derive(Default)]
 pub struct MemoryPublisher {
     /// Recorded events in arrival order.
-    pub events: Arc<tokio::sync::Mutex<Vec<ClaudeEvent>>>,
+    pub events: Arc<tokio::sync::Mutex<Vec<Envelope>>>,
 }
 
 impl MemoryPublisher {
@@ -245,7 +260,7 @@ impl MemoryPublisher {
         Self::default()
     }
     /// Snapshot of recorded events.
-    pub async fn snapshot(&self) -> Vec<ClaudeEvent> {
+    pub async fn snapshot(&self) -> Vec<Envelope> {
         self.events.lock().await.clone()
     }
     /// Total events recorded.
@@ -256,7 +271,7 @@ impl MemoryPublisher {
 
 #[async_trait]
 impl Publisher for MemoryPublisher {
-    async fn publish(&self, event: ClaudeEvent) -> usize {
+    async fn publish(&self, event: Envelope) -> usize {
         let mut g = self.events.lock().await;
         g.push(event);
         g.len()

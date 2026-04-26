@@ -39,6 +39,11 @@ impl SessionState {
 #[derive(Debug, Default)]
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, SessionState>>,
+    /// Maps the inbound `CLAUDE_SESSION_ID` (or `__pid_<n>` when
+    /// absent) to the canonical ULID we publish on every envelope.
+    /// Spec 04's `session_id` regex `^[0-9A-HJ-KM-NP-TV-Z]{26}$` is
+    /// strict, so we never echo a free-form hint back to the wire.
+    hint_to_id: Mutex<HashMap<String, String>>,
 }
 
 impl SessionManager {
@@ -49,16 +54,21 @@ impl SessionManager {
 
     /// Resolve or synthesize a session id.
     ///
-    /// Lookup order: `session_id_hint` (e.g. `CLAUDE_SESSION_ID` env
-    /// passed by the hook), the cached pid-keyed fallback, or a new
-    /// `cc-sess-<pid>-<ulid>` stamp.
+    /// Always returns a 26-char Crockford ULID. The (hint → ULID) and
+    /// (pid → ULID) mappings are cached so every hook in the same
+    /// Claude session resolves to the same canonical id.
     pub fn resolve_or_synthesize(&self, hint: Option<&str>, pid_fallback: u32) -> String {
-        if let Some(id) = hint {
-            if !id.is_empty() {
-                return id.to_string();
-            }
+        let key = match hint {
+            Some(h) if !h.is_empty() => h.to_string(),
+            _ => format!("__pid_{pid_fallback}"),
+        };
+        if let Ok(mut g) = self.hint_to_id.lock() {
+            return g
+                .entry(key)
+                .or_insert_with(|| ulid::Ulid::new().to_string())
+                .clone();
         }
-        format!("cc-sess-{}-{}", pid_fallback, ulid::Ulid::new())
+        ulid::Ulid::new().to_string()
     }
 
     /// Register the state for `session_id` if it's new; otherwise
@@ -145,18 +155,30 @@ impl SessionManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn synthesizes_session_when_hint_missing() {
-        let mgr = SessionManager::new();
-        let id = mgr.resolve_or_synthesize(None, 1234);
-        assert!(id.starts_with("cc-sess-1234-"));
+    fn is_canonical_ulid(s: &str) -> bool {
+        s.len() == 26 && s.chars().all(|c| matches!(c,
+            '0'..='9' | 'A'..='H' | 'J'..='K' | 'M'..='N' | 'P'..='T' | 'V'..='Z'))
     }
 
     #[test]
-    fn keeps_hinted_session_id_when_provided() {
+    fn synthesizes_canonical_ulid_when_hint_missing() {
         let mgr = SessionManager::new();
-        let id = mgr.resolve_or_synthesize(Some("env-session"), 0);
-        assert_eq!(id, "env-session");
+        let id = mgr.resolve_or_synthesize(None, 1234);
+        assert!(is_canonical_ulid(&id), "expected ULID, got {id}");
+        // Same pid resolves to the same id across calls (cached).
+        let id2 = mgr.resolve_or_synthesize(None, 1234);
+        assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn maps_hint_to_canonical_ulid_consistently() {
+        let mgr = SessionManager::new();
+        let id1 = mgr.resolve_or_synthesize(Some("env-session-X"), 0);
+        let id2 = mgr.resolve_or_synthesize(Some("env-session-X"), 0);
+        assert!(is_canonical_ulid(&id1));
+        assert_eq!(id1, id2, "same hint must resolve to the same ULID");
+        let id3 = mgr.resolve_or_synthesize(Some("env-session-Y"), 0);
+        assert_ne!(id1, id3, "different hint must resolve to different ULIDs");
     }
 
     #[test]

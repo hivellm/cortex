@@ -11,7 +11,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::events::{build_event, ClaudeEvent, HookFrame, HookKind};
+use crate::events::{build_event, HookFrame, HookKind};
 use crate::publisher::Publisher;
 use crate::session::SessionManager;
 use crate::sync_paths::SyncClient;
@@ -91,10 +91,30 @@ impl Dispatcher {
             }
         };
 
-        let event = build_event(kind, &frame, &self.sessions, self.pid);
-        let response = self.maybe_sync_path(kind, &frame, &event).await;
-        // Async publish always happens, regardless of sync outcome.
-        self.publisher.publish(event).await;
+        // Resolve correlation IDs before sync path so PreToolUse can
+        // reference the in-flight turn even though it doesn't publish.
+        let session_id = self
+            .sessions
+            .resolve_or_synthesize(frame.session_id.as_deref(), self.pid);
+        self.sessions.ensure(&session_id);
+
+        // build_event updates correlation tables (open turn / open tool
+        // call) and returns Some(envelope) only for the publishable
+        // hooks (UserPromptSubmit, PostToolUse, SubagentStop).
+        let envelope = build_event(kind, &frame, &self.sessions, self.pid);
+        let turn_id = self.sessions.current_turn(&session_id);
+
+        let response = self
+            .maybe_sync_path(kind, &frame, &session_id, turn_id.as_deref())
+            .await;
+
+        // Only publishable hooks reach the queue. Spec 04 has no
+        // canonical kind for PreToolUse / Stop / SessionStart /
+        // Notification, so they're sync-only.
+        if let Some(env) = envelope {
+            self.publisher.publish(env).await;
+        }
+
         response
     }
 
@@ -102,7 +122,8 @@ impl Dispatcher {
         &self,
         kind: HookKind,
         frame: &HookFrame,
-        event: &ClaudeEvent,
+        session_id: &str,
+        turn_id: Option<&str>,
     ) -> HookResponse {
         match kind {
             HookKind::UserPromptSubmit => {
@@ -111,7 +132,7 @@ impl Dispatcher {
                     .unwrap_or_default();
                 let result = self
                     .sync
-                    .pre_thinking(&prompt, &event.session_id, frame.cwd.as_deref())
+                    .pre_thinking(&prompt, session_id, frame.cwd.as_deref())
                     .await;
                 if result.fail_open
                     && result
@@ -130,12 +151,7 @@ impl Dispatcher {
                 let input = frame.payload.get("input").cloned().unwrap_or(json!({}));
                 let result = self
                     .sync
-                    .law_check(
-                        &tool_name,
-                        &input,
-                        &event.session_id,
-                        event.turn_id.as_deref(),
-                    )
+                    .law_check(&tool_name, &input, session_id, turn_id)
                     .await;
                 if result.deny {
                     return HookResponse::deny(result.reason);

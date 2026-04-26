@@ -26,7 +26,7 @@ pub use config::{
     LawsSection, LoggingSection, PreThinkingSection, RedactionSection,
 };
 pub use dispatcher::{Dispatcher, HookResponse};
-pub use events::{build_event, ClaudeEvent, HookFrame, HookKind};
+pub use events::{build_event, ClaudeCodeExtras, HookFrame, HookKind, TOOL_CLAUDE_CODE};
 pub use install::{
     install, install_with, uninstall, HookShim, InstallError, InstallOptions, InstallReport,
     Layout, HOOK_SHIMS,

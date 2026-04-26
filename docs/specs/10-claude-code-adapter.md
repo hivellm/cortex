@@ -75,19 +75,26 @@ Daemon replies (must be printed to stdout unchanged by the hook script):
 
 The adapter's rule: **never break the session.** Any internal error produces an empty JSON response, a structured log entry, and a metric bump — it never bubbles up as a Claude Code failure.
 
-### Envelope mapping (Claude Code hook → Cortex event kind)
+### Envelope mapping (Claude Code hook → canonical Cortex event)
 
-| Hook                | Cortex kind(s)                         | Notes                                                          |
-|---------------------|----------------------------------------|----------------------------------------------------------------|
-| `SessionStart`      | `turn.session_start`                    | Emits `Session` node props                                     |
-| `UserPromptSubmit`  | `turn.user`                             | + synchronous `pre_change_context` query                       |
-| `PreToolUse`        | `tool_call.requested`                   | + synchronous blocking-law check                               |
-| `PostToolUse`       | `tool_call.completed`                   | Carries status + latency + truncated output                    |
-| `SubagentStop`      | `turn.subagent_complete`                 | Attaches the subagent's final message                          |
-| `Stop`              | `turn.session_stop`                      | Triggers session summary in `cortex-api` (spec 15 hook)        |
-| `Notification`      | `event.notification`                     | Permission prompts, idle warnings                              |
+The adapter emits the canonical `Envelope` defined by spec 04
+(`crates/cortex-core/schemas/envelope.schema.json`). Spec 04's `kind`
+enum is the authority — there is no parallel "dotted" `kind` vocabulary.
+Hooks without a canonical analogue still fire the synchronous
+`HookResponse` path (law-check verdicts, pre-thinking bundles) but
+do not produce a published event:
 
-All events carry `adapter = "claude-code"`, `model = env CLAUDE_MODEL`, and the session's `cwd` as `context_repo` (best-effort resolution to repo name).
+| Hook                | Canonical `kind` | Sync path                        | Notes                                                              |
+|---------------------|------------------|----------------------------------|--------------------------------------------------------------------|
+| `UserPromptSubmit`  | `turn`           | `pre_change_context` query        | payload `{user_message, assistant_message: null, tokens?, tool_call_event_ids?}` |
+| `PostToolUse`       | `tool_call`      | —                                 | payload `{tool_name, input, output, outcome, duration_ms?, touched?}` |
+| `SubagentStop`      | `agent_call`     | —                                 | payload `{agent_type, description, prompt?, model?, team_name?, child_event_ids?, result?, duration_ms?, outcome}` |
+| `PreToolUse`        | _drop_           | blocking law-check                | The matching `PostToolUse` carries the canonical record.            |
+| `Stop`              | _drop_           | —                                 | Session lifecycle is implicit; no canonical kind.                   |
+| `SessionStart`      | _drop_           | —                                 | The first `turn` opens the session.                                 |
+| `Notification`      | _drop_           | —                                 | No canonical kind; recorded only in adapter-side metrics.           |
+
+All published envelopes set `tool = "claude-code"`, `schema_version = "1"`, `stream = "live"`, `model = env CLAUDE_MODEL` when present, and a `context` block with `platform`, `cwd`, `repo` (best-effort resolution from `cwd`), and an `extras.claude_code` sub-object carrying the adapter-side correlation IDs (`turn_id`, `tool_call_id`, `tool_use_id`, `orphan`) so the indexing layer can reconstruct turn / tool-call lineage without polluting the canonical envelope.
 
 ### Adapter config (`~/.cortex/adapter.toml`)
 
