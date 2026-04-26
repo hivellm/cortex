@@ -7,9 +7,6 @@
     "email": "hello@hivellm.org"
   },
   "homepage": "https://github.com/hivellm/cortex",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hivellm/cortex"
-  },
+  "repository": "https://github.com/hivellm/cortex",
   "license": "Apache-2.0"
 }
