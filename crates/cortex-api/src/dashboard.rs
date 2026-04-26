@@ -44,7 +44,18 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/analyses", get(analyses))
         .route("/v1/dashboard/tools/stats", get(tools_stats))
         .route("/v1/dashboard/graph", get(graph))
+        .route("/v1/dashboard/sessions", get(sessions))
         .with_state(state)
+}
+
+/// Pull the `session_id` extras a hit was stamped with by the
+/// archive loader. Helper kept inline so all sites share the same
+/// fall-through logic.
+fn session_id_of(hit: &crate::lanes::LaneHit) -> Option<&str> {
+    hit.extras
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------
@@ -141,6 +152,17 @@ pub struct TimelineQuery {
     /// Cap the result count. Defaults to 50, max 500.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Restrict to a single session. Pass the `session_id` from
+    /// `/v1/dashboard/sessions` (canonical 26-char ULID).
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Restrict to a single repo (matches `context.repo`).
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Restrict to a single canonical kind (`turn` / `tool_call` /
+    /// `agent_call`). Maps onto the symbol prefix the lane stamps.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// One timeline row — shape matches the prototype's `MOCK.events`.
@@ -163,6 +185,11 @@ pub struct TimelineEvent {
     pub detail: String,
     /// Repo identifier (best-effort from `context.repo`).
     pub repo: Option<String>,
+    /// Source session id (the canonical 26-char ULID). Surfaced so
+    /// the GUI can render a "this row is from session X" pill and
+    /// link back to the session detail.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// Adapter / tool — always `claude-code` today, surfaced for
     /// future multi-adapter contexts.
     pub model: String,
@@ -174,6 +201,15 @@ async fn timeline_recent(
 ) -> Response {
     let limit = params.limit.unwrap_or(50).clamp(1, 500);
     let mut hits = collect_lane_hits(&state.lane);
+    if let Some(sid) = params.session_id.as_deref().filter(|s| !s.is_empty()) {
+        hits.retain(|h| session_id_of(h) == Some(sid));
+    }
+    if let Some(repo) = params.repo.as_deref().filter(|r| !r.is_empty()) {
+        hits.retain(|h| h.repo.as_deref() == Some(repo));
+    }
+    if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
+        hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
+    }
     // Newest first by `ts`.
     hits.sort_by(|a, b| b.ts.cmp(&a.ts));
     hits.truncate(limit);
@@ -187,6 +223,7 @@ async fn timeline_recent(
             title: title_from_hit(&h),
             detail: clip(&h.text, 280),
             repo: h.repo.clone(),
+            session_id: session_id_of(&h).map(String::from),
             model: "claude-code".to_string(),
         })
         .collect();
@@ -242,6 +279,15 @@ pub struct MemoryQuery {
     /// Cap the result count. Defaults to 50, max 500.
     #[serde(default)]
     pub limit: Option<usize>,
+    /// Restrict to one session.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Restrict to one repo.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Restrict to one canonical kind.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 /// One memory row — shape matches the prototype's `MOCK.memories`.
@@ -272,6 +318,15 @@ async fn memory(
     let q = params.q.unwrap_or_default();
 
     let mut hits = collect_lane_hits(&state.lane);
+    if let Some(sid) = params.session_id.as_deref().filter(|s| !s.is_empty()) {
+        hits.retain(|h| session_id_of(h) == Some(sid));
+    }
+    if let Some(repo) = params.repo.as_deref().filter(|r| !r.is_empty()) {
+        hits.retain(|h| h.repo.as_deref() == Some(repo));
+    }
+    if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
+        hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
+    }
     if !q.trim().is_empty() {
         let needle = q.to_ascii_lowercase();
         hits.retain(|h| h.text.to_ascii_lowercase().contains(&needle));
@@ -640,6 +695,94 @@ pub struct GraphEdge {
     pub label: String,
 }
 
+// ---------------------------------------------------------------------
+// /v1/dashboard/sessions
+// ---------------------------------------------------------------------
+
+/// One session row — aggregated from the lane hits' `session_id`
+/// extras stamp. The dashboard sidebar lists these so the user can
+/// click to filter Timeline / Memory views.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionRow {
+    /// Canonical 26-char ULID.
+    pub session_id: String,
+    /// Total events captured under this session.
+    pub event_count: u64,
+    /// Per-kind breakdown.
+    pub kind_breakdown: Vec<KindCount>,
+    /// `ts` of the earliest event we have (ms epoch). 0 if missing.
+    pub started_at_ms: i64,
+    /// `ts` of the latest event we have (ms epoch).
+    pub last_event_ms: i64,
+    /// Duration in milliseconds between earliest and latest event.
+    pub duration_ms: i64,
+    /// Repos touched by this session.
+    pub repos: Vec<String>,
+    /// Title surface — first turn's user_message clipped at 80 chars.
+    /// Empty when no turn was captured under this session.
+    pub title: String,
+}
+
+async fn sessions(State(state): State<DashboardState>) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+
+    // Group by session_id.
+    let mut groups: std::collections::BTreeMap<String, Vec<crate::lanes::LaneHit>> =
+        std::collections::BTreeMap::new();
+    for h in hits {
+        if let Some(sid) = session_id_of(&h) {
+            groups.entry(sid.to_string()).or_default().push(h);
+        }
+    }
+
+    let mut rows: Vec<SessionRow> = groups
+        .into_iter()
+        .map(|(session_id, mut bucket)| {
+            // Sort oldest → newest so [0] is the earliest event.
+            bucket.sort_by(|a, b| a.ts.cmp(&b.ts));
+            let started_at_ms = bucket.first().map(|h| h.ts).unwrap_or(0);
+            let last_event_ms = bucket.last().map(|h| h.ts).unwrap_or(0);
+            let duration_ms = (last_event_ms - started_at_ms).max(0);
+
+            let mut by_kind: std::collections::BTreeMap<&'static str, u64> =
+                std::collections::BTreeMap::new();
+            let mut repos: std::collections::BTreeSet<String> = Default::default();
+            let mut title = String::new();
+            for h in &bucket {
+                let kind = symbol_to_kind(h.symbol.as_deref());
+                *by_kind.entry(kind).or_insert(0) += 1;
+                if let Some(r) = h.repo.as_deref() {
+                    repos.insert(r.to_string());
+                }
+                if title.is_empty() && kind == "turn" {
+                    title = clip(h.text.lines().next().unwrap_or(""), 80);
+                }
+            }
+
+            SessionRow {
+                session_id,
+                event_count: bucket.len() as u64,
+                kind_breakdown: by_kind
+                    .into_iter()
+                    .map(|(k, count)| KindCount {
+                        kind: k.to_string(),
+                        count,
+                    })
+                    .collect(),
+                started_at_ms,
+                last_event_ms,
+                duration_ms,
+                repos: repos.into_iter().collect(),
+                title,
+            }
+        })
+        .collect();
+
+    // Sort by most-recent-activity, descending.
+    rows.sort_by(|a, b| b.last_event_ms.cmp(&a.last_event_ms));
+    (StatusCode::OK, Json(rows)).into_response()
+}
+
 async fn graph(State(state): State<DashboardState>) -> Response {
     // Build a small graph from the seeded lane. We can reach Turn
     // and ToolCall nodes via the captured hits + the
@@ -734,6 +877,12 @@ mod tests {
     }
 
     fn turn_hit(text: &str, repo: &str, ts: i64) -> LaneHit {
+        turn_hit_in("session-default", text, repo, ts)
+    }
+
+    fn turn_hit_in(session: &str, text: &str, repo: &str, ts: i64) -> LaneHit {
+        let mut extras = BTreeMap::new();
+        extras.insert("session_id".to_string(), Value::String(session.to_string()));
         LaneHit {
             doc_id: format!("archive|{}", text),
             text: text.to_string(),
@@ -744,7 +893,7 @@ mod tests {
             score: 1.0,
             ts,
             severity: None,
-            extras: BTreeMap::new(),
+            extras,
         }
     }
 
@@ -802,7 +951,12 @@ mod tests {
         let state = DashboardState { lane };
         let resp = timeline_recent(
             State(state),
-            Query(TimelineQuery { limit: Some(2) }),
+            Query(TimelineQuery {
+                limit: Some(2),
+                session_id: None,
+                repo: None,
+                kind: None,
+            }),
         )
         .await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -827,6 +981,9 @@ mod tests {
             Query(MemoryQuery {
                 q: Some("hnsw".to_string()),
                 limit: None,
+                session_id: None,
+                repo: None,
+                kind: None,
             }),
         )
         .await;
@@ -845,7 +1002,17 @@ mod tests {
             turn_hit("b", "Cortex", 200),
         ]);
         let state = DashboardState { lane };
-        let resp = memory(State(state), Query(MemoryQuery { q: None, limit: None })).await;
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: None,
+                session_id: None,
+                repo: None,
+                kind: None,
+            }),
+        )
+        .await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
             .unwrap();
@@ -866,6 +1033,9 @@ mod tests {
             State(state),
             Query(TimelineQuery {
                 limit: Some(99999),
+                session_id: None,
+                repo: None,
+                kind: None,
             }),
         )
         .await;
@@ -874,6 +1044,83 @@ mod tests {
             .unwrap();
         let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed.len(), 500);
+    }
+
+    #[tokio::test]
+    async fn sessions_groups_by_session_id_and_sorts_by_recency() {
+        let lane = lane_with(vec![
+            turn_hit_in("01SESSIONA0000000000000001", "first ever", "Cortex", 100),
+            turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
+            turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
+        ]);
+        let state = DashboardState { lane };
+        let resp = sessions(State(state)).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let rows: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows.len(), 2);
+        // Most-recent first.
+        assert_eq!(rows[0]["session_id"], "01SESSIONB0000000000000002");
+        assert_eq!(rows[0]["event_count"], 1);
+        assert_eq!(rows[0]["title"], "session B latest");
+        assert_eq!(rows[1]["session_id"], "01SESSIONA0000000000000001");
+        assert_eq!(rows[1]["event_count"], 2);
+        assert_eq!(rows[1]["duration_ms"], 100);
+        assert_eq!(rows[1]["title"], "first ever");
+    }
+
+    #[tokio::test]
+    async fn timeline_filter_by_session_id_only_returns_matching_rows() {
+        let lane = lane_with(vec![
+            turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
+            turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
+        ]);
+        let state = DashboardState { lane };
+        let resp = timeline_recent(
+            State(state),
+            Query(TimelineQuery {
+                limit: None,
+                session_id: Some("01SESSIONB0000000000000002".to_string()),
+                repo: None,
+                kind: None,
+            }),
+        )
+        .await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["title"], "beta");
+        assert_eq!(parsed[0]["session_id"], "01SESSIONB0000000000000002");
+    }
+
+    #[tokio::test]
+    async fn memory_filter_by_repo_and_kind_combine() {
+        let lane = lane_with(vec![
+            turn_hit("note A", "Cortex", 100),
+            tool_call_hit("Edit", "x", "Cortex", 200),
+            turn_hit("note V", "Vectorizer", 150),
+        ]);
+        let state = DashboardState { lane };
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: None,
+                session_id: None,
+                repo: Some("Cortex".to_string()),
+                kind: Some("turn".to_string()),
+            }),
+        )
+        .await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["title"], "note A");
     }
 
     #[test]

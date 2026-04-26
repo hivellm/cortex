@@ -2,7 +2,14 @@
   "permissions": {
     "allow": [
       "Read(//e/HiveLLM/**)",
-      "Read(//c/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/memory/**)"
+      "Read(//c/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/memory/**)",
+      "Bash(claude plugin *)",
+      "Bash(rm -rf C:/Users/Bolado/.claude/plugins/cache/hivellm-cortex)",
+      "Bash(rm C:/Users/Bolado/.claude/plugins/cache/hivellm-cortex/cortex/0.1.0/hooks.json)",
+      "Read(//c/Users/Bolado/.claude/plugins/cache/hivellm-cortex/cortex/0.1.0/**)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
     ]
   }
 }

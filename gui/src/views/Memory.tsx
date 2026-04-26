@@ -4,16 +4,18 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
 import { api } from "../lib/api";
+import { hasAnyFilter, useFilters } from "../lib/filters";
 
 const KIND_FACETS = ["project", "reference", "feedback", "user"];
 
 export function MemoryView() {
   const [query, setQuery] = useState("");
   const [activeKind, setActiveKind] = useState<string | null>(null);
+  const { filters, setFilter, clearFilters } = useFilters();
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["memory", query],
-    queryFn: () => api.memory(query, 80),
+    queryKey: ["memory", query, filters.session_id ?? "", filters.repo ?? ""],
+    queryFn: () => api.memory(query, 80, filters),
     refetchInterval: 8000,
     refetchIntervalInBackground: true,
   });
@@ -41,6 +43,35 @@ export function MemoryView() {
           </p>
         </div>
       </div>
+
+      {hasAnyFilter(filters) ? (
+        <div className="filter-banner">
+          <span className="filter-banner__label">Filtered:</span>
+          {filters.session_id ? (
+            <button
+              className="chip chip--active"
+              onClick={() => setFilter("session_id", undefined)}
+            >
+              session: <span className="mono">{filters.session_id.slice(0, 12)}…</span> ✕
+            </button>
+          ) : null}
+          {filters.repo ? (
+            <button
+              className="chip chip--active"
+              onClick={() => setFilter("repo", undefined)}
+            >
+              repo: {filters.repo} ✕
+            </button>
+          ) : null}
+          <button
+            className="btn btn--sm btn--ghost"
+            onClick={() => clearFilters()}
+            style={{ marginLeft: "auto" }}
+          >
+            Clear all
+          </button>
+        </div>
+      ) : null}
 
       <div className="filter-bar">
         <span className="filter-bar__label">Kind</span>

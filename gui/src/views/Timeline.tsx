@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
 import { api, type TimelineEvent } from "../lib/api";
+import { hasAnyFilter, useFilters } from "../lib/filters";
 
 const KIND_ICON: Record<string, string> = {
   turn: "→",
@@ -64,12 +65,13 @@ const SEARCH_HINT_TEXT = "Search events, repos, models…";
 export function TimelineView() {
   const [query, setQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
+  const { filters, setFilter, clearFilters } = useFilters();
 
-  // Five-second polling now; the streaming source replaces the
-  // queryFn directly when SSE lands per the §1 backend plan.
   const { data, isLoading, error } = useQuery({
-    queryKey: ["timeline-recent"],
-    queryFn: () => api.timelineRecent(200),
+    // Re-fetch when the global filter changes so server-side
+    // filtering kicks in alongside the local kind chips.
+    queryKey: ["timeline-recent", filters.session_id ?? "", filters.repo ?? ""],
+    queryFn: () => api.timelineRecent(200, filters),
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   });
@@ -97,6 +99,14 @@ export function TimelineView() {
     });
   };
 
+  const reposInBuffer = useMemo(() => {
+    const set = new Set<string>();
+    events.forEach((e) => {
+      if (e.repo) set.add(e.repo);
+    });
+    return Array.from(set).sort();
+  }, [events]);
+
   const kinds = ["turn", "tool_call", "agent_call", "memory", "decision", "law_violation"];
 
   const searchInputProps: Record<string, string> = {
@@ -122,6 +132,45 @@ export function TimelineView() {
         </div>
       </div>
 
+      {hasAnyFilter(filters) ? (
+        <div className="filter-banner">
+          <span className="filter-banner__label">Filtered:</span>
+          {filters.session_id ? (
+            <button
+              className="chip chip--active"
+              onClick={() => setFilter("session_id", undefined)}
+              title="Clear session filter"
+            >
+              session: <span className="mono">{filters.session_id.slice(0, 12)}…</span> ✕
+            </button>
+          ) : null}
+          {filters.repo ? (
+            <button
+              className="chip chip--active"
+              onClick={() => setFilter("repo", undefined)}
+              title="Clear repo filter"
+            >
+              repo: {filters.repo} ✕
+            </button>
+          ) : null}
+          {filters.kind ? (
+            <button
+              className="chip chip--active"
+              onClick={() => setFilter("kind", undefined)}
+            >
+              kind: {filters.kind} ✕
+            </button>
+          ) : null}
+          <button
+            className="btn btn--sm btn--ghost"
+            onClick={() => clearFilters()}
+            style={{ marginLeft: "auto" }}
+          >
+            Clear all
+          </button>
+        </div>
+      ) : null}
+
       <div className="filter-bar">
         <span className="filter-bar__label">Kind</span>
         <span className="chip-group">
@@ -136,6 +185,23 @@ export function TimelineView() {
             </button>
           ))}
         </span>
+        {reposInBuffer.length > 1 ? (
+          <>
+            <span className="filter-divider" />
+            <span className="filter-bar__label">Repo</span>
+            <span className="chip-group">
+              {reposInBuffer.map((r) => (
+                <button
+                  key={r}
+                  className={`chip ${filters.repo === r ? "is-active" : ""}`}
+                  onClick={() => setFilter("repo", filters.repo === r ? undefined : r)}
+                >
+                  {r}
+                </button>
+              ))}
+            </span>
+          </>
+        ) : null}
         <span className="filter-divider" />
         <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
           <input

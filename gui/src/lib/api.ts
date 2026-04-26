@@ -51,7 +51,25 @@ export type TimelineEvent = {
   title: string;
   detail: string;
   repo: string | null;
+  session_id?: string;
   model: string;
+};
+
+export type SessionRow = {
+  session_id: string;
+  event_count: number;
+  kind_breakdown: KindCount[];
+  started_at_ms: number;
+  last_event_ms: number;
+  duration_ms: number;
+  repos: string[];
+  title: string;
+};
+
+export type Filters = {
+  session_id?: string;
+  repo?: string;
+  kind?: string;
 };
 
 export type MemoryEntry = {
@@ -131,16 +149,29 @@ export type GraphNode = {
 export type GraphEdge = { from: string; to: string; label: string };
 export type GraphPayload = { nodes: GraphNode[]; edges: GraphEdge[] };
 
+function applyFilters(params: URLSearchParams, filters?: Filters) {
+  if (!filters) return;
+  if (filters.session_id) params.set("session_id", filters.session_id);
+  if (filters.repo) params.set("repo", filters.repo);
+  if (filters.kind) params.set("kind", filters.kind);
+}
+
 export const api = {
   overview: () => getJson<Overview>("/v1/dashboard/overview"),
-  timelineRecent: (limit = 200) =>
-    getJson<TimelineEvent[]>(`/v1/dashboard/timeline/recent?limit=${limit}`),
-  memory: (q: string, limit = 80) => {
+  timelineRecent: (limit = 200, filters?: Filters) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    applyFilters(params, filters);
+    return getJson<TimelineEvent[]>(`/v1/dashboard/timeline/recent?${params.toString()}`);
+  },
+  memory: (q: string, limit = 80, filters?: Filters) => {
     const params = new URLSearchParams();
     if (q) params.set("q", q);
     params.set("limit", String(limit));
+    applyFilters(params, filters);
     return getJson<MemoryEntry[]>(`/v1/dashboard/memory?${params.toString()}`);
   },
+  sessions: () => getJson<SessionRow[]>("/v1/dashboard/sessions"),
   decisions: () => getJson<DecisionRow[]>("/v1/dashboard/decisions"),
   laws: () => getJson<LawRow[]>("/v1/dashboard/laws"),
   violations: () => getJson<ViolationRow[]>("/v1/dashboard/violations"),

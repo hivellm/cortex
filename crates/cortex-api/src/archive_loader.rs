@@ -201,6 +201,14 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         _ => return None,
     };
 
+    // Stamp session_id on extras so the dashboard endpoints can
+    // group / filter by session without re-reading the archive.
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert(
+        "session_id".to_string(),
+        serde_json::Value::String(env.session_id.clone()),
+    );
+
     Some(LaneHit {
         doc_id: format!("archive|{}", env.event_id),
         text,
@@ -214,7 +222,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         score: 1.0,
         ts: parse_rfc3339_to_ms(&env.occurred_at).unwrap_or(0),
         severity: None,
-        extras: Default::default(),
+        extras,
     })
 }
 
