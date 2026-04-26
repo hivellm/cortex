@@ -18,7 +18,8 @@
 - [x] 4.1 `fn map_event_to_patch(&EnrichedEvent) -> GraphPatch` with exhaustive match on `Kind`
 - [x] 4.2 Natural-key computation (Artifact: `repo|path|content_hash`; event_id for Turn/ToolCall/Memory/Decision/Analysis/LawViolation)
 - [x] 4.3 Patch coalescer dedups nodes/edges within a micro-batch
-- [ ] 4.4 Per-kind payload expansion: `TOUCHED` per file, `LINKED_TO`, `OF`, `OBSERVED_IN` (currently identity-only subset)
+- [x] 4.4 Per-kind payload expansion: `TOUCHED` (ToolCall→Artifact per file), `LINKED_TO` (Turn→Decision, role=status via `parent_event_id`), `OF` (LawViolation→Law), `SUPERSEDES` (Decision→Decision), Turn-anchored `HAS_TOOL_CALL` (with Session fallback for orphans)
+- [ ] 4.5 `OBSERVED_IN` (LawViolation → Turn|ToolCall) — blocked by upstream schema: `LawViolationPayload.observed_event_id` carries no kind discriminator, so the writer cannot choose the target label without phantom-node risk via Cypher `MERGE`. Unblocks once the payload gains `observed_event_kind`.
 
 ## 5. Worker loop
 - [ ] 5.1 Consume `cortex.events.enriched` from Synap; batch 256 graph-patch entries / 500 ms flush

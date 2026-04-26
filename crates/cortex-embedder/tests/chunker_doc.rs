@@ -29,6 +29,7 @@ fn make_event(md: &str) -> EnrichedEvent {
         },
         context_repo: None,
         context_path: Some("README.md".into()),
+        parent_event_id: None,
     }
 }
 

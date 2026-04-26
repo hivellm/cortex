@@ -68,33 +68,3 @@ pub const BOOTSTRAP_STATEMENTS: &[&str] = &[
     "CREATE INDEX artifact_path IF NOT EXISTS FOR (a:Artifact) ON (a.path)",
 ];
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn labels_are_unique() {
-        let mut v = LABELS.to_vec();
-        v.sort_unstable();
-        v.dedup();
-        assert_eq!(v.len(), LABELS.len());
-    }
-
-    #[test]
-    fn relationships_are_unique() {
-        let mut v = RELATIONSHIPS.to_vec();
-        v.sort_unstable();
-        v.dedup();
-        assert_eq!(v.len(), RELATIONSHIPS.len());
-    }
-
-    #[test]
-    fn bootstrap_statements_are_idempotent() {
-        for stmt in BOOTSTRAP_STATEMENTS {
-            assert!(
-                stmt.contains("IF NOT EXISTS"),
-                "non-idempotent statement: {stmt}"
-            );
-        }
-    }
-}

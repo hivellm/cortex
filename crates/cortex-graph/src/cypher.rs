@@ -87,13 +87,19 @@ pub const REQUIRED_TEMPLATES: &[&str] = &[
     "node_memory",
     "node_analysis",
     "node_law_violation",
+    "node_law",
     "node_repo",
     // Edges — one entry per (from, rel, to) currently emitted by
     // `mapper.rs`. Keep in lockstep with the mapper.
     "edge_session__has_turn__turn",
     "edge_session__has_tool_call__tool_call",
+    "edge_turn__has_tool_call__tool_call",
     "edge_session__remembers__memory",
     "edge_artifact__in_repo__repo",
+    "edge_tool_call__touched__artifact",
+    "edge_turn__linked_to__decision",
+    "edge_decision__supersedes__decision",
+    "edge_law_violation__of__law",
 ];
 
 /// Read-only registry of Cypher templates keyed by name.

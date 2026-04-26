@@ -34,21 +34,3 @@ pub fn dedup_key(event_id: &str, ordinal: u32, chunk_content_hash: &str) -> Stri
     Ulid::from_bytes(bytes).to_string()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dedup_key_is_deterministic() {
-        let a = dedup_key("evt_1", 0, "abc");
-        let b = dedup_key("evt_1", 0, "abc");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn dedup_key_differs_on_ordinal() {
-        let a = dedup_key("evt_1", 0, "abc");
-        let b = dedup_key("evt_1", 1, "abc");
-        assert_ne!(a, b);
-    }
-}

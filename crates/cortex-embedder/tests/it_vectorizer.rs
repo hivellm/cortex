@@ -253,6 +253,7 @@ async fn idempotent_replay_reports_zero_new() {
         },
         context_repo: None,
         context_path: Some("replay.rs".into()),
+        parent_event_id: None,
     };
 
     // Contract: even with the server's UUID-reassignment bug (ADR 0001),
