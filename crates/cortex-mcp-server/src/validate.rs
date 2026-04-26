@@ -254,12 +254,15 @@ fn validate_hooks(plugin_dir: &Path, report: &mut ValidationReport) {
         ));
         return;
     }
-    let descriptor_path = hooks_dir.join("hooks.json");
+    // Claude Code's plugin loader expects `hooks.json` at the plugin
+    // ROOT, not under `hooks/`. The shim scripts live under `hooks/`
+    // but the descriptor itself is colocated with `plugin.json`.
+    let descriptor_path = plugin_dir.join("hooks.json");
     let raw = match fs::read_to_string(&descriptor_path) {
         Ok(s) => s,
         Err(e) => {
             report.errors.push(format!(
-                "missing {}: {e} — hooks/ directory present but no descriptor",
+                "missing {}: {e} — hooks/ directory present but no descriptor at plugin root",
                 descriptor_path.display()
             ));
             return;
@@ -490,7 +493,7 @@ mod tests {
             "#!/usr/bin/env bash\nexit 0\n",
         );
         write(
-            root.join("hooks/hooks.json"),
+            root.join("hooks.json"),
             r#"{"hooks":{"UserPromptSubmit":[{"matcher":"*","hooks":[{"type":"command","command":"bash \"${CLAUDE_PLUGIN_ROOT}/hooks/cortex-user-prompt.sh\"","timeout":5}]}]}}"#,
         );
     }
@@ -564,7 +567,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         build_clean_plugin(dir.path());
         write(
-            dir.path().join("hooks/hooks.json"),
+            dir.path().join("hooks.json"),
             r#"{"hooks":{"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"bash \"${CLAUDE_PLUGIN_ROOT}/hooks/cortex-does-not-exist.sh\""}]}]}}"#,
         );
         let report = validate_plugin(dir.path());
@@ -595,7 +598,7 @@ mod tests {
     fn malformed_hooks_json_fails() {
         let dir = tempfile::tempdir().unwrap();
         build_clean_plugin(dir.path());
-        write(dir.path().join("hooks/hooks.json"), "{ not json");
+        write(dir.path().join("hooks.json"), "{ not json");
         let report = validate_plugin(dir.path());
         assert!(!report.is_ok());
         assert!(report
@@ -608,13 +611,13 @@ mod tests {
     fn hooks_dir_without_descriptor_fails() {
         let dir = tempfile::tempdir().unwrap();
         build_clean_plugin(dir.path());
-        fs::remove_file(dir.path().join("hooks/hooks.json")).unwrap();
+        fs::remove_file(dir.path().join("hooks.json")).unwrap();
         let report = validate_plugin(dir.path());
         assert!(!report.is_ok());
         assert!(report
             .errors
             .iter()
-            .any(|e| e.contains("hooks/ directory present but no descriptor")
+            .any(|e| e.contains("hooks/ directory present but no descriptor at plugin root")
                 || e.contains("missing")));
     }
 
