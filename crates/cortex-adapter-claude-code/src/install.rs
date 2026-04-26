@@ -124,10 +124,45 @@ pub struct InstallReport {
     pub hooks_written: Vec<String>,
     /// Whether the settings.json patch produced a modified file.
     pub settings_modified: bool,
+    /// `true` when the caller requested `--no-hooks` and the
+    /// installer left both the shim files and the settings patch
+    /// untouched. Used by spec-18 plugin users who already get hooks
+    /// from the plugin's `hooks/hooks.json`.
+    pub hooks_omitted: bool,
+}
+
+/// Knobs the binary entry point passes through to [`install`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InstallOptions {
+    /// When `true`, the installer keeps the daemon socket + adapter
+    /// binary install but does not write hook shims under
+    /// `~/.claude/hooks/` and does not touch `~/.claude/settings.json`.
+    /// The plugin tree (spec 18) then owns the hook surface and there
+    /// is no risk of duplicate firing when both paths are wired up.
+    pub no_hooks: bool,
 }
 
 /// Install hook shims + patch settings.json for the current platform.
+///
+/// Honours [`InstallOptions::no_hooks`] — see the field docs.
 pub fn install(layout: &Layout) -> Result<InstallReport, InstallError> {
+    install_with(layout, InstallOptions::default())
+}
+
+/// [`install`] with explicit options. Public so the binary entry can
+/// thread `--no-hooks` through.
+pub fn install_with(
+    layout: &Layout,
+    options: InstallOptions,
+) -> Result<InstallReport, InstallError> {
+    if options.no_hooks {
+        return Ok(InstallReport {
+            hooks_written: Vec::new(),
+            settings_modified: false,
+            hooks_omitted: true,
+        });
+    }
+
     fs::create_dir_all(&layout.hooks_dir)?;
     let mut hooks_written: Vec<String> = Vec::new();
     for shim in HOOK_SHIMS {
@@ -151,6 +186,7 @@ pub fn install(layout: &Layout) -> Result<InstallReport, InstallError> {
     Ok(InstallReport {
         hooks_written,
         settings_modified,
+        hooks_omitted: false,
     })
 }
 
@@ -158,10 +194,7 @@ pub fn install(layout: &Layout) -> Result<InstallReport, InstallError> {
 /// and (when `purge_files` is `true`) removes the hook shim files
 /// themselves. The settings.json is rewritten to its pre-install
 /// shape exactly when nothing else owns the same keys.
-pub fn uninstall(
-    layout: &Layout,
-    purge_files: bool,
-) -> Result<InstallReport, InstallError> {
+pub fn uninstall(layout: &Layout, purge_files: bool) -> Result<InstallReport, InstallError> {
     let mut hooks_written: Vec<String> = Vec::new();
     if purge_files && layout.hooks_dir.exists() {
         for shim in HOOK_SHIMS {
@@ -174,6 +207,7 @@ pub fn uninstall(
     Ok(InstallReport {
         hooks_written,
         settings_modified,
+        hooks_omitted: false,
     })
 }
 
@@ -245,9 +279,7 @@ fn unpatch_settings(path: &Path) -> Result<bool, InstallError> {
         .and_then(|h| h.as_object())
     {
         if hooks.is_empty() {
-            existing
-                .as_object_mut()
-                .map(|m| m.remove("hooks"));
+            existing.as_object_mut().map(|m| m.remove("hooks"));
         }
     }
     if existing == original {
@@ -301,6 +333,42 @@ mod tests {
         for shim in HOOK_SHIMS {
             assert!(hooks.contains_key(shim.hook_name));
         }
+    }
+
+    #[test]
+    fn install_with_no_hooks_omits_shims_and_leaves_settings_byte_identical() {
+        let (_tmp, layout) = fixture_layout();
+        // Pre-existing settings.json — operator-owned.
+        fs::create_dir_all(&layout.claude_dir).unwrap();
+        let pre = json!({ "theme": "dark" });
+        fs::write(
+            &layout.settings_path,
+            serde_json::to_string_pretty(&pre).unwrap(),
+        )
+        .unwrap();
+        let original = fs::read_to_string(&layout.settings_path).unwrap();
+
+        let report =
+            install_with(&layout, InstallOptions { no_hooks: true }).expect("install --no-hooks");
+        assert!(report.hooks_omitted);
+        assert!(report.hooks_written.is_empty());
+        assert!(!report.settings_modified);
+
+        // settings.json must be byte-identical to before the install.
+        let after = fs::read_to_string(&layout.settings_path).unwrap();
+        assert_eq!(original, after);
+        // Hook shims must not have been written.
+        for shim in HOOK_SHIMS {
+            assert!(!layout.hooks_dir.join(shim.sh_filename).exists());
+        }
+    }
+
+    #[test]
+    fn install_default_path_still_writes_hooks() {
+        let (_tmp, layout) = fixture_layout();
+        let report = install_with(&layout, InstallOptions::default()).expect("install");
+        assert!(!report.hooks_omitted);
+        assert_eq!(report.hooks_written.len(), HOOK_SHIMS.len());
     }
 
     #[test]
@@ -361,7 +429,11 @@ mod tests {
                 "MyCustom": { "type": "command", "command": "/usr/bin/true" }
             }
         });
-        fs::write(&layout.settings_path, serde_json::to_string_pretty(&pre).unwrap()).unwrap();
+        fs::write(
+            &layout.settings_path,
+            serde_json::to_string_pretty(&pre).unwrap(),
+        )
+        .unwrap();
         install(&layout).unwrap();
         uninstall(&layout, false).unwrap();
         let body = fs::read_to_string(&layout.settings_path).unwrap();

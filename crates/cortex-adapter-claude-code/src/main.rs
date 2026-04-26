@@ -8,9 +8,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cortex_adapter_claude_code::{
-    install as install_layout, load_config, serve, spawn_flusher, uninstall as uninstall_layout,
-    Dispatcher, HttpPublisher, IpcBinding, Layout, Metrics, OverflowWal, SessionManager,
-    SyncClient,
+    install_with as install_layout_with, load_config, serve, spawn_flusher,
+    uninstall as uninstall_layout, Dispatcher, HttpPublisher, InstallOptions, IpcBinding, Layout,
+    Metrics, OverflowWal, SessionManager, SyncClient,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -37,7 +37,18 @@ enum Command {
     /// Run the daemon (default).
     Daemon,
     /// Install hook shims + patch `~/.claude/settings.json`.
-    Install,
+    ///
+    /// Pass `--no-hooks` when you already have the spec-18 plugin
+    /// installed (`claude plugin install cortex@hivellm-cortex`) — the
+    /// installer keeps the daemon socket but skips the hook-shim
+    /// write + settings.json patch so the plugin is the only source
+    /// of hook firing.
+    Install {
+        /// Skip the `~/.claude/hooks/` write + the settings.json
+        /// patch. The daemon and adapter binary are still set up.
+        #[arg(long)]
+        no_hooks: bool,
+    },
     /// Reverse install. Pass `--purge` to also remove the hook files.
     Uninstall {
         /// Remove the on-disk hook shims as well as the settings
@@ -56,12 +67,21 @@ async fn main() -> Result<()> {
 
     match cli.command.unwrap_or(Command::Daemon) {
         Command::Daemon => run_daemon(cli.config.as_deref(), cli.bind.as_deref()).await,
-        Command::Install => {
+        Command::Install { no_hooks } => {
             let layout = default_layout();
-            let report = install_layout(&layout)?;
-            println!("installed {} hook shims", report.hooks_written.len());
-            if report.settings_modified {
-                println!("settings.json patched at {}", layout.settings_path.display());
+            let report = install_layout_with(&layout, InstallOptions { no_hooks })?;
+            if report.hooks_omitted {
+                println!(
+                    "hook shim install omitted (--no-hooks); spec-18 plugin owns the hook surface"
+                );
+            } else {
+                println!("installed {} hook shims", report.hooks_written.len());
+                if report.settings_modified {
+                    println!(
+                        "settings.json patched at {}",
+                        layout.settings_path.display()
+                    );
+                }
             }
             Ok(())
         }
@@ -69,7 +89,10 @@ async fn main() -> Result<()> {
             let layout = default_layout();
             let report = uninstall_layout(&layout, purge)?;
             if report.settings_modified {
-                println!("settings.json restored at {}", layout.settings_path.display());
+                println!(
+                    "settings.json restored at {}",
+                    layout.settings_path.display()
+                );
             }
             if purge && !report.hooks_written.is_empty() {
                 println!("removed {} hook shims", report.hooks_written.len());
@@ -89,12 +112,10 @@ async fn run_daemon(
     config_path: Option<&std::path::Path>,
     bind_override: Option<&str>,
 ) -> Result<()> {
-    let cfg_path = config_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            let home = home_dir();
-            home.join(".cortex").join("adapter.toml")
-        });
+    let cfg_path = config_path.map(PathBuf::from).unwrap_or_else(|| {
+        let home = home_dir();
+        home.join(".cortex").join("adapter.toml")
+    });
     let cfg = load_config(&cfg_path)
         .with_context(|| format!("load adapter config from {}", cfg_path.display()))?;
     let adapter = cfg.adapter;
@@ -114,12 +135,7 @@ async fn run_daemon(
     let sync = Arc::new(SyncClient::new(&adapter, metrics.clone()));
     let sessions = Arc::new(SessionManager::new());
     let pid = std::process::id();
-    let dispatcher = Arc::new(Dispatcher::new(
-        sessions,
-        publisher.clone(),
-        sync,
-        pid,
-    ));
+    let dispatcher = Arc::new(Dispatcher::new(sessions, publisher.clone(), sync, pid));
 
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let _flusher = spawn_flusher(
@@ -169,8 +185,7 @@ fn home_dir() -> PathBuf {
 
 fn init_tracing(verbose: bool) {
     let level = if verbose { "debug" } else { "info" };
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        EnvFilter::new(format!("{level},cortex_adapter_claude_code={level}"))
-    });
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new(format!("{level},cortex_adapter_claude_code={level}")));
     fmt().with_env_filter(filter).with_target(true).init();
 }

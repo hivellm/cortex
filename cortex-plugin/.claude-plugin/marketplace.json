@@ -1,6 +1,8 @@
 {
   "name": "hivellm-cortex",
-  "description": "HiveLLM marketplace — Cortex retrieval, pre-thinking, law check, and audit tooling for Claude Code.",
+  "metadata": {
+    "description": "HiveLLM marketplace — Cortex retrieval, pre-thinking, law check, and audit tooling for Claude Code."
+  },
   "owner": {
     "name": "HiveLLM",
     "email": "hello@hivellm.org"

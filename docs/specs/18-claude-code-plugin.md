@@ -29,8 +29,9 @@ A Claude Code plugin is a **directory of text + config**, not a Rust crate. The 
 **Out:**
 - VS Code marketplace extension — separate Phase-3 effort.
 - Non-Claude-Code MCP hosts (Cursor / Codex / Gemini) — spec 17 covers those.
-- Refactoring spec 10's hooks into the plugin's `hooks/hooks.json` (possible follow-up; current install path stays at `~/.claude/hooks/`).
 - Re-implementing the query API or pre-thinking pipeline — the plugin is a thin adapter.
+
+**Hook registration (capture, spec 10) was originally out-of-scope but is folded in via the plugin's `hooks/hooks.json` so a single `claude plugin install cortex@hivellm-cortex` wires up both directions: the model can pull from Cortex via MCP tools, and the Claude Code host pushes session events into Cortex via the plugin-installed hooks. The standalone `cortex-adapter-claude install` path is retained for non-plugin users; pass `--no-hooks` when both paths are present to avoid duplicate firing.**
 
 ## Inputs / Outputs
 
@@ -51,13 +52,22 @@ cortex-plugin/                          # workspace-root plugin directory
 │   ├── cortex-historian.md
 │   ├── cortex-lawkeeper.md
 │   └── cortex-context-curator.md
-└── commands/
-    ├── cortex-status.md
-    ├── cortex-query.md
-    ├── cortex-laws.md
-    ├── cortex-decisions.md
-    ├── cortex-pre-thinking.md
-    └── cortex-audit.md
+├── commands/
+│   ├── cortex-status.md
+│   ├── cortex-query.md
+│   ├── cortex-laws.md
+│   ├── cortex-decisions.md
+│   ├── cortex-pre-thinking.md
+│   └── cortex-audit.md
+└── hooks/                              # spec-10 capture surface, registered at install
+    ├── hooks.json                      # event → bash "${CLAUDE_PLUGIN_ROOT}/hooks/cortex-*.sh"
+    ├── cortex-session-start.{sh,ps1}
+    ├── cortex-user-prompt.{sh,ps1}
+    ├── cortex-pre-tool.{sh,ps1}
+    ├── cortex-post-tool.{sh,ps1}
+    ├── cortex-stop.{sh,ps1}
+    ├── cortex-subagent-stop.{sh,ps1}
+    └── cortex-notification.{sh,ps1}
 ```
 
 Per the Claude Code plugin reference, every component is auto-discovered from this layout. A single `plugin.json` is the only required manifest; subdirectories carry their own component-level metadata (YAML frontmatter for agents, `.mcp.json` for MCP, etc).
@@ -180,6 +190,10 @@ Each sub-agent is a Markdown file with YAML frontmatter (per Claude Code agent r
 
 User-invoked. Each Markdown file is a prompt template the slash command expands to.
 
+### Hooks (`hooks/`)
+
+The plugin ships the spec-10 hook shims directly so capture activates the moment the plugin is installed. `hooks/hooks.json` follows the canonical Claude Code plugin shape: each Claude Code event (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `Notification`) maps to one matcher group invoking `bash "${CLAUDE_PLUGIN_ROOT}/hooks/cortex-<event>.sh"` with a 5-second timeout. The shim scripts under `hooks/` are byte-identical mirrors of `crates/cortex-adapter-claude-code/hooks/`; a CI drift test (`cargo test -p cortex-mcp-server --test hook_drift`) refuses to land a change to one tree without the matching change in the other. The shims forward each event to `~/.cortex/adapter-claude.sock`, which the spec-10 daemon publishes into Cortex via the existing publisher / WAL pipeline.
+
 ### Marketplace JSON
 
 ```jsonc
@@ -272,6 +286,10 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 - [ ] Local install drill: `claude --plugin-dir ./cortex-plugin` boots, `/plugin list` shows `cortex`, `tools/list` over the embedded MCP server returns the three tools.
 - [ ] Marketplace listing: `cortex-plugin/.claude-plugin/marketplace.json` parses and points at this repo's `cortex-plugin/` path.
 - [ ] Telemetry counters non-zero after a 5-tool-call recorded session.
+- [ ] `cortex-plugin/hooks/hooks.json` parses; every script it references exists; every shim under `hooks/` is referenced from `hooks.json`; `cortex-mcp-server validate` enforces both invariants.
+- [ ] Hook shims under `cortex-plugin/hooks/cortex-*.{sh,ps1}` are byte-identical to the canonical sources under `crates/cortex-adapter-claude-code/hooks/` (drift test fails the build otherwise).
+- [ ] After `claude plugin install cortex@hivellm-cortex`, a fresh Claude Code session emits `UserPromptSubmit` events that reach `~/.cortex/adapter-claude.sock` and the spec-10 daemon publishes them upstream (capture round-trip).
+- [ ] `cortex-adapter-claude install --no-hooks` keeps `~/.claude/settings.json` byte-identical to its pre-install state and writes zero shims, so spec-18 plugin users can run the standalone install side-by-side without duplicate hook firing.
 
 ## Decisions
 
@@ -282,11 +300,12 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 5. **CI validates the asset tree.** `cortex-mcp-server validate ./cortex-plugin` runs in CI; the plugin can't ship with a missing file or a malformed agent frontmatter.
 6. **Distribution via a Cortex marketplace.** `cortex-plugin/.claude-plugin/marketplace.json` lets users `/plugin marketplace add hivellm/cortex` and pull updates from this repo.
 7. **JSON-RPC errors carry the spec-11 reason in `data`.** Hosts that surface error messages to the user get a deterministic string they can pattern-match on.
+8. **Hooks ship inside the plugin tree.** The `hooks/` directory and `hooks/hooks.json` register capture at plugin-install time so a single `claude plugin install` covers both pull (MCP tools) and push (capture). The spec-10 standalone install path stays for non-plugin users; the new `--no-hooks` flag keeps both paths cohabitable.
+9. **Single source of truth for hook shims.** Canonical `cortex-*.{sh,ps1}` live under `crates/cortex-adapter-claude-code/hooks/`. The plugin tree mirrors them and a drift test refuses divergence — no need to re-author Bash scripts inside the plugin tree.
 
 ## Open questions
 
-1. **Hook migration.** Spec 10 installs hooks at `~/.claude/hooks/cortex-*.sh`. The plugin model supports `hooks/hooks.json` inside the plugin directory; should we migrate? Defer until the spec-10 install path has eaten a year of operator feedback.
-2. **MCP stateful resources.** Should `cortex.session` expose the active turn / decisions / laws as MCP resources (URIs the host can subscribe to)? Defer to Phase 3.
+1. **MCP stateful resources.** Should `cortex.session` expose the active turn / decisions / laws as MCP resources (URIs the host can subscribe to)? Defer to Phase 3.
 
 ## References
 

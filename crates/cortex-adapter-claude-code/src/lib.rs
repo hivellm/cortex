@@ -27,7 +27,10 @@ pub use config::{
 };
 pub use dispatcher::{Dispatcher, HookResponse};
 pub use events::{build_event, ClaudeEvent, HookFrame, HookKind};
-pub use install::{install, uninstall, HookShim, InstallError, InstallReport, Layout, HOOK_SHIMS};
+pub use install::{
+    install, install_with, uninstall, HookShim, InstallError, InstallOptions, InstallReport,
+    Layout, HOOK_SHIMS,
+};
 pub use ipc::{dispatch_inline, serve, IpcBinding};
 pub use metrics::Metrics;
 pub use publisher::{spawn_flusher, HttpPublisher, MemoryPublisher, Publisher};

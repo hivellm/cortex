@@ -23,18 +23,22 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 | `/cortex-decisions <topic>` | Decision lookup. |
 | `/cortex-pre-thinking` | Manually trigger a pre-thinking bundle (debug). |
 | `/cortex-audit <turn_id>` | Audit envelope for a past turn. |
+| Hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `Notification`) | Push every Claude Code session event into the local `cortex-adapter-claude` daemon for indexing. |
 
 ## Install
 
 ### Prerequisites
 
 - `cortex-api` running on `http://127.0.0.1:15011` (the default).
-- `cortex-mcp-server` on `PATH`. From this repo:
+- `cortex-mcp-server` and `cortex-adapter-claude` on `PATH`. From this repo:
   ```bash
   cargo install --path crates/cortex-mcp-server
+  cargo install --path crates/cortex-adapter-claude-code
   ```
-  Or grab a release artifact and drop it in `~/.local/bin` / `%USERPROFILE%\.cargo\bin`.
-- (Recommended) `cortex-adapter-claude` installed for capture (spec 10).
+  Or grab release artifacts and drop them in `~/.local/bin` / `%USERPROFILE%\.cargo\bin`.
+- The capture daemon socket: `cortex-adapter-claude install --no-hooks` once, then run the daemon (`cortex-adapter-claude daemon`).
+  - `--no-hooks` is important: the plugin's `hooks/hooks.json` already registers the same shim catalogue, and running both paths without it would fire each event twice. The flag keeps `~/.claude/settings.json` byte-identical to its pre-install state.
+- `bash` on `PATH` so the plugin's hook shims (`cortex-*.sh`) execute. On Windows the Claude Code harness already provides Git Bash.
 
 ### As a marketplace (recommended)
 
@@ -48,6 +52,18 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 ```bash
 claude --plugin-dir ./cortex-plugin
 ```
+
+### Migrating from the spec-10 standalone install
+
+If you previously ran `cortex-adapter-claude install` (without `--no-hooks`) and are now switching to the plugin path:
+
+```bash
+cortex-adapter-claude uninstall          # restores ~/.claude/settings.json byte-identical to pre-install
+claude plugin install cortex@hivellm-cortex
+cortex-adapter-claude install --no-hooks # bring the daemon back up; leaves settings.json alone
+```
+
+The plugin's `hooks/hooks.json` is now the single source of hook firing.
 
 ## Configuration
 
@@ -87,13 +103,22 @@ cortex-plugin/
 │   ├── cortex-historian.md
 │   ├── cortex-lawkeeper.md
 │   └── cortex-context-curator.md
-└── commands/
-    ├── cortex-status.md
-    ├── cortex-query.md
-    ├── cortex-laws.md
-    ├── cortex-decisions.md
-    ├── cortex-pre-thinking.md
-    └── cortex-audit.md
+├── commands/
+│   ├── cortex-status.md
+│   ├── cortex-query.md
+│   ├── cortex-laws.md
+│   ├── cortex-decisions.md
+│   ├── cortex-pre-thinking.md
+│   └── cortex-audit.md
+└── hooks/
+    ├── hooks.json
+    ├── cortex-session-start.{sh,ps1}
+    ├── cortex-user-prompt.{sh,ps1}
+    ├── cortex-pre-tool.{sh,ps1}
+    ├── cortex-post-tool.{sh,ps1}
+    ├── cortex-stop.{sh,ps1}
+    ├── cortex-subagent-stop.{sh,ps1}
+    └── cortex-notification.{sh,ps1}
 ```
 
 ## See also

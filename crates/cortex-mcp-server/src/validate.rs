@@ -59,6 +59,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationReport {
     validate_skills(plugin_dir, &mut report);
     validate_agents(plugin_dir, &mut report);
     validate_commands(plugin_dir, &mut report);
+    validate_hooks(plugin_dir, &mut report);
     validate_readme(plugin_dir, &mut report);
 
     report
@@ -244,6 +245,134 @@ fn validate_commands(plugin_dir: &Path, report: &mut ValidationReport) {
     }
 }
 
+fn validate_hooks(plugin_dir: &Path, report: &mut ValidationReport) {
+    let hooks_dir = plugin_dir.join("hooks");
+    if !hooks_dir.is_dir() {
+        report.warnings.push(format!(
+            "{} missing — capture is opt-in",
+            hooks_dir.display()
+        ));
+        return;
+    }
+    let descriptor_path = hooks_dir.join("hooks.json");
+    let raw = match fs::read_to_string(&descriptor_path) {
+        Ok(s) => s,
+        Err(e) => {
+            report.errors.push(format!(
+                "missing {}: {e} — hooks/ directory present but no descriptor",
+                descriptor_path.display()
+            ));
+            return;
+        }
+    };
+    let parsed: Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            report
+                .errors
+                .push(format!("malformed {}: {e}", descriptor_path.display()));
+            return;
+        }
+    };
+
+    let hooks_obj = match parsed.get("hooks").and_then(Value::as_object) {
+        Some(o) => o,
+        None => {
+            report.errors.push(format!(
+                "{}: top-level `hooks` object missing",
+                descriptor_path.display()
+            ));
+            return;
+        }
+    };
+
+    let mut referenced: std::collections::BTreeSet<String> = Default::default();
+    for (event, group) in hooks_obj {
+        let arr = match group.as_array() {
+            Some(a) => a,
+            None => {
+                report.errors.push(format!(
+                    "{}: hooks.{event} must be an array",
+                    descriptor_path.display()
+                ));
+                continue;
+            }
+        };
+        for entry in arr {
+            let inner = entry.get("hooks").and_then(Value::as_array);
+            let Some(inner) = inner else {
+                report.errors.push(format!(
+                    "{}: hooks.{event}[].hooks[] missing",
+                    descriptor_path.display()
+                ));
+                continue;
+            };
+            for h in inner {
+                let cmd = h.get("command").and_then(Value::as_str).unwrap_or("");
+                if cmd.is_empty() {
+                    report.errors.push(format!(
+                        "{}: hooks.{event}[].hooks[].command must be a non-empty string",
+                        descriptor_path.display()
+                    ));
+                    continue;
+                }
+                if let Some(script) = extract_plugin_script(cmd) {
+                    let candidate = plugin_dir.join(&script);
+                    if !candidate.exists() {
+                        report.errors.push(format!(
+                            "{}: hooks.{event} references missing script `{script}`",
+                            descriptor_path.display()
+                        ));
+                    } else {
+                        referenced.insert(script);
+                    }
+                }
+            }
+        }
+    }
+
+    // Orphan-script check: every cortex-*.sh in hooks/ must be referenced.
+    if let Ok(entries) = fs::read_dir(&hooks_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("sh") {
+                continue;
+            }
+            let rel = match path.strip_prefix(plugin_dir) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+            if !referenced.contains(&rel) {
+                report.errors.push(format!(
+                    "{}: orphan shim `{rel}` not referenced from hooks.json",
+                    descriptor_path.display()
+                ));
+            }
+        }
+    }
+}
+
+/// Extract the `${CLAUDE_PLUGIN_ROOT}/<rest>` path from a command
+/// string. Returns the path **relative to the plugin root**, with
+/// forward slashes, ready to join against `plugin_dir`.
+fn extract_plugin_script(cmd: &str) -> Option<String> {
+    let needle = "${CLAUDE_PLUGIN_ROOT}";
+    let start = cmd.find(needle)? + needle.len();
+    let tail = &cmd[start..];
+    // Skip a leading separator.
+    let tail = tail.trim_start_matches(['/', '\\']);
+    // Stop at quote / whitespace.
+    let end = tail
+        .find(|c: char| c == '"' || c.is_whitespace())
+        .unwrap_or(tail.len());
+    let path = tail[..end].trim().replace('\\', "/");
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
+}
+
 fn validate_readme(plugin_dir: &Path, report: &mut ValidationReport) {
     let path = plugin_dir.join("README.md");
     if !path.exists() {
@@ -356,6 +485,14 @@ mod tests {
             root.join("commands/cortex-status.md"),
             "---\ndescription: show status\n---\nbody",
         );
+        write(
+            root.join("hooks/cortex-user-prompt.sh"),
+            "#!/usr/bin/env bash\nexit 0\n",
+        );
+        write(
+            root.join("hooks/hooks.json"),
+            r#"{"hooks":{"UserPromptSubmit":[{"matcher":"*","hooks":[{"type":"command","command":"bash \"${CLAUDE_PLUGIN_ROOT}/hooks/cortex-user-prompt.sh\"","timeout":5}]}]}}"#,
+        );
     }
 
     #[test]
@@ -420,5 +557,84 @@ mod tests {
     fn nonexistent_root_fails() {
         let report = validate_plugin(Path::new("/this/path/does/not/exist"));
         assert!(!report.is_ok());
+    }
+
+    #[test]
+    fn hooks_descriptor_referencing_missing_script_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        build_clean_plugin(dir.path());
+        write(
+            dir.path().join("hooks/hooks.json"),
+            r#"{"hooks":{"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"bash \"${CLAUDE_PLUGIN_ROOT}/hooks/cortex-does-not-exist.sh\""}]}]}}"#,
+        );
+        let report = validate_plugin(dir.path());
+        assert!(!report.is_ok());
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("missing script `hooks/cortex-does-not-exist.sh`")));
+    }
+
+    #[test]
+    fn orphan_hook_script_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        build_clean_plugin(dir.path());
+        write(
+            dir.path().join("hooks/cortex-orphan.sh"),
+            "#!/usr/bin/env bash\nexit 0\n",
+        );
+        let report = validate_plugin(dir.path());
+        assert!(!report.is_ok());
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("orphan shim `hooks/cortex-orphan.sh`")));
+    }
+
+    #[test]
+    fn malformed_hooks_json_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        build_clean_plugin(dir.path());
+        write(dir.path().join("hooks/hooks.json"), "{ not json");
+        let report = validate_plugin(dir.path());
+        assert!(!report.is_ok());
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("malformed") && e.contains("hooks.json")));
+    }
+
+    #[test]
+    fn hooks_dir_without_descriptor_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        build_clean_plugin(dir.path());
+        fs::remove_file(dir.path().join("hooks/hooks.json")).unwrap();
+        let report = validate_plugin(dir.path());
+        assert!(!report.is_ok());
+        assert!(report
+            .errors
+            .iter()
+            .any(|e| e.contains("hooks/ directory present but no descriptor")
+                || e.contains("missing")));
+    }
+
+    #[test]
+    fn extract_plugin_script_handles_quoted_path() {
+        let cmd = "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/cortex-user-prompt.sh\"";
+        assert_eq!(
+            extract_plugin_script(cmd).as_deref(),
+            Some("hooks/cortex-user-prompt.sh")
+        );
+    }
+
+    #[test]
+    fn extract_plugin_script_handles_unquoted_path() {
+        let cmd = "node ${CLAUDE_PLUGIN_ROOT}/dist/hook.js arg1";
+        assert_eq!(extract_plugin_script(cmd).as_deref(), Some("dist/hook.js"));
+    }
+
+    #[test]
+    fn extract_plugin_script_returns_none_when_marker_absent() {
+        assert!(extract_plugin_script("bash some-other-script.sh").is_none());
     }
 }

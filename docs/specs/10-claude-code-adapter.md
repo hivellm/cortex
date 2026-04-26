@@ -191,14 +191,18 @@ Hook shim detects OS and uses `nc -U` / `socat` (Unix) or PowerShell `NamedPipeC
 ### Install / uninstall
 
 ```
-cortex-adapters install claude-code
+cortex-adapters install claude-code            # standalone path — writes hooks + settings.json
+cortex-adapters install claude-code --no-hooks # plugin path — daemon only, hooks owned by spec 18
 cortex-adapters uninstall claude-code
 cortex-adapters status
 ```
 
-- **Install:** copies hook shims, patches `~/.claude/settings.json` to wire them up (idempotent — detects existing Cortex entries), creates `~/.cortex/` layout, writes a systemd/launchd/Windows-Service unit, starts the daemon.
+- **Install (default):** copies hook shims, patches `~/.claude/settings.json` to wire them up (idempotent — detects existing Cortex entries), creates `~/.cortex/` layout, writes a systemd/launchd/Windows-Service unit, starts the daemon.
+- **Install `--no-hooks`:** keeps the daemon socket + adapter binary install but does **not** touch `~/.claude/hooks/` or `~/.claude/settings.json`. Spec-18 plugin users pick this path because their `claude plugin install cortex@hivellm-cortex` already wired hooks via the plugin's `hooks/hooks.json` — running both sides without `--no-hooks` would fire each event twice. `settings.json` stays byte-identical to its pre-install state when `--no-hooks` is set.
 - **Uninstall:** reverts settings.json, stops the daemon, removes hook shims (leaves logs + overflow WAL unless `--purge`).
 - **Status:** prints daemon PID, uptime, queue depth, overflow WAL size, last N publish errors.
+
+> **Spec 18 supersedes the standalone hook install path for users who install the Cortex Claude Code plugin.** The plugin's `hooks/hooks.json` registers the same shim catalogue at plugin-install time, so a fresh laptop only needs `claude plugin install cortex@hivellm-cortex` (plus `cargo install --path crates/cortex-adapter-claude-code` for the daemon binary) followed by `cortex-adapter-claude install --no-hooks` to bootstrap the daemon. The standalone `cortex-adapter-claude install` (without `--no-hooks`) remains the canonical path for non-plugin contexts (CI, headless, custom installs).
 
 ### Failure modes
 
