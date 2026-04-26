@@ -1,3 +1,19 @@
+## 0. MVP slice — pragmatic single-session cut
+
+Goal: open a browser at `http://127.0.0.1:15011/dashboard/` and see the
+Timeline view rendering the user's actual captured events. Stands up the
+existing `gui/assets/` prototype served verbatim from `cortex-api`, swapping
+its `MOCK` data for live fetchers. The §1–§9 plan below stays as the
+durable production target.
+
+- [ ] 0.1 `cortex-api` mounts `/dashboard/*` static-file route serving `gui/assets/` (the prototype already bootstraps via Babel-standalone, no build step needed for the MVP)
+- [ ] 0.2 `GET /v1/dashboard/overview` returns counters from the in-memory keyword lane (`events_total`, `repos_indexed`, `kind_breakdown`, `recent_repos`) — JSON shape matches `MOCK.overview` so the prototype's `OverviewView` renders against it without code change
+- [ ] 0.3 `GET /v1/dashboard/timeline/recent?limit=N` returns the most-recent N captured envelopes mapped to the `MOCK.events` shape (`id`, `t`, `kind`, `title`, `detail`, `repo`); reuses the archive_loader's lane hits as the source of truth (no SSE in MVP — periodic polling from the SPA covers it)
+- [ ] 0.4 `GET /v1/dashboard/memory?q=...` wraps `cortex.query intent=free_search` with a result shape matching `MOCK.memories` (`title`, `excerpt`, `kind`, `repo`, `topics`, `updated`)
+- [ ] 0.5 `gui/assets/data.js` learns to fetch live data on boot — `MOCK` becomes the initial state; a small bootstrap script re-fills `MOCK.overview` / `MOCK.events` / `MOCK.memories` from the new endpoints, then a 5-second `setInterval` keeps Timeline fresh; auth-key support is moved to §2 of this document
+- [ ] 0.6 Manual smoke: `cortex-api` running with `CORTEX_ARCHIVE_ROOT` set; open `http://127.0.0.1:15011/dashboard/`; Timeline view shows the user's prompts the way `/cortex-query` already returns them; Memory view's free-text search hits the live archive
+- [ ] 0.7 Tests: integration test for each new endpoint (overview/timeline-recent/memory) round-tripping the response shape; backend unit tests cover the MOCK-shape contract
+
 ## 1. Backend endpoints (cortex-api)
 - [ ] 1.1 `cortex-api/src/dashboard/` module with router prefix `/v1/dashboard` and shared response types matching `gui/assets/data.js` shapes
 - [ ] 1.2 `GET /v1/dashboard/overview` — today's counters (events emitted by kind, active laws, in-progress analyses, top tools, classifier spend) plus the four sparkline series the prototype renders (`turns`, `tools`, `violations`, `classifier`)

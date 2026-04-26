@@ -64,13 +64,14 @@ impl Validator {
 
         let envelope_value: Value = serde_json::from_str(ENVELOPE_SCHEMA)
             .map_err(|e| format!("envelope schema parse: {e}"))?;
+        let registry = jsonschema::Registry::new()
+            .add(context_uri, jsonschema::Resource::from_contents(context_value))
+            .map_err(|e| format!("context resource: {e}"))?
+            .prepare()
+            .map_err(|e| format!("context registry: {e}"))?;
         let envelope = jsonschema::options()
             .with_draft(jsonschema::Draft::Draft202012)
-            .with_resource(
-                context_uri,
-                jsonschema::Resource::from_contents(context_value)
-                    .map_err(|e| format!("context resource: {e}"))?,
-            )
+            .with_registry(&registry)
             .build(&envelope_value)
             .map_err(|e| format!("envelope schema compile: {e}"))?;
 
@@ -162,7 +163,7 @@ fn collect(schema: &JsonValidator, value: &Value) -> Result<(), Vec<ValidationEr
     let mut out = Vec::new();
     for err in schema.iter_errors(value) {
         out.push(ValidationError::Schema {
-            path: err.instance_path.to_string(),
+            path: err.instance_path().to_string(),
             message: err.to_string(),
         });
     }

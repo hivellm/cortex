@@ -1,0 +1,39 @@
+{
+  "name": "cortex-gui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cortex desktop dashboard — Electron + Vite + React 18 + TypeScript renderer talking to cortex-api over HTTP. Spec 16, phase2_dashboard §0 MVP.",
+  "main": "dist-electron/main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm run build:electron && concurrently -k -n vite,electron -c blue,green \"vite\" \"wait-on tcp:5173 && node scripts/launch-electron.cjs\"",
+    "dev:vite": "vite",
+    "dev:electron": "pnpm run build:electron && wait-on tcp:5173 && node scripts/launch-electron.cjs",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json && node -e \"require('fs').writeFileSync('dist-electron/package.json', JSON.stringify({type:'commonjs'}))\"",
+    "build": "pnpm run build:renderer && pnpm run build:electron",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
+    "lint": "eslint src electron"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.62.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "^9.1.0",
+    "cross-env": "^10.0.0",
+    "electron": "^39.8.5",
+    "typescript": "^5.9.3",
+    "vite": "^7.0.0",
+    "wait-on": "^9.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["electron", "esbuild"]
+  }
+}

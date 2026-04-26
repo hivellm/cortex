@@ -48,14 +48,29 @@ pub struct StatusBody {
 
 /// Build the router. The state Arc is cheap to clone per request.
 pub fn build_router(service: Arc<QueryService>) -> Router {
+    build_router_with(service, None)
+}
+
+/// `build_router` with an optional dashboard mount. Threads the
+/// shared `MemoryKeywordLane` (the one the archive_loader seeds) so
+/// `/v1/dashboard/*` and the `/dashboard/*` static asset route mount
+/// alongside the spec-11 routes.
+pub fn build_router_with(
+    service: Arc<QueryService>,
+    dashboard: Option<crate::dashboard::DashboardState>,
+) -> Router {
     let state = ApiState {
         service,
         started_at: Arc::new(Instant::now()),
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/v1/query", post(handle_query))
         .route("/v1/status", get(handle_status))
-        .with_state(state)
+        .with_state(state);
+    if let Some(dash) = dashboard {
+        router = router.merge(crate::dashboard::build_dashboard_router(dash));
+    }
+    router
 }
 
 async fn handle_status(State(state): State<ApiState>) -> Response {

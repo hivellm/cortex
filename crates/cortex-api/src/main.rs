@@ -17,8 +17,7 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use cortex_api::{
-    build_router, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator,
-    QueryService,
+    MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryService,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -84,12 +83,16 @@ async fn main() -> Result<()> {
         });
     }
 
-    let orchestrator = Orchestrator::new(vector, keyword, graph);
+    let dashboard_state = cortex_api::DashboardState {
+        lane: keyword.clone(),
+    };
+
+    let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);
     let service = Arc::new(QueryService::with_memory_defaults(orchestrator));
 
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
-    let app = build_router(service);
+    let app = cortex_api::build_router_with(service, Some(dashboard_state));
     axum::serve(listener, app).await?;
     Ok(())
 }

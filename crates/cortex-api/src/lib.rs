@@ -15,6 +15,7 @@ pub mod acl;
 pub mod archive_loader;
 pub mod audit;
 pub mod cache;
+pub mod dashboard;
 pub mod fusion;
 pub mod http;
 pub mod lanes;
@@ -30,10 +31,11 @@ pub use acl::{AclDecision, AclStore};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
 };
+pub use dashboard::{build_dashboard_router, DashboardState};
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
 pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
 pub use fusion::{rrf_fuse, RRF_K};
-pub use http::{build_router, CALLER_HEADER};
+pub use http::{build_router, build_router_with, CALLER_HEADER};
 pub use lanes::{
     GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit, MemoryGraphLane,
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
