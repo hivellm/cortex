@@ -54,6 +54,28 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 claude --plugin-dir ./cortex-plugin
 ```
 
+### Local marketplace (development) — known cache pitfall
+
+When the marketplace source is `directory` (the local-dev path), the
+Claude Code installer copies **only** the manifest files
+(`plugin.json`, `marketplace.json`) into
+`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. Hooks /
+skills / agents / commands stay invisible to the loader because the
+runtime reads from the cache, not from the source directory.
+
+Workaround: after `claude plugin install cortex@hivellm-cortex` (or
+after editing the plugin assets in the source tree), run
+
+```bash
+bash cortex-plugin/scripts/sync-cache.sh
+```
+
+The script copies the missing assets (hooks, hooks.json, skills,
+agents, commands, README, .claude-plugin, .mcp.json) into the cache.
+Restart Claude Code so the loader picks up the new files —
+`~/.claude/settings.json` should then list `cortex-*` hook entries
+under the `hooks` key.
+
 ### Migrating from the spec-10 standalone install
 
 If you previously ran `cortex-adapter-claude install` (without `--no-hooks`) and are now switching to the plugin path:
