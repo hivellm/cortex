@@ -121,8 +121,46 @@ async fn ingest_one(
 async fn ingest_batch(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(envelopes): Json<Vec<Value>>,
+    Json(payload): Json<Value>,
 ) -> Response {
+    // Spec-04 §POST /v1/events/batch: `{ "events": [Envelope, ...] }`.
+    // Tolerate a bare array too — older callers + tests rely on it.
+    let envelopes: Vec<Value> = match payload {
+        Value::Array(a) => a,
+        Value::Object(mut m) => match m.remove("events") {
+            Some(Value::Array(a)) => a,
+            _ => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(BatchResponse {
+                        accepted: 0,
+                        rejected: 0,
+                        errors: vec![BatchError {
+                            index: 0,
+                            event_id: None,
+                            errors: vec!["expected `events` array (spec 04)".into()],
+                        }],
+                    }),
+                )
+                    .into_response();
+            }
+        },
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(BatchResponse {
+                    accepted: 0,
+                    rejected: 0,
+                    errors: vec![BatchError {
+                        index: 0,
+                        event_id: None,
+                        errors: vec!["batch body must be an object or array".into()],
+                    }],
+                }),
+            )
+                .into_response();
+        }
+    };
     let mut accepted = 0usize;
     let mut rejected = 0usize;
     let mut errors = Vec::new();

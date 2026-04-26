@@ -145,6 +145,28 @@ async fn redacts_secrets_and_records_tokens() {
 }
 
 #[tokio::test]
+async fn batch_accepts_spec04_wrapped_events_object() {
+    // Spec 04: `POST /v1/events/batch` body is `{ "events": [...] }`.
+    // The cortex-adapter-claude publisher uses this exact shape.
+    let (app, _, publisher, _) = build_app();
+    let batch = json!({ "events": [good_envelope(), good_envelope()] });
+    let body = serde_json::to_vec(&batch).unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/events/batch")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+    assert_eq!(publisher.len(), 2);
+}
+
+#[tokio::test]
 async fn batch_mixes_accept_and_reject() {
     let (app, _, publisher, _) = build_app();
     let bad = {
