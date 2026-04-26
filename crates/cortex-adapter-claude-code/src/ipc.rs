@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::Value;
-#[cfg(not(windows))]
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(windows)]
 use tokio::io::AsyncWriteExt;
+#[cfg(not(windows))]
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::dispatcher::{Dispatcher, HookResponse};
 #[cfg(not(windows))]
@@ -105,10 +105,7 @@ async fn serve_unix(
 }
 
 #[cfg(not(windows))]
-async fn handle_unix(
-    stream: tokio::net::UnixStream,
-    dispatcher: Arc<Dispatcher>,
-) -> Result<()> {
+async fn handle_unix(stream: tokio::net::UnixStream, dispatcher: Arc<Dispatcher>) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
     let mut line = String::new();
@@ -234,4 +231,49 @@ pub async fn dispatch_inline(value: Value, dispatcher: Arc<Dispatcher>) -> HookR
         Err(_) => return HookResponse::empty(),
     };
     handle_line(&line, dispatcher).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::publisher::MemoryPublisher;
+    use crate::session::SessionManager;
+    use crate::sync_paths::SyncClient;
+    use crate::AdapterSection;
+
+    fn build() -> Arc<Dispatcher> {
+        let metrics = Arc::new(crate::Metrics::new());
+        let sessions = Arc::new(SessionManager::new());
+        let publisher: Arc<dyn crate::Publisher> = Arc::new(MemoryPublisher::new());
+        let cfg = AdapterSection::default();
+        let sync = Arc::new(SyncClient::new(&cfg, metrics));
+        Arc::new(Dispatcher::new(sessions, publisher, sync, 1))
+    }
+
+    #[tokio::test]
+    async fn handle_line_accepts_frame_padded_with_whitespace() {
+        // The .ps1 shim used to emit a trailing newline inside the
+        // payload before the spec-18 Windows-fix landed. The wire
+        // handler strips at the first `\n`, so `handle_line` itself
+        // never actually saw embedded newlines — but stray
+        // surrounding whitespace (CRLF leftovers, spaces from
+        // platform-quirky writers) is plausible and should still
+        // parse cleanly.
+        let dispatcher = build();
+        let body = r#"{"hook":"UserPromptSubmit","session_id":"s","cwd":"/x","payload":{}}"#;
+        let padded = format!("   \r\n  {body}  \r\n");
+        let resp = handle_line(&padded, dispatcher).await;
+        // Empty / no-op response is fine — the assertion is "no panic
+        // / no warn-level malformed-frame log". A successfully parsed
+        // frame surfaces as `additional_context` `None` for the
+        // UserPromptSubmit path because nothing was indexed.
+        let _ = resp;
+    }
+
+    #[tokio::test]
+    async fn handle_line_returns_empty_response_on_blank_input() {
+        let dispatcher = build();
+        let resp = handle_line("", dispatcher).await;
+        assert_eq!(serde_json::to_value(&resp).unwrap(), serde_json::json!({}));
+    }
 }

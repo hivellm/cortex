@@ -39,6 +39,7 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 - The capture daemon socket: `cortex-adapter-claude install --no-hooks` once, then run the daemon (`cortex-adapter-claude daemon`).
   - `--no-hooks` is important: the plugin's `hooks/hooks.json` already registers the same shim catalogue, and running both paths without it would fire each event twice. The flag keeps `~/.claude/settings.json` byte-identical to its pre-install state.
 - `bash` on `PATH` so the plugin's hook shims (`cortex-*.sh`) execute. On Windows the Claude Code harness already provides Git Bash.
+- On Windows: `pwsh` 7+ on `PATH`. The `.sh` shim detects `$OSTYPE` (`msys*` / `cygwin*` / `win32*`) and re-execs the sibling `.ps1` via `pwsh` because the daemon binds a Windows named pipe (`\\.\pipe\cortex-adapter-claude`) that Git Bash's `nc` / `socat` can't reach.
 
 ### As a marketplace (recommended)
 

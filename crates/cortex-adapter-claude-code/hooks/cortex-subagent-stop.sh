@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # cortex-subagent-stop — SubagentStop shim. Spec 10.
 set -u
+
+# Polyglot: on Windows shells the daemon binds a named pipe and `nc -U`
+# is unavailable, so re-exec the .ps1 sibling via pwsh. On Linux/macOS
+# the case falls through and the Unix-socket path below runs unchanged.
+case "${OSTYPE:-}" in
+    msys*|cygwin*|win32*)
+        exec pwsh -NoProfile -File "$(dirname "$0")/cortex-subagent-stop.ps1"
+        ;;
+esac
+
 SOCK="${CORTEX_ADAPTER_SOCK:-$HOME/.cortex/adapter-claude.sock}"
 INPUT="$(cat || true)"
 PAYLOAD=$(printf '{"hook":"SubagentStop","session_id":"%s","cwd":"%s","payload":%s}' \

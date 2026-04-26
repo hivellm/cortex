@@ -186,7 +186,7 @@ Mirrors `cortex-core`'s pattern catalog. Redaction happens **before** anything l
 - **Unix:** UDS at `~/.cortex/adapter-claude.sock`, perms 0600.
 - **Windows:** named pipe `\\.\pipe\cortex-adapter-claude`, ACL restricted to current user.
 
-Hook shim detects OS and uses `nc -U` / `socat` (Unix) or PowerShell `NamedPipeClientStream` (Windows). The shim scripts live in `hooks/` and are copied into `~/.claude/hooks/` by `cortex-adapters install`.
+Hook shim detects OS and uses `nc -U` / `socat` (Unix) or PowerShell `NamedPipeClientStream` (Windows). The `.sh` shim is polyglot: a leading `case "${OSTYPE:-}"` block re-execs the sibling `.ps1` via `pwsh -NoProfile -File` on `msys*` / `cygwin*` / `win32*`, then falls through to the Unix-socket path on `linux-gnu` / `darwin*`. That lets the spec-18 plugin's `hooks/hooks.json` invoke a single `bash <event>.sh` command across every platform without per-OS dispatch in the descriptor. The shim scripts live in `hooks/` and are copied into `~/.claude/hooks/` by `cortex-adapters install` (or mirrored into `cortex-plugin/hooks/` when the spec-18 plugin owns the install). On Windows the `.ps1` shim `.Trim()`s its stdin before embedding it as the JSON payload — a stray trailing newline used to break the daemon parser, which is now fixed at the source.
 
 ### Install / uninstall
 

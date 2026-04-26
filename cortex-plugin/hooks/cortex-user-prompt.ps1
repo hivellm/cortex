@@ -2,6 +2,7 @@
 $ErrorActionPreference = "SilentlyContinue"
 $pipeName = if ($env:CORTEX_ADAPTER_PIPE) { $env:CORTEX_ADAPTER_PIPE } else { "cortex-adapter-claude" }
 $input_text = [Console]::In.ReadToEnd()
+if ($input_text) { $input_text = $input_text.Trim() }
 if (-not $input_text) { $input_text = "{}" }
 $session = if ($env:CLAUDE_SESSION_ID) { $env:CLAUDE_SESSION_ID } else { "" }
 $frame = "{`"hook`":`"UserPromptSubmit`",`"session_id`":`"$session`",`"cwd`":`"$($PWD.Path -replace '\\','\\\\')`",`"payload`":$input_text}"
