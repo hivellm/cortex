@@ -482,3 +482,21 @@ async fn mcp_invoke_routes_through_the_same_service() {
     assert_eq!(result.intent, "free_search");
     assert!(!result.results.snippets.is_empty());
 }
+
+#[tokio::test]
+async fn status_endpoint_returns_service_pid_and_uptime() {
+    let (svc, _v, _k, _g, _) = build_test_service();
+    let app = build_router(svc);
+    let request = Request::builder()
+        .method("GET")
+        .uri("/v1/status")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    assert_eq!(body["service"], "cortex-api");
+    assert!(body["pid"].as_u64().unwrap_or(0) > 0);
+    assert!(body["uptime_ms"].is_u64());
+    assert!(!body["version"].as_str().unwrap_or("").is_empty());
+}
