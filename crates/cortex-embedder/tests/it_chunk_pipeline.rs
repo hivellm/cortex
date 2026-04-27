@@ -40,6 +40,7 @@ fn enriched(id: &str, kind: Kind, path: Option<&str>, content: &str) -> Enriched
         context_repo: None,
         context_path: path.map(|s| s.to_string()),
         parent_event_id: None,
+        session_id: None,
     }
 }
 

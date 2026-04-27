@@ -115,27 +115,41 @@ fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
         "content_hash".to_string(),
         Value::String(event.content_hash.clone()),
     );
-    // Display label = first ~96 chars of the user message (the line
-    // a human would scan to recognise the turn). Fall back to the
-    // event id when the payload was redacted away so the node is
-    // never label-less in the Nexus browser.
-    let display = payload
+    // Display label — prefer the canonical `Turn.user_message`; fall
+    // back to bootstrap's `turn.historical` payload shape
+    // (`{role, message, evidence}`) so historical commits get a
+    // useful name; finally fall back to the event id.
+    let canonical_message = payload
         .as_ref()
-        .map(|p| clip_display(&p.user_message, 96))
+        .map(|p| p.user_message.clone())
+        .filter(|s| !s.is_empty());
+    let bootstrap_message = canonical_message.clone().or_else(|| {
+        event
+            .redacted_payload
+            .get("message")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    });
+    let display = bootstrap_message
+        .as_deref()
+        .map(|s| clip_display(s, 96))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("Turn {}", turn_id.chars().take(12).collect::<String>()));
     props.insert("name".to_string(), Value::String(display));
-    if let Some(p) = payload.as_ref() {
-        if !p.user_message.is_empty() {
+    if let Some(msg) = bootstrap_message.as_deref() {
+        if !msg.is_empty() {
             // Carry the full user message so downstream readers (the
             // dashboard's `node_label` in particular) can clip it on
             // their own; capped at 4 KB to keep individual props
             // small inside Nexus.
             props.insert(
                 "user_message".to_string(),
-                Value::String(clip_display(&p.user_message, 4096)),
+                Value::String(clip_display(msg, 4096)),
             );
         }
+    }
+    if let Some(p) = payload.as_ref() {
         if let Some(reply) = p.assistant_message.as_deref() {
             if !reply.is_empty() {
                 props.insert(
@@ -641,26 +655,30 @@ fn agent_call_display(event: &EnrichedEvent) -> String {
     }
 }
 
-/// Best-effort session id derivation. The
-/// [`cortex_embedder::EnrichedEvent`] type does not surface the
-/// envelope's `session_id` directly today, so we read it from the
-/// classifier `extras` bag if the upstream put it there, falling back
-/// to the event id so the graph stays connected even when the hint is
-/// missing. Any improvement to `EnrichedEvent` flows in here without
-/// changing the public mapper API.
+/// Resolve the owning session id for an event.
+///
+/// Lookup order:
+/// 1. `event.session_id` — the dedicated field the classifier worker
+///    populates from the canonical envelope's top-level `session_id`.
+///    This is the only source that is correct by construction.
+/// 2. The redacted payload's `session_id` field — historical fallback
+///    for older enriched events written before the dedicated field
+///    landed.
+/// 3. The event id itself — last-ditch fallback so the graph stays
+///    connected. Produces a synthetic single-event session and is
+///    the surface symptom of an upstream that forgot to stamp
+///    `session_id`.
 fn session_id_of(event: &EnrichedEvent) -> String {
-    if let Some(Value::String(s)) = lookup_extras(event, "session_id") {
+    if let Some(s) = event.session_id.as_deref() {
+        if !s.is_empty() {
+            return s.to_string();
+        }
+    }
+    if let Some(Value::String(s)) = event.redacted_payload.get("session_id") {
         if !s.is_empty() {
             return s.clone();
         }
     }
+    let _ = json!(null); // anchor serde_json import for future expansion
     event.event_id.clone()
-}
-
-fn lookup_extras<'a>(event: &'a EnrichedEvent, key: &str) -> Option<&'a Value> {
-    // The redacted payload itself is the most reliable place to find
-    // session_id at this layer of the stack — every per-kind payload
-    // either carries it directly or inherits it from the envelope.
-    let _ = json!(null); // anchor `serde_json` import for future expansion
-    event.redacted_payload.get(key)
 }

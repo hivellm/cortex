@@ -57,6 +57,7 @@ fn enriched(
         context_repo: Some("hivellm/cortex".into()),
         context_path: None,
         parent_event_id: parent.map(String::from),
+        session_id: None,
     }
 }
 

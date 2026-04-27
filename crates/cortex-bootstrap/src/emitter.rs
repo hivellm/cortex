@@ -36,6 +36,12 @@ pub struct BootstrapEvent {
     pub adapter: String,
     /// Stream the publisher targets. Defaults to [`BOOTSTRAP_STREAM`].
     pub stream: String,
+    /// Owning bootstrap-run session id. Generated once per
+    /// `run_repo` call and reused for every event the run emits, so
+    /// the graph writer collapses them under a single Session node
+    /// (`HAS_TURN(Session→Turn)`, `HAS_ARTIFACT(Session→Artifact)`)
+    /// instead of one synthetic session per event.
+    pub session_id: String,
     /// Provenance — repo, path, symbol, byte_range, git_ref.
     pub source: Value,
     /// Per-kind payload after redaction.
@@ -52,6 +58,7 @@ pub struct BootstrapEvent {
 /// every kind reaches the wire identically.
 fn finalise(
     kind: &str,
+    session_id: &str,
     source: Value,
     mut payload: Value,
     stream: &str,
@@ -65,6 +72,7 @@ fn finalise(
         kind: kind.to_string(),
         adapter: "bootstrap".to_string(),
         stream: stream.to_string(),
+        session_id: session_id.to_string(),
         source,
         redacted_payload: payload,
         content_hash: hash,
@@ -75,6 +83,7 @@ fn finalise(
 /// Build the `artifact.code` event for one accepted code file.
 pub fn emit_artifact_code(
     repo_id: &str,
+    session_id: &str,
     git_ref: Option<&str>,
     entry: &WalkEntry,
     body: &str,
@@ -94,12 +103,13 @@ pub fn emit_artifact_code(
         "text": body,
         "language": language,
     });
-    Some(finalise("artifact.code", source, payload, stream))
+    Some(finalise("artifact.code", session_id, source, payload, stream))
 }
 
 /// Build the `artifact.doc` event for one accepted documentation file.
 pub fn emit_artifact_doc(
     repo_id: &str,
+    session_id: &str,
     git_ref: Option<&str>,
     entry: &WalkEntry,
     body: &str,
@@ -118,12 +128,13 @@ pub fn emit_artifact_doc(
         "text": body,
         "title": derive_doc_title(body, rel_path),
     });
-    Some(finalise("artifact.doc", source, payload, stream))
+    Some(finalise("artifact.doc", session_id, source, payload, stream))
 }
 
 /// Build the `turn.historical` event for one git commit.
 pub fn emit_turn_historical(
     repo_id: &str,
+    session_id: &str,
     commit: &CommitRecord,
     stream: &str,
 ) -> BootstrapEvent {
@@ -145,7 +156,7 @@ pub fn emit_turn_historical(
             "diff_summary": commit.diff_summary(),
         },
     });
-    let mut event = finalise("turn.historical", source, payload, stream);
+    let mut event = finalise("turn.historical", session_id, source, payload, stream);
     // Override timestamp to match the commit's author time. Newer
     // events keep `now`; historical turns must carry their authored
     // moment so the dashboard sorts them where they belong.
@@ -156,6 +167,7 @@ pub fn emit_turn_historical(
 /// Build the `decision.imported` event for one ADR / OpenSpec body.
 pub fn emit_decision_imported(
     repo_id: &str,
+    session_id: &str,
     git_ref: Option<&str>,
     rel_path: &str,
     body: &str,
@@ -169,12 +181,13 @@ pub fn emit_decision_imported(
         "supersedes": parsed.supersedes,
         "body": body,
     });
-    finalise("decision.imported", source, payload, stream)
+    finalise("decision.imported", session_id, source, payload, stream)
 }
 
 /// Build the `law.imported` event for one law / rule file.
 pub fn emit_law_imported(
     repo_id: &str,
+    session_id: &str,
     git_ref: Option<&str>,
     rel_path: &str,
     body: &str,
@@ -189,12 +202,13 @@ pub fn emit_law_imported(
         "detector": parsed.detector,
         "body": body,
     });
-    finalise("law.imported", source, payload, stream)
+    finalise("law.imported", session_id, source, payload, stream)
 }
 
 /// Build the `memory.imported` event for one memory file.
 pub fn emit_memory_imported(
     repo_id: &str,
+    session_id: &str,
     git_ref: Option<&str>,
     rel_path: &str,
     body: &str,
@@ -206,7 +220,7 @@ pub fn emit_memory_imported(
         "title": title,
         "body": body,
     });
-    finalise("memory.imported", source, payload, stream)
+    finalise("memory.imported", session_id, source, payload, stream)
 }
 
 fn build_source(
@@ -363,6 +377,7 @@ fn filename_stem(rel_path: &str) -> String {
 /// if the entry is `Dropped` or carries an empty body.
 pub fn emit_for_file(
     repo_id: &str,
+    session_id: &str,
     git_ref: Option<&str>,
     entry: &WalkEntry,
     body: &str,
@@ -377,19 +392,22 @@ pub fn emit_for_file(
     match class {
         FileClass::Code => emit_artifact_code(
             repo_id,
+            session_id,
             git_ref,
             entry,
             body,
             language_for(rel_path).as_deref(),
             stream,
         ),
-        FileClass::Doc => emit_artifact_doc(repo_id, git_ref, entry, body, stream),
+        FileClass::Doc => emit_artifact_doc(repo_id, session_id, git_ref, entry, body, stream),
         FileClass::Decision => Some(emit_decision_imported(
-            repo_id, git_ref, rel_path, body, stream,
+            repo_id, session_id, git_ref, rel_path, body, stream,
         )),
-        FileClass::Law => Some(emit_law_imported(repo_id, git_ref, rel_path, body, stream)),
+        FileClass::Law => Some(emit_law_imported(
+            repo_id, session_id, git_ref, rel_path, body, stream,
+        )),
         FileClass::Memory => Some(emit_memory_imported(
-            repo_id, git_ref, rel_path, body, stream,
+            repo_id, session_id, git_ref, rel_path, body, stream,
         )),
         FileClass::Other => None,
     }
@@ -445,6 +463,7 @@ mod tests {
         let e = entry("src/lib.rs", FileClass::Code, 42);
         let evt = emit_artifact_code(
             "Vectorizer",
+            "01TESTSESSION0000000000000",
             Some("abc123"),
             &e,
             "fn main() {}",
@@ -472,7 +491,8 @@ mod tests {
             body: "More detail".into(),
             files_changed: vec!["src/parser.rs".into()],
         };
-        let evt = emit_turn_historical("Vectorizer", &commit, BOOTSTRAP_STREAM);
+        let evt =
+            emit_turn_historical("Vectorizer", "01TESTSESSION0000000000000", &commit, BOOTSTRAP_STREAM);
         assert_eq!(evt.kind, "turn.historical");
         assert_eq!(evt.ts, 1_710_000_000_000);
         assert_eq!(evt.source["author"], "a@b.c");
@@ -493,6 +513,7 @@ mod tests {
         let body = "# Adopt Meilisearch\n\nStatus: accepted\nSupersedes: ADR-0001\n\nBody.";
         let evt = emit_decision_imported(
             "Vectorizer",
+            "01TESTSESSION0000000000000",
             None,
             "docs/decisions/0042.md",
             body,
@@ -508,6 +529,7 @@ mod tests {
     fn decision_falls_back_to_filename_when_no_title() {
         let evt = emit_decision_imported(
             "Vectorizer",
+            "01TESTSESSION0000000000000",
             None,
             "docs/decisions/no-title.md",
             "",
@@ -523,6 +545,7 @@ mod tests {
         let body = "law_id: LAW-007\ntitle: No skipping hooks\nseverity: critical\ndetector: hook:pre_commit_no_skip\n";
         let evt = emit_law_imported(
             "Rulebook",
+            "01TESTSESSION0000000000000",
             None,
             "rulebook/laws/LAW-007.yaml",
             body,
@@ -541,6 +564,7 @@ mod tests {
     fn law_falls_back_to_filename_stem() {
         let evt = emit_law_imported(
             "Rulebook",
+            "01TESTSESSION0000000000000",
             None,
             "rulebook/laws/LAW-042.yaml",
             "",
@@ -554,6 +578,7 @@ mod tests {
         let body = "# CLAUDE memory\n\nNote body.";
         let evt = emit_memory_imported(
             "Cortex",
+            "01TESTSESSION0000000000000",
             None,
             "CLAUDE.md",
             body,
@@ -566,15 +591,15 @@ mod tests {
     #[test]
     fn content_hash_is_deterministic_for_same_payload() {
         let body = "# Same\n\nSame body.";
-        let a = emit_decision_imported("R", None, "a.md", body, BOOTSTRAP_STREAM);
-        let b = emit_decision_imported("R", None, "a.md", body, BOOTSTRAP_STREAM);
+        let a = emit_decision_imported("R", "01TESTSESSION0000000000000", None, "a.md", body, BOOTSTRAP_STREAM);
+        let b = emit_decision_imported("R", "01TESTSESSION0000000000000", None, "a.md", body, BOOTSTRAP_STREAM);
         assert_eq!(a.content_hash, b.content_hash);
     }
 
     #[test]
     fn empty_body_returns_none_for_artifact_paths() {
         let e = entry("src/lib.rs", FileClass::Code, 0);
-        let evt = emit_for_file("R", None, &e, "   \n  ", BOOTSTRAP_STREAM);
+        let evt = emit_for_file("R", "01TESTSESSION0000000000000", None, &e, "   \n  ", BOOTSTRAP_STREAM);
         assert!(evt.is_none());
     }
 }

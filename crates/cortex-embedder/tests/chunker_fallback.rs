@@ -29,6 +29,7 @@ fn make_event(payload_text: &str) -> EnrichedEvent {
         context_repo: None,
         context_path: None,
         parent_event_id: None,
+        session_id: None,
     }
 }
 

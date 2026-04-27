@@ -74,6 +74,11 @@ pub async fn run_repo(
     } else {
         runner_cfg.stream.clone()
     };
+    // One Session node per repo run. Every artifact / turn / etc.
+    // emitted by this invocation gets stamped with the same id so
+    // the graph writer collapses them under a single Session
+    // instead of one synthetic session per event.
+    let session_id = ulid::Ulid::new().to_string();
 
     {
         let p = checkpoint.repo_mut(&repo_id);
@@ -117,7 +122,8 @@ pub async fn run_repo(
                         continue;
                     }
                 };
-                let evt = match emit_for_file(&repo_id, None, entry, &body, &stream) {
+                let evt = match emit_for_file(&repo_id, &session_id, None, entry, &body, &stream)
+                {
                     Some(e) => e,
                     None => continue,
                 };
@@ -158,7 +164,7 @@ pub async fn run_repo(
                     }
                     commits_walked += 1;
                     metrics.incr_commits_walked(&repo_id);
-                    let evt = emit_turn_historical(&repo_id, c, &stream);
+                    let evt = emit_turn_historical(&repo_id, &session_id, c, &stream);
                     metrics.incr_redactions(u64::from(evt.redactions));
                     if let Err(e) = publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run)
                         .await
