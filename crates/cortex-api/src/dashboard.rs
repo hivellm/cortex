@@ -1590,9 +1590,19 @@ fn node_label(
             .find_map(|k| props.get(*k).and_then(|v| v.as_str()))
             .map(|s| clip(s, 48))
     };
+    // The graph writer (cortex-graph mapper) now stamps a `name`
+    // prop on every node — it's the single human-readable label
+    // every kind ends up carrying. Prefer it; fall back to the
+    // payload-specific fields only when `name` is absent (older
+    // nodes written before the labelling change).
+    if let Some(name) = props.get("name").and_then(|v| v.as_str()) {
+        if !name.is_empty() {
+            return clip(name, 96);
+        }
+    }
     match kind {
         "session" => pick(&["title", "session_id"]).unwrap_or_else(|| "Session".to_string()),
-        "turn" => pick(&["text", "user_message"]).unwrap_or_else(|| "Turn".to_string()),
+        "turn" => pick(&["user_message", "text"]).unwrap_or_else(|| "Turn".to_string()),
         "tool_call" => pick(&["tool_name"])
             .map(|s| format!("[{s}]"))
             .unwrap_or_else(|| "ToolCall".to_string()),
@@ -1602,8 +1612,8 @@ fn node_label(
         "decision" => pick(&["title", "decision_id"]).unwrap_or_else(|| "Decision".to_string()),
         "analysis" => pick(&["title", "analysis_id"]).unwrap_or_else(|| "Analysis".to_string()),
         "law" => pick(&["title", "law_id"]).unwrap_or_else(|| "Law".to_string()),
-        "violation" => pick(&["law_id"]).unwrap_or_else(|| "Violation".to_string()),
-        "artifact" => pick(&["path", "name"]).unwrap_or_else(|| fallback_id.to_string()),
+        "violation" => pick(&["message", "law_id"]).unwrap_or_else(|| "Violation".to_string()),
+        "artifact" => pick(&["path"]).unwrap_or_else(|| fallback_id.to_string()),
         _ => fallback_id.to_string(),
     }
 }

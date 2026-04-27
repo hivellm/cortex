@@ -29,13 +29,34 @@
 use std::collections::BTreeMap;
 
 use cortex_core::events::{
-    DecisionPayload, Kind, LawViolationPayload, ToolCall as ToolCallPayload, TouchedArtifact,
+    AgentCall as AgentCallPayload, AnalysisPayload, DecisionPayload, Kind, LawViolationPayload,
+    MemoryPayload, ToolCall as ToolCallPayload, TouchedArtifact, Turn as TurnPayload,
 };
 use serde_json::{json, Value};
 
 use crate::identity::artifact_natural_key;
 use crate::patch::{EdgeOp, GraphPatch, NodeOp};
 use crate::EnrichedEvent;
+
+/// Cap a human-readable label so a single node never explodes the
+/// graph viewer with multi-paragraph text. The cap is generous —
+/// 96 chars — because Nexus clients (and our Cytoscape renderer)
+/// already truncate display text further.
+fn clip_display(s: &str, max: usize) -> String {
+    let trimmed = s.trim();
+    if trimmed.chars().count() <= max {
+        return trimmed.to_string();
+    }
+    let mut out = String::with_capacity(max + 1);
+    for (i, ch) in trimmed.chars().enumerate() {
+        if i >= max {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
 
 /// Map one enriched event into a graph patch.
 ///
@@ -48,11 +69,20 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
     // Every event implies a Session node — without it we cannot anchor
     // the per-kind node into the graph. The full `Session` props
     // (`started_at`, `adapter`, `model`) live on the `session.start`
-    // event; here we upsert with just the natural key, and Cypher
-    // `MERGE` semantics will keep any earlier-set props intact.
+    // event; here we upsert with just the natural key plus a
+    // best-effort display label, and Cypher `MERGE` semantics will
+    // keep any earlier-set props intact.
     let session_id = session_id_of(event);
     let mut session_props = BTreeMap::new();
     session_props.insert("id".to_string(), Value::String(session_id.clone()));
+    // Short version of the session id for human use in the Nexus
+    // browser. Sessions are normally 26-char ULIDs so the first 12
+    // chars uniquely identify a session in practice.
+    let session_short = session_id.chars().take(12).collect::<String>();
+    session_props.insert(
+        "name".to_string(),
+        Value::String(format!("Session {session_short}")),
+    );
     patch.nodes.push(NodeOp {
         label: "Session".to_string(),
         natural_key: session_id.clone(),
@@ -75,6 +105,9 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
 
 fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
     let turn_id = event.event_id.clone();
+    let payload: Option<TurnPayload> =
+        serde_json::from_value(event.redacted_payload.clone()).ok();
+
     let mut props = BTreeMap::new();
     props.insert("id".to_string(), Value::String(turn_id.clone()));
     props.insert("session_id".to_string(), Value::String(session_id.to_string()));
@@ -82,6 +115,36 @@ fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
         "content_hash".to_string(),
         Value::String(event.content_hash.clone()),
     );
+    // Display label = first ~96 chars of the user message (the line
+    // a human would scan to recognise the turn). Fall back to the
+    // event id when the payload was redacted away so the node is
+    // never label-less in the Nexus browser.
+    let display = payload
+        .as_ref()
+        .map(|p| clip_display(&p.user_message, 96))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("Turn {}", turn_id.chars().take(12).collect::<String>()));
+    props.insert("name".to_string(), Value::String(display));
+    if let Some(p) = payload.as_ref() {
+        if !p.user_message.is_empty() {
+            // Carry the full user message so downstream readers (the
+            // dashboard's `node_label` in particular) can clip it on
+            // their own; capped at 4 KB to keep individual props
+            // small inside Nexus.
+            props.insert(
+                "user_message".to_string(),
+                Value::String(clip_display(&p.user_message, 4096)),
+            );
+        }
+        if let Some(reply) = p.assistant_message.as_deref() {
+            if !reply.is_empty() {
+                props.insert(
+                    "assistant_message".to_string(),
+                    Value::String(clip_display(reply, 4096)),
+                );
+            }
+        }
+    }
     patch.nodes.push(NodeOp {
         label: "Turn".to_string(),
         natural_key: turn_id.clone(),
@@ -108,6 +171,23 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
         "content_hash".to_string(),
         Value::String(event.content_hash.clone()),
     );
+
+    // Best-effort display label — pulls the first touched path or
+    // the input's `command` / `pattern` / `path` field so the
+    // ToolCall reads as `Edit src/foo.rs` / `Bash cargo check` in
+    // Nexus instead of a bare ULID.
+    let display = match (event.kind, payload.as_ref()) {
+        (Kind::AgentCall, _) => agent_call_display(event),
+        (_, Some(p)) => format!("{} {}", p.tool_name, tool_call_target(p)).trim().to_string(),
+        (_, None) => format!("ToolCall {}", tool_call_id.chars().take(12).collect::<String>()),
+    };
+    let display = if display.is_empty() {
+        format!("ToolCall {}", tool_call_id.chars().take(12).collect::<String>())
+    } else {
+        display
+    };
+    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+
     if let Some(p) = payload.as_ref() {
         props.insert(
             "tool_name".to_string(),
@@ -117,7 +197,23 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
         if let Some(d) = p.duration_ms {
             props.insert("duration_ms".to_string(), Value::from(d));
         }
+        if let Some(target) = tool_call_target_field(p) {
+            props.insert("target".to_string(), Value::String(target));
+        }
     }
+    // Stamp `kind` so downstream consumers (e.g. cortex-api's graph
+    // endpoint) can distinguish a real ToolCall from an AgentCall
+    // even though both share the `:ToolCall` label today.
+    props.insert(
+        "kind".to_string(),
+        Value::String(
+            match event.kind {
+                Kind::AgentCall => "agent_call",
+                _ => "tool_call",
+            }
+            .to_string(),
+        ),
+    );
     patch.nodes.push(NodeOp {
         label: "ToolCall".to_string(),
         natural_key: tool_call_id.clone(),
@@ -217,13 +313,19 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
         "content_hash".to_string(),
         Value::String(content_hash.to_string()),
     );
+    // Display label = the path; that is the field a human scans.
+    props.insert("name".to_string(), Value::String(clip_display(path, 96)));
     patch.nodes.push(NodeOp {
         label: "Artifact".to_string(),
         natural_key: key.clone(),
         props,
     });
 
+    // Repo node MERGEs on `name` (per spec 07 schema constraint).
+    // Stamp both `name` and a redundant `repo` field so old readers
+    // that grep for `repo` keep working.
     let mut repo_props = BTreeMap::new();
+    repo_props.insert("name".to_string(), Value::String(repo.to_string()));
     repo_props.insert("repo".to_string(), Value::String(repo.to_string()));
     patch.nodes.push(NodeOp {
         label: "Repo".to_string(),
@@ -243,8 +345,28 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
 
 fn emit_memory(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
     let memory_id = event.event_id.clone();
+    let payload: Option<MemoryPayload> =
+        serde_json::from_value(event.redacted_payload.clone()).ok();
+
     let mut props = BTreeMap::new();
     props.insert("id".to_string(), Value::String(memory_id.clone()));
+    let display = payload
+        .as_ref()
+        .map(|p| {
+            let head = if p.name.is_empty() {
+                p.description.as_deref().unwrap_or("Memory").to_string()
+            } else {
+                p.name.clone()
+            };
+            format!("{head} ({})", p.memory_type)
+        })
+        .unwrap_or_else(|| format!("Memory {}", memory_id.chars().take(12).collect::<String>()));
+    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    if let Some(p) = payload.as_ref() {
+        props.insert("title".to_string(), Value::String(p.name.clone()));
+        props.insert("memory_type".to_string(), Value::String(p.memory_type.clone()));
+        props.insert("op".to_string(), Value::String(p.op.clone()));
+    }
     patch.nodes.push(NodeOp {
         label: "Memory".to_string(),
         natural_key: memory_id.clone(),
@@ -275,6 +397,12 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
 
     let mut props = BTreeMap::new();
     props.insert("id".to_string(), Value::String(decision_key.clone()));
+    let display = payload
+        .as_ref()
+        .filter(|p| !p.title.is_empty())
+        .map(|p| format!("{} · {}", decision_key, p.title))
+        .unwrap_or_else(|| format!("Decision {decision_key}"));
+    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
     if let Some(p) = payload.as_ref() {
         props.insert("title".to_string(), Value::String(p.title.clone()));
         props.insert("status".to_string(), Value::String(p.status.clone()));
@@ -330,12 +458,40 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
 }
 
 fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
-    let analysis_id = event.event_id.clone();
+    let payload: Option<AnalysisPayload> =
+        serde_json::from_value(event.redacted_payload.clone()).ok();
+    // Architecture §4.2 — `Analysis.id` is a ULID minted upstream;
+    // the payload carries it as `analysis_id`. Fall back to
+    // `event_id` when the payload was redacted away.
+    let analysis_key = payload
+        .as_ref()
+        .map(|p| p.analysis_id.clone())
+        .unwrap_or_else(|| event.event_id.clone());
+
     let mut props = BTreeMap::new();
-    props.insert("id".to_string(), Value::String(analysis_id.clone()));
+    props.insert("id".to_string(), Value::String(analysis_key.clone()));
+    let display = payload
+        .as_ref()
+        .filter(|p| !p.question.is_empty())
+        .map(|p| format!("{} · {}", analysis_key, p.question))
+        .unwrap_or_else(|| format!("Analysis {analysis_key}"));
+    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    if let Some(p) = payload.as_ref() {
+        props.insert("title".to_string(), Value::String(p.question.clone()));
+        props.insert("status".to_string(), Value::String(p.status.clone()));
+        if let Some(decision) = p.decision_id.as_deref() {
+            props.insert("decision_id".to_string(), Value::String(decision.to_string()));
+        }
+        if !p.panel.is_empty() {
+            props.insert(
+                "panel".to_string(),
+                Value::Array(p.panel.iter().cloned().map(Value::String).collect()),
+            );
+        }
+    }
     patch.nodes.push(NodeOp {
         label: "Analysis".to_string(),
-        natural_key: analysis_id,
+        natural_key: analysis_key,
         props,
     });
 }
@@ -354,6 +510,18 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
 
     let mut props = BTreeMap::new();
     props.insert("id".to_string(), Value::String(violation_key.clone()));
+    let display = payload
+        .as_ref()
+        .map(|p| {
+            let head = if p.message.is_empty() {
+                p.law_id.clone()
+            } else {
+                format!("{} · {}", p.law_id, p.message)
+            };
+            format!("[{}] {head}", p.severity)
+        })
+        .unwrap_or_else(|| format!("Violation {violation_key}"));
+    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
     if let Some(p) = payload.as_ref() {
         props.insert("law_id".to_string(), Value::String(p.law_id.clone()));
         props.insert(
@@ -379,6 +547,10 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
         let law_id = p.law_id.clone();
         let mut law_props = BTreeMap::new();
         law_props.insert("id".to_string(), Value::String(law_id.clone()));
+        // Display label = the id itself until spec-13 ships full
+        // Law metadata (title / severity / scope). The id alone is
+        // already enough to identify the rule in the Nexus browser.
+        law_props.insert("name".to_string(), Value::String(law_id.clone()));
         patch.nodes.push(NodeOp {
             label: "Law".to_string(),
             natural_key: law_id.clone(),
@@ -421,6 +593,51 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
                 });
             }
         }
+    }
+}
+
+/// Pick the most useful target string for a [`ToolCallPayload`] —
+/// the first touched path, then `path` / `file_path` / `pattern` /
+/// `command` from the input bag. Returns an empty string when the
+/// payload has nothing display-worthy.
+fn tool_call_target(p: &ToolCallPayload) -> String {
+    if let Some(touched) = p.touched.first() {
+        if !touched.path.is_empty() {
+            return touched.path.clone();
+        }
+    }
+    tool_call_target_field(p).unwrap_or_default()
+}
+
+/// Pull a single labelable string from `input.{path,file_path,pattern,command}`.
+fn tool_call_target_field(p: &ToolCallPayload) -> Option<String> {
+    let candidates = ["path", "file_path", "filename", "pattern", "command", "url"];
+    let obj = p.input.as_object()?;
+    for k in candidates {
+        if let Some(v) = obj.get(k).and_then(|v| v.as_str()) {
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Build the display label for an `agent_call` event. We route those
+/// through `emit_tool_call` for graph identity reasons (no separate
+/// AgentCall MERGE template today) but still want the label to read
+/// `Task: <agent_type> · <description>` so the Nexus browser
+/// distinguishes them visually.
+fn agent_call_display(event: &EnrichedEvent) -> String {
+    let payload: Option<AgentCallPayload> =
+        serde_json::from_value(event.redacted_payload.clone()).ok();
+    match payload {
+        Some(p) if !p.description.is_empty() => format!("Task: {} · {}", p.agent_type, p.description),
+        Some(p) => format!("Task: {}", p.agent_type),
+        None => format!(
+            "AgentCall {}",
+            event.event_id.chars().take(12).collect::<String>()
+        ),
     }
 }
 
