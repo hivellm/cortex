@@ -310,7 +310,7 @@ pub fn empty_response(req: &QueryRequest) -> QueryResponse {
     QueryResponse {
         intent: req.intent.label().to_string(),
         query_id: ulid::Ulid::new().to_string(),
-        scope_resolved: req.scope.clone(),
+        scope_resolved: req.scope.clone(), // canonicalised for real responses by `QueryService::handle`
         results: ResultsBag::default(),
         laws_active: Vec::new(),
         budget: BudgetReport {

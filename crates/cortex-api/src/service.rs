@@ -11,7 +11,28 @@ use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::orchestrator::Orchestrator;
 use crate::rate_limit::{RateConfig, RateDecision, RateLimiter};
 use crate::redaction::redact_response;
-use crate::types::{QueryRequest, QueryResponse};
+use crate::types::{QueryRequest, QueryResponse, Scope};
+
+/// Project the request-side scope into the canonical form the lanes
+/// actually filter on. The `repo` field is slugified through
+/// `cortex_storage::names::slug_for_repo` so it matches the
+/// `cortex-{slug}-{family}` index / collection naming the strategies
+/// produce; everything else round-trips verbatim. Dashboards reading
+/// `scope_resolved.repo` see exactly the slug the per-project lane
+/// hit, not the raw request input.
+fn canonicalise_scope(req_scope: &Scope) -> Scope {
+    let repo = req_scope
+        .repo
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(cortex_storage::names::slug_for_repo);
+    Scope {
+        repo,
+        files: req_scope.files.clone(),
+        topics: req_scope.topics.clone(),
+        since: req_scope.since.clone(),
+    }
+}
 
 /// Outcome surfaced by [`QueryService::handle`]. The HTTP handler
 /// translates `Denied` / `RateLimited` into the spec-defined status
@@ -87,8 +108,12 @@ impl QueryService {
         let mut response = self.orchestrator.run(&req).await;
         redact_response(&mut response);
         // Stamp ACL + scope echo before caching so the audit layer
-        // sees the canonical view.
-        response.scope_resolved = req.scope.clone();
+        // sees the canonical view. The echoed `repo` carries the
+        // slug the lanes actually filter on (matches the
+        // `cortex-{slug}-{family}` index/collection names) — not
+        // the raw request input — so dashboards can show how the
+        // query landed in the per-project surfaces.
+        response.scope_resolved = canonicalise_scope(&req.scope);
         self.cache.put(&key, response.clone()).await;
         self.audit
             .publish(build_envelope(caller, req.intent.label(), &response))
@@ -96,9 +121,15 @@ impl QueryService {
         ServiceOutcome::Ok(Box::new(response))
     }
 
-    /// Helper for the cache-invalidation event consumer.
+    /// Helper for the cache-invalidation event consumer. The cache
+    /// stores the canonicalised slug (the form the lanes actually
+    /// filter on after `canonicalise_scope` runs in `handle`); the
+    /// caller may pass the raw repo id, so we slugify here so
+    /// `invalidate_repo("Vectorizer")` and
+    /// `invalidate_repo("vectorizer")` both clear the same entries.
     pub async fn invalidate_repo(&self, repo: &str) {
-        self.cache.invalidate_repo(repo).await;
+        let slug = cortex_storage::names::slug_for_repo(repo);
+        self.cache.invalidate_repo(&slug).await;
     }
 }
 
@@ -170,6 +201,40 @@ mod tests {
         match svc.handle("dash", r).await {
             ServiceOutcome::Denied => (),
             other => panic!("expected Denied, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_resolved_echoes_canonical_slug() {
+        let svc = QueryService::with_memory_defaults(build_orchestrator());
+        // Allow the repo through the ACL so the request reaches the
+        // orchestrator instead of bouncing as Denied.
+        svc.acl.set_allowed("dash", vec!["Vectorizer".into()]);
+        let mut r = req("hello");
+        r.scope.repo = Some("Vectorizer".into());
+        match svc.handle("dash", r).await {
+            ServiceOutcome::Ok(resp) => {
+                // The slug runs through `slug_for_repo` so a
+                // request that types "Vectorizer" resolves to the
+                // lowercase ASCII form the per-project lane keys.
+                assert_eq!(
+                    resp.scope_resolved.repo.as_deref(),
+                    Some("vectorizer"),
+                    "scope_resolved.repo should be the slug the lanes filter on"
+                );
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_resolved_stays_empty_when_request_omits_repo() {
+        let svc = QueryService::with_memory_defaults(build_orchestrator());
+        match svc.handle("dash", req("hello")).await {
+            ServiceOutcome::Ok(resp) => {
+                assert!(resp.scope_resolved.repo.is_none());
+            }
+            other => panic!("expected Ok, got {other:?}"),
         }
     }
 
