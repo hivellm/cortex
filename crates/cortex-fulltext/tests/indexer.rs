@@ -157,6 +157,158 @@ async fn oversize_event_increments_truncated_counter_and_flag() {
     let _ = (indexer, metrics);
 }
 
+/// Spec-08 §Routing matrix: a mixed batch should fan out across every
+/// destination family (`code`, `docs`, `decisions`, `governance`,
+/// `turns`, `misc`). The `routed_total` counter must mirror the
+/// `IndexReport.by_index` numbers exactly.
+#[tokio::test]
+async fn routing_matrix_distributes_mixed_batch_across_families() {
+    let (_client, indexer, metrics) = build_indexer();
+
+    // ToolCall → cortex-vectorizer-code.
+    let mut tool_call = event(
+        "tc-1",
+        Kind::ToolCall,
+        json!({
+            "tool_name": "Edit",
+            "input": { "command": "edit foo" },
+            "outcome": "success",
+            "touched": []
+        }),
+    );
+    tool_call.classifier.topics = vec!["code".into()];
+
+    // AgentCall → cortex-vectorizer-turns (per spec-08).
+    let mut agent_call = event(
+        "ag-1",
+        Kind::AgentCall,
+        json!({
+            "agent_type": "researcher",
+            "description": "research",
+            "outcome": "success",
+            "duration_ms": 5
+        }),
+    );
+    agent_call.classifier.topics = vec!["agent".into()];
+
+    // Turn → cortex-vectorizer-turns.
+    let turn = event(
+        "tu-1",
+        Kind::Turn,
+        json!({
+            "user_message": "hi",
+            "assistant_message": "hello"
+        }),
+    );
+
+    // Decision → cortex-vectorizer-decisions.
+    let decision = event(
+        "dec-1",
+        Kind::Decision,
+        json!({
+            "decision_id": "DEC-1",
+            "title": "Adopt X",
+            "status": "accepted",
+            "body": "rationale"
+        }),
+    );
+
+    // LawViolation → cortex-vectorizer-governance.
+    let law = event(
+        "lv-1",
+        Kind::LawViolation,
+        json!({
+            "violation_id": "VIO-1",
+            "law_id": "LAW-1",
+            "severity": "critical",
+            "tier": 1,
+            "message": "broke a rule",
+            "evidence": null
+        }),
+    );
+
+    // Artifact (.rs path) → cortex-vectorizer-code.
+    let mut code_artifact = event(
+        "art-rs",
+        Kind::Artifact,
+        json!({
+            "artifact_type": "file",
+            "path": "src/lib.rs",
+            "body": "fn main() {}"
+        }),
+    );
+    code_artifact.context_path = Some("src/lib.rs".into());
+
+    // Artifact (.md path) → cortex-vectorizer-docs.
+    let mut doc_artifact = event(
+        "art-md",
+        Kind::Artifact,
+        json!({
+            "artifact_type": "file",
+            "path": "docs/spec-08.md",
+            "body": "# Spec"
+        }),
+    );
+    doc_artifact.context_path = Some("docs/spec-08.md".into());
+
+    // Artifact with unknown ext + no topics → cortex-vectorizer-misc.
+    let mut misc_artifact = event(
+        "art-bin",
+        Kind::Artifact,
+        json!({
+            "artifact_type": "file",
+            "path": "tools/blob.bin",
+            "body": "raw"
+        }),
+    );
+    misc_artifact.context_path = Some("tools/blob.bin".into());
+    misc_artifact.classifier.topics = vec![];
+
+    let events = vec![
+        tool_call,
+        agent_call,
+        turn,
+        decision,
+        law,
+        code_artifact,
+        doc_artifact,
+        misc_artifact,
+    ];
+
+    let report = indexer.index_batch(&events).await.expect("index_batch");
+    assert_eq!(report.documents_upserted, 8);
+
+    // Every destination from the spec-08 matrix should be populated.
+    let want = [
+        ("cortex-vectorizer-code", 2),         // tool_call + .rs artifact
+        ("cortex-vectorizer-turns", 2),        // turn + agent_call
+        ("cortex-vectorizer-decisions", 1),
+        ("cortex-vectorizer-governance", 1),
+        ("cortex-vectorizer-docs", 1),         // .md artifact
+        ("cortex-vectorizer-misc", 1),         // unknown-ext artifact
+    ];
+    for (idx, expected) in want {
+        assert_eq!(
+            report.by_index.get(idx).copied(),
+            Some(expected),
+            "index {idx} count drift: by_index={:?}",
+            report.by_index
+        );
+    }
+
+    // The routed_total counter must mirror by_index exactly so the
+    // operator dashboard and the per-batch report cannot diverge.
+    let routed = metrics.routed_snapshot();
+    for (idx, expected) in want {
+        assert_eq!(
+            routed.get(idx).copied(),
+            Some(expected as u64),
+            "routed_total mismatch for {idx}: snapshot={:?}",
+            routed
+        );
+    }
+}
+
 #[tokio::test]
 async fn batches_chunk_by_upsert_batch_size() {
     let (client, indexer, _metrics) = build_indexer();

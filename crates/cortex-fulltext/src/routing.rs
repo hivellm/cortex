@@ -36,9 +36,17 @@ const DOC_EXTENSIONS: &[&str] = &[
 /// anything else ⇒ `misc`.
 pub fn family_for(kind: Kind) -> &'static str {
     match kind {
-        Kind::ToolCall | Kind::AgentCall => "code",
+        // tool_call sits alongside `code` because the body is almost always
+        // a Bash / Edit / Write payload — searching for a command name
+        // belongs in the same lane as searching for the source file it
+        // touched.
+        Kind::ToolCall => "code",
         Kind::Decision => "decisions",
-        Kind::Turn => "turns",
+        // agent_call rides with `turn` per spec-08's routing matrix —
+        // both are conversational dispatches, and folding them into
+        // `cortex-turns` keeps "what did the assistant do this turn"
+        // queries deterministic.
+        Kind::Turn | Kind::AgentCall => "turns",
         Kind::LawViolation => "governance",
         Kind::Artifact => "misc",
         Kind::Memory | Kind::Analysis => "misc",
@@ -219,6 +227,29 @@ mod tests {
             "governance"
         );
         assert_eq!(family_for_event(Kind::ToolCall, &[], None), "code");
-        assert_eq!(family_for_event(Kind::AgentCall, &[], None), "code");
+        // agent_call rides with `turn` per spec-08 — both are
+        // conversational dispatches.
+        assert_eq!(family_for_event(Kind::AgentCall, &[], None), "turns");
+    }
+
+    #[test]
+    fn matrix_covers_every_event_kind_per_spec_08() {
+        // Spec-08 §Routing matrix lists six destinations. Pin every
+        // Kind variant to a known family so a future Kind addition
+        // forces an explicit routing decision instead of silently
+        // landing in `misc`. Non-artifact branches use kind-only
+        // routing; the artifact tie-break is covered separately.
+        for (kind, family) in [
+            (Kind::Decision, "decisions"),
+            (Kind::LawViolation, "governance"),
+            (Kind::Turn, "turns"),
+            (Kind::AgentCall, "turns"),
+            (Kind::ToolCall, "code"),
+            (Kind::Memory, "misc"),
+            (Kind::Analysis, "misc"),
+            (Kind::Artifact, "misc"),
+        ] {
+            assert_eq!(family_for(kind), family, "kind={kind:?} drift");
+        }
     }
 }

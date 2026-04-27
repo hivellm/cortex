@@ -38,6 +38,12 @@ pub struct Metrics {
     pub settings_bump: AtomicU64,
     /// `cortex.fulltext.backpressure.active` — 0 / 1 gauge.
     pub backpressure_active: AtomicU64,
+    /// `cortex_fulltext_routed_total` — count of envelopes routed to
+    /// each index, keyed by index name. Lets the operator confirm the
+    /// spec-08 routing matrix is producing the expected distribution
+    /// (every kind / topic combination should land in a known bucket;
+    /// `cortex-misc` should stay non-zero but small).
+    pub routed_total: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -105,5 +111,21 @@ impl Metrics {
     pub fn set_backpressure(&self, active: bool) {
         self.backpressure_active
             .store(u64::from(active), Ordering::Relaxed);
+    }
+
+    /// Record one envelope routed into `index`. Drives the
+    /// `cortex_fulltext_routed_total{index=...}` counter.
+    pub fn incr_routed(&self, index: &str) {
+        if let Ok(mut map) = self.routed_total.lock() {
+            *map.entry(index.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Snapshot the routed-total counter (test / dashboard helper).
+    pub fn routed_snapshot(&self) -> BTreeMap<String, u64> {
+        self.routed_total
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 }

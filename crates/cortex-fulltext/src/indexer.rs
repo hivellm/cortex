@@ -107,6 +107,7 @@ impl FulltextIndexer for MeiliFulltextIndexer {
                         self.metrics.incr_truncated();
                     }
                     let index_name = index_for_event(&self.config.index_prefix, event);
+                    self.metrics.incr_routed(&index_name);
                     by_index.entry(index_name).or_default().push(*doc);
                 }
             }

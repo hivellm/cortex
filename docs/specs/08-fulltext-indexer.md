@@ -90,6 +90,28 @@ Missing extensions are absent — no null-padding.
 
 The full index uid is `{prefix}-{repo_slug}-{family}` (default prefix `cortex-`). Per-project isolation is mandatory: a Cortex repo populates `cortex-cortex-docs` / `cortex-cortex-code`, while a Tml repo populates `cortex-tml-docs` / `cortex-tml-code`. Events with no `context.repo` route to the `unknown` slug. The slug is canonicalised through `cortex_storage::names::slug_for_repo` (lowercase ASCII, non-`[a-z0-9-]` collapsed to `-`, no leading/trailing dashes).
 
+### Routing matrix
+
+The family suffix is picked deterministically from `(kind, classifier.topics, context.path)` by `cortex_fulltext::routing::family_for_event`. Order is significant — the first rule that matches wins.
+
+| Predicate                                                          | Family         |
+|--------------------------------------------------------------------|----------------|
+| `kind == decision`                                                 | `decisions`    |
+| `kind == law_violation` (or, when introduced, `kind == law`)       | `governance`   |
+| `kind == turn` ∨ `kind == agent_call`                              | `turns`        |
+| `kind == tool_call`                                                | `code`         |
+| `kind == artifact` ∧ `path` ends with `CODE_EXTENSIONS`            | `code`         |
+| `kind == artifact` ∧ `path` ends with `DOC_EXTENSIONS`             | `docs`         |
+| `kind == artifact` ∧ `topics ⊇ {code}`                             | `code`         |
+| `kind == artifact` ∧ `topics ⊇ {doc, documentation}`               | `docs`         |
+| anything else (including `memory`, `analysis`, signal-less artifacts) | `misc`      |
+
+`CODE_EXTENSIONS` is the curated allowlist `rs, ts, tsx, js, jsx, mjs, cjs, py, go, rb, java, kt, scala, c, cc, cpp, h, hpp, cs, swift, php, lua, sh, bash, zsh, ps1, fish, sql, proto`. `DOC_EXTENSIONS` is `md, mdx, markdown, rst, adoc, asciidoc, txt, rtf, tex, org`. Files with neither extension and no topic signal land in `misc` rather than silently piling into `docs` (the 2026-04-27 audit failure mode).
+
+**Tie-break for artifacts with mixed `topics: [code, doc]`:** the path extension always wins because the file itself is the most reliable signal. Only when the extension is unknown does the classifier's topic list arbitrate.
+
+**Observability:** every routed envelope increments `cortex_fulltext_routed_total{index="<full-uid>"}` (see §Observability). The post-bootstrap operator check is "every of the six families is non-zero, and `misc` stays in the low single-digit percent of total throughput."
+
 ### Identity
 
 ```
