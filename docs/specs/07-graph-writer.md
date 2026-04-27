@@ -210,14 +210,41 @@ cortex.graph.backpressure.active  gauge
 - [ ] Bolt vs HTTP: both transports pass the full suite under `CORTEX_GRAPH_TRANSPORT` flag.
 - [ ] Telemetry counters non-zero after soak; P95 tx latency < 300 ms on dev stack.
 
+## Compat note — Nexus 1.15.0 silently drops UNWIND / `$param` writes
+
+**Status (2026-04-27):** the live writer in `crates/cortex-graph/src/nexus_client.rs` no longer reads from `cypher/*.cypher`. Every node and edge MERGE is rendered per-row at runtime with values inline-escaped into the Cypher string (`MERGE (n:Label { id: '<escaped>' }) SET n.x = '<v>' RETURN count(*) AS written`). The writer asserts the `RETURN` produced rows so silent drops surface as real errors.
+
+**Why.** Probing Nexus 1.15.0 directly (`POST /cypher`) showed:
+
+| Cypher shape                                                 | Result                                |
+|--------------------------------------------------------------|---------------------------------------|
+| `UNWIND $rows AS row MERGE (n:L {key: row.k}) SET n += row.props` | 200 OK, **0 rows persisted, no error** |
+| `MERGE (n:L {key: $k}) SET n += $props`                      | 200 OK, **0 rows persisted, no error** |
+| `MERGE (n:L {key: "literal"}) SET n.x = "lit", n.y = "lit"`  | persists                               |
+| `MATCH (a:L1 {key:"l1"}), (b:L2 {key:"l2"}) MERGE (a)-[r:T]->(b) RETURN r` | persists                  |
+| `FOREACH (k IN [...] | MERGE …)`                             | parse error                           |
+| `POST /data/nodes` typed SDK API                             | persists                               |
+
+So Nexus 1.15 drops every write that uses `$param` substitution **inside** a write clause or that consumes an `UNWIND`-bound row. Reads with `$param` work fine. Until a Nexus version that supports the parametrised-write path ships, the writer renders Cypher with literal values escaped via `crates/cortex-graph/src/cypher.rs::cypher_str_escape`. Throughput drops (one round-trip per row vs one per batch) but a writer that lies is worse than one that's slow.
+
+**Validated end-to-end (2026-04-27 18:22, Cortex repo bootstrap):** `MATCH (n) RETURN labels(n), count(n)` → 1833 nodes spanning Artifact / Repo / Session / Turn labels; `MATCH ()-[r]->() RETURN type(r), count(r)` → IN_REPO=2563, HAS_TURN=2. Pre-fix: 1 unlabeled node, 0 relationships.
+
+**Re-enable the template path** once one of:
+
+1. Nexus ships a release that supports `UNWIND $rows … MERGE …` with row-bound literals **(preferred)**.
+2. We move read queries (graph traversals, `MATCH`-only) onto the registry so the file format earns its keep regardless.
+
+See `phase1_graph_writer_nexus_compat` (archived under `.rulebook/tasks/_archive/`) for the full diagnosis and probe transcripts. The `.cypher/` files are kept as the future-state shape; the README in that directory points back here.
+
 ## Decisions
 
 1. **MERGE-based idempotency, not lookup-then-write.** Nexus `MERGE` with unique constraints is the only thread-safe path. Never read-check-write.
 2. **Natural keys where they exist; composite otherwise.** Avoid generating surrogate IDs for things that already have a natural identity (`Artifact` is the only composite case).
 3. **`SIMILAR_TO` is a read-time derivation.** Storing cross-node similarities would 10× graph size and bit-rot the moment embeddings change. The query layer computes this on demand (spec 11).
-4. **Cypher templates are source-controlled files, not string builds.** Security (injection) + auditability. Every template is reviewed once, used forever.
+4. **Cypher templates are source-controlled files, not string builds.** Security (injection) + auditability. Every template is reviewed once, used forever. **Suspended in 1.15-compat mode** — see §Compat note above.
 5. **Patch coalescer lives client-side.** Nexus charges per op; coalescing before the wire saves ~40% on bootstrap.
 6. **Orphans are allowed.** In distributed event streams, out-of-order arrivals are normal. Orphan `Turn{orphan:true}` nodes are a debuggable signal, not a data-loss error.
+7. **Inline-literal Cypher for writes (Nexus 1.15 compat).** Render every `MERGE` per-row with values escaped into the literal via `cypher_str_escape`; refuse implicit silent successes by appending `RETURN count(*) AS written` and asserting the rows array is non-empty. Revisit once Nexus fixes parametrised writes.
 
 ## Open questions
 

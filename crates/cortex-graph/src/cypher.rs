@@ -156,6 +156,7 @@ pub fn render_node_merge(
 /// MERGEs before edge MERGEs in a batch). If either is missing,
 /// Nexus returns `written = 0` and the writer surfaces a real failure
 /// rather than the previous silent success.
+#[allow(clippy::too_many_arguments)]
 pub fn render_edge_merge(
     from_label: &str,
     from_key_field: &str,
@@ -471,7 +472,7 @@ mod tests {
         assert_eq!(render_value(&serde_json::Value::Null), "null");
         assert_eq!(render_value(&json!(true)), "true");
         assert_eq!(render_value(&json!(42)), "42");
-        assert_eq!(render_value(&json!(3.14)), "3.14");
+        assert_eq!(render_value(&json!(2.5)), "2.5");
         assert_eq!(render_value(&json!("hi")), "'hi'");
         assert_eq!(render_value(&json!("it's")), "'it\\'s'");
     }
@@ -527,7 +528,7 @@ mod tests {
     #[test]
     fn render_edge_merge_emits_match_merge_with_return() {
         let mut props: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-        props.insert("at".into(), serde_json::json!(1714__200_000_000_i64));
+        props.insert("at".into(), serde_json::json!(1_714_200_000_000_i64));
         let stmt = render_edge_merge(
             "Session",
             "id",
