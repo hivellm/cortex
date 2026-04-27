@@ -295,6 +295,7 @@ impl Embedder for VectorizerEmbedder {
                     &event.kind,
                     &chunk.metadata.source,
                     &self.config.collection_prefix,
+                    event.context_repo.as_deref(),
                 );
             }
 
@@ -401,7 +402,13 @@ impl Embedder for VectorizerEmbedder {
                 // Vectorizer error on the first event of that collection.
                 let victim_event = events
                     .iter()
-                    .find(|e| collection_for(&e.kind, &self.config.collection_prefix) == *name)
+                    .find(|e| {
+                        collection_for(
+                            &e.kind,
+                            &self.config.collection_prefix,
+                            e.context_repo.as_deref(),
+                        ) == *name
+                    })
                     .map(|e| e.event_id.clone())
                     .unwrap_or_else(|| "unknown".into());
                 report.errors.push(EmbedError::Vectorizer {
@@ -471,8 +478,11 @@ impl Embedder for VectorizerEmbedder {
                         let victim_event = events
                             .iter()
                             .find(|e| {
-                                collection_for(&e.kind, &self.config.collection_prefix)
-                                    == collection
+                                collection_for(
+                                    &e.kind,
+                                    &self.config.collection_prefix,
+                                    e.context_repo.as_deref(),
+                                ) == collection
                             })
                             .map(|e| e.event_id.clone())
                             .unwrap_or_else(|| "unknown".into());

@@ -266,8 +266,11 @@ async fn idempotent_replay_reports_zero_new() {
         .embed_batch(std::slice::from_ref(&event))
         .await
         .expect("first embed_batch");
-    let collection =
-        cortex_embedder::collection_for(&Kind::ToolCall, &config.collection_prefix);
+    let collection = cortex_embedder::collection_for(
+        &Kind::ToolCall,
+        &config.collection_prefix,
+        event.context_repo.as_deref(),
+    );
 
     assert!(first.chunks_written > 0, "first run must write: {first:?}");
     assert_eq!(first.chunks_deduped, 0, "first run has nothing to dedup");

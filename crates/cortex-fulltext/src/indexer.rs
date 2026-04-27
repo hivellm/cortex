@@ -106,7 +106,11 @@ impl FulltextIndexer for MeiliFulltextIndexer {
                         truncated = truncated.saturating_add(1);
                         self.metrics.incr_truncated();
                     }
-                    let index_name = index_for(&self.config.index_prefix, event.kind);
+                    let index_name = index_for(
+                        &self.config.index_prefix,
+                        event.kind,
+                        event.context_repo.as_deref(),
+                    );
                     by_index.entry(index_name).or_default().push(*doc);
                 }
             }

@@ -55,7 +55,7 @@ async fn embed_one(
         .embed_batch(std::slice::from_ref(event))
         .await
         .expect("embed_batch");
-    let collection = cortex_embedder::collection_for(&event.kind, prefix);
+    let collection = cortex_embedder::collection_for(&event.kind, prefix, event.context_repo.as_deref());
     (live, collection, report)
 }
 

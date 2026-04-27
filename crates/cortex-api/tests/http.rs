@@ -63,7 +63,7 @@ fn pre_change_request(query: &str, repo: Option<&str>) -> QueryRequest {
 async fn pre_change_context_returns_snippet_within_budget() {
     let (svc, v, _, _, _) = build_test_service();
     v.seed(
-        "cortex-code",
+        "cortex-vectorizer-code",
         vec![cortex_api::LaneHit {
             doc_id: "doc-1".into(),
             text: "hnsw_search impl".into(),
@@ -98,7 +98,7 @@ async fn pre_change_context_returns_snippet_within_budget() {
 async fn cache_hit_marks_cache_hit_and_skips_lanes() {
     let (svc, v, _, _, _) = build_test_service();
     v.seed(
-        "cortex-code",
+        "cortex-vectorizer-code",
         vec![cortex_api::LaneHit {
             doc_id: "h".into(),
             text: "hi".into(),
@@ -240,8 +240,9 @@ async fn lane_failure_does_not_block_other_lanes() {
     let v = Arc::new(MemoryVectorLane::new().with_fail());
     let k = Arc::new(MemoryKeywordLane::new());
     let g = Arc::new(MemoryGraphLane::new());
+    // Scope is None below ⇒ orchestrator picks `cortex-unknown-code`.
     k.seed(
-        "cortex-code",
+        "cortex-unknown-code",
         vec![cortex_api::LaneHit {
             doc_id: "kk".into(),
             text: "keyword hit".into(),
@@ -370,7 +371,7 @@ async fn law_check_returns_only_violations_field() {
         extras,
     };
     g.seed("law_violations_last_30d", vec![violation_hit.clone()]);
-    k.seed("cortex-governance", vec![violation_hit]);
+    k.seed("cortex-vectorizer-governance", vec![violation_hit]);
     let svc = Arc::new(QueryService::with_memory_defaults(Orchestrator::new(v, k, g)));
     let app = build_router(svc);
     let req: QueryRequest = serde_json::from_value(json!({
@@ -409,8 +410,9 @@ async fn law_check_returns_only_violations_field() {
 #[tokio::test]
 async fn redaction_strips_aws_key_from_snippet_text_in_response() {
     let (svc, v, _, _, _) = build_test_service();
+    // Scope is None below ⇒ orchestrator picks `cortex-unknown-code`.
     v.seed(
-        "cortex-code",
+        "cortex-unknown-code",
         vec![cortex_api::LaneHit {
             doc_id: "k".into(),
             text: "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE0000".into(),
@@ -446,15 +448,20 @@ async fn redaction_strips_aws_key_from_snippet_text_in_response() {
 #[tokio::test]
 async fn mcp_tool_descriptor_advertises_query_schema() {
     let descriptor = cortex_api::tool_descriptor();
-    assert_eq!(descriptor["name"], "cortex.query");
-    assert!(descriptor["input_schema"]["properties"]["intent"].is_object());
+    assert_eq!(descriptor["name"], "cortex_query");
+    assert!(descriptor["inputSchema"]["properties"]["intent"].is_object());
+    assert!(
+        descriptor.get("input_schema").is_none(),
+        "snake_case input_schema must not be emitted"
+    );
 }
 
 #[tokio::test]
 async fn mcp_invoke_routes_through_the_same_service() {
     let (svc, v, _, _, _) = build_test_service();
+    // mcp_invoke below has no `scope` field ⇒ orchestrator picks `cortex-unknown-code`.
     v.seed(
-        "cortex-code",
+        "cortex-unknown-code",
         vec![cortex_api::LaneHit {
             doc_id: "x".into(),
             text: "hello".into(),

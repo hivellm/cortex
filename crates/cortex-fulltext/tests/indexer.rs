@@ -39,6 +39,7 @@ fn event(event_id: &str, kind: Kind, payload: serde_json::Value) -> EnrichedEven
         context_repo: Some("Vectorizer".into()),
         context_path: None,
         parent_event_id: None,
+        session_id: None,
     }
 }
 
@@ -94,8 +95,10 @@ async fn index_batch_groups_events_per_index() {
     ];
     let report = indexer.index_batch(&events).await.expect("index_batch");
     assert_eq!(report.documents_upserted, 3);
-    assert_eq!(report.by_index.get("cortex-code").copied(), Some(2));
-    assert_eq!(report.by_index.get("cortex-decisions").copied(), Some(1));
+    // Per-repo isolation: events with `context_repo = "Vectorizer"` route to
+    // `cortex-vectorizer-{family}` instead of the legacy shared `cortex-{family}`.
+    assert_eq!(report.by_index.get("cortex-vectorizer-code").copied(), Some(2));
+    assert_eq!(report.by_index.get("cortex-vectorizer-decisions").copied(), Some(1));
 
     let calls = client.calls_snapshot();
     let mut indexes_seen: Vec<String> = calls
@@ -108,7 +111,10 @@ async fn index_batch_groups_events_per_index() {
     indexes_seen.sort();
     assert_eq!(
         indexes_seen,
-        vec!["cortex-code".to_string(), "cortex-decisions".to_string()]
+        vec![
+            "cortex-vectorizer-code".to_string(),
+            "cortex-vectorizer-decisions".to_string()
+        ]
     );
 }
 

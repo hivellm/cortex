@@ -39,7 +39,7 @@ impl Chunker for DocChunker {
         if text.is_empty() {
             return Ok(Vec::new());
         }
-        let collection = collection_for(&event.kind, "cortex");
+        let collection = collection_for(&event.kind, "cortex", event.context_repo.as_deref());
         Ok(chunk_markdown(event, &text, &collection))
     }
 }

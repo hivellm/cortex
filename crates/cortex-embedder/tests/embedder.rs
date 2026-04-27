@@ -78,9 +78,9 @@ async fn mixed_kind_events_route_to_correct_collections() {
         .await
         .expect("embed_batch");
     assert!(report.errors.is_empty(), "{:?}", report.errors);
-    assert!(report.by_collection.contains_key("cortex-code"));
-    assert!(report.by_collection.contains_key("cortex-docs"));
-    assert!(report.by_collection.contains_key("cortex-turns"));
+    assert!(report.by_collection.contains_key("cortex-unknown-code"));
+    assert!(report.by_collection.contains_key("cortex-unknown-docs"));
+    assert!(report.by_collection.contains_key("cortex-unknown-turns"));
 
     let collections_touched: BTreeSet<String> = client
         .calls()
@@ -90,9 +90,9 @@ async fn mixed_kind_events_route_to_correct_collections() {
             _ => None,
         })
         .collect();
-    assert!(collections_touched.contains("cortex-code"));
-    assert!(collections_touched.contains("cortex-docs"));
-    assert!(collections_touched.contains("cortex-turns"));
+    assert!(collections_touched.contains("cortex-unknown-code"));
+    assert!(collections_touched.contains("cortex-unknown-docs"));
+    assert!(collections_touched.contains("cortex-unknown-turns"));
 }
 
 #[tokio::test]

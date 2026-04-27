@@ -44,6 +44,7 @@ fn enriched(event_id: &str, kind: Kind, payload: serde_json::Value) -> EnrichedE
         context_repo: Some("Vectorizer".into()),
         context_path: None,
         parent_event_id: None,
+        session_id: None,
     }
 }
 

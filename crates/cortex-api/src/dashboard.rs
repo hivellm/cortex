@@ -58,7 +58,7 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/graph", get(graph))
         .route("/v1/dashboard/sessions", get(sessions))
         .route("/v1/dashboard/trust", get(trust))
-        .route("/v1/dashboard/decisions/:id", get(decision_detail))
+        .route("/v1/dashboard/decisions/{id}", get(decision_detail))
         .with_state(state)
 }
 

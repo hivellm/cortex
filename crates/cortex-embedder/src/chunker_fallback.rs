@@ -69,7 +69,7 @@ impl FallbackChunker {
         starting_ordinal: u32,
         collection_prefix: &str,
     ) -> Vec<Chunk> {
-        let collection = collection_for(&event.kind, collection_prefix);
+        let collection = collection_for(&event.kind, collection_prefix, event.context_repo.as_deref());
         chunk_str(
             text,
             self.window_chars(),
@@ -99,7 +99,7 @@ impl Chunker for FallbackChunker {
         // go through `VectorizerEmbedder` which owns its own prefix and will
         // invoke `chunk_text` directly. The `Chunker` trait method keeps a
         // sensible default for stand-alone use (e.g. tests).
-        let collection = collection_for(&event.kind, "cortex");
+        let collection = collection_for(&event.kind, "cortex", event.context_repo.as_deref());
         let chunks = chunk_str(
             &text,
             self.window_chars(),

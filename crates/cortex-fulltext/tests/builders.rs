@@ -45,6 +45,7 @@ fn event(
         context_repo: repo.map(String::from),
         context_path: path.map(String::from),
         parent_event_id: None,
+        session_id: None,
     }
 }
 

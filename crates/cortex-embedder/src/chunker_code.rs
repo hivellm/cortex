@@ -245,7 +245,7 @@ impl Chunker for CodeChunker {
             return Ok(Vec::new());
         }
 
-        let collection = collection_for(&event.kind, "cortex");
+        let collection = collection_for(&event.kind, "cortex", event.context_repo.as_deref());
         let fallback = FallbackChunker::default();
         let mut out: Vec<Chunk> = Vec::new();
         let mut ordinal: u32 = 0;

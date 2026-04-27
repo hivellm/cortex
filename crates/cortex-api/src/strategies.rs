@@ -11,6 +11,23 @@ use serde_json::json;
 use crate::lanes::{GraphRequest, KeywordRequest, VectorRequest};
 use crate::types::{IncludeField, Intent, QueryRequest};
 
+/// Resolve the per-repo collection / index family the strategies
+/// should target. Reads `req.scope.repos[0]` and slugifies it; an
+/// empty scope falls back to `unknown` so the produced name is always
+/// well-formed (and the lane simply returns zero hits — surfacing the
+/// missing scope to the caller).
+fn repo_scoped(req: &QueryRequest, family: &str) -> String {
+    use cortex_storage::names::{slug_for_repo, UNKNOWN_REPO_SLUG};
+    let slug = req
+        .scope
+        .repo
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(slug_for_repo)
+        .unwrap_or_else(|| UNKNOWN_REPO_SLUG.to_string());
+    format!("cortex-{slug}-{family}")
+}
+
 /// One execution plan produced from an intent + request. Carries the
 /// pre-built lane requests + the overlay set the orchestrator runs
 /// after fusion.
@@ -76,7 +93,7 @@ pub fn build_plan(req: &QueryRequest) -> Plan {
 }
 
 fn pre_change_context(req: &QueryRequest) -> Plan {
-    let collections = vec!["cortex-code".to_string(), "cortex-docs".to_string()];
+    let collections = vec![repo_scoped(req, "code"), repo_scoped(req, "docs")];
     let vectors = collections
         .into_iter()
         .map(|c| VectorRequest {
@@ -86,15 +103,19 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
             scope: req.scope.clone(),
         })
         .collect();
-    let keywords = vec!["cortex-code", "cortex-docs", "cortex-decisions"]
-        .into_iter()
-        .map(|i| KeywordRequest {
-            index: i.to_string(),
-            query: req.query.clone(),
-            limit: req.limit,
-            scope: req.scope.clone(),
-        })
-        .collect();
+    let keywords = vec![
+        repo_scoped(req, "code"),
+        repo_scoped(req, "docs"),
+        repo_scoped(req, "decisions"),
+    ]
+    .into_iter()
+    .map(|i| KeywordRequest {
+        index: i,
+        query: req.query.clone(),
+        limit: req.limit,
+        scope: req.scope.clone(),
+    })
+    .collect();
     let graphs = vec![GraphRequest {
         template: "edge_artifact_touched_neighbours".to_string(),
         params: json!({ "query": req.query }),
@@ -120,13 +141,13 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
 
 fn decision_lookup(req: &QueryRequest) -> Plan {
     let vectors = vec![VectorRequest {
-        collection: "cortex-decisions".into(),
+        collection: repo_scoped(req, "decisions"),
         query: req.query.clone(),
         k: req.k,
         scope: req.scope.clone(),
     }];
     let keywords = vec![KeywordRequest {
-        index: "cortex-decisions".into(),
+        index: repo_scoped(req, "decisions"),
         query: req.query.clone(),
         limit: req.limit,
         scope: req.scope.clone(),
@@ -148,7 +169,7 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
 
 fn similar_problems(req: &QueryRequest) -> Plan {
     let vectors = vec![VectorRequest {
-        collection: "cortex-turns".into(),
+        collection: repo_scoped(req, "turns"),
         query: req.query.clone(),
         k: req.k,
         scope: req.scope.clone(),
@@ -174,7 +195,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
 
 fn law_check(req: &QueryRequest) -> Plan {
     let keywords = vec![KeywordRequest {
-        index: "cortex-governance".into(),
+        index: repo_scoped(req, "governance"),
         query: req.query.clone(),
         limit: req.limit,
         scope: req.scope.clone(),
@@ -200,13 +221,13 @@ fn law_check(req: &QueryRequest) -> Plan {
 
 fn free_search(req: &QueryRequest) -> Plan {
     let vectors = vec![VectorRequest {
-        collection: "cortex-code".into(),
+        collection: repo_scoped(req, "code"),
         query: req.query.clone(),
         k: req.k,
         scope: req.scope.clone(),
     }];
     let keywords = vec![KeywordRequest {
-        index: "cortex-code".into(),
+        index: repo_scoped(req, "code"),
         query: req.query.clone(),
         limit: req.limit,
         scope: req.scope.clone(),

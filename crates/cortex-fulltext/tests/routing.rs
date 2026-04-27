@@ -24,12 +24,27 @@ fn each_kind_routes_to_a_known_family() {
 }
 
 #[test]
-fn index_for_uses_prefix_and_family() {
-    assert_eq!(index_for("cortex-", Kind::ToolCall), "cortex-code");
-    assert_eq!(index_for("cortex-", Kind::Decision), "cortex-decisions");
-    assert_eq!(index_for("cortex-", Kind::Turn), "cortex-turns");
-    assert_eq!(index_for("cortex-", Kind::LawViolation), "cortex-governance");
-    assert_eq!(index_for("cortex-", Kind::Artifact), "cortex-docs");
-    assert_eq!(index_for("cortex-", Kind::Memory), "cortex-misc");
-    assert_eq!(index_for("staging-", Kind::Turn), "staging-turns");
+fn index_for_uses_prefix_repo_slug_and_family() {
+    let repo = Some("Cortex");
+    assert_eq!(index_for("cortex-", Kind::ToolCall, repo), "cortex-cortex-code");
+    assert_eq!(index_for("cortex-", Kind::Decision, repo), "cortex-cortex-decisions");
+    assert_eq!(index_for("cortex-", Kind::Turn, repo), "cortex-cortex-turns");
+    assert_eq!(
+        index_for("cortex-", Kind::LawViolation, repo),
+        "cortex-cortex-governance"
+    );
+    assert_eq!(index_for("cortex-", Kind::Artifact, repo), "cortex-cortex-docs");
+    assert_eq!(index_for("cortex-", Kind::Memory, repo), "cortex-cortex-misc");
+    assert_eq!(
+        index_for("staging-", Kind::Turn, Some("Tml")),
+        "staging-tml-turns"
+    );
+}
+
+#[test]
+fn missing_repo_routes_to_unknown_slug() {
+    assert_eq!(
+        index_for("cortex-", Kind::Artifact, None),
+        "cortex-unknown-docs"
+    );
 }

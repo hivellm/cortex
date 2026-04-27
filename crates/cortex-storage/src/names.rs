@@ -120,3 +120,107 @@ pub const ALL_INDEXES: &[&str] = &[
 /// Nexus database / keyspace name.
 pub const NEXUS_DB: &str = "cortex";
 
+// ---------- Per-repo collection / index naming ----------
+
+/// Slug used when a repo id is missing or empty. Keeps every
+/// downstream collection / index name well-formed instead of producing
+/// strings like `cortex--docs`.
+pub const UNKNOWN_REPO_SLUG: &str = "unknown";
+
+/// Canonicalise a `cortex.id` (or git-root basename) into an
+/// identifier safe for use as part of a Vectorizer collection name or
+/// a Meilisearch index uid. Output matches `[a-z0-9-]+` with no
+/// leading or trailing `-`.
+///
+/// Empty input maps to [`UNKNOWN_REPO_SLUG`] so callers can rely on
+/// `format!("cortex-{slug}-{family}")` always producing a well-formed
+/// name.
+pub fn slug_for_repo(repo_id: &str) -> String {
+    let lowered: String = repo_id
+        .chars()
+        .map(|c| {
+            let lc = c.to_ascii_lowercase();
+            if lc.is_ascii_alphanumeric() || lc == '-' {
+                lc
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let mut out = String::with_capacity(lowered.len());
+    let mut last_dash = true;
+    for c in lowered.chars() {
+        if c == '-' {
+            if last_dash {
+                continue;
+            }
+            last_dash = true;
+        } else {
+            last_dash = false;
+        }
+        out.push(c);
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        UNKNOWN_REPO_SLUG.to_string()
+    } else {
+        out
+    }
+}
+
+/// Compose the per-repo Vectorizer collection / Meilisearch index
+/// name. `prefix` is the deployment namespace (default `"cortex"`),
+/// `family` is the kind suffix (`docs`, `code`, `turns`, …).
+pub fn repo_scoped_name(prefix: &str, repo_slug: &str, family: &str) -> String {
+    format!("{prefix}-{repo_slug}-{family}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_lowercases_ascii() {
+        assert_eq!(slug_for_repo("Cortex"), "cortex");
+        assert_eq!(slug_for_repo("CompressionPrompt"), "compressionprompt");
+    }
+
+    #[test]
+    fn slug_collapses_special_chars() {
+        assert_eq!(slug_for_repo("Hive Hub/cloud"), "hive-hub-cloud");
+        assert_eq!(slug_for_repo("foo___bar"), "foo-bar");
+        assert_eq!(slug_for_repo("a..b..c"), "a-b-c");
+    }
+
+    #[test]
+    fn slug_strips_leading_trailing_dashes() {
+        assert_eq!(slug_for_repo("--foo--"), "foo");
+        assert_eq!(slug_for_repo("/proj/"), "proj");
+    }
+
+    #[test]
+    fn slug_empty_falls_back_to_unknown() {
+        assert_eq!(slug_for_repo(""), UNKNOWN_REPO_SLUG);
+        assert_eq!(slug_for_repo("///"), UNKNOWN_REPO_SLUG);
+    }
+
+    #[test]
+    fn slug_keeps_existing_dashes() {
+        assert_eq!(slug_for_repo("hive-llm"), "hive-llm");
+    }
+
+    #[test]
+    fn repo_scoped_name_format() {
+        assert_eq!(
+            repo_scoped_name("cortex", "cortex", "docs"),
+            "cortex-cortex-docs"
+        );
+        assert_eq!(
+            repo_scoped_name("cortex", "tml", "code"),
+            "cortex-tml-code"
+        );
+    }
+}
+
