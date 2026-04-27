@@ -21,8 +21,43 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| EnvFilter::new("info,cortex_embedder=info"));
     fmt().with_env_filter(filter).with_target(true).init();
 
-    let config = EmbedderConfig::from_env();
+    let mut config = EmbedderConfig::from_env();
     tracing::info!(?config, "loaded cortex-embedder config");
+
+    // Vectorizer 3.x rejects raw passwords on `Authorization: Bearer`.
+    // When the password in config does NOT look like a JWT (3 dot-
+    // separated segments) treat it as a username/password pair, run
+    // `POST /auth/login` once, and replace the password in the config
+    // with the minted JWT before building the SDK client. Subsequent
+    // worker writes ride that bearer token.
+    if let Some(pwd) = config.vectorizer_password.clone() {
+        let looks_like_jwt = pwd.split('.').count() == 3
+            && pwd.split('.').all(|s| !s.is_empty());
+        if !looks_like_jwt {
+            tracing::info!(
+                user = %config.vectorizer_user,
+                "vectorizer password does not look like a JWT — running /auth/login"
+            );
+            match LiveVectorizerClient::login(
+                &config.vectorizer_url,
+                &config.vectorizer_user,
+                &pwd,
+            )
+            .await
+            {
+                Ok(jwt) => {
+                    tracing::info!("vectorizer /auth/login succeeded");
+                    config.vectorizer_password = Some(jwt.access_token);
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "vectorizer /auth/login failed for user `{}`: {e}",
+                        config.vectorizer_user
+                    ));
+                }
+            }
+        }
+    }
 
     // Vectorizer client — HTTP via vectorizer-sdk v3.
     let vectorizer_client = Arc::new(
