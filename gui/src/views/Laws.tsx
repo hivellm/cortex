@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
@@ -22,6 +22,12 @@ export function LawsView() {
 
   const lawsRaw = lawsQ.data ?? [];
   const violations = violationsQ.data ?? [];
+  const trustQ = useQuery({
+    queryKey: ["trust"],
+    queryFn: () => api.trust(),
+    refetchInterval: 60_000,
+  });
+  const trust = trustQ.data;
 
   // Sort by violation rate descending so the most-active laws bubble
   // to the top — explicit so the UI does not depend on the backend's
@@ -31,44 +37,107 @@ export function LawsView() {
     [lawsRaw],
   );
 
+  // Stats derived from the current law set + violation stream. Honest
+  // numbers — when spec-13/spec-14 haven't shipped these read as 0
+  // rather than mocked values, so the dashboard never fakes activity.
+  const blocking = laws.filter((l) => l.blocked).length;
+  const observational = laws.filter((l) => !l.blocked).length;
+  const blocked7d = violations.filter((v) => v.action === "blocked").length;
+  const flagged7d = violations.filter((v) => v.action !== "blocked").length;
+  const falseBlockPct =
+    blocked7d === 0 ? 0 : (violations.filter((v) => v.action === "annotated").length / blocked7d) * 100;
+  const trustRange = useMemo(() => {
+    if (!trust || trust.models.length === 0 || trust.repos.length === 0) {
+      return null;
+    }
+    const flat: number[] = [];
+    for (const m of trust.models) {
+      const row = trust.scores[m] ?? {};
+      for (const r of trust.repos) {
+        const s = row[r];
+        if (typeof s === "number") flat.push(s);
+      }
+    }
+    if (flat.length === 0) return null;
+    return { min: Math.min(...flat), max: Math.max(...flat) };
+  }, [trust]);
+
   return (
     <div className="view">
       <div className="view__head">
         <div>
-          <h1 className="view__title">Laws</h1>
+          <h1 className="view__title">Law dashboard</h1>
           <p className="view__subtitle">
-            Spec-13 catalogue + spec-14 enforcement. The catalogue endpoint
-            (<span className="mono">/v1/dashboard/laws</span>) returns empty until spec-13 ships;
-            <span className="mono"> /v1/dashboard/violations</span> tracks observed
-            <span className="mono"> kind=law_violation</span> envelopes.
+            Codified rules · graduated punishment · per-(model, repo) trust score
           </p>
+        </div>
+        <div className="view__actions">
+          <button className="btn" type="button" disabled title="Lints the law catalogue against the spec-13 schema. Available once authoring lands.">
+            <Icon name="external" size={13} /> Lint laws
+          </button>
+          <button className="btn btn--primary" type="button" disabled title="Opens the law-authoring split pane. Available once spec-13 authoring lands.">
+            <Icon name="law" size={13} /> Author new law
+          </button>
         </div>
       </div>
 
-      <div className="stats-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-        <Stat label="Active laws" value={String(laws.length)} sub="spec-13 catalogue" />
+      <div className="stats-grid" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
         <Stat
-          label="Critical · 7d"
-          value={String(violations.filter((v) => v.action === "blocked").length)}
-          sub={`${violations.length} total`}
+          label={
+            <>
+              <Icon name="block" size={12} /> Blocking laws
+            </>
+          }
+          labelColor="var(--critical)"
+          value={String(blocking)}
+          sub={`${blocked7d} fired · 7d`}
         />
         <Stat
-          label="Annotated · 7d"
-          value={String(violations.filter((v) => v.action === "annotated").length)}
-          sub="recorded but not blocked"
+          label={
+            <>
+              <Icon name="alert" size={12} /> Observational
+            </>
+          }
+          value={String(observational)}
+          sub={`${flagged7d} events flagged · 7d`}
+        />
+        <Stat
+          label="False-block rate"
+          value={`${falseBlockPct.toFixed(1)}%`}
+          sub={blocked7d > 0 ? "annotated ÷ blocked · 7d" : "no blocks observed yet"}
+        />
+        <Stat
+          label="Trust score · range"
+          value={trustRange ? `${trustRange.min.toFixed(2)} – ${trustRange.max.toFixed(2)}` : "—"}
+          sub={
+            trustRange
+              ? `${trust?.models.length ?? 0} models × ${trust?.repos.length ?? 0} repos`
+              : "spec-14 derivation pending"
+          }
         />
       </div>
 
-      <section style={{ marginTop: 16 }}>
-        <h2 style={{ fontSize: 13, color: "var(--fg-2)", marginBottom: 8 }}>Catalogue</h2>
+      <div className="card" style={{ marginTop: 18, marginBottom: 18 }}>
+        <div className="card__head">
+          <span className="card__title">Active laws</span>
+          <span className="card__sub">
+            {laws.length} {laws.length === 1 ? "law" : "laws"} · sorted by violation rate
+          </span>
+        </div>
         {lawsQ.error ? (
-          <Empty msg="cortex-api unreachable." />
+          <div className="card__body">
+            <Empty msg="cortex-api unreachable." />
+          </div>
         ) : lawsQ.isLoading ? (
-          <Empty msg="Loading laws…" />
+          <div className="card__body">
+            <Empty msg="Loading laws…" />
+          </div>
         ) : laws.length === 0 ? (
-          <Empty msg="The law catalogue is empty. Spec-13 will populate it." />
+          <div className="card__body">
+            <Empty msg="The law catalogue is empty. Spec-13 will populate it." />
+          </div>
         ) : (
-          <div className="law-table">
+          <div>
             <div className="law-row law-row--header">
               <span>ID</span>
               <span>Title</span>
@@ -85,9 +154,7 @@ export function LawsView() {
                 role="button"
                 tabIndex={0}
               >
-                <span className="mono" style={{ color: "var(--accent)", fontSize: 11 }}>
-                  {law.id}
-                </span>
+                <span className="law-row__id">{law.id}</span>
                 <span className="law-row__title">{law.title}</span>
                 <span className="law-row__sev">
                   <SeverityBar severity={law.severity} />
@@ -114,12 +181,12 @@ export function LawsView() {
                     <Tag>observe</Tag>
                   )}
                 </span>
-                <span className="muted mono" style={{ fontSize: 10.5 }}>
+                <span className="mono" style={{ fontSize: 11, color: "var(--fg-2)" }}>
                   {law.scope}
                 </span>
                 <span
-                  className="mono tabular"
-                  style={{ fontSize: 10.5, textAlign: "right" }}
+                  className="law-row__rate"
+                  style={{ textAlign: "right" }}
                 >
                   {law.violations_7d}
                   <span className="muted"> / {law.applies}</span>
@@ -128,9 +195,25 @@ export function LawsView() {
             ))}
           </div>
         )}
-      </section>
+      </div>
 
-      <section style={{ marginTop: 16 }}>
+      <div className="card" style={{ marginBottom: 18 }}>
+        <div className="card__head">
+          <span className="card__title">Trust score · per (model, repo)</span>
+          <span className="card__sub">recomputed nightly · 30-day rolling</span>
+        </div>
+        <div className="card__body">
+          {trustQ.isLoading ? (
+            <Empty msg="Loading trust matrix…" />
+          ) : !trust || trust.models.length === 0 || trust.repos.length === 0 ? (
+            <Empty msg="Spec-14 trust derivation has not run yet. Empty until model × repo scores are stored under cortex.events.violations." />
+          ) : (
+            <TrustGrid trust={trust} />
+          )}
+        </div>
+      </div>
+
+      <section style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 13, color: "var(--fg-2)", marginBottom: 8 }}>
           Recent violations
         </h2>
@@ -163,6 +246,82 @@ export function LawsView() {
         violations={violations.filter((v) => v.law_id === selectedId)}
         onClose={() => setSelectedId(null)}
       />
+    </div>
+  );
+}
+
+/// Heatmap-style grid: rows are models, columns are repos. Cell
+/// shading runs through the same `oklch` ramp the design uses
+/// (gui/assets/views-mid.jsx lines 219-227): low scores red, mid
+/// amber, high green, modulated by score-driven alpha so the eye
+/// reads density quickly.
+function TrustGrid({ trust }: { trust: import("../lib/api").TrustMatrix }) {
+  const { models, repos, scores } = trust;
+  const visibleRepos = repos.slice(0, 5);
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `180px repeat(${visibleRepos.length}, 1fr)`,
+        gap: 6,
+        fontSize: 11.5,
+        fontFamily: "var(--font-mono)",
+      }}
+    >
+      <div />
+      {visibleRepos.map((r) => (
+        <div key={r} style={{ color: "var(--fg-3)", padding: 4 }}>
+          {r}
+        </div>
+      ))}
+      {models.map((m) => (
+        <Fragment key={m}>
+          <div style={{ color: "var(--fg-1)", padding: 6, fontSize: 11 }}>{m}</div>
+          {visibleRepos.map((r) => {
+            const score = scores[m]?.[r];
+            if (typeof score !== "number") {
+              return (
+                <div
+                  key={r}
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 4,
+                    color: "var(--fg-4, var(--fg-3))",
+                    textAlign: "center",
+                    border: "1px solid var(--border-soft)",
+                  }}
+                >
+                  —
+                </div>
+              );
+            }
+            const hue = 25 + score * 110;
+            const bg = `oklch(0.42 0.10 ${hue} / ${0.35 + score * 0.5})`;
+            const fg =
+              score > 0.85
+                ? "oklch(0.95 0.05 155)"
+                : score > 0.75
+                  ? "oklch(0.95 0.10 90)"
+                  : "oklch(0.95 0.10 25)";
+            return (
+              <div
+                key={r}
+                style={{
+                  padding: "8px 10px",
+                  background: bg,
+                  borderRadius: 4,
+                  color: fg,
+                  fontVariantNumeric: "tabular-nums",
+                  textAlign: "center",
+                  border: "1px solid var(--border-soft)",
+                }}
+              >
+                {score.toFixed(2)}
+              </div>
+            );
+          })}
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -341,10 +500,22 @@ explicitly authorized an exception in this session.`;
   );
 }
 
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function Stat({
+  label,
+  value,
+  sub,
+  labelColor,
+}: {
+  label: ReactNode;
+  value: string;
+  sub?: string;
+  labelColor?: string;
+}) {
   return (
     <div className="stat">
-      <div className="stat__label">{label}</div>
+      <div className="stat__label" style={labelColor ? { color: labelColor } : undefined}>
+        {label}
+      </div>
       <div className="stat__value tabular">{value}</div>
       {sub ? <div className="stat__delta">{sub}</div> : null}
     </div>

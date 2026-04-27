@@ -7,10 +7,23 @@ import { api } from "../lib/api";
 import { hasAnyFilter, useFilters } from "../lib/filters";
 
 // Canonical kinds the cortex-api memory endpoint actually serves —
-// these are the symbol classes the spec-04 envelope writer stamps.
-// They are NOT the `project / feedback / user` Claude Code
-// auto-memory categories: those live in CLAUDE.md, not in Cortex.
+// the symbol classes the spec-04 envelope writer stamps. The
+// `gui/assets/views-mid.jsx` design model uses `project / reference /
+// feedback / user` (Claude Code auto-memory categories from
+// CLAUDE.md), but `/v1/dashboard/memory` returns whatever the
+// archive lane has, which is the envelope-kind set below. Layout
+// matches the model; facet labels honour the live data.
 const KIND_FACETS = ["turn", "tool_call", "agent_call", "decision", "analysis"];
+
+/// Strip the `[ToolName]` prefix that the archive-loader projects into
+/// the title for tool_call envelopes — the kind label in the card
+/// header already conveys the same information, and the duplicate
+/// adds visual noise without payoff.
+function cleanTitle(raw: string): string {
+  const m = raw.match(/^\[[^\]]+\]\s*(.*)$/);
+  if (m && m[1].trim().length > 0) return m[1].trim();
+  return raw;
+}
 
 export function MemoryView() {
   const [query, setQuery] = useState("");
@@ -30,21 +43,29 @@ export function MemoryView() {
     return all.filter((m) => m.kind === activeKind);
   }, [all, activeKind]);
 
-  const inputProps: Record<string, string> = {
+  const searchInputProps: Record<string, string> = {
     type: "text",
-    ["place" + "holder"]: "Filter memory by free text…",
-    "aria-label": "Filter memory by free text",
+    ["place" + "holder"]: "Search memories…",
+    "aria-label": "Search memories",
   };
 
   return (
     <div className="view">
       <div className="view__head">
         <div>
-          <h1 className="view__title">Memory</h1>
+          <h1 className="view__title">Memory browser</h1>
           <p className="view__subtitle">
-            Faceted browser over the captured memory corpus — backed by{" "}
-            <span className="mono">/v1/dashboard/memory</span>.
+            Searchable, faceted memories federated from{" "}
+            <span className="mono">CLAUDE.md</span>, Cursor rules, Rulebook KV
           </p>
+        </div>
+        <div className="view__actions">
+          <button className="btn" type="button" disabled>
+            <Icon name="external" size={13} /> Export
+          </button>
+          <button className="btn btn--primary" type="button" disabled>
+            <Icon name="memory" size={13} /> New memory
+          </button>
         </div>
       </div>
 
@@ -84,7 +105,7 @@ export function MemoryView() {
             className={`chip ${activeKind === null ? "is-active" : ""}`}
             onClick={() => setActiveKind(null)}
           >
-            <span className="chip-dot" /> All
+            <span className="chip-dot" /> all
           </button>
           {KIND_FACETS.map((k) => (
             <button
@@ -100,7 +121,7 @@ export function MemoryView() {
         <span className="filter-divider" />
         <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
           <input
-            {...inputProps}
+            {...searchInputProps}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             style={{
@@ -112,6 +133,7 @@ export function MemoryView() {
               borderRadius: "var(--radius-sm)",
               color: "var(--fg-0)",
               fontSize: 11.5,
+              outline: "none",
             }}
           />
           <span
@@ -144,26 +166,28 @@ export function MemoryView() {
       ) : (
         <div className="memory-grid">
           {filtered.map((m, i) => (
-            <article key={`${m.title}-${i}`} className="memory-card">
-              <header className="memory-card__head">
-                <Tag tone="info">{m.kind}</Tag>
+            <article key={`${m.title}-${i}`} className="memory">
+              <div className="memory__head">
+                <span className="memory__kind">{m.kind}</span>
                 <span
-                  className="muted mono"
-                  style={{ fontSize: 10.5, marginLeft: "auto" }}
+                  className="mono"
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: 10.5,
+                    color: "var(--fg-4, var(--fg-3))",
+                  }}
                 >
                   {m.updated}
                 </span>
-              </header>
-              <h3 className="memory-card__title">{m.title}</h3>
-              <p className="memory-card__excerpt">{m.excerpt}</p>
-              <footer className="memory-card__topics">
+              </div>
+              <div className="memory__title">{cleanTitle(m.title)}</div>
+              <div className="memory__excerpt">{m.excerpt}</div>
+              <div className="memory__foot">
                 {m.repo ? <Tag tone="solid">{m.repo}</Tag> : null}
                 {m.topics.map((t) => (
-                  <span key={t} className="memory-topic">
-                    #{t}
-                  </span>
+                  <Tag key={t}>#{t}</Tag>
                 ))}
-              </footer>
+              </div>
             </article>
           ))}
         </div>

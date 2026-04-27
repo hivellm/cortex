@@ -71,8 +71,8 @@ All seven views wired to live `cortex-api` data:
 |-------------------|-------------------------------------|-----------------------------------------------------------------------|
 | Live timeline     | `/v1/dashboard/timeline/recent`     | Polls every 5s; row click opens slide-in inspector with envelope.     |
 | Memory            | `/v1/dashboard/memory`              | Faceted by canonical kind (`turn / tool_call / agent_call / decision / analysis`). |
-| Decisions         | `/v1/dashboard/decisions`           | Stats grid + list. Empty until `kind=decision` envelopes flow.        |
-| Laws              | `/v1/dashboard/laws` + `/violations`| Catalogue empty until spec-13 ships; violations list lives.           |
+| Decisions         | `/v1/dashboard/decisions`           | "Decision register" — `Show superseded` toggle, `supersedes` / `superseded → …` inline tags, `is-superseded` opacity, optional `chain` renders the horizontal supersession chain (graceful when absent). Empty until `kind=decision` envelopes flow. |
+| Laws              | `/v1/dashboard/laws` + `/violations` + `/trust` | "Law dashboard" — 4-tile stats (Blocking laws · Observational · False-block rate · Trust score range), Active-laws card (header row · `SeverityBar` atom · `block`/`observe` action cell · sorted by `violations_7d` desc), Trust score `model × repo` heatmap with `oklch` ramp (graceful empty until spec-14), recent-violations list. |
 | Analysis          | `/v1/dashboard/analyses`            | Stats grid + cards. Empty until spec-15 emits `kind=analysis`.        |
 | Tool analytics    | `/v1/dashboard/tools/stats`         | `avg_ms` and `err_rate` are 0 until spec-12 derivation lands.         |
 | Graph explorer    | `/v1/dashboard/graph`               | Synthetic Session→Turn→ToolCall layout from the seeded archive.       |
@@ -87,6 +87,12 @@ daemon answers, grey when it does not.
 
 - **SSE / WebSocket** for the timeline (still polls every 5s).
 - **Tweaks panel** (theme/accent/density) from the design reference.
-- **Decision supersession chain** rendering.
-- **Trust matrix** and tool-call **heatmap** — both need data shapes
-  the backend doesn't emit yet.
+- **Decision supersession chain** — the renderer (`SupersedeChain`)
+  ships and renders gracefully when the backend includes
+  `chain: [{id, title, state}]` on a `DecisionRow`. Phase2h adds the
+  field; until then, decisions render without a chain.
+- **Trust matrix** — the renderer (`TrustGrid`) is wired against
+  `/v1/dashboard/trust` with the design's `oklch` ramp, but the
+  endpoint stays empty until spec-14 derivation lands.
+- Tool-call **heatmap** — the data shape exists; the renderer is on
+  the Tool Analytics view's TODO.

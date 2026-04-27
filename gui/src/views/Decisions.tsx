@@ -30,10 +30,9 @@ export function DecisionsView() {
     <div className="view">
       <div className="view__head">
         <div>
-          <h1 className="view__title">Decisions</h1>
+          <h1 className="view__title">Decision register</h1>
           <p className="view__subtitle">
-            Architectural records derived from <span className="mono">kind=decision</span> envelopes.
-            Promotion and supersession arrive when spec-15 (deep analysis) starts emitting them.
+            ADR-style decisions · supersedable · cited from pre-thinking bundles
           </p>
         </div>
         <div className="view__actions">
@@ -47,6 +46,14 @@ export function DecisionsView() {
             }
           >
             {showSuperseded ? "✓ " : ""}Show superseded
+          </button>
+          <button
+            className="btn btn--primary"
+            type="button"
+            disabled
+            title="Promotes a candidate decision out of an in-progress analysis. Available once spec-15 emits kind=analysis envelopes."
+          >
+            <Icon name="decision" size={13} /> Promote candidate
           </button>
         </div>
       </div>
@@ -68,39 +75,64 @@ export function DecisionsView() {
           {rows.map((d) => (
             <article
               key={d.id}
-              className={`decision-card ${d.status === "superseded" ? "is-superseded" : ""}`}
+              className={`decision ${d.status === "superseded" ? "is-superseded" : ""}`}
             >
-              <header className="decision-card__head">
-                <span className="mono" style={{ color: "var(--accent)", fontWeight: 600 }}>
-                  {d.id}
-                </span>
-                <Tag tone={d.status === "active" ? "ok" : "default"}>{d.status}</Tag>
+              <div className="decision__head">
+                <span className="decision__id">{d.id}</span>
+                <span className="decision__title">{d.title}</span>
+                {d.status === "active" ? <Tag tone="ok">active</Tag> : null}
+                {d.status === "superseded" && d.superseded_by ? (
+                  <Tag>superseded → {d.superseded_by}</Tag>
+                ) : null}
+                {d.status !== "active" && d.status !== "superseded" ? (
+                  <Tag>{d.status}</Tag>
+                ) : null}
                 {d.supersedes ? (
                   <Tag tone="warn">supersedes {d.supersedes}</Tag>
-                ) : null}
-                {d.superseded_by ? (
-                  <Tag>superseded → {d.superseded_by}</Tag>
                 ) : null}
                 <span className="muted mono" style={{ marginLeft: "auto", fontSize: 10.5 }}>
                   {d.occurred_at}
                 </span>
-              </header>
-              <h3 className="decision-card__title">{d.title}</h3>
+              </div>
               {d.rationale ? (
-                <p className="decision-card__rationale">{d.rationale}</p>
+                <p className="decision__rationale">{d.rationale}</p>
               ) : null}
-              <footer className="decision-card__footer">
-                {d.tags.map((t) => (
-                  <span key={t} className="memory-topic">
-                    #{t}
-                  </span>
-                ))}
-                {d.cites.length > 0 ? (
-                  <span className="muted mono" style={{ fontSize: 10.5 }}>
-                    cites: {d.cites.join(", ")}
+              <div className="decision__foot">
+                {d.author ? (
+                  <span>
+                    by <span className="strong">{d.author}</span>
                   </span>
                 ) : null}
-              </footer>
+                {d.author && (d.source_analysis || d.cites.length > 0) ? <span>·</span> : null}
+                {d.source_analysis ? (
+                  <>
+                    <span>
+                      from <span style={{ color: "var(--accent)" }}>{d.source_analysis}</span>
+                    </span>
+                    <span>·</span>
+                  </>
+                ) : null}
+                <span>{d.occurred_at}</span>
+                {d.cites.length > 0 ? (
+                  <>
+                    <span>·</span>
+                    <span>
+                      {d.cites.map((c, i) => (
+                        <span key={i} style={{ marginRight: 6 }}>
+                          {c}
+                        </span>
+                      ))}
+                    </span>
+                  </>
+                ) : null}
+                {d.tags.length > 0 ? (
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                    {d.tags.map((t) => (
+                      <Tag key={t}>#{t}</Tag>
+                    ))}
+                  </span>
+                ) : null}
+              </div>
               {d.chain && d.chain.length > 1 ? <SupersedeChain chain={d.chain} /> : null}
             </article>
           ))}
