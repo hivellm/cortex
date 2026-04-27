@@ -304,7 +304,13 @@ impl MeiliClient for LiveMeiliClient {
         if docs.is_empty() {
             return Ok(UpsertReport::default());
         }
-        let url = self.url(&format!("/indexes/{index}/documents"));
+        // `?primaryKey=id` is required so per-project indexes that the
+        // bootstrap walker materialises lazily (e.g. `cortex-vectorizer-code`)
+        // are auto-created with the right primary key. Without it Meili
+        // 1.x tries to infer from `id` vs `event_id`, finds two
+        // candidates ending in `id`, and fails the whole batch with
+        // `index_primary_key_multiple_candidates_found`.
+        let url = self.url(&format!("/indexes/{index}/documents?primaryKey=id"));
         let payload = serde_json::to_value(docs)
             .map_err(|e| MeiliError::Http(format!("serialize docs: {e}")))?;
         let http = self.http.clone();

@@ -238,3 +238,39 @@ fn body_truncates_to_max_bytes_and_flips_flag() {
     assert!(doc.truncated);
     assert!(doc.body.len() <= 8 * 1024);
 }
+
+/// Regression for phase2_static_classifier_summary_preserves_text §3.3:
+/// when the classifier does not synthesise a summary (the static path
+/// since the 2026-04-27 fix), the Meili document's `body` MUST hold the
+/// envelope's source text — not the literal string `"static summary: N
+/// chars"` that was being copied into the index before the fix.
+#[test]
+fn body_falls_back_to_envelope_text_when_classifier_summary_is_none() {
+    let payload_text = "fn search(query: &str) -> Vec<Hit> { /* HNSW recall */ }";
+    let evt = event(
+        "evt-no-summary",
+        Kind::Artifact,
+        json!({
+            "artifact_type": "file",
+            "path": "src/search.rs",
+            "body": payload_text,
+        }),
+        Some("Vectorizer"),
+        Some("src/search.rs"),
+        None, // classifier.summary = None — the static-path contract
+    );
+    let out = build_doc(&evt, false, 1024 * 1024);
+    let doc = match out {
+        BuildOutcome::Ready(d) => *d,
+        BuildOutcome::Skipped => panic!("must build with raw fallback"),
+    };
+    assert_eq!(
+        doc.body, payload_text,
+        "body must mirror envelope text when summary is None"
+    );
+    assert!(
+        doc.summary.is_none(),
+        "doc.summary stays None — clients fall back to body / source text"
+    );
+    assert!(!doc.truncated);
+}

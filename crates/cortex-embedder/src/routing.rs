@@ -11,9 +11,10 @@ use cortex_storage::names::{repo_scoped_name, slug_for_repo, UNKNOWN_REPO_SLUG};
 
 use crate::chunker::ChunkSource;
 
-/// Family suffix for the collection a `Kind` routes to. The `prefix`
-/// + `repo_slug` are combined with this suffix to build the full
-/// collection name.
+/// Family suffix for the collection a `Kind` routes to.
+///
+/// The `prefix` + `repo_slug` are combined with this suffix to build
+/// the full collection name.
 fn family_for(kind: &Kind) -> &'static str {
     match kind {
         // tool_call.* — code symbols (spec: "tool_call.* (code)" → -code).

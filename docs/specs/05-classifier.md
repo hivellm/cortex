@@ -232,6 +232,14 @@ pub struct StaticClassifier { rules: RulesTable }
 
 Rules live in `cortex-classifier/static-rules.yaml`. Easy to extend; not a substitute for Haiku — it's a graceful degradation layer.
 
+### Summary contract
+
+`ClassifierOutput.summary: Option<String>` is **always `None` from the static path.** The static classifier ships no model that could produce a faithful summary, and any synthesised placeholder (e.g. `"static summary: <N> chars"`) corrupts downstream consumers that copy `summary` into a search-indexed `body` field.
+
+Downstream readers (`cortex-fulltext-worker` body selector, `cortex-embedder` chunker) treat `summary == None` as the cue to fall back on the source `text` / redacted payload — see spec-08 §Body selection rule 2 and spec-06 §Chunk inputs. The Haiku-backed classifier is the **only** path that may set `summary` to a non-empty string.
+
+**Why this matters (2026-04-27 incident):** the previous implementation stamped `summary = "static summary: <N> chars"` for any payload over 4 KB. The full-text worker copied that placeholder into Meilisearch's `body` field, and search broke for ~96 % of indexed artifacts (no real tokens to match against). The fix, scoped under `phase2_static_classifier_summary_preserves_text`, drops the field. Reindex via `cortex-bootstrap` is required to recover.
+
 ## Design
 
 ### Worker concurrency
