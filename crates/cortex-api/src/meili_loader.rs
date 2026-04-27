@@ -326,6 +326,12 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
     let parsed_body: Option<Value> = serde_json::from_str(body_raw).ok();
 
     let mut extras: Props = BTreeMap::new();
+    // Tag the source up-front so every hit this loader feeds into
+    // `MemoryKeywordLane` carries the same `extras["source"] =
+    // "keyword"` label `MeiliKeywordLane` stamps. The orchestrator's
+    // `lane_label()` reads this field; without it, dev fallback hits
+    // surface as `source = "vector"` and the audit drift returns.
+    extras.insert("source".to_string(), Value::String("keyword".to_string()));
 
     let symbol: &'static str;
     let text: String;

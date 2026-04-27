@@ -16,8 +16,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
+use std::sync::Arc as StdArc;
+
 use cortex_api::{
-    MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryService,
+    KeywordLane, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, MeiliKeywordLane,
+    Orchestrator, QueryService,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -38,8 +41,58 @@ async fn main() -> Result<()> {
     init_tracing(cli.verbose);
 
     let vector = Arc::new(MemoryVectorLane::new());
-    let keyword = Arc::new(MemoryKeywordLane::new());
+    let keyword_memory = Arc::new(MemoryKeywordLane::new());
     let graph = Arc::new(MemoryGraphLane::new());
+
+    // Live keyword lane: when CORTEX_FULLTEXT_MEILI_URL is set and
+    // the server answers /health within the probe timeout, we hand
+    // the orchestrator a Meili-backed lane that filters by the
+    // request's actual `query` string. Without this swap, every
+    // /v1/query call returns the same archive snapshot regardless
+    // of input — the 2026-04-27 audit confirmed three consecutive
+    // pre-thinking turns yielded the same five smoke-test envelopes.
+    //
+    // On probe failure (env unset, server unreachable, timeout) we
+    // fall back to the in-memory lane so cold-stack dev keeps
+    // working without a Meili dependency. Failure logs WARN with
+    // the URL + reason so the operator can spot the misconfiguration.
+    let keyword: StdArc<dyn KeywordLane> = if let Ok(meili_url) =
+        std::env::var("CORTEX_FULLTEXT_MEILI_URL")
+    {
+        let api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok();
+        match MeiliKeywordLane::new(&meili_url, api_key) {
+            Ok(live) => match live.probe().await {
+                Ok(()) => {
+                    tracing::info!(
+                        meili_url = %meili_url,
+                        "live keyword lane: MeiliKeywordLane wired"
+                    );
+                    StdArc::new(live)
+                }
+                Err(reason) => {
+                    tracing::warn!(
+                        meili_url = %meili_url,
+                        reason = %reason,
+                        "live keyword lane probe failed; falling back to MemoryKeywordLane"
+                    );
+                    keyword_memory.clone()
+                }
+            },
+            Err(reason) => {
+                tracing::warn!(
+                    meili_url = %meili_url,
+                    reason = %reason,
+                    "live keyword lane build failed; falling back to MemoryKeywordLane"
+                );
+                keyword_memory.clone()
+            }
+        }
+    } else {
+        tracing::info!(
+            "CORTEX_FULLTEXT_MEILI_URL unset; keyword lane stays on MemoryKeywordLane"
+        );
+        keyword_memory.clone()
+    };
 
     // Pragmatic boot-time seed + periodic re-scan: when
     // CORTEX_ARCHIVE_ROOT is set, walk the cortex-ingestion archive
@@ -51,7 +104,7 @@ async fn main() -> Result<()> {
     // the live spec-06 / spec-07 / spec-08 indexers ship.
     if let Ok(root) = std::env::var("CORTEX_ARCHIVE_ROOT") {
         let archive_root = PathBuf::from(&root);
-        let initial = cortex_api::load_into_keyword_lane(&archive_root, &keyword);
+        let initial = cortex_api::load_into_keyword_lane(&archive_root, &keyword_memory);
         tracing::info!(
             archive_root = %root,
             files_visited = initial.files_visited,
@@ -66,7 +119,7 @@ async fn main() -> Result<()> {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(30)
             .max(1);
-        let lane = keyword.clone();
+        let lane = keyword_memory.clone();
         tokio::spawn(async move {
             let interval = Duration::from_secs(refresh_secs);
             loop {
@@ -97,7 +150,7 @@ async fn main() -> Result<()> {
         match cortex_api::load_meili_into_keyword_lane(
             &meili_url,
             meili_api_key.as_deref(),
-            &keyword,
+            &keyword_memory,
         )
         .await
         {
@@ -128,7 +181,7 @@ async fn main() -> Result<()> {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(60)
             .max(5);
-        let lane = keyword.clone();
+        let lane = keyword_memory.clone();
         let url = meili_url.clone();
         let key = meili_api_key.clone();
         tokio::spawn(async move {
@@ -151,7 +204,7 @@ async fn main() -> Result<()> {
 
     let nexus_client = build_nexus_client().await;
     let dashboard_state = cortex_api::DashboardState {
-        lane: keyword.clone(),
+        lane: keyword_memory.clone(),
         nexus: nexus_client,
     };
 

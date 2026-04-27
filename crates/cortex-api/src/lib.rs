@@ -20,6 +20,7 @@ pub mod fusion;
 pub mod http;
 pub mod lanes;
 pub mod mcp;
+pub mod meili_lane;
 pub mod meili_loader;
 pub mod orchestrator;
 pub mod rate_limit;
@@ -32,6 +33,7 @@ pub use acl::{AclDecision, AclStore};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
 };
+pub use meili_lane::MeiliKeywordLane;
 pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
 pub use dashboard::{build_dashboard_router, DashboardState};
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};

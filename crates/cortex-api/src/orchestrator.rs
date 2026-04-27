@@ -131,6 +131,21 @@ impl Orchestrator {
             response.debug.truncated = true;
         }
 
+        // Debug-only invariant — every keyword-lane hit must carry
+        // `extras["source"] = "keyword"`. The 2026-04-27 audit caught
+        // hits surfacing as `source = "vector"` because the previous
+        // double left the field empty and `lane_label()` falls back
+        // to `"vector"`. The live `MeiliKeywordLane` stamps the field;
+        // this assert catches a future regression in any new lane
+        // implementation.
+        debug_assert!(
+            keyword_result
+                .hits
+                .iter()
+                .all(|h| h.extras.get("source").and_then(|v| v.as_str()) == Some("keyword")),
+            "keyword lane returned a hit without extras[\"source\"] = \"keyword\""
+        );
+
         // ---- Fuse ----
         let mut fused = rrf_fuse(vec![
             vector_result.hits.clone(),

@@ -241,6 +241,11 @@ async fn lane_failure_does_not_block_other_lanes() {
     let k = Arc::new(MemoryKeywordLane::new());
     let g = Arc::new(MemoryGraphLane::new());
     // Scope is None below ⇒ orchestrator picks `cortex-unknown-code`.
+    let mut keyword_extras = std::collections::BTreeMap::new();
+    keyword_extras.insert(
+        "source".to_string(),
+        serde_json::Value::String("keyword".to_string()),
+    );
     k.seed(
         "cortex-unknown-code",
         vec![cortex_api::LaneHit {
@@ -253,7 +258,7 @@ async fn lane_failure_does_not_block_other_lanes() {
             score: 0.4,
             ts: 1,
             severity: None,
-            extras: Default::default(),
+            extras: keyword_extras,
         }],
     );
     let svc = Arc::new(QueryService {

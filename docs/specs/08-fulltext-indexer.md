@@ -240,6 +240,109 @@ cortex.fulltext.truncated             counter
 cortex.fulltext.backpressure.active   gauge
 ```
 
+## Read path
+
+The write path above is consumed at query time by `cortex-api`'s
+keyword lane (spec 11 §Lane traits). The lane translates the
+orchestrator's `KeywordRequest { index, query, limit, scope }` into
+a Meilisearch `POST /indexes/{uid}/search` body and projects each
+returned hit into the `LaneHit` shape the fusion stage expects.
+
+### Live lane: `MeiliKeywordLane`
+
+Lives at [crates/cortex-api/src/meili_lane.rs](../../crates/cortex-api/src/meili_lane.rs).
+Selected at daemon startup when `CORTEX_FULLTEXT_MEILI_URL` is set
+**and** `/health` answers a 2xx within the probe timeout. On any
+failure (env unset, server unreachable, probe timeout, build error)
+the daemon falls back to `MemoryKeywordLane` so cold-stack dev keeps
+working — the failure is logged at WARN with the URL + reason.
+
+**Search request shape** (per [Meili search API](https://www.meilisearch.com/docs/reference/api/search)):
+
+```json
+POST /indexes/{uid}/search
+{
+  "q": "<request.query verbatim>",
+  "limit": <request.limit>,
+  "showRankingScore": true
+}
+```
+
+`showRankingScore=true` surfaces the per-hit `_rankingScore` (a
+normalised `[0, 1]` float) on every hit, which the lane projects
+into `LaneHit.score`. Without this the lane would have to fall back
+to the positional `1/(60+rank)` artefact the test double produces
+— RRF fusion would still work but the score column on the snippet
+becomes meaningless to downstream callers.
+
+**HTTP status handling:**
+
+- `2xx` — parse `hits[]` and project each into a `LaneHit` (see below).
+- `404` — return `Vec::new()`. Per-project indexes (`cortex-{slug}-{family}`)
+  are materialised lazily by the worker on first upsert; a 404 is the
+  legitimate empty-index case, not an error.
+- `4xx` (other) / `5xx` — return `LaneError::Rejected(detail)`. The
+  orchestrator's fail-open policy turns this into an empty hit set
+  plus a `debug.errors["keyword"]` entry; the response stays HTTP 200.
+- Transport / decode failure — `LaneError::Transport`. Same fail-open
+  semantics as above.
+
+### Hit projection (Meili → `LaneHit`)
+
+| LaneHit field   | Meili source                                                 |
+|-----------------|--------------------------------------------------------------|
+| `doc_id`        | `meili|{index}|{event_id or id or "unknown"}`               |
+| `text`          | `summary` → `title` → `body` (first non-empty wins)          |
+| `repo`          | `repo`                                                       |
+| `path`          | `path`                                                       |
+| `symbol`        | `kind` (e.g. `"turn"`, `"decision"`, `"law_violation"`)      |
+| `content_hash`  | `content_hash`                                               |
+| `score`         | `_rankingScore` (defaults to `0.0` when absent)              |
+| `ts`            | `ts` (defaults to `0` when absent)                           |
+| `severity`      | `severity`                                                   |
+| `extras["source"]` | `"keyword"` (constant — the source-attribution invariant) |
+
+The `summary → title → body` fallback chain matches the deterministic
+body-selection rule in §Document body. The lane never blends the
+three; it picks the first non-empty projection. Empty `text` only
+surfaces when the document carries none of the three.
+
+### Source-attribution invariant
+
+Every hit produced by the keyword lane MUST carry
+`extras["source"] = "keyword"`. The orchestrator's `lane_label()`
+([crates/cortex-api/src/orchestrator.rs](../../crates/cortex-api/src/orchestrator.rs))
+reads this field; when it's missing, the label falls back to
+`"vector"` — the 2026-04-27 audit caught this regression in the
+`MemoryKeywordLane` test double (every keyword hit surfaced as
+`source: "vector"` on the snippet column).
+
+A `debug_assert!` in `Orchestrator::run` walks the keyword lane's
+result and panics in debug builds when any hit lacks the marker.
+Both the live `MeiliKeywordLane` and the `MemoryKeywordLane`
+seeders (`archive_loader`, `meili_loader`) stamp the field.
+
+### Configuration
+
+| Env var                          | Default              | Purpose                                                      |
+|----------------------------------|----------------------|--------------------------------------------------------------|
+| `CORTEX_FULLTEXT_MEILI_URL`      | (unset)              | Live lane base URL. Unset → MemoryKeywordLane fallback.      |
+| `CORTEX_FULLTEXT_MEILI_API_KEY`  | (unset)              | Bearer token. Sent on `/health` probe + every search call.   |
+
+### Acceptance for the read path
+
+- [ ] Two `/v1/query` calls with distinct `query` strings against the
+      same index return distinct `results.snippets` sets (the
+      `MemoryKeywordLane` regression returned the same 5 envelopes
+      regardless of query).
+- [ ] A nonsense query (`"asdfqwerty12345"`) returns either an empty
+      `results.snippets` or only fuzzy-but-relevant matches per
+      `typoTolerance` settings.
+- [ ] Meili down → response is HTTP 200, `debug.errors["keyword"]`
+      populated, `results` may be empty (fail-open).
+- [ ] Snippet `source` column is `"keyword"` for every hit produced
+      by the keyword lane (no `"vector"` mislabelling).
+
 ## Acceptance criteria
 
 - [ ] Startup against an empty Meilisearch creates all indexes with the declared settings; idempotent on re-run.

@@ -203,10 +203,17 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
 
     // Stamp session_id on extras so the dashboard endpoints can
     // group / filter by session without re-reading the archive.
+    // Also stamp `source = "keyword"` so the orchestrator's
+    // `lane_label()` (extras["source"] → "keyword") tags the hit
+    // honestly when the MemoryKeywordLane fallback is active.
     let mut extras = std::collections::BTreeMap::new();
     extras.insert(
         "session_id".to_string(),
         serde_json::Value::String(env.session_id.clone()),
+    );
+    extras.insert(
+        "source".to_string(),
+        serde_json::Value::String("keyword".to_string()),
     );
 
     Some(LaneHit {
