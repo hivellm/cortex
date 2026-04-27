@@ -606,12 +606,14 @@ impl Worker {
                 Ok(None)
             }
             EmbedError::Chunker { event_id, detail } => {
+                tracing::warn!(event_id = %event_id, detail = %detail, "embed chunker_failed");
                 self.publish_invalid(event_id, "chunker_failed", detail)
                     .await;
                 self.ack(STREAM_ENRICHED, offset).await;
                 Ok(None)
             }
             EmbedError::Vectorizer { event_id, detail } => {
+                tracing::warn!(event_id = %event_id, detail = %detail, "embed vectorizer_error");
                 self.metrics.incr_vectorizer_errors(1);
                 // Detect rate-limit signatures coming back from the client
                 // so we can apply backpressure without the trait surface

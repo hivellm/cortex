@@ -85,6 +85,7 @@ impl Publisher for LiveSynapPublisher {
         let payload: Value = serde_json::to_value(event)?;
         let attempts = self.max_retry.max(1);
         let mut last: Option<anyhow::Error> = None;
+        let mut attempted_create = false;
         for attempt in 0..attempts {
             match self
                 .handle
@@ -94,7 +95,23 @@ impl Publisher for LiveSynapPublisher {
             {
                 Ok(_offset) => return Ok(()),
                 Err(e) => {
+                    let msg = e.to_string();
                     last = Some(anyhow::anyhow!("synap publish: {e}"));
+                    if !attempted_create
+                        && (msg.contains("not found") || msg.contains("Room"))
+                    {
+                        attempted_create = true;
+                        if let Err(create_err) =
+                            self.handle.streams().create_room(room, None).await
+                        {
+                            tracing::debug!(
+                                room,
+                                error = %create_err,
+                                "stream.create failed; will retry publish anyway"
+                            );
+                        }
+                        continue;
+                    }
                     if attempt + 1 == attempts {
                         break;
                     }

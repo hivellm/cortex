@@ -2,7 +2,9 @@
 
 > **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 01, 04
 >
-> Implementation: [`crates/cortex-classifier/`](../../crates/cortex-classifier/). `Classifier` trait, `StaticClassifier` (pure-Rust rule table), `CachedClassifier`, `BudgetedClassifier` (threshold ladder → static fallback), `HaikuCliClassifier` (spawns `claude -p ... --output-format json`), prompt template v1 + topic vocabulary v1. Worker binary wiring + Synap-backed cache arrive with the ingestion consumer in a follow-up pass.
+> Library: [`crates/cortex-classifier/`](../../crates/cortex-classifier/). `Classifier` trait, `StaticClassifier` (pure-Rust rule table), `CachedClassifier`, `BudgetedClassifier` (threshold ladder → static fallback), `HaikuCliClassifier` (spawns `claude -p ... --output-format json`), prompt template v1 + topic vocabulary v1.
+>
+> Worker binary: [`crates/cortex-classifier-worker/`](../../crates/cortex-classifier-worker/). Standalone crate (separate to avoid a `classifier → embedder → classifier` cycle, since the worker publishes the embedder's `EnrichedEvent` shape). Drains `cortex.events.raw` + `cortex.events.bootstrap`, classifies through the configured stack (`static` default, `cli` opt-in via `CORTEX_CLASSIFIER_MODE=cli`), and publishes on `cortex.events.enriched`. Replay dedup is keyed on `event_id`; missing Synap rooms are auto-created on the first publish.
 
 ## Goal
 

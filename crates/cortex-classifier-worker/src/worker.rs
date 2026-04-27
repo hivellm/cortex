@@ -160,12 +160,24 @@ impl SynapConsumer for LiveSynapConsumer {
     async fn next_batch(&self, room: &str, max: usize) -> Result<Vec<ConsumedMessage>> {
         let tracker = self.tracker_for(room);
         let offset = tracker.current();
-        let events: Vec<Event> = self
+        let events: Vec<Event> = match self
             .handle
             .streams()
             .consume(room, Some(offset), Some(max))
             .await
-            .map_err(|e| anyhow::anyhow!("synap consume {room}: {e}"))?;
+        {
+            Ok(v) => v,
+            Err(e) => {
+                // Synap returns "Room not found" until the first publisher
+                // touches the room. Treat that as an empty batch so the
+                // worker can come up before bootstrap / live capture.
+                let msg = e.to_string();
+                if msg.contains("not found") || msg.contains("Room") {
+                    return Ok(Vec::new());
+                }
+                return Err(anyhow::anyhow!("synap consume {room}: {e}"));
+            }
+        };
 
         Ok(events
             .into_iter()
@@ -210,12 +222,36 @@ impl SynapPublisher for LiveSynapPublisher {
             .get("kind")
             .and_then(|v| v.as_str())
             .unwrap_or(room);
-        self.handle
+        match self
+            .handle
             .streams()
             .publish(room, kind, envelope.clone())
             .await
-            .map(|_offset| ())
-            .map_err(|e| anyhow::anyhow!("synap publish {room}: {e}"))
+        {
+            Ok(_offset) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("not found") || msg.contains("Room") {
+                    if let Err(create_err) =
+                        self.handle.streams().create_room(room, None).await
+                    {
+                        tracing::debug!(
+                            room,
+                            error = %create_err,
+                            "stream.create failed; retrying publish anyway"
+                        );
+                    }
+                    self.handle
+                        .streams()
+                        .publish(room, kind, envelope.clone())
+                        .await
+                        .map(|_| ())
+                        .map_err(|e| anyhow::anyhow!("synap publish {room} (post-create): {e}"))
+                } else {
+                    Err(anyhow::anyhow!("synap publish {room}: {e}"))
+                }
+            }
+        }
     }
 }
 

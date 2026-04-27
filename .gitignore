@@ -36,3 +36,6 @@ target
 *.rs.bk
 .cargo/
 
+# Cortex runtime state files (per-process resume points)
+.cortex-*.state.json
+

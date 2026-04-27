@@ -256,8 +256,14 @@ impl MeiliClient for LiveMeiliClient {
         .await?;
 
         // Step 2: apply settings. PATCH /indexes/{uid}/settings.
+        // Meili rejects unknown top-level fields, so strip the
+        // tooling-only `version` marker baked into settings.v1.json
+        // before forwarding the document.
         let settings_url = self.url(&format!("/indexes/{index}/settings"));
-        let settings_owned = settings.clone();
+        let mut settings_owned = settings.clone();
+        if let Some(map) = settings_owned.as_object_mut() {
+            map.remove("version");
+        }
         let http = self.http.clone();
         let max = self.max_retry;
         with_retry(max, move || {
