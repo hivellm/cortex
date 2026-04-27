@@ -78,6 +78,51 @@ data: { ... }
 
 One named event per ingestion family; clients subscribe by filter (`?repo=...&severity=...`).
 
+## Backends
+
+The 12 `/v1/dashboard/*` endpoints share a single `MemoryKeywordLane` populated by **two loaders that run on `cortex-api` boot** (and then on a periodic refresh). Layered this way the dashboard surface stays decoupled from any one backend, and individual handlers can opt in to richer per-source paths (Nexus Cypher for the graph endpoint, future Meili pagination for high-cardinality views) without re-wiring the lane.
+
+### Loader 1 — `archive_loader.rs`
+
+- Source: `cortex-ingestion`'s zstd-NDJSON archive at `CORTEX_ARCHIVE_ROOT/events/year=YYYY/month=MM/day=DD/hour=HH/raw-NNNNN.parquet` (the `.parquet` suffix is historical; the bytes are zstd-compressed line-delimited JSON).
+- Projects only `Kind::{Turn, ToolCall, AgentCall}` envelopes — those are the only ones the live capture surface (cortex-adapter-claude → /v1/events) writes.
+- Stamps `session_id` on `LaneHit.extras` so `/v1/dashboard/sessions` and the sidebar can group/filter by session without re-reading the archive.
+- Refreshes every `CORTEX_ARCHIVE_REFRESH_SECS` (default `30`).
+
+### Loader 2 — `meili_loader.rs`
+
+- Source: every `cortex-{slug}-{family}` Meili index in scope (per spec-08 §Routing matrix). Walks `decisions / governance / misc / turns` family suffixes only.
+- Decodes the JSON-encoded envelope `body` field that `cortex-fulltext-worker` stores and hoists meaningful fields onto `LaneHit.extras`:
+  - decisions → `title / status / supersedes / body_markdown`
+  - law_violations → `title / law_id / body_markdown`
+  - memories → `title / body_markdown`
+  - analyses → `title / body_markdown` (uses `verdict` as the body when present)
+- Seeds under `cortex-meili-{decisions,governance,misc,turns}` aliases so the lane keeps clean snapshots per family — flat-chains with the archive loader's `cortex-code` seed without double-counting.
+- Refreshes every `CORTEX_MEILI_REFRESH_SECS` (default `60`).
+- Skipped silently when `CORTEX_FULLTEXT_MEILI_URL` is unset so cold-stack dev still works with just the archive loader.
+
+### Per-handler routing through the lane
+
+`dashboard.rs::collect_lane_hits` aggregates **every** seeded index of the lane and the per-handler filters work against the unified hit set:
+
+| Handler | Filter |
+|---|---|
+| `/overview`, `/timeline/recent`, `/sessions` | every hit (group by `symbol_to_kind`, `session_id`) |
+| `/memory` | `symbol = turn / tool_call / agent_call / decision / analysis` |
+| `/decisions`, `/decisions/{id}` | `symbol = "decision"`; merges `extras.{title,status,supersedes,body_markdown}` over the legacy text-scrape fallback |
+| `/laws` | `symbol = "law_violation"` deduped by `extras.law_id` (until spec-13 ships a canonical catalogue source) |
+| `/violations` | `symbol = "law_violation"`; surfaces `extras.law_id` and `severity = critical → action = blocked` |
+| `/analyses` | `symbol = "analysis"` |
+| `/tools/stats` | hits with a `tool_call:<name>` symbol; aggregates calls and the 7×24 weekday × hour heatmap |
+| `/trust` | empty until spec-14 ships the `(model, repo)` derivation pipeline — handler returns honest empty arrays |
+| `/graph` | bypasses the lane: when `CORTEX_NEXUS_URL` is set, runs `MATCH … RETURN nodes, edges` Cypher; otherwise falls back to a synthetic Session→Turn→ToolCall layout from the lane |
+
+`MemoryKeywordLane` is **not** test-only — it's the production cache layer. The orchestrator (`spec-11`) consumes the same trait, so a future `MeiliKeywordLane` impl can drop in behind the same surface for high-cardinality search without changing any handler.
+
+### Per-project Meili settings (spec-08 ↔ spec-16 contract)
+
+`cortex-fulltext-worker` ensures the legacy `cortex-{family}` indexes at startup. Per-project uids (`cortex-{slug}-{family}`) materialise on the first upsert; `MeiliFulltextIndexer::ensure_settings` applies the spec-08 settings (sortable / filterable / searchable / ranking rules) lazily so `sort: ["ts:desc"]` and `filter: ["kind = tool_call"]` queries from the dashboard succeed against every project's index. Without this every per-project index would auto-create with an empty settings doc and the timeline / tools / decisions queries would error with `"Attribute ts is not sortable"`.
+
 ## Design
 
 ### Component layout

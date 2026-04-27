@@ -30,9 +30,14 @@ async fn main() -> Result<()> {
     );
 
     // Bootstrap every per-kind index against Meili so the worker
-    // never tries to upsert into an unconfigured index.
+    // never tries to upsert into an unconfigured index. The
+    // per-project (`cortex-{slug}-{family}`) uids are materialised
+    // lazily by the indexer on first upsert (see
+    // `MeiliFulltextIndexer::ensure_settings`), so we only need to
+    // seed the legacy family set here.
     let settings = settings_v1_json().context("baked-in v1 settings unparseable")?;
     let metrics = Arc::new(Metrics::new());
+    let mut seeded: Vec<String> = Vec::with_capacity(FAMILIES.len());
     for family in FAMILIES {
         let index = format!("{}{}", config.index_prefix, family);
         meili_client
@@ -41,12 +46,14 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("ensure_index({index}): {e}"))?;
         metrics.incr_settings_bump();
         tracing::info!(index = %index, "ensured fulltext index");
+        seeded.push(index);
     }
 
-    let indexer = Arc::new(MeiliFulltextIndexer::new(
+    let indexer = Arc::new(MeiliFulltextIndexer::with_ensured(
         config.clone(),
         meili_client,
         metrics.clone(),
+        seeded,
     ));
 
     let synap = Arc::new(
