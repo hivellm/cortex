@@ -77,18 +77,18 @@ Per-kind extensions live under `ext.<kind>`:
 
 Missing extensions are absent — no null-padding.
 
-### Indexes (per-kind families, mirrors spec 06)
+### Indexes (per-kind family, per-repo, mirrors spec 06)
 
-| Index name              | Holds                        | Typical size (live, post-bootstrap) |
-|-------------------------|------------------------------|-------------------------------------|
-| `cortex-code`           | `tool_call.*`, `artifact.code` | ~500 MB                            |
-| `cortex-docs`           | `artifact.doc`, docs chunks   | ~400 MB                            |
-| `cortex-decisions`      | `decision.*`                   | ~20 MB                              |
-| `cortex-turns`          | `turn.*`                       | ~800 MB                             |
-| `cortex-governance`     | `law`, `law_violation`         | ~10 MB                              |
-| `cortex-misc`           | everything else                | varies                              |
+| Family suffix        | Holds                          | Typical size (live, post-bootstrap, per repo) |
+|----------------------|--------------------------------|-----------------------------------------------|
+| `code`               | `tool_call.*`, `artifact.code` | ~30 MB                                         |
+| `docs`               | `artifact.doc`, docs chunks    | ~25 MB                                         |
+| `decisions`          | `decision.*`                   | ~1 MB                                          |
+| `turns`              | `turn.*`                       | ~50 MB                                         |
+| `governance`         | `law`, `law_violation`         | ~1 MB                                          |
+| `misc`               | everything else                | varies                                         |
 
-Deployment namespace prefix (default `cortex-`) matches spec 06.
+The full index uid is `{prefix}-{repo_slug}-{family}` (default prefix `cortex-`). Per-project isolation is mandatory: a Cortex repo populates `cortex-cortex-docs` / `cortex-cortex-code`, while a Tml repo populates `cortex-tml-docs` / `cortex-tml-code`. Events with no `context.repo` route to the `unknown` slug. The slug is canonicalised through `cortex_storage::names::slug_for_repo` (lowercase ASCII, non-`[a-z0-9-]` collapsed to `-`, no leading/trailing dashes).
 
 ### Identity
 

@@ -105,18 +105,18 @@ pub struct ChunkMetadata {
   filtering out already-embedded chunks. Re-runs produce the same
   `dedup_key` set → zero new upserts → idempotent re-runs.
 
-### Collections (per-kind)
+### Collections (per-kind, per-repo)
 
-| Kind                  | Collection              | Why separate                                                |
-|-----------------------|-------------------------|-------------------------------------------------------------|
-| `tool_call.*` (code)  | `cortex-code`           | Symbol-level; favors small HNSW `ef_search`                 |
-| `artifact.doc`        | `cortex-docs`           | Larger chunks; favors `ef_search` tuned for recall          |
-| `decision`            | `cortex-decisions`      | Small N, very high weight; favors recall > latency          |
-| `turn.*`              | `cortex-turns`          | High write throughput; favors insert rate                   |
-| `law` / `law_violation` | `cortex-governance`   | Small, long-lived; per-deployment                            |
-| everything else       | `cortex-misc`           | Catch-all                                                   |
+| Kind                    | Collection family        | Why separate                                                |
+|-------------------------|--------------------------|-------------------------------------------------------------|
+| `tool_call.*` (code)    | `code`                   | Symbol-level; favors small HNSW `ef_search`                 |
+| `artifact.doc`          | `docs`                   | Larger chunks; favors `ef_search` tuned for recall          |
+| `decision`              | `decisions`              | Small N, very high weight; favors recall > latency          |
+| `turn.*`                | `turns`                  | High write throughput; favors insert rate                   |
+| `law` / `law_violation` | `governance`             | Small, long-lived; per-deployment                            |
+| everything else         | `misc`                   | Catch-all                                                   |
 
-Collection names are prefixed with the deployment namespace (default `cortex-`) so a single Vectorizer instance can host multiple deployments.
+The full collection name is `{prefix}-{repo_slug}-{family}` (default prefix `cortex`). Per-project isolation is mandatory: every event carries a `context.repo` from the upstream emitter, the routing layer slugifies it through `cortex_storage::names::slug_for_repo`, and each repo writes into its own collection — `cortex-cortex-docs`, `cortex-tml-code`, `cortex-vectorizer-turns`, etc. Events with no `context.repo` route to the `unknown` slug so the produced name is always well-formed; downstream queries can scope to a single repo (or fan out across slugs in a future revision).
 
 ## Design
 
