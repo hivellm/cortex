@@ -73,7 +73,7 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     decisions: decisionsQ.data?.length,
     laws: lawsQ.data?.length,
     analyses: analysesQ.data?.length,
-    tools: toolsQ.data?.length,
+    tools: toolsQ.data?.tools.length,
     sessions: sessions.length,
   };
 
@@ -86,12 +86,16 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     }
   };
 
+  /// Toggle this repo in the active filter list. Clicking a repo
+  /// row that's already selected removes it; clicking a new one
+  /// adds it; clearing the last selection drops the filter
+  /// entirely so the timeline shows everything again.
   const onRepoClick = (repo: string) => {
-    if (filters.repo === repo) {
-      setFilter("repo", undefined);
-    } else {
-      setFilter("repo", repo);
-    }
+    const current = filters.repo ?? [];
+    const next = current.includes(repo)
+      ? current.filter((r) => r !== repo)
+      : [...current, repo];
+    setFilter("repo", next.length === 0 ? undefined : next);
   };
 
   return (
@@ -129,7 +133,7 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
             }}
           >
             <span>Repos · {overview.repos_indexed}</span>
-            {filters.repo ? (
+            {filters.repo && filters.repo.length > 0 ? (
               <button
                 onClick={() => setFilter("repo", undefined)}
                 title="Clear repo filter"
@@ -150,7 +154,7 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
             <RepoItem
               key={r.repo}
               repo={r}
-              active={filters.repo === r.repo}
+              active={(filters.repo ?? []).includes(r.repo)}
               onClick={() => onRepoClick(r.repo)}
             />
           ))}

@@ -216,7 +216,11 @@ export function TimelineView() {
   const { data, isLoading, error } = useQuery({
     // Re-fetch when the global filter changes so server-side
     // filtering kicks in alongside the local kind chips.
-    queryKey: ["timeline-recent", filters.session_id ?? "", filters.repo ?? ""],
+    queryKey: [
+      "timeline-recent",
+      filters.session_id ?? "",
+      (filters.repo ?? []).join("|"),
+    ],
     queryFn: () => api.timelineRecent(200, filters),
     refetchInterval: live ? 5000 : false,
     refetchIntervalInBackground: true,
@@ -237,24 +241,13 @@ export function TimelineView() {
 
   const events = data ?? [];
 
-  // Rolling buffer of `events_total` deltas across overview polls,
-  // used to feed the Sparkline on the "Events captured" tile. Plain
-  // useRef + a forced render via state — no time-series in the
-  // backend yet, so this is the honest version.
-  const totalsRef = useRef<number[]>([]);
-  const [, forceRender] = useState(0);
-  useEffect(() => {
-    if (overviewQ.data) {
-      const buf = totalsRef.current;
-      const next = overviewQ.data.events_total;
-      const last = buf[buf.length - 1];
-      if (last !== next) {
-        buf.push(next);
-        if (buf.length > 24) buf.shift();
-        forceRender((n) => n + 1);
-      }
-    }
-  }, [overviewQ.data]);
+  // Backend now ships an `events_per_min` series in the overview
+  // payload (20 minute buckets). We feed that to the Sparkline; the
+  // local rolling buffer that derived a series from polled deltas is
+  // gone — server-side bucketing is more accurate and survives
+  // refresh.
+  const eventsPerMin = overviewQ.data?.series?.events_per_min ?? [];
+  const violationsDaily = overviewQ.data?.series?.violations_7d_daily ?? [];
 
   // Track previously-seen ids so we can flash newly-arriving rows.
   // First fetch primes the set without flashing every row.
@@ -303,13 +296,18 @@ export function TimelineView() {
     });
   };
 
-  const reposInBuffer = useMemo(() => {
+  /// Union of every repo cortex-api has indexed (from `/overview`'s
+  /// `recent_repos`) plus repos already in the visible buffer plus
+  /// whatever is currently selected. With many repos a buffer-only
+  /// list would silently drop options the user can't see yet — the
+  /// overview surface keeps the dropdown stable.
+  const repoOptions = useMemo(() => {
     const set = new Set<string>();
-    events.forEach((e) => {
-      if (e.repo) set.add(e.repo);
-    });
-    return Array.from(set).sort();
-  }, [events]);
+    for (const e of events) if (e.repo) set.add(e.repo);
+    for (const r of overviewQ.data?.recent_repos ?? []) set.add(r.repo);
+    for (const r of filters.repo ?? []) set.add(r);
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [events, overviewQ.data?.recent_repos, filters.repo]);
 
   const kinds = ["turn", "tool_call", "agent_call", "memory", "decision", "law_violation"];
 
@@ -346,7 +344,8 @@ export function TimelineView() {
         reposIndexed={overviewQ.data?.repos_indexed ?? 0}
         sessionCount={sessionsQ.data?.length ?? 0}
         kindBreakdown={overviewQ.data?.kind_breakdown ?? []}
-        sparkSeries={totalsRef.current}
+        eventsPerMin={eventsPerMin}
+        violationsDaily={violationsDaily}
       />
 
       {hasAnyFilter(filters) ? (
@@ -361,13 +360,16 @@ export function TimelineView() {
               session: <span className="mono">{filters.session_id.slice(0, 12)}…</span> ✕
             </button>
           ) : null}
-          {filters.repo ? (
+          {filters.repo && filters.repo.length > 0 ? (
             <button
               className="chip chip--active"
               onClick={() => setFilter("repo", undefined)}
               title="Clear repo filter"
             >
-              repo: {filters.repo} ✕
+              repo: {filters.repo.length === 1
+                ? filters.repo[0]
+                : `${filters.repo.length} selected`}{" "}
+              ✕
             </button>
           ) : null}
           {filters.kind ? (
@@ -402,21 +404,16 @@ export function TimelineView() {
             </button>
           ))}
         </span>
-        {reposInBuffer.length > 1 ? (
+        {repoOptions.length > 0 ? (
           <>
             <span className="filter-divider" />
-            <span className="filter-bar__label">Repo</span>
-            <span className="chip-group">
-              {reposInBuffer.map((r) => (
-                <button
-                  key={r}
-                  className={`chip ${filters.repo === r ? "is-active" : ""}`}
-                  onClick={() => setFilter("repo", filters.repo === r ? undefined : r)}
-                >
-                  {r}
-                </button>
-              ))}
-            </span>
+            <RepoMultiSelect
+              options={repoOptions}
+              selected={filters.repo ?? []}
+              onChange={(next) =>
+                setFilter("repo", next.length === 0 ? undefined : next)
+              }
+            />
           </>
         ) : null}
         <span className="filter-divider" />
@@ -506,30 +503,249 @@ export function TimelineView() {
   );
 }
 
+/// Multi-repo selector. Renders as a single chip-shaped trigger that
+/// summarises the current selection ("Repo: all", "Repo: 3 of 17",
+/// "Repo: cortex") and pops a checkbox panel on click. Closing rules:
+/// outside-click, Escape, or the explicit "Done" button.
+///
+/// Designed for a many-repos future — a chip-row of toggles stops
+/// scaling past ~8 repos. The dropdown stays compact regardless of
+/// the option count and supports the natural "I want these three"
+/// gesture.
+function RepoMultiSelect({
+  options,
+  selected,
+  onChange,
+}: {
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const sel = useMemo(() => new Set(selected), [selected]);
+
+  // Close on outside-click + Escape so the panel never traps focus.
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (
+        rootRef.current &&
+        e.target instanceof Node &&
+        !rootRef.current.contains(e.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const visible = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((r) => r.toLowerCase().includes(q));
+  }, [options, query]);
+
+  const summary =
+    selected.length === 0
+      ? "all"
+      : selected.length === 1
+        ? selected[0]
+        : `${selected.length} of ${options.length}`;
+
+  const toggle = (repo: string) => {
+    if (sel.has(repo)) {
+      onChange(selected.filter((r) => r !== repo));
+    } else {
+      onChange([...selected, repo]);
+    }
+  };
+
+  const FILTER_HINT = "Filter repos";
+  const filterInputProps: Record<string, string> = {
+    type: "text",
+    "aria-label": FILTER_HINT,
+    [SEARCH_HINT_ATTR]: FILTER_HINT,
+  };
+
+  return (
+    <div ref={rootRef} style={{ position: "relative" }}>
+      <button
+        type="button"
+        className={`chip ${selected.length > 0 ? "is-active" : ""}`}
+        onClick={() => setOpen((o) => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Filter by repo"
+      >
+        Repo: {summary}
+        <span aria-hidden="true" style={{ marginLeft: 4 }}>
+          {open ? "▴" : "▾"}
+        </span>
+      </button>
+      {open ? (
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            zIndex: 20,
+            minWidth: 240,
+            maxWidth: 360,
+            background: "var(--bg-1)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--radius-sm)",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.32)",
+            padding: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          <input
+            {...filterInputProps}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{
+              height: 24,
+              padding: "0 8px",
+              background: "var(--bg-2)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-xs)",
+              color: "var(--fg-0)",
+              fontSize: 11.5,
+              outline: "none",
+            }}
+          />
+          <div
+            style={{
+              maxHeight: 240,
+              overflowY: "auto",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            {visible.length === 0 ? (
+              <span
+                style={{
+                  padding: "8px 6px",
+                  color: "var(--fg-3)",
+                  fontSize: 11.5,
+                  textAlign: "center",
+                }}
+              >
+                No repos match.
+              </span>
+            ) : (
+              visible.map((repo) => (
+                <label
+                  key={repo}
+                  role="option"
+                  aria-selected={sel.has(repo)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "5px 6px",
+                    fontSize: 12,
+                    color: "var(--fg-0)",
+                    cursor: "pointer",
+                    borderRadius: "var(--radius-xs)",
+                  }}
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  <input
+                    type="checkbox"
+                    checked={sel.has(repo)}
+                    onChange={() => toggle(repo)}
+                    style={{ accentColor: "var(--accent)" }}
+                  />
+                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {repo}
+                  </span>
+                </label>
+              ))
+            )}
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 6,
+              borderTop: "1px solid var(--border-soft)",
+              paddingTop: 6,
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn--sm btn--ghost"
+              onClick={() => onChange([])}
+              disabled={selected.length === 0}
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              className="btn btn--sm btn--ghost"
+              onClick={() => onChange([...options])}
+              disabled={selected.length === options.length}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => setOpen(false)}
+              style={{ marginLeft: "auto" }}
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TimelineStats({
   eventsTotal,
   reposIndexed,
   sessionCount,
   kindBreakdown,
-  sparkSeries,
+  eventsPerMin,
+  violationsDaily,
 }: {
   eventsTotal: number;
   reposIndexed: number;
   sessionCount: number;
   kindBreakdown: { kind: string; count: number }[];
-  sparkSeries: number[];
+  eventsPerMin: number[];
+  violationsDaily: number[];
 }) {
   const turnCount = kindBreakdown.find((k) => k.kind === "turn")?.count ?? 0;
   const toolCount = kindBreakdown.find((k) => k.kind === "tool_call")?.count ?? 0;
+  const lastMinute = eventsPerMin[eventsPerMin.length - 1] ?? 0;
+  const violations7d = violationsDaily.reduce((s, v) => s + v, 0);
   return (
     <div className="stats-grid" style={{ marginBottom: 14 }}>
       <div className="stat">
-        <div className="stat__label">Events captured</div>
-        <div className="stat__value tabular">{fmtNum(eventsTotal)}</div>
-        <div className="stat__delta">across the indexed archive</div>
-        {sparkSeries.length >= 2 ? (
+        <div className="stat__label">Events / min</div>
+        <div className="stat__value tabular">{fmtNum(lastMinute)}</div>
+        <div className="stat__delta">{fmtNum(eventsTotal)} captured · last 20 min</div>
+        {eventsPerMin.some((v) => v > 0) ? (
           <div className="stat__spark">
-            <Sparkline data={sparkSeries} color="var(--accent)" />
+            <Sparkline data={eventsPerMin} color="var(--accent)" />
           </div>
         ) : null}
       </div>
@@ -549,9 +765,14 @@ function TimelineStats({
         </div>
       </div>
       <div className="stat">
-        <div className="stat__label">Sessions</div>
-        <div className="stat__value tabular">{fmtNum(sessionCount)}</div>
-        <div className="stat__delta">grouped by claude_code.session_id</div>
+        <div className="stat__label">Violations · 7d</div>
+        <div className="stat__value tabular">{fmtNum(violations7d)}</div>
+        <div className="stat__delta">{fmtNum(sessionCount)} sessions captured</div>
+        {violationsDaily.some((v) => v > 0) ? (
+          <div className="stat__spark">
+            <Sparkline data={violationsDaily} color="var(--critical)" />
+          </div>
+        ) : null}
       </div>
     </div>
   );

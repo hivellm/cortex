@@ -37,11 +37,22 @@ async function getJson<T>(path: string): Promise<T> {
 
 export type KindCount = { kind: string; count: number };
 export type RepoCount = { repo: string; count: number };
+
+/// Time-bucketed series block. `events_per_min` carries 20 minute
+/// buckets; `violations_7d_daily` carries 7 day buckets. Both are
+/// always present — empty buckets are zero so the renderer can draw
+/// a gap-free Sparkline.
+export type SeriesBlock = {
+  events_per_min: number[];
+  violations_7d_daily: number[];
+};
+
 export type Overview = {
   events_total: number;
   repos_indexed: number;
   kind_breakdown: KindCount[];
   recent_repos: RepoCount[];
+  series: SeriesBlock;
 };
 
 export type TimelineEvent = {
@@ -66,9 +77,15 @@ export type SessionRow = {
   title: string;
 };
 
+/// Active filter set. `repo` is a list because the user often
+/// observes more than one repo at once (compare staging-vs-prod,
+/// watch a refactor that spans `core` + `gui`, etc.). The wire
+/// contract: each repo is sent as its own `repo=<name>` query
+/// parameter so the server-side filter stays a simple "any-of"
+/// match without a delimiter convention.
 export type Filters = {
   session_id?: string;
-  repo?: string;
+  repo?: string[];
   kind?: string;
 };
 
@@ -151,6 +168,32 @@ export type ToolStat = {
   share: number;
 };
 
+export type HeatmapBlock = {
+  tz: string;
+  days: string[];
+  /// `[7][24]` matrix of tool-call counts. Rows are weekdays
+  /// (Mon..Sun), columns are hour-of-day in UTC.
+  cells: number[][];
+};
+
+export type ToolsStatsBody = {
+  tools: ToolStat[];
+  heatmap: HeatmapBlock;
+};
+
+/// Trust matrix — model × repo cells with `[0, 1]` scores. Empty
+/// arrays / map until spec-14 lands the actual computation; the GUI
+/// shows an empty state in that case.
+export type TrustMatrix = {
+  models: string[];
+  repos: string[];
+  scores: Record<string, Record<string, number>>;
+};
+
+export type DecisionDetail = DecisionRow & {
+  body_markdown: string;
+};
+
 export type GraphNode = {
   id: string;
   label: string;
@@ -162,10 +205,18 @@ export type GraphNode = {
 export type GraphEdge = { from: string; to: string; label: string };
 export type GraphPayload = { nodes: GraphNode[]; edges: GraphEdge[] };
 
+/// Render a `Filters` set onto a `URLSearchParams`. Multi-valued
+/// fields (today: `repo`) get one `key=value` pair per entry so the
+/// server reads them via `Vec<String>` axum extractors without
+/// needing a custom delimiter.
 function applyFilters(params: URLSearchParams, filters?: Filters) {
   if (!filters) return;
   if (filters.session_id) params.set("session_id", filters.session_id);
-  if (filters.repo) params.set("repo", filters.repo);
+  if (filters.repo && filters.repo.length > 0) {
+    for (const r of filters.repo) {
+      params.append("repo", r);
+    }
+  }
   if (filters.kind) params.set("kind", filters.kind);
 }
 
@@ -189,7 +240,10 @@ export const api = {
   laws: () => getJson<LawRow[]>("/v1/dashboard/laws"),
   violations: () => getJson<ViolationRow[]>("/v1/dashboard/violations"),
   analyses: () => getJson<AnalysisRow[]>("/v1/dashboard/analyses"),
-  toolsStats: () => getJson<ToolStat[]>("/v1/dashboard/tools/stats"),
+  toolsStats: () => getJson<ToolsStatsBody>("/v1/dashboard/tools/stats"),
+  trust: () => getJson<TrustMatrix>("/v1/dashboard/trust"),
+  decisionDetail: (id: string) =>
+    getJson<DecisionDetail>(`/v1/dashboard/decisions/${encodeURIComponent(id)}`),
   graph: (sessionId?: string, limit = 60) => {
     const params = new URLSearchParams();
     if (sessionId) params.set("session_id", sessionId);

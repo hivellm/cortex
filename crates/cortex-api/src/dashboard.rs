@@ -8,7 +8,9 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, State};
+use axum_extra::extract::Query;
+use chrono::{Datelike, Timelike};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -55,6 +57,8 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/tools/stats", get(tools_stats))
         .route("/v1/dashboard/graph", get(graph))
         .route("/v1/dashboard/sessions", get(sessions))
+        .route("/v1/dashboard/trust", get(trust))
+        .route("/v1/dashboard/decisions/:id", get(decision_detail))
         .with_state(state)
 }
 
@@ -85,6 +89,26 @@ pub struct OverviewBody {
     pub kind_breakdown: Vec<KindCount>,
     /// Top repos by event count, descending. Capped at 8.
     pub recent_repos: Vec<RepoCount>,
+    /// Time-bucketed series the GUI's stats grid renders. Only
+    /// quantities derivable from the captured lane are emitted —
+    /// see [`SeriesBlock`].
+    pub series: SeriesBlock,
+}
+
+/// Time-bucketed series block. Each array carries a fixed number of
+/// buckets, oldest-first, with no nulls — empty buckets are zero so
+/// the front-end Sparkline renders a gap-free line. Only series that
+/// can be computed from the captured envelopes are emitted; latency
+/// and cost series will land when the spec-12 derivation pipeline
+/// and the spec-05 classifier worker start stamping the
+/// corresponding fields.
+#[derive(Debug, Clone, Serialize)]
+pub struct SeriesBlock {
+    /// Total events per minute over the last 20 minutes.
+    pub events_per_min: Vec<u64>,
+    /// Daily count of `kind=law_violation` envelopes over the last
+    /// 7 days, oldest-first.
+    pub violations_7d_daily: Vec<u64>,
 }
 
 /// One row of the per-kind breakdown.
@@ -128,6 +152,12 @@ async fn overview(State(state): State<DashboardState>) -> Response {
     repos_sorted.sort_by(|a, b| b.count.cmp(&a.count));
     repos_sorted.truncate(8);
 
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let series = SeriesBlock {
+        events_per_min: bucket_per_minute(&snapshot, now_ms, 20),
+        violations_7d_daily: bucket_violations_per_day(&snapshot, now_ms, 7),
+    };
+
     let body = OverviewBody {
         events_total,
         repos_indexed: repos_sorted.len() as u64,
@@ -139,14 +169,83 @@ async fn overview(State(state): State<DashboardState>) -> Response {
             })
             .collect(),
         recent_repos: repos_sorted,
+        series,
     };
     (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Bucket `hits` into `buckets` minute-wide slots ending at `now_ms`.
+/// Slot 0 is the oldest (`now_ms - buckets * 60_000`), slot
+/// `buckets - 1` is the most recent. Hits older than the window are
+/// ignored; hits in the future (clock-skew) collapse into the last
+/// slot.
+fn bucket_per_minute(
+    hits: &[crate::lanes::LaneHit],
+    now_ms: i64,
+    buckets: usize,
+) -> Vec<u64> {
+    let mut out = vec![0u64; buckets];
+    let span_ms = (buckets as i64) * 60_000;
+    let start_ms = now_ms - span_ms;
+    for h in hits {
+        if h.ts <= 0 {
+            continue;
+        }
+        if h.ts < start_ms {
+            continue;
+        }
+        let off = (h.ts - start_ms) / 60_000;
+        let idx = if off < 0 {
+            0
+        } else if off >= buckets as i64 {
+            buckets - 1
+        } else {
+            off as usize
+        };
+        out[idx] += 1;
+    }
+    out
+}
+
+/// Bucket `kind=law_violation` envelopes into `days` day-wide slots
+/// ending at `now_ms`. Slot 0 is the oldest, slot `days - 1` is
+/// today.
+fn bucket_violations_per_day(
+    hits: &[crate::lanes::LaneHit],
+    now_ms: i64,
+    days: usize,
+) -> Vec<u64> {
+    let mut out = vec![0u64; days];
+    let day_ms: i64 = 86_400_000;
+    let span_ms = (days as i64) * day_ms;
+    let start_ms = now_ms - span_ms;
+    for h in hits {
+        if h.symbol.as_deref() != Some("law_violation") {
+            continue;
+        }
+        if h.ts <= 0 || h.ts < start_ms {
+            continue;
+        }
+        let off = (h.ts - start_ms) / day_ms;
+        let idx = if off < 0 {
+            0
+        } else if off >= days as i64 {
+            days - 1
+        } else {
+            off as usize
+        };
+        out[idx] += 1;
+    }
+    out
 }
 
 fn symbol_to_kind(symbol: Option<&str>) -> &'static str {
     match symbol {
         Some(s) if s.starts_with("tool_call") => "tool_call",
         Some(s) if s.starts_with("agent_call") => "agent_call",
+        Some("decision") => "decision",
+        Some("analysis") => "analysis",
+        Some("law_violation") => "law_violation",
         Some("turn") | None => "turn",
         Some(_) => "turn",
     }
@@ -166,9 +265,11 @@ pub struct TimelineQuery {
     /// `/v1/dashboard/sessions` (canonical 26-char ULID).
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Restrict to a single repo (matches `context.repo`).
+    /// Restrict to one or more repos. Each `repo=<name>` query param
+    /// is appended; the filter passes when the hit matches ANY of
+    /// the listed repos.
     #[serde(default)]
-    pub repo: Option<String>,
+    pub repo: Vec<String>,
     /// Restrict to a single canonical kind (`turn` / `tool_call` /
     /// `agent_call`). Maps onto the symbol prefix the lane stamps.
     #[serde(default)]
@@ -214,8 +315,10 @@ async fn timeline_recent(
     if let Some(sid) = params.session_id.as_deref().filter(|s| !s.is_empty()) {
         hits.retain(|h| session_id_of(h) == Some(sid));
     }
-    if let Some(repo) = params.repo.as_deref().filter(|r| !r.is_empty()) {
-        hits.retain(|h| h.repo.as_deref() == Some(repo));
+    if !params.repo.is_empty() {
+        let allow: std::collections::HashSet<&str> =
+            params.repo.iter().map(String::as_str).collect();
+        hits.retain(|h| h.repo.as_deref().map(|r| allow.contains(r)).unwrap_or(false));
     }
     if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
         hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
@@ -292,9 +395,11 @@ pub struct MemoryQuery {
     /// Restrict to one session.
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Restrict to one repo.
+    /// Restrict to one or more repos. Each `repo=<name>` query param
+    /// is appended; the filter passes when the hit matches ANY of
+    /// the listed repos.
     #[serde(default)]
-    pub repo: Option<String>,
+    pub repo: Vec<String>,
     /// Restrict to one canonical kind.
     #[serde(default)]
     pub kind: Option<String>,
@@ -331,8 +436,10 @@ async fn memory(
     if let Some(sid) = params.session_id.as_deref().filter(|s| !s.is_empty()) {
         hits.retain(|h| session_id_of(h) == Some(sid));
     }
-    if let Some(repo) = params.repo.as_deref().filter(|r| !r.is_empty()) {
-        hits.retain(|h| h.repo.as_deref() == Some(repo));
+    if !params.repo.is_empty() {
+        let allow: std::collections::HashSet<&str> =
+            params.repo.iter().map(String::as_str).collect();
+        hits.retain(|h| h.repo.as_deref().map(|r| allow.contains(r)).unwrap_or(false));
     }
     if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
         hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
@@ -446,33 +553,268 @@ pub struct DecisionRow {
     pub cites: Vec<String>,
     /// Id of the decision this one supersedes, if any.
     pub supersedes: Option<String>,
+    /// Reverse pointer of `supersedes` — id of the decision that
+    /// superseded this one. Computed by the dashboard from the
+    /// captured set; not stamped on the envelope itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    /// Linear supersession chain — oldest at index 0, current at the
+    /// tail. Each node carries the decision id, its title, and its
+    /// state (`current` or `old`). When the decision has no chain,
+    /// this is an empty vec (length 0 or 1 means "no chain to draw"
+    /// — the renderer hides the element).
+    #[serde(default)]
+    pub chain: Vec<DecisionChainNode>,
+    /// Number of envelopes captured in the last 7 days that
+    /// reference this decision id by `\bDEC-\d{4}-\d{3}\b` regex.
+    pub cites_7d: u64,
     /// Relative time label.
     pub occurred_at: String,
 }
 
-async fn decisions(State(state): State<DashboardState>) -> Response {
-    let hits = collect_lane_hits(&state.lane);
-    let rows: Vec<DecisionRow> = hits
-        .into_iter()
-        .filter(|h| h.symbol.as_deref() == Some("decision"))
-        .map(|h| DecisionRow {
-            id: h
-                .doc_id
-                .strip_prefix("archive|")
-                .unwrap_or(&h.doc_id)
-                .to_string(),
+/// One node of a [`DecisionRow::chain`].
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionChainNode {
+    /// Decision id at this position.
+    pub id: String,
+    /// Title clipped at 80 chars.
+    pub title: String,
+    /// `current` (the row being rendered) or `old` (an ancestor).
+    pub state: &'static str,
+}
+
+/// Optional body for the `/v1/dashboard/decisions/{id}` detail
+/// endpoint — same shape as a list row plus the un-clipped Markdown
+/// body.
+#[derive(Debug, Clone, Serialize)]
+pub struct DecisionDetail {
+    /// Spread of [`DecisionRow`].
+    #[serde(flatten)]
+    pub row: DecisionRow,
+    /// Full envelope body.
+    pub body_markdown: String,
+}
+
+/// Build the full set of [`DecisionRow`] from a snapshot of the
+/// lane. Walking the supersedes pointer is local to this helper so
+/// both `/decisions` and `/decisions/{id}` agree on chain layout.
+fn build_decision_rows(hits: &[crate::lanes::LaneHit]) -> Vec<DecisionRow> {
+    use std::collections::HashMap;
+
+    // First pass: turn each `kind=decision` envelope into a (raw row,
+    // raw body) pair so the chain pass below has a complete index
+    // before walking pointers.
+    let mut rows: Vec<DecisionRow> = Vec::new();
+    let mut bodies: HashMap<String, String> = HashMap::new();
+    for h in hits.iter().filter(|h| h.symbol.as_deref() == Some("decision")) {
+        let id = h
+            .doc_id
+            .strip_prefix("archive|")
+            .unwrap_or(&h.doc_id)
+            .to_string();
+        bodies.insert(id.clone(), h.text.clone());
+        rows.push(DecisionRow {
+            id,
             title: clip(h.text.lines().next().unwrap_or(""), 120),
-            status: "active".to_string(),
+            status: detect_status(&h.text),
             author: None,
             source_analysis: None,
             rationale: Some(clip(&h.text, 600)),
             tags: Vec::new(),
             cites: Vec::new(),
-            supersedes: None,
+            supersedes: detect_supersedes(&h.text),
+            superseded_by: None,
+            chain: Vec::new(),
+            cites_7d: 0,
             occurred_at: ts_to_relative(h.ts),
-        })
+        });
+    }
+
+    // Reverse-pointer pass: for every row whose `supersedes` is set,
+    // stamp the matching ancestor's `superseded_by`. Two rows that
+    // both supersede the same id is a writer bug — last write wins.
+    let mut superseded_by_index: HashMap<String, String> = HashMap::new();
+    for row in &rows {
+        if let Some(prev) = row.supersedes.as_ref() {
+            superseded_by_index.insert(prev.clone(), row.id.clone());
+        }
+    }
+    for row in rows.iter_mut() {
+        if let Some(next) = superseded_by_index.get(&row.id) {
+            row.superseded_by = Some(next.clone());
+        }
+    }
+
+    // Status reflects the reverse-pointer index: a row with a
+    // `superseded_by` is `superseded`, regardless of what the
+    // payload claimed.
+    for row in rows.iter_mut() {
+        if row.superseded_by.is_some() && row.status != "superseded" {
+            row.status = "superseded".to_string();
+        }
+    }
+
+    // Chain pass: walk `supersedes` backwards from the head toward
+    // the oldest decision in the chain, then reverse so the oldest
+    // comes first. A chain with a single element is reported as an
+    // empty vec so the renderer hides the supersede element. Indexes
+    // are owned String→String so the chain build doesn't borrow from
+    // `rows` while we mutate it.
+    let title_index: HashMap<String, String> = rows
+        .iter()
+        .map(|r| (r.id.clone(), r.title.clone()))
         .collect();
+    let supersedes_index: HashMap<String, String> = rows
+        .iter()
+        .filter_map(|r| r.supersedes.clone().map(|prev| (r.id.clone(), prev)))
+        .collect();
+    for i in 0..rows.len() {
+        let head_id = rows[i].id.clone();
+        let mut nodes: Vec<DecisionChainNode> = Vec::new();
+        // Tail (current).
+        nodes.push(DecisionChainNode {
+            id: head_id.clone(),
+            title: clip(
+                title_index.get(&head_id).map(String::as_str).unwrap_or(""),
+                80,
+            ),
+            state: "current",
+        });
+        // Walk backward through `supersedes` until either no parent
+        // is set or a cycle is hit. The `seen` guard caps the walk.
+        let mut cursor = head_id.clone();
+        let mut seen: std::collections::HashSet<String> = Default::default();
+        seen.insert(cursor.clone());
+        while let Some(prev) = supersedes_index.get(&cursor).cloned() {
+            if !seen.insert(prev.clone()) {
+                break;
+            }
+            nodes.push(DecisionChainNode {
+                id: prev.clone(),
+                title: clip(
+                    title_index.get(&prev).map(String::as_str).unwrap_or(""),
+                    80,
+                ),
+                state: "old",
+            });
+            cursor = prev;
+            if seen.len() > 32 {
+                break;
+            }
+        }
+        if nodes.len() <= 1 {
+            // Single-element chains are the "no chain" case.
+            continue;
+        }
+        nodes.reverse();
+        rows[i].chain = nodes;
+    }
+
+    // Cites pass: count distinct lane hits within the last 7 days
+    // whose body contains the decision id, excluding the decision's
+    // own envelope. A regex match on the id is the cheapest signal
+    // we have — the spec-12 derivation pipeline will refine this.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let cutoff_ms = now_ms - 7 * 86_400_000;
+    for row in rows.iter_mut() {
+        let needle = row.id.as_str();
+        let mut count: u64 = 0;
+        for h in hits {
+            if h.ts <= 0 || h.ts < cutoff_ms {
+                continue;
+            }
+            // Skip the decision's own envelope (the doc_id matches
+            // `archive|<id>`).
+            if h.doc_id
+                .strip_prefix("archive|")
+                .map(|s| s == needle)
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if h.text.contains(needle) {
+                count += 1;
+            }
+        }
+        row.cites_7d = count;
+    }
+
+    let _ = bodies; // keep `bodies` available for the detail handler
+    rows
+}
+
+/// Detect a `status:` line in a decision payload's first 32 lines.
+/// Falls back to `active` when no marker is found.
+fn detect_status(text: &str) -> String {
+    for line in text.lines().take(32) {
+        let lower = line.trim().to_ascii_lowercase();
+        if let Some(v) = lower.strip_prefix("status:") {
+            let v = v.trim();
+            if !v.is_empty() {
+                return v.to_string();
+            }
+        }
+    }
+    "active".to_string()
+}
+
+/// Detect a `supersedes: DEC-...` line. Returns the matched id.
+fn detect_supersedes(text: &str) -> Option<String> {
+    let re_target = "supersedes:";
+    for line in text.lines().take(64) {
+        let lower = line.trim().to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix(re_target) {
+            let token = rest.trim().split_whitespace().next().unwrap_or("");
+            if !token.is_empty() {
+                // The lower-cased prefix gave us the offset; re-derive
+                // the cased token from the original line so the id
+                // keeps its `DEC-` casing.
+                let cased = line
+                    .trim()
+                    .strip_prefix(|c: char| c.is_alphabetic() || c == ':')
+                    .unwrap_or(line.trim())
+                    .trim_start_matches(':')
+                    .trim();
+                let cased_token = cased.split_whitespace().next().unwrap_or(token);
+                return Some(cased_token.to_string());
+            }
+        }
+    }
+    None
+}
+
+async fn decisions(State(state): State<DashboardState>) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+    let rows = build_decision_rows(&hits);
     (StatusCode::OK, Json(rows)).into_response()
+}
+
+async fn decision_detail(
+    State(state): State<DashboardState>,
+    Path(id): Path<String>,
+) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+    let rows = build_decision_rows(&hits);
+    let row = match rows.into_iter().find(|r| r.id == id) {
+        Some(r) => r,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({ "reason": "decision_not_found" })),
+            )
+                .into_response();
+        }
+    };
+    let body_markdown = hits
+        .iter()
+        .find(|h| {
+            h.symbol.as_deref() == Some("decision")
+                && h.doc_id.strip_prefix("archive|").unwrap_or(&h.doc_id) == row.id
+        })
+        .map(|h| h.text.clone())
+        .unwrap_or_default();
+    let detail = DecisionDetail { row, body_markdown };
+    (StatusCode::OK, Json(detail)).into_response()
 }
 
 // ---------------------------------------------------------------------
@@ -638,6 +980,32 @@ pub struct ToolStat {
     pub share: f64,
 }
 
+/// Top-level body of `/v1/dashboard/tools/stats`. Wraps the per-tool
+/// rows the GUI table consumes plus the day×hour heatmap matrix the
+/// design's Tool analytics view renders.
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolsStatsBody {
+    /// Per-tool aggregates, descending by call count.
+    pub tools: Vec<ToolStat>,
+    /// Tool-call density per (weekday, hour-of-day) over the last
+    /// 7 days, UTC. `cells[d][h]` is the count for weekday `d` at
+    /// hour `h`. Days follow ISO numbering (Monday = 0).
+    pub heatmap: HeatmapBlock,
+}
+
+/// 7×24 heatmap of tool-call counts.
+#[derive(Debug, Clone, Serialize)]
+pub struct HeatmapBlock {
+    /// Always `"UTC"` — buckets read off `chrono::DateTime<Utc>`.
+    pub tz: &'static str,
+    /// Day labels in display order, matching the row dimension of
+    /// `cells`.
+    pub days: [&'static str; 7],
+    /// `[7][24]` tool-call counts. Outer index is weekday (0 = Mon),
+    /// inner index is hour of day. Buckets with no calls are zero.
+    pub cells: Vec<Vec<u64>>,
+}
+
 async fn tools_stats(State(state): State<DashboardState>) -> Response {
     let hits = collect_lane_hits(&state.lane);
     let mut by_tool: std::collections::BTreeMap<String, u64> =
@@ -662,7 +1030,72 @@ async fn tools_stats(State(state): State<DashboardState>) -> Response {
         })
         .collect();
     rows.sort_by(|a, b| b.calls.cmp(&a.calls));
-    (StatusCode::OK, Json(rows)).into_response()
+
+    let heatmap = build_tool_heatmap(&hits);
+    let body = ToolsStatsBody {
+        tools: rows,
+        heatmap,
+    };
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Bucket every `tool_call:*` envelope captured in the last 7 days
+/// into a 7×24 grid of `(weekday, hour)` UTC counts. Hits with no
+/// timestamp are dropped — they cannot be placed honestly.
+fn build_tool_heatmap(hits: &[crate::lanes::LaneHit]) -> HeatmapBlock {
+    let now = chrono::Utc::now();
+    let cutoff_ms = now.timestamp_millis() - 7 * 86_400_000;
+    let mut cells = vec![vec![0u64; 24]; 7];
+    for h in hits {
+        let symbol = match h.symbol.as_deref() {
+            Some(s) if s.starts_with("tool_call:") => s,
+            _ => continue,
+        };
+        let _ = symbol; // explicit kept-handle — keeps the filter readable
+        if h.ts <= 0 || h.ts < cutoff_ms {
+            continue;
+        }
+        let dt = match chrono::DateTime::<chrono::Utc>::from_timestamp_millis(h.ts) {
+            Some(dt) => dt,
+            None => continue,
+        };
+        let weekday = dt.weekday().num_days_from_monday() as usize;
+        let hour = dt.hour() as usize;
+        if weekday < 7 && hour < 24 {
+            cells[weekday][hour] += 1;
+        }
+    }
+    HeatmapBlock {
+        tz: "UTC",
+        days: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        cells,
+    }
+}
+
+// ---------------------------------------------------------------------
+// /v1/dashboard/trust
+// ---------------------------------------------------------------------
+
+/// Trust matrix payload — model × repo cells with a `[0, 1]` score.
+/// Spec 14 owns the actual computation (rolling violation rate per
+/// (model, repo) pair). Until that ships the lane has no per-(model,
+/// repo) trust signal, so we return empty arrays / map and the GUI
+/// surfaces an empty state.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustMatrix {
+    pub models: Vec<String>,
+    pub repos: Vec<String>,
+    /// `scores[model][repo]` → trust score in `[0, 1]`.
+    pub scores: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+}
+
+async fn trust(State(_state): State<DashboardState>) -> Response {
+    let body = TrustMatrix {
+        models: Vec::new(),
+        repos: Vec::new(),
+        scores: std::collections::BTreeMap::new(),
+    };
+    (StatusCode::OK, Json(body)).into_response()
 }
 
 // ---------------------------------------------------------------------
@@ -839,68 +1272,193 @@ async fn graph(
     (StatusCode::OK, Json(payload)).into_response()
 }
 
-/// Run a Cypher MATCH against Nexus and assemble a [`GraphPayload`].
+/// Run several Cypher MATCH passes against Nexus and assemble a
+/// [`GraphPayload`].
 ///
-/// Today the writer (spec-07 round-2) only emits identity edges
-/// (`HAS_TURN`, `HAS_TOOL_CALL`); the query reflects that. As the
-/// payload-parsing round lands `LINKED_TO` / `TOUCHED` / `OF` /
-/// `OBSERVED_IN`, the OPTIONAL MATCH clauses just need to grow — the
-/// row-decoding loop below already handles arbitrary node labels.
+/// Nexus 1.15 returns nodes as flat `{_nexus_id, ...properties}`
+/// objects (no nested `properties` field, no `labels` array) and
+/// returns relationships as `{_nexus_id, type}` (no `start`/`end`).
+/// We therefore pull each label and edge type with explicit
+/// `RETURN`-projected columns rather than parsing whole-node objects,
+/// which means this code already works for the seven node labels and
+/// three edge types the writer produces today (`Session`, `Turn`,
+/// `Artifact`, `Repo`, `Memory`, `LawViolation`, `Decision` /
+/// `IN_REPO`, `HAS_TURN`, `REMEMBERS`). New labels just need a fresh
+/// pass below; new edges only need a fresh `MATCH ... RETURN`.
 async fn query_nexus_graph(
     client: &NexusClient,
     session_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<GraphPayload> {
-    let cypher = if session_id.is_some() {
-        // Anchor at a specific session; OPTIONAL MATCH downstream so
-        // a turn/tool-less session still returns the session node.
-        r"
-        MATCH (s:Session {session_id: $sid})
-        OPTIONAL MATCH (s)-[r1:HAS_TURN]->(t:Turn)
-        OPTIONAL MATCH (t)-[r2:HAS_TOOL_CALL]->(tc:ToolCall)
-        RETURN s, t, tc, r1, r2
-        LIMIT $lim
-        "
-    } else {
-        // No session filter: pull whatever the writer has produced
-        // most recently — Nexus orders by internal node id which
-        // matches insertion order under our writer's append-only
-        // pattern.
-        r"
-        MATCH (s:Session)
-        OPTIONAL MATCH (s)-[r1:HAS_TURN]->(t:Turn)
-        OPTIONAL MATCH (t)-[r2:HAS_TOOL_CALL]->(tc:ToolCall)
-        RETURN s, t, tc, r1, r2
-        LIMIT $lim
-        "
-    };
+    let mut nodes: Vec<GraphNode> = Vec::new();
+    let mut seen_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
+    let mut seen_edges: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let mut params: std::collections::HashMap<String, NexusValue> =
-        std::collections::HashMap::new();
-    params.insert("lim".to_string(), NexusValue::Int(limit as i64));
-    if let Some(sid) = session_id {
-        params.insert("sid".to_string(), NexusValue::String(sid.to_string()));
-    }
-
-    let result = client
-        .execute_cypher(cypher, Some(params))
-        .await
-        .map_err(|e| anyhow::anyhow!("nexus execute_cypher failed: {e}"))?;
-
-    let mut builder = GraphBuilder::default();
-    for row in &result.rows {
-        let cells = match row.as_array() {
-            Some(arr) => arr,
-            None => continue,
+    // Per-label node pulls. Each query returns rows of two cells:
+    // `[<key>, <display_label>]` — the rest of the property bag stays
+    // server-side. Limit-per-label keeps the canvas legible while
+    // still giving every kind a chance to appear.
+    let per_label_limit = (limit / 2).max(20).min(limit);
+    // Order: small / interesting kinds first so a tight `limit` still
+    // surfaces every label rather than getting drowned by Artifacts.
+    let label_specs: &[(&str, &str, &str, &str)] = &[
+        // (cypher_label, return_id_prop, return_label_prop, gui_kind)
+        ("Repo", "name", "name", "repo"),
+        ("Decision", "id", "title", "decision"),
+        ("Law", "id", "title", "law"),
+        ("Analysis", "id", "title", "analysis"),
+        ("LawViolation", "id", "law_id", "violation"),
+        ("Memory", "id", "id", "memory"),
+        ("Session", "id", "id", "session"),
+        ("Turn", "id", "id", "turn"),
+        ("ToolCall", "id", "tool_name", "tool_call"),
+        ("AgentCall", "id", "agent_type", "agent_call"),
+        ("Artifact", "natural_key", "path", "artifact"),
+    ];
+    for (cypher_label, id_prop, label_prop, gui_kind) in label_specs {
+        // Anchor at a session when one is supplied — restricts to the
+        // session's first-degree neighbourhood so the canvas stays
+        // focused. Otherwise pull a recent slice of the label.
+        let cy = if session_id.is_some() && *cypher_label != "Session" {
+            format!(
+                "MATCH (s:Session {{ session_id: $sid }})-[]->(n:{cypher_label}) \
+                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
+                 LIMIT $lim"
+            )
+        } else if session_id.is_some() {
+            format!(
+                "MATCH (n:{cypher_label} {{ session_id: $sid }}) \
+                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
+                 LIMIT $lim"
+            )
+        } else {
+            format!(
+                "MATCH (n:{cypher_label}) \
+                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
+                 LIMIT $lim"
+            )
         };
-        // Columns: s, t, tc, r1, r2
-        builder.add_node(cells.first(), "session");
-        builder.add_node(cells.get(1), "turn");
-        builder.add_node(cells.get(2), "tool_call");
-        builder.add_edge(cells.get(3));
-        builder.add_edge(cells.get(4));
+        let mut params: std::collections::HashMap<String, NexusValue> =
+            std::collections::HashMap::new();
+        params.insert(
+            "lim".to_string(),
+            NexusValue::Int(per_label_limit as i64),
+        );
+        if let Some(sid) = session_id {
+            params.insert("sid".to_string(), NexusValue::String(sid.to_string()));
+        }
+        let res = match client.execute_cypher(&cy, Some(params)).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!(
+                    cypher_label,
+                    error = %e,
+                    "nexus label pull failed; skipping this label"
+                );
+                continue;
+            }
+        };
+        for row in &res.rows {
+            let cells = match row.as_array() {
+                Some(a) => a,
+                None => continue,
+            };
+            let id = cells
+                .first()
+                .and_then(|v| v.as_str().map(String::from).or_else(|| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        Some(v.to_string())
+                    }
+                }))
+                .unwrap_or_default();
+            if id.is_empty() {
+                continue;
+            }
+            let label = cells
+                .get(1)
+                .and_then(|v| v.as_str().map(String::from).or_else(|| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        Some(v.to_string())
+                    }
+                }))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| id.clone());
+            if seen_nodes.insert(id.clone()) {
+                nodes.push(GraphNode {
+                    id,
+                    label: clip(&label, 64),
+                    x: 0,
+                    y: 0,
+                    kind: gui_kind.to_string(),
+                });
+            }
+            if nodes.len() >= limit {
+                break;
+            }
+        }
+        if nodes.len() >= limit {
+            break;
+        }
     }
-    Ok(builder.into_payload(limit))
+
+    // Edge pulls — one MATCH per relationship type. Each query
+    // returns the ID of each endpoint via the same property the node
+    // pull above used as `id`, so dedup by that string lines up.
+    let edge_specs: &[(&str, &str, &str, &str, &str)] = &[
+        ("Session", "id", "HAS_TURN", "Turn", "id"),
+        ("Session", "id", "REMEMBERS", "Memory", "id"),
+        ("Artifact", "natural_key", "IN_REPO", "Repo", "name"),
+        ("Turn", "id", "HAS_TOOL_CALL", "ToolCall", "id"),
+        ("Turn", "id", "HAS_AGENT_CALL", "AgentCall", "id"),
+        ("ToolCall", "id", "TOUCHED", "Artifact", "natural_key"),
+        ("LawViolation", "id", "OBSERVED_IN", "Turn", "id"),
+        ("LawViolation", "id", "OF", "Law", "id"),
+        ("Decision", "id", "SUPERSEDES", "Decision", "id"),
+    ];
+    for (from_label, from_prop, rel, to_label, to_prop) in edge_specs {
+        let cy = format!(
+            "MATCH (a:{from_label})-[r:{rel}]->(b:{to_label}) \
+             RETURN a.{from_prop} AS from_id, b.{to_prop} AS to_id \
+             LIMIT $lim"
+        );
+        let mut params: std::collections::HashMap<String, NexusValue> =
+            std::collections::HashMap::new();
+        params.insert("lim".to_string(), NexusValue::Int(limit as i64));
+        let res = match client.execute_cypher(&cy, Some(params)).await {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for row in &res.rows {
+            let cells = match row.as_array() {
+                Some(a) => a,
+                None => continue,
+            };
+            let from = cells.first().and_then(|v| v.as_str()).unwrap_or_default();
+            let to = cells.get(1).and_then(|v| v.as_str()).unwrap_or_default();
+            if from.is_empty() || to.is_empty() {
+                continue;
+            }
+            // Skip edges to nodes the canvas isn't rendering.
+            if !seen_nodes.contains(from) || !seen_nodes.contains(to) {
+                continue;
+            }
+            let key = format!("{from}|{rel}|{to}");
+            if seen_edges.insert(key) {
+                edges.push(GraphEdge {
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    label: rel.to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(GraphPayload { nodes, edges })
 }
 
 /// Accumulator that dedups Nexus nodes/edges by id while turning
@@ -1072,7 +1630,10 @@ fn synthesize_graph_from_lane(
     let mut turns_seen: std::collections::BTreeMap<String, (i32, i32)> =
         std::collections::BTreeMap::new();
     let mut tool_calls_seen = 0i32;
-    let cap = limit.saturating_sub(1).min(12);
+    let mut decisions_seen = 0i32;
+    let mut analyses_seen = 0i32;
+    let mut violations_seen = 0i32;
+    let cap = limit.saturating_sub(1).min(60);
 
     for (idx, h) in hits.iter().enumerate().take(cap) {
         let kind = symbol_to_kind(h.symbol.as_deref());
@@ -1116,6 +1677,90 @@ fn synthesize_graph_from_lane(
                     from: parent,
                     to: id,
                     label: "INVOKED".to_string(),
+                });
+            }
+            "decision" => {
+                let raw_id = h
+                    .doc_id
+                    .strip_prefix("archive|")
+                    .unwrap_or(&h.doc_id)
+                    .to_string();
+                let id = format!("decision-{raw_id}");
+                let y = 80 + decisions_seen * 60;
+                decisions_seen += 1;
+                nodes.push(GraphNode {
+                    id: id.clone(),
+                    label: clip(&label, 32),
+                    x: 720,
+                    y,
+                    kind: kind.to_string(),
+                });
+                // Anchor the decision under the most recent turn —
+                // when no turn is around, hang it directly off the
+                // session so the canvas stays connected.
+                let parent = turns_seen
+                    .keys()
+                    .next_back()
+                    .cloned()
+                    .unwrap_or_else(|| session_id.to_string());
+                edges.push(GraphEdge {
+                    from: parent,
+                    to: id,
+                    label: "REFERENCES".to_string(),
+                });
+            }
+            "analysis" => {
+                let raw_id = h
+                    .doc_id
+                    .strip_prefix("archive|")
+                    .unwrap_or(&h.doc_id)
+                    .to_string();
+                let id = format!("analysis-{raw_id}");
+                let y = 220 + analyses_seen * 60;
+                analyses_seen += 1;
+                nodes.push(GraphNode {
+                    id: id.clone(),
+                    label: clip(&label, 32),
+                    x: 720,
+                    y,
+                    kind: kind.to_string(),
+                });
+                let parent = turns_seen
+                    .keys()
+                    .next_back()
+                    .cloned()
+                    .unwrap_or_else(|| session_id.to_string());
+                edges.push(GraphEdge {
+                    from: parent,
+                    to: id,
+                    label: "PRODUCED".to_string(),
+                });
+            }
+            "law_violation" => {
+                let raw_id = h
+                    .doc_id
+                    .strip_prefix("archive|")
+                    .unwrap_or(&h.doc_id)
+                    .to_string();
+                let id = format!("violation-{raw_id}");
+                let y = 320 + violations_seen * 50;
+                violations_seen += 1;
+                nodes.push(GraphNode {
+                    id: id.clone(),
+                    label: clip(&label, 28),
+                    x: 540,
+                    y,
+                    kind: "violation".to_string(),
+                });
+                let parent = turns_seen
+                    .keys()
+                    .next_back()
+                    .cloned()
+                    .unwrap_or_else(|| session_id.to_string());
+                edges.push(GraphEdge {
+                    from: id.clone(),
+                    to: parent,
+                    label: "OBSERVED_IN".to_string(),
                 });
             }
             _ => {}
@@ -1215,7 +1860,7 @@ mod tests {
             Query(TimelineQuery {
                 limit: Some(2),
                 session_id: None,
-                repo: None,
+                repo: Vec::new(),
                 kind: None,
             }),
         )
@@ -1243,7 +1888,7 @@ mod tests {
                 q: Some("hnsw".to_string()),
                 limit: None,
                 session_id: None,
-                repo: None,
+                repo: Vec::new(),
                 kind: None,
             }),
         )
@@ -1269,7 +1914,7 @@ mod tests {
                 q: None,
                 limit: None,
                 session_id: None,
-                repo: None,
+                repo: Vec::new(),
                 kind: None,
             }),
         )
@@ -1295,7 +1940,7 @@ mod tests {
             Query(TimelineQuery {
                 limit: Some(99999),
                 session_id: None,
-                repo: None,
+                repo: Vec::new(),
                 kind: None,
             }),
         )
@@ -1343,7 +1988,7 @@ mod tests {
             Query(TimelineQuery {
                 limit: None,
                 session_id: Some("01SESSIONB0000000000000002".to_string()),
-                repo: None,
+                repo: Vec::new(),
                 kind: None,
             }),
         )
@@ -1371,7 +2016,7 @@ mod tests {
                 q: None,
                 limit: None,
                 session_id: None,
-                repo: Some("Cortex".to_string()),
+                repo: vec!["Cortex".to_string()],
                 kind: Some("turn".to_string()),
             }),
         )

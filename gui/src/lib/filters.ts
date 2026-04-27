@@ -26,5 +26,5 @@ export function useFilters(): FiltersContextValue {
 
 /// `true` when the filter object has at least one active key.
 export function hasAnyFilter(f: Filters): boolean {
-  return Boolean(f.session_id || f.repo || f.kind);
+  return Boolean(f.session_id || (f.repo && f.repo.length > 0) || f.kind);
 }

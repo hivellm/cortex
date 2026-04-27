@@ -31,6 +31,46 @@ cytoscape.use(coseBilkent);
 // Map our canonical kinds to design-system colors. Single source of
 // truth: the legend below + the Cytoscape stylesheet both read from
 // this object so they can never drift.
+//
+// Cytoscape parses these strings through Canvas 2D, which does NOT
+// resolve CSS custom properties (`var(--*)`) — it just sees an
+// invalid color and silently paints black. We therefore feed it
+// resolved values via `cssVar()` at render time so a theme switch
+// still flows through the legend AND the canvas.
+const KIND_COLOR_VARS: Record<string, { token: string; fallback: string }> = {
+  session: { token: "--info", fallback: "#7aa2f7" },
+  turn: { token: "--info", fallback: "#7aa2f7" },
+  tool_call: { token: "--accent", fallback: "#9ece6a" },
+  agent_call: { token: "", fallback: "#bb9af7" },
+  artifact: { token: "--fg-2", fallback: "#a9b1d6" },
+  decision: { token: "--ok", fallback: "#9ece6a" },
+  law: { token: "--critical", fallback: "#f7768e" },
+  violation: { token: "--critical", fallback: "#f7768e" },
+  analysis: { token: "", fallback: "#bb9af7" },
+};
+
+/// Resolve a CSS custom property to its computed value (or a hex
+/// fallback when the property is absent / the document isn't yet
+/// laid out). Always returns something Canvas 2D can parse.
+function cssVar(token: string, fallback: string): string {
+  if (typeof window === "undefined" || !token) return fallback;
+  const v = getComputedStyle(document.documentElement)
+    .getPropertyValue(token)
+    .trim();
+  return v.length > 0 ? v : fallback;
+}
+
+function resolvedKindColors(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [kind, def] of Object.entries(KIND_COLOR_VARS)) {
+    out[kind] = cssVar(def.token, def.fallback);
+  }
+  return out;
+}
+
+/// Legend palette — uses `var(--*)` because the legend lives in the
+/// DOM where browser CSS resolution works fine. Same intent as
+/// `KIND_COLOR_VARS`, different rendering target.
 const KIND_COLOR: Record<string, string> = {
   session: "var(--info)",
   turn: "var(--info)",
@@ -299,9 +339,26 @@ function viewportCenter(cy: Core): { x: number; y: number } {
 }
 
 function cytoscapeStyle(): cytoscape.StylesheetStyle[] {
-  // Map kinds to colors via attribute selectors so the same palette
-  // shipped to the legend feeds the canvas.
-  const nodeKindStyles: cytoscape.StylesheetStyle[] = Object.entries(KIND_COLOR).map(
+  // Resolve every theme color up-front. Canvas 2D doesn't understand
+  // `var(--*)` and silently paints black on parse failure, which is
+  // why labels used to render as black-on-black rectangles. Numbers
+  // are tuned per theme via design tokens; fallback hex covers the
+  // case where the document isn't laid out yet.
+  const fg1 = cssVar("--fg-1", "#a9b1d6");
+  const fg2 = cssVar("--fg-2", "#9aa5ce");
+  const fg3 = cssVar("--fg-3", "#737aa2");
+  const bg1 = cssVar("--bg-1", "#1a1b26");
+  const accent = cssVar("--accent", "#9ece6a");
+  const borderStrong = cssVar("--border-strong", "#414868");
+  const fontMono = cssVar(
+    "--font-mono",
+    "ui-monospace, SFMono-Regular, monospace",
+  );
+
+  // Map kinds to colors via attribute selectors — same palette the
+  // legend renders, but with values Canvas can actually parse.
+  const palette = resolvedKindColors();
+  const nodeKindStyles: cytoscape.StylesheetStyle[] = Object.entries(palette).map(
     ([kind, color]) => ({
       selector: `node[kind = "${kind}"]`,
       style: {
@@ -315,22 +372,22 @@ function cytoscapeStyle(): cytoscape.StylesheetStyle[] {
     {
       selector: "node",
       style: {
-        "background-color": "var(--fg-2)",
-        "border-color": "var(--fg-2)",
+        "background-color": fg2,
+        "border-color": fg2,
         "border-width": 1.5,
         "border-opacity": 1,
         width: 20,
         height: 20,
         label: "data(label)",
-        color: "var(--fg-1)",
-        "font-family": "var(--font-mono)",
+        color: fg1,
+        "font-family": fontMono,
         "font-size": 10,
         "text-valign": "bottom",
         "text-halign": "center",
         "text-margin-y": 6,
         "text-wrap": "ellipsis",
-        "text-max-width": "120px",
-        "text-background-color": "var(--bg-1)",
+        "text-max-width": "160px",
+        "text-background-color": bg1,
         "text-background-opacity": 0.85,
         "text-background-padding": "2px",
       },
@@ -340,7 +397,7 @@ function cytoscapeStyle(): cytoscape.StylesheetStyle[] {
       selector: "node:selected",
       style: {
         "border-width": 3,
-        "border-color": "var(--accent)",
+        "border-color": accent,
         width: 26,
         height: 26,
       },
@@ -349,14 +406,14 @@ function cytoscapeStyle(): cytoscape.StylesheetStyle[] {
       selector: "edge",
       style: {
         width: 1.4,
-        "line-color": "var(--border-strong)",
-        "target-arrow-color": "var(--fg-3)",
+        "line-color": borderStrong,
+        "target-arrow-color": fg3,
         "target-arrow-shape": "triangle",
         "curve-style": "bezier",
         label: "data(label)",
-        "font-family": "var(--font-mono)",
+        "font-family": fontMono,
         "font-size": 8,
-        color: "var(--fg-3)",
+        color: fg3,
         "text-rotation": "autorotate",
         "text-margin-y": -4,
       },
@@ -364,8 +421,8 @@ function cytoscapeStyle(): cytoscape.StylesheetStyle[] {
     {
       selector: "edge:selected",
       style: {
-        "line-color": "var(--accent)",
-        "target-arrow-color": "var(--accent)",
+        "line-color": accent,
+        "target-arrow-color": accent,
         width: 2,
       },
     },
