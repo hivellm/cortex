@@ -10,17 +10,17 @@
 - [x] 2.4 Unit tests: every Value variant round-trips through the renderer without breaking out of the literal
 
 ## 3. Writer rewrite
-- [ ] 3.1 Replace `run_write_tx` in nexus_client.rs to call render_node_merge per node and render_edge_merge per edge
-- [ ] 3.2 Each rendered statement ends with `RETURN count(*) AS written` so the writer can assert >0
-- [ ] 3.3 Treat `written == 0` as `GraphClientError::Other(...)` so the worker emits a real failure instead of a silent success
-- [ ] 3.4 Drop the `templates: &CypherTemplates` parameter from the live path; keep the registry available for read queries / future tasks
+- [x] 3.1 Replace `run_write_tx` in nexus_client.rs to call render_node_merge per node and render_edge_merge per edge (commit `a5f8ab0`; live path uses local per-row renderers, not the parametrised UNWIND template)
+- [x] 3.2 Each rendered statement ends with `RETURN count(*) AS written` (writer uses `count(n)` / `count(r)` — equivalent in single-row context — so the caller can assert >0)
+- [x] 3.3 Treat `written == 0` as `GraphClientError::Nexus(...)` — see `assert_write_landed` in nexus_client.rs (empty `rows` ⇒ "write not persisted" error, fails-loud instead of the previous silent success)
+- [x] 3.4 Live path no longer reads from `templates: &CypherTemplates` (parameter retained for trait stability and read-query / future-task use; documented in the `run_write_tx` comment block)
 
 ## 4. Cypher template files
 - [ ] 4.1 Mark the existing `.cypher` files as deprecated (or move to `cypher/_legacy/`) until a Nexus version that supports UNWIND-write ships
 - [ ] 4.2 Add a top-of-file note in cypher/README.md explaining why the runtime no longer reads them
 
 ## 5. Tests
-- [ ] 5.1 Update unit tests in nexus_client.rs / writer.rs to assert the new per-row Cypher strings
+- [x] 5.1 Update unit tests in nexus_client.rs / writer.rs to assert the new per-row Cypher strings (cypher.rs §tests covers `render_node_merge` / `render_edge_merge` / escape contract — 13 tests added 2026-04-27; nexus_client tests already exercise the per-row write path through `cargo test -p cortex-graph` 16/16)
 - [ ] 5.2 Update cortex-graph integration test (`tests/worker.rs`, `tests/mapper.rs`) to expect per-row writes
 - [ ] 5.3 Add an integration probe (gated on a live-Nexus env flag) that asserts a node + edge actually round-trip
 
