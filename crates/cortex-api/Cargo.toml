@@ -35,6 +35,9 @@ axum = { workspace = true }
 axum-extra = { version = "0.10", features = ["query"] }
 tower = { workspace = true }
 tower-http = { workspace = true }
+tokio-stream = "0.1"
+async-stream = "0.3"
+futures = "0.3"
 
 synap-sdk = { workspace = true }
 nexus-graph-sdk = { workspace = true }

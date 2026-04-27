@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
 import { Sparkline } from "../atoms/Sparkline";
 import { api, type TimelineEvent } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { hasAnyFilter, useFilters } from "../lib/filters";
+import { isStreamStale, useSSE } from "../lib/useSSE";
 
 const KIND_ICON: Record<string, string> = {
   turn: "→",
@@ -213,18 +214,65 @@ export function TimelineView() {
   const [live, setLive] = useState(true);
   const { filters, setFilter, clearFilters } = useFilters();
 
+  const queryClient = useQueryClient();
+  const queryKey = [
+    "timeline-recent",
+    filters.session_id ?? "",
+    (filters.repo ?? []).join("|"),
+  ] as const;
   const { data, isLoading, error } = useQuery({
-    // Re-fetch when the global filter changes so server-side
-    // filtering kicks in alongside the local kind chips.
-    queryKey: [
-      "timeline-recent",
-      filters.session_id ?? "",
-      (filters.repo ?? []).join("|"),
-    ],
+    // Initial backfill — TanStack Query owns the cached snapshot;
+    // the SSE hook below appends live envelopes onto it. We keep a
+    // long-tail polling refetch (30 s) as a safety net so a missed
+    // SSE event eventually reconciles without forcing a reload.
+    queryKey: [...queryKey],
     queryFn: () => api.timelineRecent(200, filters),
-    refetchInterval: live ? 5000 : false,
+    refetchInterval: live ? 30_000 : false,
     refetchIntervalInBackground: true,
   });
+
+  // Build the SSE URL with the same filters. Encoded once per
+  // (session_id, repo[], kind, live) tuple so the EventSource
+  // doesn't churn on unrelated re-renders.
+  const sseUrl = useMemo(() => {
+    if (!live) return null;
+    const base = "/v1/dashboard/timeline/stream";
+    const qs = new URLSearchParams();
+    if (filters.session_id) qs.set("session_id", filters.session_id);
+    for (const r of filters.repo ?? []) qs.append("repo", r);
+    if (filters.kind) qs.set("kind", filters.kind);
+    const tail = qs.toString();
+    // Renderer hits the absolute API in production builds (file://)
+    // and Vite's proxy in dev — same logic the polling fetcher uses.
+    const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
+    const root = isFile ? "http://127.0.0.1:15011" : "";
+    return tail ? `${root}${base}?${tail}` : `${root}${base}`;
+  }, [live, filters.session_id, filters.repo, filters.kind]);
+
+  // Live append from SSE. Each incoming TimelineEvent is appended
+  // to the front of the cached `timeline-recent` buffer if the id
+  // isn't already there; a 200-row cap matches the polling fetch.
+  const onSseEvent = useCallback(
+    (ev: TimelineEvent) => {
+      queryClient.setQueryData<TimelineEvent[]>([...queryKey], (prev) => {
+        const existing = prev ?? [];
+        if (existing.some((e) => e.id === ev.id)) return existing;
+        return [ev, ...existing].slice(0, 200);
+      });
+    },
+    [queryClient, queryKey],
+  );
+
+  const sseStatus = useSSE<TimelineEvent>(sseUrl ?? "/__sse_disabled__", {
+    eventName: "timeline",
+    onEvent: onSseEvent,
+  });
+  // When `sseUrl` is null (paused), the hook still mounts against a
+  // disabled URL — the EventSource open will 404 and the
+  // reconnect ladder backs off. To avoid that noise we only
+  // expose the status when live.
+  const sseLive = sseUrl !== null;
+  const stale = sseLive ? isStreamStale(sseStatus) : false;
 
   // Overview + sessions feed the stats grid. Both queries are also
   // populated by the Sidebar; TanStack dedupes by key.
@@ -494,9 +542,30 @@ export function TimelineView() {
         </span>
         <span>
           stream:{" "}
-          <span style={{ color: live ? "var(--ok)" : "var(--fg-3)" }}>
-            {live ? "● connected" : "○ paused"}
+          <span
+            style={{
+              color: !live
+                ? "var(--fg-3)"
+                : stale
+                  ? "var(--warn)"
+                  : sseStatus.connected
+                    ? "var(--ok)"
+                    : "var(--fg-3)",
+            }}
+          >
+            {!live
+              ? "○ paused"
+              : stale
+                ? "○ stale"
+                : sseStatus.connected
+                  ? "● connected"
+                  : "○ disconnected"}
           </span>
+          {sseLive && sseStatus.reconnects > 0 ? (
+            <span className="muted" style={{ marginLeft: 6, fontSize: 10.5 }}>
+              · {sseStatus.reconnects} reconnect{sseStatus.reconnects === 1 ? "" : "s"}
+            </span>
+          ) : null}
         </span>
       </div>
     </div>

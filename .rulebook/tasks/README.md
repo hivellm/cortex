@@ -27,7 +27,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase2f_dashboard_sse_stream_and_auth | 0/29 | dashboard_sse_stream_and_auth |
+| ⬚ | phase2f_dashboard_auth | 0/20 | dashboard_auth |
 
 ## phase2g
 

@@ -6,15 +6,19 @@
 //! the rest of the spec-16 surface) live under §1–§9 of
 //! `phase2_dashboard/tasks.md`.
 
+use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum_extra::extract::Query;
 use chrono::{Datelike, Timelike};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use futures::stream::Stream;
 use nexus_sdk::{NexusClient, Value as NexusValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -49,6 +53,7 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
     Router::new()
         .route("/v1/dashboard/overview", get(overview))
         .route("/v1/dashboard/timeline/recent", get(timeline_recent))
+        .route("/v1/dashboard/timeline/stream", get(timeline_stream))
         .route("/v1/dashboard/memory", get(memory))
         .route("/v1/dashboard/decisions", get(decisions))
         .route("/v1/dashboard/laws", get(laws))
@@ -341,6 +346,149 @@ async fn timeline_recent(
         })
         .collect();
     (StatusCode::OK, Json(events)).into_response()
+}
+
+/// `GET /v1/dashboard/timeline/stream` — SSE stream of timeline
+/// events. Each new envelope visible to the lane fans out as one
+/// `event: timeline` frame; a periodic `event: heartbeat` is emitted
+/// every 15 seconds so the client can flip a "stale" pill when the
+/// server stops talking.
+///
+/// Reconnect contract: every event carries `id: <doc_id>`. On
+/// reconnect the browser sends `Last-Event-ID`; the handler then
+/// emits any envelopes newer than that id (best-effort — the lane
+/// is in-memory, so an id older than the current snapshot just
+/// drops back to the live tail).
+///
+/// Filters via `?repo`, `?session_id`, `?kind` honour the same shape
+/// as `/timeline/recent`. The handler polls the lane every 500 ms
+/// and diffs against the per-subscriber seen-id set so each
+/// connection sees a clean per-session timeline.
+async fn timeline_stream(
+    State(state): State<DashboardState>,
+    Query(params): Query<TimelineQuery>,
+    headers: HeaderMap,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let last_event_id = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    let lane = state.lane.clone();
+    let session_filter = params
+        .session_id
+        .clone()
+        .filter(|s| !s.is_empty());
+    let repo_filter: std::collections::HashSet<String> =
+        params.repo.iter().cloned().collect();
+    let kind_filter = params.kind.clone().filter(|s| !s.is_empty());
+
+    // Per-subscriber loop. Polls the in-memory lane every 500 ms and
+    // emits the diff against the previously-seen ids. Heartbeat
+    // every 15 s decouples liveness signal from event volume.
+    let stream = async_stream::stream! {
+        // Prime the seen-ids set with whatever the lane has now,
+        // optionally rewinding to `Last-Event-ID` so the client gets
+        // events newer than that point on reconnect. Without rewind,
+        // we'd flash the entire backfill every time the user
+        // reloaded the GUI.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let initial_hits = filtered_hits(&lane, session_filter.as_deref(), &repo_filter, kind_filter.as_deref());
+        let cutoff_ts: Option<i64> = match last_event_id.as_deref() {
+            Some(id) => initial_hits
+                .iter()
+                .find(|h| h.doc_id == id)
+                .map(|h| h.ts),
+            None => None,
+        };
+        for h in &initial_hits {
+            if let Some(t) = cutoff_ts {
+                if h.ts > t {
+                    let event = build_timeline_event(h);
+                    yield encode_sse(&event);
+                }
+            }
+            seen.insert(h.doc_id.clone());
+        }
+
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+        heartbeat.tick().await; // skip the immediate first tick
+        let mut poll = tokio::time::interval(Duration::from_millis(500));
+        poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = poll.tick() => {
+                    let snapshot = filtered_hits(&lane, session_filter.as_deref(), &repo_filter, kind_filter.as_deref());
+                    for h in snapshot {
+                        if seen.insert(h.doc_id.clone()) {
+                            let event = build_timeline_event(&h);
+                            yield encode_sse(&event);
+                        }
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    yield Ok::<SseEvent, Infallible>(
+                        SseEvent::default()
+                            .event("heartbeat")
+                            .data(r#"{"ok":true}"#)
+                    );
+                }
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
+}
+
+/// Apply the same `(session_id, repo, kind)` filters the polling
+/// `/timeline/recent` handler uses, in the same order, so both
+/// surfaces agree on which envelopes are visible to a given query.
+/// Returns the result sorted oldest-first so the SSE stream emits
+/// envelopes in chronological order on first paint.
+fn filtered_hits(
+    lane: &crate::lanes::MemoryKeywordLane,
+    session_filter: Option<&str>,
+    repo_filter: &std::collections::HashSet<String>,
+    kind_filter: Option<&str>,
+) -> Vec<crate::lanes::LaneHit> {
+    let mut hits = collect_lane_hits(lane);
+    if let Some(sid) = session_filter {
+        hits.retain(|h| session_id_of(h) == Some(sid));
+    }
+    if !repo_filter.is_empty() {
+        hits.retain(|h| h.repo.as_deref().map(|r| repo_filter.contains(r)).unwrap_or(false));
+    }
+    if let Some(kind) = kind_filter {
+        hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
+    }
+    hits.sort_by(|a, b| a.ts.cmp(&b.ts));
+    hits
+}
+
+fn build_timeline_event(h: &crate::lanes::LaneHit) -> TimelineEvent {
+    TimelineEvent {
+        id: h.doc_id.clone(),
+        t: ts_to_clock_string(h.ts),
+        kind: symbol_to_kind(h.symbol.as_deref()).to_string(),
+        title: title_from_hit(h),
+        detail: clip(&h.text, 280),
+        repo: h.repo.clone(),
+        session_id: session_id_of(h).map(String::from),
+        model: "claude-code".to_string(),
+    }
+}
+
+fn encode_sse(event: &TimelineEvent) -> Result<SseEvent, Infallible> {
+    let payload = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
+    Ok(SseEvent::default()
+        .id(event.id.clone())
+        .event("timeline")
+        .data(payload))
 }
 
 fn title_from_hit(h: &crate::lanes::LaneHit) -> String {

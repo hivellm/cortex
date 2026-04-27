@@ -497,6 +497,7 @@ name = "cortex-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "axum",
  "axum-extra",
@@ -504,6 +505,7 @@ dependencies = [
  "clap",
  "cortex-core",
  "cortex-storage",
+ "futures",
  "nexus-graph-sdk",
  "reqwest 0.12.28",
  "serde",
@@ -513,6 +515,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tower",
  "tower-http",
  "tracing",
