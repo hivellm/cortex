@@ -83,8 +83,10 @@ async fn main() -> Result<()> {
         });
     }
 
+    let nexus_client = build_nexus_client().await;
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword.clone(),
+        nexus: nexus_client,
     };
 
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);
@@ -95,6 +97,35 @@ async fn main() -> Result<()> {
     let app = cortex_api::build_router_with(service, Some(dashboard_state));
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Build a Nexus client from `CORTEX_NEXUS_URL` (or `NEXUS_URL` as
+/// fallback) when set. Returns `None` when neither variable is set
+/// or when the URL is unreachable — the dashboard graph endpoint
+/// then degrades to the synthetic-from-lane fallback.
+async fn build_nexus_client() -> Option<Arc<nexus_sdk::NexusClient>> {
+    let url = std::env::var("CORTEX_NEXUS_URL")
+        .or_else(|_| std::env::var("NEXUS_URL"))
+        .ok()?;
+    let cfg = nexus_sdk::ClientConfig {
+        base_url: url.clone(),
+        api_key: std::env::var("CORTEX_NEXUS_API_KEY").ok(),
+        ..Default::default()
+    };
+    match nexus_sdk::NexusClient::with_config(cfg) {
+        Ok(client) => {
+            tracing::info!(url = %url, "nexus client connected");
+            Some(Arc::new(client))
+        }
+        Err(e) => {
+            tracing::warn!(
+                url = %url,
+                error = %e,
+                "nexus client unreachable; graph endpoint will return synthetic data",
+            );
+            None
+        }
+    }
 }
 
 fn init_tracing(verbose: bool) {

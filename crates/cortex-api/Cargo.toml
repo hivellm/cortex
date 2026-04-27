@@ -35,6 +35,7 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 
 synap-sdk = { workspace = true }
+nexus-graph-sdk = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]

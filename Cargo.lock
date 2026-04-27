@@ -475,6 +475,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-core",
+ "nexus-graph-sdk",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

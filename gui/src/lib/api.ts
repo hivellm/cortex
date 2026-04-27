@@ -177,7 +177,12 @@ export const api = {
   violations: () => getJson<ViolationRow[]>("/v1/dashboard/violations"),
   analyses: () => getJson<AnalysisRow[]>("/v1/dashboard/analyses"),
   toolsStats: () => getJson<ToolStat[]>("/v1/dashboard/tools/stats"),
-  graph: () => getJson<GraphPayload>("/v1/dashboard/graph"),
+  graph: (sessionId?: string, limit = 60) => {
+    const params = new URLSearchParams();
+    if (sessionId) params.set("session_id", sessionId);
+    params.set("limit", String(limit));
+    return getJson<GraphPayload>(`/v1/dashboard/graph?${params.toString()}`);
+  },
   status: () => getJson<StatusBody>("/v1/status"),
 };
 

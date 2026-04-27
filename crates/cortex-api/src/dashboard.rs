@@ -13,20 +13,30 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use nexus_sdk::{NexusClient, Value as NexusValue};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::lanes::MemoryKeywordLane;
 use crate::types::{IncludeField, Intent, QueryRequest, Scope};
 
-/// Shared state for dashboard routes — the same `MemoryKeywordLane`
-/// the archive loader seeds. Source of truth for `/v1/dashboard/*`
-/// until live spec-06 / spec-07 / spec-08 indexers ship.
+/// Shared state for dashboard routes — the seeded keyword lane plus
+/// an optional Nexus client used by the graph endpoint to run real
+/// Cypher queries against the captured graph instead of falling back
+/// to a synthetic Session→Turn→ToolCall layout.
 #[derive(Clone)]
 pub struct DashboardState {
     /// Keyword lane the archive_loader populates at boot + on
-    /// refresh.
+    /// refresh. Source of truth for the timeline / memory / decisions
+    /// / analyses / violations / tools endpoints until the live
+    /// spec-06 / spec-07 / spec-08 indexers ship.
     pub lane: Arc<MemoryKeywordLane>,
+    /// Optional Nexus client. When `Some`, the `/v1/dashboard/graph`
+    /// handler runs a Cypher MATCH against it; when `None`, the
+    /// handler falls back to deriving a synthetic graph from the
+    /// keyword lane so dev iterations without a live Nexus stay
+    /// usable.
+    pub nexus: Option<Arc<NexusClient>>,
 }
 
 /// Build the dashboard sub-router carrying the `/v1/dashboard/*` JSON
@@ -783,13 +793,270 @@ async fn sessions(State(state): State<DashboardState>) -> Response {
     (StatusCode::OK, Json(rows)).into_response()
 }
 
-async fn graph(State(state): State<DashboardState>) -> Response {
-    // Build a small graph from the seeded lane. We can reach Turn
-    // and ToolCall nodes via the captured hits + the
-    // `claude_code.turn_id` extras the spec-18 envelope writer
-    // stamps. Each turn anchors under a synthetic Session node so
-    // the renderer always shows a connected component.
-    let hits = collect_lane_hits(&state.lane);
+/// Query params for `/v1/dashboard/graph`.
+#[derive(Debug, Default, Deserialize)]
+pub struct GraphQuery {
+    /// Restrict to one session — when set, the Cypher MATCH anchors
+    /// at `Session {session_id: $sid}`. When unset, the handler
+    /// returns the most-recently-active subgraph capped at `limit`.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// Cap the total node count. Defaults to 60, max 200.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+async fn graph(
+    State(state): State<DashboardState>,
+    Query(params): Query<GraphQuery>,
+) -> Response {
+    let limit = params.limit.unwrap_or(60).clamp(1, 200);
+
+    // Live path: when a Nexus client is configured, run a real
+    // Cypher MATCH and convert the returned rows into the GraphPayload
+    // shape the GUI consumes. On any failure (transport, schema, empty
+    // result), fall through to the synthetic-from-lane fallback so a
+    // dev environment without a populated Nexus still renders
+    // something useful.
+    if let Some(nx) = state.nexus.as_ref() {
+        match query_nexus_graph(nx.as_ref(), params.session_id.as_deref(), limit).await {
+            Ok(payload) if !payload.nodes.is_empty() => {
+                return (StatusCode::OK, Json(payload)).into_response();
+            }
+            Ok(_) => {
+                tracing::debug!("nexus returned an empty graph; falling back to lane synthesis");
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "nexus graph query failed; falling back to lane synthesis"
+                );
+            }
+        }
+    }
+
+    let payload = synthesize_graph_from_lane(&state.lane, limit);
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
+/// Run a Cypher MATCH against Nexus and assemble a [`GraphPayload`].
+///
+/// Today the writer (spec-07 round-2) only emits identity edges
+/// (`HAS_TURN`, `HAS_TOOL_CALL`); the query reflects that. As the
+/// payload-parsing round lands `LINKED_TO` / `TOUCHED` / `OF` /
+/// `OBSERVED_IN`, the OPTIONAL MATCH clauses just need to grow — the
+/// row-decoding loop below already handles arbitrary node labels.
+async fn query_nexus_graph(
+    client: &NexusClient,
+    session_id: Option<&str>,
+    limit: usize,
+) -> anyhow::Result<GraphPayload> {
+    let cypher = if session_id.is_some() {
+        // Anchor at a specific session; OPTIONAL MATCH downstream so
+        // a turn/tool-less session still returns the session node.
+        r"
+        MATCH (s:Session {session_id: $sid})
+        OPTIONAL MATCH (s)-[r1:HAS_TURN]->(t:Turn)
+        OPTIONAL MATCH (t)-[r2:HAS_TOOL_CALL]->(tc:ToolCall)
+        RETURN s, t, tc, r1, r2
+        LIMIT $lim
+        "
+    } else {
+        // No session filter: pull whatever the writer has produced
+        // most recently — Nexus orders by internal node id which
+        // matches insertion order under our writer's append-only
+        // pattern.
+        r"
+        MATCH (s:Session)
+        OPTIONAL MATCH (s)-[r1:HAS_TURN]->(t:Turn)
+        OPTIONAL MATCH (t)-[r2:HAS_TOOL_CALL]->(tc:ToolCall)
+        RETURN s, t, tc, r1, r2
+        LIMIT $lim
+        "
+    };
+
+    let mut params: std::collections::HashMap<String, NexusValue> =
+        std::collections::HashMap::new();
+    params.insert("lim".to_string(), NexusValue::Int(limit as i64));
+    if let Some(sid) = session_id {
+        params.insert("sid".to_string(), NexusValue::String(sid.to_string()));
+    }
+
+    let result = client
+        .execute_cypher(cypher, Some(params))
+        .await
+        .map_err(|e| anyhow::anyhow!("nexus execute_cypher failed: {e}"))?;
+
+    let mut builder = GraphBuilder::default();
+    for row in &result.rows {
+        let cells = match row.as_array() {
+            Some(arr) => arr,
+            None => continue,
+        };
+        // Columns: s, t, tc, r1, r2
+        builder.add_node(cells.first(), "session");
+        builder.add_node(cells.get(1), "turn");
+        builder.add_node(cells.get(2), "tool_call");
+        builder.add_edge(cells.get(3));
+        builder.add_edge(cells.get(4));
+    }
+    Ok(builder.into_payload(limit))
+}
+
+/// Accumulator that dedups Nexus nodes/edges by id while turning
+/// untyped `serde_json::Value` cells into typed [`GraphNode`] /
+/// [`GraphEdge`]. Nexus returns nodes with shape
+/// `{ "labels": [..], "properties": {..}, "_id": .. }` and edges
+/// with shape `{ "type": "...", "start": .., "end": .., ... }` —
+/// both surface here as `Value::Object`.
+#[derive(Default)]
+struct GraphBuilder {
+    nodes: Vec<GraphNode>,
+    edges: Vec<GraphEdge>,
+    seen_nodes: std::collections::HashSet<String>,
+    seen_edges: std::collections::HashSet<String>,
+}
+
+impl GraphBuilder {
+    fn add_node(&mut self, cell: Option<&Value>, default_kind: &str) {
+        let obj = match cell.and_then(|v| v.as_object()) {
+            Some(o) => o,
+            None => return,
+        };
+        let props = obj
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let id = match props
+            .get("session_id")
+            .or_else(|| props.get("turn_id"))
+            .or_else(|| props.get("tool_call_id"))
+            .or_else(|| props.get("event_id"))
+            .or_else(|| obj.get("_id"))
+            .and_then(|v| v.as_str().map(String::from).or_else(|| Some(v.to_string())))
+        {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
+        };
+        if !self.seen_nodes.insert(id.clone()) {
+            return;
+        }
+        let kind = obj
+            .get("labels")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|v| v.as_str())
+            .map(label_to_kind)
+            .unwrap_or_else(|| default_kind.to_string());
+        let label = node_label(&kind, &props, &id);
+        // x/y are unused by the Cytoscape renderer (cose layout owns
+        // positioning) but kept in the shape so older clients still
+        // round-trip the response.
+        self.nodes.push(GraphNode {
+            id,
+            label,
+            x: 0,
+            y: 0,
+            kind,
+        });
+    }
+
+    fn add_edge(&mut self, cell: Option<&Value>) {
+        let obj = match cell.and_then(|v| v.as_object()) {
+            Some(o) => o,
+            None => return,
+        };
+        let from = obj.get("start").and_then(|v| v.as_str()).map(String::from);
+        let to = obj.get("end").and_then(|v| v.as_str()).map(String::from);
+        let rel = obj
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("REL")
+            .to_string();
+        let (from, to) = match (from, to) {
+            (Some(a), Some(b)) if !a.is_empty() && !b.is_empty() => (a, b),
+            _ => return,
+        };
+        let key = format!("{from}|{rel}|{to}");
+        if !self.seen_edges.insert(key) {
+            return;
+        }
+        self.edges.push(GraphEdge {
+            from,
+            to,
+            label: rel,
+        });
+    }
+
+    fn into_payload(mut self, limit: usize) -> GraphPayload {
+        if self.nodes.len() > limit {
+            self.nodes.truncate(limit);
+            let kept: std::collections::HashSet<&String> =
+                self.nodes.iter().map(|n| &n.id).collect();
+            self.edges
+                .retain(|e| kept.contains(&e.from) && kept.contains(&e.to));
+        }
+        GraphPayload {
+            nodes: self.nodes,
+            edges: self.edges,
+        }
+    }
+}
+
+/// Map a Nexus node label (`Session`, `Turn`, `ToolCall`, …) to the
+/// kebab kind the GUI consumes (`session`, `turn`, `tool_call`, …).
+fn label_to_kind(label: &str) -> String {
+    match label {
+        "Session" => "session".to_string(),
+        "Turn" => "turn".to_string(),
+        "ToolCall" => "tool_call".to_string(),
+        "AgentCall" => "agent_call".to_string(),
+        "Decision" => "decision".to_string(),
+        "Law" => "law".to_string(),
+        "LawViolation" => "violation".to_string(),
+        "Analysis" => "analysis".to_string(),
+        "Artifact" => "artifact".to_string(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
+/// Pick a human-readable label for a node based on the kind + props.
+fn node_label(
+    kind: &str,
+    props: &serde_json::Map<String, Value>,
+    fallback_id: &str,
+) -> String {
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| props.get(*k).and_then(|v| v.as_str()))
+            .map(|s| clip(s, 48))
+    };
+    match kind {
+        "session" => pick(&["title", "session_id"]).unwrap_or_else(|| "Session".to_string()),
+        "turn" => pick(&["text", "user_message"]).unwrap_or_else(|| "Turn".to_string()),
+        "tool_call" => pick(&["tool_name"])
+            .map(|s| format!("[{s}]"))
+            .unwrap_or_else(|| "ToolCall".to_string()),
+        "agent_call" => pick(&["agent_type"])
+            .map(|s| format!("Task: {s}"))
+            .unwrap_or_else(|| "AgentCall".to_string()),
+        "decision" => pick(&["title", "decision_id"]).unwrap_or_else(|| "Decision".to_string()),
+        "analysis" => pick(&["title", "analysis_id"]).unwrap_or_else(|| "Analysis".to_string()),
+        "law" => pick(&["title", "law_id"]).unwrap_or_else(|| "Law".to_string()),
+        "violation" => pick(&["law_id"]).unwrap_or_else(|| "Violation".to_string()),
+        "artifact" => pick(&["path", "name"]).unwrap_or_else(|| fallback_id.to_string()),
+        _ => fallback_id.to_string(),
+    }
+}
+
+/// Original lane-only graph synthesis — used as the fallback when no
+/// Nexus client is configured or the live query fails.
+fn synthesize_graph_from_lane(
+    lane: &MemoryKeywordLane,
+    limit: usize,
+) -> GraphPayload {
+    let hits = collect_lane_hits(lane);
 
     let mut nodes: Vec<GraphNode> = Vec::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
@@ -805,8 +1072,9 @@ async fn graph(State(state): State<DashboardState>) -> Response {
     let mut turns_seen: std::collections::BTreeMap<String, (i32, i32)> =
         std::collections::BTreeMap::new();
     let mut tool_calls_seen = 0i32;
+    let cap = limit.saturating_sub(1).min(12);
 
-    for (idx, h) in hits.iter().enumerate().take(12) {
+    for (idx, h) in hits.iter().enumerate().take(cap) {
         let kind = symbol_to_kind(h.symbol.as_deref());
         let label = title_from_hit(h);
 
@@ -839,9 +1107,6 @@ async fn graph(State(state): State<DashboardState>) -> Response {
                     y,
                     kind: kind.to_string(),
                 });
-                // Anchor the tool call under the most recent turn —
-                // when no turn is around, hang it directly off the
-                // session so the canvas stays connected.
                 let parent = turns_seen
                     .keys()
                     .next_back()
@@ -857,11 +1122,7 @@ async fn graph(State(state): State<DashboardState>) -> Response {
         }
     }
 
-    (
-        StatusCode::OK,
-        Json(GraphPayload { nodes, edges }),
-    )
-        .into_response()
+    GraphPayload { nodes, edges }
 }
 
 #[cfg(test)]
@@ -919,7 +1180,7 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -948,7 +1209,7 @@ mod tests {
             turn_hit("middle prompt", "Cortex", 200),
             turn_hit("newest prompt", "Cortex", 300),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -975,7 +1236,7 @@ mod tests {
             turn_hit("HNSW recall floor benchmark", "Vectorizer", 100),
             turn_hit("unrelated thoughts", "Cortex", 200),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -1001,7 +1262,7 @@ mod tests {
             turn_hit("a", "Cortex", 100),
             turn_hit("b", "Cortex", 200),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -1028,7 +1289,7 @@ mod tests {
                 .map(|i| turn_hit(&format!("p{i}"), "X", i))
                 .collect(),
         );
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -1053,7 +1314,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
             turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -1076,7 +1337,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
             turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -1103,7 +1364,7 @@ mod tests {
             tool_call_hit("Edit", "x", "Cortex", 200),
             turn_hit("note V", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane };
+        let state = DashboardState { lane, nexus: None };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
