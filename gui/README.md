@@ -83,6 +83,20 @@ session/repo/kind filters that flow through every list view.
 Header pill and sidebar footer reflect `/v1/status` — green when the
 daemon answers, grey when it does not.
 
+### Atoms
+
+Reusable visual primitives under `src/atoms/`:
+
+| Atom         | Where it lives                  | Used by                                                                                |
+|--------------|---------------------------------|----------------------------------------------------------------------------------------|
+| `Icon`       | `atoms/Icon.tsx`                | every view (sidebar nav, view actions, timeline kind glyphs, inspector chrome)         |
+| `Sparkline`  | `atoms/Sparkline.tsx`           | Sidebar workspace pulse (last-20-minutes events-per-min); Timeline stats grid          |
+| `Bars`       | `atoms/Bars.tsx`                | Tool analytics bar chart                                                               |
+| `SeverityBar`| `atoms/SeverityBar.tsx`         | Laws table + Law inspector severity column (3-segment info / notable / critical ramp) |
+| `Tag`        | `atoms/Tag.tsx`                 | every view — `default / ok / warn / critical / info / accent / solid` tone variants    |
+
+The atoms map 1:1 to `gui/assets/atoms.jsx` (the design source). Production code under `src/atoms/` ports the visual language but does not import from `gui/assets/`.
+
 ### Not yet wired
 
 - **SSE / WebSocket** for the timeline (still polls every 5s).

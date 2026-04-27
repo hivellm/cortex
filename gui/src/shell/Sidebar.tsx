@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { Icon, type IconName } from "../atoms/Icon";
+import { Sparkline } from "../atoms/Sparkline";
 import { api, type RepoCount, type SessionRow } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { useFilters } from "../lib/filters";
@@ -98,9 +99,27 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     setFilter("repo", next.length === 0 ? undefined : next);
   };
 
+  // 20-bucket events-per-min sparkline drawn under the Workspace
+  // label — gives the sidebar a live pulse cue without claiming a
+  // full stat tile (those land on the Timeline view's stats grid).
+  // Honest empty when the overview hasn't returned yet.
+  const epm = overview?.series.events_per_min ?? [];
+  const sparkVisible = !collapsed && epm.some((v) => v > 0);
+
   return (
     <aside className="sidebar">
       <div className="sidebar__group-label">Workspace</div>
+      {sparkVisible ? (
+        <div
+          className="sidebar__spark"
+          title={`Events per minute · last ${epm.length}m · current ${fmtNum(
+            epm[epm.length - 1] ?? 0,
+          )}`}
+          style={{ padding: "0 12px 6px", color: "var(--accent)" }}
+        >
+          <Sparkline data={epm} height={20} />
+        </div>
+      ) : null}
       {NAV.map((item) => {
         const c = item.countSource ? counts[item.countSource] : undefined;
         return (
