@@ -36,7 +36,7 @@ pub use meili_client::{
     TaskUid, UpsertReport,
 };
 pub use metrics::Metrics;
-pub use routing::{family_for, index_for, index_name, FAMILIES};
+pub use routing::{family_for, family_for_event, index_for, index_for_event, index_name, FAMILIES};
 pub use settings::{load_settings_v1, settings_v1_json, SETTINGS_V1};
 pub use worker::{
     BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher,

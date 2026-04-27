@@ -33,7 +33,10 @@ fn index_for_uses_prefix_repo_slug_and_family() {
         index_for("cortex-", Kind::LawViolation, repo),
         "cortex-cortex-governance"
     );
-    assert_eq!(index_for("cortex-", Kind::Artifact, repo), "cortex-cortex-docs");
+    // Kind-only routing for `Artifact` lands in `misc` — callers
+    // that want code-vs-docs split must use `index_for_event` so the
+    // path extension and classifier topics can drive the family.
+    assert_eq!(index_for("cortex-", Kind::Artifact, repo), "cortex-cortex-misc");
     assert_eq!(index_for("cortex-", Kind::Memory, repo), "cortex-cortex-misc");
     assert_eq!(
         index_for("staging-", Kind::Turn, Some("Tml")),
@@ -45,6 +48,10 @@ fn index_for_uses_prefix_repo_slug_and_family() {
 fn missing_repo_routes_to_unknown_slug() {
     assert_eq!(
         index_for("cortex-", Kind::Artifact, None),
-        "cortex-unknown-docs"
+        "cortex-unknown-misc"
+    );
+    assert_eq!(
+        index_for("cortex-", Kind::Turn, None),
+        "cortex-unknown-turns"
     );
 }

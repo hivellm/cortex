@@ -27,7 +27,7 @@ use crate::config::FulltextConfig;
 use crate::document::Document;
 use crate::meili_client::{MeiliClient, MeiliError};
 use crate::metrics::Metrics;
-use crate::routing::index_for;
+use crate::routing::index_for_event;
 use crate::EnrichedEvent;
 
 /// Per-batch report returned by [`FulltextIndexer::index_batch`].
@@ -106,11 +106,7 @@ impl FulltextIndexer for MeiliFulltextIndexer {
                         truncated = truncated.saturating_add(1);
                         self.metrics.incr_truncated();
                     }
-                    let index_name = index_for(
-                        &self.config.index_prefix,
-                        event.kind,
-                        event.context_repo.as_deref(),
-                    );
+                    let index_name = index_for_event(&self.config.index_prefix, event);
                     by_index.entry(index_name).or_default().push(*doc);
                 }
             }
