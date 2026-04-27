@@ -90,6 +90,24 @@ pub async fn run_repo(
     let mut files_dropped: u64 = 0;
     let mut events_published: u64 = 0;
     let mut resume_filter_active = last_file.is_some();
+    // Per-repo error tolerance. A single oversized JSON or a
+    // transient Synap blip used to abort the entire repo (and
+    // every repo after it on the CLI line). The bootstrap now
+    // tolerates up to 5% publish failures before re-arming the
+    // hard error path; below that ratio the error is logged +
+    // counted and the walk continues. The 20-event minimum keeps
+    // the ratio from tripping on the very first publish failure
+    // of a small repo.
+    let mut publishes_attempted: u64 = 0;
+    let mut publishes_failed: u64 = 0;
+    const PUBLISH_FAILURE_RATIO_LIMIT: f64 = 0.05;
+    const PUBLISH_FAILURE_FLOOR: u64 = 20;
+    let abort_on_failure = |attempted: u64, failed: u64| -> bool {
+        if attempted < PUBLISH_FAILURE_FLOOR {
+            return false;
+        }
+        (failed as f64) / (attempted as f64) > PUBLISH_FAILURE_RATIO_LIMIT
+    };
     for entry in &entries {
         match entry {
             WalkEntry::Dropped { reason, rel_path } => {
@@ -128,11 +146,19 @@ pub async fn run_repo(
                     None => continue,
                 };
                 metrics.incr_redactions(u64::from(evt.redactions));
+                publishes_attempted += 1;
                 if let Err(e) = publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run)
                     .await
                 {
                     metrics.incr_errors(&repo_id, "publish");
-                    return Err(anyhow::anyhow!("publish failed for {rel_path}: {e}"));
+                    publishes_failed += 1;
+                    tracing::warn!(error = %e, path = %rel_path, repo = %repo_id, "publish skipped");
+                    if abort_on_failure(publishes_attempted, publishes_failed) {
+                        return Err(anyhow::anyhow!(
+                            "publish failure ratio exceeded for {repo_id}: {publishes_failed}/{publishes_attempted} (last: {rel_path}: {e})"
+                        ));
+                    }
+                    continue;
                 }
                 events_published += 1;
                 metrics.incr_events_emitted(&repo_id, &evt.kind);
@@ -166,11 +192,25 @@ pub async fn run_repo(
                     metrics.incr_commits_walked(&repo_id);
                     let evt = emit_turn_historical(&repo_id, &session_id, c, &stream);
                     metrics.incr_redactions(u64::from(evt.redactions));
+                    publishes_attempted += 1;
                     if let Err(e) = publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run)
                         .await
                     {
                         metrics.incr_errors(&repo_id, "publish");
-                        return Err(anyhow::anyhow!("publish failed for commit {}: {e}", c.sha));
+                        publishes_failed += 1;
+                        tracing::warn!(
+                            error = %e,
+                            commit = %c.sha,
+                            repo = %repo_id,
+                            "publish skipped"
+                        );
+                        if abort_on_failure(publishes_attempted, publishes_failed) {
+                            return Err(anyhow::anyhow!(
+                                "publish failure ratio exceeded for {repo_id}: {publishes_failed}/{publishes_attempted} (last commit: {}: {e})",
+                                c.sha
+                            ));
+                        }
+                        continue;
                     }
                     events_published += 1;
                     metrics.incr_events_emitted(&repo_id, &evt.kind);
