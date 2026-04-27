@@ -37,7 +37,7 @@ use nexus_sdk::{ClientConfig, NexusClient, NexusError, QueryResult, Value as Sdk
 use thiserror::Error;
 
 use crate::config::{GraphConfig, GraphTransport};
-use crate::cypher::{edge_template_name, node_template_name, CypherTemplates};
+use crate::cypher::CypherTemplates;
 use crate::patch::{EdgeOp, GraphPatch, NodeOp};
 
 /// Per-transaction write counters returned by a successful
@@ -351,84 +351,51 @@ impl GraphClient for LiveNexusClient {
     async fn run_write_tx(
         &self,
         patch: &GraphPatch,
-        templates: &CypherTemplates,
+        _templates: &CypherTemplates,
     ) -> GraphClientResult<WriteStats> {
+        // Nexus 1.15.0 silently drops every write that touches an `UNWIND`
+        // row or that uses `$param` substitution inside a write clause:
+        // the HTTP call returns 200 with zero rows but nothing is
+        // persisted. (Reads with `$param` work fine; only the write
+        // substitution path is broken.) Until a Nexus version that fixes
+        // this ships, every write is rendered as a per-row Cypher
+        // statement with values escaped into the literal — so MERGE,
+        // SET, and the relationship-MATCH/MERGE pair all see literal
+        // values rather than parameter slots.
+        //
+        // The `_templates` registry is kept as a parameter for API
+        // stability; the live writer no longer reads from it. See task
+        // `phase1_graph_writer_nexus_compat` for the full diagnosis.
         let mut nodes_upserted = 0u32;
         let mut edges_upserted = 0u32;
 
-        // ---- nodes: group by label, dispatch one UNWIND-MERGE per label
-        // through the source-controlled template registry. Spec 07
-        // §Cypher generation: every Cypher write goes through a
-        // parametrized template loaded from a `.cypher` file — no
-        // string concat of user data.
-        let mut by_label: HashMap<&str, Vec<&NodeOp>> = HashMap::new();
-        for n in &patch.nodes {
-            by_label.entry(n.label.as_str()).or_default().push(n);
-        }
         // Iterate in deterministic order so retries hit the same Cypher
         // shape every time and integration-test diffs are stable.
-        let mut label_order: Vec<&str> = by_label.keys().copied().collect();
-        label_order.sort_unstable();
-        for label in label_order {
-            let nodes = &by_label[label];
-            let template_name = node_template_name(label);
-            let cypher = templates
-                .get(&template_name)
-                .ok_or_else(|| GraphClientError::MissingTemplate(template_name.clone()))?;
-            let rows: Vec<SdkValue> = nodes
-                .iter()
-                .map(|n| {
-                    let mut row = HashMap::with_capacity(2);
-                    row.insert("key".to_string(), SdkValue::String(n.natural_key.clone()));
-                    row.insert("props".to_string(), props_to_sdk_value(&n.props));
-                    SdkValue::Object(row)
-                })
-                .collect();
-            let mut params = HashMap::with_capacity(1);
-            params.insert("rows".to_string(), SdkValue::Array(rows));
-            self.execute_with_retry(cypher, Some(params)).await?;
-            nodes_upserted = nodes_upserted.saturating_add(nodes.len() as u32);
+        let mut nodes_sorted: Vec<&NodeOp> = patch.nodes.iter().collect();
+        nodes_sorted.sort_by(|a, b| {
+            a.label
+                .cmp(&b.label)
+                .then_with(|| a.natural_key.cmp(&b.natural_key))
+        });
+        for node in nodes_sorted {
+            let cypher = render_node_merge(node);
+            let result = self.execute_with_retry(&cypher, None).await?;
+            assert_write_landed(&result, "node", &node.label, &node.natural_key)?;
+            nodes_upserted = nodes_upserted.saturating_add(1);
         }
 
-        // ---- edges: group by (rel_type, from_label, to_label) ----
-        //
-        // Nexus 1.15 rejects `UNWIND ... MATCH ...` and `UNWIND ... WITH
-        // row MATCH ...` shapes with "Unsupported clause in write
-        // query" (verified via direct Cypher probes against
-        // hivehub/nexus:1.15.0). Every shipped edge template uses the
-        // accepted MERGE-MERGE-MERGE pattern (endpoints + relationship
-        // inside the same UNWIND row) which is equally idempotent and
-        // re-asserts the endpoint nodes (a no-op for keys already
-        // upserted in the node phase above).
-        let mut by_pair: HashMap<(&str, &str, &str), Vec<&EdgeOp>> = HashMap::new();
-        for e in &patch.edges {
-            by_pair
-                .entry((e.edge_type.as_str(), e.from_label.as_str(), e.to_label.as_str()))
-                .or_default()
-                .push(e);
-        }
-        let mut pair_order: Vec<(&str, &str, &str)> = by_pair.keys().copied().collect();
-        pair_order.sort_unstable();
-        for (rel_type, fl, tl) in pair_order {
-            let edges = &by_pair[&(rel_type, fl, tl)];
-            let template_name = edge_template_name(fl, rel_type, tl);
-            let cypher = templates
-                .get(&template_name)
-                .ok_or_else(|| GraphClientError::MissingTemplate(template_name.clone()))?;
-            let rows: Vec<SdkValue> = edges
-                .iter()
-                .map(|e| {
-                    let mut row = HashMap::with_capacity(3);
-                    row.insert("from".to_string(), SdkValue::String(e.from_key.clone()));
-                    row.insert("to".to_string(), SdkValue::String(e.to_key.clone()));
-                    row.insert("props".to_string(), props_to_sdk_value(&e.props));
-                    SdkValue::Object(row)
-                })
-                .collect();
-            let mut params = HashMap::with_capacity(1);
-            params.insert("rows".to_string(), SdkValue::Array(rows));
-            self.execute_with_retry(cypher, Some(params)).await?;
-            edges_upserted = edges_upserted.saturating_add(edges.len() as u32);
+        let mut edges_sorted: Vec<&EdgeOp> = patch.edges.iter().collect();
+        edges_sorted.sort_by(|a, b| {
+            (a.edge_type.as_str(), a.from_label.as_str(), a.to_label.as_str())
+                .cmp(&(b.edge_type.as_str(), b.from_label.as_str(), b.to_label.as_str()))
+                .then_with(|| (a.from_key.as_str(), a.to_key.as_str()).cmp(&(b.from_key.as_str(), b.to_key.as_str())))
+        });
+        for edge in edges_sorted {
+            let cypher = render_edge_merge(edge);
+            let result = self.execute_with_retry(&cypher, None).await?;
+            let pair = format!("{}->{}", edge.from_key, edge.to_key);
+            assert_write_landed(&result, "edge", &edge.edge_type, &pair)?;
+            edges_upserted = edges_upserted.saturating_add(1);
         }
 
         Ok(WriteStats {
@@ -438,22 +405,136 @@ impl GraphClient for LiveNexusClient {
     }
 }
 
-// ---------- JSON ↔ SDK Value bridge -------------------------------------
+// ---------- Per-row Cypher renderers (Nexus 1.15 compat) ----------------
 
-/// Convert a property bag (`BTreeMap<String, serde_json::Value>`) into
-/// the SDK's parametrized `Value::Object` shape. The graph patch types
-/// hold properties as `serde_json::Value` so they stay schema-agnostic
-/// across crates; the SDK accepts its own untagged enum for query
-/// parameters.
-fn props_to_sdk_value(
-    props: &std::collections::BTreeMap<String, serde_json::Value>,
-) -> SdkValue {
-    let mut map = HashMap::with_capacity(props.len());
-    for (k, v) in props {
-        map.insert(k.clone(), json_to_sdk_value(v));
+/// Render one node-MERGE statement with every value already escaped into
+/// the Cypher string literal. Format:
+///
+/// ```text
+/// MERGE (n:<Label> { <key_field>: "<key>" }) SET n.prop_a = "v", n.prop_b = 42 RETURN count(n) AS written
+/// ```
+///
+/// `RETURN count(n) AS written` lets the caller assert the write
+/// actually landed (Nexus 1.15 returns 0 for the silently-dropped
+/// shapes; a real persist returns 1).
+fn render_node_merge(node: &NodeOp) -> String {
+    let key_field = LiveNexusClient::key_field_for(&node.label);
+    let mut cy = format!(
+        "MERGE (n:{label} {{ {kf}: {key} }})",
+        label = node.label,
+        kf = key_field,
+        key = cypher_string_literal(&node.natural_key),
+    );
+    if !node.props.is_empty() {
+        cy.push_str(" SET ");
+        let mut first = true;
+        for (k, v) in &node.props {
+            if !first {
+                cy.push_str(", ");
+            }
+            first = false;
+            cy.push_str(&format!("n.{k} = {}", value_to_cypher_literal(v)));
+        }
     }
-    SdkValue::Object(map)
+    cy.push_str(" RETURN count(n) AS written");
+    cy
 }
+
+/// Render one edge-MERGE statement (MATCH endpoints, MERGE the
+/// relationship, optional SET on the relationship). Endpoints must
+/// already exist — the writer always upserts nodes before edges.
+fn render_edge_merge(edge: &EdgeOp) -> String {
+    let from_kf = LiveNexusClient::key_field_for(&edge.from_label);
+    let to_kf = LiveNexusClient::key_field_for(&edge.to_label);
+    let mut cy = format!(
+        "MATCH (a:{fl} {{ {fkf}: {fk} }}), (b:{tl} {{ {tkf}: {tk} }}) \
+         MERGE (a)-[r:{rt}]->(b)",
+        fl = edge.from_label,
+        fkf = from_kf,
+        fk = cypher_string_literal(&edge.from_key),
+        tl = edge.to_label,
+        tkf = to_kf,
+        tk = cypher_string_literal(&edge.to_key),
+        rt = edge.edge_type,
+    );
+    if !edge.props.is_empty() {
+        cy.push_str(" SET ");
+        let mut first = true;
+        for (k, v) in &edge.props {
+            if !first {
+                cy.push_str(", ");
+            }
+            first = false;
+            cy.push_str(&format!("r.{k} = {}", value_to_cypher_literal(v)));
+        }
+    }
+    cy.push_str(" RETURN count(r) AS written");
+    cy
+}
+
+/// Encode a string as a Cypher double-quoted string literal. Reuses
+/// `serde_json` for the escape pass — JSON's escape rules are a strict
+/// subset of Cypher's, so a JSON-encoded string is always a valid
+/// Cypher literal.
+fn cypher_string_literal(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// Encode a `serde_json::Value` as a Cypher literal. Primitives map
+/// 1:1; arrays/objects are flattened to their JSON encoding wrapped as
+/// a string literal so Nexus 1.15 doesn't choke on nested structures.
+fn value_to_cypher_literal(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => cypher_string_literal(s),
+        serde_json::Value::Array(items) => {
+            // Flatten primitive-only arrays as Cypher lists; otherwise
+            // fall back to a JSON-string literal.
+            if items.iter().all(|i| {
+                matches!(
+                    i,
+                    serde_json::Value::Null
+                        | serde_json::Value::Bool(_)
+                        | serde_json::Value::Number(_)
+                        | serde_json::Value::String(_)
+                )
+            }) {
+                let inner: Vec<String> = items.iter().map(value_to_cypher_literal).collect();
+                format!("[{}]", inner.join(", "))
+            } else {
+                cypher_string_literal(&serde_json::to_string(v).unwrap_or_default())
+            }
+        }
+        serde_json::Value::Object(_) => {
+            cypher_string_literal(&serde_json::to_string(v).unwrap_or_default())
+        }
+    }
+}
+
+/// Confirm a write Cypher's RETURN actually produced a row. Nexus 1.15
+/// quirk: write queries don't surface meaningful result data — even on
+/// success, `RETURN count(n) AS written` and `RETURN n` both come back
+/// as `[[null]]`. But silently-dropped writes (UNWIND-write, $param-write
+/// substitution) come back with an *empty* `rows` array. So
+/// `rows.is_empty()` is the actual signal that nothing landed; the cell
+/// value is irrelevant.
+fn assert_write_landed(
+    result: &QueryResult,
+    op: &str,
+    op_kind: &str,
+    op_key: &str,
+) -> GraphClientResult<()> {
+    if result.rows.is_empty() {
+        return Err(GraphClientError::Nexus(format!(
+            "{op} write not persisted (kind={op_kind}, key={op_key}, no rows)"
+        )));
+    }
+    Ok(())
+}
+
+// ---------- JSON ↔ SDK Value bridge -------------------------------------
 
 /// Convert one [`serde_json::Value`] into the SDK's [`SdkValue`].
 #[doc(hidden)]

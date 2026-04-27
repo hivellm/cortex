@@ -72,6 +72,14 @@ pub struct EnrichedEvent {
     /// events that have no parent (like `turn.start` itself).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_event_id: Option<String>,
+    /// Owning session id from the canonical envelope. Carried as a
+    /// dedicated field (rather than buried inside `redacted_payload`)
+    /// because every downstream worker — graph mapper, embedder
+    /// metadata, dashboard session aggregator — anchors on it. `None`
+    /// when the upstream emitter omitted the field; the graph writer
+    /// then falls back to a synthetic per-event session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 /// Per-event failure surfaced in an [`EmbedReport`].
@@ -190,11 +198,15 @@ impl VectorizerEmbedder {
         client: Arc<dyn VectorizerClient>,
         metrics: Arc<Metrics>,
     ) -> Self {
+        let collection_schema = CollectionSchema {
+            dim: config.vector_dim,
+            ..CollectionSchema::default()
+        };
         Self {
             config,
             client,
             metrics,
-            collection_schema: CollectionSchema::default(),
+            collection_schema,
             code: CodeChunker::new(),
             doc: DocChunker::new(),
             fallback: FallbackChunker::default(),
@@ -274,12 +286,16 @@ impl Embedder for VectorizerEmbedder {
                     .chunk_text(event, &raw, None, 0, prefix);
             }
 
-            // Relabel collections so they honour the configured prefix (the
-            // chunker trait impls default to `cortex-`).
-            let target_collection =
-                collection_for(&event.kind, &self.config.collection_prefix);
+            // Relabel collections so they honour the configured prefix.
+            // For Kind::Artifact we route per-chunk on `ChunkSource`
+            // (Code → cortex-code, Doc → cortex-docs); other kinds use
+            // the event-level table.
             for chunk in &mut chunks {
-                chunk.collection = target_collection.clone();
+                chunk.collection = crate::routing::collection_for_chunk(
+                    &event.kind,
+                    &chunk.metadata.source,
+                    &self.config.collection_prefix,
+                );
             }
 
             // Summary substitution pass.

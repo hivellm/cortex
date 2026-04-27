@@ -177,6 +177,95 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
             class,
         });
     }
+
+    // Second pass: rescue files that the gitignore-aware walk would
+    // have excluded but that the user explicitly opted in to via
+    // `cortex.toml`'s `[cortex.decisions]`, `[cortex.laws]`, or
+    // `[cortex.memories]` blocks. The default walk above respects
+    // `.gitignore`, which in many Hive repos blanket-excludes
+    // `.rulebook/*` while only whitelisting `specs/` and `tasks/` —
+    // dropping ADRs, laws, and memory imports on the floor. This
+    // rescue walk runs without gitignore filtering and only retains
+    // paths that match a promote / import pattern.
+    let already_seen: HashSet<String> = out
+        .iter()
+        .filter_map(|e| match e {
+            WalkEntry::Accepted { rel_path, .. } => Some(rel_path.clone()),
+            WalkEntry::Dropped { .. } => None,
+        })
+        .collect();
+    let mut rescue = WalkBuilder::new(repo_root);
+    rescue
+        .standard_filters(false)
+        .git_ignore(false)
+        .git_exclude(false)
+        .git_global(false)
+        .hidden(false);
+    for entry in rescue.build().flatten() {
+        let path = entry.path();
+        if path == repo_root {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(repo_root) else {
+            continue;
+        };
+        let rel_path = rel
+            .to_string_lossy()
+            .replace('\\', "/")
+            .trim_start_matches('/')
+            .to_string();
+        if already_seen.contains(&rel_path) {
+            continue;
+        }
+        // Skip anything that doesn't match a promotion / import pattern
+        // — the rescue walk should never re-include random files the
+        // user did not opt in to.
+        let promoted = matches_any(&cfg.decisions.promote_patterns, &rel_path)
+            || matches_any(&cfg.laws.promote_patterns, &rel_path)
+            || matches_any(&cfg.memories.import_files, &rel_path);
+        if !promoted {
+            continue;
+        }
+        // Honour the same extension drop + oversize gates as the main
+        // walk so a 12 MB binary the user happened to whitelist
+        // doesn't blow past spec 09's safety nets.
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        if let Some(ref e) = ext {
+            if extension_drop.contains(e) {
+                out.push(WalkEntry::Dropped {
+                    rel_path,
+                    reason: "extension",
+                });
+                continue;
+            }
+        }
+        let size_bytes = metadata.len();
+        if size_bytes > MAX_FILE_BYTES {
+            out.push(WalkEntry::Dropped {
+                rel_path,
+                reason: "oversize",
+            });
+            continue;
+        }
+        let class = classify_path(&rel_path, cfg);
+        out.push(WalkEntry::Accepted {
+            path: path.to_path_buf(),
+            rel_path,
+            size_bytes,
+            class,
+        });
+    }
+
     out
 }
 

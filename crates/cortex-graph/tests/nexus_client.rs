@@ -232,35 +232,16 @@ fn json_to_sdk_value_round_trips_primitives() {
     }
 }
 
-#[tokio::test]
-async fn missing_node_template_surfaces_as_hard_error() {
-    // The shipped registry is loaded but we ask the writer to upsert
-    // an unknown label so it must dispatch to a template that does
-    // not exist. Live SDK never gets called — failure happens at
-    // dispatch time.
-    let cfg = GraphConfig::default();
-    let Ok(client) = LiveNexusClient::new(cfg) else {
-        // SDK construction can require a reachable URL on some
-        // platforms; if so, treat as covered elsewhere.
-        return;
-    };
-    let cypher_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("cypher");
-    let templates = load_from_dir(&cypher_dir).expect("load shipped cypher dir");
-    let patch = GraphPatch {
-        nodes: vec![node("BrandNewLabel", "x")],
-        edges: vec![],
-    };
-    let err = client
-        .run_write_tx(&patch, &templates)
-        .await
-        .expect_err("missing template must error");
-    match err {
-        GraphClientError::MissingTemplate(name) => {
-            assert_eq!(name, "node_brand_new_label");
-        }
-        other => panic!("expected MissingTemplate, got {other:?}"),
-    }
-}
+// Removed: `missing_node_template_surfaces_as_hard_error`.
+//
+// The writer no longer dispatches through the `.cypher` template
+// registry — Nexus 1.15.0 silently drops UNWIND-write and $param-write
+// substitutions, so writes are now rendered as per-row Cypher with
+// values escaped into the literal (see
+// `phase1_graph_writer_nexus_compat`). The "missing template" error
+// path is unreachable in this code path; the corresponding live-Nexus
+// failure mode is now `GraphClientError::Nexus("... write not
+// persisted ...")` and is covered by the live-stack probes below.
 
 // ---- env-gated live probes (Round 5 owns full IT) -----------------
 

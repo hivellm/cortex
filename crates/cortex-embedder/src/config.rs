@@ -24,6 +24,12 @@ pub struct EmbedderConfig {
     pub vectorizer_password: Option<String>,
     /// Collection-name prefix (deployment namespace).
     pub collection_prefix: String,
+    /// Vector dimension to provision new collections with. Must match
+    /// what the Vectorizer server's embedding provider produces — 512
+    /// for the BM25 fallback, 768 for the production FastEmbed
+    /// configuration. Mismatched values lead to every insert failing
+    /// `invalid_dimension` at the server.
+    pub vector_dim: u32,
 }
 
 impl Default for EmbedderConfig {
@@ -38,6 +44,7 @@ impl Default for EmbedderConfig {
             vectorizer_user: "admin".to_string(),
             vectorizer_password: None,
             collection_prefix: "cortex".to_string(),
+            vector_dim: 768,
         }
     }
 }
@@ -64,6 +71,7 @@ impl EmbedderConfig {
             vectorizer_password: env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok(),
             collection_prefix: env::var("CORTEX_EMBEDDER_COLLECTION_PREFIX")
                 .unwrap_or(def.collection_prefix),
+            vector_dim: parse_u32("CORTEX_EMBEDDER_DIM", def.vector_dim),
         }
     }
 }

@@ -528,8 +528,29 @@ impl VectorizerClient for LiveVectorizerClient {
             tracing::warn!(
                 collection,
                 total_failed,
+                total_written,
                 "some vectorizer upsert operations failed"
             );
+        }
+        // If the server rejected every entry in the batch (e.g. dim
+        // mismatch on `/insert_texts`), the SDK still returns Ok; the
+        // failures are reported per-entry. Propagate that as a transport
+        // error so the worker's `EmbedError::Vectorizer` path fires
+        // instead of silently treating it as success.
+        if total_written == 0 && total_failed > 0 {
+            let detail = chunks
+                .iter()
+                .next()
+                .map(|c| {
+                    format!(
+                        "all {} entries failed (collection={}, sample_dedup_key={})",
+                        total_failed, collection, c.dedup_key
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!("all {total_failed} entries failed (collection={collection})")
+                });
+            return Err(VectorizerClientError::Other(detail));
         }
         // `deduped` on the wire stays zero: the v3 server response rolls
         // dedup hits into `inserted` and does not surface a separate count.
