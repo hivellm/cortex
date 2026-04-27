@@ -83,6 +83,15 @@ session/repo/kind filters that flow through every list view.
 Header pill and sidebar footer reflect `/v1/status` — green when the
 daemon answers, grey when it does not.
 
+### Inspectors
+
+Two slide-in inspectors share the chrome (`.inspector` + `.inspector-backdrop` in `styles.css`); ESC and outside-click close both.
+
+| Inspector       | Source                | Sections                                                                                                  |
+|-----------------|-----------------------|-----------------------------------------------------------------------------------------------------------|
+| Event inspector | `views/Timeline.tsx`  | Detail · Envelope (id / kind / session / repo / model / at) · **Payload (redacted)** (full JSON via `<pre class="code-block">`) · **Linked** (DEC- / ANL- ids found in the title surface as clickable cards; "no linked decisions or analyses" otherwise — no fabricated links). |
+| Law inspector   | `views/Laws.tsx`      | Head (severity icon + id + severity / blocking tag) · Definition (synthesized YAML frontmatter from the row) · 7-day stats (`applies / violations / rate / action`) · Recent violations (subset of `/v1/dashboard/violations` filtered by `law_id`).                          |
+
 ### Atoms
 
 Reusable visual primitives under `src/atoms/`:
