@@ -56,8 +56,8 @@ async fn user_prompt_returns_empty_additional_context_on_unreachable_api() {
         dispatcher,
     )
     .await;
-    // Empty fail-open ⇒ {} reply ⇒ no additionalContext field.
-    assert!(resp.additional_context.is_none());
+    // Empty fail-open ⇒ {} reply ⇒ no hookSpecificOutput field.
+    assert!(resp.hook_specific_output.is_none());
     assert!(resp.permission_decision.is_none());
     // UserPromptSubmit is publishable as a canonical `turn` event.
     assert_eq!(publisher.count().await, 1);
@@ -145,13 +145,43 @@ async fn pre_tool_use_denies_on_critical_violation_from_mock_api() {
 
 #[tokio::test]
 async fn user_prompt_returns_bundle_when_api_responds() {
+    // Mock a real-shaped QueryResponse with one active law and one
+    // decision. The pre-thinking pipeline formats it to Markdown and
+    // hands the string back as `hookSpecificOutput.additionalContext`.
     let mock_server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/query"))
         .respond_with(
             wiremock::ResponseTemplate::new(200).set_body_json(json!({
-                "decisions": ["DEC-0042"],
-                "active_laws": ["LAW-007"]
+                "intent": "pre_change_context",
+                "query_id": "01HX0DEMOQUERY0000000001",
+                "scope_resolved": { "repos": [], "topics": [] },
+                "results": {
+                    "snippets": [],
+                    "decisions": [
+                        {
+                            "rank": 1,
+                            "id": "DEC-0042",
+                            "title": "Use Meilisearch for keyword lane",
+                            "status": "accepted",
+                            "ts": 1_777_000_000_000_i64,
+                            "score": 0.91,
+                            "links": []
+                        }
+                    ],
+                    "violations": [],
+                    "graph_neighbors": [],
+                    "similar_turns": []
+                },
+                "laws_active": [
+                    {
+                        "id": "LAW-007",
+                        "severity": "critical",
+                        "title": "No --no-verify on commits"
+                    }
+                ],
+                "budget": { "used_ms": 12, "cap_ms": 600, "cache": "miss" },
+                "debug": { "lanes": {}, "errors": {} }
             })),
         )
         .mount(&mock_server)
@@ -171,9 +201,17 @@ async fn user_prompt_returns_bundle_when_api_responds() {
         dispatcher,
     )
     .await;
-    let bundle = resp.additional_context.expect("bundle present");
-    assert_eq!(bundle["decisions"][0], "DEC-0042");
-    assert_eq!(bundle["active_laws"][0], "LAW-007");
+    let bundle = resp
+        .hook_specific_output
+        .expect("hookSpecificOutput present");
+    assert_eq!(bundle.hook_event_name, "UserPromptSubmit");
+    let md = &bundle.additional_context;
+    assert!(md.contains("LAW-007"), "bundle missing law: {md}");
+    assert!(md.contains("DEC-0042"), "bundle missing decision: {md}");
+    assert!(
+        md.starts_with("<!-- cortex: pre_change_context"),
+        "bundle missing cortex header: {md}"
+    );
 }
 
 #[tokio::test]
@@ -187,7 +225,7 @@ async fn malformed_hook_input_replies_empty_and_publishes_nothing() {
         dispatcher,
     )
     .await;
-    assert!(resp.additional_context.is_none());
+    assert!(resp.hook_specific_output.is_none());
     assert!(resp.permission_decision.is_none());
     assert_eq!(publisher.count().await, 0);
 }
@@ -201,7 +239,7 @@ async fn unknown_hook_kind_replies_empty() {
         dispatcher,
     )
     .await;
-    assert!(resp.additional_context.is_none());
+    assert!(resp.hook_specific_output.is_none());
     assert_eq!(publisher.count().await, 0);
 }
 
@@ -295,10 +333,29 @@ async fn hook_response_serializes_to_protocol_shape() {
     let empty = serde_json::to_value(HookResponse::empty()).unwrap();
     assert_eq!(empty.as_object().unwrap().len(), 0);
 
-    let bundle = serde_json::to_value(HookResponse::additional_context(json!({ "k": 1 }))).unwrap();
-    assert_eq!(bundle["additional_context"]["k"], 1);
+    let bundle = serde_json::to_value(HookResponse::additional_context(
+        "## Active laws\n- LAW-007: blah\n".to_string(),
+    ))
+    .unwrap();
+    assert_eq!(
+        bundle["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert!(bundle["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap()
+        .contains("LAW-007"));
+    assert!(bundle.get("additional_context").is_none(),
+        "snake_case field must not be emitted");
+
+    let empty_bundle =
+        serde_json::to_value(HookResponse::additional_context(String::new())).unwrap();
+    assert_eq!(empty_bundle.as_object().unwrap().len(), 0,
+        "empty bundle must short-circuit to {{}}");
 
     let deny = serde_json::to_value(HookResponse::deny("LAW-007 ...")).unwrap();
-    assert_eq!(deny["permission_decision"], "deny");
-    assert_eq!(deny["permission_decision_reason"], "LAW-007 ...");
+    assert_eq!(deny["permissionDecision"], "deny");
+    assert_eq!(deny["permissionDecisionReason"], "LAW-007 ...");
+    assert!(deny.get("permission_decision").is_none(),
+        "snake_case field must not be emitted");
 }

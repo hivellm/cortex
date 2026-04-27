@@ -36,6 +36,6 @@ pub use metrics::Metrics;
 pub use publisher::{spawn_flusher, HttpPublisher, MemoryPublisher, Publisher};
 pub use session::{SessionManager, SessionState};
 pub use sync_paths::{
-    LawCheckRequest, LawCheckResult, PreThinkingRequest, PreThinkingResult, SyncClient, Violation,
+    LawCheckRequest, LawCheckResult, PreThinkingResult, SyncClient, Violation,
 };
 pub use wal::{OverflowWal, WalError};

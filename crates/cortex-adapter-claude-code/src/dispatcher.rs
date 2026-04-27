@@ -16,12 +16,32 @@ use crate::publisher::Publisher;
 use crate::session::SessionManager;
 use crate::sync_paths::SyncClient;
 
-/// Protocol response printed to stdout by the hook shim.
+/// `hookSpecificOutput` payload for `UserPromptSubmit`. Claude Code
+/// looks up `additionalContext` (a string) under this object and
+/// injects it as a `<additional-context>` block in the model's
+/// system prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookSpecificOutput {
+    /// Echoed event name. Claude Code uses this to disambiguate the
+    /// payload when multiple hook kinds share a struct.
+    pub hook_event_name: String,
+    /// Markdown bundle to inject into the model context. Empty
+    /// string is allowed; Claude Code drops empty bundles silently.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub additional_context: String,
+}
+
+/// Protocol response printed to stdout by the hook shim. Field
+/// names follow Claude Code's hook contract verbatim
+/// (`hookSpecificOutput`, `permissionDecision`,
+/// `permissionDecisionReason`).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct HookResponse {
-    /// `additionalContext` bundle (UserPromptSubmit only).
+    /// `hookSpecificOutput.additionalContext` (UserPromptSubmit only).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub additional_context: Option<Value>,
+    pub hook_specific_output: Option<HookSpecificOutput>,
     /// `permissionDecision` (PreToolUse only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_decision: Option<String>,
@@ -36,10 +56,18 @@ impl HookResponse {
         Self::default()
     }
 
-    /// Build a UserPromptSubmit response.
-    pub fn additional_context(value: Value) -> Self {
+    /// Build a UserPromptSubmit response from a Markdown bundle. An
+    /// empty bundle short-circuits to [`HookResponse::empty`] so we
+    /// never emit a `hookSpecificOutput` block with no content.
+    pub fn additional_context(bundle: String) -> Self {
+        if bundle.is_empty() {
+            return Self::empty();
+        }
         Self {
-            additional_context: Some(value),
+            hook_specific_output: Some(HookSpecificOutput {
+                hook_event_name: "UserPromptSubmit".into(),
+                additional_context: bundle,
+            }),
             permission_decision: None,
             permission_decision_reason: None,
         }
@@ -48,7 +76,7 @@ impl HookResponse {
     /// Build a PreToolUse `deny` response.
     pub fn deny(reason: impl Into<String>) -> Self {
         Self {
-            additional_context: None,
+            hook_specific_output: None,
             permission_decision: Some("deny".into()),
             permission_decision_reason: Some(reason.into()),
         }
@@ -160,18 +188,9 @@ impl Dispatcher {
                     .unwrap_or_default();
                 let result = self
                     .sync
-                    .pre_thinking(&prompt, session_id, frame.cwd.as_deref())
+                    .pre_thinking(&prompt, session_id, turn_id, frame.cwd.as_deref())
                     .await;
-                if result.fail_open
-                    && result
-                        .additional_context
-                        .as_object()
-                        .map(|m| m.is_empty())
-                        .unwrap_or(false)
-                {
-                    return HookResponse::empty();
-                }
-                HookResponse::additional_context(result.additional_context)
+                HookResponse::additional_context(result.bundle)
             }
             HookKind::PreToolUse => {
                 let tool_name =

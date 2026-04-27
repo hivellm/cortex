@@ -2,22 +2,29 @@
 //!
 //! Spec 10 §Synchronous paths: two hooks block on `cortex-api`:
 //!
-//! - `UserPromptSubmit` calls `/v1/query?intent=pre_change_context`
-//!   and returns the bundle as `additionalContext`.
+//! - `UserPromptSubmit` drives `cortex_pre_thinking::pipeline::run`,
+//!   which POSTs a real `cortex_api::QueryRequest` to `/v1/query`,
+//!   formats the response into a Markdown bundle, and clips it to the
+//!   configured budget. The bundle string ships back as
+//!   `additionalContext`.
 //! - `PreToolUse` calls `/v1/laws/check`; critical violations route
 //!   to `permissionDecision: deny`.
 //!
 //! Both fail-open on timeout / error: the session continues
-//! unchanged. `cortex-api` doesn't exist yet (specs 11 + 13), so the
-//! current implementation issues the request and degrades silently
-//! — the contract is right, the backend will land with spec 11.
+//! unchanged.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cortex_api::{QueryRequest, QueryResponse};
+use cortex_pre_thinking::pipeline::{
+    run as pre_thinking_run, ClosureQueryFn, PreThinkingBudget, PreThinkingInput,
+};
+use cortex_pre_thinking::Metrics as PreThinkingMetrics;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::config::AdapterSection;
 use crate::metrics::Metrics;
@@ -25,9 +32,10 @@ use crate::metrics::Metrics;
 /// Result of the pre-thinking sync path.
 #[derive(Debug, Clone, Default)]
 pub struct PreThinkingResult {
-    /// Bundle the daemon returns as `additionalContext`. Empty on
-    /// timeout / error.
-    pub additional_context: Value,
+    /// Markdown bundle the daemon returns as `additionalContext`.
+    /// Empty on timeout, error, or when the pipeline produced no
+    /// content for the active intent.
+    pub bundle: String,
     /// `true` when the call was throttled by `enabled = false` or
     /// timed out and we returned the empty bundle.
     pub fail_open: bool,
@@ -71,19 +79,9 @@ pub struct LawCheckRequest<'a> {
     pub turn_id: Option<&'a str>,
 }
 
-/// Outbound shape of the `/v1/query?intent=pre_change_context` body.
-#[derive(Debug, Clone, Serialize)]
-pub struct PreThinkingRequest<'a> {
-    /// User prompt verbatim (already redacted).
-    pub prompt: &'a str,
-    /// Session id for correlation.
-    pub session_id: &'a str,
-    /// Working directory at the time the hook fired.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<&'a str>,
-    /// Maximum bundle size in bytes.
-    pub max_bundle_bytes: u64,
-}
+// Pre-thinking outbound body is `cortex_api::QueryRequest`. The
+// adapter does not declare its own request struct so the wire shape
+// can never drift from the API contract.
 
 /// Sync-path helper that wraps the HTTP client + the hook-budget
 /// timeout knobs.
@@ -118,65 +116,81 @@ impl SyncClient {
     }
 
     /// Run the pre-thinking sync call. Always returns a value —
-    /// fail-open on any error.
+    /// fail-open on any error. Drives the spec-12
+    /// `cortex_pre_thinking::pipeline::run` pipeline so the wire shape
+    /// matches `cortex_api::QueryRequest` and the resulting Markdown
+    /// bundle is already clipped to the budget.
     pub async fn pre_thinking(
         &self,
         prompt: &str,
         session_id: &str,
+        turn_id: Option<&str>,
         cwd: Option<&str>,
     ) -> PreThinkingResult {
         if !self.pre_thinking_enabled {
             return PreThinkingResult {
-                additional_context: json!({}),
+                bundle: String::new(),
                 fail_open: true,
             };
         }
-        let started = Instant::now();
-        let url = format!("{}/v1/query?intent=pre_change_context", self.api_endpoint);
-        let req = PreThinkingRequest {
-            prompt,
+        let timeout = self.pre_thinking_timeout;
+        let max_bytes = self.pre_thinking_max_bytes;
+        let url = format!("{}/v1/query", self.api_endpoint.trim_end_matches('/'));
+        let http = self.client.clone();
+        let metrics = self.metrics.clone();
+
+        let query_fn = Arc::new(ClosureQueryFn(move |req: QueryRequest| {
+            let url = url.clone();
+            let http = http.clone();
+            let metrics = metrics.clone();
+            async move {
+                let send_started = Instant::now();
+                let resp = tokio::time::timeout(
+                    timeout,
+                    http.post(&url).json(&req).send(),
+                )
+                .await;
+                let latency_ms =
+                    u32::try_from(send_started.elapsed().as_millis()).unwrap_or(u32::MAX);
+                metrics.observe_sync_latency("UserPromptSubmit", latency_ms);
+                match resp {
+                    Err(_elapsed) => {
+                        metrics.incr_sync_timeout("UserPromptSubmit");
+                        None
+                    }
+                    Ok(Err(_e)) => None,
+                    Ok(Ok(resp)) if !resp.status().is_success() => None,
+                    Ok(Ok(resp)) => resp.json::<QueryResponse>().await.ok(),
+                }
+            }
+        }));
+
+        let cwd_path = cwd
+            .map(Path::new)
+            .unwrap_or_else(|| Path::new("."));
+        let budget_bytes = u32::try_from(max_bytes).unwrap_or(u32::MAX);
+        let budget_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
+        let input = PreThinkingInput {
             session_id,
-            cwd,
-            max_bundle_bytes: self.pre_thinking_max_bytes,
-        };
-        let resp = tokio::time::timeout(
-            self.pre_thinking_timeout,
-            self.client.post(&url).json(&req).send(),
-        )
-        .await;
-        let latency_ms =
-            u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
-        self.metrics
-            .observe_sync_latency("UserPromptSubmit", latency_ms);
-        match resp {
-            Err(_elapsed) => {
-                self.metrics.incr_sync_timeout("UserPromptSubmit");
-                PreThinkingResult {
-                    additional_context: json!({}),
-                    fail_open: true,
-                }
-            }
-            Ok(Err(_e)) => PreThinkingResult {
-                additional_context: json!({}),
-                fail_open: true,
+            turn_id: turn_id.unwrap_or(""),
+            user_prompt: prompt,
+            cwd: cwd_path,
+            recent_files: &[],
+            budget: PreThinkingBudget {
+                bundle_bytes: budget_bytes,
+                time_ms: budget_ms,
             },
-            Ok(Ok(resp)) => {
-                if !resp.status().is_success() {
-                    return PreThinkingResult {
-                        additional_context: json!({}),
-                        fail_open: true,
-                    };
-                }
-                let body: Value =
-                    resp.json().await.unwrap_or(Value::Object(Default::default()));
-                let bytes = serde_json::to_vec(&body).unwrap_or_default().len();
-                self.metrics
-                    .observe_bundle_bytes(u32::try_from(bytes).unwrap_or(u32::MAX));
-                PreThinkingResult {
-                    additional_context: body,
-                    fail_open: false,
-                }
-            }
+        };
+
+        let prethink_metrics = Arc::new(PreThinkingMetrics::new());
+        let output = pre_thinking_run(&input, query_fn, prethink_metrics).await;
+        let bundle_bytes =
+            u32::try_from(output.bundle.len()).unwrap_or(u32::MAX);
+        self.metrics.observe_bundle_bytes(bundle_bytes);
+
+        PreThinkingResult {
+            bundle: output.bundle,
+            fail_open: output.fail_open,
         }
     }
 
@@ -257,6 +271,7 @@ impl SyncClient {
 mod tests {
     use super::*;
     use crate::config::AdapterSection;
+    use serde_json::json;
 
     #[tokio::test]
     async fn pre_thinking_disabled_returns_empty_fail_open() {
@@ -270,11 +285,10 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
         let client = SyncClient::new(&cfg, metrics);
         let r = client
-            .pre_thinking("hello", "sess", Some("/repo"))
+            .pre_thinking("hello", "sess", None, Some("/repo"))
             .await;
         assert!(r.fail_open);
-        assert!(r.additional_context.is_object());
-        assert!(r.additional_context.as_object().unwrap().is_empty());
+        assert!(r.bundle.is_empty());
     }
 
     #[tokio::test]
@@ -308,7 +322,10 @@ mod tests {
         };
         let metrics = Arc::new(Metrics::new());
         let client = SyncClient::new(&cfg, metrics);
-        let r = client.pre_thinking("hello", "sess", Some("/repo")).await;
+        let r = client
+            .pre_thinking("hello", "sess", None, Some("/repo"))
+            .await;
         assert!(r.fail_open);
+        assert!(r.bundle.is_empty());
     }
 }

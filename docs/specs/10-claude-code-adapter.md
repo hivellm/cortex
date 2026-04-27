@@ -161,13 +161,13 @@ cortex-adapters/claude-code/
 Two hooks run **blocking**, inline with the model loop:
 
 1. **`UserPromptSubmit`**
-   - Daemon assembles a `pre_change_context` query from:
-     - the user prompt text
-     - the current `cwd` (mapped to repo)
-     - recently-edited files (via `git status` in `cwd`, TTL-cached 10 s)
-   - POSTs to `cortex-api /v1/query` with `timeout_ms=600`.
-   - Response JSON (decisions, similar turns, active laws) is returned to Claude Code as `additionalContext`.
-   - On timeout / error: empty `additionalContext` — the session continues unchanged.
+   - Daemon drives the `cortex-pre-thinking` pipeline (spec 12) which:
+     - derives the `Scope` from `cwd` (mapped to repo) and recent files,
+     - selects the `intent` from the prompt (default `pre_change_context`),
+     - POSTs a `cortex_api::QueryRequest` (intent in body, `query` field) to `cortex-api /v1/query` with `timeout_ms=600`,
+     - formats the `QueryResponse` to a deterministic Markdown bundle and clips it to `max_bundle_kb` (default 32 KB).
+   - The Markdown string is returned to Claude Code under `hookSpecificOutput.additionalContext` (camelCase, per Claude Code's hook contract).
+   - On timeout / error / empty bundle: the response is `{}` — no `hookSpecificOutput` field, the session continues unchanged.
 
 2. **`PreToolUse`**
    - Daemon POSTs to `cortex-api /v1/laws/check` with the proposed tool call.
