@@ -4,10 +4,10 @@
 - [x] 1.3 Decide on the per-row interpolated-literals fix path
 
 ## 2. Cypher rendering helpers
-- [ ] 2.1 Add `cypher_str_escape(&str)` to crates/cortex-graph/src/cypher.rs (handles `\`, `'`, control chars; refuses raw newlines inside literals)
-- [ ] 2.2 Add `render_node_merge(label, key_field, key, props)` that returns a complete Cypher statement string with all values inline-escaped
-- [ ] 2.3 Add `render_edge_merge(from_label, from_key_field, from_key, edge_type, to_label, to_key_field, to_key, props)` doing the same for edges
-- [ ] 2.4 Unit tests: every Value variant round-trips through the renderer without breaking out of the literal
+- [x] 2.1 Add `cypher_str_escape(&str)` to crates/cortex-graph/src/cypher.rs (handles `\`, `'`, control chars; refuses raw newlines inside literals)
+- [x] 2.2 Add `render_node_merge(label, key_field, key, props)` that returns a complete Cypher statement string with all values inline-escaped
+- [x] 2.3 Add `render_edge_merge(from_label, from_key_field, from_key, edge_type, to_label, to_key_field, to_key, props)` doing the same for edges
+- [x] 2.4 Unit tests: every Value variant round-trips through the renderer without breaking out of the literal
 
 ## 3. Writer rewrite
 - [ ] 3.1 Replace `run_write_tx` in nexus_client.rs to call render_node_merge per node and render_edge_merge per edge

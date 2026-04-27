@@ -11,6 +11,7 @@
 //! startup and held read-only for the worker's lifetime.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -27,6 +28,164 @@ pub enum CypherLoadError {
     /// events without the Cypher it needs.
     #[error("missing required cypher templates: {0:?}")]
     MissingRequired(Vec<String>),
+}
+
+/// Escape a Rust string for safe inclusion inside a single-quoted
+/// Cypher string literal.
+///
+/// The renderer (see [`render_node_merge`] / [`render_edge_merge`])
+/// emits literal values inline rather than via `$param` substitution
+/// because Nexus 1.15.0 silently drops every write that uses
+/// `$param` inside a `MERGE`/`SET` clause (see
+/// `phase1_graph_writer_nexus_compat`'s proposal for the probe results).
+/// Inline literals require a hardened escape so untrusted property
+/// values cannot break out of the surrounding quotes.
+///
+/// Rules:
+///   - `\` → `\\` (must come first; subsequent escapes add their own `\`)
+///   - `'` → `\'` (the wrapping quote)
+///   - `\n` / `\r` / `\t` → `\\n` / `\\r` / `\\t`
+///   - any other control byte (< 0x20) → replaced with a space; Cypher
+///     1.x has no portable `\uXXXX` form, and a literal NUL or 0x1B
+///     would break the parser
+///   - everything else passes through verbatim (including non-ASCII
+///     UTF-8, which Cypher accepts inside string literals)
+///
+/// The output is **never** wrapped in quotes — the caller is expected
+/// to do `format!("'{}'", cypher_str_escape(&v))`. That keeps the
+/// helper composable for `MATCH (n {key: '<escaped>'})` shapes too.
+pub fn cypher_str_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    for ch in value.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push(' '),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render a `serde_json::Value` as an inline Cypher literal.
+///
+/// Strings are wrapped in single quotes via [`cypher_str_escape`].
+/// Numbers, booleans, and null pass through using Cypher's native
+/// syntax. Arrays render as `[v1, v2, ...]`. Objects (maps) render as
+/// JSON-encoded **strings** because the live mapper currently emits
+/// only flat scalar property bags — anything nested falls back to a
+/// JSON-encoded literal so nothing is silently lost.
+pub fn render_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("'{}'", cypher_str_escape(s)),
+        serde_json::Value::Array(arr) => {
+            let mut out = String::from("[");
+            for (i, v) in arr.iter().enumerate() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&render_value(v));
+            }
+            out.push(']');
+            out
+        }
+        serde_json::Value::Object(_) => {
+            // Nested objects are not part of the v1 graph schema. JSON-
+            // encode the value so it survives as a string property
+            // rather than silently dropping; the mapper should still
+            // be flattening before reaching the writer.
+            let json = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+            format!("'{}'", cypher_str_escape(&json))
+        }
+    }
+}
+
+/// Render a `MERGE (n:<Label> { <key_field>: '<key>' }) SET n.<k>=<v>, ...`
+/// statement with all values inline-escaped.
+///
+/// `props` may include the key field — it is intentionally **not**
+/// filtered out so the SET clause can reaffirm the natural-key value
+/// (idempotent on existing nodes). The trailing `RETURN count(*) AS
+/// written` is appended so the writer can verify the statement
+/// actually persisted instead of trusting Nexus' silent successes.
+pub fn render_node_merge(
+    label: &str,
+    key_field: &str,
+    key: &str,
+    props: &BTreeMap<String, serde_json::Value>,
+) -> String {
+    let mut stmt = String::with_capacity(128 + props.len() * 32);
+    let _ = write!(
+        stmt,
+        "MERGE (n:{label} {{ {key_field}: '{esc_key}' }})",
+        esc_key = cypher_str_escape(key),
+    );
+    if !props.is_empty() {
+        stmt.push_str(" SET ");
+        for (i, (k, v)) in props.iter().enumerate() {
+            if i > 0 {
+                stmt.push_str(", ");
+            }
+            let _ = write!(stmt, "n.{k} = {}", render_value(v));
+        }
+    }
+    stmt.push_str(" RETURN count(*) AS written");
+    stmt
+}
+
+/// Render a per-row edge MERGE between two nodes identified by their
+/// natural keys, with optional relationship properties inline-escaped.
+///
+/// Shape:
+///
+/// ```cypher
+/// MATCH (a:<FromLabel> { <from_key_field>: '<from_key>' }),
+///       (b:<ToLabel>   { <to_key_field>:   '<to_key>'   })
+/// MERGE (a)-[r:<TYPE>]->(b)
+/// SET r.<k1> = <v1>, ...
+/// RETURN count(*) AS written
+/// ```
+///
+/// Both endpoints must already exist (the writer always emits node
+/// MERGEs before edge MERGEs in a batch). If either is missing,
+/// Nexus returns `written = 0` and the writer surfaces a real failure
+/// rather than the previous silent success.
+pub fn render_edge_merge(
+    from_label: &str,
+    from_key_field: &str,
+    from_key: &str,
+    edge_type: &str,
+    to_label: &str,
+    to_key_field: &str,
+    to_key: &str,
+    props: &BTreeMap<String, serde_json::Value>,
+) -> String {
+    let mut stmt = String::with_capacity(192 + props.len() * 32);
+    let _ = write!(
+        stmt,
+        "MATCH (a:{from_label} {{ {from_key_field}: '{esc_from}' }}), \
+         (b:{to_label} {{ {to_key_field}: '{esc_to}' }}) \
+         MERGE (a)-[r:{edge_type}]->(b)",
+        esc_from = cypher_str_escape(from_key),
+        esc_to = cypher_str_escape(to_key),
+    );
+    if !props.is_empty() {
+        stmt.push_str(" SET ");
+        for (i, (k, v)) in props.iter().enumerate() {
+            if i > 0 {
+                stmt.push_str(", ");
+            }
+            let _ = write!(stmt, "r.{k} = {}", render_value(v));
+        }
+    }
+    stmt.push_str(" RETURN count(*) AS written");
+    stmt
 }
 
 /// Canonical template name for a node-upsert template, derived from the
@@ -268,6 +427,140 @@ mod tests {
         let reg = CypherTemplates::from_map(map);
         reg.ensure_required(REQUIRED_TEMPLATES)
             .expect("registry should satisfy REQUIRED_TEMPLATES");
+    }
+
+    #[test]
+    fn cypher_str_escape_handles_quotes_and_backslashes() {
+        assert_eq!(cypher_str_escape(""), "");
+        assert_eq!(cypher_str_escape("plain"), "plain");
+        assert_eq!(cypher_str_escape("it's"), "it\\'s");
+        assert_eq!(cypher_str_escape("path\\file"), "path\\\\file");
+        // The wrapping quote and the backslash must both be escaped so
+        // the rendered literal cannot break out: `'\\\\\\''` decodes
+        // to the string `\'` after Cypher unescapes it once.
+        assert_eq!(cypher_str_escape("\\'"), "\\\\\\'");
+    }
+
+    #[test]
+    fn cypher_str_escape_handles_control_chars_and_whitespace() {
+        assert_eq!(cypher_str_escape("a\nb"), "a\\nb");
+        assert_eq!(cypher_str_escape("a\rb\tc"), "a\\rb\\tc");
+        // NUL and other low control bytes collapse to a space — Cypher
+        // 1.x does not have a portable \uXXXX form for them.
+        assert_eq!(cypher_str_escape("a\x00b\x1bc"), "a b c");
+        // Non-ASCII passes through unchanged.
+        assert_eq!(cypher_str_escape("café — π"), "café — π");
+    }
+
+    #[test]
+    fn cypher_str_escape_resists_string_breakout() {
+        // Classic injection attempt: close the literal and append more
+        // Cypher. The escape must keep the payload inside the literal.
+        let payload = "', x: 1}) DETACH DELETE n // ";
+        let escaped = cypher_str_escape(payload);
+        assert!(!escaped.contains("\n"));
+        // The single-quote in the payload is escaped with a backslash;
+        // the closing brace / Cypher syntax is now plain text inside
+        // the literal.
+        assert!(escaped.starts_with("\\'"));
+    }
+
+    #[test]
+    fn render_value_emits_native_cypher_for_primitives() {
+        use serde_json::json;
+        assert_eq!(render_value(&serde_json::Value::Null), "null");
+        assert_eq!(render_value(&json!(true)), "true");
+        assert_eq!(render_value(&json!(42)), "42");
+        assert_eq!(render_value(&json!(3.14)), "3.14");
+        assert_eq!(render_value(&json!("hi")), "'hi'");
+        assert_eq!(render_value(&json!("it's")), "'it\\'s'");
+    }
+
+    #[test]
+    fn render_value_emits_array_and_nested_object_safely() {
+        use serde_json::json;
+        assert_eq!(
+            render_value(&json!(["a", 1, true, null])),
+            "['a', 1, true, null]"
+        );
+        // Nested objects fall back to a JSON-encoded literal so the
+        // value survives even though the mapper should be flattening.
+        // Cypher only escapes `\` and `'`, so the JSON's double-quotes
+        // pass through verbatim — the resulting literal is
+        // `'{"k":"v"}'` and round-trips cleanly through Cypher.
+        let nested = json!({"k": "v"});
+        let rendered = render_value(&nested);
+        assert_eq!(rendered, "'{\"k\":\"v\"}'");
+    }
+
+    #[test]
+    fn render_node_merge_emits_per_row_statement_with_return() {
+        let mut props: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        props.insert("name".into(), serde_json::json!("Alice"));
+        props.insert("age".into(), serde_json::json!(30));
+        let stmt = render_node_merge("Person", "id", "p1", &props);
+        assert_eq!(
+            stmt,
+            "MERGE (n:Person { id: 'p1' }) SET n.age = 30, n.name = 'Alice' RETURN count(*) AS written"
+        );
+    }
+
+    #[test]
+    fn render_node_merge_without_props_still_returns_count() {
+        let stmt = render_node_merge("Repo", "slug", "vectorizer", &BTreeMap::new());
+        assert_eq!(
+            stmt,
+            "MERGE (n:Repo { slug: 'vectorizer' }) RETURN count(*) AS written"
+        );
+    }
+
+    #[test]
+    fn render_node_merge_escapes_key_and_property_strings() {
+        let mut props: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        props.insert("title".into(), serde_json::json!("it's a 'quote'"));
+        let stmt = render_node_merge("Doc", "id", "id-with-'quote", &props);
+        assert!(stmt.contains("id: 'id-with-\\'quote'"));
+        assert!(stmt.contains("n.title = 'it\\'s a \\'quote\\''"));
+        assert!(stmt.ends_with("RETURN count(*) AS written"));
+    }
+
+    #[test]
+    fn render_edge_merge_emits_match_merge_with_return() {
+        let mut props: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        props.insert("at".into(), serde_json::json!(1714__200_000_000_i64));
+        let stmt = render_edge_merge(
+            "Session",
+            "id",
+            "s1",
+            "HAS_TURN",
+            "Turn",
+            "id",
+            "t1",
+            &props,
+        );
+        assert!(stmt.contains("MATCH (a:Session { id: 's1' }), (b:Turn { id: 't1' })"));
+        assert!(stmt.contains("MERGE (a)-[r:HAS_TURN]->(b)"));
+        assert!(stmt.contains("SET r.at = 1714200000000"));
+        assert!(stmt.ends_with("RETURN count(*) AS written"));
+    }
+
+    #[test]
+    fn render_edge_merge_without_props_still_returns_count() {
+        let stmt = render_edge_merge(
+            "Decision",
+            "id",
+            "d2",
+            "SUPERSEDES",
+            "Decision",
+            "id",
+            "d1",
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            stmt,
+            "MATCH (a:Decision { id: 'd2' }), (b:Decision { id: 'd1' }) \
+             MERGE (a)-[r:SUPERSEDES]->(b) RETURN count(*) AS written"
+        );
     }
 
     #[test]
