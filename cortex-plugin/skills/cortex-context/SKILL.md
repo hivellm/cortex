@@ -20,12 +20,12 @@ prompt.
 
 Do NOT use this skill for:
 - General free-text search — use `/cortex-query` or the
-  `cortex.query` tool with `intent=free_search` instead.
+  `cortex_query` tool with `intent=free_search` instead.
 - Auditing a past turn — use the `cortex-audit` skill.
 
 ## How to invoke
 
-Call the `cortex.pre_thinking` MCP tool with:
+Call the `cortex_pre_thinking` MCP tool with:
 
 ```jsonc
 {

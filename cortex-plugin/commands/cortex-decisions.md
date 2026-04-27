@@ -3,7 +3,7 @@ description: Look up decisions about a topic — walks the supersession chain.
 argument-hint: <topic>
 ---
 
-Call the `cortex.query` MCP tool with `intent=decision_lookup`:
+Call the `cortex_query` MCP tool with `intent=decision_lookup`:
 
 ```jsonc
 {

@@ -2,7 +2,7 @@
 description: Manually trigger a pre-thinking bundle for the current turn (debug aid — the spec-10 hook does this automatically).
 ---
 
-Call the `cortex.pre_thinking` MCP tool:
+Call the `cortex_pre_thinking` MCP tool:
 
 ```jsonc
 {

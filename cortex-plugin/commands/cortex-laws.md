@@ -3,7 +3,7 @@ description: List active laws in the current scope (repo + optional topics).
 argument-hint: [topic ...]
 ---
 
-Call the `cortex.query` MCP tool with `intent=law_check`:
+Call the `cortex_query` MCP tool with `intent=law_check`:
 
 ```jsonc
 {

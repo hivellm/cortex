@@ -251,9 +251,9 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(arr.len(), 3);
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"cortex.query"));
-        assert!(names.contains(&"cortex.pre_thinking"));
-        assert!(names.contains(&"cortex.status"));
+        assert!(names.contains(&"cortex_query"));
+        assert!(names.contains(&"cortex_pre_thinking"));
+        assert!(names.contains(&"cortex_status"));
     }
 
     #[tokio::test]
@@ -290,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_tool_returns_method_not_found_with_metric() {
         let s = make_server();
-        let req = br#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cortex.unknown","arguments":{}}}"#;
+        let req = br#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"cortex_unknown","arguments":{}}}"#;
         let raw = s.handle_frame(req).await.expect("response");
         let v: Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(v["error"]["code"], error_codes::METHOD_NOT_FOUND);

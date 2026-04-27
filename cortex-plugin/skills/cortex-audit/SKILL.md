@@ -20,11 +20,11 @@ turn, not what the model did with it.
 
 Do NOT use this skill to:
 - Pull fresh context for the current task — use `cortex-context`.
-- Search for events — use `cortex.query` with `intent=free_search`.
+- Search for events — use `cortex_query` with `intent=free_search`.
 
 ## How to invoke
 
-Call `cortex.query` with the `audit` intent's substitute (free
+Call `cortex_query` with the `audit` intent's substitute (free
 search against the audit stream):
 
 ```jsonc

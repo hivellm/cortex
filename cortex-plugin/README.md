@@ -8,9 +8,9 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 
 | Surface | Use it for |
 |---|---|
-| `cortex.query` (MCP tool) | Hybrid retrieval (vector + keyword + graph) over everything Cortex captured. |
-| `cortex.pre_thinking` (MCP tool) | Refresh the system-prompt context bundle: laws + decisions + similar turns + snippets. |
-| `cortex.status` (MCP tool) | Daemon health: pid, queue depth, recent publisher errors, overflow WAL bytes. |
+| `cortex_query` (MCP tool) | Hybrid retrieval (vector + keyword + graph) over everything Cortex captured. |
+| `cortex_pre_thinking` (MCP tool) | Refresh the system-prompt context bundle: laws + decisions + similar turns + snippets. |
+| `cortex_status` (MCP tool) | Daemon health: pid, queue depth, recent publisher errors, overflow WAL bytes. |
 | `cortex-context` (skill) | "Pull fresh context for what I'm about to do" — invokes pre-thinking. |
 | `cortex-audit` (skill) | "Audit turn `<id>`" — fetches the audit envelope. |
 | `cortex-laws` (skill) | "What laws apply here?" — surfaces active laws in scope. |
@@ -96,7 +96,7 @@ The plugin's `.mcp.json` carries two env vars the MCP server reads:
 | Var | Default | Purpose |
 |---|---|---|
 | `CORTEX_API_URL` | `http://127.0.0.1:15011` | `cortex-api` base URL |
-| `CORTEX_ADAPTER_SOCK` | `~/.cortex/adapter-claude.sock` | Adapter UDS for `cortex.status` |
+| `CORTEX_ADAPTER_SOCK` | `~/.cortex/adapter-claude.sock` | Adapter UDS for `cortex_status` |
 
 Override per-machine by editing `.mcp.json` in your local plugin install.
 

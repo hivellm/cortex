@@ -9,7 +9,7 @@ Ship Cortex as a first-class **Claude Code plugin** so the assistant can call in
 A Claude Code plugin is a **directory of text + config**, not a Rust crate. The Cortex plugin ships:
 
 - A `.claude-plugin/plugin.json` manifest.
-- An `.mcp.json` that registers our **MCP server binary** (Rust, lives in this repo) so the model can call `cortex.query`, `cortex.pre_thinking`, `cortex.status` mid-turn.
+- An `.mcp.json` that registers our **MCP server binary** (Rust, lives in this repo) so the model can call `cortex_query`, `cortex_pre_thinking`, `cortex_status` mid-turn. Tool names are identifier-safe per MCP 2024-11-05 (no `.`); descriptors use `inputSchema` (camelCase). Hosts silently drop tools that violate either rule.
 - Markdown **skills** (`skills/cortex-*/SKILL.md`) the model can invoke.
 - Markdown **sub-agents** (`agents/cortex-*.md`) for focused tasks.
 - Markdown **slash commands** (`commands/cortex-*.md`) the human runs verbatim.
@@ -20,7 +20,7 @@ A Claude Code plugin is a **directory of text + config**, not a Rust crate. The 
 **In:**
 - `cortex-plugin/` directory at the workspace root with the canonical Claude Code plugin layout.
 - `cortex-mcp-server` Rust crate — language-agnostic MCP server binary referenced from `cortex-plugin/.mcp.json`. JSON-RPC 2.0 over stdio (canonical MCP transport).
-- Three MCP tools backed by existing services: `cortex.query` (spec 11), `cortex.pre_thinking` (spec 12), `cortex.status` (Cortex daemon health).
+- Three MCP tools backed by existing services: `cortex_query` (spec 11), `cortex_pre_thinking` (spec 12), `cortex_status` (Cortex daemon health).
 - Three skills authored as Markdown: `cortex-context`, `cortex-audit`, `cortex-laws`.
 - Three sub-agents authored as Markdown: `cortex-historian`, `cortex-lawkeeper`, `cortex-context-curator`.
 - Six slash commands authored as Markdown: `cortex-status`, `cortex-query`, `cortex-laws`, `cortex-decisions`, `cortex-pre-thinking`, `cortex-audit`.
@@ -128,7 +128,7 @@ JSON-RPC 2.0 over stdio (Anthropic's MCP spec, revision `2024-11-05`). Standard 
 
 // tools/call
 → { "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-    "params": { "name": "cortex.query", "arguments": { "intent": "free_search", "query": "ef_search" } } }
+    "params": { "name": "cortex_query", "arguments": { "intent": "free_search", "query": "ef_search" } } }
 ← { "jsonrpc": "2.0", "id": 3, "result": {
       "content": [ { "type": "text", "text": "<JSON or formatted bundle>" } ],
       "isError": false
@@ -139,14 +139,14 @@ Errors use the standard JSON-RPC codes (`-32700` parse, `-32600` invalid request
 
 ### Tool descriptors
 
-`cortex.query` reuses `cortex_api::tool_descriptor()` byte-for-byte (spec 11 §MCP tool binding) so the schema source-of-truth stays in `cortex-api`.
+`cortex_query` reuses `cortex_api::tool_descriptor()` byte-for-byte (spec 11 §MCP tool binding) so the schema source-of-truth stays in `cortex-api`.
 
-`cortex.pre_thinking`:
+`cortex_pre_thinking`:
 ```jsonc
 {
-  "name": "cortex.pre_thinking",
+  "name": "cortex_pre_thinking",
   "description": "Run the spec-12 pre-thinking pipeline against the configured cortex-api and return the deterministic Markdown bundle.",
-  "input_schema": {
+  "inputSchema": {
     "type": "object",
     "required": ["user_prompt", "cwd"],
     "properties": {
@@ -161,14 +161,21 @@ Errors use the standard JSON-RPC codes (`-32700` parse, `-32600` invalid request
 }
 ```
 
-`cortex.status`:
+`cortex_status`:
 ```jsonc
 {
-  "name": "cortex.status",
+  "name": "cortex_status",
   "description": "Cortex daemon health snapshot: pid, queue depth, recent publisher errors, overflow WAL bytes.",
-  "input_schema": { "type": "object", "properties": {} }
+  "inputSchema": { "type": "object", "properties": {} }
 }
 ```
+
+#### Contract guardrails
+
+Tool descriptors MUST satisfy MCP 2024-11-05:
+
+- **Names** match `[a-zA-Z0-9_-]+`. `.` and other punctuation are forbidden — Claude Code drops the descriptor silently when violated. Confirmed 2026-04-27 by `phase2_mcp_server_contract_fix`: the dotted names `cortex.query` / `cortex.pre_thinking` / `cortex.status` shipped with the 0.1.0 plugin and were never callable from the model despite the MCP panel showing `Connected`.
+- **Schema fields** use camelCase `inputSchema` / `outputSchema`. Snake_case `input_schema` / `output_schema` is rejected by the same loader for the same reason. Tests in `cortex-mcp-server::tools` and `cortex-api::mcp` lock the camelCase shape and assert the snake_case keys are absent.
 
 ### Skills (`skills/cortex-*/SKILL.md`)
 

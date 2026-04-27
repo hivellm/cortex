@@ -38,9 +38,9 @@ impl Metrics {
     /// `cortex.plugin.tool.invocations{tool=…}`.
     pub fn incr_invocation(&self, tool: &str) {
         match tool {
-            "cortex.query" => &self.invocations_query,
-            "cortex.pre_thinking" => &self.invocations_pre_thinking,
-            "cortex.status" => &self.invocations_status,
+            "cortex_query" => &self.invocations_query,
+            "cortex_pre_thinking" => &self.invocations_pre_thinking,
+            "cortex_status" => &self.invocations_status,
             _ => return,
         }
         .fetch_add(1, Ordering::Relaxed);
@@ -49,9 +49,9 @@ impl Metrics {
     /// `cortex.plugin.tool.errors{tool=…}`.
     pub fn incr_error(&self, tool: &str) {
         match tool {
-            "cortex.query" => &self.errors_query,
-            "cortex.pre_thinking" => &self.errors_pre_thinking,
-            "cortex.status" => &self.errors_status,
+            "cortex_query" => &self.errors_query,
+            "cortex_pre_thinking" => &self.errors_pre_thinking,
+            "cortex_status" => &self.errors_status,
             _ => return,
         }
         .fetch_add(1, Ordering::Relaxed);
@@ -61,9 +61,9 @@ impl Metrics {
     /// can derive the average. Histograms wait for spec 13.
     pub fn observe_latency(&self, tool: &str, ms: u64) {
         let target = match tool {
-            "cortex.query" => &self.latency_sum_ms_query,
-            "cortex.pre_thinking" => &self.latency_sum_ms_pre_thinking,
-            "cortex.status" => &self.latency_sum_ms_status,
+            "cortex_query" => &self.latency_sum_ms_query,
+            "cortex_pre_thinking" => &self.latency_sum_ms_pre_thinking,
+            "cortex_status" => &self.latency_sum_ms_status,
             _ => return,
         };
         target.fetch_add(ms, Ordering::Relaxed);
@@ -110,11 +110,11 @@ mod tests {
     fn counters_increment_per_tool() {
         let m = Metrics::new();
         m.incr_handshake();
-        m.incr_invocation("cortex.query");
-        m.incr_invocation("cortex.query");
-        m.incr_invocation("cortex.status");
-        m.incr_error("cortex.pre_thinking");
-        m.observe_latency("cortex.query", 12);
+        m.incr_invocation("cortex_query");
+        m.incr_invocation("cortex_query");
+        m.incr_invocation("cortex_status");
+        m.incr_error("cortex_pre_thinking");
+        m.observe_latency("cortex_query", 12);
         let s = m.snapshot();
         assert_eq!(s.handshakes, 1);
         assert_eq!(s.invocations_query, 2);
@@ -126,9 +126,9 @@ mod tests {
     #[test]
     fn unknown_tool_label_is_ignored() {
         let m = Metrics::new();
-        m.incr_invocation("cortex.unknown");
-        m.incr_error("cortex.unknown");
-        m.observe_latency("cortex.unknown", 5);
+        m.incr_invocation("cortex_unknown");
+        m.incr_error("cortex_unknown");
+        m.observe_latency("cortex_unknown", 5);
         let s = m.snapshot();
         assert_eq!(s.invocations_query, 0);
         assert_eq!(s.errors_query, 0);

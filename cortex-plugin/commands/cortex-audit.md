@@ -3,7 +3,7 @@ description: Show the audit envelope for a past Cortex turn or query.
 argument-hint: <turn_id_or_query_id>
 ---
 
-Call the `cortex.query` MCP tool, free-searching the audit
+Call the `cortex_query` MCP tool, free-searching the audit
 stream for the given id:
 
 ```jsonc

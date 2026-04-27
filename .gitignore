@@ -39,3 +39,6 @@ target
 # Cortex runtime state files (per-process resume points)
 .cortex-*.state.json
 
+# Claude Code session lock (per-process)
+.claude/scheduled_tasks.lock
+

@@ -7,6 +7,15 @@
         "@hivehub/rulebook@latest",
         "mcp-server"
       ]
+    },
+    "cortex": {
+      "type": "stdio",
+      "command": "cortex-mcp-server",
+      "args": ["serve"],
+      "env": {
+        "CORTEX_API_URL": "http://127.0.0.1:15011",
+        "CORTEX_ADAPTER_SOCK": "~/.cortex/adapter-claude.sock"
+      }
     }
   }
 }

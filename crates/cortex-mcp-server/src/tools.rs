@@ -52,7 +52,7 @@ pub struct ToolContext {
     pub http: reqwest::Client,
     /// Pre-thinking pipeline metrics handle.
     pub pt_metrics: Arc<PreThinkingMetrics>,
-    /// Server start instant — surfaced through `cortex.status`.
+    /// Server start instant — surfaced through `cortex_status`.
     pub started_at: std::time::Instant,
 }
 
@@ -145,7 +145,9 @@ impl ToolError {
 /// Surface every tool implements.
 #[async_trait]
 pub trait Tool: Send + Sync {
-    /// MCP tool name (e.g. `cortex.query`).
+    /// MCP tool name (e.g. `cortex_query`). Identifier-safe per the
+    /// MCP 2024-11-05 contract — names with `.` are rejected by
+    /// clients (Claude Code silently drops the descriptor).
     fn name(&self) -> &'static str;
     /// MCP descriptor advertised by `tools/list`.
     fn descriptor(&self) -> Value;
@@ -211,7 +213,7 @@ impl Default for ToolRegistry {
 }
 
 // ---------------------------------------------------------------------
-// cortex.query
+// cortex_query
 // ---------------------------------------------------------------------
 
 /// Wraps `POST <api_url>/v1/query` (spec 11).
@@ -290,7 +292,7 @@ impl Tool for QueryTool {
 }
 
 // ---------------------------------------------------------------------
-// cortex.pre_thinking
+// cortex_pre_thinking
 // ---------------------------------------------------------------------
 
 /// Wraps the spec-12 pipeline backed by `cortex-api`.
@@ -309,7 +311,7 @@ impl Default for PreThinkingTool {
     }
 }
 
-/// Inbound shape for `cortex.pre_thinking`.
+/// Inbound shape for `cortex_pre_thinking`.
 #[derive(Debug, Clone, Deserialize)]
 struct PreThinkingArgs {
     user_prompt: String,
@@ -329,14 +331,14 @@ struct PreThinkingArgs {
 #[async_trait]
 impl Tool for PreThinkingTool {
     fn name(&self) -> &'static str {
-        "cortex.pre_thinking"
+        "cortex_pre_thinking"
     }
 
     fn descriptor(&self) -> Value {
         json!({
-            "name": "cortex.pre_thinking",
+            "name": "cortex_pre_thinking",
             "description": "Run the spec-12 pre-thinking pipeline against the configured cortex-api and return the deterministic Markdown bundle.",
-            "input_schema": {
+            "inputSchema": {
                 "type": "object",
                 "required": ["user_prompt", "cwd"],
                 "properties": {
@@ -441,7 +443,7 @@ async fn post_query(
 }
 
 // ---------------------------------------------------------------------
-// cortex.status
+// cortex_status
 // ---------------------------------------------------------------------
 
 /// Daemon health probe.
@@ -463,14 +465,14 @@ impl Default for StatusTool {
 #[async_trait]
 impl Tool for StatusTool {
     fn name(&self) -> &'static str {
-        "cortex.status"
+        "cortex_status"
     }
 
     fn descriptor(&self) -> Value {
         json!({
-            "name": "cortex.status",
+            "name": "cortex_status",
             "description": "Cortex daemon health snapshot: pid, queue depth, recent publisher errors, overflow WAL bytes.",
-            "input_schema": { "type": "object", "properties": {} }
+            "inputSchema": { "type": "object", "properties": {} }
         })
     }
 
@@ -528,9 +530,15 @@ mod tests {
         let reg = ToolRegistry::default_set();
         assert_eq!(reg.len(), 3);
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"cortex.query"));
-        assert!(names.contains(&"cortex.pre_thinking"));
-        assert!(names.contains(&"cortex.status"));
+        assert!(names.contains(&"cortex_query"));
+        assert!(names.contains(&"cortex_pre_thinking"));
+        assert!(names.contains(&"cortex_status"));
+        for n in &names {
+            assert!(
+                !n.contains('.'),
+                "tool name {n} contains '.' — MCP spec forbids dots"
+            );
+        }
     }
 
     #[test]
@@ -543,8 +551,12 @@ mod tests {
     fn pre_thinking_descriptor_lists_required_fields() {
         let t = PreThinkingTool::new();
         let d = t.descriptor();
-        assert_eq!(d["name"], "cortex.pre_thinking");
-        let req = d["input_schema"]["required"].as_array().unwrap();
+        assert_eq!(d["name"], "cortex_pre_thinking");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        let req = d["inputSchema"]["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "user_prompt"));
         assert!(req.iter().any(|v| v == "cwd"));
     }
@@ -553,9 +565,13 @@ mod tests {
     fn status_descriptor_takes_no_input() {
         let t = StatusTool::new();
         let d = t.descriptor();
-        assert_eq!(d["name"], "cortex.status");
-        assert_eq!(d["input_schema"]["type"], "object");
-        let props = d["input_schema"]["properties"].as_object().unwrap();
+        assert_eq!(d["name"], "cortex_status");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        assert_eq!(d["inputSchema"]["type"], "object");
+        let props = d["inputSchema"]["properties"].as_object().unwrap();
         assert!(props.is_empty());
     }
 

@@ -1,4 +1,4 @@
-//! MCP tool binding for `cortex.query`.
+//! MCP tool binding for `cortex_query`.
 //!
 //! Spec 11 §MCP tool binding: the same JSON schema is exposed as an
 //! MCP tool so agent hosts can call the orchestrator without
@@ -6,7 +6,9 @@
 //! spec-17 multi-adapter rollout; for now the binding exposes:
 //!
 //! - [`tool_descriptor`] — the JSON document an MCP host advertises
-//!   (`name`, `description`, `input_schema`, `output_schema`).
+//!   (`name`, `description`, `inputSchema`, `outputSchema`) per the
+//!   MCP 2024-11-05 contract: tool names are identifier-safe (no
+//!   dots) and schema fields are camelCase.
 //! - [`invoke`] — a uniform handler the runtime calls with the
 //!   parsed input and returns the parsed output. Identical
 //!   surface-by-construction to the HTTP path so behaviour is
@@ -20,8 +22,9 @@ use thiserror::Error;
 use crate::service::{QueryService, ServiceOutcome};
 use crate::types::{QueryRequest, QueryResponse};
 
-/// Tool name surfaced to MCP hosts.
-pub const TOOL_NAME: &str = "cortex.query";
+/// Tool name surfaced to MCP hosts. Identifier-safe per MCP
+/// 2024-11-05; clients reject names containing `.`.
+pub const TOOL_NAME: &str = "cortex_query";
 
 /// MCP-side error shape. Translates the spec-11 outcomes into JSON
 /// the runtime can serialise as a tool error.
@@ -51,8 +54,8 @@ pub fn tool_descriptor() -> Value {
         "name": TOOL_NAME,
         "description": "Hybrid retrieval (vector + keyword + graph) over Cortex. \
                         Returns a structured context bundle for an agent prompt.",
-        "input_schema": input_schema(),
-        "output_schema": output_schema(),
+        "inputSchema": input_schema(),
+        "outputSchema": output_schema(),
     })
 }
 
@@ -142,8 +145,12 @@ mod tests {
     #[test]
     fn tool_descriptor_advertises_cortex_query_with_required_fields() {
         let d = tool_descriptor();
-        assert_eq!(d["name"], "cortex.query");
-        let input = &d["input_schema"];
+        assert_eq!(d["name"], "cortex_query");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        let input = &d["inputSchema"];
         assert_eq!(input["type"], "object");
         assert!(input["properties"]["intent"]["enum"]
             .as_array()
@@ -155,7 +162,11 @@ mod tests {
     #[test]
     fn output_schema_lists_every_response_top_level_field() {
         let d = tool_descriptor();
-        let props = d["output_schema"]["properties"].as_object().unwrap();
+        assert!(
+            d.get("output_schema").is_none(),
+            "snake_case output_schema must not be emitted"
+        );
+        let props = d["outputSchema"]["properties"].as_object().unwrap();
         for k in ["intent", "query_id", "scope_resolved", "results", "budget", "debug"] {
             assert!(props.contains_key(k), "missing {k}");
         }

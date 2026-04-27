@@ -3,7 +3,7 @@ description: Free-text search across everything Cortex captured (vector + keywor
 argument-hint: <query>
 ---
 
-Call the `cortex.query` MCP tool:
+Call the `cortex_query` MCP tool:
 
 ```jsonc
 {

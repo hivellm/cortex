@@ -2,7 +2,7 @@
 name: cortex-historian
 description: Decision-lookup specialist. Given a question about why a project does something a particular way, queries Cortex for the relevant ADRs, walks the supersession chain, and produces a focused historical brief (ids, dates, status, who decided, what it superseded, why it was chosen). Use this agent for "why did we pick X?" / "who decided Y?" / "what's the history of Z?" questions.
 tools_required:
-  - mcp__cortex__cortex.query
+  - mcp__cortex__cortex_query
   - Read
 ---
 
@@ -16,7 +16,7 @@ project choice — not the current code, not the active laws, the
 1. Read the user's question carefully. Extract:
    - The repo (often implied by the cwd; if absent, ask).
    - The topic (a system, a file, a config, a name).
-2. Call `cortex.query` with:
+2. Call `cortex_query` with:
    ```json
    {
      "intent": "decision_lookup",

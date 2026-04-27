@@ -4,10 +4,10 @@
 //! See `docs/specs/18-claude-code-plugin.md` for the wire protocol +
 //! tool contract. Three tools are exposed:
 //!
-//! - `cortex.query` — wraps `POST <api_url>/v1/query`.
-//! - `cortex.pre_thinking` — runs the spec-12 pipeline against the
+//! - `cortex_query` — wraps `POST <api_url>/v1/query`.
+//! - `cortex_pre_thinking` — runs the spec-12 pipeline against the
 //!   same `cortex-api`.
-//! - `cortex.status` — daemon health snapshot.
+//! - `cortex_status` — daemon health snapshot.
 //!
 //! The library half is reusable from tests; the binary half lives in
 //! `main.rs` and only handles clap parsing + bootstrap.

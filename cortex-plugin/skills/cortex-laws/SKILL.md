@@ -27,7 +27,7 @@ Do NOT use this skill to:
 
 ## How to invoke
 
-Call `cortex.query` with `intent=law_check`:
+Call `cortex_query` with `intent=law_check`:
 
 ```jsonc
 {
