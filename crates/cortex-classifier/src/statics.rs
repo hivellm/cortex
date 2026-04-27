@@ -89,7 +89,14 @@ impl Classifier for StaticClassifier {
                 severity,
                 pii_risk,
                 redaction_suggestions: Vec::new(),
-                summary: maybe_summary(&input.redacted_payload),
+                // No synthesised summary — the static path has no
+                // model to summarise with, and the previous
+                // `"static summary: N chars"` marker was being
+                // copied into Meilisearch's `body` field by the
+                // fulltext worker, destroying full-text search on
+                // every artifact. Downstream consumers fall back to
+                // the source `text` when this is `None`.
+                summary: None,
                 source: ClassifierSource::StaticFallback,
                 prompt_version: "static-v1".into(),
                 model: "static-v1".into(),
@@ -232,12 +239,37 @@ fn payload_to_string(payload: &Value) -> String {
     serde_json::to_string(payload).unwrap_or_default()
 }
 
-fn maybe_summary(payload: &Value) -> Option<String> {
-    let encoded = payload_to_string(payload);
-    let without_ws: String = encoded.chars().filter(|c| !c.is_whitespace()).collect();
-    if without_ws.len() > 4096 {
-        Some(format!("static summary: {} chars", without_ws.len()))
-    } else {
-        None
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: the static path used to emit
+    /// `summary = "static summary: <N> chars"` for any payload over
+    /// 4 KB. The fulltext worker copied that string into Meilisearch's
+    /// `body` field, and full-text search broke for every artifact —
+    /// the indexed body had no real tokens. Verify the static path
+    /// now returns `summary: None` so downstream consumers fall back
+    /// to the source `text`.
+    #[tokio::test]
+    async fn static_classifier_emits_no_summary_even_for_oversize_payloads() {
+        let big = "x".repeat(20_000);
+        let input = EnrichmentInput {
+            event_id: "evt-static-summary".into(),
+            kind: Kind::Artifact,
+            content_hash: "sha256:0".into(),
+            redacted_payload: serde_json::json!({ "text": big }),
+            context_repo: Some("Cortex".into()),
+        };
+        let out = StaticClassifier::new()
+            .classify_batch(std::slice::from_ref(&input))
+            .await
+            .expect("classify");
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].summary.is_none(),
+            "static path must not synthesise a summary string; got: {:?}",
+            out[0].summary
+        );
     }
 }
+

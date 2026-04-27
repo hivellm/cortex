@@ -59,6 +59,28 @@ pub struct ExcludeConfig {
     /// File extensions to drop (without leading dot).
     #[serde(default)]
     pub extensions: Vec<String>,
+    /// File size ceiling in bytes. Files above this are dropped with
+    /// `reason: "oversize"` instead of being shipped to Synap. The
+    /// default 8 MB sits below Synap's 10 MB request-body limit with
+    /// headroom for envelope wrapping and JSON expansion (binary
+    /// chars escape to multi-byte sequences). Repos with vendored
+    /// blobs (Tml/docs/docs.json hit 12 MB on 2026-04-27) override
+    /// to a smaller value.
+    #[serde(default = "default_max_file_bytes")]
+    pub max_file_bytes: u64,
+}
+
+/// Default file size ceiling for the bootstrap walker — see the
+/// `[cortex.exclude].max_file_bytes` field. `pub const` so callers
+/// (and the [`crate::walker::MAX_FILE_BYTES`] re-export) can reach
+/// it from `const` contexts.
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Serde wrapper for [`DEFAULT_MAX_FILE_BYTES`] — `serde(default)`
+/// only accepts a function path, so this trampoline lets the default
+/// flow through.
+pub fn default_max_file_bytes() -> u64 {
+    DEFAULT_MAX_FILE_BYTES
 }
 
 impl Default for ExcludeConfig {
@@ -89,6 +111,7 @@ impl Default for ExcludeConfig {
                 "so".into(),
                 "dylib".into(),
             ],
+            max_file_bytes: default_max_file_bytes(),
         }
     }
 }

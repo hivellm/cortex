@@ -72,8 +72,14 @@ async fn redacted_content_marks_high_pii() {
     assert_eq!(out[0].pii_risk, PiiRisk::High);
 }
 
+/// The static path used to emit `summary = "static summary: <N> chars"`
+/// for any payload over 4 KB. The fulltext worker then copied that
+/// string verbatim into Meilisearch's `body` field, destroying full-text
+/// search on every artifact (the indexed body had no real tokens). The
+/// static path now returns `summary: None` and downstream consumers
+/// fall back to the source `text`. Test pinned to lock the contract.
 #[tokio::test]
-async fn oversize_payload_triggers_summary() {
+async fn oversize_payload_does_not_synthesise_summary() {
     let c = StaticClassifier::new();
     let big = "x".repeat(5000);
     let out = c
@@ -85,7 +91,11 @@ async fn oversize_payload_triggers_summary() {
         )])
         .await
         .unwrap();
-    assert!(out[0].summary.is_some());
+    assert!(
+        out[0].summary.is_none(),
+        "static path must not synthesise a summary; got: {:?}",
+        out[0].summary
+    );
 }
 
 #[tokio::test]

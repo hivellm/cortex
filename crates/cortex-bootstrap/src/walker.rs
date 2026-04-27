@@ -11,9 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::CortexSection;
 
-/// Spec 09 §File walker: oversize cap above which a file is dropped
-/// rather than indexed.
-pub const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
+/// Default oversize cap above which a file is dropped rather than
+/// indexed. Mirrors [`crate::config::default_max_file_bytes`] —
+/// kept here as a re-export so callers that historically read this
+/// constant compile unchanged. Per-repo overrides ride
+/// `cortex.toml`'s `[cortex.exclude].max_file_bytes`.
+pub const MAX_FILE_BYTES: u64 = crate::config::DEFAULT_MAX_FILE_BYTES;
 
 /// Classification of a walked file. Drives which `kind` the synthetic
 /// event will carry downstream.
@@ -159,9 +162,12 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
             }
         }
 
-        // Oversize gate.
+        // Oversize gate. The cap defaults to 8 MB (1 MB headroom
+        // below Synap's 10 MB body limit for envelope wrapping +
+        // JSON expansion); per-repo overrides land via
+        // `cortex.toml`'s `[cortex.exclude].max_file_bytes`.
         let size_bytes = metadata.len();
-        if size_bytes > MAX_FILE_BYTES {
+        if size_bytes > cfg.exclude.max_file_bytes {
             out.push(WalkEntry::Dropped {
                 rel_path,
                 reason: "oversize",
