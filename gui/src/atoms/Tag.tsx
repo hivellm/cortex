@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-export type TagTone = "default" | "ok" | "warn" | "critical" | "info" | "accent";
+export type TagTone = "default" | "ok" | "warn" | "critical" | "info" | "accent" | "solid";
 
 type TagProps = { children: ReactNode; tone?: TagTone };
 

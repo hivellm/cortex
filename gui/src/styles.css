@@ -955,6 +955,17 @@ a { color: inherit; text-decoration: none; }
 }
 .law-row:hover { background: var(--bg-2); }
 .law-row.is-active { background: var(--bg-3); }
+.law-row--header {
+  background: var(--bg-2);
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  cursor: default;
+}
+.law-row--header:hover { background: var(--bg-2); }
+.law-row__sev { display: inline-flex; align-items: center; }
 .law-row__id { font-family: var(--font-mono); font-size: 11.5px; color: var(--accent); font-weight: 600; }
 .law-row__title { font-size: 12.5px; color: var(--fg-0); font-weight: 500; }
 .law-row__sev { font-family: var(--font-mono); font-size: 10.5px; }

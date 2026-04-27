@@ -1,20 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { Icon, type IconName } from "../atoms/Icon";
-import { api, type SessionRow } from "../lib/api";
+import { api, type RepoCount, type SessionRow } from "../lib/api";
+import { fmtNum } from "../lib/format";
 import { useFilters } from "../lib/filters";
 
 export type ViewId = "timeline" | "memory" | "decisions" | "laws" | "analysis" | "tools" | "graph";
 
-type NavItem = { id: ViewId; label: string; icon: IconName };
+type NavItem = { id: ViewId; label: string; icon: IconName; countSource?: CountKey };
+type CountKey = "events" | "decisions" | "laws" | "analyses" | "tools" | "sessions";
 
 const NAV: NavItem[] = [
   { id: "timeline", label: "Live timeline", icon: "timeline" },
-  { id: "memory", label: "Memory", icon: "memory" },
-  { id: "decisions", label: "Decisions", icon: "decision" },
-  { id: "laws", label: "Laws", icon: "law" },
-  { id: "analysis", label: "Analysis", icon: "analysis" },
-  { id: "tools", label: "Tool analytics", icon: "tools" },
+  { id: "memory", label: "Memory", icon: "memory", countSource: "events" },
+  { id: "decisions", label: "Decisions", icon: "decision", countSource: "decisions" },
+  { id: "laws", label: "Laws", icon: "law", countSource: "laws" },
+  { id: "analysis", label: "Analysis", icon: "analysis", countSource: "analyses" },
+  { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
 ];
 
@@ -35,6 +37,46 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
   });
   const sessions = sessionsQ.data ?? [];
 
+  const overviewQ = useQuery({
+    queryKey: ["overview"],
+    queryFn: () => api.overview(),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: true,
+  });
+  const overview = overviewQ.data;
+
+  // Counts pulled from the same TanStack caches the views populate —
+  // re-using the keyed query result avoids a second round of fetches.
+  const decisionsQ = useQuery({
+    queryKey: ["decisions"],
+    queryFn: () => api.decisions(),
+    refetchInterval: 30_000,
+  });
+  const lawsQ = useQuery({
+    queryKey: ["laws"],
+    queryFn: () => api.laws(),
+    refetchInterval: 60_000,
+  });
+  const analysesQ = useQuery({
+    queryKey: ["analyses"],
+    queryFn: () => api.analyses(),
+    refetchInterval: 30_000,
+  });
+  const toolsQ = useQuery({
+    queryKey: ["tools-stats"],
+    queryFn: () => api.toolsStats(),
+    refetchInterval: 15_000,
+  });
+
+  const counts: Record<CountKey, number | undefined> = {
+    events: overview?.events_total,
+    decisions: decisionsQ.data?.length,
+    laws: lawsQ.data?.length,
+    analyses: analysesQ.data?.length,
+    tools: toolsQ.data?.length,
+    sessions: sessions.length,
+  };
+
   const onSessionClick = (sid: string) => {
     if (filters.session_id === sid) {
       setFilter("session_id", undefined);
@@ -44,22 +86,76 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     }
   };
 
+  const onRepoClick = (repo: string) => {
+    if (filters.repo === repo) {
+      setFilter("repo", undefined);
+    } else {
+      setFilter("repo", repo);
+    }
+  };
+
   return (
     <aside className="sidebar">
       <div className="sidebar__group-label">Workspace</div>
-      {NAV.map((item) => (
-        <button
-          key={item.id}
-          className={`nav-item ${view === item.id ? "is-active" : ""}`}
-          onClick={() => setView(item.id)}
-          title={collapsed ? item.label : undefined}
-        >
-          <span className="nav-icon">
-            <Icon name={item.icon} size={15} />
-          </span>
-          <span className="nav-label">{item.label}</span>
-        </button>
-      ))}
+      {NAV.map((item) => {
+        const c = item.countSource ? counts[item.countSource] : undefined;
+        return (
+          <button
+            key={item.id}
+            className={`nav-item ${view === item.id ? "is-active" : ""}`}
+            onClick={() => setView(item.id)}
+            title={collapsed ? item.label : undefined}
+          >
+            <span className="nav-icon">
+              <Icon name={item.icon} size={15} />
+            </span>
+            <span className="nav-label">{item.label}</span>
+            {typeof c === "number" && c > 0 ? (
+              <span className="nav-count">{fmtNum(c)}</span>
+            ) : null}
+          </button>
+        );
+      })}
+
+      {overview && overview.recent_repos.length > 0 ? (
+        <>
+          <div
+            className="sidebar__group-label"
+            style={{
+              marginTop: 14,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>Repos · {overview.repos_indexed}</span>
+            {filters.repo ? (
+              <button
+                onClick={() => setFilter("repo", undefined)}
+                title="Clear repo filter"
+                style={{
+                  background: "transparent",
+                  border: 0,
+                  color: "var(--accent)",
+                  fontSize: 10,
+                  fontFamily: "var(--font-mono)",
+                  cursor: "pointer",
+                }}
+              >
+                clear
+              </button>
+            ) : null}
+          </div>
+          {overview.recent_repos.map((r: RepoCount) => (
+            <RepoItem
+              key={r.repo}
+              repo={r}
+              active={filters.repo === r.repo}
+              onClick={() => onRepoClick(r.repo)}
+            />
+          ))}
+        </>
+      ) : null}
 
       <div className="sidebar__group-label" style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span>Sessions · {sessions.length}</span>
@@ -133,6 +229,40 @@ function SidebarFooter() {
         </span>
       </div>
     </div>
+  );
+}
+
+function RepoItem({
+  repo,
+  active,
+  onClick,
+}: {
+  repo: RepoCount;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`nav-item ${active ? "is-active" : ""}`}
+      onClick={onClick}
+      title={`${repo.repo} · ${repo.count} events`}
+    >
+      <span
+        className="nav-icon"
+        style={{
+          width: 8,
+          height: 8,
+          borderRadius: 2,
+          background: "var(--accent-dim)",
+          display: "inline-block",
+        }}
+      />
+      <span className="nav-label mono" style={{ fontSize: 11.5 }}>
+        {repo.repo}
+      </span>
+      <span className="nav-count">{fmtNum(repo.count)}</span>
+    </button>
   );
 }
 

@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
+import { Sparkline } from "../atoms/Sparkline";
 import { api, type TimelineEvent } from "../lib/api";
+import { fmtNum } from "../lib/format";
 import { hasAnyFilter, useFilters } from "../lib/filters";
 
 const KIND_ICON: Record<string, string> = {
@@ -26,10 +28,12 @@ const KIND_LABEL: Record<string, string> = {
 function TimelineRow({
   ev,
   active,
+  isNew,
   onSelect,
 }: {
   ev: TimelineEvent;
   active: boolean;
+  isNew: boolean;
   onSelect: (ev: TimelineEvent) => void;
 }) {
   const detail = ev.detail || "";
@@ -46,7 +50,7 @@ function TimelineRow({
   return (
     <button
       type="button"
-      className={`timeline__row ${active ? "is-active" : ""}`}
+      className={`timeline__row ${active ? "is-active" : ""} ${isNew ? "is-new" : ""}`}
       onClick={() => onSelect(ev)}
       style={{ width: "100%", textAlign: "left", border: 0, background: "transparent" }}
     >
@@ -76,6 +80,24 @@ function TimelineRow({
 
 function Inspector({ ev, onClose }: { ev: TimelineEvent | null; onClose: () => void }) {
   const open = !!ev;
+  // ESC closes the inspector — listen at the document level so the
+  // shortcut works regardless of focus location.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [open, onClose]);
+
+  const linkedIds = useMemo(() => {
+    if (!ev) return [] as string[];
+    const re = /\b(DEC-\d{4}-\d{3}|ANL-\d{2,4})\b/g;
+    const all = `${ev.title} ${ev.detail}`.match(re) ?? [];
+    return Array.from(new Set(all));
+  }, [ev]);
+
   return (
     <>
       <div className={`inspector-backdrop ${open ? "is-open" : ""}`} onClick={onClose} />
@@ -131,6 +153,45 @@ function Inspector({ ev, onClose }: { ev: TimelineEvent | null; onClose: () => v
                   <dd className="mono">{ev.t || "—"}</dd>
                 </dl>
               </div>
+              <div className="inspector__section">
+                <div className="inspector__section-label">Payload (redacted)</div>
+                <pre className="code-block" style={{ fontSize: 11 }}>
+                  {JSON.stringify(ev, null, 2)}
+                </pre>
+              </div>
+              <div className="inspector__section">
+                <div className="inspector__section-label">Linked</div>
+                {linkedIds.length === 0 ? (
+                  <div className="muted" style={{ fontSize: 11.5 }}>
+                    no linked decisions or analyses
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {linkedIds.map((id) => (
+                      <div key={id} className="violation-card" style={{ marginBottom: 0 }}>
+                        <div className="violation-card__head">
+                          <span
+                            className="mono"
+                            style={{
+                              fontSize: 11,
+                              color: "var(--accent)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {id}
+                          </span>
+                          <span style={{ fontSize: 11, color: "var(--fg-3)" }}>
+                            {id.startsWith("DEC-") ? "Decision" : "Analysis"}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--fg-3)" }}>
+                          referenced from this event's body
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </>
         ) : null}
@@ -149,6 +210,7 @@ export function TimelineView() {
   const [query, setQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<TimelineEvent | null>(null);
+  const [live, setLive] = useState(true);
   const { filters, setFilter, clearFilters } = useFilters();
 
   const { data, isLoading, error } = useQuery({
@@ -156,11 +218,69 @@ export function TimelineView() {
     // filtering kicks in alongside the local kind chips.
     queryKey: ["timeline-recent", filters.session_id ?? "", filters.repo ?? ""],
     queryFn: () => api.timelineRecent(200, filters),
-    refetchInterval: 5000,
+    refetchInterval: live ? 5000 : false,
     refetchIntervalInBackground: true,
   });
 
+  // Overview + sessions feed the stats grid. Both queries are also
+  // populated by the Sidebar; TanStack dedupes by key.
+  const overviewQ = useQuery({
+    queryKey: ["overview"],
+    queryFn: () => api.overview(),
+    refetchInterval: live ? 5000 : false,
+  });
+  const sessionsQ = useQuery({
+    queryKey: ["sessions"],
+    queryFn: () => api.sessions(),
+    refetchInterval: live ? 8000 : false,
+  });
+
   const events = data ?? [];
+
+  // Rolling buffer of `events_total` deltas across overview polls,
+  // used to feed the Sparkline on the "Events captured" tile. Plain
+  // useRef + a forced render via state — no time-series in the
+  // backend yet, so this is the honest version.
+  const totalsRef = useRef<number[]>([]);
+  const [, forceRender] = useState(0);
+  useEffect(() => {
+    if (overviewQ.data) {
+      const buf = totalsRef.current;
+      const next = overviewQ.data.events_total;
+      const last = buf[buf.length - 1];
+      if (last !== next) {
+        buf.push(next);
+        if (buf.length > 24) buf.shift();
+        forceRender((n) => n + 1);
+      }
+    }
+  }, [overviewQ.data]);
+
+  // Track previously-seen ids so we can flash newly-arriving rows.
+  // First fetch primes the set without flashing every row.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (events.length === 0) return;
+    const seen = seenIdsRef.current;
+    if (seen.size === 0) {
+      events.forEach((e) => seen.add(e.id));
+      return;
+    }
+    const incoming = new Set<string>();
+    for (const e of events) {
+      if (!seen.has(e.id)) {
+        incoming.add(e.id);
+        seen.add(e.id);
+      }
+    }
+    if (incoming.size > 0) {
+      setNewIds(incoming);
+      const t = setTimeout(() => setNewIds(new Set()), 700);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [events]);
 
   const filtered = useMemo(() => {
     return events.filter((e) => {
@@ -209,7 +329,25 @@ export function TimelineView() {
             by <span className="mono">cortex-api</span>.
           </p>
         </div>
+        <div className="view__actions">
+          <button
+            className={`btn btn--sm ${live ? "" : "btn--ghost"}`}
+            onClick={() => setLive((l) => !l)}
+            title={live ? "Pause stream" : "Resume stream"}
+          >
+            <Icon name={live ? "pause" : "play"} size={12} />
+            {live ? "Pause stream" : "Resume"}
+          </button>
+        </div>
       </div>
+
+      <TimelineStats
+        eventsTotal={overviewQ.data?.events_total ?? 0}
+        reposIndexed={overviewQ.data?.repos_indexed ?? 0}
+        sessionCount={sessionsQ.data?.length ?? 0}
+        kindBreakdown={overviewQ.data?.kind_breakdown ?? []}
+        sparkSeries={totalsRef.current}
+      />
 
       {hasAnyFilter(filters) ? (
         <div className="filter-banner">
@@ -336,6 +474,7 @@ export function TimelineView() {
               key={ev.id}
               ev={ev}
               active={selected?.id === ev.id}
+              isNew={newIds.has(ev.id)}
               onSelect={(e) => setSelected((s) => (s?.id === e.id ? null : e))}
             />
           ))
@@ -357,8 +496,62 @@ export function TimelineView() {
           {filtered.length} events shown · {events.length} in buffer
         </span>
         <span>
-          poll: <span style={{ color: "var(--ok)" }}>5 s</span>
+          stream:{" "}
+          <span style={{ color: live ? "var(--ok)" : "var(--fg-3)" }}>
+            {live ? "● connected" : "○ paused"}
+          </span>
         </span>
+      </div>
+    </div>
+  );
+}
+
+function TimelineStats({
+  eventsTotal,
+  reposIndexed,
+  sessionCount,
+  kindBreakdown,
+  sparkSeries,
+}: {
+  eventsTotal: number;
+  reposIndexed: number;
+  sessionCount: number;
+  kindBreakdown: { kind: string; count: number }[];
+  sparkSeries: number[];
+}) {
+  const turnCount = kindBreakdown.find((k) => k.kind === "turn")?.count ?? 0;
+  const toolCount = kindBreakdown.find((k) => k.kind === "tool_call")?.count ?? 0;
+  return (
+    <div className="stats-grid" style={{ marginBottom: 14 }}>
+      <div className="stat">
+        <div className="stat__label">Events captured</div>
+        <div className="stat__value tabular">{fmtNum(eventsTotal)}</div>
+        <div className="stat__delta">across the indexed archive</div>
+        {sparkSeries.length >= 2 ? (
+          <div className="stat__spark">
+            <Sparkline data={sparkSeries} color="var(--accent)" />
+          </div>
+        ) : null}
+      </div>
+      <div className="stat">
+        <div className="stat__label">Repos active</div>
+        <div className="stat__value tabular">{fmtNum(reposIndexed)}</div>
+        <div className="stat__delta">distinct context.repo values</div>
+      </div>
+      <div className="stat">
+        <div className="stat__label">Tool calls / Turns</div>
+        <div className="stat__value tabular">
+          {fmtNum(toolCount)}
+          <span className="stat__unit">/ {fmtNum(turnCount)}</span>
+        </div>
+        <div className="stat__delta">
+          {turnCount > 0 ? (toolCount / turnCount).toFixed(1) : "0"} per turn
+        </div>
+      </div>
+      <div className="stat">
+        <div className="stat__label">Sessions</div>
+        <div className="stat__value tabular">{fmtNum(sessionCount)}</div>
+        <div className="stat__delta">grouped by claude_code.session_id</div>
       </div>
     </div>
   );

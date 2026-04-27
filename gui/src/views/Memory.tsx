@@ -147,21 +147,23 @@ export function MemoryView() {
             <article key={`${m.title}-${i}`} className="memory-card">
               <header className="memory-card__head">
                 <Tag tone="info">{m.kind}</Tag>
-                <span className="muted mono" style={{ fontSize: 10.5 }}>
-                  {m.repo ?? "—"} · {m.updated}
+                <span
+                  className="muted mono"
+                  style={{ fontSize: 10.5, marginLeft: "auto" }}
+                >
+                  {m.updated}
                 </span>
               </header>
               <h3 className="memory-card__title">{m.title}</h3>
               <p className="memory-card__excerpt">{m.excerpt}</p>
-              {m.topics.length > 0 ? (
-                <footer className="memory-card__topics">
-                  {m.topics.map((t) => (
-                    <span key={t} className="memory-topic">
-                      {t}
-                    </span>
-                  ))}
-                </footer>
-              ) : null}
+              <footer className="memory-card__topics">
+                {m.repo ? <Tag tone="solid">{m.repo}</Tag> : null}
+                {m.topics.map((t) => (
+                  <span key={t} className="memory-topic">
+                    #{t}
+                  </span>
+                ))}
+              </footer>
             </article>
           ))}
         </div>

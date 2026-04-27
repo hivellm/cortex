@@ -1,9 +1,13 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
-import { api } from "../lib/api";
+import { api, type DecisionChainNode } from "../lib/api";
 
 export function DecisionsView() {
+  const [showSuperseded, setShowSuperseded] = useState(false);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ["decisions"],
     queryFn: () => api.decisions(),
@@ -11,10 +15,16 @@ export function DecisionsView() {
     refetchIntervalInBackground: true,
   });
 
-  const rows = data ?? [];
-  const active = rows.filter((d) => d.status === "active").length;
-  const superseded = rows.filter((d) => d.status === "superseded").length;
-  const withRationale = rows.filter((d) => !!d.rationale).length;
+  const rowsRaw = data ?? [];
+  const active = rowsRaw.filter((d) => d.status === "active").length;
+  const superseded = rowsRaw.filter((d) => d.status === "superseded").length;
+  const withRationale = rowsRaw.filter((d) => !!d.rationale).length;
+
+  const rows = useMemo(
+    () =>
+      showSuperseded ? rowsRaw : rowsRaw.filter((d) => d.status !== "superseded"),
+    [rowsRaw, showSuperseded],
+  );
 
   return (
     <div className="view">
@@ -25,6 +35,19 @@ export function DecisionsView() {
             Architectural records derived from <span className="mono">kind=decision</span> envelopes.
             Promotion and supersession arrive when spec-15 (deep analysis) starts emitting them.
           </p>
+        </div>
+        <div className="view__actions">
+          <button
+            className={`btn ${showSuperseded ? "" : "btn--ghost"}`}
+            onClick={() => setShowSuperseded((s) => !s)}
+            title={
+              showSuperseded
+                ? "Hide superseded decisions"
+                : `Show ${superseded} superseded decision${superseded === 1 ? "" : "s"}`
+            }
+          >
+            {showSuperseded ? "✓ " : ""}Show superseded
+          </button>
         </div>
       </div>
 
@@ -43,12 +66,21 @@ export function DecisionsView() {
       ) : (
         <div className="decision-list">
           {rows.map((d) => (
-            <article key={d.id} className="decision-card">
+            <article
+              key={d.id}
+              className={`decision-card ${d.status === "superseded" ? "is-superseded" : ""}`}
+            >
               <header className="decision-card__head">
                 <span className="mono" style={{ color: "var(--accent)", fontWeight: 600 }}>
                   {d.id}
                 </span>
                 <Tag tone={d.status === "active" ? "ok" : "default"}>{d.status}</Tag>
+                {d.supersedes ? (
+                  <Tag tone="warn">supersedes {d.supersedes}</Tag>
+                ) : null}
+                {d.superseded_by ? (
+                  <Tag>superseded → {d.superseded_by}</Tag>
+                ) : null}
                 <span className="muted mono" style={{ marginLeft: "auto", fontSize: 10.5 }}>
                   {d.occurred_at}
                 </span>
@@ -60,7 +92,7 @@ export function DecisionsView() {
               <footer className="decision-card__footer">
                 {d.tags.map((t) => (
                   <span key={t} className="memory-topic">
-                    {t}
+                    #{t}
                   </span>
                 ))}
                 {d.cites.length > 0 ? (
@@ -68,16 +100,38 @@ export function DecisionsView() {
                     cites: {d.cites.join(", ")}
                   </span>
                 ) : null}
-                {d.supersedes ? (
-                  <span className="muted mono" style={{ fontSize: 10.5 }}>
-                    supersedes <span style={{ color: "var(--accent)" }}>{d.supersedes}</span>
-                  </span>
-                ) : null}
               </footer>
+              {d.chain && d.chain.length > 1 ? <SupersedeChain chain={d.chain} /> : null}
             </article>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function SupersedeChain({ chain }: { chain: DecisionChainNode[] }) {
+  return (
+    <div className="supersede-chain">
+      {chain.map((c, i) => (
+        <span key={c.id} style={{ display: "contents" }}>
+          <div
+            className={`supersede-node ${
+              c.state === "current" ? "is-current" : "is-old"
+            }`}
+          >
+            <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-3)" }}>
+              {c.id}
+            </span>
+            <span style={{ fontSize: 11.5, color: "var(--fg-1)" }}>{c.title}</span>
+          </div>
+          {i < chain.length - 1 ? (
+            <span className="supersede-arrow">
+              <Icon name="arrow-right" size={14} />
+            </span>
+          ) : null}
+        </span>
+      ))}
     </div>
   );
 }

@@ -81,6 +81,12 @@ export type MemoryEntry = {
   updated: string;
 };
 
+export type DecisionChainNode = {
+  id: string;
+  title: string;
+  state: "current" | "old";
+};
+
 export type DecisionRow = {
   id: string;
   title: string;
@@ -91,6 +97,13 @@ export type DecisionRow = {
   tags: string[];
   cites: string[];
   supersedes: string | null;
+  /// Optional supersession chain. Populated by the backend's
+  /// phase2h work; until that ships, the field is absent and the
+  /// renderer skips the chain element.
+  chain?: DecisionChainNode[];
+  /// Optional id of the decision that superseded this one (the
+  /// reverse pointer of `supersedes`). Phase2h-gated like `chain`.
+  superseded_by?: string;
   occurred_at: string;
 };
 
