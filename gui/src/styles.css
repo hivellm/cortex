@@ -1181,6 +1181,51 @@ a { color: inherit; text-decoration: none; }
 
 .law-table { display: flex; flex-direction: column; gap: 1px; background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 
+/* ============================================================
+   Tweaks drawer — phase2e
+   ============================================================ */
+.tweaks { /* reserved for future tweak-only chrome overrides */ }
+.tweak-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.tweak-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+.tweak-slider__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.tweak-slider input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.tweak-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-1);
+  cursor: pointer;
+  margin: 4px 0 8px;
+}
+.tweak-toggle input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.accent-chip {
+  transition: transform 120ms;
+}
+.accent-chip:hover { transform: scale(1.08); }
+.accent-chip.is-active { transform: scale(1.12); }
+
 .violation-list { display: flex; flex-direction: column; gap: 8px; }
 .violation-row {
   display: grid;

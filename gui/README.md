@@ -83,6 +83,19 @@ session/repo/kind filters that flow through every list view.
 Header pill and sidebar footer reflect `/v1/status` — green when the
 daemon answers, grey when it does not.
 
+### Tweaks
+
+A slide-in panel triggered by the header gear icon, exposing the operator-tunable surface backed by `localStorage` under key `cortex.tweaks`. Mirrors the `.inspector` chrome (right-anchored slide, ESC + outside-click close). Source: [`shell/Tweaks.tsx`](src/shell/Tweaks.tsx) + [`lib/useTweaks.tsx`](src/lib/useTweaks.tsx).
+
+| Group   | Control                                                               | Driven CSS                                                  |
+|---------|-----------------------------------------------------------------------|-------------------------------------------------------------|
+| Theme   | Dark / Light radio                                                    | `document.documentElement.dataset.theme`                    |
+| Color   | 5 preset chips (Amber 75 · Green 155 · Blue 230 · Purple 290 · Red 25) + 20°–320° hue slider | `--accent-h` (consumed by `--accent` and every `--accent-*` token via `oklch(... var(--accent-h))`) |
+| Layout  | Collapse-sidebar checkbox + 1–10 density slider                       | `--header-h: calc(52 - (10 - density) × 0.8)px`             |
+| About   | Read-only `service / version / pid / uptime` from `/v1/status`        | —                                                           |
+
+A "Reset to defaults" button at the bottom of the drawer flips the store back to `{ theme: dark, accentHue: 75, density: 7, sidebarCollapsed: false }`. Closing the drawer doesn't revert anything — the tweak is committed on every change.
+
 ### Inspectors
 
 Two slide-in inspectors share the chrome (`.inspector` + `.inspector-backdrop` in `styles.css`); ESC and outside-click close both.

@@ -7,11 +7,10 @@ import { bridge } from "../lib/bridge";
 type HeaderProps = {
   collapsed: boolean;
   onToggleSidebar: () => void;
-  theme: "dark" | "light";
-  onToggleTheme: () => void;
+  onOpenTweaks: () => void;
 };
 
-export function Header({ collapsed, onToggleSidebar, theme, onToggleTheme }: HeaderProps) {
+export function Header({ collapsed, onToggleSidebar, onOpenTweaks }: HeaderProps) {
   const statusQ = useQuery({
     queryKey: ["status"],
     queryFn: () => api.status(),
@@ -54,11 +53,11 @@ export function Header({ collapsed, onToggleSidebar, theme, onToggleTheme }: Hea
         </span>
         <button
           className="icon-btn"
-          onClick={onToggleTheme}
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          aria-label="Toggle theme"
+          onClick={onOpenTweaks}
+          title="Open tweaks (theme · accent · density)"
+          aria-label="Open tweaks panel"
         >
-          <Icon name={theme === "dark" ? "sun" : "moon"} size={15} />
+          <Icon name="settings" size={15} />
         </button>
       </div>
       {collapsed ? null : null}

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Header } from "./shell/Header";
 import { Sidebar, type ViewId } from "./shell/Sidebar";
+import { Tweaks } from "./shell/Tweaks";
 import { TimelineView } from "./views/Timeline";
 import { MemoryView } from "./views/Memory";
 import { DecisionsView } from "./views/Decisions";
@@ -10,17 +11,28 @@ import { AnalysisView } from "./views/Analysis";
 import { ToolsView } from "./views/Tools";
 import { GraphView } from "./views/Graph";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
+import { TweaksProvider, useTweaks } from "./lib/useTweaks";
 import type { Filters } from "./lib/api";
 
 export function App() {
-  const [view, setView] = useState<ViewId>("timeline");
-  const [collapsed, setCollapsed] = useState(false);
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [filters, setFiltersState] = useState<Filters>(EMPTY_FILTERS);
+  return (
+    <TweaksProvider>
+      <AppShell />
+    </TweaksProvider>
+  );
+}
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
+function AppShell() {
+  const { tweaks, setTweak } = useTweaks();
+  const collapsed = tweaks.sidebarCollapsed;
+  const onToggleSidebar = useCallback(
+    () => setTweak("sidebarCollapsed", !collapsed),
+    [collapsed, setTweak],
+  );
+
+  const [view, setView] = useState<ViewId>("timeline");
+  const [tweaksOpen, setTweaksOpen] = useState(false);
+  const [filters, setFiltersState] = useState<Filters>(EMPTY_FILTERS);
 
   const setFilter = useCallback(
     <K extends keyof Filters>(key: K, value: Filters[K] | undefined) => {
@@ -70,12 +82,12 @@ export function App() {
       <div className={`app ${collapsed ? "collapsed" : ""}`}>
         <Header
           collapsed={collapsed}
-          onToggleSidebar={() => setCollapsed((c) => !c)}
-          theme={theme}
-          onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+          onToggleSidebar={onToggleSidebar}
+          onOpenTweaks={() => setTweaksOpen(true)}
         />
         <Sidebar view={view} setView={setView} collapsed={collapsed} />
         <main className="main">{renderView()}</main>
+        <Tweaks open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
       </div>
     </FiltersContext.Provider>
   );
