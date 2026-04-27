@@ -14,18 +14,18 @@ pub mod composer;
 pub mod errors;
 pub mod haiku_cli;
 pub mod prompt;
-pub mod stats;
 pub mod statics;
+pub mod stats;
 pub mod types;
 
 pub use budget::{BudgetTracker, BudgetedClassifier};
 pub use cache::{CacheError, CachedClassifier, ClassifierCache, InMemoryCache};
-pub use composer::ClassifierStack;
+pub use composer::{build_offline_stack, build_stack, ClassifierStack};
 pub use errors::ClassifierError;
 pub use haiku_cli::{HaikuCliClassifier, HaikuCliConfig};
 pub use prompt::{PromptTemplate, TOPIC_VOCAB_V1};
-pub use stats::{ClassifierSpend, PricingTable};
 pub use statics::StaticClassifier;
+pub use stats::{ClassifierSpend, PricingTable};
 pub use types::{
     Classifier, ClassifierMode, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk,
     RedactionSuggestion, Severity,

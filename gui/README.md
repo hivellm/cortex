@@ -65,7 +65,28 @@ pnpm start             # run the packaged Electron app
 
 ## Status
 
-Spec 16 §0 MVP — Timeline view wired to live `cortex-api` data.
-The remaining six views (Memory, Decisions, Laws, Analysis, Tools,
-Graph) ship under `phase2_dashboard` §5; until then they render a
-"coming next" panel that points back at the design reference.
+All seven views wired to live `cortex-api` data:
+
+| View              | Endpoint                            | Notes                                                                 |
+|-------------------|-------------------------------------|-----------------------------------------------------------------------|
+| Live timeline     | `/v1/dashboard/timeline/recent`     | Polls every 5s; row click opens slide-in inspector with envelope.     |
+| Memory            | `/v1/dashboard/memory`              | Faceted by canonical kind (`turn / tool_call / agent_call / decision / analysis`). |
+| Decisions         | `/v1/dashboard/decisions`           | Stats grid + list. Empty until `kind=decision` envelopes flow.        |
+| Laws              | `/v1/dashboard/laws` + `/violations`| Catalogue empty until spec-13 ships; violations list lives.           |
+| Analysis          | `/v1/dashboard/analyses`            | Stats grid + cards. Empty until spec-15 emits `kind=analysis`.        |
+| Tool analytics    | `/v1/dashboard/tools/stats`         | `avg_ms` and `err_rate` are 0 until spec-12 derivation lands.         |
+| Graph explorer    | `/v1/dashboard/graph`               | Synthetic Session→Turn→ToolCall layout from the seeded archive.       |
+
+Sidebar lists captured sessions (`/v1/dashboard/sessions`) and supports
+session/repo/kind filters that flow through every list view.
+
+Header pill and sidebar footer reflect `/v1/status` — green when the
+daemon answers, grey when it does not.
+
+### Not yet wired
+
+- **SSE / WebSocket** for the timeline (still polls every 5s).
+- **Tweaks panel** (theme/accent/density) from the design reference.
+- **Decision supersession chain** rendering.
+- **Trust matrix** and tool-call **heatmap** — both need data shapes
+  the backend doesn't emit yet.

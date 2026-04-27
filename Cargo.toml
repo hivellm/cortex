@@ -6,6 +6,7 @@ members = [
     "crates/cortex-ops",
     "crates/cortex-ingestion",
     "crates/cortex-classifier",
+    "crates/cortex-classifier-worker",
     "crates/cortex-embedder",
     "crates/cortex-graph",
     "crates/cortex-fulltext",

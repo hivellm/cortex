@@ -118,9 +118,9 @@ impl Classifier for HaikuCliClassifier {
             .map_err(|e| ClassifierError::Backend(format!("stdout utf8: {e}")))?;
 
         let outer: ClaudeJsonResponse = serde_json::from_str(stdout.trim())?;
-        let inner_text = outer.text.ok_or_else(|| {
-            ClassifierError::Backend("claude response has no text body".into())
-        })?;
+        let inner_text = outer
+            .text
+            .ok_or_else(|| ClassifierError::Backend("claude response has no text body".into()))?;
         let inner: ClassifierOutputBatch = serde_json::from_str(inner_text.trim())?;
 
         if inner.events.len() != events.len() {
@@ -137,22 +137,20 @@ impl Classifier for HaikuCliClassifier {
         Ok(events
             .iter()
             .zip(inner.events)
-            .map(|(input, rec)| {
-                ClassifierOutput {
-                    event_id: input.event_id.clone(),
-                    kind_refinement: rec.kind_refinement,
-                    topics: normalise_topics(rec.topics),
-                    severity: rec.severity,
-                    pii_risk: rec.pii_risk,
-                    redaction_suggestions: rec.redaction_suggestions,
-                    summary: rec.summary,
-                    source: ClassifierSource::HaikuCli,
-                    prompt_version: self.prompt.version.into(),
-                    model: self.cfg.model.clone(),
-                    latency_ms,
-                    tokens_in,
-                    tokens_out,
-                }
+            .map(|(input, rec)| ClassifierOutput {
+                event_id: input.event_id.clone(),
+                kind_refinement: rec.kind_refinement,
+                topics: normalise_topics(rec.topics),
+                severity: rec.severity,
+                pii_risk: rec.pii_risk,
+                redaction_suggestions: rec.redaction_suggestions,
+                summary: rec.summary,
+                source: ClassifierSource::HaikuCli,
+                prompt_version: self.prompt.version.into(),
+                model: self.cfg.model.clone(),
+                latency_ms,
+                tokens_in,
+                tokens_out,
             })
             .collect())
     }

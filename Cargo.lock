@@ -534,6 +534,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-classifier-worker"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "cortex-classifier",
+ "cortex-core",
+ "cortex-embedder",
+ "serde",
+ "serde_json",
+ "synap-sdk",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "cortex-core"
 version = "0.1.0"
 dependencies = [

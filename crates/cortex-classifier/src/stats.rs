@@ -40,4 +40,3 @@ pub struct ClassifierSpend {
     /// Running spend estimate in US cents.
     pub est_usd_cents: u64,
 }
-

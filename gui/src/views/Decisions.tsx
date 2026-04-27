@@ -12,6 +12,9 @@ export function DecisionsView() {
   });
 
   const rows = data ?? [];
+  const active = rows.filter((d) => d.status === "active").length;
+  const superseded = rows.filter((d) => d.status === "superseded").length;
+  const withRationale = rows.filter((d) => !!d.rationale).length;
 
   return (
     <div className="view">
@@ -23,6 +26,12 @@ export function DecisionsView() {
             Promotion and supersession arrive when spec-15 (deep analysis) starts emitting them.
           </p>
         </div>
+      </div>
+
+      <div className="stats-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+        <Stat label="Total decisions" value={String(rows.length)} sub="captured envelopes" />
+        <Stat label="Active" value={String(active)} sub={`${superseded} superseded`} />
+        <Stat label="With rationale" value={String(withRationale)} sub="non-empty body" />
       </div>
 
       {error ? (
@@ -69,6 +78,16 @@ export function DecisionsView() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="stat">
+      <div className="stat__label">{label}</div>
+      <div className="stat__value tabular">{value}</div>
+      {sub ? <div className="stat__delta">{sub}</div> : null}
     </div>
   );
 }

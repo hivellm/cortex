@@ -7,7 +7,8 @@ use crate::types::Classifier;
 use std::sync::Arc;
 
 /// Fully-composed classifier ready to consume from a worker loop.
-pub type ClassifierStack = BudgetedClassifier<CachedClassifier<Box<dyn Classifier>, Box<dyn ClassifierCache>>>;
+pub type ClassifierStack =
+    BudgetedClassifier<CachedClassifier<Box<dyn Classifier>, Box<dyn ClassifierCache>>>;
 
 /// Convenience builder that wraps a backend in the standard cache + budget stack.
 pub fn build_stack(
@@ -25,6 +26,10 @@ pub fn build_offline_stack(
     cache: Box<dyn ClassifierCache>,
     budget: Arc<BudgetTracker>,
 ) -> ClassifierStack {
-    build_stack(Box::new(StaticClassifier::default()), cache, budget, "static-v1")
+    build_stack(
+        Box::new(StaticClassifier::default()),
+        cache,
+        budget,
+        "static-v1",
+    )
 }
-

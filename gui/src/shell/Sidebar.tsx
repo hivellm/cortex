@@ -103,14 +103,36 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
         </div>
       )}
 
-      <div className="sidebar__footer">
-        <div className="repo-pill">
-          <span className="repo-dot" />
-          <span className="repo-name">cortex-api</span>
-          <span className="repo-meta">live</span>
-        </div>
-      </div>
+      <SidebarFooter />
     </aside>
+  );
+}
+
+function SidebarFooter() {
+  // Mirror the header's status query so the footer pill agrees with
+  // the header's connection indicator without duplicating fetches —
+  // TanStack Query dedupes by key.
+  const statusQ = useQuery({
+    queryKey: ["status"],
+    queryFn: () => api.status(),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+    retry: 0,
+  });
+  const live = !statusQ.isError && !!statusQ.data;
+  return (
+    <div className="sidebar__footer">
+      <div className="repo-pill">
+        <span
+          className="repo-dot"
+          style={{ background: live ? "var(--ok)" : "var(--fg-3)" }}
+        />
+        <span className="repo-name">cortex-api</span>
+        <span className="repo-meta">
+          {statusQ.isLoading ? "…" : live ? `v${statusQ.data!.version}` : "offline"}
+        </span>
+      </div>
+    </div>
   );
 }
 

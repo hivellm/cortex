@@ -178,8 +178,12 @@ export const api = {
   analyses: () => getJson<AnalysisRow[]>("/v1/dashboard/analyses"),
   toolsStats: () => getJson<ToolStat[]>("/v1/dashboard/tools/stats"),
   graph: () => getJson<GraphPayload>("/v1/dashboard/graph"),
-  status: () =>
-    getJson<{ service: string; version: string; pid: number; uptime_ms: number }>(
-      "/v1/status",
-    ),
+  status: () => getJson<StatusBody>("/v1/status"),
+};
+
+export type StatusBody = {
+  service: string;
+  version: string;
+  pid: number;
+  uptime_ms: number;
 };

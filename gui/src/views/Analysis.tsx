@@ -10,6 +10,10 @@ export function AnalysisView() {
     refetchInterval: 15_000,
   });
   const rows = data ?? [];
+  const concluded = rows.filter((a) => a.status === "concluded").length;
+  const promoted = rows.filter((a) => !!a.decision_id).length;
+  const totalRounds = rows.reduce((s, a) => s + (a.rounds ?? 0), 0);
+  const avgRounds = rows.length ? (totalRounds / rows.length).toFixed(1) : "0";
 
   return (
     <div className="view">
@@ -22,6 +26,12 @@ export function AnalysisView() {
             ships the deep-analysis workflow.
           </p>
         </div>
+      </div>
+
+      <div className="stats-grid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+        <Stat label="Captured" value={String(rows.length)} sub={`${concluded} concluded`} />
+        <Stat label="Promoted" value={String(promoted)} sub="linked to a decision" />
+        <Stat label="Avg rounds" value={avgRounds} sub="across captured analyses" />
       </div>
 
       {error ? (
@@ -91,6 +101,16 @@ export function AnalysisView() {
           </article>
         ))
       )}
+    </div>
+  );
+}
+
+function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="stat">
+      <div className="stat__label">{label}</div>
+      <div className="stat__value tabular">{value}</div>
+      {sub ? <div className="stat__delta">{sub}</div> : null}
     </div>
   );
 }

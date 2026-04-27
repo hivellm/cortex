@@ -1,9 +1,7 @@
 //! Integration tests for `cortex_classifier::statics`.
 
 use cortex_classifier::statics::StaticClassifier;
-use cortex_classifier::types::{
-    Classifier, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
-};
+use cortex_classifier::types::{Classifier, ClassifierSource, EnrichmentInput, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use serde_json::{json, Value};
 

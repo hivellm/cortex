@@ -30,7 +30,10 @@ static KEYWORD_TOPICS: Lazy<Vec<(Regex, &'static [&'static str])>> = Lazy::new(|
             Regex::new(r"(?i)\brefactor(ing|ed)?\b").unwrap(),
             &["refactor"],
         ),
-        (Regex::new(r"(?i)\bcargo\s+test\b").unwrap(), &["test", "ci"]),
+        (
+            Regex::new(r"(?i)\bcargo\s+test\b").unwrap(),
+            &["test", "ci"],
+        ),
         (Regex::new(r"(?i)\bpytest\b|\bjest\b").unwrap(), &["test"]),
         (
             Regex::new(r"(?i)\bdocker\b|\bcompose\b").unwrap(),
@@ -238,4 +241,3 @@ fn maybe_summary(payload: &Value) -> Option<String> {
         None
     }
 }
-

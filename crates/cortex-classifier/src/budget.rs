@@ -1,8 +1,8 @@
 //! Daily spend tracker + budget-gated classifier.
 
 use crate::errors::ClassifierError;
-use crate::stats::PricingTable;
 use crate::statics::StaticClassifier;
+use crate::stats::PricingTable;
 use crate::types::{Classifier, ClassifierOutput, EnrichmentInput};
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -152,4 +152,3 @@ where
         Ok(out)
     }
 }
-

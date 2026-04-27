@@ -23,7 +23,15 @@ const KIND_LABEL: Record<string, string> = {
   law_violation: "Violation",
 };
 
-function TimelineRow({ ev }: { ev: TimelineEvent }) {
+function TimelineRow({
+  ev,
+  active,
+  onSelect,
+}: {
+  ev: TimelineEvent;
+  active: boolean;
+  onSelect: (ev: TimelineEvent) => void;
+}) {
   const detail = ev.detail || "";
   // Strip the leading `[ToolName] ` prefix from the detail so the
   // detail line doesn't repeat the title. Same idea for `Task:` /
@@ -37,7 +45,9 @@ function TimelineRow({ ev }: { ev: TimelineEvent }) {
   }
   return (
     <button
-      className="timeline__row"
+      type="button"
+      className={`timeline__row ${active ? "is-active" : ""}`}
+      onClick={() => onSelect(ev)}
       style={{ width: "100%", textAlign: "left", border: 0, background: "transparent" }}
     >
       <span className="timeline__time">{ev.t}</span>
@@ -64,6 +74,71 @@ function TimelineRow({ ev }: { ev: TimelineEvent }) {
   );
 }
 
+function Inspector({ ev, onClose }: { ev: TimelineEvent | null; onClose: () => void }) {
+  const open = !!ev;
+  return (
+    <>
+      <div className={`inspector-backdrop ${open ? "is-open" : ""}`} onClick={onClose} />
+      <aside className={`inspector ${open ? "is-open" : ""}`}>
+        {ev ? (
+          <>
+            <div className="inspector__head">
+              <span
+                className="timeline__type"
+                data-kind={ev.kind}
+                style={{ width: 26, height: 26 }}
+              >
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {KIND_ICON[ev.kind] ?? "•"}
+                </span>
+              </span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+                <span className="inspector__title">{ev.title}</span>
+                <span className="inspector__id">
+                  {ev.id} · {KIND_LABEL[ev.kind] ?? ev.kind}
+                </span>
+              </div>
+              <button
+                className="icon-btn"
+                onClick={onClose}
+                style={{ marginLeft: "auto" }}
+                aria-label="Close inspector"
+              >
+                <Icon name="close" size={15} />
+              </button>
+            </div>
+            <div className="inspector__body">
+              <div className="inspector__section">
+                <div className="inspector__section-label">Detail</div>
+                <div style={{ fontSize: 12.5, color: "var(--fg-1)", whiteSpace: "pre-wrap" }}>
+                  {ev.detail || <span className="muted">(no body captured)</span>}
+                </div>
+              </div>
+              <div className="inspector__section">
+                <div className="inspector__section-label">Envelope</div>
+                <dl className="kv-list">
+                  <dt>id</dt>
+                  <dd className="mono">{ev.id}</dd>
+                  <dt>kind</dt>
+                  <dd className="mono">{ev.kind}</dd>
+                  <dt>session</dt>
+                  <dd className="mono">{ev.session_id ?? "—"}</dd>
+                  <dt>repo</dt>
+                  <dd className="mono">{ev.repo ?? "—"}</dd>
+                  <dt>model</dt>
+                  <dd className="mono">{ev.model}</dd>
+                  <dt>at</dt>
+                  <dd className="mono">{ev.t || "—"}</dd>
+                </dl>
+              </div>
+            </div>
+          </>
+        ) : null}
+      </aside>
+    </>
+  );
+}
+
 // Build the input hint attribute name at runtime so the source file
 // never contains the literal token; lets the rule that bans the
 // English word in code stay strict without breaking the search box.
@@ -73,6 +148,7 @@ const SEARCH_HINT_TEXT = "Search events, repos, models…";
 export function TimelineView() {
   const [query, setQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<TimelineEvent | null>(null);
   const { filters, setFilter, clearFilters } = useFilters();
 
   const { data, isLoading, error } = useQuery({
@@ -132,11 +208,6 @@ export function TimelineView() {
             Sessions · turns · tool calls · decisions — captured by the spec-18 plugin and indexed
             by <span className="mono">cortex-api</span>.
           </p>
-        </div>
-        <div className="view__actions">
-          <button className="btn btn--ghost">
-            <Icon name="external" size={13} /> Export NDJSON
-          </button>
         </div>
       </div>
 
@@ -260,9 +331,17 @@ export function TimelineView() {
             removed everything — clear them or capture a few prompts via the Cortex plugin.
           </div>
         ) : (
-          filtered.map((ev) => <TimelineRow key={ev.id} ev={ev} />)
+          filtered.map((ev) => (
+            <TimelineRow
+              key={ev.id}
+              ev={ev}
+              active={selected?.id === ev.id}
+              onSelect={(e) => setSelected((s) => (s?.id === e.id ? null : e))}
+            />
+          ))
         )}
       </div>
+      <Inspector ev={selected} onClose={() => setSelected(null)} />
 
       <div
         style={{

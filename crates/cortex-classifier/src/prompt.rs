@@ -73,4 +73,3 @@ impl PromptTemplate {
             .replace("{{EVENTS_JSON}}", &events_json))
     }
 }
-

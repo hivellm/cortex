@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
 
 const NODE_COLOR: Record<string, string> = {
@@ -37,11 +36,6 @@ export function GraphView() {
             <span className="mono">/v1/dashboard/graph</span>. Decision / Law / Analysis nodes
             join in once spec-13/14/15 envelopes start flowing through capture.
           </p>
-        </div>
-        <div className="view__actions">
-          <button className="btn">
-            <Icon name="external" size={13} /> Open in Nexus
-          </button>
         </div>
       </div>
 

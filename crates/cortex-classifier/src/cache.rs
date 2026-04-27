@@ -22,10 +22,7 @@ pub enum CacheError {
 #[async_trait]
 pub trait ClassifierCache: Send + Sync + 'static {
     /// Look up a cached record. Returns `None` on miss.
-    async fn get(
-        &self,
-        key: &str,
-    ) -> Result<Option<ClassifierOutput>, CacheError>;
+    async fn get(&self, key: &str) -> Result<Option<ClassifierOutput>, CacheError>;
     /// Store a classifier output under the given key.
     async fn put(&self, key: &str, value: ClassifierOutput) -> Result<(), CacheError>;
 }
@@ -51,7 +48,11 @@ impl InMemoryCache {
 #[async_trait]
 impl ClassifierCache for InMemoryCache {
     async fn get(&self, key: &str) -> Result<Option<ClassifierOutput>, CacheError> {
-        Ok(self.inner.lock().map(|m| m.get(key).cloned()).unwrap_or(None))
+        Ok(self
+            .inner
+            .lock()
+            .map(|m| m.get(key).cloned())
+            .unwrap_or(None))
     }
 
     async fn put(&self, key: &str, value: ClassifierOutput) -> Result<(), CacheError> {
@@ -156,7 +157,9 @@ where
             }
         }
 
-        Ok(results.into_iter().map(|o| o.expect("all slots filled")).collect())
+        Ok(results
+            .into_iter()
+            .map(|o| o.expect("all slots filled"))
+            .collect())
     }
 }
-

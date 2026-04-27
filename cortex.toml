@@ -1,0 +1,74 @@
+# Cortex bootstrap configuration for the Cortex repo itself.
+#
+# Consumed by `cortex-bootstrap` (spec 09). Lets the bootstrap walker
+# treat Cortex like any other Hive repo when running
+# `cortex-bootstrap .` from the repo root.
+
+[cortex]
+id = "Cortex"
+
+[cortex.exclude]
+paths = [
+    "target/",
+    "node_modules/",
+    "gui/node_modules/",
+    "gui/dist/",
+    "dist/",
+    "tmp/",
+    ".cargo/",
+    ".git/",
+    ".cortex/",
+]
+extensions = [
+    "lock",
+    "log",
+    "pack",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "ico",
+    "pdf",
+    "exe",
+    "dll",
+    "so",
+    "dylib",
+    "wasm",
+    "zip",
+    "gz",
+    "tgz",
+    "zst",
+]
+
+[cortex.chunking]
+code_strategy = "auto"
+doc_strategy = "section"
+
+[cortex.git]
+include_commits = true
+include_prs = false
+
+[cortex.decisions]
+promote_patterns = [
+    ".rulebook/decisions/*.md",
+    ".rulebook/decisions/**/*.md",
+    "docs/decisions/*.md",
+    "docs/decisions/**/*.md",
+    "ADR-*.md",
+]
+
+[cortex.laws]
+promote_patterns = [
+    ".rulebook/laws/*.yaml",
+    ".rulebook/laws/*.yml",
+    ".claude/rules/*.md",
+]
+
+[cortex.memories]
+import_files = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    ".rulebook/memory/**/*.md",
+    ".rulebook/PLANS.md",
+]

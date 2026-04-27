@@ -6,7 +6,11 @@ import { Tag } from "../atoms/Tag";
 import { api } from "../lib/api";
 import { hasAnyFilter, useFilters } from "../lib/filters";
 
-const KIND_FACETS = ["project", "reference", "feedback", "user"];
+// Canonical kinds the cortex-api memory endpoint actually serves —
+// these are the symbol classes the spec-04 envelope writer stamps.
+// They are NOT the `project / feedback / user` Claude Code
+// auto-memory categories: those live in CLAUDE.md, not in Cortex.
+const KIND_FACETS = ["turn", "tool_call", "agent_call", "decision", "analysis"];
 
 export function MemoryView() {
   const [query, setQuery] = useState("");
