@@ -246,6 +246,28 @@ See `phase1_graph_writer_nexus_compat` (archived under `.rulebook/tasks/_archive
 6. **Orphans are allowed.** In distributed event streams, out-of-order arrivals are normal. Orphan `Turn{orphan:true}` nodes are a debuggable signal, not a data-loss error.
 7. **Inline-literal Cypher for writes (Nexus 1.15 compat).** Render every `MERGE` per-row with values escaped into the literal via `cypher_str_escape`; refuse implicit silent successes by appending `RETURN count(*) AS written` and asserting the rows array is non-empty. Revisit once Nexus fixes parametrised writes.
 
+## Post-write verification contract
+
+Nexus 1.15 has two distinct silent-drop failure modes the writer **MUST** detect:
+
+| Response shape from `RETURN count(*) AS written` | Meaning                                                | Writer action                                  |
+|--------------------------------------------------|--------------------------------------------------------|------------------------------------------------|
+| `rows: []` (empty)                               | UNWIND-write / `$param`-write quirk; nothing persisted | Hard error — abort the batch (`GraphClientError::Nexus`) |
+| `rows: [[null]]`                                 | Successful write (Nexus suppresses real counts)        | Count as `edges_upserted` / `nodes_upserted`   |
+| `rows: [[0]]` (integer zero)                     | `MATCH` found no endpoint; MERGE created nothing       | Count as `edges_dropped{edge_type=...}`, log a `WARN`, **continue the batch** |
+| `rows: [[<positive integer>]]`                   | Successful write with explicit count                   | Count as upserted                              |
+
+`assert_write_landed` in `crates/cortex-graph/src/nexus_client.rs` is the single point of enforcement. Edge silent-drops are isolated from the rest of the batch — the operator gets a structured `WARN` and the `cortex_graph_edges_dropped{edge_type}` counter, while the rest of the patch lands intact. Cross-batch endpoint races resolve themselves on the next replay because `MERGE` is idempotent.
+
+`WriteStats.edges_upserted` is therefore a **confirmed-persisted** count, not an attempted count. Spec compliance check: in any batch report,
+```
+attempted_edges_for_type(t) == write_stats.edges_upserted_for_type(t)
+                              + write_stats.edges_dropped.get(t).unwrap_or(0)
+```
+must hold. The `cortex.events.graphed` envelope inherits the confirmed count, so downstream lanes (search, dashboard) see honest numbers.
+
+This contract was added under `phase2_graph_emit_session_and_provenance_edges` (2026-04-27) after the prior `rows.is_empty()` check let `[[0]]` responses pass through as success — 15 of 17 `HAS_TURN` edges silently lost in production with `outcome="ok"` reported. See that task's `design.md` for the full probe transcript.
+
 ## Open questions
 
 1. **Per-repo graph partitions.** Should we partition the graph per repo to isolate blast radius of schema changes? Defer — Nexus HA story (architecture §11 Phase 5) will decide.

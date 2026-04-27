@@ -107,8 +107,15 @@ impl GraphWriter for NexusGraphWriter {
             *by_label.entry(node.label.clone()).or_insert(0) += 1;
             self.metrics.incr_nodes_upserted(&node.label, 1);
         }
+        // Tally each edge's edge_type *before* the write so we can
+        // back out the persisted count per type from `write_stats.
+        // edges_dropped`. The per-type metric must reflect what
+        // actually landed in Nexus, not what the patch attempted, or
+        // the dashboard returns to the same lying-success class
+        // phase1 + phase2 spent the day fixing.
+        let mut attempted_by_type: BTreeMap<String, u32> = BTreeMap::new();
         for edge in &patch.edges {
-            self.metrics.incr_edges_upserted(&edge.edge_type, 1);
+            *attempted_by_type.entry(edge.edge_type.clone()).or_insert(0) += 1;
         }
         self.metrics
             .incr_dedup_hits_nodes(u64::from(stats.node_dedup_hits));
@@ -119,6 +126,36 @@ impl GraphWriter for NexusGraphWriter {
             .client
             .run_write_tx(&patch, self.templates.as_ref())
             .await?;
+
+        // Reconcile attempted vs persisted per edge_type. Increment
+        // `edges_upserted` for the persisted slice and
+        // `edges_dropped` for the silently-lost slice; emit one WARN
+        // per edge_type that had any drops so a recurrence is loud
+        // in the worker log.
+        for (edge_type, attempted) in &attempted_by_type {
+            let dropped = write_stats
+                .edges_dropped
+                .get(edge_type)
+                .copied()
+                .unwrap_or(0);
+            let persisted = attempted.saturating_sub(dropped);
+            if persisted > 0 {
+                self.metrics
+                    .incr_edges_upserted(edge_type, u64::from(persisted));
+            }
+            if dropped > 0 {
+                for _ in 0..dropped {
+                    self.metrics.incr_edges_dropped(edge_type);
+                }
+                tracing::warn!(
+                    edge_type = %edge_type,
+                    attempted = attempted,
+                    persisted = persisted,
+                    dropped = dropped,
+                    "Nexus dropped {dropped} of {attempted} {edge_type} edges in this batch"
+                );
+            }
+        }
 
         let latency_ms = u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX);
         self.metrics.observe_tx_latency(latency_ms);

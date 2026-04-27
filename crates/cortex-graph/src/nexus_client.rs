@@ -42,12 +42,26 @@ use crate::patch::{EdgeOp, GraphPatch, NodeOp};
 
 /// Per-transaction write counters returned by a successful
 /// [`GraphClient::run_write_tx`] call.
+///
+/// `edges_upserted` reports edges that Nexus *confirmed it persisted*
+/// (the per-row `RETURN count(*)` came back non-zero). Silent drops —
+/// where Nexus accepts the HTTP call but the underlying `MATCH … MERGE`
+/// found no endpoint and produced no relationship — are kept off the
+/// upserted counter and surfaced through `edges_dropped` so the worker
+/// can WARN and bump `cortex_graph_edges_dropped{edge_type}`. See
+/// `phase2_graph_emit_session_and_provenance_edges/design.md` for the
+/// failure-mode probe transcript.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WriteStats {
     /// Number of node `MERGE`s that ran in the transaction.
     pub nodes_upserted: u32,
-    /// Number of edge `MERGE`s that ran in the transaction.
+    /// Number of edge `MERGE`s Nexus confirmed it persisted.
     pub edges_upserted: u32,
+    /// Edges the writer attempted to MERGE but Nexus silently dropped,
+    /// keyed by `edge_type`. Non-empty values are the actionable signal
+    /// for the operator: cross-batch endpoint races, schema drift,
+    /// or a regression in the writer's MATCH-MERGE shape.
+    pub edges_dropped: std::collections::BTreeMap<String, u32>,
 }
 
 /// Failure modes raised by a [`GraphClient`].
@@ -390,17 +404,42 @@ impl GraphClient for LiveNexusClient {
                 .cmp(&(b.edge_type.as_str(), b.from_label.as_str(), b.to_label.as_str()))
                 .then_with(|| (a.from_key.as_str(), a.to_key.as_str()).cmp(&(b.from_key.as_str(), b.to_key.as_str())))
         });
+        let mut edges_dropped: std::collections::BTreeMap<String, u32> =
+            std::collections::BTreeMap::new();
         for edge in edges_sorted {
             let cypher = render_edge_merge(edge);
             let result = self.execute_with_retry(&cypher, None).await?;
             let pair = format!("{}->{}", edge.from_key, edge.to_key);
-            assert_write_landed(&result, "edge", &edge.edge_type, &pair)?;
-            edges_upserted = edges_upserted.saturating_add(1);
+            // Edges that Nexus silently drops (MATCH found no endpoint)
+            // are isolated from the rest of the batch: we tally them
+            // for the operator and continue, rather than aborting an
+            // otherwise-good transaction. Cross-batch endpoint races
+            // resolve themselves on the next replay.
+            match assert_write_landed(&result, "edge", &edge.edge_type, &pair) {
+                Ok(()) => {
+                    edges_upserted = edges_upserted.saturating_add(1);
+                }
+                Err(GraphClientError::Nexus(detail))
+                    if detail.contains("count=0") =>
+                {
+                    *edges_dropped.entry(edge.edge_type.clone()).or_insert(0) += 1;
+                    tracing::warn!(
+                        edge_type = %edge.edge_type,
+                        from_label = %edge.from_label,
+                        from_key = %edge.from_key,
+                        to_label = %edge.to_label,
+                        to_key = %edge.to_key,
+                        "edge silently dropped by Nexus (MATCH found no endpoint)"
+                    );
+                }
+                Err(other) => return Err(other),
+            }
         }
 
         Ok(WriteStats {
             nodes_upserted,
             edges_upserted,
+            edges_dropped,
         })
     }
 }
@@ -513,13 +552,26 @@ fn value_to_cypher_literal(v: &serde_json::Value) -> String {
     }
 }
 
-/// Confirm a write Cypher's RETURN actually produced a row. Nexus 1.15
-/// quirk: write queries don't surface meaningful result data — even on
-/// success, `RETURN count(n) AS written` and `RETURN n` both come back
-/// as `[[null]]`. But silently-dropped writes (UNWIND-write, $param-write
-/// substitution) come back with an *empty* `rows` array. So
-/// `rows.is_empty()` is the actual signal that nothing landed; the cell
-/// value is irrelevant.
+/// Confirm a write Cypher's RETURN actually produced a row.
+///
+/// Nexus 1.15 has two failure-modes that look like success at the
+/// HTTP layer:
+///
+/// 1. UNWIND-write / `$param`-write — silently dropped, response has
+///    `rows: []` (empty). Caught here as `rows.is_empty() == true`.
+///    (The phase1_graph_writer_nexus_compat task moved the live path
+///    off these shapes, but defence in depth is cheap.)
+/// 2. `MATCH (a:From {…}), (b:To {…}) MERGE (a)-[:R]->(b) RETURN count(*)`
+///    where the `MATCH` finds nothing — Nexus returns `rows: [[0]]`.
+///    Caught here by reading the first cell and rejecting integer `0`.
+///    A *successful* write returns `rows: [[null]]` (Nexus 1.15 doesn't
+///    surface real counts on writes), which we treat as success.
+///
+/// The phase2_graph_emit_session_and_provenance_edges audit found 15
+/// of 17 `HAS_TURN` edges silently lost in production through case 2:
+/// the MATCH on the from-endpoint failed against the live Nexus while
+/// a sibling write transaction held the Session, and the previous
+/// `rows.is_empty()` check let it slide.
 fn assert_write_landed(
     result: &QueryResult,
     op: &str,
@@ -530,6 +582,32 @@ fn assert_write_landed(
         return Err(GraphClientError::Nexus(format!(
             "{op} write not persisted (kind={op_kind}, key={op_key}, no rows)"
         )));
+    }
+    // Walk the first cell. Treat an integer `0` (any signed/unsigned
+    // width) as a confirmed silent drop. `null`, positive integers,
+    // and non-numeric cells stay classified as success — Nexus 1.15
+    // returns `[[null]]` on every successful write, and tightening
+    // beyond "is it literally zero" would re-introduce the false
+    // positives that masked phase1's parametrised-write bug.
+    if let Some(first_cell) = result
+        .rows
+        .first()
+        .and_then(|row| row.as_array())
+        .and_then(|cells| cells.first())
+    {
+        if let Some(count) = first_cell.as_i64() {
+            if count == 0 {
+                return Err(GraphClientError::Nexus(format!(
+                    "{op} write not persisted (kind={op_kind}, key={op_key}, count=0)"
+                )));
+            }
+        } else if let Some(count) = first_cell.as_u64() {
+            if count == 0 {
+                return Err(GraphClientError::Nexus(format!(
+                    "{op} write not persisted (kind={op_kind}, key={op_key}, count=0)"
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -624,7 +702,103 @@ impl GraphClient for MemoryNexusClient {
         Ok(WriteStats {
             nodes_upserted: u32::try_from(patch.nodes.len()).unwrap_or(u32::MAX),
             edges_upserted: u32::try_from(patch.edges.len()).unwrap_or(u32::MAX),
+            edges_dropped: std::collections::BTreeMap::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn qresult(rows: Vec<serde_json::Value>) -> QueryResult {
+        QueryResult {
+            columns: vec!["written".to_string()],
+            rows,
+            execution_time_ms: Some(0),
+            error: None,
+        }
+    }
+
+    /// Pre-fix behaviour relied on `rows.is_empty()`. Empty rows still
+    /// signal a silent drop and the new check must keep flagging it.
+    #[test]
+    fn assert_write_landed_rejects_empty_rows() {
+        let r = qresult(vec![]);
+        let err = assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").unwrap_err();
+        match err {
+            GraphClientError::Nexus(detail) => {
+                assert!(detail.contains("no rows"), "msg={detail}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// Post-fix behaviour: Nexus 1.15 returns `[[null]]` for every
+    /// successful write. That's not a silent drop — the writer must
+    /// keep counting it as success or every persisted edge is mis-
+    /// classified.
+    #[test]
+    fn assert_write_landed_accepts_null_cell_as_success() {
+        let r = qresult(vec![json!([null])]);
+        assert!(assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").is_ok());
+    }
+
+    /// The phase2 fix: when Nexus returns `[[0]]` the MATCH found no
+    /// endpoint and the MERGE created nothing. The pre-fix check let
+    /// this slide because `rows.is_empty()` is false. The post-fix
+    /// check must reject it with a `count=0` error so the worker
+    /// can route it through the `edges_dropped` accounting path.
+    #[test]
+    fn assert_write_landed_rejects_zero_count_silent_drop() {
+        let r = qresult(vec![json!([0])]);
+        let err = assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").unwrap_err();
+        match err {
+            GraphClientError::Nexus(detail) => {
+                assert!(
+                    detail.contains("count=0") && detail.contains("HAS_TURN"),
+                    "msg={detail}"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    /// Positive integers (rare on writes, but possible if Nexus ever
+    /// surfaces real counts) should keep counting as success.
+    #[test]
+    fn assert_write_landed_accepts_positive_integer_count() {
+        let r = qresult(vec![json!([3])]);
+        assert!(assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").is_ok());
+    }
+
+    /// Non-numeric cells (Nexus could in theory return a node row)
+    /// stay classified as success — tightening beyond "is it
+    /// literally zero" risks reintroducing the false positives that
+    /// masked the parametrised-write bug fixed in phase1.
+    #[test]
+    fn assert_write_landed_accepts_non_numeric_cell() {
+        let r = qresult(vec![json!([{"id": "n-1"}])]);
+        assert!(assert_write_landed(&r, "node", "Session", "s1").is_ok());
+    }
+
+    /// A row that isn't even a list (e.g. a bare scalar) keeps the
+    /// previous "trust the wire shape" behaviour — only literal `0`
+    /// in the first cell of an array row is a silent drop.
+    #[test]
+    fn assert_write_landed_accepts_non_array_row() {
+        let r = qresult(vec![json!(null)]);
+        assert!(assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").is_ok());
+    }
+
+    /// Spec-07 §Post-write verification: the writer must confirm the
+    /// count is also non-zero when the cell is an unsigned integer
+    /// (some nexus_sdk versions decode write-counts via `as_u64`).
+    #[test]
+    fn assert_write_landed_rejects_zero_unsigned_count() {
+        let r = qresult(vec![json!([0u64])]);
+        assert!(assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").is_err());
     }
 }
 

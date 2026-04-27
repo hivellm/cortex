@@ -33,6 +33,14 @@ pub struct Metrics {
     pub orphans: Mutex<BTreeMap<String, u64>>,
     /// `cortex.graph.backpressure.active` — 0 / 1 gauge.
     pub backpressure_active: AtomicU64,
+    /// `cortex_graph_edges_dropped{edge_type}` — count of edges that
+    /// the writer attempted to MERGE but Nexus 1.15 silently dropped
+    /// (returned `count(*) == 0` from `MATCH (a),(b) MERGE (a)-[r]->(b)
+    /// RETURN count(*)`). Spec-07 §Post-write verification: every batch
+    /// reconciles attempted-vs-persisted edge counts and increments
+    /// this counter for the shortfall. A non-zero rate flags either a
+    /// missing-endpoint cross-batch race or a remote schema drift.
+    pub edges_dropped: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -97,5 +105,21 @@ impl Metrics {
     pub fn set_backpressure(&self, active: bool) {
         self.backpressure_active
             .store(u64::from(active), Ordering::Relaxed);
+    }
+
+    /// Record one edge that the writer attempted but Nexus dropped.
+    /// Drives `cortex_graph_edges_dropped{edge_type=...}`.
+    pub fn incr_edges_dropped(&self, edge_type: &str) {
+        if let Ok(mut map) = self.edges_dropped.lock() {
+            *map.entry(edge_type.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Snapshot the edges_dropped map (test / dashboard helper).
+    pub fn edges_dropped_snapshot(&self) -> BTreeMap<String, u64> {
+        self.edges_dropped
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 }
