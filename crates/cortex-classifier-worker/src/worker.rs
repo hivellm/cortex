@@ -358,6 +358,10 @@ struct NormalisedEvent {
     context_repo: Option<String>,
     context_path: Option<String>,
     parent_event_id: Option<String>,
+    /// Owning session id. From the canonical envelope's top-level
+    /// `session_id`; bootstrap events fall back to whatever they
+    /// stamped at synthesis time.
+    session_id: Option<String>,
 }
 
 impl NormalisedEvent {
@@ -380,6 +384,11 @@ impl NormalisedEvent {
             .get("path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        let session_id = if env.session_id.is_empty() {
+            None
+        } else {
+            Some(env.session_id.clone())
+        };
         Ok(Self {
             event_id: env.event_id,
             kind: env.kind,
@@ -388,6 +397,7 @@ impl NormalisedEvent {
             context_repo: env.context.repo,
             context_path,
             parent_event_id: env.parent_event_id,
+            session_id,
         })
     }
 
@@ -422,6 +432,15 @@ impl NormalisedEvent {
             .and_then(|s| s.get("path"))
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+        // Bootstrap events emit a top-level `session_id` (one per
+        // bootstrap run, shared across every emitted artifact event)
+        // — pick it up so the graph writer groups them under a real
+        // Session node instead of one synthetic session per event.
+        let session_id = payload
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         Ok(Self {
             event_id,
             kind,
@@ -430,6 +449,7 @@ impl NormalisedEvent {
             context_repo,
             context_path,
             parent_event_id: None,
+            session_id,
         })
     }
 
@@ -453,6 +473,7 @@ impl NormalisedEvent {
             context_repo: self.context_repo,
             context_path: self.context_path,
             parent_event_id: self.parent_event_id,
+            session_id: self.session_id,
         }
     }
 }
