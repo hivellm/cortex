@@ -496,10 +496,16 @@ fn collect_lane_hits(lane: &MemoryKeywordLane) -> Vec<crate::lanes::LaneHit> {
         Ok(g) => g,
         Err(_) => return Vec::new(),
     };
-    // The archive_loader seeds the same hits under three index aliases
-    // (cortex-code / cortex-docs / cortex-decisions). Pick one — the
-    // canonical one — to avoid triple-counting.
-    g.get("cortex-code").cloned().unwrap_or_default()
+    // Aggregate every seeded index. The archive_loader writes under
+    // `cortex-code`; the meili_loader (decisions / violations /
+    // memories / analyses / turns) seeds under `cortex-meili-*`.
+    // Each seed is a complete snapshot for its family, so flat-
+    // chaining them never double-counts.
+    let mut out: Vec<crate::lanes::LaneHit> = Vec::new();
+    for hits in g.values() {
+        out.extend(hits.iter().cloned());
+    }
+    out
 }
 
 /// Build a `QueryRequest` shaped for the dashboard memory endpoint.
@@ -612,17 +618,44 @@ fn build_decision_rows(hits: &[crate::lanes::LaneHit]) -> Vec<DecisionRow> {
             .strip_prefix("archive|")
             .unwrap_or(&h.doc_id)
             .to_string();
-        bodies.insert(id.clone(), h.text.clone());
+        // The meili_loader stamps cleaner fields on extras (parsed
+        // from the JSON-encoded envelope body the fulltext worker
+        // stores). Fall back to the legacy text-scraping path so
+        // archive-fed envelopes — Turn / ToolCall / AgentCall paths
+        // through detect_status() — still parse identically.
+        let extras_title = h.extras.get("title").and_then(|v| v.as_str());
+        let extras_status = h.extras.get("status").and_then(|v| v.as_str());
+        let extras_supersedes = h
+            .extras
+            .get("supersedes")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let extras_body = h.extras.get("body_markdown").and_then(|v| v.as_str());
+        let title_clean = match extras_title {
+            Some(t) if !t.is_empty() => clip(t, 120),
+            _ => clip(h.text.lines().next().unwrap_or(""), 120),
+        };
+        let rationale = match extras_body {
+            Some(b) if !b.is_empty() => Some(clip(b, 600)),
+            _ => Some(clip(&h.text, 600)),
+        };
+        let status = match extras_status {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => detect_status(&h.text),
+        };
+        let supersedes = extras_supersedes.or_else(|| detect_supersedes(&h.text));
+
+        bodies.insert(id.clone(), extras_body.unwrap_or(&h.text).to_string());
         rows.push(DecisionRow {
             id,
-            title: clip(h.text.lines().next().unwrap_or(""), 120),
-            status: detect_status(&h.text),
+            title: title_clean,
+            status,
             author: None,
             source_analysis: None,
-            rationale: Some(clip(&h.text, 600)),
+            rationale,
             tags: Vec::new(),
             cites: Vec::new(),
-            supersedes: detect_supersedes(&h.text),
+            supersedes,
             superseded_by: None,
             chain: Vec::new(),
             cites_7d: 0,
@@ -811,7 +844,18 @@ async fn decision_detail(
             h.symbol.as_deref() == Some("decision")
                 && h.doc_id.strip_prefix("archive|").unwrap_or(&h.doc_id) == row.id
         })
-        .map(|h| h.text.clone())
+        .map(|h| {
+            // Prefer the parsed body the meili_loader stamped onto
+            // extras over the lane's `text` field, since `text` may
+            // be the JSON-encoded raw envelope for archive-fed
+            // decisions. The meili-fed path always has the parsed
+            // form available.
+            h.extras
+                .get("body_markdown")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| h.text.clone())
+        })
         .unwrap_or_default();
     let detail = DecisionDetail { row, body_markdown };
     (StatusCode::OK, Json(detail)).into_response()
@@ -885,18 +929,38 @@ async fn violations(State(state): State<DashboardState>) -> Response {
     let rows: Vec<ViolationRow> = hits
         .into_iter()
         .filter(|h| h.symbol.as_deref() == Some("law_violation"))
-        .map(|h| ViolationRow {
-            id: h
+        .map(|h| {
+            let id = h
                 .doc_id
                 .strip_prefix("archive|")
                 .unwrap_or(&h.doc_id)
-                .to_string(),
-            law_id: None,
-            at: ts_to_relative(h.ts),
-            repo: h.repo.clone(),
-            action: "annotated".to_string(),
-            evidence: clip(&h.text, 240),
-            remediation: None,
+                .to_string();
+            // The meili_loader stamps `law_id` on extras when the
+            // envelope body carries it. Fall back to None for
+            // envelopes that arrived through the (currently empty)
+            // archive path.
+            let law_id = h
+                .extras
+                .get("law_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            // Critical-severity violations are surfaced as `blocked`;
+            // everything else stays `annotated`. Honest mapping until
+            // spec-14 emits a richer `action` enum on the wire.
+            let action = if h.severity.as_deref() == Some("critical") {
+                "blocked".to_string()
+            } else {
+                "annotated".to_string()
+            };
+            ViolationRow {
+                id,
+                law_id,
+                at: ts_to_relative(h.ts),
+                repo: h.repo.clone(),
+                action,
+                evidence: clip(&h.text, 240),
+                remediation: None,
+            }
         })
         .collect();
     (StatusCode::OK, Json(rows)).into_response()

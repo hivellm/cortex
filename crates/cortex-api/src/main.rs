@@ -83,6 +83,72 @@ async fn main() -> Result<()> {
         });
     }
 
+    // Pragmatic boot-time seed + periodic re-scan for non-Turn /
+    // ToolCall / AgentCall envelopes. The cortex-ingestion archive
+    // does not carry decisions, law violations, memories, or
+    // analyses — those flow exclusively through the bootstrap
+    // pipeline and live in Meili. The loader pulls them once at
+    // boot + every CORTEX_MEILI_REFRESH_SECS so the dashboard's
+    // /v1/dashboard/decisions, /violations, /memory and /analyses
+    // endpoints stop returning empty. Skips silently when the env
+    // var is absent — cold-stack dev keeps working.
+    if let Ok(meili_url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
+        let meili_api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok();
+        match cortex_api::load_meili_into_keyword_lane(
+            &meili_url,
+            meili_api_key.as_deref(),
+            &keyword,
+        )
+        .await
+        {
+            Ok(report) => {
+                tracing::info!(
+                    meili_url = %meili_url,
+                    indexes_visited = report.indexes_visited,
+                    decisions = report.decisions_seeded,
+                    violations = report.violations_seeded,
+                    memories = report.memories_seeded,
+                    analyses = report.analyses_seeded,
+                    turns = report.turns_seeded,
+                    skipped = report.hits_skipped,
+                    "meili loader: keyword lane seeded (boot)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    meili_url = %meili_url,
+                    error = %e,
+                    "meili loader: skipped — dashboard decisions/violations stay empty until next refresh",
+                );
+            }
+        }
+
+        let refresh_secs = std::env::var("CORTEX_MEILI_REFRESH_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(60)
+            .max(5);
+        let lane = keyword.clone();
+        let url = meili_url.clone();
+        let key = meili_api_key.clone();
+        tokio::spawn(async move {
+            let interval = Duration::from_secs(refresh_secs);
+            loop {
+                tokio::time::sleep(interval).await;
+                match cortex_api::load_meili_into_keyword_lane(&url, key.as_deref(), &lane)
+                    .await
+                {
+                    Ok(report) => tracing::debug!(
+                        meili_url = %url,
+                        total = report.total_seeded(),
+                        "meili loader: refreshed"
+                    ),
+                    Err(e) => tracing::warn!(meili_url = %url, error = %e, "meili loader: refresh failed"),
+                }
+            }
+        });
+    }
+
     let nexus_client = build_nexus_client().await;
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword.clone(),
