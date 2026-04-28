@@ -71,6 +71,7 @@ fn build_stack_for_mode(
             let cli_cfg = HaikuCliConfig {
                 claude_bin: PathBuf::from(&config.claude_bin),
                 model: config.model.clone(),
+                timeout: std::time::Duration::from_secs(config.cli_timeout_secs),
                 ..Default::default()
             };
             let backend: Box<dyn Classifier> = Box::new(HaikuCliClassifier::new(cli_cfg));

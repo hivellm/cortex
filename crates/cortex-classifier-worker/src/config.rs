@@ -40,6 +40,12 @@ pub struct ClassifierWorkerConfig {
     pub claude_bin: String,
     /// Optional model identifier override (Cli mode).
     pub model: String,
+    /// Per-batch CLI timeout in seconds. Sonnet-class models with
+    /// 32-event batches and a cold subprocess regularly need >30s,
+    /// so the previous hard-coded 30s default produced 100% timeout
+    /// rates and every classification fell back to the static path.
+    /// Override with `CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS`.
+    pub cli_timeout_secs: u64,
 }
 
 impl Default for ClassifierWorkerConfig {
@@ -53,6 +59,7 @@ impl Default for ClassifierWorkerConfig {
             prompt_version: "static-v1".to_string(),
             claude_bin: "claude".to_string(),
             model: "claude-haiku-4-5".to_string(),
+            cli_timeout_secs: 90,
         }
     }
 }
@@ -78,6 +85,10 @@ impl ClassifierWorkerConfig {
                 .unwrap_or(def.prompt_version),
             claude_bin: env::var("CLAUDE_CODE_BIN").unwrap_or(def.claude_bin),
             model: env::var("CORTEX_CLASSIFIER_MODEL").unwrap_or(def.model),
+            cli_timeout_secs: parse_u64(
+                "CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS",
+                def.cli_timeout_secs,
+            ),
         }
     }
 }
