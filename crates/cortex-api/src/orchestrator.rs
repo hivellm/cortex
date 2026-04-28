@@ -152,6 +152,40 @@ impl Orchestrator {
             keyword_result.hits.clone(),
             graph_result.hits.clone(),
         ]);
+        // Post-fusion dedupe + degenerate-hit filter. `rrf_fuse` only
+        // dedupes by `doc_id`, so the same artifact lands twice when
+        // the keyword lane (`meili|...`) and vector lane (`vec|...`)
+        // both surface it. Collapse on `(repo, path, symbol)` and
+        // keep the first (highest-fused) occurrence so the snippet
+        // section doesn't repeat the same file under different lane
+        // labels. Hits that carry no identifying tuple AND no text
+        // — observed when the vector lane returns empty metadata
+        // — are dropped entirely; otherwise they render as blank
+        // numbered lines in the spec-12 bundle.
+        let mut seen_anchor: std::collections::HashSet<(String, String, String)> =
+            std::collections::HashSet::new();
+        fused.retain(|h| {
+            let anchor = (
+                h.repo.clone().unwrap_or_default(),
+                h.path.clone().unwrap_or_default(),
+                h.symbol.clone().unwrap_or_default(),
+            );
+            let has_anchor = !(anchor.0.is_empty() && anchor.1.is_empty() && anchor.2.is_empty());
+            if has_anchor {
+                return seen_anchor.insert(anchor);
+            }
+            // Anchor-less hit: only keep when it carries useful text
+            // or a `why` blurb. Filters out vector-lane hits whose
+            // upstream metadata was empty.
+            let has_text = !h.text.trim().is_empty();
+            let has_why = h
+                .extras
+                .get("why")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.trim().is_empty())
+                .unwrap_or(false);
+            has_text || has_why
+        });
         fused.truncate(req.limit);
 
         if req.include.contains(&IncludeField::Snippets) {

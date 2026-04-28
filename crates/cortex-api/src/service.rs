@@ -115,6 +115,29 @@ impl QueryService {
         })
     }
 
+    /// Build a [`Notice`] when the canonicalised scope omitted
+    /// `scope.repo`. The strategies layer slugifies an empty repo to
+    /// the `unknown` family and the lanes return zero hits — without
+    /// this notice the caller sees a silent empty success and has no
+    /// way to know the request never targeted a real index. Returns
+    /// `None` when the repo IS set (the existing
+    /// `repo_not_indexed` path covers the unknown-but-set case).
+    fn build_scope_unset_notice(canonical: &Scope) -> Option<Notice> {
+        if canonical.repo.is_some() {
+            return None;
+        }
+        Some(Notice {
+            code: "scope_unset".to_string(),
+            message: "scope.repo is missing — query targeted the `unknown` family and \
+                      returned zero hits"
+                .to_string(),
+            hint: "set `scope.repo` to one of the indexed repos (see \
+                   `/v1/status.indexed_repos`); MCP callers can pass \
+                   `scope: { repo: \"<repo>\" }` in the tool arguments."
+                .to_string(),
+        })
+    }
+
     /// Run one request through the full pipeline.
     pub async fn handle(&self, caller: &str, req: QueryRequest) -> ServiceOutcome {
         if req.query.trim().is_empty() {
@@ -160,6 +183,14 @@ impl QueryService {
         // structured remediation hint instead of an empty success.
         if response.notice.is_none() {
             response.notice = self.build_repo_not_indexed_notice(&response.scope_resolved);
+        }
+        // Fallback diagnostic: when the caller forgot scope.repo
+        // entirely we still want them to see an actionable hint
+        // instead of `results: {}`. The repo-set-but-unknown path
+        // above already produces `repo_not_indexed`, so this only
+        // fires when `scope.repo` is `None` after canonicalisation.
+        if response.notice.is_none() {
+            response.notice = Self::build_scope_unset_notice(&response.scope_resolved);
         }
         self.cache.put(&key, response.clone()).await;
         self.audit
@@ -394,12 +425,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn notice_absent_when_request_omits_scope_repo() {
+    async fn scope_unset_notice_fires_when_request_omits_scope_repo() {
+        // Spec 11 §Failure modes — a missing `scope.repo` makes the
+        // strategies layer slugify to the `unknown` family, so every
+        // lane returns zero hits. The service surfaces that as a
+        // `scope_unset` notice (instead of a silent empty success)
+        // so MCP / dashboard callers can render an actionable hint.
         let lane = Arc::new(MemoryKeywordLane::new());
         let svc = QueryService::with_memory_defaults(build_orchestrator())
             .with_indexed_repos(lane);
         match svc.handle("dash", req("anything")).await {
-            ServiceOutcome::Ok(resp) => assert!(resp.notice.is_none()),
+            ServiceOutcome::Ok(resp) => {
+                let n = resp.notice.expect("expected scope_unset notice");
+                assert_eq!(n.code, "scope_unset");
+                assert!(
+                    !n.hint.is_empty(),
+                    "scope_unset notice must carry a remediation hint"
+                );
+            }
             other => panic!("expected Ok, got {other:?}"),
         }
     }
