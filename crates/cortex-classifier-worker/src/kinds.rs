@@ -26,7 +26,7 @@ pub fn kind_from_bootstrap(kind: &str) -> Result<Kind, KindMapError> {
         "memory.imported" | "memory" => Ok(Kind::Memory),
         "tool_call" | "tool.call" => Ok(Kind::ToolCall),
         "agent_call" | "agent.call" => Ok(Kind::AgentCall),
-        "analysis" => Ok(Kind::Analysis),
+        "analysis.imported" | "analysis" => Ok(Kind::Analysis),
         _ => Err(KindMapError::Unknown(kind.to_string())),
     }
 }
@@ -71,6 +71,15 @@ mod tests {
             kind_from_bootstrap("memory.imported").unwrap(),
             Kind::Memory
         );
+    }
+
+    #[test]
+    fn analysis_imported_maps_to_analysis() {
+        assert_eq!(
+            kind_from_bootstrap("analysis.imported").unwrap(),
+            Kind::Analysis
+        );
+        assert_eq!(kind_from_bootstrap("analysis").unwrap(), Kind::Analysis);
     }
 
     #[test]

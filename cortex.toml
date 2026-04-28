@@ -64,6 +64,14 @@ promote_patterns = [
     ".claude/rules/*.md",
 ]
 
+[cortex.analyses]
+promote_patterns = [
+    "docs/analysis/*.md",
+    "docs/analysis/**/*.md",
+    "docs/analyses/*.md",
+    "docs/analyses/**/*.md",
+]
+
 [cortex.memories]
 import_files = [
     "CLAUDE.md",

@@ -33,6 +33,10 @@ pub enum FileClass {
     Law,
     /// Memory file — `memory.imported`.
     Memory,
+    /// Audit / deep-analysis report — `analysis.imported`. Lives
+    /// under `docs/analysis/**/*.md` by convention; the explicit
+    /// `[cortex.analyses].promote_patterns` opts a path in.
+    Analysis,
     /// Anything else worth indexing as opaque text.
     Other,
 }
@@ -241,6 +245,7 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
         // surfaced in discovery).
         let promoted = matches_any(&cfg.decisions.promote_patterns, &rel_path)
             || matches_any(&cfg.laws.promote_patterns, &rel_path)
+            || matches_any(&cfg.analyses.promote_patterns, &rel_path)
             || matches_any(&cfg.memories.import_files, &rel_path)
             || matches_str_globs(RULEBOOK_DECISION_GLOBS, &rel_path)
             || matches_str_globs(RULEBOOK_MEMORY_GLOBS, &rel_path);
@@ -334,6 +339,9 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
     }
     if matches_any(&cfg.laws.promote_patterns, rel_path) {
         return FileClass::Law;
+    }
+    if matches_any(&cfg.analyses.promote_patterns, rel_path) {
+        return FileClass::Analysis;
     }
     if matches_any(&cfg.memories.import_files, rel_path) {
         return FileClass::Memory;
@@ -465,6 +473,7 @@ mod tests {
         let mut cfg = CortexSection::default();
         cfg.decisions.promote_patterns = vec!["docs/decisions/*.md".into(), "ADR-*.md".into()];
         cfg.laws.promote_patterns = vec!["rulebook/laws/*.yaml".into()];
+        cfg.analyses.promote_patterns = vec!["docs/analysis/**/*.md".into()];
         cfg.memories.import_files = vec!["CLAUDE.md".into()];
         assert_eq!(
             classify_path("docs/decisions/0042-adopt-meili.md", &cfg),
@@ -473,6 +482,14 @@ mod tests {
         assert_eq!(
             classify_path("rulebook/laws/LAW-007.yaml", &cfg),
             FileClass::Law
+        );
+        assert_eq!(
+            classify_path("docs/analysis/cortex/01-overview.md", &cfg),
+            FileClass::Analysis
+        );
+        assert_eq!(
+            classify_path("docs/analysis/2026-04-28-audit.md", &cfg),
+            FileClass::Analysis
         );
         assert_eq!(classify_path("CLAUDE.md", &cfg), FileClass::Memory);
         assert_eq!(classify_path("README.md", &cfg), FileClass::Doc);

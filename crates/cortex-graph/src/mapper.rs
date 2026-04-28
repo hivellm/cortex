@@ -472,27 +472,62 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
 }
 
 fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
-    let payload: Option<AnalysisPayload> =
+    // Two payload shapes feed this emitter:
+    //
+    //   1. Deep-analysis (spec 15) — `AnalysisPayload {
+    //      analysis_id, question, status, decision_id?, panel }`.
+    //   2. Bootstrap-imported audit/report (phase4e) — `{ title,
+    //      status, body, source_path }`. No analysis_id; the
+    //      event_id is the natural key.
+    //
+    // We try the canonical shape first; when it doesn't fit (or
+    // produces an empty analysis_id), we fall back to the imported
+    // shape. Either way the result is a labelled `Analysis` node
+    // wired to its owning Repo via `ANALYZES`.
+    let canonical: Option<AnalysisPayload> =
         serde_json::from_value(event.redacted_payload.clone()).ok();
-    // Architecture §4.2 — `Analysis.id` is a ULID minted upstream;
-    // the payload carries it as `analysis_id`. Fall back to
-    // `event_id` when the payload was redacted away.
-    let analysis_key = payload
+    let canonical_id = canonical
         .as_ref()
         .map(|p| p.analysis_id.clone())
-        .unwrap_or_else(|| event.event_id.clone());
+        .filter(|s| !s.is_empty());
+
+    let analysis_key = canonical_id.unwrap_or_else(|| event.event_id.clone());
+    let imported_title = event
+        .redacted_payload
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let imported_status = event
+        .redacted_payload
+        .get("status")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let imported_source_path = event
+        .redacted_payload
+        .get("source_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     let mut props = BTreeMap::new();
     props.insert("id".to_string(), Value::String(analysis_key.clone()));
-    let display = payload
-        .as_ref()
-        .filter(|p| !p.question.is_empty())
-        .map(|p| format!("{} · {}", analysis_key, p.question))
-        .unwrap_or_else(|| format!("Analysis {analysis_key}"));
+    let display = match canonical.as_ref() {
+        Some(p) if !p.question.is_empty() => format!("{} · {}", analysis_key, p.question),
+        _ => match imported_title.as_deref() {
+            Some(t) => t.to_string(),
+            None => format!("Analysis {analysis_key}"),
+        },
+    };
     props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
-    if let Some(p) = payload.as_ref() {
-        props.insert("title".to_string(), Value::String(p.question.clone()));
-        props.insert("status".to_string(), Value::String(p.status.clone()));
+    if let Some(p) = canonical.as_ref() {
+        if !p.question.is_empty() {
+            props.insert("title".to_string(), Value::String(p.question.clone()));
+        }
+        if !p.status.is_empty() {
+            props.insert("status".to_string(), Value::String(p.status.clone()));
+        }
         if let Some(decision) = p.decision_id.as_deref() {
             props.insert("decision_id".to_string(), Value::String(decision.to_string()));
         }
@@ -503,11 +538,49 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
             );
         }
     }
+    // Imported-shape fields are only set when they aren't already present
+    // — canonical wins when both are populated (defensive against an
+    // event that happens to carry both shapes).
+    if let Some(t) = imported_title.as_deref() {
+        props.entry("title".to_string()).or_insert_with(|| Value::String(t.to_string()));
+    }
+    if let Some(s) = imported_status.as_deref() {
+        props.entry("status".to_string()).or_insert_with(|| Value::String(s.to_string()));
+    }
+    if let Some(p) = imported_source_path.as_deref() {
+        props.insert("source_path".to_string(), Value::String(p.to_string()));
+    }
+
     patch.nodes.push(NodeOp {
         label: "Analysis".to_string(),
-        natural_key: analysis_key,
+        natural_key: analysis_key.clone(),
         props,
     });
+
+    // (:Analysis)-[:ANALYZES]->(:Repo) — anchors the analysis to the
+    // repo it surveys. The Repo node is upserted by `emit_artifact`
+    // for every `artifact.*` event in the same bootstrap run, so
+    // pointing at it by natural key is safe; the writer's
+    // `assert_write_landed` path catches a regression if the Repo
+    // node ever fails to land.
+    if let Some(repo) = event.context_repo.as_deref().filter(|s| !s.is_empty()) {
+        let mut repo_props = BTreeMap::new();
+        repo_props.insert("name".to_string(), Value::String(repo.to_string()));
+        repo_props.insert("repo".to_string(), Value::String(repo.to_string()));
+        patch.nodes.push(NodeOp {
+            label: "Repo".to_string(),
+            natural_key: repo.to_string(),
+            props: repo_props,
+        });
+        patch.edges.push(EdgeOp {
+            edge_type: "ANALYZES".to_string(),
+            from_label: "Analysis".to_string(),
+            from_key: analysis_key,
+            to_label: "Repo".to_string(),
+            to_key: repo.to_string(),
+            props: BTreeMap::new(),
+        });
+    }
 }
 
 fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {

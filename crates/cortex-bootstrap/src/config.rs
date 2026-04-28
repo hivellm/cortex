@@ -45,6 +45,13 @@ pub struct CortexSection {
     /// `[cortex.laws]` block.
     #[serde(default)]
     pub laws: PromoteConfig,
+    /// `[cortex.analyses]` block — promote audit / deep-analysis
+    /// reports (typically under `docs/analysis/**/*.md`) to a
+    /// dedicated `analysis.imported` event kind so they fan out
+    /// to the analyses index/collection/sub-graph instead of the
+    /// generic docs bucket.
+    #[serde(default)]
+    pub analyses: PromoteConfig,
     /// `[cortex.memories]` block.
     #[serde(default)]
     pub memories: MemoriesConfig,
@@ -277,6 +284,9 @@ promote_patterns = ["docs/decisions/*.md", "ADR-*.md"]
 [cortex.laws]
 promote_patterns = ["rulebook/laws/*.yaml"]
 
+[cortex.analyses]
+promote_patterns = ["docs/analysis/**/*.md"]
+
 [cortex.memories]
 import_files = ["CLAUDE.md", "AGENTS.md"]
 "#;
@@ -288,6 +298,17 @@ import_files = ["CLAUDE.md", "AGENTS.md"]
         assert!(cfg.cortex.git.include_prs);
         assert_eq!(cfg.cortex.git.since.as_deref(), Some("2019-01-01"));
         assert_eq!(cfg.cortex.decisions.promote_patterns.len(), 2);
+        assert_eq!(cfg.cortex.analyses.promote_patterns.len(), 1);
+        assert_eq!(
+            cfg.cortex.analyses.promote_patterns[0],
+            "docs/analysis/**/*.md"
+        );
         assert_eq!(cfg.cortex.memories.import_files.len(), 2);
+    }
+
+    #[test]
+    fn analyses_block_defaults_to_empty() {
+        let cfg: CortexToml = toml::from_str("").expect("parse empty");
+        assert!(cfg.cortex.analyses.promote_patterns.is_empty());
     }
 }

@@ -25,8 +25,13 @@ fn family_for(kind: &Kind) -> &'static str {
         Kind::Decision => "decisions",
         Kind::Turn => "turns",
         Kind::LawViolation => "governance",
+        // Audit / deep-analysis reports get their own per-repo
+        // collection so the dashboard's Analysis view can scope to a
+        // single index instead of fishing them out of the catch-all
+        // misc bucket.
+        Kind::Analysis => "analyses",
         // Catch-all for kinds not explicitly called out in the spec table.
-        Kind::AgentCall | Kind::Memory | Kind::Analysis => "misc",
+        Kind::AgentCall | Kind::Memory => "misc",
     }
 }
 
@@ -130,6 +135,18 @@ mod tests {
         assert_eq!(
             collection_for(&Kind::Turn, "cortex", Some("Cortex")),
             "cortex-cortex-turns"
+        );
+    }
+
+    #[test]
+    fn analysis_routes_to_dedicated_per_repo_analyses_collection() {
+        assert_eq!(
+            collection_for(&Kind::Analysis, "cortex", Some("Cortex")),
+            "cortex-cortex-analyses"
+        );
+        assert_eq!(
+            collection_for(&Kind::Analysis, "cortex", Some("Rulebook")),
+            "cortex-rulebook-analyses"
         );
     }
 }

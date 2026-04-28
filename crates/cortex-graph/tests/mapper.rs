@@ -375,6 +375,91 @@ fn law_violation_with_unknown_observed_kind_drops_edge_safely() {
     );
 }
 
+// ---------- Analysis ----------
+
+#[test]
+fn imported_analysis_emits_analysis_node_and_analyzes_edge_to_repo() {
+    // Bootstrap-shape payload (phase4e): `{ title, status, body,
+    // source_path }`. The mapper must produce an `Analysis` node
+    // labelled by the title plus an `ANALYZES` edge wired to the
+    // owning repo.
+    let payload = json!({
+        "title": "Cortex — System Analysis (2026-04-28)",
+        "status": "draft",
+        "body": "# Cortex — System Analysis (2026-04-28)\n\nBody.",
+        "source_path": "docs/analysis/cortex/00-index.md"
+    });
+    let evt = event(
+        "01ANALYSIS00000000000000A1",
+        Kind::Analysis,
+        payload,
+        Some("Cortex"),
+        Some("docs/analysis/cortex/00-index.md"),
+        None,
+    );
+    let patch = map_event_to_patch(&evt);
+
+    let analysis = patch
+        .nodes
+        .iter()
+        .find(|n| n.label == "Analysis")
+        .expect("Analysis node must be present");
+    assert_eq!(analysis.natural_key, "01ANALYSIS00000000000000A1");
+    assert_eq!(
+        analysis.props.get("title").and_then(|v| v.as_str()),
+        Some("Cortex — System Analysis (2026-04-28)")
+    );
+    assert_eq!(
+        analysis.props.get("status").and_then(|v| v.as_str()),
+        Some("draft")
+    );
+    assert_eq!(
+        analysis.props.get("source_path").and_then(|v| v.as_str()),
+        Some("docs/analysis/cortex/00-index.md")
+    );
+
+    let repo = patch
+        .nodes
+        .iter()
+        .find(|n| n.label == "Repo" && n.natural_key == "Cortex")
+        .expect("Repo node must be present");
+    assert_eq!(repo.props.get("name").and_then(|v| v.as_str()), Some("Cortex"));
+
+    let analyzes = patch
+        .edges
+        .iter()
+        .find(|e| e.edge_type == "ANALYZES")
+        .expect("ANALYZES edge must be present");
+    assert_eq!(analyzes.from_label, "Analysis");
+    assert_eq!(analyzes.from_key, "01ANALYSIS00000000000000A1");
+    assert_eq!(analyzes.to_label, "Repo");
+    assert_eq!(analyzes.to_key, "Cortex");
+}
+
+#[test]
+fn imported_analysis_without_repo_skips_analyzes_edge() {
+    let payload = json!({
+        "title": "Loose Analysis",
+        "status": "draft",
+        "body": "# Loose",
+        "source_path": "docs/analysis/loose.md"
+    });
+    let evt = event(
+        "01ANALYSIS00000000000000A2",
+        Kind::Analysis,
+        payload,
+        None,
+        None,
+        None,
+    );
+    let patch = map_event_to_patch(&evt);
+    assert!(patch.nodes.iter().any(|n| n.label == "Analysis"));
+    assert!(
+        patch.edges.iter().all(|e| e.edge_type != "ANALYZES"),
+        "no ANALYZES edge expected when context_repo is missing"
+    );
+}
+
 // ---------- Robustness ----------
 
 #[test]

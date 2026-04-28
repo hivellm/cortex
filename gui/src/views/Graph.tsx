@@ -81,9 +81,13 @@ type SelectedNode = {
 function GraphLoader({
   data,
   onSelect,
+  onRepoClick,
+  drilldown,
 }: {
   data: GraphPayload | undefined;
   onSelect: (s: SelectedNode | null) => void;
+  onRepoClick: (repoId: string) => void;
+  drilldown: boolean;
 }) {
   const sigma = useSigma();
   const loadGraph = useLoadGraph();
@@ -118,7 +122,13 @@ function GraphLoader({
     // hub) but never rendered as their own nodes. The result is a
     // ~100-node graph that reads like the spec-07 schema diagram
     // instead of a hairball.
-    const STRUCTURAL_KINDS = new Set([
+    // In skeleton mode (the default panorama view) the long-tail
+    // Artifacts / ToolCalls are dropped — at scale they form a black
+    // ball with zero discoverable structure. In drilldown mode (the
+    // user clicked a Repo, narrowing the backend filter to a single
+    // project) we let them through so the user can actually inspect
+    // the repo's IN_REPO subtree they just expanded.
+    const SKELETON_KINDS = new Set([
       "repo",
       "session",
       "turn",
@@ -129,6 +139,12 @@ function GraphLoader({
       "analysis",
       "agent_call",
     ]);
+    const DRILLDOWN_KINDS = new Set([
+      ...SKELETON_KINDS,
+      "artifact",
+      "tool_call",
+    ]);
+    const STRUCTURAL_KINDS = drilldown ? DRILLDOWN_KINDS : SKELETON_KINDS;
     const inboundCount = new Map<string, number>();
     for (const e of data.edges) {
       inboundCount.set(e.to, (inboundCount.get(e.to) ?? 0) + 1);
@@ -298,7 +314,7 @@ function GraphLoader({
     sigma.setSetting("defaultNodeColor", "#9aa5ce");
 
     loadGraph(g);
-  }, [data, loadGraph, sigma]);
+  }, [data, loadGraph, sigma, drilldown]);
 
   useEffect(() => {
     registerEvents({
@@ -307,16 +323,25 @@ function GraphLoader({
       clickNode: ({ node }) => {
         const g = sigma.getGraph();
         if (!g.hasNode(node)) return;
+        const kind = g.getNodeAttribute(node, "kind") ?? "unknown";
+        // Repo nodes are drill-down anchors — clicking one narrows
+        // the backend filter to that project (single-repo mode).
+        // The next render will pull the full subtree (artifacts +
+        // tool calls) instead of the structural skeleton.
+        if (kind === "repo") {
+          onRepoClick(node);
+          return;
+        }
         onSelect({
           id: node,
           label: g.getNodeAttribute(node, "label") ?? node,
-          kind: g.getNodeAttribute(node, "kind") ?? "unknown",
+          kind,
           neighbors: g.degree(node),
         });
       },
       clickStage: () => onSelect(null),
     });
-  }, [registerEvents, sigma, onSelect]);
+  }, [registerEvents, sigma, onSelect, onRepoClick]);
 
   useEffect(() => {
     const dimColor = "#2a2e3a";
@@ -340,12 +365,18 @@ function GraphLoader({
 }
 
 export function GraphView() {
-  const { filters } = useFilters();
+  const { filters, setFilter } = useFilters();
   const [selected, setSelected] = useState<SelectedNode | null>(null);
+  const isRepoDrilldown =
+    !!filters.repo && filters.repo.length > 0 && !filters.session_id;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["graph", filters.session_id ?? ""],
-    queryFn: () => api.graph(filters.session_id, 30_000),
+    queryKey: [
+      "graph",
+      filters.session_id ?? "",
+      (filters.repo ?? []).slice().sort().join("|"),
+    ],
+    queryFn: () => api.graph(filters.session_id, 30_000, filters.repo),
     // The full panorama is multiple MB on the wire and a few seconds
     // of FA2 layout — refetching every 12 s would peg the CPU on a
     // laptop. 60 s is the closest cadence the dashboard actually
@@ -357,21 +388,24 @@ export function GraphView() {
   // Count what survives the structural filter the loader applies, not
   // the full payload — the user's mental model is "how many shapes
   // does the canvas show", not "how many rows did the backend send".
-  const STRUCTURAL_KINDS = useMemo(
-    () =>
-      new Set([
-        "repo",
-        "session",
-        "turn",
-        "decision",
-        "law",
-        "violation",
-        "memory",
-        "analysis",
-        "agent_call",
-      ]),
-    [],
-  );
+  // Mirror the loader's drilldown switch so the side panel's `shown`
+  // count matches the canvas in single-repo mode.
+  const STRUCTURAL_KINDS = useMemo(() => {
+    const base = [
+      "repo",
+      "session",
+      "turn",
+      "decision",
+      "law",
+      "violation",
+      "memory",
+      "analysis",
+      "agent_call",
+    ];
+    return new Set(
+      isRepoDrilldown ? [...base, "artifact", "tool_call"] : base,
+    );
+  }, [isRepoDrilldown]);
   const renderedNodes = useMemo(
     () =>
       data?.nodes.filter((n) => STRUCTURAL_KINDS.has(n.kind)).length ?? 0,
@@ -458,7 +492,21 @@ export function GraphView() {
             }}
             settings={sigmaSettings}
           >
-            <GraphLoader data={data} onSelect={setSelected} />
+            <GraphLoader
+              data={data}
+              onSelect={setSelected}
+              onRepoClick={(repoId) => {
+                // Toggle: clicking the already-active Repo clears
+                // the filter; clicking a different Repo swaps to it.
+                const current = filters.repo ?? [];
+                if (current.length === 1 && current[0] === repoId) {
+                  setFilter("repo", undefined);
+                } else {
+                  setFilter("repo", [repoId]);
+                }
+              }}
+              drilldown={isRepoDrilldown}
+            />
             <ControlsContainer position="top-left">
               <ZoomControl />
               <FullScreenControl />
@@ -535,7 +583,9 @@ export function GraphView() {
               <dd className="mono">
                 {filters.session_id
                   ? filters.session_id.slice(0, 12) + "..."
-                  : "all sessions"}
+                  : filters.repo && filters.repo.length > 0
+                    ? filters.repo.join(", ")
+                    : "all sessions"}
               </dd>
               <dt>refresh</dt>
               <dd className="mono">60 s</dd>

@@ -205,6 +205,47 @@ pub fn emit_law_imported(
     finalise("law.imported", session_id, source, payload, stream)
 }
 
+/// Build the `analysis.imported` event for one audit / deep-analysis
+/// report. Title comes from the first H1; status from a `Status:`
+/// line if present (defaults to `draft`). The `body` field carries
+/// the full markdown so downstream embedders + fulltext can chunk
+/// it without re-reading the source file.
+pub fn emit_analysis_imported(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    rel_path: &str,
+    body: &str,
+    stream: &str,
+) -> BootstrapEvent {
+    let title = derive_doc_title(body, rel_path);
+    let status = derive_status(body).unwrap_or_else(|| "draft".to_string());
+    let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
+    let payload = json!({
+        "title": title,
+        "status": status,
+        "body": body,
+        "source_path": rel_path,
+    });
+    finalise("analysis.imported", session_id, source, payload, stream)
+}
+
+/// Extract a `Status:` line value from the body, case-insensitive,
+/// matching the same loose front-matter convention `parse_decision_markdown`
+/// uses. Returns `None` when no recognisable status line is present.
+fn derive_status(body: &str) -> Option<String> {
+    for line in body.lines() {
+        let trimmed = line.trim().trim_start_matches(|c: char| c == '*' || c == '>' || c.is_whitespace());
+        if let Some(rest) = strip_prefix_ci(trimmed, "status:") {
+            let v = rest.trim().trim_matches(|c: char| c == '*' || c == '"');
+            if !v.is_empty() {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Build the `memory.imported` event for one memory file.
 pub fn emit_memory_imported(
     repo_id: &str,
@@ -409,6 +450,9 @@ pub fn emit_for_file(
         FileClass::Memory => Some(emit_memory_imported(
             repo_id, session_id, git_ref, rel_path, body, stream,
         )),
+        FileClass::Analysis => Some(emit_analysis_imported(
+            repo_id, session_id, git_ref, rel_path, body, stream,
+        )),
         FileClass::Other => None,
     }
 }
@@ -571,6 +615,63 @@ mod tests {
             BOOTSTRAP_STREAM,
         );
         assert_eq!(evt.redacted_payload["law_id"], "LAW-042");
+    }
+
+    #[test]
+    fn analysis_imported_extracts_title_and_status() {
+        let body = "# Cortex — System Analysis (2026-04-28)\n\n> Status: draft\n\nBody.";
+        let evt = emit_analysis_imported(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            "docs/analysis/cortex/00-index.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(evt.kind, "analysis.imported");
+        assert_eq!(
+            evt.redacted_payload["title"],
+            "Cortex — System Analysis (2026-04-28)"
+        );
+        assert_eq!(evt.redacted_payload["status"], "draft");
+        assert_eq!(
+            evt.redacted_payload["source_path"],
+            "docs/analysis/cortex/00-index.md"
+        );
+        assert!(evt.redacted_payload["body"].as_str().unwrap().starts_with("# Cortex"));
+    }
+
+    #[test]
+    fn analysis_imported_defaults_status_to_draft() {
+        let evt = emit_analysis_imported(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            "docs/analysis/cortex/02-pipeline-state.md",
+            "# Pipeline State\n\nNo status line.",
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(evt.redacted_payload["status"], "draft");
+    }
+
+    #[test]
+    fn analysis_imported_routed_via_emit_for_file() {
+        let e = WalkEntry::Accepted {
+            path: PathBuf::from("docs/analysis/cortex/01-overview.md"),
+            rel_path: "docs/analysis/cortex/01-overview.md".to_string(),
+            size_bytes: 4242,
+            class: FileClass::Analysis,
+        };
+        let evt = emit_for_file(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            &e,
+            "# Overview\n\n2-3 paragraph audit body.",
+            BOOTSTRAP_STREAM,
+        )
+        .expect("must emit");
+        assert_eq!(evt.kind, "analysis.imported");
     }
 
     #[test]

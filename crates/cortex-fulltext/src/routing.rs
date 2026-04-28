@@ -31,9 +31,9 @@ const DOC_EXTENSIONS: &[&str] = &[
 /// Family suffix for the index a `Kind` routes to when no richer
 /// signals (topics, path) are available. Spec 08 §Indexes:
 /// `tool_call` ⇒ `code`, `decision` ⇒ `decisions`, `turn` ⇒ `turns`,
-/// `law_violation` ⇒ `governance`, `artifact` ⇒ `misc` (forced into
-/// the topic-aware path when called via [`family_for_event`]),
-/// anything else ⇒ `misc`.
+/// `law_violation` ⇒ `governance`, `analysis` ⇒ `analyses`,
+/// `artifact` ⇒ `misc` (forced into the topic-aware path when called
+/// via [`family_for_event`]), anything else ⇒ `misc`.
 pub fn family_for(kind: Kind) -> &'static str {
     match kind {
         // tool_call sits alongside `code` because the body is almost always
@@ -48,8 +48,12 @@ pub fn family_for(kind: Kind) -> &'static str {
         // queries deterministic.
         Kind::Turn | Kind::AgentCall => "turns",
         Kind::LawViolation => "governance",
+        // Analysis events get their own family so audit / deep-analysis
+        // reports do not get diluted in the catch-all `misc` bucket and
+        // the dashboard's Analysis view can scope to a single index.
+        Kind::Analysis => "analyses",
         Kind::Artifact => "misc",
-        Kind::Memory | Kind::Analysis => "misc",
+        Kind::Memory => "misc",
     }
 }
 
@@ -139,7 +143,15 @@ pub fn index_for_event(prefix: &str, event: &EnrichedEvent) -> String {
 /// All known family suffixes in deterministic order. Used by tests that
 /// need to iterate every family. Bootstrap is now lazy per-repo, so
 /// this is no longer driven into a fixed `ensure_index` loop.
-pub const FAMILIES: &[&str] = &["code", "docs", "decisions", "turns", "governance", "misc"];
+pub const FAMILIES: &[&str] = &[
+    "code",
+    "docs",
+    "decisions",
+    "turns",
+    "governance",
+    "analyses",
+    "misc",
+];
 
 #[cfg(test)]
 mod tests {
@@ -230,6 +242,21 @@ mod tests {
         // agent_call rides with `turn` per spec-08 — both are
         // conversational dispatches.
         assert_eq!(family_for_event(Kind::AgentCall, &[], None), "turns");
+        // Analysis events route to their own dedicated family so the
+        // dashboard Analysis view can scope to a single index.
+        assert_eq!(family_for_event(Kind::Analysis, &[], None), "analyses");
+    }
+
+    #[test]
+    fn analysis_index_uses_analyses_family_per_repo() {
+        assert_eq!(
+            index_for("cortex-", Kind::Analysis, Some("Cortex")),
+            "cortex-cortex-analyses"
+        );
+        assert_eq!(
+            index_for("cortex-", Kind::Analysis, Some("Rulebook")),
+            "cortex-rulebook-analyses"
+        );
     }
 
     #[test]
@@ -246,7 +273,7 @@ mod tests {
             (Kind::AgentCall, "turns"),
             (Kind::ToolCall, "code"),
             (Kind::Memory, "misc"),
-            (Kind::Analysis, "misc"),
+            (Kind::Analysis, "analyses"),
             (Kind::Artifact, "misc"),
         ] {
             assert_eq!(family_for(kind), family, "kind={kind:?} drift");

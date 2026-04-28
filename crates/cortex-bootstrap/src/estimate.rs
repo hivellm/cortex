@@ -70,6 +70,7 @@ pub fn estimate_repo(repo_root: &Path, repo_id: &str, cfg: &CortexSection) -> Es
     let mut decision_count: u64 = 0;
     let mut law_count: u64 = 0;
     let mut memory_count: u64 = 0;
+    let mut analysis_count: u64 = 0;
     let mut other_count: u64 = 0;
     for entry in &entries {
         match entry {
@@ -83,6 +84,13 @@ pub fn estimate_repo(repo_root: &Path, repo_id: &str, cfg: &CortexSection) -> Es
                     FileClass::Decision => decision_count += 1,
                     FileClass::Law => law_count += 1,
                     FileClass::Memory => memory_count += 1,
+                    // Analyses chunk like docs (markdown sections); count
+                    // their bytes in the doc bucket so the chunk estimate
+                    // stays directionally correct without a new bucket.
+                    FileClass::Analysis => {
+                        analysis_count += 1;
+                        doc_bytes += *size_bytes;
+                    }
                     FileClass::Other => other_count += 1,
                 }
             }
@@ -104,6 +112,7 @@ pub fn estimate_repo(repo_root: &Path, repo_id: &str, cfg: &CortexSection) -> Es
         + decision_count
         + law_count
         + memory_count
+        + analysis_count
         + other_count;
 
     let redacted_bytes_est = code_bytes + doc_bytes;
@@ -111,7 +120,8 @@ pub fn estimate_repo(repo_root: &Path, repo_id: &str, cfg: &CortexSection) -> Es
     let classifier_output_tokens_est = events_total * 350;
     let embedding_storage_bytes_est =
         (code_chunks_est + doc_chunks_est) * (1024 * 4 + 1024); // 4 KB float vector + ~1 KB metadata
-    let graph_nodes_est = files_kept + commits + decision_count + law_count + memory_count;
+    let graph_nodes_est =
+        files_kept + commits + decision_count + law_count + memory_count + analysis_count;
     let graph_edges_est = (graph_nodes_est * 18) / 10;
     let fulltext_index_bytes_est = events_total * 3_000;
     let runtime_seconds_est = events_total.div_ceil(500);
