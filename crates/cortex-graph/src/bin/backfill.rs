@@ -396,6 +396,13 @@ fn envelope_to_enriched(env: Envelope) -> EnrichedEvent {
             pii_risk: PiiRisk::Low,
             redaction_suggestions: Vec::new(),
             summary: None,
+            // Backfill replays archived envelopes through the
+            // structural mapper only; Sonnet-driven entities +
+            // relations come from the live classifier path, never
+            // from the backfill (we don't want to burn tokens
+            // re-classifying historical data here).
+            entities: Vec::new(),
+            relations: Vec::new(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "backfill-v1".into(),
             model: "backfill-v1".into(),

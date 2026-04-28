@@ -244,6 +244,8 @@ async fn idempotent_replay_reports_zero_new() {
             pii_risk: PiiRisk::Low,
             redaction_suggestions: vec![],
             summary: None,
+            entities: Vec::new(),
+            relations: Vec::new(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),

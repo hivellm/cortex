@@ -100,7 +100,177 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
         Kind::Artifact => emit_artifact(event, &mut patch),
     }
 
+    // Sonnet-extracted entity/relation layer. Independent from the
+    // structural mapping above — the structural pass produces the
+    // canonical Session→Turn→ToolCall→Artifact skeleton, this pass
+    // adds the SEMANTIC layer (REFERENCES / IMPLEMENTS / DISCUSSES /
+    // …) the user asked for so retrieval can traverse the meaning
+    // dimension instead of relying on full-text hits alone.
+    emit_classifier_entities(event, &mut patch);
+
     patch
+}
+
+/// Translate the classifier's `entities` + `relations` into graph
+/// nodes + edges. Each entity becomes a typed node keyed by
+/// `(entity_type, identifier)` so the same `Decision DEC-0042`
+/// referenced from many events collapses to a single Nexus node.
+/// Each relation becomes an edge anchored at the current event
+/// (its primary node id), with the relation label as the edge
+/// type. Skipped silently when the classifier emitted nothing
+/// (static fallback, or Sonnet returned an empty list).
+fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
+    let entities = &event.classifier.entities;
+    let relations = &event.classifier.relations;
+    if entities.is_empty() && relations.is_empty() {
+        return;
+    }
+
+    // Index entities by identifier so the relation pass below can
+    // look up `entity_type` and pick the right Nexus label without
+    // re-parsing.
+    let mut by_id: BTreeMap<&str, &cortex_classifier::types::ExtractedEntity> = BTreeMap::new();
+    for ent in entities {
+        by_id.insert(ent.identifier.as_str(), ent);
+        let label = entity_type_to_label(&ent.entity_type);
+        let mut props = BTreeMap::new();
+        props.insert(
+            "id".to_string(),
+            Value::String(ent.identifier.clone()),
+        );
+        props.insert(
+            "name".to_string(),
+            Value::String(
+                ent.label
+                    .clone()
+                    .unwrap_or_else(|| ent.identifier.clone()),
+            ),
+        );
+        // Carry the typed kind so dashboard surfaces can colour-code
+        // even when the canonical label collapses to `Concept` (the
+        // catch-all for novel entity types Sonnet emits).
+        props.insert(
+            "entity_type".to_string(),
+            Value::String(ent.entity_type.clone()),
+        );
+        patch.nodes.push(NodeOp {
+            label: label.to_string(),
+            natural_key: format!("{}|{}", ent.entity_type, ent.identifier),
+            props,
+        });
+    }
+
+    // Anchor each relation at the current event's primary node.
+    // The kind dictates which natural key to use.
+    let event_anchor = anchor_natural_key(event);
+    let event_label = anchor_label_for_kind(event.kind);
+
+    for rel in relations {
+        // Resolve the target entity from the same record. Skip the
+        // relation when the target wasn't declared — keeps the graph
+        // free of phantom edges Sonnet occasionally hallucinates.
+        let target = match by_id.get(rel.to.as_str()) {
+            Some(e) => *e,
+            None => continue,
+        };
+        let target_label = entity_type_to_label(&target.entity_type);
+        let target_key = format!("{}|{}", target.entity_type, target.identifier);
+
+        // Normalise the relation label to UPPER_SNAKE so the Nexus
+        // schema stays inspectable. Drop relations whose label
+        // doesn't validate (the prompt enumerates the closed set
+        // but defensive parsing catches drift).
+        let rel_label = match normalise_relation_label(&rel.relation) {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let mut props = BTreeMap::new();
+        props.insert(
+            "extracted_by".to_string(),
+            Value::String(event.classifier.model.clone()),
+        );
+        props.insert(
+            "event_id".to_string(),
+            Value::String(event.event_id.clone()),
+        );
+        patch.edges.push(EdgeOp {
+            edge_type: rel_label,
+            from_label: event_label.to_string(),
+            from_key: event_anchor.clone(),
+            to_label: target_label.to_string(),
+            to_key: target_key,
+            props,
+        });
+    }
+}
+
+/// Map an `entity_type` from the classifier prompt's controlled
+/// list to its Nexus node label. Unknown types collapse to
+/// `Concept` so a novel value Sonnet emits still creates a node
+/// rather than silently dropping it.
+fn entity_type_to_label(entity_type: &str) -> &'static str {
+    match entity_type {
+        "decision" => "Decision",
+        "law" => "Law",
+        "analysis" => "Analysis",
+        "artifact" => "Artifact",
+        "repo" => "Repo",
+        "topic" => "Topic",
+        "tool" => "Tool",
+        "person" => "Person",
+        "session" => "Session",
+        "turn" => "Turn",
+        // `concept` and any unknown / novel type — the catch-all so
+        // the graph layer doesn't silently drop entities just
+        // because Sonnet invented a new category we haven't
+        // codified yet. Worst case: a `Concept` node with the
+        // explicit `entity_type` prop preserved for later cleanup.
+        _ => "Concept",
+    }
+}
+
+/// Pick the structural natural key the current event was upserted
+/// under by the per-kind emitters above. Used as the `from` of
+/// every classifier-extracted relation.
+fn anchor_natural_key(event: &EnrichedEvent) -> String {
+    match event.kind {
+        Kind::Artifact => {
+            // Artifacts use the spec-07 natural key
+            // `repo|path|content_hash`. Reuse `artifact_natural_key`
+            // so the value matches what `emit_artifact` upserted.
+            let repo = event.context_repo.as_deref().unwrap_or("unknown");
+            let path = event.context_path.as_deref().unwrap_or("unknown");
+            artifact_natural_key(repo, path, &event.content_hash)
+        }
+        // Everything else uses event_id as its natural key.
+        _ => event.event_id.clone(),
+    }
+}
+
+fn anchor_label_for_kind(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Turn => "Turn",
+        Kind::ToolCall => "ToolCall",
+        Kind::AgentCall => "AgentCall",
+        Kind::Memory => "Memory",
+        Kind::Decision => "Decision",
+        Kind::Analysis => "Analysis",
+        Kind::LawViolation => "LawViolation",
+        Kind::Artifact => "Artifact",
+    }
+}
+
+/// Validate + normalise a relation label against the closed set
+/// the classifier prompt names. Returns `None` for labels outside
+/// the vocabulary so we never write phantom edge types to Nexus.
+fn normalise_relation_label(raw: &str) -> Option<String> {
+    let upper = raw.trim().to_ascii_uppercase().replace([' ', '-'], "_");
+    match upper.as_str() {
+        "REFERENCES" | "IMPLEMENTS" | "FIXES" | "DISCUSSES" | "DEFINES"
+        | "DEPENDS_ON" | "SUPERSEDES" | "OBSERVED_IN" | "TOUCHED" => Some(upper),
+        _ => None,
+    }
 }
 
 fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {

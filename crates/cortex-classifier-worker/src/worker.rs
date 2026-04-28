@@ -684,6 +684,8 @@ fn static_fallback_output(n: &NormalisedEvent, prompt_version: &str) -> Classifi
         pii_risk: PiiRisk::Low,
         redaction_suggestions: vec![],
         summary: None,
+        entities: Vec::new(),
+        relations: Vec::new(),
         source: ClassifierSource::StaticFallback,
         prompt_version: prompt_version.to_string(),
         model: "static-v1".into(),

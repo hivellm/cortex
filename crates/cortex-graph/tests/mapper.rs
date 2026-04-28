@@ -6,6 +6,7 @@
 //! test asserts the patch shape only — the writer test suite covers
 //! the Cypher dispatch layer.
 
+use cortex_classifier::types::{ExtractedEntity, ExtractedRelation};
 use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_graph::{map_event_to_patch, EnrichedEvent, GraphPatch};
@@ -20,6 +21,8 @@ fn classifier(event_id: &str) -> ClassifierOutput {
         pii_risk: PiiRisk::Low,
         redaction_suggestions: vec![],
         summary: None,
+        entities: Vec::new(),
+        relations: Vec::new(),
         source: ClassifierSource::StaticFallback,
         prompt_version: "v1".into(),
         model: "static-v1".into(),
@@ -474,4 +477,121 @@ fn malformed_payload_falls_back_to_identity_only() {
     assert!(patch.nodes.iter().any(|n| n.label == "Session"));
     assert_eq!(count_edges(&patch, "HAS_TOOL_CALL"), 1);
     assert_eq!(count_edges(&patch, "TOUCHED"), 0);
+}
+
+#[test]
+fn classifier_extracted_entities_become_typed_nodes_and_edges() {
+    // The new semantic-graph layer: when Sonnet stamps `entities` +
+    // `relations` on a Turn's classifier output, the mapper must
+    // emit one node per entity (typed by `entity_type`) and one
+    // edge per relation anchored at the Turn.
+    let payload = json!({
+        "user_message": "Implementing the RRF fusion change from DEC-0042",
+        "assistant_message": null,
+    });
+    let mut evt = event("turn-9", Kind::Turn, payload, Some("Cortex"), None, None);
+    evt.classifier.entities = vec![
+        ExtractedEntity {
+            entity_type: "decision".into(),
+            identifier: "DEC-0042".into(),
+            label: Some("Adopt RRF fusion".into()),
+        },
+        ExtractedEntity {
+            entity_type: "artifact".into(),
+            identifier: "crates/cortex-api/src/orchestrator.rs".into(),
+            label: None,
+        },
+        ExtractedEntity {
+            entity_type: "concept".into(),
+            identifier: "rrf-fusion".into(),
+            label: None,
+        },
+    ];
+    evt.classifier.relations = vec![
+        ExtractedRelation {
+            from: "this_event".into(),
+            relation: "IMPLEMENTS".into(),
+            to: "DEC-0042".into(),
+        },
+        ExtractedRelation {
+            from: "this_event".into(),
+            relation: "OBSERVED_IN".into(),
+            to: "crates/cortex-api/src/orchestrator.rs".into(),
+        },
+        ExtractedRelation {
+            from: "this_event".into(),
+            relation: "DISCUSSES".into(),
+            to: "rrf-fusion".into(),
+        },
+    ];
+
+    let patch = map_event_to_patch(&evt);
+
+    // One typed node per entity, deduplicated by `(entity_type, identifier)`.
+    assert!(patch.nodes.iter().any(|n| n.label == "Decision"
+        && n.natural_key == "decision|DEC-0042"));
+    assert!(patch.nodes.iter().any(|n| n.label == "Artifact"
+        && n.natural_key == "artifact|crates/cortex-api/src/orchestrator.rs"));
+    assert!(patch.nodes.iter().any(|n| n.label == "Concept"
+        && n.natural_key == "concept|rrf-fusion"));
+
+    // One typed edge per relation, anchored at the Turn.
+    assert_eq!(count_edges(&patch, "IMPLEMENTS"), 1);
+    assert_eq!(count_edges(&patch, "OBSERVED_IN"), 1);
+    assert_eq!(count_edges(&patch, "DISCUSSES"), 1);
+
+    // The IMPLEMENTS edge points from the Turn to the Decision —
+    // direction matters for "what implements DEC-0042?" queries.
+    let impl_edge = patch
+        .edges
+        .iter()
+        .find(|e| e.edge_type == "IMPLEMENTS")
+        .unwrap();
+    assert_eq!(impl_edge.from_label, "Turn");
+    assert_eq!(impl_edge.from_key, "turn-9");
+    assert_eq!(impl_edge.to_label, "Decision");
+    assert_eq!(impl_edge.to_key, "decision|DEC-0042");
+}
+
+#[test]
+fn classifier_drops_phantom_relations_with_no_matching_entity() {
+    // Defensive: if Sonnet emits a relation pointing at an entity
+    // identifier it didn't list, we drop the relation rather than
+    // creating a dangling edge to nowhere.
+    let payload = json!({ "user_message": "noop", "assistant_message": null });
+    let mut evt = event("turn-10", Kind::Turn, payload, None, None, None);
+    evt.classifier.relations = vec![ExtractedRelation {
+        from: "this_event".into(),
+        relation: "REFERENCES".into(),
+        to: "DEC-NEVER-DECLARED".into(),
+    }];
+
+    let patch = map_event_to_patch(&evt);
+    assert_eq!(count_edges(&patch, "REFERENCES"), 0);
+}
+
+#[test]
+fn classifier_drops_relations_with_unknown_label() {
+    // Defensive: relations outside the closed vocabulary
+    // (REFERENCES / IMPLEMENTS / FIXES / DISCUSSES / DEFINES /
+    // DEPENDS_ON / SUPERSEDES / OBSERVED_IN / TOUCHED) are dropped
+    // so the Nexus schema stays inspectable.
+    let payload = json!({ "user_message": "noop", "assistant_message": null });
+    let mut evt = event("turn-11", Kind::Turn, payload, None, None, None);
+    evt.classifier.entities = vec![ExtractedEntity {
+        entity_type: "decision".into(),
+        identifier: "DEC-0001".into(),
+        label: None,
+    }];
+    evt.classifier.relations = vec![ExtractedRelation {
+        from: "this_event".into(),
+        relation: "PROBABLY_BREAKS".into(),
+        to: "DEC-0001".into(),
+    }];
+
+    let patch = map_event_to_patch(&evt);
+    // Node still appears (Sonnet identified the entity) but no
+    // bogus edge label sneaks in.
+    assert!(patch.nodes.iter().any(|n| n.label == "Decision"));
+    assert_eq!(count_edges(&patch, "PROBABLY_BREAKS"), 0);
 }

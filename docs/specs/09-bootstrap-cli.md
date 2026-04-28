@@ -85,9 +85,23 @@ promote_patterns = [
   ".cursor/rules/*.md"
 ]
 
+[cortex.analyses]
+promote_patterns = [
+  "docs/analysis/**/*.md",
+  "docs/analyses/**/*.md"
+]
+
 [cortex.memories]
 import_files = ["CLAUDE.md", "AGENTS.md", ".rulebook/memory/**/*.md"]
 ```
+
+Files matching `[cortex.analyses].promote_patterns` are emitted as
+`analysis.imported` events with payload `{ title, status, body,
+source_path }`. They route to a dedicated per-repo
+`cortex-{repo}-analyses` Meili index + Vectorizer collection, and the
+graph writer materialises them as `(:Analysis)-[:ANALYZES]->(:Repo)`.
+This is the path audit / deep-analysis (spec 15) reports take to reach
+the dashboard's Analysis surface.
 
 If `cortex.toml` is missing, defaults apply:
 
@@ -305,6 +319,7 @@ Numbers are back-of-envelope; real cost depends on classifier cache hit rate.
 - [ ] Checkpoint + resume: SIGINT mid-run; `--resume` picks up without duplicate events.
 - [ ] ADR recognition: a file matching `cortex.decisions.promote_patterns` produces `decision.imported` events and ends up as a `Decision` node in Nexus.
 - [ ] Law recognition: a file matching `cortex.laws.promote_patterns` produces `law.imported` events and ends up as a `Law` node in Nexus (spec 13 seeding).
+- [x] Analysis recognition: a file matching `cortex.analyses.promote_patterns` produces `analysis.imported` events, lands in `cortex-{repo}-analyses` (Meili + Vectorizer), and surfaces as `(:Analysis)-[:ANALYZES]->(:Repo)` in Nexus.
 - [ ] Redaction: a committed `.env` file with synthetic secrets is detected + patterns are stripped before publication; unit test asserts no secret bytes reach Synap.
 - [ ] Parallel walk: `--parallelism 4` against 4 small repos finishes in ~1/4 the wall-clock of sequential; no event loss.
 - [ ] Tree-sitter-missing language: Elixir files land with `source=fallback_window` chunks downstream.

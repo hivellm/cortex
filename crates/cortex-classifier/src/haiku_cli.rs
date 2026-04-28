@@ -148,6 +148,12 @@ impl Classifier for HaikuCliClassifier {
                 pii_risk: rec.pii_risk,
                 redaction_suggestions: rec.redaction_suggestions,
                 summary: rec.summary,
+                // Pass through Sonnet's typed entities + relations
+                // so the graph mapper can hoist them into Nexus
+                // nodes/edges. Empty when the model emitted nothing
+                // (or when the fallback static path runs).
+                entities: rec.entities,
+                relations: rec.relations,
                 source: ClassifierSource::HaikuCli,
                 prompt_version: self.prompt.version.into(),
                 model: self.cfg.model.clone(),
@@ -228,6 +234,14 @@ pub struct ClassifierRecord {
     /// Short summary.
     #[serde(default)]
     pub summary: Option<String>,
+    /// Typed entities the model identified inside the event.
+    /// Each becomes a Nexus node in the graph mapper.
+    #[serde(default)]
+    pub entities: Vec<crate::types::ExtractedEntity>,
+    /// Semantic relations between this event and the listed
+    /// entities. Each becomes a typed edge in Nexus.
+    #[serde(default)]
+    pub relations: Vec<crate::types::ExtractedRelation>,
 }
 
 /// Normalize free-form classifier topics against the controlled vocab —

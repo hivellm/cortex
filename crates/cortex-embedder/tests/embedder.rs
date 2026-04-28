@@ -31,6 +31,8 @@ fn make_event(
             pii_risk: PiiRisk::Low,
             redaction_suggestions: vec![],
             summary: summary.map(|s| s.to_string()),
+            entities: Vec::new(),
+            relations: Vec::new(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),

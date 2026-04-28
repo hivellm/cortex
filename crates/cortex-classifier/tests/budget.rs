@@ -32,6 +32,8 @@ impl Classifier for FakeHaiku {
                 pii_risk: PiiRisk::Low,
                 redaction_suggestions: vec![],
                 summary: None,
+                entities: Vec::new(),
+                relations: Vec::new(),
                 source: ClassifierSource::HaikuCli,
                 prompt_version: "v1".into(),
                 model: "claude-haiku-4-5".into(),

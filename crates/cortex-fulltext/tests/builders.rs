@@ -19,6 +19,8 @@ fn classifier(event_id: &str, summary: Option<&str>) -> ClassifierOutput {
         pii_risk: PiiRisk::Low,
         redaction_suggestions: vec![],
         summary: summary.map(String::from),
+        entities: Vec::new(),
+        relations: Vec::new(),
         source: ClassifierSource::StaticFallback,
         prompt_version: "v1".into(),
         model: "static-v1".into(),

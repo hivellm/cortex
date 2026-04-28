@@ -97,6 +97,8 @@ impl Classifier for StaticClassifier {
                 // every artifact. Downstream consumers fall back to
                 // the source `text` when this is `None`.
                 summary: None,
+                entities: Vec::new(),
+                relations: Vec::new(),
                 source: ClassifierSource::StaticFallback,
                 prompt_version: "static-v1".into(),
                 model: "static-v1".into(),

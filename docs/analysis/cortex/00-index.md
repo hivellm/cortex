@@ -3,6 +3,7 @@
 > **Author:** automated audit · **Source data:** repo snapshot at commit `c41dab0` + bootstrap state + rulebook learnings (most recent dated 2026-04-27).
 > **Scope:** end-to-end review of the Cortex platform — what is implemented, what is producing results, what is degraded, and what to fix next.
 > **Audience:** project maintainers and anyone proposing changes to the indexing pipeline, GUI, or governance layer.
+> **Status:** draft. Indexed as first-class `Analysis` entities by [phase4e_bootstrap_analysis_promotion](../../../.rulebook/tasks/phase4e_bootstrap_analysis_promotion/proposal.md) — `cortex-bootstrap` emits an `analysis.imported` event per file under this directory, routed to `cortex-Cortex-analyses` in Meili + Vectorizer and to `(:Analysis)-[:ANALYZES]->(:Repo)` in Nexus.
 
 This index points to ten focused files. Each file is self-contained: read in order for the full picture, or jump straight to the area you own.
 
