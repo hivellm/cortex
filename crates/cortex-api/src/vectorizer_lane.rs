@@ -25,17 +25,35 @@ use vectorizer_sdk::{ClientConfig, VectorizerClient};
 
 use crate::lanes::{LaneError, LaneHit, VectorLane, VectorRequest};
 
+/// Cached credentials so the lane can transparently re-mint a JWT
+/// when the upstream returns 401. Recorded on `with_login` only; the
+/// `new(api_key=...)` path leaves this `None` because the caller
+/// supplied the token directly and there is no flow we can re-run.
+#[derive(Clone)]
+struct LoginCreds {
+    username: String,
+    password: String,
+}
+
 /// Concrete `VectorLane` backed by a live Vectorizer instance.
+///
+/// Issue hivellm/cortex#2 — the JWT minted at boot expires after
+/// ~1 hour. The lane stores the credentials it logged in with so a
+/// 401 Unauthorized on `search_vectors` triggers one transparent
+/// re-mint + retry; subsequent calls then carry the fresh JWT until
+/// it expires again.
 #[derive(Clone)]
 pub struct VectorizerLane {
-    client: Arc<VectorizerClient>,
+    client: Arc<tokio::sync::RwLock<Arc<VectorizerClient>>>,
     base_url: String,
+    creds: Option<LoginCreds>,
 }
 
 impl std::fmt::Debug for VectorizerLane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VectorizerLane")
             .field("base_url", &self.base_url)
+            .field("auto_refresh", &self.creds.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -48,60 +66,109 @@ impl VectorizerLane {
     /// `cortex-embedder-worker` uses for write traffic.
     pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Result<Self, String> {
         let base_url = base_url.into();
-        let cfg = ClientConfig {
-            base_url: Some(base_url.clone()),
-            api_key,
-            timeout_secs: Some(10),
-            ..Default::default()
-        };
-        let client = VectorizerClient::new(cfg)
-            .map_err(|e| format!("vectorizer-sdk client: {e}"))?;
+        let client = build_client(&base_url, api_key)?;
         Ok(Self {
-            client: Arc::new(client),
+            client: Arc::new(tokio::sync::RwLock::new(Arc::new(client))),
             base_url,
+            creds: None,
         })
     }
 
     /// Build a lane after exchanging `(username, password)` for a JWT
     /// via the SDK's `/auth/login` endpoint. The same flow
     /// `cortex-embedder-worker` runs at boot when its
-    /// `vectorizer_password` is not already a JWT. Returns the same
-    /// lane shape as [`Self::new`], with the minted JWT carried as
-    /// the SDK's `api_key`.
+    /// `vectorizer_password` is not already a JWT. The credentials
+    /// are kept in-memory so the lane can re-mint the JWT whenever
+    /// the Vectorizer returns 401 — see `Self::search` for the
+    /// refresh-and-retry path.
     pub async fn with_login(
         base_url: impl Into<String>,
         username: &str,
         password: &str,
     ) -> Result<Self, String> {
         let base_url = base_url.into();
-        // Build a transient client purely to run `/auth/login`. The
-        // SDK requires an instance to call the method; we discard
-        // it after pulling out the JWT.
-        let login_cfg = ClientConfig {
-            base_url: Some(base_url.clone()),
-            api_key: None,
-            timeout_secs: Some(10),
-            ..Default::default()
-        };
-        let login_client = VectorizerClient::new(login_cfg)
-            .map_err(|e| format!("vectorizer-sdk login client: {e}"))?;
-        let jwt = login_client
-            .login(username, password)
-            .await
-            .map_err(|e| format!("/auth/login {base_url}: {e}"))?;
-        Self::new(base_url, Some(jwt.access_token))
+        let jwt = mint_jwt(&base_url, username, password).await?;
+        let client = build_client(&base_url, Some(jwt))?;
+        Ok(Self {
+            client: Arc::new(tokio::sync::RwLock::new(Arc::new(client))),
+            base_url,
+            creds: Some(LoginCreds {
+                username: username.to_string(),
+                password: password.to_string(),
+            }),
+        })
     }
 
     /// Probe `/health` so the caller can decide whether to swap in
     /// the lane or fall back to `MemoryVectorLane`. Returns `Ok(())`
     /// only when the SDK's `health_check` succeeds.
     pub async fn probe(&self) -> Result<(), String> {
-        self.client
+        let client = self.client.read().await.clone();
+        client
             .health_check()
             .await
             .map(|_| ())
             .map_err(|e| format!("probe {}: {e}", self.base_url))
     }
+
+    /// Force a JWT refresh — exposed for tests and for the daemon's
+    /// optional periodic warmup. Returns `Err` when no credentials
+    /// were captured (the `new(api_key=...)` path) or the upstream
+    /// `/auth/login` rejects them.
+    pub async fn refresh_token(&self) -> Result<(), String> {
+        let creds = self
+            .creds
+            .as_ref()
+            .ok_or_else(|| "refresh_token: lane has no cached credentials".to_string())?;
+        let jwt = mint_jwt(&self.base_url, &creds.username, &creds.password).await?;
+        let new_client = build_client(&self.base_url, Some(jwt))?;
+        let mut w = self.client.write().await;
+        *w = Arc::new(new_client);
+        Ok(())
+    }
+}
+
+fn build_client(base_url: &str, api_key: Option<String>) -> Result<VectorizerClient, String> {
+    let cfg = ClientConfig {
+        base_url: Some(base_url.to_string()),
+        api_key,
+        timeout_secs: Some(10),
+        ..Default::default()
+    };
+    VectorizerClient::new(cfg).map_err(|e| format!("vectorizer-sdk client: {e}"))
+}
+
+async fn mint_jwt(base_url: &str, username: &str, password: &str) -> Result<String, String> {
+    // Build a transient client purely to run `/auth/login`. The SDK
+    // requires an instance to call the method; we discard it after
+    // pulling out the JWT.
+    let login_cfg = ClientConfig {
+        base_url: Some(base_url.to_string()),
+        api_key: None,
+        timeout_secs: Some(10),
+        ..Default::default()
+    };
+    let login_client = VectorizerClient::new(login_cfg)
+        .map_err(|e| format!("vectorizer-sdk login client: {e}"))?;
+    let jwt = login_client
+        .login(username, password)
+        .await
+        .map_err(|e| format!("/auth/login {base_url}: {e}"))?;
+    Ok(jwt.access_token)
+}
+
+/// Match the SDK error message against the HTTP status codes that
+/// indicate the cached JWT is no longer accepted (`401`, `403`, or
+/// the literal "unauthorized" / "expired" tokens). Strings come from
+/// `VectorizerError::Server { message }` which today renders as
+/// `"Server error: HTTP 401 Unauthorized: {...}"`.
+fn looks_like_auth_failure(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("expired")
+        || lower.contains("invalid token")
 }
 
 #[async_trait]
@@ -115,14 +182,17 @@ impl VectorLane for VectorizerLane {
         // expansion that the orchestrator's RRF fusion already does
         // — running them here would be redundant work plus a second
         // ranking signal the fusion stage doesn't know about.
-        let resp = match self
-            .client
+        let client = self.client.read().await.clone();
+        let attempt = client
             .search_vectors(&req.collection, &req.query, Some(req.k), None)
-            .await
-        {
+            .await;
+
+        let resp = match attempt {
             Ok(r) => r,
             Err(e) => {
-                let msg = format!("{}: search_vectors({}): {e}", self.base_url, req.collection);
+                let msg =
+                    format!("{}: search_vectors({}): {e}", self.base_url, req.collection);
+                let lower = msg.to_ascii_lowercase();
                 // 404 on the per-project collection is the legitimate
                 // empty-index case (the spec-06 worker materialises
                 // collections lazily on first upsert). The SDK
@@ -130,11 +200,59 @@ impl VectorLane for VectorizerLane {
                 // a "not found" message — fall through to empty
                 // hits rather than failing the whole orchestrator
                 // turn.
-                let lower = msg.to_ascii_lowercase();
                 if lower.contains("not found") || lower.contains("404") {
                     return Ok(Vec::new());
                 }
-                return Err(LaneError::Transport(msg));
+                // Issue hivellm/cortex#2 — the boot-time JWT expires
+                // after ~1 h and every subsequent search returns
+                // 401. Re-mint the token using the cached creds and
+                // retry once; if the refresh path is unavailable
+                // (no creds, or `/auth/login` rejected the retry) we
+                // still surface the 401 so the orchestrator's
+                // `debug.errors.vector` lane carries an actionable
+                // signal.
+                if looks_like_auth_failure(&msg) {
+                    if self.creds.is_some() {
+                        match self.refresh_token().await {
+                            Ok(()) => {
+                                tracing::info!(
+                                    base_url = %self.base_url,
+                                    collection = %req.collection,
+                                    "vector lane: refreshed JWT after upstream 401, retrying"
+                                );
+                                let client2 = self.client.read().await.clone();
+                                match client2
+                                    .search_vectors(
+                                        &req.collection,
+                                        &req.query,
+                                        Some(req.k),
+                                        None,
+                                    )
+                                    .await
+                                {
+                                    Ok(r) => r,
+                                    Err(e2) => {
+                                        return Err(LaneError::Transport(format!(
+                                            "{msg}; refresh-retry failed: {e2}"
+                                        )));
+                                    }
+                                }
+                            }
+                            Err(reason) => {
+                                return Err(LaneError::Transport(format!(
+                                    "{msg}; auth refresh failed: {reason}"
+                                )));
+                            }
+                        }
+                    } else {
+                        return Err(LaneError::Transport(format!(
+                            "{msg}; no cached credentials to mint a fresh JWT — set \
+                             CORTEX_VECTORIZER_USER + _PASSWORD (or _EMBEDDER_VECTORIZER_*)"
+                        )));
+                    }
+                } else {
+                    return Err(LaneError::Transport(msg));
+                }
             }
         };
 
@@ -270,5 +388,26 @@ mod tests {
         assert_eq!(hit.text, "");
         assert_eq!(hit.score, 0.0);
         assert_eq!(hit.ts, 0);
+    }
+
+    #[test]
+    fn auth_failure_detector_matches_known_upstream_strings() {
+        // Issue hivellm/cortex#2 — the SDK renders 401 errors as the
+        // string `"Server error: HTTP 401 Unauthorized: ..."`. The
+        // detector must catch every variant the upstream emits so
+        // the auto-refresh path fires whenever the cached JWT is
+        // rejected.
+        assert!(super::looks_like_auth_failure(
+            "Server error: HTTP 401 Unauthorized: {\"error\":\"unauthorized\"}"
+        ));
+        assert!(super::looks_like_auth_failure("HTTP 403 Forbidden"));
+        assert!(super::looks_like_auth_failure("token expired"));
+        assert!(super::looks_like_auth_failure("Invalid token: signature mismatch"));
+        // Negative — anything else (404, 500, transport noise) keeps
+        // the existing not-found / generic-transport paths.
+        assert!(!super::looks_like_auth_failure("HTTP 404 Not Found"));
+        assert!(!super::looks_like_auth_failure(
+            "tcp connect timeout after 10s"
+        ));
     }
 }

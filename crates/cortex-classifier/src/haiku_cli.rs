@@ -55,9 +55,9 @@ fn hookless_config_dir() -> &'static Path {
             );
             return dir;
         }
-        let settings = dir.join("settings.json");
         // An empty `hooks` block disables every lifecycle hook a
         // marketplace plugin would otherwise register.
+        let settings = dir.join("settings.json");
         if let Err(e) = std::fs::write(&settings, b"{\"hooks\":{}}\n") {
             tracing::warn!(
                 error = %e,
@@ -65,8 +65,53 @@ fn hookless_config_dir() -> &'static Path {
                 "failed to write hookless settings.json"
             );
         }
+        // claude-code authenticates via `~/.claude/.credentials.json`;
+        // an empty config dir has no credentials, so the subprocess
+        // exits with status 1 ("not logged in"). Copy the host's
+        // credentials so the subprocess inherits the operator's
+        // login but NOT the operator's plugins. We try a couple of
+        // common locations: the home dir and the explicit
+        // `CLAUDE_CONFIG_DIR` if it's already set on the parent.
+        let creds_src = host_claude_credentials_path();
+        if let Some(src) = creds_src {
+            let dst = dir.join(".credentials.json");
+            if let Err(e) = std::fs::copy(&src, &dst) {
+                tracing::warn!(
+                    error = %e,
+                    src = %src.display(),
+                    dst = %dst.display(),
+                    "failed to copy claude credentials into hookless config dir; subprocess will fail to authenticate"
+                );
+            }
+        } else {
+            tracing::warn!(
+                "could not locate host claude credentials; classifier subprocess will likely fail to authenticate"
+            );
+        }
         dir
     })
+}
+
+/// Best-effort lookup for the operator's existing `.credentials.json`
+/// so the classifier subprocess can authenticate without re-running
+/// `claude /login`. Honours `CLAUDE_CONFIG_DIR` when set; otherwise
+/// falls back to `$HOME/.claude/.credentials.json` (Unix and Windows).
+fn host_claude_credentials_path() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let p = PathBuf::from(dir).join(".credentials.json");
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .ok()?;
+    let p = PathBuf::from(home).join(".claude").join(".credentials.json");
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 /// Config for [`HaikuCliClassifier`].
