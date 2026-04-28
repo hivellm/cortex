@@ -117,9 +117,14 @@ impl Classifier for HaikuCliClassifier {
 
         let outer: ClaudeJsonResponse = serde_json::from_str(stdout.trim())?;
         let inner_text = outer
-            .text
-            .ok_or_else(|| ClassifierError::Backend("claude response has no text body".into()))?;
-        let inner: ClassifierOutputBatch = serde_json::from_str(inner_text.trim())?;
+            .body()
+            .ok_or_else(|| ClassifierError::Backend("claude response has no text body".into()))?
+            .to_string();
+        // The model wraps JSON in ```json … ``` fences with some
+        // frequency. Strip them so the inner parse doesn't choke
+        // on the markdown.
+        let cleaned = strip_code_fence(&inner_text);
+        let inner: ClassifierOutputBatch = serde_json::from_str(cleaned.trim())?;
 
         if inner.events.len() != events.len() {
             return Err(ClassifierError::LengthMismatch {
@@ -155,9 +160,15 @@ impl Classifier for HaikuCliClassifier {
 }
 
 /// Outer Claude Code CLI response (shape of `--output-format json`).
+/// CLI 2.x renamed the body field from `text` to `result`; we
+/// accept both so the parser keeps working across CLI versions
+/// (and so tests that fixture the older `text` field still pass).
 #[derive(Debug, Deserialize)]
 pub struct ClaudeJsonResponse {
-    /// Model output body (may already be JSON-encoded).
+    /// Body in CLI 2.x. Wins when present.
+    #[serde(default)]
+    pub result: Option<String>,
+    /// Body in CLI 1.x. Legacy fallback.
     #[serde(default)]
     pub text: Option<String>,
     /// Token usage if reported.
@@ -166,6 +177,15 @@ pub struct ClaudeJsonResponse {
     /// Any free-form fields we don't care about.
     #[serde(flatten)]
     pub rest: std::collections::BTreeMap<String, Value>,
+}
+
+impl ClaudeJsonResponse {
+    /// `result` (CLI 2.x) → fallback to `text` (CLI 1.x).
+    pub fn body(&self) -> Option<&str> {
+        self.result
+            .as_deref()
+            .or(self.text.as_deref())
+    }
 }
 
 /// Token usage subsection.
@@ -221,4 +241,17 @@ pub fn normalise_topics(mut topics: Vec<String>) -> Vec<String> {
     topics.sort();
     topics.dedup();
     topics
+}
+
+/// Strip ```json … ``` markdown fences. Sonnet sometimes wraps
+/// its JSON output in fences despite explicit instructions; this
+/// keeps the inner parse from failing.
+fn strip_code_fence(s: &str) -> String {
+    let trimmed = s.trim();
+    let stripped = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed);
+    let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
+    stripped.trim().to_string()
 }
