@@ -353,6 +353,7 @@ mod tests {
                 errors: Default::default(),
                 truncated: false,
             },
+            notice: None,
         }
     }
 

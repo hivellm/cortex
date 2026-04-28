@@ -112,6 +112,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
             errors: Default::default(),
             truncated: false,
         },
+        notice: None,
     }
 }
 
