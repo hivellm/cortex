@@ -170,6 +170,21 @@ Errors use the standard JSON-RPC codes (`-32700` parse, `-32600` invalid request
 }
 ```
 
+The wrapped `daemon` payload echoes the upstream `/v1/status` shape verbatim:
+
+```jsonc
+{
+  "service": "cortex-api",
+  "version": "0.1.0",
+  "pid": 12345,
+  "uptime_ms": 91234,
+  // Sorted slugs the daemon currently has signal for. Callers use it
+  // to detect "this repo was never indexed" before running a query —
+  // pairs with `notice.repo_not_indexed` on `/v1/query` (issue #1).
+  "indexed_repos": ["cortex", "vectorizer"]
+}
+```
+
 #### Contract guardrails
 
 Tool descriptors MUST satisfy MCP 2024-11-05:

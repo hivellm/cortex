@@ -95,11 +95,21 @@ Content-Type: application/json
   },
   "laws_active": [ { "id": "LAW-012", "severity": "notable", "title": "..." } ],
   "budget": { "used_ms": 142, "cap_ms": 500, "cache": "miss" },
-  "debug": { "lanes": { "vector_ms": 48, "keyword_ms": 33, "graph_ms": 71 } }
+  "debug": { "lanes": { "vector_ms": 48, "keyword_ms": 33, "graph_ms": 71 } },
+  // Optional. Present when the orchestrator wants to flag a structural
+  // condition the caller would otherwise miss — today the only emitter
+  // is `repo_not_indexed`, fired when `scope_resolved.repo` does not
+  // appear in the daemon's keyword-lane snapshot (the same set
+  // `/v1/status.indexed_repos` reports).
+  "notice": {
+    "code": "repo_not_indexed",
+    "message": "scope.repo `<slug>` is not present in the cortex-api indexed-repo snapshot",
+    "hint": "run `cortex-bootstrap --repo <path>` to seed the daemon for this repo, then retry."
+  }
 }
 ```
 
-Fields inside `results` are only present when requested via `include`. Missing-by-request is different from missing-by-error (the latter surfaces in `debug.errors`).
+Fields inside `results` are only present when requested via `include`. Missing-by-request is different from missing-by-error (the latter surfaces in `debug.errors`). The optional top-level `notice` is omitted from the wire when `null` (`skip_serializing_if = Option::is_none`).
 
 ### MCP tool binding
 

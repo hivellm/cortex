@@ -97,6 +97,27 @@ Code (`cortex-core`, `cortex-workers`, `cortex-api`, `cortex-classifier`, `corte
 
 Because no spec has flipped to 🟢 *implemented* yet, there is no runnable binary in `master` at the time of writing. The work unfolds in spec order (see below).
 
+### First-time indexing (per repo)
+
+The daemon answers `/v1/query`, `cortex_pre_thinking`, and the
+dashboard against repos that have been bootstrapped at least once. A
+brand-new repo returns empty hits with
+`notice = { code: "repo_not_indexed", … }` and `cortex_status` lists
+the indexed slugs under `daemon.indexed_repos`, so callers can detect
+the gap before issuing the next query.
+
+To bootstrap a repo:
+
+```sh
+# canonical entry point: spec-09 bootstrap CLI
+cargo run -p cortex-bootstrap -- --repo /path/to/repo
+```
+
+Subsequent calls scoped to that repo (`scope.repo = "<slug>"`) drop
+the notice and start returning real results. The slug is the value
+`cortex-storage`'s `slug_for_repo` produces — lowercase ASCII; the
+same form `daemon.indexed_repos` reports.
+
 ## Roadmap
 
 Five phases, mapped to the spec list:
