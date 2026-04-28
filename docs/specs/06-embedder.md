@@ -237,6 +237,124 @@ cortex.embedder.oversize_without_summary counter
 
 Span per event: `event_id`, `chunks.emitted`, `chunks.deduped`, `collections.touched`, `latency.chunk_ms`, `latency.upsert_ms`.
 
+## Read path
+
+The write path above is consumed at query time by `cortex-api`'s
+vector lane (spec 11 §Lane traits). The lane translates the
+orchestrator's `VectorRequest { collection, query, k, scope }` into
+the Vectorizer SDK's `search_vectors(collection, query, limit,
+threshold)` and projects each `SearchResult` into the `LaneHit`
+shape the fusion stage expects.
+
+### Live lane: `VectorizerLane`
+
+Lives at [crates/cortex-api/src/vectorizer_lane.rs](../../crates/cortex-api/src/vectorizer_lane.rs).
+Selected at daemon startup when `CORTEX_VECTORIZER_URL` (or
+`VECTORIZER_URL`) is set **and** the SDK's `health_check` succeeds.
+On any failure (env unset, server unreachable, build error,
+unauthorised) the daemon falls back to `MemoryVectorLane` so
+cold-stack dev keeps working — the failure is logged at WARN with
+the URL + reason.
+
+Auth selection mirrors `cortex-embedder-worker`'s boot flow:
+
+1. **Explicit JWT / API key** — `CORTEX_VECTORIZER_API_KEY` or
+   `VECTORIZER_API_KEY` wins when set; passed through as the SDK's
+   `api_key` (the 3.0.3 HTTP transport sniffs the JWT shape and
+   sends it as `Authorization: Bearer …`).
+2. **Username + password** — when both `CORTEX_VECTORIZER_USER` /
+   `CORTEX_EMBEDDER_VECTORIZER_USER` and the matching `*_PASSWORD`
+   are set, the lane runs `POST /auth/login` once at boot via the
+   SDK's `login()` and uses the minted JWT.
+3. **No auth** — falls through to a no-credential client (Vectorizer
+   running with `auth.enabled: false`).
+
+### Search request shape
+
+```rust
+client.search_vectors(
+    /* collection: */ &req.collection, // cortex-{slug}-{family}
+    /* query:      */ &req.query,
+    /* limit:      */ Some(req.k),
+    /* threshold:  */ None,
+).await
+```
+
+The SDK serialises this into `POST /collections/{uid}/search/text`
+with `{ query, limit }`. `score_threshold` is left server-default
+because the orchestrator's RRF fusion already applies a normalisation
+pass over the lane scores — pre-filtering here would interact poorly
+with the fusion stage.
+
+### Hit projection (Vectorizer → `LaneHit`)
+
+| LaneHit field        | Vectorizer source                                                |
+|----------------------|------------------------------------------------------------------|
+| `doc_id`             | `vec|{collection}|{result.id}`                                  |
+| `text`               | `result.content` → `metadata.summary` → `metadata.title` → `metadata.body` (first non-empty wins) |
+| `repo`               | `metadata.repo`                                                  |
+| `path`               | `metadata.path`                                                  |
+| `symbol`             | `metadata.kind`                                                  |
+| `content_hash`       | `metadata.content_hash`                                          |
+| `score`              | `result.score` (the SDK's normalised similarity, `[0, 1]`)       |
+| `ts`                 | `metadata.ts` (defaults to `0` when absent)                      |
+| `severity`           | `metadata.severity`                                              |
+| `extras["source"]`   | `"vector"` (constant — source-attribution invariant)             |
+| `extras["collection"]` | `req.collection` (so debug surfaces can correlate hits to the per-project collection name) |
+
+Empty `text` is acceptable: some embedded chunks carry no inline
+content (the chunker stored the body elsewhere). The fusion stage
+still ranks the hit on score; the snippet column simply lacks a
+preview, which is honest.
+
+### Failure handling
+
+- `2xx` — parse `results[]` and project each into a `LaneHit`.
+- 404 / "not found" (collection not yet materialised) — return
+  `Vec::new()`. Per-project collections are created lazily by the
+  worker on first upsert; an empty result is the legitimate case,
+  not an error.
+- Other SDK errors — `LaneError::Transport(detail)`. The
+  orchestrator's fail-open policy turns this into an empty hit set
+  plus a `debug.errors["vector"]` entry; the response stays HTTP 200.
+
+### Source-attribution invariant
+
+Every hit produced by the vector lane MUST carry
+`extras["source"] = "vector"`. The orchestrator's `lane_label()`
+([crates/cortex-api/src/orchestrator.rs](../../crates/cortex-api/src/orchestrator.rs))
+falls back to `"vector"` when missing — so a missing label happens to
+work for the vector lane today, but stamping explicitly keeps the
+keyword/vector lanes symmetric and prevents regressions if the
+default ever changes. The keyword lane has the matching invariant
+(`"keyword"`) checked by a `debug_assert!` in `Orchestrator::run`.
+
+### Configuration
+
+| Env var                                 | Default                  | Purpose                                                  |
+|-----------------------------------------|--------------------------|----------------------------------------------------------|
+| `CORTEX_VECTORIZER_URL`                 | (unset, falls back to `VECTORIZER_URL`) | Live lane base URL. Unset → MemoryVectorLane fallback. |
+| `CORTEX_VECTORIZER_API_KEY`             | (unset, falls back to `VECTORIZER_API_KEY`) | JWT / API key (auth path 1).                            |
+| `CORTEX_VECTORIZER_USER`                | (unset, falls back to `CORTEX_EMBEDDER_VECTORIZER_USER`) | Username for `/auth/login` (auth path 2).               |
+| `CORTEX_VECTORIZER_PASSWORD`            | (unset, falls back to `CORTEX_EMBEDDER_VECTORIZER_PASSWORD`) | Password for `/auth/login` (auth path 2).               |
+
+### Acceptance for the read path
+
+- [ ] Two `/v1/query` calls with distinct `query` strings against the
+      same collection return distinct `results.snippets` sets when
+      semantically different documents exist.
+- [ ] `debug.lanes.vector_ms` is non-zero on every query (the
+      regression had `vector_ms = 0` because the `MemoryVectorLane`
+      double never executed).
+- [ ] Vectorizer down → response is HTTP 200,
+      `debug.errors["vector"]` populated, `results` may be empty
+      (fail-open).
+- [ ] Snippet `source` column is `"vector"` for every hit produced
+      by the vector lane.
+- [ ] `/auth/login` is run **once** at boot when username + password
+      are set; subsequent requests carry the minted JWT, never
+      re-authenticate per request.
+
 ## Acceptance criteria
 
 - [ ] Code chunker produces one chunk per top-level declaration on a 1 000-LOC Rust sample; `symbol` and `byte_range` set correctly; round-trip content matches original.

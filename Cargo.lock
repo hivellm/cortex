@@ -521,6 +521,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ulid",
+ "vectorizer-sdk",
  "wiremock",
  "zstd",
 ]

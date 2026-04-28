@@ -20,15 +20,17 @@ use std::sync::Arc as StdArc;
 
 use cortex_api::{
     KeywordLane, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, MeiliKeywordLane,
-    Orchestrator, QueryService,
+    Orchestrator, QueryService, VectorLane, VectorizerLane,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "cortex-api", version, about)]
 struct Cli {
-    /// Bind address.
-    #[arg(long, default_value = "127.0.0.1:15011")]
+    /// Bind address. Matches `.env` `CORTEX_API_PORT` (15000) so a
+    /// supervisor booting from env settings stays in sync with the
+    /// GUI's hardcoded `BASE_URL`.
+    #[arg(long, default_value = "127.0.0.1:15000")]
     bind: SocketAddr,
     /// Verbose tracing output.
     #[arg(long)]
@@ -40,9 +42,86 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
 
-    let vector = Arc::new(MemoryVectorLane::new());
+    let vector_memory = Arc::new(MemoryVectorLane::new());
     let keyword_memory = Arc::new(MemoryKeywordLane::new());
     let graph = Arc::new(MemoryGraphLane::new());
+
+    // Live vector lane: when CORTEX_VECTORIZER_URL is set and the
+    // SDK's `health_check` succeeds, swap the in-memory double for
+    // a `VectorizerLane` that runs KNN against the same per-project
+    // collections the spec-06 embedder-worker upserts to. Without
+    // this swap, `debug.lanes.vector_ms` stays at 0 on every query
+    // and the snippets surfaced under `source = "vector"` are
+    // actually keyword-lane hits the orchestrator's lane_label
+    // fallback mislabelled (the 2026-04-27 audit caught this).
+    //
+    // Fallback to the in-memory lane on probe failure (env unset,
+    // server unreachable, build error) keeps cold-stack dev working;
+    // failures log WARN with the URL + reason so misconfigurations
+    // are spotted at boot.
+    let vector: StdArc<dyn VectorLane> = if let Ok(vectorizer_url) =
+        std::env::var("CORTEX_VECTORIZER_URL")
+            .or_else(|_| std::env::var("VECTORIZER_URL"))
+    {
+        // Auth selection mirrors the embedder-worker boot flow:
+        // - explicit JWT / api-key wins (`*_API_KEY` env)
+        // - otherwise, if user+password are both set, run /auth/login
+        //   once and use the minted JWT
+        // - otherwise, no auth (dev-stack default)
+        let api_key = std::env::var("CORTEX_VECTORIZER_API_KEY")
+            .or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+            .ok();
+        let username = std::env::var("CORTEX_VECTORIZER_USER")
+            .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER"))
+            .ok();
+        let password = std::env::var("CORTEX_VECTORIZER_PASSWORD")
+            .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
+            .ok();
+        let lane_result = if api_key.is_some() {
+            VectorizerLane::new(&vectorizer_url, api_key)
+        } else if let (Some(u), Some(p)) = (username.as_deref(), password.as_deref()) {
+            tracing::info!(
+                vectorizer_url = %vectorizer_url,
+                user = %u,
+                "vector lane: running /auth/login to mint JWT"
+            );
+            VectorizerLane::with_login(&vectorizer_url, u, p).await
+        } else {
+            VectorizerLane::new(&vectorizer_url, None)
+        };
+        match lane_result {
+            Ok(live) => match live.probe().await {
+                Ok(()) => {
+                    tracing::info!(
+                        vectorizer_url = %vectorizer_url,
+                        "live vector lane: VectorizerLane wired"
+                    );
+                    StdArc::new(live)
+                }
+                Err(reason) => {
+                    tracing::warn!(
+                        vectorizer_url = %vectorizer_url,
+                        reason = %reason,
+                        "live vector lane probe failed; falling back to MemoryVectorLane"
+                    );
+                    vector_memory.clone()
+                }
+            },
+            Err(reason) => {
+                tracing::warn!(
+                    vectorizer_url = %vectorizer_url,
+                    reason = %reason,
+                    "live vector lane build failed; falling back to MemoryVectorLane"
+                );
+                vector_memory.clone()
+            }
+        }
+    } else {
+        tracing::info!(
+            "CORTEX_VECTORIZER_URL unset; vector lane stays on MemoryVectorLane"
+        );
+        vector_memory.clone()
+    };
 
     // Live keyword lane: when CORTEX_FULLTEXT_MEILI_URL is set and
     // the server answers /health within the probe timeout, we hand

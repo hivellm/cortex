@@ -41,6 +41,7 @@ futures = "0.3"
 
 synap-sdk = { workspace = true }
 nexus-graph-sdk = { workspace = true }
+vectorizer-sdk = { workspace = true }
 zstd = { workspace = true }
 
 [dev-dependencies]
