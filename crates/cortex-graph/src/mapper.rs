@@ -58,6 +58,23 @@ fn clip_display(s: &str, max: usize) -> String {
     out
 }
 
+/// Stamp every prop a graph viewer might use to render a node's
+/// caption. Different Nexus / Cytoscape / Bloom builds prefer
+/// different keys (`label` / `name` / `display` / `caption`), and
+/// our own dashboard's `node_label()` helper falls through every
+/// candidate before defaulting to the natural-key id. Setting all
+/// of them at once costs ~80 bytes per node and means whichever
+/// viewer the operator opens reads SOMETHING legible — instead of
+/// the unrendered ULID we were leaking into the Nexus UI.
+fn stamp_display_label(props: &mut BTreeMap<String, Value>, label: &str) {
+    let clipped = clip_display(label, 96);
+    let v = Value::String(clipped);
+    props.insert("label".to_string(), v.clone());
+    props.insert("display".to_string(), v.clone());
+    props.insert("caption".to_string(), v.clone());
+    props.insert("name".to_string(), v);
+}
+
 /// Map one enriched event into a graph patch.
 ///
 /// The patch is always idempotent under replay because every node uses
@@ -79,9 +96,9 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
     // browser. Sessions are normally 26-char ULIDs so the first 12
     // chars uniquely identify a session in practice.
     let session_short = session_id.chars().take(12).collect::<String>();
-    session_props.insert(
-        "name".to_string(),
-        Value::String(format!("Session {session_short}")),
+    stamp_display_label(
+        &mut session_props,
+        &format!("Session {session_short}"),
     );
     patch.nodes.push(NodeOp {
         label: "Session".to_string(),
@@ -138,14 +155,17 @@ fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
             "id".to_string(),
             Value::String(ent.identifier.clone()),
         );
-        props.insert(
-            "name".to_string(),
-            Value::String(
-                ent.label
-                    .clone()
-                    .unwrap_or_else(|| ent.identifier.clone()),
-            ),
-        );
+        // Display caption for the Nexus / Cytoscape viewer. Prefer
+        // the Sonnet-supplied human label (e.g. a decision title)
+        // when present; fall back to the identifier itself, which
+        // is always the most diagnostic thing the operator can
+        // read (e.g. `DEC-0042`, `crates/cortex-api/src/lib.rs`).
+        let display = ent
+            .label
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| ent.identifier.clone());
+        stamp_display_label(&mut props, &display);
         // Carry the typed kind so dashboard surfaces can colour-code
         // even when the canonical label collapses to `Concept` (the
         // catch-all for novel entity types Sonnet emits).
@@ -306,7 +326,7 @@ fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
         .map(|s| clip_display(s, 96))
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| format!("Turn {}", turn_id.chars().take(12).collect::<String>()));
-    props.insert("name".to_string(), Value::String(display));
+    stamp_display_label(&mut props, &display);
     if let Some(msg) = bootstrap_message.as_deref() {
         if !msg.is_empty() {
             // Carry the full user message so downstream readers (the
@@ -370,7 +390,7 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
     } else {
         display
     };
-    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    stamp_display_label(&mut props, &clip_display(&display, 96));
 
     if let Some(p) = payload.as_ref() {
         props.insert(
@@ -498,7 +518,7 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
         Value::String(content_hash.to_string()),
     );
     // Display label = the path; that is the field a human scans.
-    props.insert("name".to_string(), Value::String(clip_display(path, 96)));
+    stamp_display_label(&mut props, &clip_display(path, 96));
     patch.nodes.push(NodeOp {
         label: "Artifact".to_string(),
         natural_key: key.clone(),
@@ -509,7 +529,7 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
     // Stamp both `name` and a redundant `repo` field so old readers
     // that grep for `repo` keep working.
     let mut repo_props = BTreeMap::new();
-    repo_props.insert("name".to_string(), Value::String(repo.to_string()));
+    stamp_display_label(&mut repo_props, &repo.to_string());
     repo_props.insert("repo".to_string(), Value::String(repo.to_string()));
     patch.nodes.push(NodeOp {
         label: "Repo".to_string(),
@@ -545,7 +565,7 @@ fn emit_memory(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) 
             format!("{head} ({})", p.memory_type)
         })
         .unwrap_or_else(|| format!("Memory {}", memory_id.chars().take(12).collect::<String>()));
-    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = payload.as_ref() {
         props.insert("title".to_string(), Value::String(p.name.clone()));
         props.insert("memory_type".to_string(), Value::String(p.memory_type.clone()));
@@ -586,7 +606,7 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
         .filter(|p| !p.title.is_empty())
         .map(|p| format!("{} · {}", decision_key, p.title))
         .unwrap_or_else(|| format!("Decision {decision_key}"));
-    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = payload.as_ref() {
         props.insert("title".to_string(), Value::String(p.title.clone()));
         props.insert("status".to_string(), Value::String(p.status.clone()));
@@ -690,7 +710,7 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
             None => format!("Analysis {analysis_key}"),
         },
     };
-    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = canonical.as_ref() {
         if !p.question.is_empty() {
             props.insert("title".to_string(), Value::String(p.question.clone()));
@@ -735,7 +755,7 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
     // node ever fails to land.
     if let Some(repo) = event.context_repo.as_deref().filter(|s| !s.is_empty()) {
         let mut repo_props = BTreeMap::new();
-        repo_props.insert("name".to_string(), Value::String(repo.to_string()));
+        stamp_display_label(&mut repo_props, &repo.to_string());
         repo_props.insert("repo".to_string(), Value::String(repo.to_string()));
         patch.nodes.push(NodeOp {
             label: "Repo".to_string(),
@@ -778,7 +798,7 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
             format!("[{}] {head}", p.severity)
         })
         .unwrap_or_else(|| format!("Violation {violation_key}"));
-    props.insert("name".to_string(), Value::String(clip_display(&display, 96)));
+    stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = payload.as_ref() {
         props.insert("law_id".to_string(), Value::String(p.law_id.clone()));
         props.insert(
@@ -807,7 +827,7 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
         // Display label = the id itself until spec-13 ships full
         // Law metadata (title / severity / scope). The id alone is
         // already enough to identify the rule in the Nexus browser.
-        law_props.insert("name".to_string(), Value::String(law_id.clone()));
+        stamp_display_label(&mut law_props, &law_id.clone());
         patch.nodes.push(NodeOp {
             label: "Law".to_string(),
             natural_key: law_id.clone(),
