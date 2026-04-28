@@ -83,11 +83,13 @@ function GraphLoader({
   onSelect,
   onRepoClick,
   drilldown,
+  sessionPrimaryRepo,
 }: {
   data: GraphPayload | undefined;
   onSelect: (s: SelectedNode | null) => void;
   onRepoClick: (repoId: string) => void;
   drilldown: boolean;
+  sessionPrimaryRepo: Map<string, string>;
 }) {
   const sigma = useSigma();
   const loadGraph = useLoadGraph();
@@ -199,6 +201,58 @@ function GraphLoader({
       agent_call: "#73daca",// mint — sub-agent invocations
     };
 
+    // Per-repo accent palette. Sessions / Turns inherit their
+    // owning project's hue when known via `sessionPrimaryRepo`,
+    // so the canvas reads as project-coloured clusters at first
+    // glance instead of a sea of cyan turns. The palette stays
+    // distinct from KIND_HEX so the legend's "Session" / "Turn"
+    // dots still read true on session-tree spines whose repo is
+    // unknown.
+    const REPO_PALETTE: readonly string[] = [
+      "#f7768e", // rose
+      "#9ece6a", // green
+      "#7aa2f7", // blue
+      "#bb9af7", // purple
+      "#e0af68", // amber
+      "#73daca", // mint
+      "#ff9e64", // orange
+      "#7dcfff", // cyan
+      "#c0caf5", // lavender
+      "#f5a97f", // peach
+      "#a6da95", // pistachio
+      "#cba6f7", // mauve
+    ];
+    const knownRepos = Array.from(
+      new Set([
+        ...data.nodes.filter((n) => n.kind === "repo").map((n) => n.id),
+        ...sessionPrimaryRepo.values(),
+      ]),
+    ).sort();
+    const repoColor = new Map<string, string>();
+    knownRepos.forEach((r, idx) => {
+      repoColor.set(r, REPO_PALETTE[idx % REPO_PALETTE.length]);
+    });
+
+    // Resolve each Turn's owning Session (HAS_TURN edge `from`)
+    // so Turns also pick up the parent Session's repo hue.
+    const turnSession = new Map<string, string>();
+    for (const e of data.edges) {
+      if (e.label === "HAS_TURN") turnSession.set(e.to, e.from);
+    }
+    const colorFor = (id: string, kind: string): string => {
+      if (kind === "repo") return repoColor.get(id) ?? KIND_HEX.repo;
+      if (kind === "session") {
+        const r = sessionPrimaryRepo.get(id);
+        if (r && repoColor.has(r)) return repoColor.get(r)!;
+      }
+      if (kind === "turn") {
+        const sid = turnSession.get(id);
+        const r = sid ? sessionPrimaryRepo.get(sid) : undefined;
+        if (r && repoColor.has(r)) return repoColor.get(r)!;
+      }
+      return KIND_HEX[kind] ?? "#9aa5ce";
+    };
+
     // Step 2 — per-node degree (using the *full* edge set, not just
     // the surviving slice) so a Session that orchestrated 200 tool
     // calls renders bigger than a Session with 5 turns. The visual
@@ -241,7 +295,7 @@ function GraphLoader({
         label: labelToShow,
         kind: n.kind,
         size: sizeFor(n.id, n.kind),
-        color: KIND_HEX[n.kind] ?? "#9aa5ce",
+        color: colorFor(n.id, n.kind),
         // Force-show labels for the headline nodes — Repos / Sessions /
         // Decisions / Laws — so the canvas reads as a structured map
         // instead of an anonymous cloud. Smaller nodes (Turns,
@@ -314,7 +368,7 @@ function GraphLoader({
     sigma.setSetting("defaultNodeColor", "#9aa5ce");
 
     loadGraph(g);
-  }, [data, loadGraph, sigma, drilldown]);
+  }, [data, loadGraph, sigma, drilldown, sessionPrimaryRepo]);
 
   useEffect(() => {
     registerEvents({
@@ -384,6 +438,30 @@ export function GraphView() {
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
   });
+
+  // Sessions don't connect to Repos in the graph schema — there's
+  // no `:USED_IN`/`:SESSION_REPO` edge on the writer side today.
+  // The dashboard `/sessions` endpoint already aggregates per-
+  // session repo touches; we pull it in parallel and join into a
+  // `sessionId -> primaryRepo` map the GraphLoader uses to colour
+  // each Session node by its dominant project. Refetches happen
+  // far less often than the graph because the per-session repo
+  // mapping is stable once a session ends.
+  const { data: sessionsRows } = useQuery({
+    queryKey: ["graph-sessions-for-repo-tint"],
+    queryFn: () => api.sessions(),
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+  });
+  const sessionPrimaryRepo = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const row of sessionsRows ?? []) {
+      if (row.repos && row.repos.length > 0) {
+        m.set(row.session_id, row.repos[0]);
+      }
+    }
+    return m;
+  }, [sessionsRows]);
 
   // Count what survives the structural filter the loader applies, not
   // the full payload — the user's mental model is "how many shapes
@@ -506,6 +584,7 @@ export function GraphView() {
                 }
               }}
               drilldown={isRepoDrilldown}
+              sessionPrimaryRepo={sessionPrimaryRepo}
             />
             <ControlsContainer position="top-left">
               <ZoomControl />
