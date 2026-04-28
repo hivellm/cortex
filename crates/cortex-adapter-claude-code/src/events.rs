@@ -19,7 +19,8 @@
 use chrono::{SecondsFormat, Utc};
 use cortex_core::canonical_json::canonicalize;
 use cortex_core::events::{
-    AgentCall, Context, Envelope, Kind, Stream, ToolCall, ToolCallOutput, Turn,
+    AgentCall, Context, Envelope, Kind, Stream, ToolCall, ToolCallOutput,
+    TouchedArtifact, Turn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -173,6 +174,20 @@ pub fn build_event(
     let occurred_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let content_hash = canonical_sha256(&payload_value);
 
+    // Anchor every child event under its parent Turn so the
+    // graph writer can build the canonical Session->Turn->ToolCall
+    // chain instead of falling back to Session->ToolCall.
+    // `extras.turn_id` is populated for Turn / ToolCall / AgentCall
+    // and any of their derivatives by `update_correlation` above.
+    // Turn events themselves keep `parent_event_id = None` because
+    // they ARE the parent; the inner `if` short-circuits when the
+    // current envelope is the turn envelope (its event_id is the
+    // turn_id, so a Turn parented on itself is meaningless).
+    let parent_event_id = match canonical_kind {
+        Kind::Turn => None,
+        _ => extras.turn_id.clone(),
+    };
+
     Some(Envelope {
         event_id: cortex_core::ids::event_id(),
         schema_version: "1".to_string(),
@@ -187,7 +202,7 @@ pub fn build_event(
         payload: payload_value,
         redactions: report.tokens,
         content_hash,
-        parent_event_id: None,
+        parent_event_id,
     })
 }
 
@@ -368,15 +383,63 @@ fn build_tool_call_payload(redacted: &Value) -> Value {
         .and_then(|v| v.as_u64())
         .or_else(|| redacted.get("duration").and_then(|v| v.as_u64()));
 
+    // Spec 01 lists `touched` as "resolved post-call by adapter" —
+    // Claude Code's PostToolUse hook does not surface a structured
+    // touched-files list, so the adapter infers it from each tool's
+    // canonical `input` field. Earlier revisions left this empty,
+    // which collapsed every TOUCHED edge in the graph (only one
+    // edge across the entire bootstrap dataset). The mapping below
+    // covers the file-mutating tools the agent actually uses; Bash
+    // is intentionally skipped because its touched set requires
+    // real shell parsing — `git status` doesn't touch a file the
+    // way `Edit` does, and a wrong inference is worse than none.
+    let touched = infer_touched_artifacts(&tool_name, &input_obj);
+
     let tc = ToolCall {
         tool_name,
         input: Value::Object(input_obj),
         output,
         duration_ms,
-        touched: Vec::new(),
+        touched,
         outcome,
     };
     serde_json::to_value(&tc).unwrap_or(Value::Null)
+}
+
+/// Best-effort `touched[]` inference from the canonical PostToolUse
+/// `input` bag. Pulls `file_path` (and a couple of common synonyms)
+/// for the tools whose semantics map cleanly onto a single file
+/// kind. Tools whose touched set is multi-file (`Glob`, `Grep`) or
+/// shell-shaped (`Bash`) are left empty for the writer to backfill
+/// later from the tool's `output`.
+fn infer_touched_artifacts(
+    tool_name: &str,
+    input: &serde_json::Map<String, Value>,
+) -> Vec<TouchedArtifact> {
+    fn pull_path(input: &serde_json::Map<String, Value>) -> Option<String> {
+        for key in ["file_path", "path", "filename", "notebook_path"] {
+            if let Some(Value::String(s)) = input.get(key) {
+                if !s.is_empty() {
+                    return Some(s.clone());
+                }
+            }
+        }
+        None
+    }
+    let kind = match tool_name {
+        "Read" | "NotebookRead" => "file_read",
+        "Write" => "file_create",
+        "Edit" | "MultiEdit" | "NotebookEdit" => "file_write",
+        _ => return Vec::new(),
+    };
+    pull_path(input)
+        .map(|path| {
+            vec![TouchedArtifact {
+                kind: kind.to_string(),
+                path,
+            }]
+        })
+        .unwrap_or_default()
 }
 
 fn build_agent_call_payload(redacted: &Value) -> Value {

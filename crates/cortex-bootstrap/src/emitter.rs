@@ -247,6 +247,18 @@ fn derive_status(body: &str) -> Option<String> {
 }
 
 /// Build the `memory.imported` event for one memory file.
+///
+/// Field shape mirrors `cortex_core::events::MemoryPayload` so the
+/// graph mapper deserialises it cleanly. Earlier revisions emitted
+/// `{"title", "body"}`, which the mapper's
+/// `serde_json::from_value::<MemoryPayload>(...)` rejected because
+/// `op` / `memory_type` / `name` are required — every Memory node
+/// fell back to the `"Memory <ulid12>"` display label and lost
+/// connection between the bootstrap source and the searchable name.
+/// `op = "write"` + `memory_type = "reference"` are the right
+/// constants for bootstrap imports: the file is being written into
+/// the index for reference, not authored as user / feedback /
+/// project memory.
 pub fn emit_memory_imported(
     repo_id: &str,
     session_id: &str,
@@ -258,7 +270,10 @@ pub fn emit_memory_imported(
     let title = derive_doc_title(body, rel_path);
     let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
     let payload = json!({
-        "title": title,
+        "op": "write",
+        "memory_type": "reference",
+        "name": title,
+        "memory_path": rel_path,
         "body": body,
     });
     finalise("memory.imported", session_id, source, payload, stream)
@@ -344,12 +359,25 @@ fn parse_decision_markdown(body: &str, rel_path: &str) -> DecisionParsed {
 
 /// Case-insensitive prefix strip that returns the remainder of the
 /// original string (preserving case in the returned slice).
+///
+/// Byte-safe against multi-byte UTF-8: slicing `haystack[..prefix.len()]`
+/// directly panics when the haystack starts with a multi-byte character
+/// shorter than the prefix (e.g. `# 01 — Overview` slicing for a 7-byte
+/// `"status:"` lands inside the em-dash). The `prefix` is ASCII by
+/// construction (every callsite passes a literal like `"status:"`), so
+/// we test the prefix length in *characters* against the haystack's
+/// leading bytes, falling back to `is_char_boundary` to refuse slices
+/// that would split a code point.
 fn strip_prefix_ci<'a>(haystack: &'a str, prefix: &str) -> Option<&'a str> {
-    if haystack.len() < prefix.len() {
+    let n = prefix.len();
+    if haystack.len() < n {
         return None;
     }
-    if haystack[..prefix.len()].eq_ignore_ascii_case(prefix) {
-        Some(&haystack[prefix.len()..])
+    if !haystack.is_char_boundary(n) {
+        return None;
+    }
+    if haystack[..n].eq_ignore_ascii_case(prefix) {
+        Some(&haystack[n..])
     } else {
         None
     }
@@ -615,6 +643,22 @@ mod tests {
             BOOTSTRAP_STREAM,
         );
         assert_eq!(evt.redacted_payload["law_id"], "LAW-042");
+    }
+
+    #[test]
+    fn derive_status_does_not_panic_on_multibyte_lines() {
+        // Regression: pre-fix `strip_prefix_ci` sliced bytes without
+        // a char-boundary check, panicking on the em-dash in lines
+        // like `# 01 — Overview`. The fix makes the helper boundary-
+        // safe; this test pins the behaviour.
+        assert_eq!(
+            derive_status("# 01 — Overview\n\nNo status line here."),
+            None
+        );
+        assert_eq!(
+            derive_status("# Title — with em-dash\n\nStatus: draft"),
+            Some("draft".to_string())
+        );
     }
 
     #[test]
