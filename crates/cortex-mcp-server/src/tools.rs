@@ -248,14 +248,24 @@ impl Tool for QueryTool {
             .map_err(|e| ToolError::invalid_input(format!("query request: {e}")))?;
 
         let url = format!("{}/v1/query", ctx.api_url.trim_end_matches('/'));
-        let resp = match ctx
+        // Phase6a — inject `x-cortex-cwd` so the daemon's
+        // `resolve_scope` can derive `scope.repo` from the
+        // basename when the caller did not supply one explicitly.
+        // Errors reading `current_dir` are non-fatal — the request
+        // still goes out, the daemon then falls back to its own
+        // resolution lanes (explicit body, `x-cortex-repo` header,
+        // legacy `CORTEX_ALLOW_UNKNOWN_SCOPE` hatch).
+        let cwd_header = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(str::to_string));
+        let mut request = ctx
             .http
             .post(&url)
-            .header(cortex_api::CALLER_HEADER, CALLER)
-            .json(&req)
-            .send()
-            .await
-        {
+            .header(cortex_api::CALLER_HEADER, CALLER);
+        if let Some(cwd) = &cwd_header {
+            request = request.header("x-cortex-cwd", cwd);
+        }
+        let resp = match request.json(&req).send().await {
             Ok(r) => r,
             Err(e) => {
                 return Ok(ToolResult::soft_error(

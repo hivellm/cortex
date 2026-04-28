@@ -14,7 +14,9 @@
     "build": "pnpm run build:renderer && pnpm run build:electron",
     "start": "electron .",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
-    "lint": "eslint src electron"
+    "lint": "eslint src electron",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@react-sigma/core": "^5.0.6",
@@ -27,6 +29,8 @@
     "sigma": "^3.0.2"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
@@ -34,8 +38,10 @@
     "concurrently": "^9.1.0",
     "cross-env": "^10.0.0",
     "electron": "^39.8.5",
+    "jsdom": "^24.1.3",
     "typescript": "^5.9.3",
     "vite": "^7.0.0",
+    "vitest": "^1.6.1",
     "wait-on": "^9.0.0"
   },
   "pnpm": {

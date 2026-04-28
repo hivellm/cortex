@@ -1,5 +1,12 @@
 # cortex-post-tool — PostToolUse shim (Windows). Spec 10.
 $ErrorActionPreference = "SilentlyContinue"
+# Cortex sub-workers (classifier-cli, embedder-cli, …) spawn `claude`
+# as a child process and explicitly opt this hook out so their own
+# work doesn't loop back through the live event bus. Honouring the
+# flag is critical: without it the classifier emits 3-5 hook
+# envelopes per classification, each of which would itself need
+# classifying — pure feedback noise.
+if ($env:CORTEX_ADAPTER_DISABLE -eq "1") { Write-Output "{}"; exit 0 }
 $pipeName = if ($env:CORTEX_ADAPTER_PIPE) { $env:CORTEX_ADAPTER_PIPE } else { "cortex-adapter-claude" }
 $input_text = [Console]::In.ReadToEnd()
 if ($input_text) { $input_text = $input_text.Trim() }

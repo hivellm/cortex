@@ -28,6 +28,8 @@ zstd = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 vectorizer-sdk = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

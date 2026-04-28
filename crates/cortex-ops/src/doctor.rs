@@ -264,10 +264,162 @@ pub struct DoctorReport {
     /// as the Meili siblings — surface, do not auto-clean.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub non_canonical_vectorizer_collections: Vec<String>,
-    /// `true` when at least one row has `inconsistent = true`. The
-    /// CLI exits non-zero on this flag. Suspicious rows do not
+    /// Phase4i query-overlap reports — one entry per `--query`
+    /// passed to the CLI. Empty when no queries were supplied.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queries: Vec<crate::probe::QueryReport>,
+    /// Phase3 — coverage of `content_hash` on archive-sourced
+    /// `tool_call` envelopes from the last 24 h. `None` when the
+    /// caller did not run the probe (e.g. cold dev stack with no
+    /// archive root). Sets `failed` on its own when the ratio falls
+    /// below the threshold.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_coverage: Option<HashCoverageSummary>,
+    /// `true` when at least one row has `inconsistent = true` OR at
+    /// least one query is `below_threshold`. The CLI exits non-zero
+    /// on this flag. Suspicious rows (the ratio probe) do not
     /// contribute.
     pub failed: bool,
+}
+
+/// Default coverage threshold for the `tool_call_hash_coverage`
+/// probe — 99% per the proposal in
+/// `.rulebook/tasks/phase3_tool_call_hash_preview/proposal.md`.
+pub const HASH_COVERAGE_THRESHOLD: f64 = 0.99;
+
+/// Default rolling window for the probe — 24 h.
+pub const HASH_COVERAGE_WINDOW_HOURS: i64 = 24;
+
+/// Phase3 `tool_call_hash_coverage` probe summary. Walks the
+/// archive parquet files and counts `tool_call` envelopes whose
+/// `content_hash` is non-empty, scoped to the last
+/// `window_hours` window.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HashCoverageSummary {
+    /// Total `tool_call` envelopes observed inside the window.
+    pub tool_calls_total: u64,
+    /// Subset of `tool_calls_total` whose `content_hash` is a
+    /// non-empty string. The proposal expects this to track 1:1 with
+    /// `tool_calls_total` because the spec-18 plugin stamps the hash
+    /// on every envelope.
+    pub tool_calls_with_hash: u64,
+    /// `tool_calls_with_hash / tool_calls_total` — `0.0` when no
+    /// envelopes fell inside the window, which the probe treats as
+    /// "skip" (does not flip `failed`).
+    pub ratio: f64,
+    /// Threshold the probe fails below.
+    pub threshold: f64,
+    /// Window size in hours. Mirrors
+    /// [`HASH_COVERAGE_WINDOW_HOURS`] unless the caller overrode it.
+    pub window_hours: i64,
+    /// `true` when `tool_calls_total > 0` AND `ratio < threshold`.
+    pub failed: bool,
+}
+
+/// Run the phase3 `tool_call_hash_coverage` probe. Walks the same
+/// archive root [`ArchiveProbe`] uses and computes the
+/// `content_hash` coverage ratio for `tool_call` envelopes whose
+/// `occurred_at` falls inside the last `window_hours` window.
+///
+/// `now_ms` lets tests pin "now" for deterministic windowing;
+/// production callers pass `chrono::Utc::now().timestamp_millis()`.
+/// The probe is read-only and never propagates an error: an
+/// unreadable archive root produces an empty summary so the CLI
+/// surfaces the absence as "skip" instead of a hard failure.
+pub fn scan_hash_coverage(
+    root: &Path,
+    now_ms: i64,
+    window_hours: i64,
+    threshold: f64,
+) -> HashCoverageSummary {
+    let mut totals = HashCoverageScanState::default();
+    let cutoff_ms = now_ms.saturating_sub(window_hours.max(0).saturating_mul(3_600_000));
+    let events_dir = root.join("events");
+    if events_dir.exists() {
+        scan_hash_dir(&events_dir, cutoff_ms, &mut totals);
+    }
+    let ratio = if totals.tool_calls_total == 0 {
+        0.0
+    } else {
+        totals.tool_calls_with_hash as f64 / totals.tool_calls_total as f64
+    };
+    let failed = totals.tool_calls_total > 0 && ratio < threshold;
+    HashCoverageSummary {
+        tool_calls_total: totals.tool_calls_total,
+        tool_calls_with_hash: totals.tool_calls_with_hash,
+        ratio,
+        threshold,
+        window_hours,
+        failed,
+    }
+}
+
+#[derive(Default)]
+struct HashCoverageScanState {
+    tool_calls_total: u64,
+    tool_calls_with_hash: u64,
+}
+
+fn scan_hash_dir(dir: &Path, cutoff_ms: i64, state: &mut HashCoverageScanState) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            scan_hash_dir(&path, cutoff_ms, state);
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("parquet") {
+            continue;
+        }
+        let _ = scan_hash_file(&path, cutoff_ms, state);
+    }
+}
+
+fn scan_hash_file(
+    path: &Path,
+    cutoff_ms: i64,
+    state: &mut HashCoverageScanState,
+) -> std::io::Result<()> {
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path)?;
+    let decoder = zstd::stream::read::Decoder::new(file)?;
+    let reader = BufReader::new(decoder);
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let env: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if env.get("kind").and_then(|v| v.as_str()) != Some("tool_call") {
+            continue;
+        }
+        let occurred_ms = env
+            .get("occurred_at")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0);
+        if occurred_ms < cutoff_ms {
+            continue;
+        }
+        state.tool_calls_total = state.tool_calls_total.saturating_add(1);
+        let has_hash = env
+            .get("content_hash")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+        if has_hash {
+            state.tool_calls_with_hash = state.tool_calls_with_hash.saturating_add(1);
+        }
+    }
+    Ok(())
 }
 
 /// Coverage probe over a Meili cluster. Wraps any
@@ -476,6 +628,8 @@ pub fn coverage_report_full(
         rows,
         non_canonical_meili_indexes,
         non_canonical_vectorizer_collections,
+        queries: Vec::new(),
+        hash_coverage: None,
         failed,
     }
 }
@@ -541,6 +695,25 @@ pub fn render_coverage_markdown(report: &DoctorReport) -> String {
         out.push_str("\nNon-canonical Vectorizer collections (sweep candidates):\n");
         for name in &report.non_canonical_vectorizer_collections {
             out.push_str(&format!("- {name}\n"));
+        }
+    }
+    for q in &report.queries {
+        out.push_str(&crate::probe::render_query_markdown(q));
+    }
+    if let Some(hash) = &report.hash_coverage {
+        out.push_str("\n## Tool-call hash coverage (last ");
+        out.push_str(&hash.window_hours.to_string());
+        out.push_str("h)\n");
+        if hash.tool_calls_total == 0 {
+            out.push_str("- skip: no `tool_call` envelopes inside the window\n");
+        } else {
+            let pct = hash.ratio * 100.0;
+            let threshold_pct = hash.threshold * 100.0;
+            let status = if hash.failed { "FAIL" } else { "ok" };
+            out.push_str(&format!(
+                "- {status}: {} / {} hashed ({pct:.2}%, threshold {threshold_pct:.2}%)\n",
+                hash.tool_calls_with_hash, hash.tool_calls_total,
+            ));
         }
     }
     out
@@ -826,6 +999,88 @@ mod tests {
         assert_eq!(partitions.get(&key("tml", "code")), Some(&184_754));
         assert_eq!(partitions.len(), 3);
         assert_eq!(non_canon, vec!["cortex-code".to_string()]);
+    }
+
+    fn write_zstd_ndjson(path: &std::path::Path, lines: &[&str]) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).unwrap();
+        let mut enc = zstd::stream::write::Encoder::new(file, 0).unwrap();
+        for line in lines {
+            writeln!(enc, "{line}").unwrap();
+        }
+        enc.finish().unwrap();
+    }
+
+    #[test]
+    fn hash_coverage_full_pass_when_every_envelope_has_hash() {
+        // Phase3 — every `tool_call` inside the window stamps a
+        // `content_hash`. The probe returns ratio = 1.0 and
+        // `failed = false`.
+        let tmp = tempfile::tempdir().unwrap();
+        let events = tmp.path().join("events");
+        std::fs::create_dir_all(&events).unwrap();
+        let path = events.join("a.parquet");
+        write_zstd_ndjson(
+            &path,
+            &[
+                r#"{"kind":"tool_call","occurred_at":"2026-04-28T20:00:00Z","content_hash":"sha256:aaa"}"#,
+                r#"{"kind":"tool_call","occurred_at":"2026-04-28T20:01:00Z","content_hash":"sha256:bbb"}"#,
+                r#"{"kind":"turn","occurred_at":"2026-04-28T20:02:00Z"}"#,
+            ],
+        );
+        let now_ms = chrono::DateTime::parse_from_rfc3339("2026-04-28T21:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let summary = scan_hash_coverage(tmp.path(), now_ms, 24, HASH_COVERAGE_THRESHOLD);
+        assert_eq!(summary.tool_calls_total, 2);
+        assert_eq!(summary.tool_calls_with_hash, 2);
+        assert!((summary.ratio - 1.0).abs() < 1e-9);
+        assert!(!summary.failed);
+    }
+
+    #[test]
+    fn hash_coverage_fails_when_below_threshold_and_skips_outside_window() {
+        // Phase3 — one `tool_call` is missing its hash AND another
+        // is outside the 24 h window (so it must NOT count). The
+        // resulting ratio falls below 99 % → `failed = true`.
+        let tmp = tempfile::tempdir().unwrap();
+        let events = tmp.path().join("events");
+        std::fs::create_dir_all(&events).unwrap();
+        write_zstd_ndjson(
+            &events.join("recent.parquet"),
+            &[
+                r#"{"kind":"tool_call","occurred_at":"2026-04-28T20:00:00Z","content_hash":"sha256:aaa"}"#,
+                r#"{"kind":"tool_call","occurred_at":"2026-04-28T20:30:00Z","content_hash":""}"#,
+            ],
+        );
+        write_zstd_ndjson(
+            &events.join("old.parquet"),
+            &[
+                // Outside the 24 h window — must be skipped entirely.
+                r#"{"kind":"tool_call","occurred_at":"2026-04-20T10:00:00Z","content_hash":"sha256:old"}"#,
+            ],
+        );
+        let now_ms = chrono::DateTime::parse_from_rfc3339("2026-04-28T21:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let summary = scan_hash_coverage(tmp.path(), now_ms, 24, HASH_COVERAGE_THRESHOLD);
+        assert_eq!(summary.tool_calls_total, 2, "the old envelope must not count");
+        assert_eq!(summary.tool_calls_with_hash, 1);
+        assert!(summary.ratio < HASH_COVERAGE_THRESHOLD);
+        assert!(summary.failed);
+    }
+
+    #[test]
+    fn hash_coverage_empty_window_does_not_fail() {
+        // Phase3 — zero envelopes inside the window is "skip", not
+        // a regression: the CLI surfaces it but never flips
+        // `report.failed`.
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join("events")).unwrap();
+        let now_ms = 1_700_000_000_000;
+        let summary = scan_hash_coverage(tmp.path(), now_ms, 24, HASH_COVERAGE_THRESHOLD);
+        assert_eq!(summary.tool_calls_total, 0);
+        assert!(!summary.failed);
     }
 
     #[test]

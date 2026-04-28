@@ -51,6 +51,12 @@ pub struct LoadReport {
     pub hits_seeded: usize,
     /// Lines that didn't deserialize as a canonical envelope.
     pub lines_dropped: usize,
+    /// Files whose zstd stream was truly corrupt (not just a live
+    /// trailing frame). Surfaced separately so the health probe at
+    /// `/healthz` can flag silent data loss after a hard-killed
+    /// `cortex-ingestion`. See
+    /// [docs/analysis/adapter/01-tool-call-archive-loss.md](../../../../docs/analysis/adapter/01-tool-call-archive-loss.md).
+    pub corrupted_files: Vec<std::path::PathBuf>,
 }
 
 /// Default index name the keyword lane is seeded under. Matches the
@@ -103,17 +109,40 @@ fn visit_dir(dir: &Path, report: &mut LoadReport, hits: &mut Vec<LaneHit>) {
         let envelopes_before = report.envelopes_parsed;
         if let Err(e) = read_one_file(&path, report, hits) {
             let recovered = report.envelopes_parsed - envelopes_before;
-            // Partial frames are normal: cortex-ingestion holds the
-            // current-hour file open, so its zstd stream is still
-            // unfinished. We log at debug when at least one envelope
-            // came through, warn when nothing was recoverable (which
-            // usually means a truly corrupt file).
-            if recovered > 0 {
+            // Two distinct shapes here:
+            //   * `incomplete frame` — cortex-ingestion holds the
+            //     current-hour file open, so the trailing bytes are
+            //     a half-flushed zstd frame. Expected noise on every
+            //     refresh; log at DEBUG so steady-state stays quiet.
+            //   * `Data corruption detected` — the leading bytes of
+            //     the file are a broken zstd stream (typically left
+            //     by a hard-killed previous run, see
+            //     docs/analysis/adapter/01-tool-call-archive-loss.md).
+            //     The reader can't cross the boundary, so every
+            //     envelope appended after the broken frame is
+            //     **silently invisible** to the dashboard until the
+            //     operator rotates the file. Promote to WARN so the
+            //     incident surfaces immediately.
+            let err_str = e.to_string();
+            let truly_corrupt = err_str.contains("Data corruption")
+                || err_str.contains("Unknown frame");
+            if truly_corrupt {
+                report.corrupted_files.push(path.clone());
+                tracing::warn!(
+                    path = %path.display(),
+                    recovered_envelopes = recovered,
+                    error = %e,
+                    "archive loader: corrupt zstd stream — \
+                     events appended after the corruption boundary \
+                     are invisible. Quarantine the file and \
+                     rotate per docs/analysis/adapter/01-tool-call-archive-loss.md."
+                );
+            } else if recovered > 0 {
                 tracing::debug!(
                     path = %path.display(),
                     recovered_envelopes = recovered,
                     error = %e,
-                    "archive loader: partial frame (live file or trailing corruption)"
+                    "archive loader: partial frame (live file)"
                 );
             } else {
                 tracing::warn!(
@@ -121,6 +150,7 @@ fn visit_dir(dir: &Path, report: &mut LoadReport, hits: &mut Vec<LaneHit>) {
                     error = %e,
                     "archive loader: file unreadable, no envelopes recovered"
                 );
+                report.corrupted_files.push(path.clone());
             }
         }
     }

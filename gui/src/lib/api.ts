@@ -37,6 +37,64 @@ async function getJson<T>(path: string): Promise<T> {
   return (await resp.json()) as T;
 }
 
+/// Phase6a — `/v1/query` request body shape, matching the daemon's
+/// `QueryRequest`. Only the fields the GUI actually emits are
+/// declared here; the daemon's spec-11 schema is the source of truth.
+export type QueryRequestBody = {
+  intent: string;
+  query: string;
+  scope?: { repo?: string; files?: string[]; topics?: string[]; since?: string };
+  limit?: number;
+  k?: number;
+  include?: string[];
+  budget_ms?: number;
+};
+
+/// Phase6a — POST `/v1/query` with the spec-6a scope-resolution
+/// headers wired in. When the caller knows the active repo (from
+/// the sidebar filter), it MUST pass `repo` so the daemon sees the
+/// same value as `x-cortex-repo`. The body's `scope.repo` still
+/// wins when set; this helper lets callers route through the
+/// header path without restructuring the request body.
+export async function postQuery<T = unknown>(
+  body: QueryRequestBody,
+  opts: { repo?: string } = {},
+): Promise<T> {
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    "content-type": "application/json",
+  };
+  if (opts.repo && opts.repo.length > 0) {
+    headers["x-cortex-repo"] = opts.repo;
+  }
+  const resp = await fetch(`${BASE_URL}/v1/query`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    // 422 carries the spec-6a `scope_repo_required` reason —
+    // surface the structured body so callers can branch on it.
+    let payload: unknown = null;
+    try {
+      payload = await resp.json();
+    } catch {
+      payload = null;
+    }
+    const reason =
+      typeof payload === "object" && payload !== null && "reason" in payload
+        ? (payload as { reason: unknown }).reason
+        : null;
+    throw new ApiError(
+      resp.status,
+      typeof reason === "string"
+        ? `${resp.status} ${reason}`
+        : `${resp.status} ${resp.statusText}`,
+    );
+  }
+  return (await resp.json()) as T;
+}
+
 export type KindCount = { kind: string; count: number };
 export type RepoCount = { repo: string; count: number };
 
@@ -74,6 +132,13 @@ export type TimelineEvent = {
   repo: string | null;
   session_id?: string;
   model: string;
+  // Phase3 — sha256 fingerprint stamped by the spec-18 plugin on every
+  // captured envelope. `sha256:<64hex>`. Dropped for redacted lane hits.
+  content_hash?: string;
+  // Phase3 — un-clipped tool-call body for the Inspector. Capped at
+  // 8 KiB server-side; rows larger than that get `preview_truncated`.
+  preview?: string;
+  preview_truncated?: boolean;
 };
 
 export type SessionRow = {
@@ -97,6 +162,11 @@ export type Filters = {
   session_id?: string;
   repo?: string[];
   kind?: string;
+  // Phase3 — full sha256 hash to filter the timeline by. The
+  // Inspector wires this when the user clicks the `content_hash` row,
+  // collapsing the view to every call sharing the same fingerprint
+  // (the dedupe / replay-detection workflow).
+  content_hash?: string;
 };
 
 export type MemoryEntry = {
@@ -320,6 +390,7 @@ function applyFilters(params: URLSearchParams, filters?: Filters) {
     }
   }
   if (filters.kind) params.set("kind", filters.kind);
+  if (filters.content_hash) params.set("content_hash", filters.content_hash);
 }
 
 export const api = {

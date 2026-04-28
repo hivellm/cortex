@@ -695,6 +695,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-health"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cortex-ingestion"
 version = "0.1.0"
 dependencies = [
@@ -745,11 +754,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "clap",
  "cortex-core",
  "cortex-fulltext",
  "cortex-graph",
  "cortex-storage",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",

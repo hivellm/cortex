@@ -2,6 +2,11 @@
 # cortex-post-tool — PostToolUse shim. Spec 10.
 set -u
 
+# Cortex sub-workers (classifier-cli, …) export CORTEX_ADAPTER_DISABLE=1
+# so this shim short-circuits and the subprocess hooks never reach the
+# bus — see crates/cortex-classifier/src/haiku_cli.rs for the rationale.
+if [ "${CORTEX_ADAPTER_DISABLE:-0}" = "1" ]; then echo "{}"; exit 0; fi
+
 # Polyglot: on Windows shells the daemon binds a named pipe and `nc -U`
 # is unavailable, so re-exec the .ps1 sibling via pwsh. On Linux/macOS
 # the case falls through and the Unix-socket path below runs unchanged.

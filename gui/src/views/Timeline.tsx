@@ -79,7 +79,38 @@ function TimelineRow({
   );
 }
 
-function Inspector({ ev, onClose }: { ev: TimelineEvent | null; onClose: () => void }) {
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    }
+  } catch {
+    // Clipboard write can fail when the document isn't focused or
+    // the browser denies permission — surface nothing rather than
+    // crashing the Inspector. The user can copy from the visible
+    // text manually.
+  }
+}
+
+function shortHash(hash: string): string {
+  // `sha256:abc1234567890...` — keep the algo prefix and the first 7
+  // hex chars so the row stays single-line and recognisable.
+  if (!hash.includes(":")) return hash.slice(0, 14);
+  const [algo, hex] = hash.split(":", 2);
+  return `${algo}:${hex.slice(0, 7)}…`;
+}
+
+export function Inspector({
+  ev,
+  onClose,
+  onFilterByHash,
+  activeHashFilter,
+}: {
+  ev: TimelineEvent | null;
+  onClose: () => void;
+  onFilterByHash: (hash: string) => void;
+  activeHashFilter?: string;
+}) {
   const open = !!ev;
   // ESC closes the inspector — listen at the document level so the
   // shortcut works regardless of focus location.
@@ -131,6 +162,44 @@ function Inspector({ ev, onClose }: { ev: TimelineEvent | null; onClose: () => v
               </button>
             </div>
             <div className="inspector__body">
+              {ev.kind === "tool_call" && ev.preview && ev.preview.length > 0 ? (
+                <div className="inspector__section" data-testid="inspector-content">
+                  <div
+                    className="inspector__section-label"
+                    style={{ display: "flex", alignItems: "center", gap: 8 }}
+                  >
+                    <span>Content</span>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      onClick={() => {
+                        void copyToClipboard(ev.preview ?? "");
+                      }}
+                      style={{ marginLeft: "auto", fontSize: 11 }}
+                      aria-label="Copy content"
+                      title="Copy content"
+                    >
+                      copy
+                    </button>
+                  </div>
+                  <pre
+                    className="code-block"
+                    style={{ fontSize: 11, whiteSpace: "pre-wrap" }}
+                    data-testid="inspector-content-pre"
+                  >
+                    {ev.preview}
+                  </pre>
+                  {ev.preview_truncated ? (
+                    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                      (truncated at 8 KiB —{" "}
+                      <a href={`/v1/dashboard/timeline/${encodeURIComponent(ev.id)}`}>
+                        open full
+                      </a>
+                      )
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="inspector__section">
                 <div className="inspector__section-label">Detail</div>
                 <div style={{ fontSize: 12.5, color: "var(--fg-1)", whiteSpace: "pre-wrap" }}>
@@ -152,6 +221,53 @@ function Inspector({ ev, onClose }: { ev: TimelineEvent | null; onClose: () => v
                   <dd className="mono">{ev.model}</dd>
                   <dt>at</dt>
                   <dd className="mono">{ev.t || "—"}</dd>
+                  {ev.content_hash ? (
+                    <>
+                      <dt>content_hash</dt>
+                      <dd
+                        className="mono"
+                        data-testid="inspector-hash-row"
+                        style={{ display: "flex", alignItems: "center", gap: 6 }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onFilterByHash(ev.content_hash!)}
+                          title={
+                            activeHashFilter === ev.content_hash
+                              ? "Clear hash filter"
+                              : "Filter timeline to rows sharing this fingerprint"
+                          }
+                          className="link-btn"
+                          style={{
+                            background: "transparent",
+                            border: 0,
+                            padding: 0,
+                            cursor: "pointer",
+                            color:
+                              activeHashFilter === ev.content_hash
+                                ? "var(--accent)"
+                                : "inherit",
+                            fontFamily: "inherit",
+                            fontSize: "inherit",
+                          }}
+                        >
+                          {shortHash(ev.content_hash)}
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() => {
+                            void copyToClipboard(ev.content_hash ?? "");
+                          }}
+                          aria-label="Copy content_hash"
+                          title="Copy full hash"
+                          style={{ fontSize: 11 }}
+                        >
+                          copy
+                        </button>
+                      </dd>
+                    </>
+                  ) : null}
                 </dl>
               </div>
               <div className="inspector__section">
@@ -219,6 +335,8 @@ export function TimelineView() {
     "timeline-recent",
     filters.session_id ?? "",
     (filters.repo ?? []).join("|"),
+    filters.kind ?? "",
+    filters.content_hash ?? "",
   ] as const;
   const { data, isLoading, error } = useQuery({
     // Initial backfill — TanStack Query owns the cached snapshot;
@@ -241,13 +359,14 @@ export function TimelineView() {
     if (filters.session_id) qs.set("session_id", filters.session_id);
     for (const r of filters.repo ?? []) qs.append("repo", r);
     if (filters.kind) qs.set("kind", filters.kind);
+    if (filters.content_hash) qs.set("content_hash", filters.content_hash);
     const tail = qs.toString();
     // Renderer hits the absolute API in production builds (file://)
     // and Vite's proxy in dev — same logic the polling fetcher uses.
     const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
     const root = isFile ? "http://127.0.0.1:17000" : "";
     return tail ? `${root}${base}?${tail}` : `${root}${base}`;
-  }, [live, filters.session_id, filters.repo, filters.kind]);
+  }, [live, filters.session_id, filters.repo, filters.kind, filters.content_hash]);
 
   // Live append from SSE. Each incoming TimelineEvent is appended
   // to the front of the cached `timeline-recent` buffer if the id
@@ -532,7 +651,16 @@ export function TimelineView() {
           ))
         )}
       </div>
-      <Inspector ev={selected} onClose={() => setSelected(null)} />
+      <Inspector
+        ev={selected}
+        onClose={() => setSelected(null)}
+        onFilterByHash={(hash) => {
+          // Toggle: a second click clears the filter so the user can
+          // exit the dedupe view without hunting for the "clear" button.
+          setFilter("content_hash", filters.content_hash === hash ? undefined : hash);
+        }}
+        activeHashFilter={filters.content_hash}
+      />
 
       <div
         style={{

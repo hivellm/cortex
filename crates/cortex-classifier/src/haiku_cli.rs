@@ -16,10 +16,58 @@ use crate::types::{
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+
+/// Path to a per-process Claude Code config directory whose
+/// `settings.json` declares no plugins / hooks. The classifier passes
+/// this to every `claude` subprocess via `CLAUDE_CONFIG_DIR` so the
+/// child does NOT load the host's `cortex-plugin` (which would fire
+/// SessionStart / UserPromptSubmit / Stop / tool hooks straight back
+/// at the live cortex-adapter, looping classification output back
+/// through the bus as fresh turn / tool_call envelopes).
+///
+/// Why CLAUDE_CONFIG_DIR rather than a sentinel env var picked up by
+/// the hooks themselves: empirically (2026-04-28), Claude Code does
+/// not propagate arbitrary parent env vars (`CORTEX_ADAPTER_DISABLE`,
+/// etc.) to the bash/pwsh shim it spawns for hook execution, so any
+/// approach that depends on the hook seeing a marker env fails
+/// silently. CLAUDE_CONFIG_DIR is part of the documented Claude Code
+/// contract and IS honoured at config-load time, so pointing it at a
+/// hook-free directory is the only mechanism that's guaranteed to
+/// suppress the loopback.
+fn hookless_config_dir() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir().join("cortex-classifier-hookless-config");
+        // Recreate on each daemon boot so a stale settings.json (e.g.
+        // an old binary that wrote hook entries here in error) cannot
+        // contaminate the new run.
+        let _ = std::fs::remove_dir_all(&dir);
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "failed to create hookless CLAUDE_CONFIG_DIR; classifier subprocess hooks may loop back into the bus"
+            );
+            return dir;
+        }
+        let settings = dir.join("settings.json");
+        // An empty `hooks` block disables every lifecycle hook a
+        // marketplace plugin would otherwise register.
+        if let Err(e) = std::fs::write(&settings, b"{\"hooks\":{}}\n") {
+            tracing::warn!(
+                error = %e,
+                path = %settings.display(),
+                "failed to write hookless settings.json"
+            );
+        }
+        dir
+    })
+}
 
 /// Config for [`HaikuCliClassifier`].
 #[derive(Debug, Clone)]
@@ -85,6 +133,15 @@ impl Classifier for HaikuCliClassifier {
         for (k, v) in &self.cfg.envs {
             cmd.env(k, v);
         }
+        // Point the subprocess at a hook-free Claude Code config dir
+        // so it doesn't load the cortex-plugin and dispatch hooks
+        // back at the live adapter. See `hookless_config_dir` above
+        // for the full incident write-up. Belt-and-suspenders:
+        // CORTEX_ADAPTER_DISABLE is also set so any hook that
+        // accidentally still loads (custom user-installed plugins,
+        // for example) can opt out via its own guard.
+        cmd.env("CLAUDE_CONFIG_DIR", hookless_config_dir());
+        cmd.env("CORTEX_ADAPTER_DISABLE", "1");
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());

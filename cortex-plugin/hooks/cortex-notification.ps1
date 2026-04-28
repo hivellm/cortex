@@ -1,5 +1,7 @@
 # cortex-notification — Notification shim (Windows). Spec 10.
 $ErrorActionPreference = "SilentlyContinue"
+# Disabled inside Cortex sub-workers (CORTEX_ADAPTER_DISABLE=1).
+if ($env:CORTEX_ADAPTER_DISABLE -eq "1") { Write-Output "{}"; exit 0 }
 $pipeName = if ($env:CORTEX_ADAPTER_PIPE) { $env:CORTEX_ADAPTER_PIPE } else { "cortex-adapter-claude" }
 $input_text = [Console]::In.ReadToEnd()
 if ($input_text) { $input_text = $input_text.Trim() }

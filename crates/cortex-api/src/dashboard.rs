@@ -263,6 +263,12 @@ pub struct TimelineQuery {
     /// `agent_call`). Maps onto the symbol prefix the lane stamps.
     #[serde(default)]
     pub kind: Option<String>,
+    /// Phase3 — filter to rows whose `content_hash` matches the
+    /// supplied value verbatim (full `sha256:<64hex>` form). Powers
+    /// the Inspector's "show every call with this fingerprint"
+    /// workflow.
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 /// One timeline row — shape matches the prototype's `MOCK.events`.
@@ -293,6 +299,32 @@ pub struct TimelineEvent {
     /// Adapter / tool — always `claude-code` today, surfaced for
     /// future multi-adapter contexts.
     pub model: String,
+    /// Phase3 — sha256 fingerprint of the captured envelope
+    /// (`sha256:<64hex>`). Pass-through from `LaneHit.content_hash`;
+    /// dropped for redacted hits per `redaction.rs`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// Phase3 — un-clipped tool-call body. Capped at
+    /// [`PREVIEW_BYTE_CAP`] (8 KiB) so a 200-row response stays
+    /// under ~2 MiB; rows larger than that get
+    /// `preview_truncated = true` and the GUI fetches the full text
+    /// via the per-id timeline route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
+    /// Phase3 — `true` when the original `LaneHit.text` exceeded
+    /// [`PREVIEW_BYTE_CAP`] and the field was clipped on its char
+    /// boundary. Dropped from the wire when `false` so non-tool_call
+    /// rows stay lean.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub preview_truncated: bool,
+}
+
+/// Hard cap on `TimelineEvent.preview` — 8 KiB matches the
+/// proposal's bandwidth budget (≈2 MiB for a 200-row response).
+pub const PREVIEW_BYTE_CAP: usize = 8 * 1024;
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 async fn timeline_recent(
@@ -312,23 +344,14 @@ async fn timeline_recent(
     if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
         hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
     }
+    if let Some(hash) = params.content_hash.as_deref().filter(|s| !s.is_empty()) {
+        hits.retain(|h| h.content_hash.as_deref() == Some(hash));
+    }
     // Newest first by `ts`.
     hits.sort_by(|a, b| b.ts.cmp(&a.ts));
     hits.truncate(limit);
 
-    let events: Vec<TimelineEvent> = hits
-        .into_iter()
-        .map(|h| TimelineEvent {
-            id: h.doc_id.clone(),
-            t: ts_to_clock_string(h.ts),
-            kind: symbol_to_kind(h.symbol.as_deref()).to_string(),
-            title: title_from_hit(&h),
-            detail: clip(&h.text, 280),
-            repo: h.repo.clone(),
-            session_id: session_id_of(&h).map(String::from),
-            model: "claude-code".to_string(),
-        })
-        .collect();
+    let events: Vec<TimelineEvent> = hits.iter().map(build_timeline_event).collect();
     (StatusCode::OK, Json(events)).into_response()
 }
 
@@ -366,6 +389,7 @@ async fn timeline_stream(
     let repo_filter: std::collections::HashSet<String> =
         params.repo.iter().cloned().collect();
     let kind_filter = params.kind.clone().filter(|s| !s.is_empty());
+    let content_hash_filter = params.content_hash.clone().filter(|s| !s.is_empty());
 
     // Per-subscriber loop. Polls the in-memory lane every 500 ms and
     // emits the diff against the previously-seen ids. Heartbeat
@@ -377,7 +401,7 @@ async fn timeline_stream(
         // we'd flash the entire backfill every time the user
         // reloaded the GUI.
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let initial_hits = filtered_hits(&lane, session_filter.as_deref(), &repo_filter, kind_filter.as_deref());
+        let initial_hits = filtered_hits(&lane, session_filter.as_deref(), &repo_filter, kind_filter.as_deref(), content_hash_filter.as_deref());
         let cutoff_ts: Option<i64> = match last_event_id.as_deref() {
             Some(id) => initial_hits
                 .iter()
@@ -403,7 +427,7 @@ async fn timeline_stream(
         loop {
             tokio::select! {
                 _ = poll.tick() => {
-                    let snapshot = filtered_hits(&lane, session_filter.as_deref(), &repo_filter, kind_filter.as_deref());
+                    let snapshot = filtered_hits(&lane, session_filter.as_deref(), &repo_filter, kind_filter.as_deref(), content_hash_filter.as_deref());
                     for h in snapshot {
                         if seen.insert(h.doc_id.clone()) {
                             let event = build_timeline_event(&h);
@@ -439,6 +463,7 @@ fn filtered_hits(
     session_filter: Option<&str>,
     repo_filter: &std::collections::HashSet<String>,
     kind_filter: Option<&str>,
+    content_hash_filter: Option<&str>,
 ) -> Vec<crate::lanes::LaneHit> {
     let mut hits = collect_lane_hits(lane);
     if let Some(sid) = session_filter {
@@ -450,20 +475,40 @@ fn filtered_hits(
     if let Some(kind) = kind_filter {
         hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
     }
+    if let Some(hash) = content_hash_filter {
+        hits.retain(|h| h.content_hash.as_deref() == Some(hash));
+    }
     hits.sort_by(|a, b| a.ts.cmp(&b.ts));
     hits
 }
 
 fn build_timeline_event(h: &crate::lanes::LaneHit) -> TimelineEvent {
+    let kind = symbol_to_kind(h.symbol.as_deref()).to_string();
+    // Phase3 — `preview` is the un-clipped body so the Inspector can
+    // render the full edit/diff/script. Cap at PREVIEW_BYTE_CAP and
+    // flip `preview_truncated` when the source overflowed; non-tool_call
+    // rows skip the field entirely so the wire stays compact.
+    let (preview, preview_truncated) = if kind == "tool_call" && !h.text.is_empty() {
+        if h.text.len() <= PREVIEW_BYTE_CAP {
+            (Some(h.text.clone()), false)
+        } else {
+            (Some(clip(&h.text, PREVIEW_BYTE_CAP)), true)
+        }
+    } else {
+        (None, false)
+    };
     TimelineEvent {
         id: h.doc_id.clone(),
         t: ts_to_clock_string(h.ts),
-        kind: symbol_to_kind(h.symbol.as_deref()).to_string(),
+        kind,
         title: title_from_hit(h),
         detail: clip(&h.text, 280),
         repo: h.repo.clone(),
         session_id: session_id_of(h).map(String::from),
         model: "claude-code".to_string(),
+        content_hash: h.content_hash.clone(),
+        preview,
+        preview_truncated,
     }
 }
 
@@ -3112,6 +3157,84 @@ mod tests {
         assert_eq!(tool_count, Some(1));
     }
 
+    #[test]
+    fn build_timeline_event_preserves_content_hash_and_full_preview_for_tool_call() {
+        // Phase3 — mapper must round-trip `content_hash` and surface
+        // the un-clipped body as `preview` for `tool_call` rows
+        // whose `text` is below the 8 KiB cap.
+        let mut hit = tool_call_hit("Edit", "small body", "Cortex", 100);
+        hit.content_hash = Some("sha256:abc123".to_string());
+        let ev = build_timeline_event(&hit);
+        assert_eq!(ev.kind, "tool_call");
+        assert_eq!(ev.content_hash.as_deref(), Some("sha256:abc123"));
+        assert_eq!(ev.preview.as_deref(), Some("[Edit] small body"));
+        assert!(!ev.preview_truncated);
+    }
+
+    #[test]
+    fn build_timeline_event_clips_preview_at_8_kib_and_flips_truncated() {
+        // Phase3 — bodies larger than `PREVIEW_BYTE_CAP` clip on a
+        // char boundary and the wire flag flips so the GUI knows it
+        // needs to fetch the full body via the per-id route.
+        let large = "a".repeat(PREVIEW_BYTE_CAP + 32);
+        let mut hit = tool_call_hit("Edit", &large, "Cortex", 100);
+        hit.content_hash = Some("sha256:full".to_string());
+        let ev = build_timeline_event(&hit);
+        assert!(ev.preview_truncated, "preview_truncated must flip on overflow");
+        let preview = ev.preview.expect("preview must be present");
+        assert_eq!(
+            preview.len(),
+            PREVIEW_BYTE_CAP,
+            "preview must clip at exactly PREVIEW_BYTE_CAP bytes"
+        );
+    }
+
+    #[test]
+    fn build_timeline_event_skips_preview_for_non_tool_call() {
+        // Phase3 — turn rows keep `preview = None` because the row's
+        // `detail` field already covers them and the wire shape stays
+        // compact for the bulk of the timeline.
+        let hit = turn_hit("plain prompt", "Cortex", 100);
+        let ev = build_timeline_event(&hit);
+        assert_eq!(ev.kind, "turn");
+        assert!(ev.preview.is_none());
+        assert!(!ev.preview_truncated);
+    }
+
+    #[tokio::test]
+    async fn timeline_recent_filters_by_content_hash() {
+        // Phase3 — `?content_hash=` collapses the timeline to rows
+        // sharing the supplied fingerprint. Powers the Inspector's
+        // dedupe / replay-detection workflow.
+        let mut a = tool_call_hit("Edit", "first", "Cortex", 100);
+        a.content_hash = Some("sha256:aaa".into());
+        let mut b = tool_call_hit("Edit", "second", "Cortex", 200);
+        b.content_hash = Some("sha256:bbb".into());
+        let mut c = tool_call_hit("Edit", "third", "Cortex", 300);
+        c.content_hash = Some("sha256:aaa".into());
+        let lane = lane_with(vec![a, b, c]);
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
+        let resp = timeline_recent(
+            State(state),
+            Query(TimelineQuery {
+                limit: Some(50),
+                session_id: None,
+                repo: Vec::new(),
+                kind: None,
+                content_hash: Some("sha256:aaa".into()),
+            }),
+        )
+        .await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 2, "only the two `aaa` hits must surface");
+        for row in &parsed {
+            assert_eq!(row["content_hash"], "sha256:aaa");
+        }
+    }
+
     #[tokio::test]
     async fn timeline_recent_returns_newest_first_and_clips_titles() {
         let lane = lane_with(vec![
@@ -3127,6 +3250,7 @@ mod tests {
                 session_id: None,
                 repo: Vec::new(),
                 kind: None,
+                content_hash: None,
             }),
         )
         .await;
@@ -3207,6 +3331,7 @@ mod tests {
                 session_id: None,
                 repo: Vec::new(),
                 kind: None,
+                content_hash: None,
             }),
         )
         .await;
@@ -3390,6 +3515,7 @@ mod tests {
                 session_id: Some("01SESSIONB0000000000000002".to_string()),
                 repo: Vec::new(),
                 kind: None,
+                content_hash: None,
             }),
         )
         .await;

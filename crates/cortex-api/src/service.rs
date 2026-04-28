@@ -5,14 +5,144 @@
 
 use std::sync::Arc;
 
+use axum::http::HeaderMap;
+
 use crate::acl::{AclDecision, AclStore};
-use crate::audit::{build_envelope, AuditPublisher, MemoryAuditPublisher};
+use crate::audit::{build_envelope_with_scope_resolution, AuditPublisher, MemoryAuditPublisher};
 use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
 use crate::rate_limit::{RateConfig, RateDecision, RateLimiter};
 use crate::redaction::redact_response;
 use crate::types::{Notice, QueryRequest, QueryResponse, Scope};
+
+/// Phase4j header — explicit repo override for direct
+/// `/v1/query` callers (MCP tools, dashboard search, GUI).
+pub const HEADER_CORTEX_REPO: &str = "x-cortex-repo";
+
+/// Phase4j header — caller's working directory; the resolver
+/// derives a repo slug from the basename via
+/// [`cortex_storage::names::slug_for_repo`].
+pub const HEADER_CORTEX_CWD: &str = "x-cortex-cwd";
+
+/// Env var honouring the legacy "fall back to the unknown slug"
+/// behaviour. When set to `1`, the resolver does NOT reject a
+/// missing scope; it logs a deprecation warning and returns
+/// [`ScopeResolution::RejectedLegacy`] so downstream code keeps
+/// the empty-corpus path. Removed at the harness gate (phase6e).
+pub const ENV_ALLOW_UNKNOWN_SCOPE: &str = "CORTEX_ALLOW_UNKNOWN_SCOPE";
+
+/// Which lane resolved `scope.repo`. Stamped on every audit
+/// envelope so the dashboard can surface "this caller forgot to
+/// set the repo and got a 422" before the relevance scores degrade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeResolution {
+    /// `request.scope.repo` carried a non-empty value.
+    Explicit,
+    /// Resolved from the `x-cortex-repo` request header.
+    Header,
+    /// Resolved from the `x-cortex-cwd` request header (slugified
+    /// via `slug_for_repo` over the path basename).
+    Cwd,
+    /// `CORTEX_ALLOW_UNKNOWN_SCOPE=1` was set and the request
+    /// would otherwise have been rejected. Acts as the
+    /// one-week deprecation hatch — the audit envelope stamps
+    /// this value so operators can grep for the count of remaining
+    /// callers that still rely on the legacy fallback.
+    RejectedLegacy,
+}
+
+impl ScopeResolution {
+    /// Stable string identifier for the audit envelope and spec
+    /// docs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScopeResolution::Explicit => "explicit",
+            ScopeResolution::Header => "header",
+            ScopeResolution::Cwd => "cwd",
+            ScopeResolution::RejectedLegacy => "rejected_legacy",
+        }
+    }
+}
+
+/// Failure mode for [`resolve_scope`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeError {
+    /// No lane produced a non-empty repo and the legacy escape
+    /// hatch was not enabled.
+    Missing,
+}
+
+/// Phase6a — derive `request.scope.repo` from the request headers
+/// when the body did not carry an explicit value, in the order
+/// declared by the spec:
+///
+/// 1. `request.scope.repo` (explicit) — round-trip unchanged.
+/// 2. `x-cortex-repo` header.
+/// 3. `x-cortex-cwd` header → `slug_for_repo(path-basename)`.
+/// 4. Reject with [`ScopeError::Missing`] (the HTTP handler maps
+///    the error to `422 scope_repo_required`).
+///
+/// The legacy `CORTEX_ALLOW_UNKNOWN_SCOPE=1` hatch flips the
+/// rejection into a warn-and-allow, marking the resolution as
+/// [`ScopeResolution::RejectedLegacy`] so the audit envelope still
+/// records the lane that fired.
+pub fn resolve_scope(
+    req: &mut QueryRequest,
+    headers: &HeaderMap,
+) -> Result<ScopeResolution, ScopeError> {
+    if req
+        .scope
+        .repo
+        .as_deref()
+        .map(|s| !s.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return Ok(ScopeResolution::Explicit);
+    }
+
+    if let Some(value) = headers
+        .get(HEADER_CORTEX_REPO)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        req.scope.repo = Some(value.to_string());
+        return Ok(ScopeResolution::Header);
+    }
+
+    if let Some(cwd) = headers
+        .get(HEADER_CORTEX_CWD)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let basename = std::path::Path::new(cwd)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(cwd);
+        let slug = cortex_storage::names::slug_for_repo(basename);
+        if !slug.is_empty() {
+            req.scope.repo = Some(slug);
+            return Ok(ScopeResolution::Cwd);
+        }
+    }
+
+    if std::env::var(ENV_ALLOW_UNKNOWN_SCOPE)
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        tracing::warn!(
+            caller = "phase6a",
+            "scope_unresolved_fallback: caller did not set scope.repo and CORTEX_ALLOW_UNKNOWN_SCOPE=1 — \
+             passing through to the unknown slug. The escape hatch is removed at the phase6e gate."
+        );
+        return Ok(ScopeResolution::RejectedLegacy);
+    }
+
+    Err(ScopeError::Missing)
+}
 
 /// Project the request-side scope into the canonical form the lanes
 /// actually filter on. The `repo` field is slugified through
@@ -44,6 +174,10 @@ pub enum ServiceOutcome {
     Ok(Box<QueryResponse>),
     /// 400 — empty query.
     EmptyQuery,
+    /// 422 — phase6a: `scope.repo` could not be resolved from the
+    /// body, the `x-cortex-repo` header, or the `x-cortex-cwd`
+    /// header. The HTTP handler maps this to `422 scope_repo_required`.
+    EmptyScope,
     /// 403 — caller / scope ACL.
     Denied,
     /// 429 — rate limit hit.
@@ -138,8 +272,39 @@ impl QueryService {
         })
     }
 
-    /// Run one request through the full pipeline.
+    /// Run one request through the full pipeline. Use this entry
+    /// when the caller has already resolved the scope (or doesn't
+    /// have `HeaderMap` access — e.g., the legacy MCP binding).
+    /// Direct `/v1/query` callers should prefer
+    /// [`QueryService::handle_with_headers`] so the audit envelope
+    /// records the resolution lane.
     pub async fn handle(&self, caller: &str, req: QueryRequest) -> ServiceOutcome {
+        self.handle_resolved(caller, req, ScopeResolution::Explicit).await
+    }
+
+    /// Phase6a entry point. Resolves the scope from `headers`
+    /// (with the body taking priority), then runs the pipeline. The
+    /// audit envelope stamps `scope_resolution` so the dashboard
+    /// can flag misconfigured callers.
+    pub async fn handle_with_headers(
+        &self,
+        caller: &str,
+        mut req: QueryRequest,
+        headers: &HeaderMap,
+    ) -> ServiceOutcome {
+        let resolution = match resolve_scope(&mut req, headers) {
+            Ok(r) => r,
+            Err(ScopeError::Missing) => return ServiceOutcome::EmptyScope,
+        };
+        self.handle_resolved(caller, req, resolution).await
+    }
+
+    async fn handle_resolved(
+        &self,
+        caller: &str,
+        req: QueryRequest,
+        resolution: ScopeResolution,
+    ) -> ServiceOutcome {
         if req.query.trim().is_empty() {
             return ServiceOutcome::EmptyQuery;
         }
@@ -161,7 +326,12 @@ impl QueryService {
             // the previous caller saw.
             hit.intent = req.intent.label().to_string();
             self.audit
-                .publish(build_envelope(caller, hit.intent.as_str(), &hit))
+                .publish(build_envelope_with_scope_resolution(
+                    caller,
+                    hit.intent.as_str(),
+                    &hit,
+                    resolution.as_str(),
+                ))
                 .await;
             return ServiceOutcome::Ok(Box::new(hit));
         }
@@ -194,7 +364,12 @@ impl QueryService {
         }
         self.cache.put(&key, response.clone()).await;
         self.audit
-            .publish(build_envelope(caller, req.intent.label(), &response))
+            .publish(build_envelope_with_scope_resolution(
+                caller,
+                req.intent.label(),
+                &response,
+                resolution.as_str(),
+            ))
             .await;
         ServiceOutcome::Ok(Box::new(response))
     }

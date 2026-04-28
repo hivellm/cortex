@@ -1,5 +1,11 @@
 # cortex-stop — Stop shim (Windows). Spec 10.
 $ErrorActionPreference = "SilentlyContinue"
+# Disabled inside Cortex sub-workers (CORTEX_ADAPTER_DISABLE=1).
+# Note: claude-code does not propagate parent env to hooks, so this
+# guard is defence-in-depth — the primary suppression mechanism is
+# CLAUDE_CONFIG_DIR pointing at a hook-free settings dir (see
+# crates/cortex-classifier/src/haiku_cli.rs::hookless_config_dir).
+if ($env:CORTEX_ADAPTER_DISABLE -eq "1") { Write-Output "{}"; exit 0 }
 $pipeName = if ($env:CORTEX_ADAPTER_PIPE) { $env:CORTEX_ADAPTER_PIPE } else { "cortex-adapter-claude" }
 $input_text = [Console]::In.ReadToEnd()
 if ($input_text) { $input_text = $input_text.Trim() }

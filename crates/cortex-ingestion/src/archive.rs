@@ -79,7 +79,21 @@ impl NdJsonZstdArchive {
         }
         let dir = archive_partition(&self.root, ts);
         std::fs::create_dir_all(&dir)?;
-        let filename = archive_filename(stream_tag, 0);
+        // Phase8a / 2026-04-28 incident: the writer used to always
+        // pick sequence `0`, so a hard-killed previous run left a
+        // half-flushed zstd tail on `raw-00000.parquet` that the
+        // next run silently appended onto. The next archive_loader
+        // refresh would then see "Data corruption detected" and
+        // truncate the recovered set at the boundary — silent data
+        // loss until the operator manually rotated the file.
+        //
+        // Pick the next free sequence number so a fresh process
+        // always opens a clean file. Graceful shutdown still flushes
+        // the encoder cleanly into whatever sequence is currently
+        // open; only an abrupt termination strands the file, and
+        // the next run side-steps it instead of corrupting it.
+        let sequence = next_free_sequence(&dir, stream_tag)?;
+        let filename = archive_filename(stream_tag, sequence);
         let path = dir.join(&filename);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let encoder = zstd::Encoder::new(BufWriter::new(file), self.level)?.auto_finish();
@@ -106,6 +120,50 @@ impl NdJsonZstdArchive {
             Err(_) => vec![],
         }
     }
+}
+
+/// Pick the next free sequence number for `<stream>-NNNNN.parquet`
+/// inside `dir`. `next_free_sequence(dir, "raw")` returns `0` on a
+/// virgin partition; on a partition that already contains
+/// `raw-00000.parquet` and `raw-00002.parquet`, it returns `3`
+/// (always `max(existing) + 1` so a re-opening process never
+/// overwrites a sibling).
+///
+/// Files that don't match the canonical `<stream>-NNNNN.parquet`
+/// shape are ignored — including the post-incident
+/// `raw-00000.parquet.corrupted-*` quarantine names produced by the
+/// 2026-04-28 manual recovery.
+fn next_free_sequence(dir: &Path, stream_tag: &str) -> Result<u32, ArchiveError> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
+    };
+    let prefix = format!("{stream_tag}-");
+    let suffix = ".parquet";
+    let mut highest: Option<u32> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let s = match name.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        let middle = match s.strip_prefix(&prefix).and_then(|t| t.strip_suffix(suffix)) {
+            Some(m) => m,
+            None => continue,
+        };
+        // `middle` must be exactly the 5-digit zero-padded sequence
+        // with no extra suffix — otherwise we'd accidentally include
+        // operator-quarantined `raw-00000.parquet.corrupted-1907`
+        // entries and pick a sequence past one of those.
+        if middle.len() != 5 || !middle.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        if let Ok(n) = middle.parse::<u32>() {
+            highest = Some(highest.map_or(n, |cur| cur.max(n)));
+        }
+    }
+    Ok(highest.map_or(0, |n| n.saturating_add(1)))
 }
 
 impl ArchiveWriter for NdJsonZstdArchive {
@@ -164,6 +222,94 @@ impl ArchiveWriter for InMemoryArchive {
             .map_err(|_| ArchiveError::Internal("archive mutex poisoned".into()))?
             .push((stream_tag.to_string(), envelope.clone()));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn touch(dir: &Path, name: &str) {
+        std::fs::write(dir.join(name), b"").unwrap();
+    }
+
+    #[test]
+    fn next_free_sequence_is_zero_on_empty_or_missing_dir() {
+        let tmp = TempDir::new().unwrap();
+        // Existing but empty directory.
+        assert_eq!(next_free_sequence(tmp.path(), "raw").unwrap(), 0);
+        // Non-existent directory.
+        assert_eq!(
+            next_free_sequence(&tmp.path().join("missing"), "raw").unwrap(),
+            0,
+        );
+    }
+
+    #[test]
+    fn next_free_sequence_picks_one_past_highest_existing() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "raw-00000.parquet");
+        touch(tmp.path(), "raw-00002.parquet");
+        // Different stream — must NOT contribute.
+        touch(tmp.path(), "bootstrap-00010.parquet");
+        assert_eq!(next_free_sequence(tmp.path(), "raw").unwrap(), 3);
+    }
+
+    #[test]
+    fn next_free_sequence_ignores_quarantined_corrupted_names() {
+        let tmp = TempDir::new().unwrap();
+        // Operator-quarantined names from the 2026-04-28 incident.
+        touch(tmp.path(), "raw-00000.parquet.corrupted-1907");
+        touch(tmp.path(), "raw-00001.parquet.corrupted-2113");
+        // No canonical files yet → next seq is 0.
+        assert_eq!(next_free_sequence(tmp.path(), "raw").unwrap(), 0);
+        // After a clean run lands raw-00000.parquet, the next is 1
+        // — quarantined sidecars never bump the sequence.
+        touch(tmp.path(), "raw-00000.parquet");
+        assert_eq!(next_free_sequence(tmp.path(), "raw").unwrap(), 1);
+    }
+
+    #[test]
+    fn next_free_sequence_skips_malformed_filenames() {
+        let tmp = TempDir::new().unwrap();
+        touch(tmp.path(), "raw-abc.parquet");
+        touch(tmp.path(), "raw-1.parquet");
+        touch(tmp.path(), "raw-000000.parquet");
+        touch(tmp.path(), "raw-00007.parquet");
+        // Only `raw-00007.parquet` matches the 5-digit canonical
+        // shape; everything else is ignored.
+        assert_eq!(next_free_sequence(tmp.path(), "raw").unwrap(), 8);
+    }
+
+    #[test]
+    fn ensure_open_picks_fresh_file_when_zero_already_exists() {
+        let tmp = TempDir::new().unwrap();
+        let archive = NdJsonZstdArchive::new(tmp.path().to_path_buf(), 1);
+        let ts = chrono::DateTime::parse_from_rfc3339("2026-04-28T22:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        // Pre-seed a corrupt-tail leftover from a previous run.
+        let dir = archive_partition(tmp.path(), ts);
+        std::fs::create_dir_all(&dir).unwrap();
+        let preexisting = dir.join("raw-00000.parquet");
+        std::fs::write(&preexisting, b"\xDEAD_TAIL_BYTES").unwrap();
+
+        archive.ensure_open("raw", ts).unwrap();
+        let opened = archive.open_paths();
+        assert_eq!(opened.len(), 1);
+        let chosen = &opened[0];
+        // The chosen file MUST NOT be the pre-existing corrupt
+        // sibling — it must be a sibling at the next free index.
+        assert_ne!(chosen, &preexisting);
+        assert!(
+            chosen.file_name().unwrap().to_string_lossy().contains("00001"),
+            "expected sequence-1 file, got {}",
+            chosen.display(),
+        );
+        // The pre-existing corrupt sibling stays on disk untouched
+        // — operators decide what to do with it.
+        assert!(preexisting.exists());
     }
 }
 

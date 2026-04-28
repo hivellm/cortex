@@ -15,6 +15,7 @@ members = [
     "crates/cortex-api",
     "crates/cortex-pre-thinking",
     "crates/cortex-mcp-server",
+    "crates/cortex-health",
 ]
 
 [workspace.package]

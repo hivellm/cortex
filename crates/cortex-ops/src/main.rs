@@ -85,6 +85,19 @@ enum Command {
         /// via `GraphConfig::from_env`.
         #[arg(long)]
         nexus: Option<String>,
+        /// Repeatable query-overlap probe (phase4i). Each value
+        /// runs against the three lanes; the report renders one
+        /// per-query block with pairwise Jaccards. The run fails
+        /// when any pair falls below `--min-overlap-jaccard`.
+        #[arg(long = "query")]
+        queries: Vec<String>,
+        /// Top-K cap for query-overlap probes (default 10).
+        #[arg(long, default_value_t = 10)]
+        probe_k: usize,
+        /// Pairwise Jaccard threshold below which the probe fails
+        /// (default 0.2).
+        #[arg(long, default_value_t = 0.2)]
+        min_overlap_jaccard: f64,
         /// Emit JSON instead of the markdown table.
         #[arg(long)]
         json: bool,
@@ -125,6 +138,9 @@ fn main() -> ExitCode {
             vectorizer_user,
             vectorizer_password,
             nexus,
+            queries,
+            probe_k,
+            min_overlap_jaccard,
             json,
         } => doctor_consistency(
             archive_root,
@@ -134,6 +150,9 @@ fn main() -> ExitCode {
             vectorizer_user,
             vectorizer_password,
             nexus,
+            queries,
+            probe_k,
+            min_overlap_jaccard,
             json,
         ),
     }
@@ -152,6 +171,9 @@ fn doctor_consistency(
     vectorizer_user: Option<String>,
     vectorizer_password: Option<String>,
     nexus: Option<String>,
+    queries: Vec<String>,
+    probe_k: usize,
+    min_overlap_jaccard: f64,
     json: bool,
 ) -> ExitCode {
     let archive_root = archive_root
@@ -189,6 +211,18 @@ fn doctor_consistency(
             return ExitCode::FAILURE;
         }
     };
+
+    // Phase3 — `tool_call_hash_coverage` probe: walks the same archive
+    // root and asserts ≥99% of `tool_call` envelopes captured in the
+    // last 24 h carry a non-empty `content_hash`. The probe never
+    // fails the run when the window is empty — that's a fresh-stack
+    // skip rather than a regression.
+    let hash_coverage = cortex_ops::scan_hash_coverage(
+        std::path::Path::new(&archive_root),
+        chrono::Utc::now().timestamp_millis(),
+        cortex_ops::HASH_COVERAGE_WINDOW_HOURS,
+        cortex_ops::HASH_COVERAGE_THRESHOLD,
+    );
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -239,7 +273,7 @@ fn doctor_consistency(
         Default::default()
     };
 
-    let report = cortex_ops::coverage_report_full(
+    let mut report = cortex_ops::coverage_report_full(
         archive,
         meili_partitions,
         non_canonical,
@@ -248,6 +282,64 @@ fn doctor_consistency(
         nexus_repo_counts,
         cortex_ops::CoverageOptions::default(),
     );
+    let hash_failed = hash_coverage.failed;
+    report.hash_coverage = Some(hash_coverage);
+    if hash_failed {
+        report.failed = true;
+    }
+
+    // Phase4i — query-overlap probes against the three live lanes.
+    // Each lane fans out across its canonical partition list (Meili
+    // indexes, Vectorizer collections) or runs a single Cypher
+    // query (Nexus repo-grain), then dedupes the result paths into
+    // a single top-K set per lane.
+    if !queries.is_empty() {
+        let meili_indexes: Vec<String> = report
+            .rows
+            .iter()
+            .map(|r| r.partition.meili_index())
+            .collect();
+        let live_meili = LiveMeiliQueryProbe {
+            base_url: meili_url.clone(),
+            api_key: meili_key.clone(),
+            indexes: meili_indexes.clone(),
+        };
+        // Vectorizer collection naming mirrors Meili index naming.
+        let live_vec = match runtime.block_on(build_live_vec_query_probe(
+            &report,
+            std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL").ok(),
+            std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER").ok(),
+            std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok(),
+        )) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("vectorizer query probe init failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let live_nexus = match runtime.block_on(build_live_nexus_query_probe(
+            std::env::var("CORTEX_NEXUS_URL").ok(),
+        )) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("nexus query probe init failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let q_reports = runtime.block_on(cortex_ops::run_query_probes(
+            &queries,
+            probe_k,
+            &live_meili,
+            &live_vec,
+            &live_nexus,
+            min_overlap_jaccard,
+        ));
+        let any_below = q_reports.iter().any(|r| r.below_threshold);
+        report.queries = q_reports;
+        if any_below {
+            report.failed = true;
+        }
+    }
     if json {
         match serde_json::to_string_pretty(&report) {
             Ok(s) => println!("{s}"),
@@ -308,6 +400,209 @@ async fn probe_nexus(url: &str) -> anyhow::Result<cortex_ops::NexusCounts> {
     config.nexus_url = url.to_string();
     let probe = LiveNexusCoverageProbe::new(config)?;
     probe.scan().await
+}
+
+// ----- Phase4i live query probes ------------------------------------
+
+/// Live Meili query probe — POSTs `/indexes/{uid}/search` to every
+/// canonical index discovered by the coverage probe and dedupes the
+/// hit `path` fields into a single top-K list. Empty when no index
+/// returned anything (transport failure, missing auth) — by
+/// contract the per-lane probe never propagates errors so a single
+/// bad lane doesn't poison the whole probe run.
+struct LiveMeiliQueryProbe {
+    base_url: String,
+    api_key: Option<String>,
+    indexes: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl cortex_ops::QueryProbe for LiveMeiliQueryProbe {
+    async fn search(&self, query: &str, k: usize) -> Vec<String> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .ok();
+        let client = match client {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
+        let mut seen: std::collections::BTreeSet<String> = Default::default();
+        for uid in &self.indexes {
+            let url = format!(
+                "{}/indexes/{}/search",
+                self.base_url.trim_end_matches('/'),
+                uid
+            );
+            let mut req = client
+                .post(&url)
+                .json(&serde_json::json!({ "q": query, "limit": k }));
+            if let Some(key) = &self.api_key {
+                req = req.bearer_auth(key);
+            }
+            let body: serde_json::Value = match req.send().await {
+                Ok(r) => match r.json().await {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                },
+                Err(_) => continue,
+            };
+            let hits = match body.get("hits").and_then(|v| v.as_array()) {
+                Some(arr) => arr,
+                None => continue,
+            };
+            for hit in hits {
+                if let Some(path) = hit.get("path").and_then(|v| v.as_str()) {
+                    seen.insert(path.to_string());
+                } else if let Some(id) = hit.get("id").and_then(|v| v.as_str()) {
+                    // Fall back to id when no `path` field — the
+                    // Meili schema stamps `id` as the canonical
+                    // dedup key, so it works as a stand-in for the
+                    // overlap check.
+                    seen.insert(id.to_string());
+                }
+            }
+        }
+        let mut out: Vec<String> = seen.into_iter().collect();
+        out.truncate(k);
+        out
+    }
+}
+
+/// Live Vectorizer query probe — calls `search_vectors(...)` against
+/// every canonical collection discovered by the coverage probe.
+/// Result paths come from the per-hit `metadata.path` slot.
+struct LiveVectorizerQueryProbe {
+    client: vectorizer_sdk::VectorizerClient,
+    collections: Vec<String>,
+}
+
+#[async_trait::async_trait]
+impl cortex_ops::QueryProbe for LiveVectorizerQueryProbe {
+    async fn search(&self, query: &str, k: usize) -> Vec<String> {
+        let mut seen: std::collections::BTreeSet<String> = Default::default();
+        for col in &self.collections {
+            let resp = match self
+                .client
+                .search_vectors(col, query, Some(k), None)
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            for hit in resp.results {
+                let path = hit
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("path"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or(hit.id);
+                seen.insert(path);
+            }
+        }
+        let mut out: Vec<String> = seen.into_iter().collect();
+        out.truncate(k);
+        out
+    }
+}
+
+async fn build_live_vec_query_probe(
+    report: &cortex_ops::DoctorReport,
+    base_url: Option<String>,
+    user: Option<String>,
+    password: Option<String>,
+) -> anyhow::Result<LiveVectorizerQueryProbe> {
+    let url = base_url.ok_or_else(|| {
+        anyhow::anyhow!("CORTEX_EMBEDDER_VECTORIZER_URL is required for --query probes")
+    })?;
+    let user = user.ok_or_else(|| {
+        anyhow::anyhow!("CORTEX_EMBEDDER_VECTORIZER_USER is required for --query probes")
+    })?;
+    let password = password.ok_or_else(|| {
+        anyhow::anyhow!("CORTEX_EMBEDDER_VECTORIZER_PASSWORD is required for --query probes")
+    })?;
+    let pre_auth = vectorizer_sdk::ClientConfig {
+        base_url: Some(url.clone()),
+        api_key: None,
+        timeout_secs: Some(30),
+        ..vectorizer_sdk::ClientConfig::default()
+    };
+    let auth_client = vectorizer_sdk::VectorizerClient::new(pre_auth)
+        .map_err(|e| anyhow::anyhow!("vectorizer client: {e}"))?;
+    let token = auth_client
+        .login(&user, &password)
+        .await
+        .map_err(|e| anyhow::anyhow!("vectorizer login: {e}"))?;
+    let bearer = vectorizer_sdk::ClientConfig {
+        base_url: Some(url),
+        api_key: Some(token.access_token),
+        timeout_secs: Some(30),
+        ..vectorizer_sdk::ClientConfig::default()
+    };
+    let client = vectorizer_sdk::VectorizerClient::new(bearer)
+        .map_err(|e| anyhow::anyhow!("vectorizer authenticated client: {e}"))?;
+    // Use the same canonical naming as the coverage probe rows —
+    // every populated `(repo, family)` row maps to one collection.
+    let collections: Vec<String> = report
+        .rows
+        .iter()
+        .filter(|r| r.vec_vectors.unwrap_or(0) > 0)
+        .map(|r| r.partition.meili_index())
+        .collect();
+    Ok(LiveVectorizerQueryProbe {
+        client,
+        collections,
+    })
+}
+
+/// Live Nexus query probe — substring match on `Artifact.body`.
+/// Returns `a.path` projections, deduped + truncated to `k`.
+struct LiveNexusQueryProbe {
+    client: cortex_graph::LiveNexusClient,
+}
+
+#[async_trait::async_trait]
+impl cortex_ops::QueryProbe for LiveNexusQueryProbe {
+    async fn search(&self, query: &str, k: usize) -> Vec<String> {
+        // Bind the query as a literal Cypher string — the Cypher
+        // CONTAINS operator does substring match. Escape the few
+        // characters that can break the literal; everything else
+        // passes through verbatim.
+        let safe = query.replace('\\', "\\\\").replace('"', "\\\"");
+        let cypher = format!(
+            "MATCH (a:Artifact) \
+             WHERE toLower(a.body) CONTAINS toLower(\"{safe}\") \
+             RETURN a.path AS path LIMIT {k}",
+        );
+        let result = match self.client.execute_with_retry(&cypher, None).await {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let mut seen: std::collections::BTreeSet<String> = Default::default();
+        for row in &result.rows {
+            if let Some(arr) = row.as_array() {
+                if let Some(p) = arr.first().and_then(|v| v.as_str()) {
+                    seen.insert(p.to_string());
+                }
+            }
+        }
+        let mut out: Vec<String> = seen.into_iter().collect();
+        out.truncate(k);
+        out
+    }
+}
+
+async fn build_live_nexus_query_probe(
+    nexus_url: Option<String>,
+) -> anyhow::Result<LiveNexusQueryProbe> {
+    let url = nexus_url
+        .ok_or_else(|| anyhow::anyhow!("CORTEX_NEXUS_URL is required for --query probes"))?;
+    let mut config = cortex_graph::GraphConfig::from_env();
+    config.nexus_url = url;
+    let client = cortex_graph::LiveNexusClient::new(config)
+        .map_err(|e| anyhow::anyhow!("nexus client: {e}"))?;
+    Ok(LiveNexusQueryProbe { client })
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {

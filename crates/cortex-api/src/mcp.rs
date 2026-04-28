@@ -33,6 +33,9 @@ pub enum McpError {
     /// 400-equivalent.
     #[error("empty query")]
     EmptyQuery,
+    /// 422-equivalent — phase6a: scope.repo could not be resolved.
+    #[error("scope.repo is required (set scope.repo or pass cwd)")]
+    ScopeRepoRequired,
     /// 403-equivalent.
     #[error("scope forbidden")]
     ScopeForbidden,
@@ -131,6 +134,7 @@ pub async fn invoke(
     match service.handle(caller, req).await {
         ServiceOutcome::Ok(resp) => Ok(*resp),
         ServiceOutcome::EmptyQuery => Err(McpError::EmptyQuery),
+        ServiceOutcome::EmptyScope => Err(McpError::ScopeRepoRequired),
         ServiceOutcome::Denied => Err(McpError::ScopeForbidden),
         ServiceOutcome::RateLimited(d) => Err(McpError::RateLimited {
             retry_after_ms: d.as_millis() as u64,

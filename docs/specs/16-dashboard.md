@@ -65,6 +65,18 @@ GET  /v1/dashboard/tasks/{id}              # full proposal + sectioned checklist
 
 All JSON; SSE uses `text/event-stream`.
 
+### Phase3 — `TimelineEvent` extensions
+
+`/timeline/recent` and the SSE stream both emit `TimelineEvent` rows. As of phase3 (`phase3_tool_call_hash_preview`) every row carries three new optional fields, all `#[serde(skip_serializing_if = "Option::is_none")]` so non-tool_call rows stay lean:
+
+- `content_hash: Option<String>` — `sha256:<64hex>` fingerprint stamped by the spec-18 capture plugin. Pass-through from `LaneHit.content_hash`. Redacted hits intentionally drop the field (see `redaction.rs`).
+- `preview: Option<String>` — un-clipped tool-call body. Capped at **8 KiB** (`PREVIEW_BYTE_CAP`); rows whose source body exceeded the cap also set `preview_truncated = true` and the GUI fetches the full body via `/v1/dashboard/timeline/{id}`. The field is only populated for `kind == "tool_call"`; turns / agent_calls keep `preview = None` because the row's `detail` already covers them.
+- `preview_truncated: bool` — `true` when the original body was clipped to fit `PREVIEW_BYTE_CAP`.
+
+`/timeline/recent` and `/timeline/stream` accept a `?content_hash=<full sha256:hex>` query parameter that filters rows to the supplied fingerprint. The filter powers the Inspector's "show every call with this fingerprint" workflow (replay-detection + dedup); paired with `Filters.content_hash` GUI-side, cleared by the existing "clear filters" button.
+
+The `cortex doctor` consistency report emits a `tool_call_hash_coverage` block: archive scan over the last 24 h asserting ≥99 % of `tool_call` envelopes carry a non-empty `content_hash`. The probe flips `report.failed = true` below the threshold; an empty window is a "skip" (no envelopes ⇒ no claim).
+
 ### SSE event envelope
 
 ```

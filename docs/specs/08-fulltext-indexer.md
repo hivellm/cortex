@@ -221,6 +221,72 @@ Coverage policy:
 
 Re-running the doctor after a fix proves the fix at the data level, not just the unit-test level. Live runs against the dev cluster have already caught real drift (`gui/code`, `gui/turns`, `rust/code` partitions present in the archive but missing from Meili after the phase4a sweep).
 
+#### Probe mode (phase4i)
+
+`cortex-ops doctor-consistency --query <q>` (repeatable) extends the
+coverage report with **per-query overlap** between the three lanes.
+For each query the doctor:
+
+1. Runs the same text against Meili (`POST /indexes/{uid}/search`,
+   fanning out across every canonical index produced by the coverage
+   probe), Vectorizer (`search_vectors` over every canonical
+   collection), and Nexus (Cypher `CONTAINS` substring on
+   `Artifact.body`).
+2. Dedupes each lane's hits into a top-K result-path set (`path` is
+   read from the lane's hit metadata; falls back to the document id
+   when the lane omits an explicit `path`).
+3. Computes pairwise Jaccards `|A ∩ B| / |A ∪ B|` for the three
+   lane pairs plus the cardinality of the three-way intersection.
+
+Threshold policy: `--min-overlap-jaccard` (default `0.2`) flips the
+report's `failed` flag when **any** pair's Jaccard falls below the
+bound AND both involved lanes returned at least one path. (One-empty
+pairs are silenced — the partition-coverage doctor already owns the
+"this lane is empty" signal.) The CLI exits non-zero on `failed`.
+
+Rendered output for each query is a Markdown block with the per-pair
+table:
+
+```
+### Query: <q>
+
+k=<k>, triple_intersection=<n>
+
+| pair | jaccard | a_size | b_size | intersection |
+|------|--------:|-------:|-------:|-------------:|
+| vec/meili | 0.823 | 10 | 10 | 7 |
+| vec/nexus | 0.118 | 10 | 8 | 1 |     <- below 0.2 threshold
+| meili/nexus | 0.157 | 10 | 8 | 1 |   <- below 0.2 threshold
+
+**FLAG:** pair(s) below threshold 0.2: vec/nexus=0.12, meili/nexus=0.16
+```
+
+Implementation lives in
+[`cortex_ops::probe`](../../crates/cortex-ops/src/probe.rs) (trait +
+Jaccard math + memory probe) and the live HTTP/SDK fan-out lives in
+the binary's `LiveMeiliQueryProbe` / `LiveVectorizerQueryProbe` /
+`LiveNexusQueryProbe`.
+
+#### CI gate (phase4j)
+
+The doctor runs in CI on every push / PR via
+[`.github/workflows/doctor.yml`](../../.github/workflows/doctor.yml).
+The workflow brings up the same `docker-compose` stack the local dev
+loop uses (Vectorizer + Nexus + Synap + Meilisearch), seeds three
+synthetic temp repos (`alpha` / `beta` / `gamma`) through
+`cortex-bootstrap --workspace`, then runs
+`cargo run -p cortex-ops -- doctor-consistency --json` and uploads
+the JSON report as the `doctor-consistency-report` workflow
+artifact. The workflow fails when the doctor exits non-zero — i.e.,
+when at least one row is `inconsistent` or any `--query` overlap
+falls below the configured threshold.
+
+The local equivalent is `make doctor-consistency`. The Makefile
+target's env-var contract is documented inline (see the comment block
+above the `doctor-consistency:` rule). Operators run it after a
+schema migration or a backend swap to confirm nothing drifted under
+their feet.
+
 ### Boot-time stale-index sweep (phase4a)
 
 Before the worker pool starts pulling from `cortex.events.enriched`,

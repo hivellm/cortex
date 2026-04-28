@@ -107,7 +107,7 @@ async fn handle_query(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("anonymous")
         .to_string();
-    match state.service.handle(&caller, req).await {
+    match state.service.handle_with_headers(&caller, req, &headers).await {
         ServiceOutcome::Ok(resp) => {
             (StatusCode::OK, Json::<QueryResponse>(*resp)).into_response()
         }
@@ -115,6 +115,13 @@ async fn handle_query(
             StatusCode::BAD_REQUEST,
             Json(ErrorBody {
                 reason: "empty_query".into(),
+            }),
+        )
+            .into_response(),
+        ServiceOutcome::EmptyScope => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorBody {
+                reason: "scope_repo_required".into(),
             }),
         )
             .into_response(),

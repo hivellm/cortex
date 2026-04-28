@@ -1,0 +1,117 @@
+name: Doctor consistency gate
+
+# Phase4j — runs `cortex-ops doctor-consistency` against a seeded
+# `docker-compose` stack (Vectorizer + Nexus + Synap + Meilisearch)
+# on every push / PR. The doctor walks the archive ↔ Meili ↔
+# Vectorizer ↔ Nexus matrix (phase4d/h) and exits non-zero on any
+# `inconsistent` row. The JSON report is captured as a workflow
+# artifact so postmortems can grep the structured output instead of
+# scraping logs.
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  doctor-consistency:
+    name: Cross-backend consistency doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Bring up docker-compose stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+          docker compose ps
+
+      - name: First-time stack init
+        run: bash bin/cortex-init.sh
+
+      - name: Seed synthetic archive (3 tiny temp repos)
+        env:
+          CORTEX_BOOTSTRAP_FIXTURE_REPOS: "3"
+        run: |
+          # Author 3 minimal `cortex.toml`-bearing checkouts under
+          # /tmp/cortex-ci-fixtures, then point cortex-bootstrap at
+          # them via the workspace TOML so the archive picks up
+          # events from each. The fixture writer is intentionally
+          # inline — the doctor gate is the unit being tested, not
+          # the bootstrap orchestrator (covered by phase4b/g).
+          mkdir -p /tmp/cortex-ci-fixtures
+          for name in alpha beta gamma; do
+            dir="/tmp/cortex-ci-fixtures/$name"
+            mkdir -p "$dir"
+            git -C "$dir" init -q
+            cat > "$dir/cortex.toml" <<EOF
+          [cortex]
+          id = "$name"
+          [include]
+          paths = ["src/**/*.rs", "docs/**/*.md"]
+          EOF
+            mkdir -p "$dir/src" "$dir/docs"
+            cat > "$dir/src/lib.rs" <<EOF
+          //! Synthetic CI fixture for the doctor-consistency gate.
+          pub fn $name() -> &'static str { "$name" }
+          EOF
+            cat > "$dir/docs/README.md" <<EOF
+          # $name
+
+          Synthetic CI fixture for the doctor-consistency gate.
+          EOF
+            git -C "$dir" add -A
+            git -C "$dir" -c user.email=ci@example.com -c user.name=CI \
+              commit -q -m "ci fixture"
+          done
+          cat > /tmp/cortex-ci-fixtures/workspace.toml <<EOF
+          [[repo]]
+          id = "alpha"
+          path = "/tmp/cortex-ci-fixtures/alpha"
+          [[repo]]
+          id = "beta"
+          path = "/tmp/cortex-ci-fixtures/beta"
+          [[repo]]
+          id = "gamma"
+          path = "/tmp/cortex-ci-fixtures/gamma"
+          EOF
+          cargo run --release -q -p cortex-bootstrap -- \
+            --workspace /tmp/cortex-ci-fixtures/workspace.toml
+
+      - name: Run doctor-consistency (JSON)
+        id: doctor
+        env:
+          CORTEX_ARCHIVE_ROOT: ${{ runner.temp }}/cortex/archive
+          CORTEX_FULLTEXT_MEILI_URL: http://127.0.0.1:17004
+          CORTEX_FULLTEXT_MEILI_API_KEY: cortex-dev-master-key
+          CORTEX_NEXUS_URL: http://127.0.0.1:17002
+        run: |
+          set -o pipefail
+          mkdir -p doctor-out
+          cargo run --release -q -p cortex-ops -- \
+            doctor-consistency --json | tee doctor-out/report.json
+
+      - name: Upload doctor report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-consistency-report
+          path: doctor-out/report.json
+          if-no-files-found: warn
+
+      - name: Tear down docker-compose stack
+        if: always()
+        run: docker compose down --volumes
