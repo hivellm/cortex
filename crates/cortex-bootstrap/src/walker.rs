@@ -312,6 +312,11 @@ pub const RULEBOOK_MEMORY_GLOBS: &[&str] = &[
     ".rulebook/knowledge/**/*.md",
     ".rulebook/learnings/**/*.md",
     ".rulebook/specs/**/*.md",
+    // Handoff snapshots — `_pending.md` rotates as the active
+    // hand-off, archived ones live alongside. The dashboard surfaces
+    // these per-project so a user resuming a session can pull the
+    // last hand-off without grepping every repo by hand.
+    ".rulebook/handoff/**/*.md",
     ".rulebook/PLANS.md",
     ".rulebook/STATE.md",
     ".rulebook/COMPACT_CONTEXT.md",
@@ -521,6 +526,17 @@ mod tests {
         );
         assert_eq!(
             classify_path(".rulebook/specs/sub/sub.md", &cfg),
+            FileClass::Memory
+        );
+
+        // Handoff snapshots — both the active `_pending.md` and
+        // archived ones must classify as Memory.
+        assert_eq!(
+            classify_path(".rulebook/handoff/_pending.md", &cfg),
+            FileClass::Memory
+        );
+        assert_eq!(
+            classify_path(".rulebook/handoff/archived/2026-04-27.md", &cfg),
             FileClass::Memory
         );
 

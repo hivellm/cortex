@@ -10,6 +10,8 @@ import { LawsView } from "./views/Laws";
 import { AnalysisView } from "./views/Analysis";
 import { ToolsView } from "./views/Tools";
 import { GraphView } from "./views/Graph";
+import { ConversationsView } from "./views/Conversations";
+import { HandoffsView } from "./views/Handoffs";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
 import { TweaksProvider, useTweaks } from "./lib/useTweaks";
 import type { Filters } from "./lib/api";
@@ -60,10 +62,14 @@ function AppShell() {
     switch (view) {
       case "timeline":
         return <TimelineView />;
+      case "conversations":
+        return <ConversationsView />;
       case "memory":
         return <MemoryView />;
       case "decisions":
         return <DecisionsView />;
+      case "handoffs":
+        return <HandoffsView />;
       case "laws":
         return <LawsView />;
       case "analysis":

@@ -1062,10 +1062,23 @@ a { color: inherit; text-decoration: none; }
    ============================================================ */
 .graph-wrap {
   display: grid;
-  grid-template-columns: 1fr 280px;
+  grid-template-columns: minmax(0, 1fr) 280px;
   gap: 12px;
   height: calc(100vh - 200px);
   min-height: 480px;
+}
+/* Stack the side panel below the canvas on narrow viewports
+   so the WebGL surface has room to breathe. */
+@media (max-width: 1100px) {
+  .graph-wrap {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: minmax(0, auto);
+    height: auto;
+  }
+  .graph-wrap > .graph-canvas {
+    height: calc(100vh - 280px);
+    min-height: 420px;
+  }
 }
 .graph-canvas {
   background: var(--bg-1);
@@ -1073,6 +1086,7 @@ a { color: inherit; text-decoration: none; }
   border-radius: var(--radius-md);
   position: relative;
   overflow: hidden;
+  min-width: 0;
   background-image:
     radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0);
   background-size: 24px 24px;
@@ -1090,16 +1104,20 @@ a { color: inherit; text-decoration: none; }
   position: absolute;
   bottom: 12px;
   left: 12px;
+  right: 12px;
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   padding: 8px 12px;
-  background: var(--bg-2);
+  background: color-mix(in oklab, var(--bg-2) 92%, transparent);
+  backdrop-filter: blur(6px);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--fg-2);
   z-index: 2;
+  pointer-events: none;
 }
 .legend-item { display: flex; align-items: center; gap: 6px; }
 .legend-dot { width: 8px; height: 8px; border-radius: 999px; }
@@ -1320,4 +1338,185 @@ a { color: inherit; text-decoration: none; }
   background: var(--accent);
   color: var(--bg-0);
   border-color: var(--accent);
+}
+
+/* ─────────── Conversations view ─────────── */
+.conversations-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 16px;
+  margin-top: 16px;
+  min-height: 60vh;
+}
+.conv-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  max-height: 78vh;
+  padding-right: 4px;
+}
+.conv-list__item {
+  text-align: left;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--fg-1);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.conv-list__item:hover {
+  border-color: var(--accent-dim);
+}
+.conv-list__item.is-active {
+  border-color: var(--accent);
+  background: var(--bg-2);
+}
+.conv-list__title {
+  font-size: 12.5px;
+  color: var(--fg-0);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conv-list__meta {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.conv-list__time {
+  font-size: 10px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+.conv-detail {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 60vh;
+}
+.conv-detail--empty {
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-3);
+  font-size: 12px;
+}
+.conv-detail__head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.conv-transcript {
+  padding: 16px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 70vh;
+}
+.conv-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px dashed var(--border);
+}
+.conv-turn:last-child {
+  border-bottom: 0;
+}
+.conv-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.conv-msg__role {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+.conv-msg--user .conv-msg__role {
+  color: var(--accent);
+}
+.conv-msg--assistant .conv-msg__role {
+  color: var(--ok, #5cb87a);
+}
+.conv-msg__body {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-1);
+  line-height: 1.5;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.conv-msg--pending {
+  padding: 8px 12px;
+  font-style: italic;
+}
+
+/* ─────────── Handoffs view ─────────── */
+.handoff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+.handoff {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+.handoff__head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.handoff__filename {
+  font-size: 12px;
+  color: var(--fg-0);
+  font-weight: 500;
+}
+.handoff__path {
+  font-size: 10.5px;
+  margin-bottom: 8px;
+}
+.handoff__excerpt {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--fg-1);
+  max-height: 220px;
+  overflow-y: auto;
+  line-height: 1.5;
 }

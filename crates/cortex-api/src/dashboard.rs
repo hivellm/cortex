@@ -64,6 +64,9 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/sessions", get(sessions))
         .route("/v1/dashboard/trust", get(trust))
         .route("/v1/dashboard/decisions/{id}", get(decision_detail))
+        .route("/v1/dashboard/conversations", get(conversations_list))
+        .route("/v1/dashboard/conversations/{session_id}", get(conversation_detail))
+        .route("/v1/dashboard/handoffs", get(handoffs))
         .with_state(state)
 }
 
@@ -251,6 +254,11 @@ fn symbol_to_kind(symbol: Option<&str>) -> &'static str {
         Some("decision") => "decision",
         Some("analysis") => "analysis",
         Some("law_violation") => "law_violation",
+        // `memory` is the canonical kind the meili_loader stamps on
+        // hits projected from `.rulebook/{handoff,specs,knowledge,
+        // learnings}/**` — without this branch they collapsed into
+        // "turn" and the Handoffs endpoint never matched them.
+        Some("memory") => "memory",
         Some("turn") | None => "turn",
         Some(_) => "turn",
     }
@@ -972,9 +980,40 @@ fn detect_supersedes(text: &str) -> Option<String> {
     None
 }
 
-async fn decisions(State(state): State<DashboardState>) -> Response {
+/// Query params for `/v1/dashboard/decisions`. `repo` filters to a
+/// single project (Cortex / Nexus / Vectorizer / …) so the GUI can
+/// render a per-repo decisions tab. `repos` (repeatable) supports
+/// multi-select. Empty → all repos.
+#[derive(Debug, Default, Deserialize)]
+pub struct DecisionsQuery {
+    /// Single-repo filter — `?repo=Nexus`.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Multi-repo filter — `?repos=Cortex&repos=Nexus`.
+    #[serde(default)]
+    pub repos: Vec<String>,
+}
+
+async fn decisions(
+    State(state): State<DashboardState>,
+    Query(params): Query<DecisionsQuery>,
+) -> Response {
     let hits = collect_lane_hits(&state.lane);
-    let rows = build_decision_rows(&hits);
+    let mut rows = build_decision_rows(&hits);
+    // Apply repo filter: union of single + multi forms. Empty union
+    // means "all repos".
+    let mut allow: std::collections::HashSet<String> = params.repos.into_iter().collect();
+    if let Some(r) = params.repo.filter(|s| !s.is_empty()) {
+        allow.insert(r);
+    }
+    if !allow.is_empty() {
+        rows.retain(|r| {
+            r.repo
+                .as_deref()
+                .map(|repo| allow.contains(repo))
+                .unwrap_or(false)
+        });
+    }
     (StatusCode::OK, Json(rows)).into_response()
 }
 
@@ -1492,6 +1531,328 @@ async fn sessions(State(state): State<DashboardState>) -> Response {
     (StatusCode::OK, Json(rows)).into_response()
 }
 
+// ---------------------------------------------------------------------
+// /v1/dashboard/conversations + /v1/dashboard/conversations/{session_id}
+// ---------------------------------------------------------------------
+
+/// One conversation summary — same per-session aggregation `sessions`
+/// returns, but rendered with the conversation lens (turn count
+/// front-and-centre, repo + title for a chat-history list). The
+/// detail endpoint below returns the full transcript.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSummary {
+    /// Canonical 26-char ULID.
+    pub session_id: String,
+    /// First captured user prompt clipped at 80 chars (the conversation's
+    /// "subject line"). Empty when no turn was captured.
+    pub title: String,
+    /// Repos the session touched (usually one).
+    pub repos: Vec<String>,
+    /// Number of distinct turns we paired (each turn = one user prompt
+    /// + zero-or-one assistant reply).
+    pub turn_count: u64,
+    /// `ts` (ms epoch) of the earliest turn we have. 0 when missing.
+    pub started_at_ms: i64,
+    /// `ts` (ms epoch) of the latest turn we have.
+    pub last_at_ms: i64,
+}
+
+/// One paired turn in a conversation transcript. The Stop hook +
+/// UserPromptSubmit hook each emit a `Kind::Turn` envelope sharing
+/// the same `turn_id` under `context.extras.claude_code` — the
+/// detail handler folds them into this row.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationTurn {
+    /// Adapter-side turn id (`cc-turn-<ulid>`) when present, else
+    /// the user envelope's `event_id`.
+    pub turn_id: String,
+    /// The user's prompt — sourced from the UserPromptSubmit
+    /// envelope. Empty when we never captured the prompt side.
+    pub user_message: String,
+    /// The assistant's reply — sourced from the Stop envelope's
+    /// `assistant_message`. `None` when the reply hasn't been
+    /// captured yet (turn still open) or pre-Stop-hook archives.
+    pub assistant_message: Option<String>,
+    /// `ts` (ms epoch) — wall-clock of the user prompt envelope.
+    pub started_at_ms: i64,
+    /// `ts` (ms epoch) of the assistant-reply envelope when present;
+    /// `None` for unpaired turns.
+    pub completed_at_ms: Option<i64>,
+}
+
+/// Full transcript of one session.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationDetail {
+    /// Echo the session id so the GUI can correlate without
+    /// re-deriving it from the route.
+    pub session_id: String,
+    /// Repos touched by the session (usually one).
+    pub repos: Vec<String>,
+    /// Turns ordered oldest → newest.
+    pub turns: Vec<ConversationTurn>,
+}
+
+/// Pull the `claude_code.turn_id` extras a hit was stamped with by
+/// the adapter. Used to pair UserPromptSubmit and Stop envelopes
+/// for the same turn.
+fn turn_id_of(hit: &crate::lanes::LaneHit) -> Option<String> {
+    hit.extras
+        .get("claude_code")
+        .and_then(|v| v.get("turn_id"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+async fn conversations_list(State(state): State<DashboardState>) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+
+    // Group turn-kind hits by session.
+    let mut by_session: std::collections::BTreeMap<String, Vec<crate::lanes::LaneHit>> =
+        std::collections::BTreeMap::new();
+    for h in hits.into_iter().filter(|h| symbol_to_kind(h.symbol.as_deref()) == "turn") {
+        if let Some(sid) = session_id_of(&h) {
+            by_session.entry(sid.to_string()).or_default().push(h);
+        }
+    }
+
+    let mut rows: Vec<ConversationSummary> = by_session
+        .into_iter()
+        .map(|(session_id, mut bucket)| {
+            bucket.sort_by(|a, b| a.ts.cmp(&b.ts));
+            // Distinct turn_ids — pairs (user envelope + Stop envelope)
+            // sharing the same turn_id collapse to one count. Hits
+            // without a turn_id (legacy archives pre-Stop-hook) each
+            // count as their own turn so we never under-report.
+            let mut seen_turns: std::collections::BTreeSet<String> = Default::default();
+            let mut anonymous = 0u64;
+            for h in &bucket {
+                match turn_id_of(h) {
+                    Some(tid) => {
+                        seen_turns.insert(tid);
+                    }
+                    None => anonymous += 1,
+                }
+            }
+            let turn_count = seen_turns.len() as u64 + anonymous;
+
+            let mut repos: std::collections::BTreeSet<String> = Default::default();
+            let mut title = String::new();
+            for h in &bucket {
+                if let Some(r) = h.repo.as_deref() {
+                    repos.insert(r.to_string());
+                }
+                // First non-empty user_message wins. The Stop envelope
+                // has user_message="" so we never accidentally surface
+                // the assistant's reply as the conversation title.
+                if title.is_empty() && !h.text.is_empty() {
+                    title = clip(h.text.lines().next().unwrap_or(""), 80);
+                }
+            }
+
+            ConversationSummary {
+                session_id,
+                title,
+                repos: repos.into_iter().collect(),
+                turn_count,
+                started_at_ms: bucket.first().map(|h| h.ts).unwrap_or(0),
+                last_at_ms: bucket.last().map(|h| h.ts).unwrap_or(0),
+            }
+        })
+        .collect();
+
+    rows.sort_by(|a, b| b.last_at_ms.cmp(&a.last_at_ms));
+    (StatusCode::OK, Json(rows)).into_response()
+}
+
+async fn conversation_detail(
+    State(state): State<DashboardState>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+
+    // Pair UserPromptSubmit + Stop envelopes by turn_id within this
+    // session. The user envelope carries user_message + ts of the
+    // prompt; the Stop envelope carries assistant_message + ts of
+    // the reply. When only one half exists (still in flight, or a
+    // pre-Stop-hook archive), we surface what we have.
+    struct TurnSlot {
+        turn_id: String,
+        user_message: String,
+        assistant_message: Option<String>,
+        started_at_ms: i64,
+        completed_at_ms: Option<i64>,
+    }
+    let mut slots: std::collections::BTreeMap<String, TurnSlot> = std::collections::BTreeMap::new();
+    let mut anonymous: Vec<TurnSlot> = Vec::new();
+    let mut repos: std::collections::BTreeSet<String> = Default::default();
+
+    for h in hits.into_iter().filter(|h| {
+        session_id_of(h) == Some(session_id.as_str())
+            && symbol_to_kind(h.symbol.as_deref()) == "turn"
+    }) {
+        if let Some(r) = h.repo.as_deref() {
+            repos.insert(r.to_string());
+        }
+        // Disambiguate user-side vs Stop-side by checking which field
+        // has content. The cortex-fulltext builder concatenates
+        // user_message + "\n" + assistant_message into the LaneHit's
+        // `text`; Stop envelopes start with the assistant text
+        // (user_message empty), UserPromptSubmit envelopes start
+        // with the user prompt.
+        //
+        // The body extras the meili_loader stamps carry the parsed
+        // payload directly — when present they're the authoritative
+        // signal. Fall back to the text-shape heuristic for
+        // archive_loader hits which don't have the parsed extras.
+        let user_text = h
+            .extras
+            .get("user_message")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let assistant_text = h
+            .extras
+            .get("assistant_message")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let (user_msg, assistant_msg) = match (user_text, assistant_text) {
+            (Some(u), Some(a)) => (u, Some(a)),
+            (Some(u), None) => (u, None),
+            (None, Some(a)) => (String::new(), Some(a)),
+            (None, None) => (h.text.clone(), None),
+        };
+
+        match turn_id_of(&h) {
+            Some(tid) => {
+                let slot = slots.entry(tid.clone()).or_insert_with(|| TurnSlot {
+                    turn_id: tid.clone(),
+                    user_message: String::new(),
+                    assistant_message: None,
+                    started_at_ms: 0,
+                    completed_at_ms: None,
+                });
+                if !user_msg.is_empty() && slot.user_message.is_empty() {
+                    slot.user_message = user_msg;
+                    slot.started_at_ms = h.ts;
+                }
+                if let Some(a) = assistant_msg {
+                    if slot.assistant_message.is_none() {
+                        slot.assistant_message = Some(a);
+                        slot.completed_at_ms = Some(h.ts);
+                    }
+                }
+            }
+            None => {
+                anonymous.push(TurnSlot {
+                    turn_id: format!("anon-{}", h.ts),
+                    user_message: user_msg,
+                    assistant_message: assistant_msg,
+                    started_at_ms: h.ts,
+                    completed_at_ms: None,
+                });
+            }
+        }
+    }
+
+    let mut turns: Vec<ConversationTurn> = slots
+        .into_values()
+        .chain(anonymous)
+        .map(|s| ConversationTurn {
+            turn_id: s.turn_id,
+            user_message: s.user_message,
+            assistant_message: s.assistant_message,
+            started_at_ms: s.started_at_ms,
+            completed_at_ms: s.completed_at_ms,
+        })
+        .collect();
+    turns.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms));
+
+    let detail = ConversationDetail {
+        session_id,
+        repos: repos.into_iter().collect(),
+        turns,
+    };
+    (StatusCode::OK, Json(detail)).into_response()
+}
+
+// ---------------------------------------------------------------------
+// /v1/dashboard/handoffs
+// ---------------------------------------------------------------------
+
+/// One hand-off snapshot — pulled from `kind=memory` envelopes whose
+/// path lives under `.rulebook/handoff/`. The walker now promotes
+/// those automatically across every repo.
+#[derive(Debug, Clone, Serialize)]
+pub struct HandoffRow {
+    /// Repo this hand-off belongs to.
+    pub repo: Option<String>,
+    /// Repo-relative path of the hand-off file.
+    pub path: Option<String>,
+    /// Filename component for display (e.g. `_pending.md` /
+    /// `2026-04-27.md`).
+    pub filename: String,
+    /// Excerpt of the body clipped at ~600 chars.
+    pub excerpt: String,
+    /// Relative wall-clock label (`"3 hours ago"` / `"yesterday"`)
+    /// — empty when no timestamp was preserved.
+    pub updated: String,
+    /// Raw ms epoch for client-side sorting.
+    pub updated_ms: i64,
+}
+
+/// Query params for `/v1/dashboard/handoffs`.
+#[derive(Debug, Default, Deserialize)]
+pub struct HandoffsQuery {
+    /// Single-repo filter — `?repo=Nexus`.
+    #[serde(default)]
+    pub repo: Option<String>,
+}
+
+async fn handoffs(
+    State(state): State<DashboardState>,
+    Query(params): Query<HandoffsQuery>,
+) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+
+    let mut rows: Vec<HandoffRow> = hits
+        .into_iter()
+        .filter(|h| {
+            symbol_to_kind(h.symbol.as_deref()) == "memory"
+                && h.path
+                    .as_deref()
+                    .map(|p| p.contains(".rulebook/handoff/") || p.contains(".rulebook\\handoff\\"))
+                    .unwrap_or(false)
+        })
+        .filter(|h| {
+            // Optional repo filter.
+            match params.repo.as_deref().filter(|s| !s.is_empty()) {
+                Some(r) => h.repo.as_deref() == Some(r),
+                None => true,
+            }
+        })
+        .map(|h| {
+            let filename = h
+                .path
+                .as_deref()
+                .and_then(|p| p.rsplit(['/', '\\']).next())
+                .unwrap_or("(unnamed)")
+                .to_string();
+            HandoffRow {
+                repo: h.repo.clone(),
+                path: h.path.clone(),
+                filename,
+                excerpt: clip(&h.text, 600),
+                updated: ts_to_relative(h.ts),
+                updated_ms: h.ts,
+            }
+        })
+        .collect();
+
+    // Most-recent first — the user is usually looking for the latest
+    // hand-off when resuming a session.
+    rows.sort_by(|a, b| b.updated_ms.cmp(&a.updated_ms));
+    (StatusCode::OK, Json(rows)).into_response()
+}
+
 /// Query params for `/v1/dashboard/graph`.
 #[derive(Debug, Default, Deserialize)]
 pub struct GraphQuery {
@@ -1509,7 +1870,13 @@ async fn graph(
     State(state): State<DashboardState>,
     Query(params): Query<GraphQuery>,
 ) -> Response {
-    let limit = params.limit.unwrap_or(60).clamp(1, 200);
+    // The cap is intentionally generous: the explorer's "show me the
+    // whole panorama" mode needs to walk every Repo / Session / Turn /
+    // ToolCall / Artifact at once. Sigma WebGL renders 30k+ nodes at
+    // 60fps; the network round-trip at this size is ~200 KB gzipped.
+    // The `unwrap_or` default stays small so unauthenticated probes
+    // don't accidentally pull the full graph.
+    let limit = params.limit.unwrap_or(200).clamp(1, 50_000);
 
     // Live path: when a Nexus client is configured, run a real
     // Cypher MATCH and convert the returned rows into the GraphPayload
@@ -1579,7 +1946,15 @@ async fn query_nexus_graph(
         ("Session", "id", "id", "session", "HAS_TURN", "Turn", "id", "id", "turn"),
         ("Session", "id", "id", "session", "REMEMBERS", "Memory", "id", "id", "memory"),
         ("Turn", "id", "id", "turn", "HAS_TOOL_CALL", "ToolCall", "id", "tool_name", "tool_call"),
+        // Session→ToolCall is the mapper's fallback anchor for tool_call
+        // events without a `parent_event_id` (bootstrap envelopes ship
+        // without one — see `cortex-graph/src/mapper.rs::emit_tool_call`).
+        // Without this row the dashboard misses every backfilled
+        // HAS_TOOL_CALL because the canonical `(:Turn)-[:HAS_TOOL_CALL]->`
+        // pattern matches zero on bootstrap data.
+        ("Session", "id", "id", "session", "HAS_TOOL_CALL", "ToolCall", "id", "tool_name", "tool_call"),
         ("Turn", "id", "id", "turn", "HAS_AGENT_CALL", "AgentCall", "id", "agent_type", "agent_call"),
+        ("Session", "id", "id", "session", "HAS_AGENT_CALL", "AgentCall", "id", "agent_type", "agent_call"),
         ("ToolCall", "id", "tool_name", "tool_call", "TOUCHED", "Artifact", "natural_key", "path", "artifact"),
         ("Artifact", "natural_key", "path", "artifact", "IN_REPO", "Repo", "name", "name", "repo"),
         ("LawViolation", "id", "law_id", "violation", "OBSERVED_IN", "Turn", "id", "id", "turn"),

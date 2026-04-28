@@ -8,10 +8,12 @@
  */
 
 const BASE_URL = (() => {
-  // In dev the renderer hits Vite's `/v1/*` proxy → 127.0.0.1:15011.
+  // In dev the renderer hits Vite's `/v1/*` proxy → 127.0.0.1:15000.
   // In production (built Electron) we hit the daemon directly.
+  // Port matches `.env` `CORTEX_API_PORT` so a single supervisor
+  // booting cortex-api from env settings stays in sync with the GUI.
   if (typeof window !== "undefined" && window.location.protocol === "file:") {
-    return "http://127.0.0.1:15011";
+    return "http://127.0.0.1:15000";
   }
   return "";
 })();
@@ -106,6 +108,10 @@ export type DecisionChainNode = {
 
 export type DecisionRow = {
   id: string;
+  /// Repo this decision belongs to (project that owns the
+  /// `.rulebook/decisions/*.md`). Multi-project Hive workspace —
+  /// without this the dashboard can't tell whose ADR it is.
+  repo?: string;
   title: string;
   status: string;
   author: string | null;
@@ -194,6 +200,46 @@ export type DecisionDetail = DecisionRow & {
   body_markdown: string;
 };
 
+/// Per-session summary the Conversations list view renders. Each row
+/// is one chat thread the user can drill into via `api.conversation`.
+export type ConversationSummary = {
+  session_id: string;
+  title: string;
+  repos: string[];
+  turn_count: number;
+  started_at_ms: number;
+  last_at_ms: number;
+};
+
+/// One paired turn in a conversation transcript — user prompt +
+/// (optional) assistant reply. Surfaces both halves the
+/// UserPromptSubmit and Stop hooks now capture.
+export type ConversationTurn = {
+  turn_id: string;
+  user_message: string;
+  assistant_message: string | null;
+  started_at_ms: number;
+  completed_at_ms: number | null;
+};
+
+export type ConversationDetail = {
+  session_id: string;
+  repos: string[];
+  turns: ConversationTurn[];
+};
+
+/// One hand-off snapshot (`.rulebook/handoff/*.md`). Used by the
+/// per-project Handoffs view so a user resuming work can pull the
+/// last hand-off without grepping every repo by hand.
+export type HandoffRow = {
+  repo: string | null;
+  path: string | null;
+  filename: string;
+  excerpt: string;
+  updated: string;
+  updated_ms: number;
+};
+
 export type GraphNode = {
   id: string;
   label: string;
@@ -236,7 +282,28 @@ export const api = {
     return getJson<MemoryEntry[]>(`/v1/dashboard/memory?${params.toString()}`);
   },
   sessions: () => getJson<SessionRow[]>("/v1/dashboard/sessions"),
-  decisions: () => getJson<DecisionRow[]>("/v1/dashboard/decisions"),
+  decisions: (repo?: string) => {
+    const params = new URLSearchParams();
+    if (repo) params.set("repo", repo);
+    const q = params.toString();
+    return getJson<DecisionRow[]>(
+      `/v1/dashboard/decisions${q ? `?${q}` : ""}`,
+    );
+  },
+  conversations: () =>
+    getJson<ConversationSummary[]>("/v1/dashboard/conversations"),
+  conversation: (sessionId: string) =>
+    getJson<ConversationDetail>(
+      `/v1/dashboard/conversations/${encodeURIComponent(sessionId)}`,
+    ),
+  handoffs: (repo?: string) => {
+    const params = new URLSearchParams();
+    if (repo) params.set("repo", repo);
+    const q = params.toString();
+    return getJson<HandoffRow[]>(
+      `/v1/dashboard/handoffs${q ? `?${q}` : ""}`,
+    );
+  },
   laws: () => getJson<LawRow[]>("/v1/dashboard/laws"),
   violations: () => getJson<ViolationRow[]>("/v1/dashboard/violations"),
   analyses: () => getJson<AnalysisRow[]>("/v1/dashboard/analyses"),

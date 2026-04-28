@@ -160,15 +160,24 @@ fn read_one_file(
 /// Map a canonical envelope to a [`LaneHit`]. Returns `None` for
 /// kinds that don't carry queryable text.
 fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
+    // Captured for the Turn branch below — extras stamping needs
+    // both halves separately so the dashboard's conversation
+    // pairing can distinguish the user/Stop envelopes by turn_id.
+    let mut turn_user_message: Option<String> = None;
+    let mut turn_assistant_message: Option<String> = None;
+
     let (text, symbol) = match env.kind {
         Kind::Turn => {
             let turn: Turn = serde_json::from_value(env.payload.clone()).ok()?;
-            let text = match turn.assistant_message.as_deref() {
+            let asst_owned = turn.assistant_message.clone();
+            let text = match asst_owned.as_deref() {
                 Some(asst) if !asst.is_empty() => {
                     format!("{}\n\n{asst}", turn.user_message)
                 }
                 _ => turn.user_message.clone(),
             };
+            turn_user_message = Some(turn.user_message);
+            turn_assistant_message = asst_owned;
             (text, Some("turn".to_string()))
         }
         Kind::ToolCall => {
@@ -215,6 +224,39 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         "source".to_string(),
         serde_json::Value::String("keyword".to_string()),
     );
+    // Also stamp the adapter's `turn_id` on extras when present —
+    // the dashboard's conversation detail pairs UserPromptSubmit
+    // (user_message) with Stop (assistant_message) by this id, and
+    // the meili_loader carries it forward separately.
+    if let Some(cc) = env
+        .context
+        .extras
+        .get("claude_code")
+        .and_then(|v| v.as_object())
+    {
+        if let Some(tid) = cc.get("turn_id").and_then(|v| v.as_str()) {
+            let mut cc_obj = serde_json::Map::new();
+            cc_obj.insert(
+                "turn_id".to_string(),
+                serde_json::Value::String(tid.to_string()),
+            );
+            extras.insert(
+                "claude_code".to_string(),
+                serde_json::Value::Object(cc_obj),
+            );
+        }
+    }
+    // Surface the turn payload halves so the conversation detail
+    // handler can distinguish UserPromptSubmit vs Stop envelopes.
+    if let Some(u) = turn_user_message {
+        extras.insert("user_message".to_string(), serde_json::Value::String(u));
+    }
+    if let Some(a) = turn_assistant_message {
+        extras.insert(
+            "assistant_message".to_string(),
+            serde_json::Value::String(a),
+        );
+    }
 
     Some(LaneHit {
         doc_id: format!("archive|{}", env.event_id),

@@ -447,6 +447,18 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
                 .and_then(|b| b.get("assistant_message"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
+            // Stamp the two halves on extras separately so the
+            // dashboard's conversation detail can pair them by
+            // turn_id without re-parsing the concatenated `text`.
+            // The Stop hook publishes a separate envelope with
+            // user_message="" — we keep the empty marker on extras
+            // so the pairing logic still distinguishes the two
+            // sides.
+            extras.insert("user_message".to_string(), Value::String(user.to_string()));
+            extras.insert(
+                "assistant_message".to_string(),
+                Value::String(asst.to_string()),
+            );
             text = if asst.is_empty() {
                 user.to_string()
             } else if user.is_empty() {
@@ -466,6 +478,26 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
         .map(|s| s.to_string());
     if let Some(s) = session_id {
         extras.insert("session_id".to_string(), Value::String(s));
+    }
+
+    // Surface the adapter `turn_id` from the doc's `ext` block so
+    // the dashboard's conversation pairing can fold UserPromptSubmit
+    // and Stop envelopes that share the same turn into one row.
+    let turn_id = doc
+        .get("ext")
+        .and_then(|v| v.get("turn_id"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            doc.get("ext")
+                .and_then(|v| v.get("claude_code"))
+                .and_then(|v| v.get("turn_id"))
+                .and_then(|v| v.as_str())
+        })
+        .map(|s| s.to_string());
+    if let Some(tid) = turn_id {
+        let mut cc_obj = serde_json::Map::new();
+        cc_obj.insert("turn_id".to_string(), Value::String(tid));
+        extras.insert("claude_code".to_string(), Value::Object(cc_obj));
     }
 
     let ts = doc.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);

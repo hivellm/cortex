@@ -6,15 +6,34 @@ import { api, type RepoCount, type SessionRow } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { useFilters } from "../lib/filters";
 
-export type ViewId = "timeline" | "memory" | "decisions" | "laws" | "analysis" | "tools" | "graph";
+export type ViewId =
+  | "timeline"
+  | "conversations"
+  | "memory"
+  | "decisions"
+  | "handoffs"
+  | "laws"
+  | "analysis"
+  | "tools"
+  | "graph";
 
 type NavItem = { id: ViewId; label: string; icon: IconName; countSource?: CountKey };
-type CountKey = "events" | "decisions" | "laws" | "analyses" | "tools" | "sessions";
+type CountKey =
+  | "events"
+  | "decisions"
+  | "laws"
+  | "analyses"
+  | "tools"
+  | "sessions"
+  | "conversations"
+  | "handoffs";
 
 const NAV: NavItem[] = [
   { id: "timeline", label: "Live timeline", icon: "timeline" },
+  { id: "conversations", label: "Conversations", icon: "memory", countSource: "conversations" },
   { id: "memory", label: "Memory", icon: "memory", countSource: "events" },
   { id: "decisions", label: "Decisions", icon: "decision", countSource: "decisions" },
+  { id: "handoffs", label: "Handoffs", icon: "memory", countSource: "handoffs" },
   { id: "laws", label: "Laws", icon: "law", countSource: "laws" },
   { id: "analysis", label: "Analysis", icon: "analysis", countSource: "analyses" },
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
@@ -68,6 +87,16 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     queryFn: () => api.toolsStats(),
     refetchInterval: 15_000,
   });
+  const conversationsQ = useQuery({
+    queryKey: ["conversations"],
+    queryFn: () => api.conversations(),
+    refetchInterval: 15_000,
+  });
+  const handoffsQ = useQuery({
+    queryKey: ["handoffs", "all"],
+    queryFn: () => api.handoffs(),
+    refetchInterval: 30_000,
+  });
 
   const counts: Record<CountKey, number | undefined> = {
     events: overview?.events_total,
@@ -76,6 +105,8 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     analyses: analysesQ.data?.length,
     tools: toolsQ.data?.tools.length,
     sessions: sessions.length,
+    conversations: conversationsQ.data?.length,
+    handoffs: handoffsQ.data?.length,
   };
 
   const onSessionClick = (sid: string) => {

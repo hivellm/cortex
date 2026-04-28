@@ -7,10 +7,20 @@ import { api, type DecisionChainNode } from "../lib/api";
 
 export function DecisionsView() {
   const [showSuperseded, setShowSuperseded] = useState(false);
+  const [repoFilter, setRepoFilter] = useState<string>("");
+
+  // Pull the unfiltered list once so the repo dropdown stays stable
+  // even as the filtered view narrows. The list is small (decisions
+  // count in the tens, not hundreds) so a second cache is cheap.
+  const { data: allRows } = useQuery({
+    queryKey: ["decisions", "all"],
+    queryFn: () => api.decisions(),
+    refetchInterval: 30_000,
+  });
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["decisions"],
-    queryFn: () => api.decisions(),
+    queryKey: ["decisions", repoFilter || "all"],
+    queryFn: () => api.decisions(repoFilter || undefined),
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
   });
@@ -19,6 +29,14 @@ export function DecisionsView() {
   const active = rowsRaw.filter((d) => d.status === "active").length;
   const superseded = rowsRaw.filter((d) => d.status === "superseded").length;
   const withRationale = rowsRaw.filter((d) => !!d.rationale).length;
+
+  const repoOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of allRows ?? []) {
+      if (d.repo) set.add(d.repo);
+    }
+    return Array.from(set).sort();
+  }, [allRows]);
 
   const rows = useMemo(
     () =>
@@ -36,6 +54,28 @@ export function DecisionsView() {
           </p>
         </div>
         <div className="view__actions">
+          <select
+            value={repoFilter}
+            onChange={(e) => setRepoFilter(e.target.value)}
+            className="btn btn--ghost"
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              padding: "5px 10px",
+            }}
+            title="Filter decisions by project"
+          >
+            <option value="">All projects ({allRows?.length ?? 0})</option>
+            {repoOptions.map((r) => {
+              const c =
+                (allRows ?? []).filter((d) => d.repo === r).length;
+              return (
+                <option key={r} value={r}>
+                  {r} ({c})
+                </option>
+              );
+            })}
+          </select>
           <button
             className={`btn ${showSuperseded ? "" : "btn--ghost"}`}
             onClick={() => setShowSuperseded((s) => !s)}
@@ -79,6 +119,7 @@ export function DecisionsView() {
             >
               <div className="decision__head">
                 <span className="decision__id">{d.id}</span>
+                {d.repo ? <Tag tone="info">{d.repo}</Tag> : null}
                 <span className="decision__title">{d.title}</span>
                 {d.status === "active" ? <Tag tone="ok">active</Tag> : null}
                 {d.status === "superseded" && d.superseded_by ? (
