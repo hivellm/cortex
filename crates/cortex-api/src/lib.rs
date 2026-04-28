@@ -22,6 +22,7 @@ pub mod lanes;
 pub mod mcp;
 pub mod meili_lane;
 pub mod meili_loader;
+pub mod nexus_graph_lane;
 pub mod orchestrator;
 pub mod vectorizer_lane;
 pub mod rate_limit;
@@ -35,6 +36,7 @@ pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
 };
 pub use meili_lane::MeiliKeywordLane;
+pub use nexus_graph_lane::NexusGraphLane;
 pub use vectorizer_lane::VectorizerLane;
 pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
 pub use dashboard::{build_dashboard_router, DashboardState};

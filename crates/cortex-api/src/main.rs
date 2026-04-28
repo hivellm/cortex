@@ -19,8 +19,8 @@ use clap::Parser;
 use std::sync::Arc as StdArc;
 
 use cortex_api::{
-    KeywordLane, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, MeiliKeywordLane,
-    Orchestrator, QueryService, VectorLane, VectorizerLane,
+    GraphLane, KeywordLane, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, MeiliKeywordLane,
+    NexusGraphLane, Orchestrator, QueryService, VectorLane, VectorizerLane,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
 
     let vector_memory = Arc::new(MemoryVectorLane::new());
     let keyword_memory = Arc::new(MemoryKeywordLane::new());
-    let graph = Arc::new(MemoryGraphLane::new());
+    let graph_memory = Arc::new(MemoryGraphLane::new());
 
     // Live vector lane: when CORTEX_VECTORIZER_URL is set and the
     // SDK's `health_check` succeeds, swap the in-memory double for
@@ -282,6 +282,24 @@ async fn main() -> Result<()> {
     }
 
     let nexus_client = build_nexus_client().await;
+    // Live graph lane: when the Nexus client is reachable, share
+    // the same `Arc<NexusClient>` between `DashboardState` and the
+    // orchestrator's `GraphLane`. Single TCP session, two consumers.
+    // The 2026-04-27 audit caught the asymmetry — dashboard graph
+    // view ran live Cypher while `/v1/query`'s graph lane stayed on
+    // the empty `MemoryGraphLane` test double, so `graph_neighbors`
+    // returned empty across every probed query. Fallback to the
+    // memory lane preserves cold-stack dev when Nexus is unreachable.
+    let graph: StdArc<dyn GraphLane> = match &nexus_client {
+        Some(client) => {
+            tracing::info!("live graph lane: NexusGraphLane wired");
+            StdArc::new(NexusGraphLane::new(client.clone()))
+        }
+        None => {
+            tracing::info!("nexus client unavailable; graph lane stays on MemoryGraphLane");
+            graph_memory.clone()
+        }
+    };
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword_memory.clone(),
         nexus: nexus_client,

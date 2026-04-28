@@ -197,6 +197,104 @@ cortex.graph.orphans              counter, labels: parent_label
 cortex.graph.backpressure.active  gauge
 ```
 
+## Read path
+
+The write path above is consumed at query time by `cortex-api`'s
+graph lane (spec 11 §Lane traits). The lane translates the
+orchestrator's `GraphRequest { template, params, max_hops, scope }`
+into a parametrised read-only Cypher against the same Nexus
+instance the dashboard graph view talks to.
+
+### Live lane: `NexusGraphLane`
+
+Lives at [crates/cortex-api/src/nexus_graph_lane.rs](../../crates/cortex-api/src/nexus_graph_lane.rs).
+Wired at daemon startup whenever the same `Arc<NexusClient>`
+`DashboardState` already holds is non-`None` — single TCP session,
+two consumers. The 2026-04-27 audit caught the asymmetry:
+`cortex-api/src/main.rs` built the client for the dashboard but
+the orchestrator wired `Arc::new(MemoryGraphLane::new())` — an
+empty test double — so `/v1/query`'s graph lane never reached
+Nexus and `results.graph_neighbors` returned empty across every
+probed query.
+
+When the client is `None` (env unset, probe failed) the lane
+falls back to `MemoryGraphLane` so cold-stack dev keeps working.
+
+### Template whitelist
+
+The lane only executes pre-registered Cypher templates. Unknown
+templates return `LaneError::Rejected` at the lane boundary —
+arbitrary client-supplied Cypher never reaches Nexus.
+
+| Template name                      | Used by intent       | Pattern                                                    |
+|------------------------------------|----------------------|------------------------------------------------------------|
+| `edge_artifact_touched_neighbours` | `pre_change_context` | `(:Artifact)<-[:TOUCHED]-(s)` filtered by query CONTAINS   |
+| `decision_supersedes_chain`        | `decision_lookup`    | `(:Decision)-[:SUPERSEDES]->(:Decision)` chain             |
+| `turn_analysis_decision_chain`     | `similar_problems`   | `(:Turn)-[:OBSERVED_IN]->(:Analysis)` (+ optional Decision)|
+| `law_violations_last_30d`          | `law_check`          | `(:LawViolation)-[:VIOLATES]->(:Law)` filtered by query    |
+
+Adding a new strategy that emits an unregistered template silently
+disables graph lookups for that intent — a unit test walks the
+whitelist to catch the drift early.
+
+### Cypher shape
+
+Every template binds `$q` from `req.params["query"]`. The Nexus
+1.15 dialect ignores numeric `$param` for `LIMIT` and comparison
+clauses, so each template caps at `LIMIT 50` inline (same workaround
+the dashboard graph endpoint uses — see `dashboard.rs` query_nexus_graph).
+The orchestrator's `req.limit` trims the result set further during
+overlay derivation.
+
+### Hit projection (Nexus row → `LaneHit`)
+
+Each row returns 5 cells: `[edge_from, edge_to, edge_type, hops, label]`.
+Projected into `LaneHit`:
+
+| LaneHit field         | Source cell / value                                                |
+|-----------------------|--------------------------------------------------------------------|
+| `doc_id`              | `graph|{template}|{edge_from}|{edge_to}` (per-template namespace)  |
+| `text`                | `label` (cell 4) — node title or id                                |
+| `symbol`              | `edge_type` (cell 2)                                               |
+| `score`               | `1.0 / max(hops, 1)` — closer hops score higher                    |
+| `extras["source"]`    | `"graph"` (constant, source-attribution invariant)                 |
+| `extras["edge_from"]` | `edge_from` (cell 0)                                               |
+| `extras["edge_to"]`   | `edge_to` (cell 1)                                                 |
+| `extras["edge_type"]` | `edge_type` (cell 2)                                               |
+| `extras["hops"]`      | `hops` (cell 3)                                                    |
+| `extras["template"]`  | the template name — useful for debug dashboards                    |
+
+The orchestrator's `derive_graph_neighbors` reads the four `edge_*`
+extras to materialise `GraphNeighbor { from, to, relation, hops }`
+overlays — the contract between this lane and the overlay function
+is locked to those exact keys.
+
+Rows with empty `edge_from` or `edge_to` are dropped (defensive
+projection — Nexus occasionally returns null cells for partial
+matches and we don't want them surfacing as "neighbour: → ?").
+
+### Failure handling
+
+- Successful Cypher execution — project rows, return hits.
+- Unknown template — `LaneError::Rejected("unknown graph template: ...")`.
+  Cypher never sent.
+- SDK error — `LaneError::Transport("execute_cypher({template}): {e}")`.
+  Orchestrator's fail-open turns this into empty hits +
+  `debug.errors["graph"]` populated; response stays HTTP 200.
+
+### Acceptance for the read path
+
+- [ ] When Nexus returns rows for a template, `results.graph_neighbors`
+      populates with `{from, to, relation, hops}` matching the row cells.
+- [ ] `debug.lanes.graph_ms` is `Some(_)` on every query (was missing
+      because `MemoryGraphLane` returned empty).
+- [ ] Unknown / arbitrary template → `LaneError::Rejected`; no Cypher
+      reaches Nexus.
+- [ ] Nexus down → response is HTTP 200, `debug.errors["graph"]` populated,
+      `results.graph_neighbors` empty (fail-open).
+- [ ] Single `Arc<NexusClient>` instance shared between `DashboardState`
+      and the orchestrator's graph lane.
+
 ## Acceptance criteria
 
 - [ ] Startup against empty Nexus creates all constraints + indexes; re-startup is a no-op.
