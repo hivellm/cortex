@@ -58,6 +58,11 @@ export function AnalysisView() {
       ) : (
         rows.map((a) => {
           const isImport = !!a.source_path;
+          // Older indexed envelopes (pre-fix) wrote the whole markdown
+          // status sentence into the field. Sanitize at render so the
+          // badge never balloons into a paragraph regardless of what
+          // upstream produced.
+          const statusBadge = badgeToken(a.status) || "draft";
           return (
             <article key={a.id} className="analysis-card">
               <div>
@@ -65,7 +70,7 @@ export function AnalysisView() {
                   <span className="mono" style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>
                     {a.id}
                   </span>
-                  <Tag tone={a.status === "concluded" ? "ok" : "default"}>{a.status}</Tag>
+                  <Tag tone={statusBadge === "concluded" ? "ok" : "default"}>{statusBadge}</Tag>
                   {a.repo ? <Tag tone="default">{a.repo}</Tag> : null}
                   {isImport ? <Tag tone="default">imported</Tag> : null}
                   <span className="mono" style={{ fontSize: 10.5, color: "var(--fg-3)", marginLeft: "auto" }}>
@@ -108,7 +113,9 @@ export function AnalysisView() {
                     ) : null}
                   </div>
                 )}
-                <div className="analysis-card__verdict">{a.verdict}</div>
+                <div className={isImport ? "analysis-card__summary" : "analysis-card__verdict"}>
+                  {isImport ? excerptFromMarkdown(a.verdict) : a.verdict}
+                </div>
               </div>
               <div className="analysis-panel">
                 <div style={{ color: "var(--fg-3)", fontSize: 10, textTransform: "uppercase", letterSpacing: "0.08em" }}>
@@ -137,6 +144,59 @@ export function AnalysisView() {
       )}
     </div>
   );
+}
+
+/**
+ * Reduce a markdown body to a one-paragraph excerpt suitable for a
+ * card preview. Skips the H1 title, front-matter quote blocks,
+ * fenced code, and bullet lists; takes the first prose paragraph and
+ * clips it on a word boundary at ~220 chars with an ellipsis.
+ *
+ * The card UI already shows the title, repo, and source path — so
+ * the body here is just enough text to remind the reader what the
+ * doc is about, not the full audit.
+ */
+function excerptFromMarkdown(body: string): string {
+  const paragraphs = body
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+  for (const p of paragraphs) {
+    const first = p.split("\n")[0]?.trim() ?? "";
+    if (
+      first.startsWith("#") ||      // headings
+      first.startsWith(">") ||       // blockquote / front-matter (Status: ...)
+      first.startsWith("- ") ||      // bullets
+      first.startsWith("* ") ||
+      first.startsWith("|") ||       // tables
+      first.startsWith("```")        // fenced code
+    ) {
+      continue;
+    }
+    return clipOnWord(p.replace(/\s+/g, " "), 220);
+  }
+  // Fall back to the raw clip when no clean prose paragraph was found.
+  return clipOnWord(body.replace(/\s+/g, " ").trim(), 220);
+}
+
+/**
+ * Reduce an arbitrary status string to its first whitespace- or
+ * punctuation-delimited token, lower-cased. `"draft. Indexed as
+ * first-class `Analysis` entities ..."` becomes `"draft"`. Empty
+ * string falls back to `null` so the caller can pick a default.
+ */
+function badgeToken(s: string | undefined): string | null {
+  if (!s) return null;
+  const m = s.trim().match(/[A-Za-z][A-Za-z0-9_-]*/);
+  return m ? m[0].toLowerCase() : null;
+}
+
+function clipOnWord(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const slice = s.slice(0, max);
+  const lastSpace = slice.lastIndexOf(" ");
+  const cut = lastSpace > max * 0.6 ? slice.slice(0, lastSpace) : slice;
+  return `${cut.trimEnd()}…`;
 }
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {

@@ -1295,13 +1295,24 @@ async fn analyses(State(state): State<DashboardState>) -> Response {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| clip(h.text.lines().next().unwrap_or(""), 120));
+            // Older bootstrap runs (pre-`derive_status` fix) wrote the
+            // whole markdown sentence into `status`. Sanitize to the
+            // first ASCII word here so consumers always see a clean
+            // badge token regardless of what's in the index.
             let status = h
                 .extras
                 .get("status")
                 .and_then(|v| v.as_str())
+                .map(|s| {
+                    let token: String = s
+                        .chars()
+                        .skip_while(|c| !c.is_ascii_alphabetic())
+                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                        .collect();
+                    token.to_ascii_lowercase()
+                })
                 .filter(|s| !s.is_empty())
-                .unwrap_or("draft")
-                .to_string();
+                .unwrap_or_else(|| "draft".to_string());
             let source_path = h
                 .extras
                 .get("source_path")

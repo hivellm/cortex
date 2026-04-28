@@ -205,6 +205,142 @@ pub fn emit_law_imported(
     finalise("law.imported", session_id, source, payload, stream)
 }
 
+/// Split a spec doc (`.rulebook/specs/**/*.md`) into one
+/// `law.imported` event per top-level `## ` section, so each
+/// rule lands in the graph + dashboard as an addressable law
+/// instead of one giant catch-all envelope. Spec-09 §Rulebook
+/// artifact indexing — closes the `laws_active = 0` gap captured
+/// in the 2026-04-27 audit.
+///
+/// The split rule:
+/// - Look for `## ` lines at column 0. Each one starts a new law.
+/// - The first heading text becomes the law title.
+/// - The body of the law is everything from the heading up to the
+///   next `## ` (or EOF).
+/// - Synthesise `law_id = LAW-{filename-stem}-{section-slug}`
+///   uppercase, kebab-cased — operators can grep for the exact
+///   prefix to find every law from a given spec doc.
+/// - When the doc has zero `## ` sections, fall back to a single
+///   law.imported via [`emit_law_imported`].
+pub fn emit_spec_laws_imported(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    rel_path: &str,
+    body: &str,
+    stream: &str,
+) -> Vec<BootstrapEvent> {
+    let stem = filename_stem(rel_path);
+    let stem_upper = stem.to_ascii_uppercase().replace('_', "-");
+
+    // Split into sections by the first column-0 `## ` boundary.
+    // Lines before the first `## ` are the doc's preamble — they
+    // become a "preamble" law if they contain real content (more
+    // than just a title + blank line). Otherwise they're dropped.
+    // Anything before the first `## ` is doc preamble (H1 title +
+    // intro paragraphs) — useful context but not itself a law, so
+    // we drop it. The dashboard already has per-spec memory entries
+    // capturing the full doc; this path only needs to materialise
+    // the addressable laws.
+    let mut sections: Vec<(String, String)> = Vec::new(); // (title, full body)
+    let mut current_title: Option<String> = None;
+    let mut current_buf = String::new();
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            // Flush previous section if any. Preamble (current_title
+            // is None) is intentionally discarded.
+            if let Some(t) = current_title.take() {
+                sections.push((t, current_buf.clone()));
+            }
+            current_buf.clear();
+            current_title = Some(rest.trim().to_string());
+            current_buf.push_str(line);
+            current_buf.push('\n');
+            continue;
+        }
+        current_buf.push_str(line);
+        current_buf.push('\n');
+    }
+    if let Some(t) = current_title.take() {
+        sections.push((t, current_buf.clone()));
+    }
+
+    // No `## ` boundaries at all → fall back to single law per file.
+    if sections.is_empty() {
+        return vec![emit_law_imported(repo_id, session_id, git_ref, rel_path, body, stream)];
+    }
+
+    sections
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (title, section_body))| {
+            let slug = slug_from_title(&title);
+            let law_id = format!("LAW-{stem_upper}-{:02}-{slug}", idx + 1);
+            let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
+            let payload = json!({
+                "law_id": law_id,
+                "title": title,
+                "severity": "info",
+                "detector": Value::Null,
+                "body": section_body,
+                "section_index": idx,
+                "source_path": rel_path,
+            });
+            finalise("law.imported", session_id, source, payload, stream)
+        })
+        .collect()
+}
+
+/// Detect spec-doc shape from a repo-rooted path. The walker
+/// classifies `.rulebook/specs/**/*.md` as `FileClass::Law`; the
+/// emitter dispatch uses this predicate to decide whether to take
+/// the `emit_spec_laws_imported` (multi-law fan-out) path or the
+/// single-law `emit_law_imported` path used by `.claude/rules/*.md`.
+fn is_spec_doc_path(rel_path: &str) -> bool {
+    let normalised = rel_path.replace('\\', "/");
+    normalised.contains("/.rulebook/specs/")
+        || normalised.starts_with(".rulebook/specs/")
+}
+
+/// Slugify a section title for use inside a synthesised law id.
+/// Keeps `[a-z0-9-]`, lowercases, collapses runs of separators
+/// to a single `-`, trims to 32 chars so the produced law id
+/// stays readable.
+fn slug_from_title(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut prev_dash = false;
+    for ch in title.chars() {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() {
+            out.push(lower);
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "section".to_string()
+    } else if out.len() > 32 {
+        let mut clipped = String::new();
+        for (i, ch) in out.chars().enumerate() {
+            if i >= 32 {
+                break;
+            }
+            clipped.push(ch);
+        }
+        while clipped.ends_with('-') {
+            clipped.pop();
+        }
+        clipped
+    } else {
+        out
+    }
+}
+
 /// Build the `analysis.imported` event for one audit / deep-analysis
 /// report. Title comes from the first H1; status from a `Status:`
 /// line if present (defaults to `draft`). The `body` field carries
@@ -232,14 +368,33 @@ pub fn emit_analysis_imported(
 
 /// Extract a `Status:` line value from the body, case-insensitive,
 /// matching the same loose front-matter convention `parse_decision_markdown`
-/// uses. Returns `None` when no recognisable status line is present.
+/// uses. Returns the first token only — analysis bodies often follow
+/// the status with a sentence ("draft. Indexed as ...") that we do NOT
+/// want surfacing as a status badge.
 fn derive_status(body: &str) -> Option<String> {
     for line in body.lines() {
-        let trimmed = line.trim().trim_start_matches(|c: char| c == '*' || c == '>' || c.is_whitespace());
+        let trimmed = line
+            .trim()
+            .trim_start_matches(|c: char| c == '*' || c == '>' || c == '#' || c.is_whitespace());
         if let Some(rest) = strip_prefix_ci(trimmed, "status:") {
-            let v = rest.trim().trim_matches(|c: char| c == '*' || c == '"');
-            if !v.is_empty() {
-                return Some(v.to_string());
+            let v = rest
+                .trim()
+                .trim_matches(|c: char| c == '*' || c == '"' || c == '_');
+            // Take only the first whitespace- or punctuation-delimited
+            // token. `draft. Indexed as ...` → `draft`. `accepted` →
+            // `accepted`. `not started` → `not` (acceptable; the user
+            // can write `not_started` or `not-started` to keep both).
+            // `split` leaves empty leading slices when the string
+            // starts with a delimiter (e.g. `** draft` after the
+            // earlier `**` strip leaves a space prefix), so skip
+            // empties before taking the first real token.
+            let token = v
+                .split(|c: char| c.is_whitespace() || c == '.' || c == ',' || c == ';')
+                .find(|s| !s.is_empty())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !token.is_empty() {
+                return Some(token);
             }
         }
     }
@@ -443,7 +598,12 @@ fn filename_stem(rel_path: &str) -> String {
 }
 
 /// Pure-function emitter dispatch for one walked file. Returns `None`
-/// if the entry is `Dropped` or carries an empty body.
+/// if the entry is `Dropped` or carries an empty body. Single-event
+/// shape — for files that fan out into multiple events (currently
+/// `.rulebook/specs/**/*.md` → one law per `## ` section), use
+/// [`emit_for_file_multi`] which returns the full list. This entry
+/// point keeps the historical contract for callers that don't know
+/// about the fan-out yet.
 pub fn emit_for_file(
     repo_id: &str,
     session_id: &str,
@@ -452,11 +612,30 @@ pub fn emit_for_file(
     body: &str,
     stream: &str,
 ) -> Option<BootstrapEvent> {
+    emit_for_file_multi(repo_id, session_id, git_ref, entry, body, stream)
+        .into_iter()
+        .next()
+}
+
+/// Pure-function emitter dispatch returning every event the walked
+/// file produces. Most file classes still produce a single event
+/// (decision, memory, analysis, code/doc artifact); spec docs under
+/// `.rulebook/specs/**/*.md` fan out into one `law.imported` per
+/// top-level `## ` section so each rule lands in the dashboard as
+/// an addressable law (closes spec-11 §`laws_active = 0` gap).
+pub fn emit_for_file_multi(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    entry: &WalkEntry,
+    body: &str,
+    stream: &str,
+) -> Vec<BootstrapEvent> {
     let WalkEntry::Accepted { rel_path, class, .. } = entry else {
-        return None;
+        return Vec::new();
     };
     if body.trim().is_empty() {
-        return None;
+        return Vec::new();
     }
     match class {
         FileClass::Code => emit_artifact_code(
@@ -467,21 +646,34 @@ pub fn emit_for_file(
             body,
             language_for(rel_path).as_deref(),
             stream,
-        ),
-        FileClass::Doc => emit_artifact_doc(repo_id, session_id, git_ref, entry, body, stream),
-        FileClass::Decision => Some(emit_decision_imported(
+        )
+        .into_iter()
+        .collect(),
+        FileClass::Doc => emit_artifact_doc(repo_id, session_id, git_ref, entry, body, stream)
+            .into_iter()
+            .collect(),
+        FileClass::Decision => vec![emit_decision_imported(
             repo_id, session_id, git_ref, rel_path, body, stream,
-        )),
-        FileClass::Law => Some(emit_law_imported(
+        )],
+        FileClass::Law => {
+            // Spec docs fan out into per-section laws; everything
+            // else (`.claude/rules/*.md`, `[cortex.laws]` patterns)
+            // stays single-law.
+            if is_spec_doc_path(rel_path) {
+                emit_spec_laws_imported(repo_id, session_id, git_ref, rel_path, body, stream)
+            } else {
+                vec![emit_law_imported(
+                    repo_id, session_id, git_ref, rel_path, body, stream,
+                )]
+            }
+        }
+        FileClass::Memory => vec![emit_memory_imported(
             repo_id, session_id, git_ref, rel_path, body, stream,
-        )),
-        FileClass::Memory => Some(emit_memory_imported(
+        )],
+        FileClass::Analysis => vec![emit_analysis_imported(
             repo_id, session_id, git_ref, rel_path, body, stream,
-        )),
-        FileClass::Analysis => Some(emit_analysis_imported(
-            repo_id, session_id, git_ref, rel_path, body, stream,
-        )),
-        FileClass::Other => None,
+        )],
+        FileClass::Other => Vec::new(),
     }
 }
 
@@ -662,6 +854,25 @@ mod tests {
     }
 
     #[test]
+    fn derive_status_returns_first_token_only() {
+        // Analysis bodies often pad the status with a sentence; the
+        // parser must keep only the badge token so the GUI does not
+        // render a paragraph as a label.
+        assert_eq!(
+            derive_status("> **Status:** draft. Indexed as first-class entities by phase4e."),
+            Some("draft".to_string())
+        );
+        assert_eq!(
+            derive_status("Status: accepted, see DEC-0042"),
+            Some("accepted".to_string())
+        );
+        assert_eq!(
+            derive_status("> Status: SUPERSEDED"),
+            Some("superseded".to_string())
+        );
+    }
+
+    #[test]
     fn analysis_imported_extracts_title_and_status() {
         let body = "# Cortex — System Analysis (2026-04-28)\n\n> Status: draft\n\nBody.";
         let evt = emit_analysis_imported(
@@ -746,5 +957,121 @@ mod tests {
         let e = entry("src/lib.rs", FileClass::Code, 0);
         let evt = emit_for_file("R", "01TESTSESSION0000000000000", None, &e, "   \n  ", BOOTSTRAP_STREAM);
         assert!(evt.is_none());
+    }
+
+    #[test]
+    fn spec_doc_splits_into_one_law_per_top_level_heading() {
+        let body = "# Rulebook\n\n\
+                    Preamble.\n\n\
+                    ## Critical Rules\n\n\
+                    Body of rule one.\n\n\
+                    More text.\n\n\
+                    ## Task Workflow\n\n\
+                    Body of rule two.\n\n\
+                    ## Quality Gates\n\n\
+                    Body of rule three.\n";
+        let events = emit_spec_laws_imported(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            ".rulebook/specs/RULEBOOK.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(events.len(), 3, "one law per `## ` section");
+        assert_eq!(events[0].kind, "law.imported");
+        // Synthesised law_id encodes filename stem + section index + slug.
+        let id0 = events[0].redacted_payload["law_id"].as_str().unwrap();
+        assert!(
+            id0.starts_with("LAW-RULEBOOK-01-"),
+            "id0={id0} should start with LAW-RULEBOOK-01-"
+        );
+        assert_eq!(events[0].redacted_payload["title"], "Critical Rules");
+        assert_eq!(events[1].redacted_payload["title"], "Task Workflow");
+        assert_eq!(events[2].redacted_payload["title"], "Quality Gates");
+        // Each event's body carries only its own section, not the
+        // whole doc — the dashboard's law card stays focused.
+        let body1 = events[1].redacted_payload["body"].as_str().unwrap();
+        assert!(body1.contains("Body of rule two"));
+        assert!(!body1.contains("Body of rule three"));
+    }
+
+    #[test]
+    fn spec_doc_with_no_headings_falls_back_to_single_law() {
+        let body = "Just a paragraph with no ## headings.\n\nAnother paragraph.\n";
+        let events = emit_spec_laws_imported(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            ".rulebook/specs/FLAT.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "law.imported");
+        // Falls through to `emit_law_imported` which derives the
+        // law_id from the filename stem.
+        let id0 = events[0].redacted_payload["law_id"].as_str().unwrap();
+        assert_eq!(id0, "FLAT");
+    }
+
+    #[test]
+    fn emit_for_file_multi_routes_spec_paths_to_split_laws() {
+        // `.rulebook/specs/**/*.md` walks as `FileClass::Law` (per
+        // walker.rs) and the dispatch fans out into multiple laws.
+        let e = WalkEntry::Accepted {
+            path: PathBuf::from(".rulebook/specs/GIT.md"),
+            rel_path: ".rulebook/specs/GIT.md".to_string(),
+            size_bytes: 200,
+            class: FileClass::Law,
+        };
+        let body = "# Git\n\n## Allowed\n\nstatus / diff / log.\n\n## Forbidden\n\nrebase / reset.\n";
+        let events = emit_for_file_multi(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            &e,
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].redacted_payload["title"], "Allowed");
+        assert_eq!(events[1].redacted_payload["title"], "Forbidden");
+    }
+
+    #[test]
+    fn emit_for_file_multi_keeps_single_law_for_non_spec_paths() {
+        // `.claude/rules/*.md` is a single-law path — fan-out only
+        // applies to `.rulebook/specs/**`.
+        let e = WalkEntry::Accepted {
+            path: PathBuf::from(".claude/rules/diagnostic-first.md"),
+            rel_path: ".claude/rules/diagnostic-first.md".to_string(),
+            size_bytes: 100,
+            class: FileClass::Law,
+        };
+        let body = "# Check before test\n\n## Allowed\n\nfine.\n";
+        let events = emit_for_file_multi(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            &e,
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(
+            events.len(),
+            1,
+            ".claude/rules/*.md keeps the single-law-per-file shape"
+        );
+        assert_eq!(events[0].kind, "law.imported");
+    }
+
+    #[test]
+    fn slug_from_title_handles_punctuation_and_unicode() {
+        assert_eq!(slug_from_title("Critical Rules"), "critical-rules");
+        assert_eq!(slug_from_title("PROHIBITION 1: No Shortcuts"), "prohibition-1-no-shortcuts");
+        assert_eq!(slug_from_title("   "), "section");
+        let long = "a".repeat(60);
+        assert!(slug_from_title(&long).len() <= 32);
     }
 }

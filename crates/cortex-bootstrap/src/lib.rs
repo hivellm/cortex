@@ -29,8 +29,8 @@ pub use config::{
 };
 pub use emitter::{
     emit_artifact_code, emit_artifact_doc, emit_decision_imported, emit_for_file,
-    emit_law_imported, emit_memory_imported, emit_turn_historical, BootstrapEvent,
-    BOOTSTRAP_STREAM,
+    emit_for_file_multi, emit_law_imported, emit_memory_imported, emit_spec_laws_imported,
+    emit_turn_historical, BootstrapEvent, BOOTSTRAP_STREAM,
 };
 pub use estimate::{estimate_repo, format_estimate, Estimate};
 pub use git::{parse_log, walk_commits, CommitRecord, GitWalkError};

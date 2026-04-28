@@ -309,6 +309,87 @@ Numbers are back-of-envelope; real cost depends on classifier cache hit rate.
 | `gh` CLI missing                 | PR enrichment disabled; warn once per run                                     |
 | Partial repo run interrupted (Ctrl-C) | Checkpoint still valid; `--resume` picks up                                |
 
+## Rulebook artifact indexing
+
+The walker promotes the canonical `.rulebook/` layout into typed
+events on every repo, regardless of whether the repo ships a
+per-repo `cortex.toml`. This closes the 2026-04-27 audit's
+`decisions = 0` / `laws_active = 0` finding for spec-driven
+projects: the institutional knowledge already exists on disk,
+the indexer just needed to know where to look.
+
+### Path → kind mapping
+
+| Repo-rooted path                          | Walker class         | Emitter event                                   | Notes |
+|-------------------------------------------|----------------------|-------------------------------------------------|-------|
+| `.rulebook/decisions/**/*.md`             | `FileClass::Decision` | `decision.imported` (one per file)              | ADR-style; first H1 → title, `Status:` → status. |
+| `.rulebook/specs/**/*.md`                 | `FileClass::Law`      | `law.imported` (**fan-out** — one per `## ` heading) | Spec doc → addressable laws. See "Spec splitter" below. |
+| `.rulebook/knowledge/patterns/**/*.md`    | `FileClass::Memory`   | `memory.imported`                               | Reusable patterns; surfaced in `/v1/dashboard/memory`. |
+| `.rulebook/knowledge/anti-patterns/**/*.md` | `FileClass::Memory` | `memory.imported`                               | Anti-patterns; same surface as patterns. |
+| `.rulebook/learnings/**/*.md`             | `FileClass::Memory`   | `memory.imported`                               | Implementation insights — clipped excerpts in the Memory view. |
+| `.rulebook/handoff/**/*.md`               | `FileClass::Memory`   | `memory.imported`                               | Cross-session hand-off snapshots; per-project Handoffs view. |
+| `.rulebook/{PLANS,STATE,COMPACT_CONTEXT}.md` | `FileClass::Memory` | `memory.imported`                               | Loose top-level memory files. |
+
+The patterns are hardcoded in `walker::RULEBOOK_DECISION_GLOBS`,
+`RULEBOOK_LAW_GLOBS`, and `RULEBOOK_MEMORY_GLOBS` so a sibling
+repo (Nexus / Vectorizer / Synap / etc.) without its own
+`cortex.toml` still gets full discovery coverage. Per-repo
+`cortex.toml` `[cortex.{decisions,laws,analyses,memories}]`
+patterns continue to win when set — explicit promotion always
+overrides the canonical defaults.
+
+### Spec splitter (`emit_spec_laws_imported`)
+
+A spec doc like `.rulebook/specs/RULEBOOK.md` typically carries
+many distinct rules under `## ` headings. Treating the whole doc
+as one law collapses every rule under one un-addressable id.
+The splitter solves this by:
+
+1. Walking lines, treating each `## ` at column 0 as a section
+   boundary.
+2. Synthesising `law_id = LAW-{filename-stem}-{section-index}-{section-slug}`
+   for every section so operators can grep for the prefix to find
+   every law from a given spec.
+3. Stamping the section heading text as `title`.
+4. Carrying the section body (heading + content up to the next
+   `## ` or EOF) as `body`.
+5. Emitting one `law.imported` event per section.
+
+Preamble text (before the first `## `) is intentionally dropped
+— the dashboard already surfaces the full doc as a `memory`
+entry; this path only materialises the *addressable* laws.
+
+When a spec doc has zero `## ` boundaries, the splitter falls
+back to `emit_law_imported`'s single-law-per-file shape so
+flat rule files keep working.
+
+### Downstream contract
+
+- **Classifier worker** (`cortex-classifier-worker::kinds`):
+  `law.imported` normalises to `Kind::LawViolation` (the canonical
+  Kind enum has no separate `Law` variant today; "imported law"
+  and "law violation" share storage but never collide because
+  imported laws never carry a `violation_id`).
+- **Fulltext worker**: routes the event to
+  `cortex-{repo-slug}-governance`. Each spec section becomes its
+  own Meili doc, searchable by `law_id` / `title` / `body`.
+- **`/v1/dashboard/laws`** + **`laws_active` overlay**: read every
+  governance hit, populate `LawRef` entries when `extras.law_id`
+  is present. The orchestrator's `derive_laws` already reads this
+  field — no changes needed downstream.
+
+### Verification path
+
+After re-bootstrapping a repo:
+1. `cortex-bootstrap <repo>` walks the `.rulebook/specs/**` tree
+   and emits N `law.imported` events per spec doc.
+2. `cortex-fulltext-worker` indexes each into
+   `cortex-{slug}-governance`.
+3. `cortex-api` boot's `meili_loader` projects them onto the
+   keyword lane with `extras.law_id` stamped.
+4. `curl http://127.0.0.1:17000/v1/dashboard/laws` shows the
+   per-section laws under `LAW-{stem}-NN-{slug}` ids.
+
 ## Acceptance criteria
 
 - [ ] `cortex-bootstrap Vectorizer/ --estimate` completes on a cold cache, prints the sizing block, writes no events.

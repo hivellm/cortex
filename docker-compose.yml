@@ -9,7 +9,10 @@ services:
       VECTORIZER_ADMIN_PASSWORD: ${VECTORIZER_ADMIN_PASSWORD:-cortex-dev-admin}
     networks: [cortex-net]
     ports:
-      - "${VECTORIZER_HOST_PORT:-17001}:17002"
+      # Container's internal listen port stays at 15002 (Vectorizer
+      # default); the host-facing side moved to 17001 to dodge the
+      # 15xxx conflict range.
+      - "${VECTORIZER_HOST_PORT:-17001}:15002"
     volumes:
       - vec-data:/data
     restart: unless-stopped
@@ -36,7 +39,7 @@ services:
     networks: [cortex-net]
     ports:
       - "${SYNAP_HOST_PORT:-17003}:15500"
-      - "${SYNAP_WS_HOST_PORT:-15013}:15501"
+      - "${SYNAP_WS_HOST_PORT:-17013}:15501"
       - "${SYNAP_RESP_HOST_PORT:-16379}:6379"
     volumes:
       - synap-data:/data

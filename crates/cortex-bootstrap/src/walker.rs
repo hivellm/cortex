@@ -248,6 +248,7 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
             || matches_any(&cfg.analyses.promote_patterns, &rel_path)
             || matches_any(&cfg.memories.import_files, &rel_path)
             || matches_str_globs(RULEBOOK_DECISION_GLOBS, &rel_path)
+            || matches_str_globs(RULEBOOK_LAW_GLOBS, &rel_path)
             || matches_str_globs(RULEBOOK_MEMORY_GLOBS, &rel_path);
         if !promoted {
             continue;
@@ -305,18 +306,29 @@ pub const RULEBOOK_DECISION_GLOBS: &[&str] = &[
     ".rulebook/decisions/**/*.md",
 ];
 
-/// Canonical glob list for non-decision `.rulebook` artifacts:
-/// knowledge (patterns + anti-patterns), learnings, specs, and the
-/// loose top-level memory files (PLANS.md / STATE.md / CLAUDE.md
-/// imports). All of these route to `FileClass::Memory` today — the
-/// emitter records them with title + body + repo, which is enough
-/// for the keyword lane to surface them per-project. A future
-/// `Kind::Knowledge` / `Kind::Learning` discriminator can split
-/// them further without changing this discovery contract.
+/// Canonical glob list for spec docs that should fan out into
+/// per-`## ` law envelopes via the emitter's
+/// `emit_spec_laws_imported` path. `.rulebook/specs/**/*.md` is
+/// the canonical Hive convention; the emitter splits each one by
+/// top-level heading so the dashboard's `laws_active` overlay
+/// finally has rules to surface (closes the 2026-04-27 audit's
+/// `laws_active = 0` finding for spec-driven projects).
+pub const RULEBOOK_LAW_GLOBS: &[&str] = &[
+    ".rulebook/specs/**/*.md",
+];
+
+/// Canonical glob list for non-decision, non-law `.rulebook`
+/// artifacts: knowledge (patterns + anti-patterns), learnings,
+/// handoff snapshots, and the loose top-level memory files
+/// (PLANS.md / STATE.md / CLAUDE.md imports). All of these route
+/// to `FileClass::Memory` — the emitter records them with title
+/// + body + repo, which is enough for the keyword lane to surface
+/// them per-project. A future `Kind::Knowledge` / `Kind::Learning`
+/// discriminator can split them further without changing this
+/// discovery contract.
 pub const RULEBOOK_MEMORY_GLOBS: &[&str] = &[
     ".rulebook/knowledge/**/*.md",
     ".rulebook/learnings/**/*.md",
-    ".rulebook/specs/**/*.md",
     // Handoff snapshots — `_pending.md` rotates as the active
     // hand-off, archived ones live alongside. The dashboard surfaces
     // these per-project so a user resuming a session can pull the
@@ -352,6 +364,13 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
     // being caught by the broader memory globs.
     if matches_str_globs(RULEBOOK_DECISION_GLOBS, rel_path) {
         return FileClass::Decision;
+    }
+    // Spec docs route to Law so the emitter's spec-splitter fans
+    // them out into per-`## ` law envelopes. Order matters: this
+    // MUST sit before the memory globs because earlier revisions
+    // included `.rulebook/specs/**` in the memory list.
+    if matches_str_globs(RULEBOOK_LAW_GLOBS, rel_path) {
+        return FileClass::Law;
     }
     if matches_str_globs(RULEBOOK_MEMORY_GLOBS, rel_path) {
         return FileClass::Memory;
@@ -536,14 +555,16 @@ mod tests {
             FileClass::Memory
         );
 
-        // Specs.
+        // Specs route to Law so the emitter's spec-splitter fans
+        // them out into per-`## ` law envelopes — closes the
+        // dashboard's `laws_active = 0` gap.
         assert_eq!(
             classify_path(".rulebook/specs/RULEBOOK.md", &cfg),
-            FileClass::Memory
+            FileClass::Law
         );
         assert_eq!(
             classify_path(".rulebook/specs/sub/sub.md", &cfg),
-            FileClass::Memory
+            FileClass::Law
         );
 
         // Handoff snapshots — both the active `_pending.md` and

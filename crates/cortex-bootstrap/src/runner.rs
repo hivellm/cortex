@@ -11,7 +11,7 @@ use anyhow::Result;
 use crate::checkpoint::Checkpoint;
 use crate::config::CortexSection;
 use crate::emitter::{
-    emit_for_file, emit_turn_historical, BootstrapEvent, BOOTSTRAP_STREAM,
+    emit_for_file_multi, emit_turn_historical, BootstrapEvent, BOOTSTRAP_STREAM,
 };
 use crate::git::walk_commits;
 use crate::metrics::Metrics;
@@ -140,32 +140,44 @@ pub async fn run_repo(
                         continue;
                     }
                 };
-                let evt = match emit_for_file(&repo_id, &session_id, None, entry, &body, &stream)
-                {
-                    Some(e) => e,
-                    None => continue,
-                };
-                metrics.incr_redactions(u64::from(evt.redactions));
-                publishes_attempted += 1;
-                if let Err(e) = publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run)
-                    .await
-                {
-                    metrics.incr_errors(&repo_id, "publish");
-                    publishes_failed += 1;
-                    tracing::warn!(error = %e, path = %rel_path, repo = %repo_id, "publish skipped");
-                    if abort_on_failure(publishes_attempted, publishes_failed) {
-                        return Err(anyhow::anyhow!(
-                            "publish failure ratio exceeded for {repo_id}: {publishes_failed}/{publishes_attempted} (last: {rel_path}: {e})"
-                        ));
-                    }
+                // `emit_for_file_multi` returns a Vec — most file
+                // classes still produce a single event, but spec docs
+                // (`.rulebook/specs/**/*.md`) fan out into one
+                // `law.imported` per `## ` section. The publish loop
+                // handles N events per walked file so the
+                // per-section laws all reach Synap.
+                let events =
+                    emit_for_file_multi(&repo_id, &session_id, None, entry, &body, &stream);
+                if events.is_empty() {
                     continue;
                 }
-                events_published += 1;
-                metrics.incr_events_emitted(&repo_id, &evt.kind);
-                let p = checkpoint.repo_mut(&repo_id);
-                p.events_emitted += 1;
-                p.files_walked += 1;
-                p.last_file = Some(rel_path.clone());
+                let mut any_published = false;
+                for evt in &events {
+                    metrics.incr_redactions(u64::from(evt.redactions));
+                    publishes_attempted += 1;
+                    if let Err(e) =
+                        publish(&publisher, &stream, evt, &metrics, runner_cfg.dry_run).await
+                    {
+                        metrics.incr_errors(&repo_id, "publish");
+                        publishes_failed += 1;
+                        tracing::warn!(error = %e, path = %rel_path, repo = %repo_id, "publish skipped");
+                        if abort_on_failure(publishes_attempted, publishes_failed) {
+                            return Err(anyhow::anyhow!(
+                                "publish failure ratio exceeded for {repo_id}: {publishes_failed}/{publishes_attempted} (last: {rel_path}: {e})"
+                            ));
+                        }
+                        continue;
+                    }
+                    events_published += 1;
+                    metrics.incr_events_emitted(&repo_id, &evt.kind);
+                    any_published = true;
+                }
+                if any_published {
+                    let p = checkpoint.repo_mut(&repo_id);
+                    p.events_emitted += events.len() as u64;
+                    p.files_walked += 1;
+                    p.last_file = Some(rel_path.clone());
+                }
             }
         }
     }
