@@ -40,6 +40,8 @@ OPTIONS:
   --dry-run                  No writes; print plan
   --estimate                 Implies --dry-run; print sizing (files, chunks, bytes, est. cost)
   --resume                   Resume from the last checkpoint
+  --workspace <file>         TOML file enumerating multiple repos (phase4b)
+  --force                    Re-run repos whose checkpoint reports `done` (phase4b)
   --parallelism <N>          Number of concurrent repo walkers (default: 4)
   --synap-endpoint <url>     Override Synap connection
   --stream <name>            Destination Synap stream (default: cortex.events.bootstrap)
@@ -255,6 +257,31 @@ Every synthetic event passes through `cortex-core`'s redactor (spec 04) **before
 - Each event carries `content_hash = sha256(canonical_json(redacted_payload))`.
 - Downstream writers (spec 06 embedder, spec 08 indexer) are keyed on `content_hash` — re-running bootstrap is a no-op at the storage layer.
 - The checkpoint file prevents **re-publishing** unchanged events to Synap, saving classifier cost.
+
+### Workspace orchestration (phase4b)
+
+`cortex-bootstrap --workspace <ws.toml>` drives multiple repos in one invocation. The TOML file lists every repo by `id` + `path`:
+
+```toml
+[[repo]]
+id = "Cortex"
+path = "E:/HiveLLM/Cortex"
+
+[[repo]]
+id = "Vectorizer"
+path = "E:/HiveLLM/Vectorizer"
+config = "cortex.toml"   # optional override; defaults to <path>/cortex.toml
+```
+
+The orchestrator runs in three phases:
+
+1. **Pre-flight** — `cortex_bootstrap::workspace::preflight` walks the entry list and aggregates every problem into a single `WorkspaceError::Preflight(Vec<String>)`. Verifies: non-empty + unique `id`, path exists, `<path>/.git` exists, `cortex.toml` is readable. The CLI aborts before walking any repo when preflight fails — no partial runs against a broken workspace.
+2. **Per-repo iteration** — repos run in declaration order. The runner reuses the existing `run_repo` for each entry; events flow through the same publisher / redactor / checkpoint pipeline as a single-repo invocation. Positional `<REPO_ROOT>...` args still work and merge with the workspace (deduped on path).
+3. **Skip-when-done** — on each iteration the orchestrator checks the checkpoint: when `repos[id].status == "done"` AND `last_git_ref == git rev-parse HEAD`, the repo is bypassed with an `info` log line. `--force` re-runs done repos regardless. After every successful run the orchestrator stamps `last_git_ref = current_head_sha(root)` so the next invocation has a value to compare against.
+
+The final output is a single summary table on stderr listing every repo with `events`, `dropped`, `duration`, and `status` (`done` / `bypassed` / `failed: <reason>`). The process exits with code `1` when any repo failed.
+
+The actual replay of the user's 17 Hive checkouts against a live cluster is an operations step — see `phase4g_bootstrap_workspace_runbook` for the runbook + workspace.toml authoring task.
 
 ### Progress & telemetry
 

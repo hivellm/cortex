@@ -57,6 +57,34 @@ pub enum GitWalkError {
 /// Walk every commit in `repo_root` and return one [`CommitRecord`]
 /// per commit, newest-first. `since` mirrors `git log --since` /
 /// rev-spec semantics — pass `None` to walk all history.
+/// Read the repo's current `HEAD` SHA via `git rev-parse HEAD`.
+///
+/// Phase4b §3 — the workspace orchestrator stamps this onto the
+/// checkpoint's `last_git_ref` so a re-run can detect "this repo
+/// is already up-to-date" and bypass the walker. Returns `None`
+/// when the repo is detached or git fails (the caller treats both
+/// as "no checkpoint match" and proceeds with the walk).
+pub fn current_head_sha(repo_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8(output.stdout).ok()?;
+    let sha = sha.trim();
+    if sha.is_empty() || sha.len() < 7 {
+        return None;
+    }
+    Some(sha.to_string())
+}
+
+/// Walk every commit reachable from `--all` in `repo_root`, optionally
+/// constrained by a `since` revision range. Returns one
+/// [`CommitRecord`] per commit in `git log` order (newest first).
 pub fn walk_commits(repo_root: &Path, since: Option<&str>) -> Result<Vec<CommitRecord>, GitWalkError> {
     let git_dir = repo_root.join(".git");
     if !git_dir.exists() {

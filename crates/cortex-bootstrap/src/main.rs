@@ -11,9 +11,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cortex_bootstrap::{
-    estimate_repo, format_estimate, load_config, load_for_repo, run_repo, write_atomic,
-    Checkpoint, CliArgs, LiveSynapPublisher, LogFormat, MemoryPublisher, Metrics, Publisher,
-    RunnerConfig, SynapHandle,
+    current_head_sha, estimate_repo, format_estimate, load_config, load_for_repo, load_workspace,
+    preflight_workspace, run_repo, write_atomic, Checkpoint, CliArgs, LiveSynapPublisher,
+    LogFormat, MemoryPublisher, Metrics, Publisher, RepoRunReport, RunnerConfig, SynapHandle,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -33,19 +33,35 @@ async fn main() -> Result<()> {
         Checkpoint::new(chrono::Utc::now().to_rfc3339())
     };
 
-    // Decide which repos to run. `--only` / `--skip` filters the
-    // CLI-supplied roots by their resolved id.
+    // Decide which repos to run. `--workspace` expands a TOML
+    // listing of repos; positional args still work (and merge with
+    // the workspace, deduped on path). `--only` / `--skip` filter
+    // the resulting list by repo id.
     let mut targets: Vec<(PathBuf, String)> = Vec::new();
+    if let Some(ws_path) = args.workspace.as_deref() {
+        let ws = load_workspace(ws_path)
+            .with_context(|| format!("load workspace `{}`", ws_path.display()))?;
+        preflight_workspace(&ws).context("workspace preflight")?;
+        for repo in &ws.repos {
+            targets.push((repo.path.clone(), repo.id.clone()));
+        }
+    }
     for root in &args.repo_roots {
         let id = resolve_repo_id(root)?;
-        if !args.only.is_empty() && !args.only.iter().any(|n| n == &id) {
-            continue;
-        }
-        if args.skip.iter().any(|n| n == &id) {
+        if targets.iter().any(|(p, _)| p == root) {
             continue;
         }
         targets.push((root.clone(), id));
     }
+    targets.retain(|(_, id)| {
+        if !args.only.is_empty() && !args.only.iter().any(|n| n == id) {
+            return false;
+        }
+        if args.skip.iter().any(|n| n == id) {
+            return false;
+        }
+        true
+    });
     if targets.is_empty() && !args.resume {
         anyhow::bail!("no repos selected after applying --only / --skip");
     }
@@ -86,6 +102,7 @@ async fn main() -> Result<()> {
         Arc::new(LiveSynapPublisher::new(handle))
     };
 
+    let mut summaries: Vec<RunSummary> = Vec::with_capacity(targets.len());
     for (root, id) in &targets {
         if shutdown.load(Ordering::Relaxed) {
             tracing::info!("shutdown requested before repo {id}; exiting");
@@ -95,6 +112,31 @@ async fn main() -> Result<()> {
             .with_context(|| format!("load cortex.toml for {id}"))?;
         let repo_cfg = cfg.cortex;
         let resolved_id = repo_cfg.id.clone().unwrap_or_else(|| id.clone());
+
+        // Phase4b §3 — skip-when-done idempotency. When the
+        // checkpoint reports `done` AND `last_git_ref` matches the
+        // current HEAD of this checkout, the run was already
+        // captured. `--force` overrides both checks.
+        if !args.force {
+            let entry = checkpoint.repos.get(&resolved_id);
+            if let Some(progress) = entry {
+                if progress.status == "done" {
+                    let head = current_head_sha(root);
+                    if head.is_some() && progress.last_git_ref == head {
+                        tracing::info!(
+                            repo = %resolved_id,
+                            last_git_ref = %head.as_deref().unwrap_or(""),
+                            "bypassing repo: checkpoint reports done at current HEAD"
+                        );
+                        summaries.push(RunSummary::bypassed(&resolved_id));
+                        continue;
+                    }
+                }
+            }
+        } else if checkpoint.is_repo_done(&resolved_id) {
+            tracing::info!(repo = %resolved_id, "--force re-running done repo");
+        }
+
         let runner_cfg = RunnerConfig {
             repo_id: resolved_id.clone(),
             stream: args.stream.clone(),
@@ -109,7 +151,7 @@ async fn main() -> Result<()> {
             .repos
             .get(&resolved_id)
             .and_then(|p| p.last_git_ref.clone());
-        match run_repo(
+        let result = run_repo(
             root,
             &runner_cfg,
             &repo_cfg,
@@ -119,8 +161,8 @@ async fn main() -> Result<()> {
             last_file,
             last_git_ref,
         )
-        .await
-        {
+        .await;
+        match result {
             Ok(report) => {
                 eprintln!(
                     "[bootstrap] {}: {} events published, {} files dropped, {} commits, {:.1} s",
@@ -130,10 +172,20 @@ async fn main() -> Result<()> {
                     report.commits_walked,
                     report.duration_secs,
                 );
+                // Stamp the current HEAD on the checkpoint so the
+                // next run's skip-when-done check has a value to
+                // compare against. The runner already sets
+                // `status = done` on success.
+                if let Some(head) = current_head_sha(root) {
+                    let progress = checkpoint.repo_mut(&resolved_id);
+                    progress.last_git_ref = Some(head);
+                }
+                summaries.push(RunSummary::from_report(&report));
             }
             Err(e) => {
                 eprintln!("[bootstrap] {id}: failed: {e}");
                 metrics.incr_errors(id, "run_repo");
+                summaries.push(RunSummary::failed(&resolved_id, &e.to_string()));
             }
         }
         if let Err(e) = write_atomic(&args.checkpoint, &checkpoint) {
@@ -141,7 +193,114 @@ async fn main() -> Result<()> {
         }
     }
 
+    print_summary_table(&summaries);
+
+    let any_failed = summaries.iter().any(|s| matches!(s.status, RunStatus::Failed { .. }));
+    if any_failed {
+        std::process::exit(1);
+    }
     Ok(())
+}
+
+/// One row of the final summary table. Mirrors the per-repo run
+/// outcome with enough detail to fit in `id | events | dropped |
+/// duration | status` columns.
+#[derive(Debug, Clone)]
+struct RunSummary {
+    repo_id: String,
+    events_published: u64,
+    files_dropped: u64,
+    duration_secs: f64,
+    status: RunStatus,
+}
+
+#[derive(Debug, Clone)]
+enum RunStatus {
+    Done,
+    Bypassed,
+    Failed { reason: String },
+}
+
+impl RunSummary {
+    fn from_report(report: &RepoRunReport) -> Self {
+        Self {
+            repo_id: report.repo_id.clone(),
+            events_published: report.events_published,
+            files_dropped: report.files_dropped,
+            duration_secs: report.duration_secs,
+            status: if report.completed {
+                RunStatus::Done
+            } else {
+                RunStatus::Failed {
+                    reason: "incomplete".into(),
+                }
+            },
+        }
+    }
+
+    fn bypassed(repo_id: &str) -> Self {
+        Self {
+            repo_id: repo_id.to_string(),
+            events_published: 0,
+            files_dropped: 0,
+            duration_secs: 0.0,
+            status: RunStatus::Bypassed,
+        }
+    }
+
+    fn failed(repo_id: &str, reason: &str) -> Self {
+        Self {
+            repo_id: repo_id.to_string(),
+            events_published: 0,
+            files_dropped: 0,
+            duration_secs: 0.0,
+            status: RunStatus::Failed {
+                reason: reason.to_string(),
+            },
+        }
+    }
+}
+
+fn print_summary_table(rows: &[RunSummary]) {
+    if rows.is_empty() {
+        return;
+    }
+    let id_width = rows
+        .iter()
+        .map(|r| r.repo_id.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    eprintln!();
+    eprintln!(
+        "{:<id_width$}  {:>10}  {:>10}  {:>10}  {}",
+        "repo",
+        "events",
+        "dropped",
+        "duration",
+        "status",
+        id_width = id_width,
+    );
+    eprintln!(
+        "{}",
+        "-".repeat(id_width + 4 + 10 + 2 + 10 + 2 + 10 + 2 + 6)
+    );
+    for r in rows {
+        let status_str = match &r.status {
+            RunStatus::Done => "done".to_string(),
+            RunStatus::Bypassed => "bypassed".to_string(),
+            RunStatus::Failed { reason } => format!("failed: {reason}"),
+        };
+        eprintln!(
+            "{:<id_width$}  {:>10}  {:>10}  {:>9.1}s  {}",
+            r.repo_id,
+            r.events_published,
+            r.files_dropped,
+            r.duration_secs,
+            status_str,
+            id_width = id_width,
+        );
+    }
 }
 
 fn resolve_repo_id(root: &Path) -> Result<String> {

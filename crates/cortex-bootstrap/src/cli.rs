@@ -44,6 +44,19 @@ pub struct CliArgs {
     #[arg(long)]
     pub resume: bool,
 
+    /// Workspace TOML enumerating multiple repos to bootstrap in
+    /// one invocation. When set, the file's `[[repo]]` entries
+    /// drive the run instead of (or alongside) the positional
+    /// `repo_roots` args.
+    #[arg(long, value_name = "FILE")]
+    pub workspace: Option<PathBuf>,
+
+    /// Re-run repos whose checkpoint already reports `status = done`.
+    /// Without this flag, the orchestrator bypasses any repo whose
+    /// checkpoint matches the current `HEAD` ref.
+    #[arg(long)]
+    pub force: bool,
+
     /// Number of concurrent repo walkers.
     #[arg(long, default_value_t = 4, value_name = "N")]
     pub parallelism: usize,
@@ -85,9 +98,10 @@ impl CliArgs {
     }
 
     /// Whether the `repo_roots` argument is mandatory for this
-    /// invocation. `--resume` is the only mode where it can be empty.
+    /// invocation. `--resume` and `--workspace` both supply repo
+    /// targets without positional args.
     pub fn requires_repo_roots(&self) -> bool {
-        !self.resume
+        !self.resume && self.workspace.is_none()
     }
 }
 

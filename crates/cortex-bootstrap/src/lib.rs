@@ -20,6 +20,7 @@ pub mod metrics;
 pub mod publisher;
 pub mod runner;
 pub mod walker;
+pub mod workspace;
 
 pub use checkpoint::{load_or_default as load_checkpoint, write_atomic, Checkpoint, RepoProgress};
 pub use cli::{CliArgs, LogFormat};
@@ -33,8 +34,12 @@ pub use emitter::{
     emit_turn_historical, BootstrapEvent, BOOTSTRAP_STREAM,
 };
 pub use estimate::{estimate_repo, format_estimate, Estimate};
-pub use git::{parse_log, walk_commits, CommitRecord, GitWalkError};
+pub use git::{current_head_sha, parse_log, walk_commits, CommitRecord, GitWalkError};
 pub use metrics::Metrics;
 pub use publisher::{LiveSynapPublisher, MemoryPublisher, Publisher, SynapHandle};
 pub use runner::{count_classes, run_repo, run_repos_parallel, RepoRunReport, RunnerConfig};
 pub use walker::{classify_path, matches_any, walk_repo, FileClass, WalkEntry, MAX_FILE_BYTES};
+pub use workspace::{
+    load_workspace, preflight as preflight_workspace, WorkspaceConfig, WorkspaceError,
+    WorkspaceRepo,
+};
