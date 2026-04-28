@@ -106,9 +106,70 @@ pub fn family_for_event(
 /// Compose the full index name from a prefix, repo slug, and family.
 /// `prefix` is the deployment namespace (default `"cortex-"`); the
 /// trailing dash is honoured so the result is `cortex-{slug}-{family}`.
+///
+/// The result is invariably a three-token name when split on `-`:
+/// `cortex` / `{repo_slug}` / `{family}`. The `debug_assert!`
+/// catches drift in dev / test builds; the runtime sweep
+/// ([`is_canonical_index_name`]) catches it in production by
+/// matching every existing Meili index against the same shape.
 pub fn index_name(prefix: &str, repo_slug: &str, family: &str) -> String {
     let trimmed = prefix.trim_end_matches('-');
-    format!("{trimmed}-{repo_slug}-{family}")
+    let name = format!("{trimmed}-{repo_slug}-{family}");
+    debug_assert!(
+        is_canonical_index_name_for_prefix(&name, trimmed),
+        "index_name produced a non-canonical name: {name:?} \
+         (prefix={prefix:?}, repo_slug={repo_slug:?}, family={family:?})",
+    );
+    name
+}
+
+/// True when `name` matches the canonical
+/// `cortex-{repo_slug}-{family}` shape — three non-empty tokens
+/// separated by `-`, with the first token literally `cortex` and
+/// the third one of [`FAMILIES`].
+///
+/// Phase4a §3 — the boot-time sweep walks every Meilisearch index
+/// and routes empty non-canonical names into `delete_index`. The
+/// regex-equivalent split-based check keeps the matcher pure (no
+/// dependency on the `regex` crate) and lets the worker run with
+/// the same vocabulary the routing code uses. The production
+/// cluster always uses the `cortex` prefix; deployments that pass
+/// a custom prefix to [`index_name`] use
+/// [`is_canonical_index_name_for_prefix`] directly.
+pub fn is_canonical_index_name(name: &str) -> bool {
+    is_canonical_index_name_for_prefix(name, "cortex")
+}
+
+/// Like [`is_canonical_index_name`] but parameterised on the
+/// deployment-namespace prefix. Callers from `index_name` use
+/// this so the debug invariant accepts non-default deployments
+/// (e.g. `staging-`); the production sweep keeps the `"cortex"`
+/// default through [`is_canonical_index_name`].
+pub fn is_canonical_index_name_for_prefix(name: &str, prefix: &str) -> bool {
+    // The repo slug itself can contain `-` (e.g. `cortex-mcp`), so a
+    // simple `splitn(3, '-')` would miss compound slugs. Instead we
+    // check (a) starts with `<prefix>-`, (b) ends with `-{family}` for
+    // some `family ∈ FAMILIES`, and (c) the middle slug is non-empty.
+    let head = format!("{prefix}-");
+    let rest = match name.strip_prefix(&head) {
+        Some(r) => r,
+        None => return false,
+    };
+    for family in FAMILIES.iter() {
+        let suffix = format!("-{family}");
+        if let Some(slug) = rest.strip_suffix(&suffix) {
+            if !slug.is_empty()
+                && slug
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                && !slug.starts_with('-')
+                && !slug.ends_with('-')
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Compose the full index name for a `Kind` + repo. `repo_id = None`
@@ -257,6 +318,62 @@ mod tests {
             index_for("cortex-", Kind::Analysis, Some("Rulebook")),
             "cortex-rulebook-analyses"
         );
+    }
+
+    #[test]
+    fn is_canonical_index_name_matches_three_token_shape() {
+        // Canonical: cortex-{slug}-{family} with a known family.
+        assert!(is_canonical_index_name("cortex-cortex-code"));
+        assert!(is_canonical_index_name("cortex-rulebook-decisions"));
+        assert!(is_canonical_index_name("cortex-cortex-mcp-code"));
+        assert!(is_canonical_index_name("cortex-tml-analyses"));
+        // Non-canonical: missing slug, missing family, unknown family.
+        assert!(!is_canonical_index_name("cortex-code"));
+        assert!(!is_canonical_index_name("cortex-decisions"));
+        assert!(!is_canonical_index_name("cortex-cortex-bogus"));
+        assert!(!is_canonical_index_name("legacy-foo"));
+        assert!(!is_canonical_index_name("cortex-"));
+        assert!(!is_canonical_index_name("cortex-cortex-"));
+    }
+
+    #[test]
+    fn known_stale_audit_indexes_are_non_canonical() {
+        // The seven names captured in the 2026-04-27 audit + the
+        // post-audit `cortex-analyses` orphan that landed before the
+        // per-project naming migration was applied to the analyses
+        // family. Each must fail the canonical check so the sweep
+        // targets them.
+        for name in [
+            "cortex-code",
+            "cortex-decisions",
+            "cortex-docs",
+            "cortex-governance",
+            "cortex-misc",
+            "cortex-turns",
+            "cortex-analyses",
+        ] {
+            assert!(
+                !is_canonical_index_name(name),
+                "expected {name} to be non-canonical",
+            );
+        }
+    }
+
+    #[test]
+    fn index_name_always_round_trips_through_canonical_check() {
+        // Property-style sweep: every (repo_slug, family) pair in the
+        // canonical vocabulary produces a name that the canonical
+        // matcher accepts. Catches drift between writer and sweeper.
+        let slugs = ["cortex", "rulebook", "nexus", "cortex-mcp", "tml_v2"];
+        for slug in &slugs {
+            for family in FAMILIES {
+                let name = index_name("cortex-", slug, family);
+                assert!(
+                    is_canonical_index_name(&name),
+                    "round-trip failed for slug={slug:?} family={family:?} → {name:?}",
+                );
+            }
+        }
     }
 
     #[test]

@@ -8,10 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use cortex_fulltext::routing::FAMILIES;
 use cortex_fulltext::{
-    settings_v1_json, FulltextConfig, LiveMeiliClient, LiveSynapConsumer, LiveSynapPublisher,
-    MeiliClient, MeiliFulltextIndexer, Metrics, SynapHandle, Worker,
+    settings_v1_json, sweep_stale_indexes, FulltextConfig, LiveMeiliClient, LiveSynapConsumer,
+    LiveSynapPublisher, MeiliFulltextIndexer, Metrics, SynapHandle, Worker,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -29,31 +28,38 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("failed to build Meili client: {e}"))?,
     );
 
-    // Bootstrap every per-kind index against Meili so the worker
-    // never tries to upsert into an unconfigured index. The
-    // per-project (`cortex-{slug}-{family}`) uids are materialised
-    // lazily by the indexer on first upsert (see
-    // `MeiliFulltextIndexer::ensure_settings`), so we only need to
-    // seed the legacy family set here.
-    let settings = settings_v1_json().context("baked-in v1 settings unparseable")?;
-    let metrics = Arc::new(Metrics::new());
-    let mut seeded: Vec<String> = Vec::with_capacity(FAMILIES.len());
-    for family in FAMILIES {
-        let index = format!("{}{}", config.index_prefix, family);
-        meili_client
-            .ensure_index(&index, &settings)
-            .await
-            .map_err(|e| anyhow::anyhow!("ensure_index({index}): {e}"))?;
-        metrics.incr_settings_bump();
-        tracing::info!(index = %index, "ensured fulltext index");
-        seeded.push(index);
+    // Phase4a §3 — stale-index sweep on boot. The legacy startup
+    // path used to seed every `cortex-{family}` (no slug) index for
+    // schema bootstrap, but per-project uids materialise lazily on
+    // first upsert via `MeiliFulltextIndexer::ensure_settings`, so
+    // those legacy names were always orphans. The sweep drops every
+    // empty non-canonical index and warns (without deleting)
+    // anything non-empty so operator state is never lost.
+    match sweep_stale_indexes(meili_client.as_ref()).await {
+        Ok(report) => tracing::info!(
+            examined = report.examined,
+            kept_canonical = report.kept_canonical,
+            deleted_stale_empty = report.deleted_stale_empty,
+            kept_warning = report.kept_warning,
+            warned = ?report.warned_names,
+            "fulltext sweep complete",
+        ),
+        Err(e) => tracing::warn!(error = %e, "fulltext sweep failed; continuing without sweep"),
     }
+
+    // The settings bag is still loaded so `MeiliFulltextIndexer`
+    // can apply it lazily when each per-project uid lands its
+    // first upsert. No eager `ensure_index` against the legacy
+    // family set — that's exactly the source of the stale names
+    // the sweep just dropped.
+    let _settings = settings_v1_json().context("baked-in v1 settings unparseable")?;
+    let metrics = Arc::new(Metrics::new());
 
     let indexer = Arc::new(MeiliFulltextIndexer::with_ensured(
         config.clone(),
         meili_client,
         metrics.clone(),
-        seeded,
+        Vec::new(),
     ));
 
     let synap = Arc::new(

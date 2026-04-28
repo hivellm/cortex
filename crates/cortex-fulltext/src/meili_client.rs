@@ -65,6 +65,20 @@ pub struct UpsertReport {
     pub task_uid: TaskUid,
 }
 
+/// One row of the `/indexes` listing — the bare minimum the
+/// boot-time stale-sweep needs to decide whether to delete an
+/// index. `numberOfDocuments` is preserved verbatim so the sweep
+/// can refuse to drop a non-empty index even when it violates the
+/// canonical name convention (preserves any operator-injected
+/// state).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexStat {
+    /// Index uid (the name).
+    pub uid: String,
+    /// Document count reported by the Meili `/stats` endpoint.
+    pub number_of_documents: u64,
+}
+
 /// Failure modes raised by [`MeiliClient`] implementations.
 #[derive(Debug, Error)]
 pub enum MeiliError {
@@ -136,6 +150,16 @@ pub trait MeiliClient: Send + Sync {
     /// Poll `task` until it reaches a terminal status or `timeout`
     /// elapses.
     async fn wait_task(&self, task: TaskUid, timeout: Duration) -> MeiliResult<TaskStatus>;
+
+    /// List every index Meili currently knows about, with its
+    /// document count. Used by the boot-time stale-sweep
+    /// (phase4a §3) to identify empty non-canonical names.
+    async fn list_indexes(&self) -> MeiliResult<Vec<IndexStat>>;
+
+    /// Drop the named index. Idempotent — a `404 Not Found` is
+    /// surfaced as `Ok(())` so re-runs of the sweep don't fail
+    /// after the first one already deleted it.
+    async fn delete_index(&self, index: &str) -> MeiliResult<()>;
 }
 
 // ---------- Retry helper -----------------------------------------------
@@ -347,6 +371,76 @@ impl MeiliClient for LiveMeiliClient {
         })
     }
 
+    async fn list_indexes(&self) -> MeiliResult<Vec<IndexStat>> {
+        // The Meili `/stats` endpoint reports every index in one
+        // response (no pagination), unlike `/indexes` which defaults
+        // to limit=20. Phase4a's diagnostic showed `/indexes` had
+        // hidden 15 of 35 indexes on the live cluster — `/stats`
+        // is the trustworthy surface for the sweep.
+        let url = self.url("/stats");
+        let max = self.max_retry;
+        let http = self.http.clone();
+        let stats: StatsBody = with_retry(max, move || {
+            let http = http.clone();
+            let url = url.clone();
+            async move {
+                let resp = http
+                    .get(&url)
+                    .send()
+                    .await
+                    .map_err(|e| classify_reqwest(e, "list_indexes"))?;
+                let status = resp.status();
+                if !status.is_success() {
+                    let detail = resp.text().await.unwrap_or_default();
+                    return Err(classify_status(status, "list_indexes", &detail));
+                }
+                resp.json::<StatsBody>()
+                    .await
+                    .map_err(|e| MeiliError::Http(format!("decode stats body: {e}")))
+            }
+        })
+        .await?;
+        let mut out: Vec<IndexStat> = stats
+            .indexes
+            .into_iter()
+            .map(|(uid, body)| IndexStat {
+                uid,
+                number_of_documents: body.number_of_documents,
+            })
+            .collect();
+        out.sort_by(|a, b| a.uid.cmp(&b.uid));
+        Ok(out)
+    }
+
+    async fn delete_index(&self, index: &str) -> MeiliResult<()> {
+        let url = self.url(&format!("/indexes/{index}"));
+        let max = self.max_retry;
+        let http = self.http.clone();
+        with_retry(max, move || {
+            let http = http.clone();
+            let url = url.clone();
+            async move {
+                let resp = http
+                    .delete(&url)
+                    .send()
+                    .await
+                    .map_err(|e| classify_reqwest(e, "delete_index"))?;
+                let status = resp.status();
+                // 202 Accepted (task enqueued) and 204 No Content
+                // are the documented success paths. 404 is also
+                // success — the index already doesn't exist.
+                if status.is_success() || status == StatusCode::ACCEPTED
+                    || status == StatusCode::NOT_FOUND
+                {
+                    return Ok(());
+                }
+                let detail = resp.text().await.unwrap_or_default();
+                Err(classify_status(status, "delete_index", &detail))
+            }
+        })
+        .await
+    }
+
     async fn wait_task(&self, task: TaskUid, timeout: Duration) -> MeiliResult<TaskStatus> {
         let url = self.url(&format!("/tasks/{task}"));
         let started = std::time::Instant::now();
@@ -398,6 +492,21 @@ struct TaskBody {
     status: TaskStatus,
 }
 
+/// `/stats` response shape — only the bits the sweep needs. Meili
+/// also returns `databaseSize`, `usedDatabaseSize`, and per-index
+/// field-distribution maps; we drop them on the floor here.
+#[derive(Debug, Clone, Deserialize)]
+struct StatsBody {
+    #[serde(default)]
+    indexes: HashMap<String, StatsIndexBody>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StatsIndexBody {
+    #[serde(rename = "numberOfDocuments", default)]
+    number_of_documents: u64,
+}
+
 fn classify_reqwest(err: reqwest::Error, purpose: &str) -> MeiliError {
     let is_transient = err.is_timeout()
         || err.is_connect()
@@ -444,6 +553,12 @@ pub enum MemoryCall {
         /// Document keys + bodies (cloned).
         docs: Vec<Document>,
     },
+    /// Captured `delete_index` call. Phase4a §3 — boot-time
+    /// stale-index sweep emits one of these per dropped name.
+    DeleteIndex {
+        /// Index name that was deleted.
+        name: String,
+    },
 }
 
 /// In-memory Meili client for tests. Records every call without
@@ -457,6 +572,11 @@ pub struct MemoryMeiliClient {
     /// Predefined task statuses keyed by task_uid; defaults to
     /// `Succeeded` when missing.
     pub task_statuses: Mutex<HashMap<TaskUid, TaskStatus>>,
+    /// Pre-seeded indexes that `list_indexes` returns. Phase4a §3
+    /// drives the boot-time stale-sweep off this surface so tests
+    /// can simulate the live cluster without a Meili container.
+    /// Keys are index names, values the document count.
+    pub indexes: Mutex<HashMap<String, u64>>,
 }
 
 impl MemoryMeiliClient {
@@ -478,6 +598,24 @@ impl MemoryMeiliClient {
         if let Ok(mut g) = self.task_statuses.lock() {
             g.insert(task, status);
         }
+    }
+
+    /// Pre-seed an index (uid + document count) so `list_indexes`
+    /// returns it. `delete_index` removes the entry; the sweep tests
+    /// poll `index_exists` post-sweep to confirm the deletion.
+    pub fn seed_index(&self, uid: &str, number_of_documents: u64) {
+        if let Ok(mut g) = self.indexes.lock() {
+            g.insert(uid.to_string(), number_of_documents);
+        }
+    }
+
+    /// Whether the named index is still present in the in-memory
+    /// state. Tests use this as the post-sweep oracle.
+    pub fn index_exists(&self, uid: &str) -> bool {
+        self.indexes
+            .lock()
+            .map(|g| g.contains_key(uid))
+            .unwrap_or(false)
     }
 }
 
@@ -526,5 +664,36 @@ impl MeiliClient for MemoryMeiliClient {
         } else {
             Err(MeiliError::TaskNotSucceeded { task, status })
         }
+    }
+
+    async fn list_indexes(&self) -> MeiliResult<Vec<IndexStat>> {
+        let snapshot: Vec<IndexStat> = self
+            .indexes
+            .lock()
+            .map(|g| {
+                let mut rows: Vec<IndexStat> = g
+                    .iter()
+                    .map(|(uid, n)| IndexStat {
+                        uid: uid.clone(),
+                        number_of_documents: *n,
+                    })
+                    .collect();
+                rows.sort_by(|a, b| a.uid.cmp(&b.uid));
+                rows
+            })
+            .unwrap_or_default();
+        Ok(snapshot)
+    }
+
+    async fn delete_index(&self, index: &str) -> MeiliResult<()> {
+        if let Ok(mut g) = self.indexes.lock() {
+            g.remove(index);
+        }
+        if let Ok(mut g) = self.calls.lock() {
+            g.push(MemoryCall::DeleteIndex {
+                name: index.to_string(),
+            });
+        }
+        Ok(())
     }
 }

@@ -201,6 +201,35 @@ The `body` field is the primary searchable text. Selection priority:
 
 The raw payload is **never** indexed without redaction.
 
+### Boot-time stale-index sweep (phase4a)
+
+Before the worker pool starts pulling from `cortex.events.enriched`,
+`main.rs` runs `sweep_stale_indexes` once against the configured
+Meili cluster. The sweep walks every existing index and applies
+this policy:
+
+- **Canonical name** — `cortex-{repo_slug}-{family}` where
+  `family ∈ {code, docs, decisions, turns, governance, misc, analyses}`
+  and `repo_slug` matches `[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?` —
+  preserved unconditionally.
+- **Non-canonical & empty** — dropped via `delete_index`. Logged at
+  `info` with `reason="stale-naming"`. The 2026-04-27 audit's seven
+  offenders (`cortex-code`, `cortex-decisions`, `cortex-docs`,
+  `cortex-governance`, `cortex-misc`, `cortex-turns`, plus the
+  post-audit `cortex-analyses`) all fell into this bucket.
+- **Non-canonical & non-empty** — preserved. The worker emits
+  exactly one `warn` line naming the index and its document count
+  so the operator can manually triage; no automatic deletion ever
+  drops state.
+
+The sweep is fully idempotent — re-running after a successful
+sweep examines fewer indexes (the deleted ones are gone) and
+produces zero deletions on subsequent runs.
+
+The matcher lives in [`cortex_fulltext::routing::is_canonical_index_name`](../../crates/cortex-fulltext/src/routing.rs) and is exercised by `index_name`'s `debug_assert!`, so writer drift is caught in dev / CI before reaching production.
+
+The legacy `for family in FAMILIES { ensure_index(format!("cortex-{family}"), ...) }` boot loop that produced the stale names was removed in phase4a — per-project uids materialise lazily on first upsert via `MeiliFulltextIndexer::ensure_settings`, so eager bootstrap of the un-slugged family set was always orphaning state into Meili.
+
 ### Worker concurrency
 
 ```
