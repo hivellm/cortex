@@ -86,11 +86,11 @@ do not produce a published event:
 
 | Hook                | Canonical `kind` | Sync path                        | Notes                                                              |
 |---------------------|------------------|----------------------------------|--------------------------------------------------------------------|
-| `UserPromptSubmit`  | `turn`           | `pre_change_context` query        | payload `{user_message, assistant_message: null, tokens?, tool_call_event_ids?}` |
+| `UserPromptSubmit`  | `turn`           | `pre_change_context` query        | payload `{user_message, assistant_message: null, tokens?, tool_call_event_ids?}`. Captures the prompt-side of the turn — the assistant hasn't replied yet. |
 | `PostToolUse`       | `tool_call`      | —                                 | payload `{tool_name, input, output, outcome, duration_ms?, touched?}` |
 | `SubagentStop`      | `agent_call`     | —                                 | payload `{agent_type, description, prompt?, model?, team_name?, child_event_ids?, result?, duration_ms?, outcome}` |
+| `Stop`              | `turn`           | —                                 | payload `{user_message: "", assistant_message, tokens?, tool_call_event_ids?}`. Captures the reply-side of the turn — `assistant_message` is extracted from the JSONL at `payload.transcript_path` (last `assistant` entry's joined `text` content blocks). Both `Turn` envelopes share the same `turn_id` under `context.extras.claude_code` so downstream readers fold them. Failure to read / parse the transcript still publishes the envelope with `assistant_message: null` so the boundary timestamp is preserved. |
 | `PreToolUse`        | _drop_           | blocking law-check                | The matching `PostToolUse` carries the canonical record.            |
-| `Stop`              | _drop_           | —                                 | Session lifecycle is implicit; no canonical kind.                   |
 | `SessionStart`      | _drop_           | —                                 | The first `turn` opens the session.                                 |
 | `Notification`      | _drop_           | —                                 | No canonical kind; recorded only in adapter-side metrics.           |
 

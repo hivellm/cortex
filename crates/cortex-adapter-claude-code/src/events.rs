@@ -74,10 +74,15 @@ impl HookKind {
             HookKind::UserPromptSubmit => Some(Kind::Turn),
             HookKind::PostToolUse => Some(Kind::ToolCall),
             HookKind::SubagentStop => Some(Kind::AgentCall),
-            HookKind::PreToolUse
-            | HookKind::Stop
-            | HookKind::SessionStart
-            | HookKind::Notification => None,
+            // Stop fires a SECOND `Turn` envelope at end-of-turn so
+            // the assistant_message gets captured. UserPromptSubmit's
+            // envelope only knows the user's prompt; the assistant's
+            // reply doesn't exist yet at that point. Both envelopes
+            // share the same `turn_id` via `context.extras["claude_code"]`
+            // so downstream (dashboard, RRF, archive readers) can fold
+            // them into a single turn record.
+            HookKind::Stop => Some(Kind::Turn),
+            HookKind::PreToolUse | HookKind::SessionStart | HookKind::Notification => None,
         }
     }
 }
@@ -155,7 +160,7 @@ pub fn build_event(
 
     // Per-kind payload construction.
     let payload_value = match canonical_kind {
-        Kind::Turn => build_turn_payload(&redacted),
+        Kind::Turn => build_turn_payload(&redacted, hook),
         Kind::ToolCall => build_tool_call_payload(&redacted),
         Kind::AgentCall => build_agent_call_payload(&redacted),
         // The other canonical kinds aren't produced by Claude Code
@@ -234,17 +239,93 @@ fn update_correlation(
     extras
 }
 
-fn build_turn_payload(redacted: &Value) -> Value {
-    let user_message = read_string_field(redacted, "prompt")
-        .or_else(|| read_string_field(redacted, "user_message"))
-        .unwrap_or_default();
+fn build_turn_payload(redacted: &Value, hook: HookKind) -> Value {
+    let (user_message, assistant_message) = match hook {
+        HookKind::UserPromptSubmit => {
+            // The user's prompt is on the inbound hook payload. The
+            // assistant_message can't be set yet — the model hasn't
+            // replied. Stop's envelope below fills that side in.
+            let user_message = read_string_field(redacted, "prompt")
+                .or_else(|| read_string_field(redacted, "user_message"))
+                .unwrap_or_default();
+            (user_message, None)
+        }
+        HookKind::Stop => {
+            // Claude Code's Stop hook payload carries `transcript_path`
+            // — a JSONL of every user/assistant message in the
+            // session. The most recent `assistant` line with a `text`
+            // content block is the reply we need. Failure to read /
+            // parse falls back to an empty message rather than
+            // dropping the envelope (a recorded turn-close with no
+            // text is still useful — it pins the boundary timestamp).
+            let assistant_message = read_string_field(redacted, "transcript_path")
+                .as_deref()
+                .and_then(read_last_assistant_text);
+            (String::new(), assistant_message)
+        }
+        // build_event guards against this branch — only the two
+        // hooks above route into Kind::Turn — but the match needs
+        // to be exhaustive over HookKind.
+        _ => (String::new(), None),
+    };
     let turn = Turn {
         user_message,
-        assistant_message: None,
+        assistant_message,
         tokens: None,
         tool_call_event_ids: Vec::new(),
     };
     serde_json::to_value(&turn).unwrap_or(Value::Null)
+}
+
+/// Walk a Claude Code transcript JSONL backwards to find the most
+/// recent `assistant` message's text content. Each transcript line
+/// has shape `{ "type": "assistant" | "user" | ..., "message":
+/// { "role": "...", "content": [...] } }`, where the content array
+/// can mix `{ "type": "text", "text": ... }` and `{ "type":
+/// "tool_use", ... }` blocks. We concatenate every `text` block from
+/// the last assistant line so a reply that arrived in multiple
+/// streamed chunks lands as a single string.
+///
+/// Returns `None` when the file is missing, malformed, or contains
+/// no assistant text — the caller treats that as "no message
+/// available", not as a hard error.
+fn read_last_assistant_text(path: &str) -> Option<String> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+    let f = File::open(path).ok()?;
+    let reader = BufReader::new(f);
+    let mut last_text: Option<String> = None;
+    for line in reader.lines().map_while(Result::ok) {
+        if line.is_empty() {
+            continue;
+        }
+        let v: Value = match serde_json::from_str(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if v.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let content = v
+            .get("message")
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array)?;
+        let mut buf = String::new();
+        for block in content {
+            if block.get("type").and_then(Value::as_str) == Some("text") {
+                if let Some(text) = block.get("text").and_then(Value::as_str) {
+                    if !buf.is_empty() {
+                        buf.push('\n');
+                    }
+                    buf.push_str(text);
+                }
+            }
+        }
+        if !buf.is_empty() {
+            last_text = Some(buf);
+        }
+    }
+    last_text
 }
 
 fn build_tool_call_payload(redacted: &Value) -> Value {
@@ -520,7 +601,11 @@ mod tests {
     #[test]
     fn session_lifecycle_hooks_do_not_publish() {
         let mgr = SessionManager::new();
-        for h in [HookKind::SessionStart, HookKind::Stop, HookKind::Notification] {
+        // SessionStart and Notification stay sync-only — no canonical
+        // kind exists for them. Stop now publishes a Kind::Turn
+        // envelope carrying the assistant_message (see
+        // `stop_emits_turn_envelope_with_assistant_message_from_transcript`).
+        for h in [HookKind::SessionStart, HookKind::Notification] {
             let env = build_event(h, &frame("X", json!({})), &mgr, 42);
             assert!(env.is_none(), "{h:?} must not publish");
         }
@@ -568,6 +653,117 @@ mod tests {
         )
         .unwrap();
         assert!(env.content_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn stop_emits_turn_envelope_with_assistant_message_from_transcript() {
+        // Write a tempfile transcript matching Claude Code's JSONL
+        // shape: a few user/attachment lines, then an assistant
+        // message with both a tool_use block (which we ignore) and a
+        // text block (which we keep). The Stop hook must produce a
+        // Kind::Turn envelope where assistant_message reflects the
+        // text content and user_message is empty (the prompt-side
+        // already shipped on UserPromptSubmit).
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let transcript_lines = [
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"go"}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"Bash","input":{}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"final reply line one"},{"type":"text","text":"line two"}]}}"#,
+        ];
+        std::fs::write(tmp.path(), transcript_lines.join("\n")).unwrap();
+        let path_str = tmp.path().to_string_lossy().to_string();
+
+        let mgr = SessionManager::new();
+        // Open a turn first so the Stop envelope's correlation
+        // carries a turn_id (the dashboard fold-by-turn-id only
+        // works when the same turn_id is on both halves).
+        let user_env = build_event(
+            HookKind::UserPromptSubmit,
+            &frame("UserPromptSubmit", json!({ "prompt": "do the thing" })),
+            &mgr,
+            42,
+        )
+        .expect("UserPromptSubmit must publish");
+
+        let stop_env = build_event(
+            HookKind::Stop,
+            &frame(
+                "Stop",
+                json!({ "transcript_path": path_str, "stop_hook_active": false }),
+            ),
+            &mgr,
+            42,
+        )
+        .expect("Stop must publish a Kind::Turn envelope");
+
+        assert_eq!(stop_env.kind, Kind::Turn);
+        let payload: Turn = serde_json::from_value(stop_env.payload).unwrap();
+        assert_eq!(
+            payload.user_message, "",
+            "Stop envelope leaves user_message empty — the prompt side rode the UserPromptSubmit envelope"
+        );
+        assert_eq!(
+            payload.assistant_message.as_deref(),
+            Some("final reply line one\nline two"),
+            "Stop envelope must carry the last assistant text (joined across content blocks)"
+        );
+        // Correlation: both envelopes carry the same turn_id under
+        // context.extras.claude_code so downstream readers can fold
+        // them.
+        let user_turn = user_env
+            .context
+            .extras
+            .get("claude_code")
+            .and_then(|v| v.get("turn_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let stop_turn = stop_env
+            .context
+            .extras
+            .get("claude_code")
+            .and_then(|v| v.get("turn_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        assert!(user_turn.is_some());
+        assert_eq!(user_turn, stop_turn, "turn_id must match across the pair");
+    }
+
+    #[test]
+    fn stop_with_missing_transcript_path_still_publishes_envelope() {
+        // A Stop hook with no transcript_path (or a path that points
+        // at nothing) must still produce a Turn envelope — the
+        // boundary timestamp is itself useful, and refusing to
+        // publish would silently drop turn-end signals on any
+        // session that hasn't written a transcript yet.
+        let mgr = SessionManager::new();
+        let env = build_event(
+            HookKind::Stop,
+            &frame("Stop", json!({})),
+            &mgr,
+            42,
+        )
+        .expect("Stop must publish even without transcript_path");
+        let payload: Turn = serde_json::from_value(env.payload).unwrap();
+        assert_eq!(payload.user_message, "");
+        assert_eq!(payload.assistant_message, None);
+    }
+
+    #[test]
+    fn stop_with_malformed_transcript_returns_no_assistant_message() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "this is not jsonl\n{not json either").unwrap();
+        let path_str = tmp.path().to_string_lossy().to_string();
+
+        let mgr = SessionManager::new();
+        let env = build_event(
+            HookKind::Stop,
+            &frame("Stop", json!({ "transcript_path": path_str })),
+            &mgr,
+            42,
+        )
+        .expect("Stop publishes regardless of transcript health");
+        let payload: Turn = serde_json::from_value(env.payload).unwrap();
+        assert_eq!(payload.assistant_message, None);
     }
 
     #[test]
