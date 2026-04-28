@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "cortex-graph-worker"
 path = "src/main.rs"
 
+[[bin]]
+name = "cortex-graph-backfill"
+path = "src/bin/backfill.rs"
+
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-classifier = { path = "../cortex-classifier" }
@@ -31,6 +35,8 @@ async-trait = { workspace = true }
 sha2 = { workspace = true }
 ulid = { workspace = true }
 reqwest = { workspace = true }
+clap = { workspace = true }
+zstd = { workspace = true }
 
 nexus-graph-sdk = { workspace = true }
 synap-sdk = { workspace = true }

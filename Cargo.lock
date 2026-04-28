@@ -672,6 +672,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "clap",
  "cortex-classifier",
  "cortex-core",
  "cortex-embedder",
@@ -688,6 +689,7 @@ dependencies = [
  "tracing-subscriber",
  "ulid",
  "wiremock",
+ "zstd",
 ]
 
 [[package]]

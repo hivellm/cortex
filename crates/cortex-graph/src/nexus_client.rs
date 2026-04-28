@@ -511,12 +511,51 @@ fn render_edge_merge(edge: &EdgeOp) -> String {
     cy
 }
 
-/// Encode a string as a Cypher double-quoted string literal. Reuses
-/// `serde_json` for the escape pass — JSON's escape rules are a strict
-/// subset of Cypher's, so a JSON-encoded string is always a valid
-/// Cypher literal.
+/// Encode a string as a Cypher double-quoted string literal.
+///
+/// Earlier revisions reused `serde_json::to_string` on the assumption
+/// that JSON's escape rules are a Cypher-compatible subset. They are
+/// not: the 2026-04-28 archive backfill probed Nexus 1.15 directly and
+/// found two distinct failure modes when display text contained
+/// non-ASCII codepoints:
+///
+/// 1. The Nexus JSON body parser rejects every `\uXXXX` escape whose
+///    codepoint is `>= 0x80` with `invalid unicode code point` —
+///    serde_json's default ASCII-safe encoding produces exactly those
+///    escapes, so a Turn name with an ellipsis (`…`, U+2026) silently
+///    failed at HTTP time.
+/// 2. The same parser also rejects raw multi-byte UTF-8 sequences
+///    (e.g. `0xE2 0x80 0xA6` for U+2026) — even though those are valid
+///    UTF-8 / valid JSON, Nexus's parser folds them into the same
+///    `invalid unicode code point` bucket.
+///
+/// The fix is to render Cypher that is ASCII-only: escape the small
+/// set Cypher's own parser understands (`\"`, `\\`, `\n`, `\r`, `\t`),
+/// drop ASCII control bytes that would confuse Cypher, transliterate
+/// `…` into the three-dot ASCII ellipsis (it's the truncation marker
+/// the mapper produces, so a 1:1 substitution preserves intent), and
+/// replace every other non-ASCII codepoint with `?`. The display
+/// labels lose accents on non-ASCII repos, but no batch is ever
+/// dropped — display fidelity is recoverable later when Nexus's body
+/// parser is fixed.
 fn cypher_string_literal(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push(' '),
+            '\u{2026}' => out.push_str("..."),
+            c if (c as u32) < 0x80 => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Encode a `serde_json::Value` as a Cypher literal. Primitives map
