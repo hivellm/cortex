@@ -249,6 +249,9 @@ pub const REQUIRED_TEMPLATES: &[&str] = &[
     "node_law_violation",
     "node_law",
     "node_repo",
+    // phase4c — code symbol nodes extracted by the embedder's
+    // CodeChunker on artifact events.
+    "node_symbol",
     // Edges — one entry per (from, rel, to) currently emitted by
     // `mapper.rs`. Keep in lockstep with the mapper.
     "edge_session__has_turn__turn",
@@ -262,6 +265,8 @@ pub const REQUIRED_TEMPLATES: &[&str] = &[
     "edge_law_violation__of__law",
     "edge_law_violation__observed_in__turn",
     "edge_law_violation__observed_in__tool_call",
+    // phase4c — Symbol → Artifact via DEFINES.
+    "edge_symbol__defines__artifact",
 ];
 
 /// Read-only registry of Cypher templates keyed by name.

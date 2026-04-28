@@ -211,6 +211,28 @@ impl MemoryKeywordLane {
         self.fail = true;
         self
     }
+
+    /// Distinct repo slugs visible in the seeded snapshot. Each hit's
+    /// raw `repo` value is run through
+    /// `cortex_storage::names::slug_for_repo` so the result matches the
+    /// canonicalised form the query lanes filter on (a request that
+    /// scopes to `"Vectorizer"` and a hit stamped with the slug
+    /// `"vectorizer"` agree on the same key). Sorted + deduplicated so
+    /// callers can `.contains()` cheaply.
+    pub fn indexed_repos(&self) -> Vec<String> {
+        let Ok(g) = self.hits.lock() else {
+            return Vec::new();
+        };
+        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for hits in g.values() {
+            for h in hits {
+                if let Some(repo) = h.repo.as_deref().filter(|s| !s.is_empty()) {
+                    set.insert(cortex_storage::names::slug_for_repo(repo));
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
 }
 
 #[async_trait]

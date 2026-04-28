@@ -8,10 +8,11 @@ use std::sync::Arc;
 use crate::acl::{AclDecision, AclStore};
 use crate::audit::{build_envelope, AuditPublisher, MemoryAuditPublisher};
 use crate::cache::{cache_key, Cache, InMemoryCache};
+use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
 use crate::rate_limit::{RateConfig, RateDecision, RateLimiter};
 use crate::redaction::redact_response;
-use crate::types::{QueryRequest, QueryResponse, Scope};
+use crate::types::{Notice, QueryRequest, QueryResponse, Scope};
 
 /// Project the request-side scope into the canonical form the lanes
 /// actually filter on. The `repo` field is slugified through
@@ -61,6 +62,13 @@ pub struct QueryService {
     pub rate_limiter: Arc<RateLimiter>,
     /// Audit publisher.
     pub audit: Arc<dyn AuditPublisher>,
+    /// Snapshot of indexed-repo slugs the daemon currently sees. Read
+    /// from the same `MemoryKeywordLane` the dashboard uses to derive
+    /// `repos_indexed`, so the answer in `/v1/status.indexed_repos`
+    /// and the trigger for `notice.code = "repo_not_indexed"` come
+    /// from one source. `None` for unit tests that don't care about
+    /// the lookup; production wires the lane through `main.rs`.
+    pub indexed_repos: Option<Arc<MemoryKeywordLane>>,
 }
 
 impl QueryService {
@@ -74,7 +82,37 @@ impl QueryService {
             acl: Arc::new(AclStore::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
             audit: Arc::new(MemoryAuditPublisher::new()),
+            indexed_repos: None,
         }
+    }
+
+    /// Attach an indexed-repos snapshot. Returns `self` so callers can
+    /// chain the wiring at startup (`QueryService::with_memory_defaults(...).with_indexed_repos(lane)`).
+    pub fn with_indexed_repos(mut self, lane: Arc<MemoryKeywordLane>) -> Self {
+        self.indexed_repos = Some(lane);
+        self
+    }
+
+    /// Build a [`Notice`] when the canonicalised scope's repo is set
+    /// but the indexed-repos snapshot does not contain it. Returns
+    /// `None` when the request omitted `scope.repo`, when the repo
+    /// IS in the snapshot, or when the lane is unwired.
+    fn build_repo_not_indexed_notice(&self, canonical: &Scope) -> Option<Notice> {
+        let repo = canonical.repo.as_deref()?;
+        let lane = self.indexed_repos.as_ref()?;
+        let snapshot = lane.indexed_repos();
+        if snapshot.iter().any(|s| s == repo) {
+            return None;
+        }
+        Some(Notice {
+            code: "repo_not_indexed".to_string(),
+            message: format!(
+                "scope.repo `{repo}` is not present in the cortex-api indexed-repo snapshot"
+            ),
+            hint: "run `cortex-bootstrap --repo <path>` to seed the daemon for this repo, \
+                   then retry. See `/v1/status.indexed_repos` for the current set."
+                .to_string(),
+        })
     }
 
     /// Run one request through the full pipeline.
@@ -114,6 +152,15 @@ impl QueryService {
         // the raw request input — so dashboards can show how the
         // query landed in the per-project surfaces.
         response.scope_resolved = canonicalise_scope(&req.scope);
+        // Attach a `repo_not_indexed` notice when the resolved scope
+        // points at a repo the daemon has never seen — see
+        // [`QueryService::build_repo_not_indexed_notice`]. Cached so
+        // the notice survives subsequent cache hits with the same
+        // scope; callers asking the question repeatedly get the same
+        // structured remediation hint instead of an empty success.
+        if response.notice.is_none() {
+            response.notice = self.build_repo_not_indexed_notice(&response.scope_resolved);
+        }
         self.cache.put(&key, response.clone()).await;
         self.audit
             .publish(build_envelope(caller, req.intent.label(), &response))
@@ -259,11 +306,102 @@ mod tests {
             acl: Arc::new(AclStore::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
             audit: audit.clone(),
+            indexed_repos: None,
         };
         let _ = svc.handle("dash", req("x")).await;
         let snap = audit.snapshot();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0]["caller"], "dash");
+    }
+
+    #[tokio::test]
+    async fn notice_fires_when_scope_repo_missing_from_indexed_snapshot() {
+        // The lane snapshot only knows about `cortex` (slug-form). A
+        // request scoped to a different repo must surface a
+        // `repo_not_indexed` notice so the caller can distinguish
+        // empty results from "we never saw this repo".
+        let lane = Arc::new(MemoryKeywordLane::new());
+        lane.seed(
+            "cortex-code",
+            vec![LaneHit {
+                doc_id: "h1".into(),
+                text: "indexed".into(),
+                repo: Some("Cortex".into()),
+                path: None,
+                symbol: None,
+                content_hash: None,
+                score: 0.9,
+                ts: 0,
+                severity: None,
+                extras: Default::default(),
+            }],
+        );
+        let svc = QueryService::with_memory_defaults(build_orchestrator())
+            .with_indexed_repos(lane);
+        let mut r = req("anything");
+        r.scope.repo = Some("UnknownRepo".into());
+        match svc.handle("dash", r).await {
+            ServiceOutcome::Ok(resp) => {
+                let n = resp.notice.expect("expected repo_not_indexed notice");
+                assert_eq!(n.code, "repo_not_indexed");
+                assert!(
+                    n.message.contains("unknownrepo"),
+                    "notice should reference the canonicalised slug: {}",
+                    n.message
+                );
+                assert!(
+                    n.hint.contains("cortex-bootstrap"),
+                    "hint should point at the bootstrap CLI: {}",
+                    n.hint
+                );
+            }
+            other => panic!("expected Ok with notice, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn notice_absent_when_scope_repo_is_in_indexed_snapshot() {
+        let lane = Arc::new(MemoryKeywordLane::new());
+        lane.seed(
+            "cortex-code",
+            vec![LaneHit {
+                doc_id: "h1".into(),
+                text: "indexed".into(),
+                repo: Some("Cortex".into()),
+                path: None,
+                symbol: None,
+                content_hash: None,
+                score: 0.9,
+                ts: 0,
+                severity: None,
+                extras: Default::default(),
+            }],
+        );
+        let svc = QueryService::with_memory_defaults(build_orchestrator())
+            .with_indexed_repos(lane);
+        let mut r = req("anything");
+        r.scope.repo = Some("Cortex".into());
+        match svc.handle("dash", r).await {
+            ServiceOutcome::Ok(resp) => {
+                assert!(
+                    resp.notice.is_none(),
+                    "no notice expected when scope.repo matches the snapshot, got {:?}",
+                    resp.notice
+                );
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn notice_absent_when_request_omits_scope_repo() {
+        let lane = Arc::new(MemoryKeywordLane::new());
+        let svc = QueryService::with_memory_defaults(build_orchestrator())
+            .with_indexed_repos(lane);
+        match svc.handle("dash", req("anything")).await {
+            ServiceOutcome::Ok(resp) => assert!(resp.notice.is_none()),
+            other => panic!("expected Ok, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -278,6 +416,7 @@ mod tests {
                 rps_burst: 2,
             })),
             audit: Arc::new(MemoryAuditPublisher::new()),
+            indexed_repos: None,
         };
         // Use distinct queries so the cache doesn't short-circuit
         // (cache hits reuse the rate-limit token on the spec-11 path

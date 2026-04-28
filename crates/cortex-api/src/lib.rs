@@ -64,6 +64,6 @@ pub use service::{ErrorBody, QueryService, ServiceOutcome};
 pub use strategies::{build_plan, BudgetSplit, Overlay, Plan};
 pub use types::{
     empty_response, BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, IncludeField, Intent,
-    LaneTimings, LawRef, Props, QueryRequest, QueryResponse, ResultsBag, Scope, SimilarTurn,
-    Snippet, ViolationRef,
+    LaneTimings, LawRef, Notice, Props, QueryRequest, QueryResponse, ResultsBag, Scope,
+    SimilarTurn, Snippet, ViolationRef,
 };

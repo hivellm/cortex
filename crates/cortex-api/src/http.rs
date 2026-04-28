@@ -44,6 +44,13 @@ pub struct StatusBody {
     pub pid: u32,
     /// Wall-clock since service boot.
     pub uptime_ms: u64,
+    /// Sorted list of repo slugs the daemon currently has signal for
+    /// (derived from the keyword-lane snapshot the dashboard uses).
+    /// Empty when the daemon was started without an indexed-repos
+    /// lane wired through. Callers use this list to detect "this
+    /// repo was never indexed" before issuing a query — see issue
+    /// hivellm/cortex#1.
+    pub indexed_repos: Vec<String>,
 }
 
 /// Build the router. The state Arc is cheap to clone per request.
@@ -74,11 +81,18 @@ pub fn build_router_with(
 }
 
 async fn handle_status(State(state): State<ApiState>) -> Response {
+    let indexed_repos = state
+        .service
+        .indexed_repos
+        .as_ref()
+        .map(|lane| lane.indexed_repos())
+        .unwrap_or_default();
     let body = StatusBody {
         service: "cortex-api",
         version: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
         uptime_ms: u64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
+        indexed_repos,
     };
     (StatusCode::OK, Json(body)).into_response()
 }

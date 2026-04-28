@@ -22,3 +22,27 @@
 pub fn artifact_natural_key(repo: &str, path: &str, content_hash: &str) -> String {
     format!("{repo}|{path}|{content_hash}")
 }
+
+/// Build the canonical `Symbol.natural_key` from `(repo, language, qualified_name)`.
+///
+/// Phase4c §1.2 — `qualified_name` is the most specific identifier the
+/// chunker can produce (e.g. `crate::module::Type` for Rust, the
+/// definition name verbatim otherwise). When the language has no
+/// namespace concept (or the chunker only surfaced the bare name),
+/// the caller MUST fold the artifact path into `qualified_name` so
+/// two `parse()` functions in different files hash to distinct
+/// Symbols. The triple is concatenated with `|`, mirroring
+/// [`artifact_natural_key`] so the same redactor invariant applies
+/// (the pipe character is rejected on each component upstream).
+///
+/// # Examples
+///
+/// ```
+/// use cortex_graph::identity::symbol_natural_key;
+///
+/// let key = symbol_natural_key("Cortex", "rust", "PreThinkingTool");
+/// assert_eq!(key, "Cortex|rust|PreThinkingTool");
+/// ```
+pub fn symbol_natural_key(repo: &str, language: &str, qualified_name: &str) -> String {
+    format!("{repo}|{language}|{qualified_name}")
+}

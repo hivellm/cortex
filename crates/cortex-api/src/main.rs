@@ -326,7 +326,13 @@ async fn main() -> Result<()> {
     };
 
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);
-    let service = Arc::new(QueryService::with_memory_defaults(orchestrator));
+    // Wire the `keyword_memory` snapshot into the service so
+    // `/v1/status.indexed_repos` and `notice.repo_not_indexed` (issue
+    // hivellm/cortex#1) read from the same source the dashboard does.
+    let service = Arc::new(
+        QueryService::with_memory_defaults(orchestrator)
+            .with_indexed_repos(keyword_memory.clone()),
+    );
 
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;

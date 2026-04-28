@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cortex_api::{Intent, QueryRequest, QueryResponse};
+use cortex_api::{Intent, Notice, QueryRequest, QueryResponse};
 
 use crate::budget::{clip_to_budget, ClippedBundle, TrimStep};
 use crate::intent_select::select as select_intent;
@@ -99,6 +99,12 @@ pub struct PreThinkingOutput {
     /// `true` when the pipeline took the fail-open path (timeout /
     /// API error / panic).
     pub fail_open: bool,
+    /// Structural diagnostic forwarded verbatim from
+    /// `QueryResponse.notice` — the MCP shim turns this into a
+    /// distinct soft-error reason (e.g. `repo_not_indexed`) so the
+    /// caller can disambiguate from a generic empty bundle. See
+    /// issue hivellm/cortex#1.
+    pub notice: Option<Notice>,
 }
 
 /// Run the spec-12 pipeline.
@@ -145,9 +151,11 @@ pub async fn run<Q: QueryFn>(
                 steps_applied: Vec::new(),
                 latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 fail_open: true,
+                notice: None,
             };
         }
     };
+    let notice = response.notice.clone();
 
     let clipped: ClippedBundle = clip_to_budget(
         intent.label(),
@@ -197,6 +205,7 @@ pub async fn run<Q: QueryFn>(
         steps_applied: clipped.steps,
         latency_ms,
         fail_open: false,
+        notice,
     }
 }
 

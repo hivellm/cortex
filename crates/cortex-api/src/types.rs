@@ -264,6 +264,25 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Diagnostic surfaced when the orchestrator can answer the request
+/// but wants to flag a structural condition the caller would
+/// otherwise miss — e.g. the resolved scope points at a repo the
+/// daemon has never indexed. Optional + skip-serialising so the wire
+/// shape is fully backwards-compatible.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Notice {
+    /// Stable discriminant the caller branches on.
+    /// `repo_not_indexed` — the resolved scope's repo is unknown to
+    /// the keyword-lane snapshot used by `/v1/status`.
+    pub code: String,
+    /// Human-readable single-line explanation.
+    pub message: String,
+    /// Suggested next step the caller can echo back to the user.
+    /// Always present; carries the bootstrap CLI hint for the only
+    /// code we emit today (`repo_not_indexed`).
+    pub hint: String,
+}
+
 /// Top-level response envelope. Matches spec 11 §Response schema.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QueryResponse {
@@ -282,6 +301,9 @@ pub struct QueryResponse {
     pub budget: BudgetReport,
     /// Debug bag.
     pub debug: DebugInfo,
+    /// Optional structural diagnostic — see [`Notice`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<Notice>,
 }
 
 /// Result groups bag carried under `results`.
@@ -319,6 +341,7 @@ pub fn empty_response(req: &QueryRequest) -> QueryResponse {
             cache: "miss".to_string(),
         },
         debug: DebugInfo::default(),
+        notice: None,
     }
 }
 

@@ -60,6 +60,7 @@ Mirrors architecture §4.2 exactly. Nodes:
 | `LawViolation`  | `violation_id` (ULID)                                       | `law_id`, `turn_id`/`tool_call_id`, `ts`    |
 | `Model`         | `(vendor, name, version)` composite                         | — pure registry                             |
 | `Repo`          | `repo` (string)                                             | `origin_url?`                               |
+| `Symbol`        | `(repo, language, qualified_name)` composite                | `name`, `language`, `repo`, `qualified_name` |
 
 Edges (all undirected-rendered but stored directed):
 
@@ -79,6 +80,7 @@ Edges (all undirected-rendered but stored directed):
 | `SIMILAR_TO`                      | `* → *`                         | `score` (derived from KNN, spec 11) |
 | `IN_REPO`                         | `Artifact → Repo`               | —                            |
 | `USED_MODEL`                      | `Session → Model`               | —                            |
+| `DEFINES`                         | `Symbol → Artifact`             | —                            |
 
 `SIMILAR_TO` is **not** written by this worker — it is materialized on-demand by the query orchestrator (spec 11). Listed here for completeness.
 
@@ -92,8 +94,24 @@ Examples:
 - **`turn.*`** → upsert `Turn`, upsert `HAS_TURN(Session→Turn)`, create `Session` if missing.
 - **`decision.created`** → upsert `Decision`, add `LINKED_TO(Turn→Decision, role=proposed)`.
 - **`law.violation`** → upsert `LawViolation`, upsert `OF(→Law)`, upsert `OBSERVED_IN(→Turn|ToolCall)`. The target label of `OBSERVED_IN` is picked from the payload's `observed_event_kind` discriminator (`turn` | `tool_call`); the spec-04 schema's `allOf/if-then` enforces that the discriminator is set whenever `observed_event_id` is set, so the writer never has to guess (no phantom-node risk via MERGE). `Law` node must already exist (seeded by spec 13).
+- **`artifact.*`** (`source = "code"`) → upsert `Artifact` + `IN_REPO` as before, then run the embedder's `CodeChunker` against the artifact body to extract top-level declarations and emit one `(:Symbol)-[:DEFINES]->(:Artifact)` pair per recognised symbol (phase4c §2). Artifacts whose path is outside the chunker's grammar set, or whose body has no declarations, stay Artifact-only without error.
 
 Mapping lives in `cortex-workers/src/graph/mapper.rs`; one `fn map(&EnrichedEvent) -> GraphPatch` with an exhaustive match on `kind`.
+
+#### Symbols & DEFINES (phase4c)
+
+`Symbol` nodes mirror the symbol field that `cortex-embedder::CodeChunker` already stamps on every code chunk; without this layer the graph could only answer "which artifacts belong to which repo" (`IN_REPO`), not "where is `PreThinkingTool` defined?". The mapper reuses the same chunker the vector lane runs against, so the symbol set on disk in Nexus stays in lockstep with what Vectorizer indexes.
+
+- **Natural key:** `(repo, language, qualified_name)` joined with `|`, mirroring `Artifact.natural_key`. When the chunker emits a bare name (most languages don't carry an FQN at the top-level declaration), the mapper folds the artifact path into the qualified name (`<path>::<name>`) so two `parse()` functions in different files hash to distinct Symbols. `Symbol.natural_key UNIQUE` is enforced by schema bootstrap.
+- **DEFINES edge:** `(:Symbol)-[:DEFINES]->(:Artifact)`, MERGE-idempotent on the Symbol natural key plus the Artifact natural key — replay does not duplicate edges (verified by `artifact_replay_is_idempotent_under_natural_key` in `crates/cortex-graph/tests/mapper.rs`).
+- **Out of scope (deferred):** `IMPORTS`, `CALLS`, `EXTENDS`, `IMPLEMENTS`. Those need richer parser-level analysis the chunker doesn't expose today; they ship in a follow-up task once the chunker emits import/call edges per chunk.
+
+Resulting Cypher pattern:
+
+```cypher
+MATCH (s:Symbol {name: "PreThinkingTool"})-[:DEFINES]->(a:Artifact)
+RETURN a.repo, a.path, s.language
+```
 
 ## Design
 
@@ -150,9 +168,12 @@ CREATE CONSTRAINT tool_call_id IF NOT EXISTS FOR (tc:ToolCall) REQUIRE tc.id IS 
 CREATE CONSTRAINT artifact_natural_key IF NOT EXISTS FOR (a:Artifact) REQUIRE a.natural_key IS UNIQUE;
 CREATE CONSTRAINT decision_id IF NOT EXISTS FOR (d:Decision) REQUIRE d.id IS UNIQUE;
 CREATE CONSTRAINT law_id IF NOT EXISTS FOR (l:Law) REQUIRE l.id IS UNIQUE;
+-- phase4c: Symbol nodes carry a composite natural key
+CREATE CONSTRAINT symbol_natural_key IF NOT EXISTS FOR (s:Symbol) REQUIRE s.natural_key IS UNIQUE;
 CREATE INDEX artifact_repo_path IF NOT EXISTS FOR (a:Artifact) ON (a.repo, a.path);
 CREATE INDEX turn_ts IF NOT EXISTS FOR (t:Turn) ON (t.ts);
 CREATE INDEX tool_call_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name);
+CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name);
 ```
 
 Idempotent; runs every startup. Failure here is fatal — no writes happen without schema.

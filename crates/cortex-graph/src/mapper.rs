@@ -34,7 +34,9 @@ use cortex_core::events::{
 };
 use serde_json::{json, Value};
 
-use crate::identity::artifact_natural_key;
+use cortex_embedder::{ChunkSource, Chunker, CodeChunker};
+
+use crate::identity::{artifact_natural_key, symbol_natural_key};
 use crate::patch::{EdgeOp, GraphPatch, NodeOp};
 use crate::EnrichedEvent;
 
@@ -504,6 +506,97 @@ fn emit_artifact(event: &EnrichedEvent, patch: &mut GraphPatch) {
         event.context_path.as_deref(),
     ) {
         emit_artifact_node(repo, path, &event.content_hash, patch);
+        // Phase4c §2 — surface code symbols as first-class graph
+        // nodes when the artifact is a recognised source file. The
+        // CodeChunker is the same one cortex-embedder runs against
+        // Vectorizer; reusing it keeps the symbol set in lockstep
+        // with what the vector lane sees.
+        emit_symbol_patches(event, repo, path, patch);
+    }
+}
+
+/// Run the code chunker against an artifact event and emit one
+/// `(:Symbol)-[:DEFINES]->(:Artifact)` pair per top-level
+/// declaration the chunker recognises. Silently produces nothing
+/// when the path's language is not in the chunker's grammar set,
+/// when the payload has no body, or when no chunk surfaced a
+/// symbol — phase4c §2.2 forbids logging an error in those cases
+/// because most artifact events legitimately have no code symbols
+/// to extract.
+fn emit_symbol_patches(
+    event: &EnrichedEvent,
+    repo: &str,
+    path: &str,
+    patch: &mut GraphPatch,
+) {
+    let chunker = CodeChunker::new();
+    let chunks = match chunker.chunk(event) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let artifact_key = artifact_natural_key(repo, path, &event.content_hash);
+    let mut emitted: std::collections::BTreeSet<String> = Default::default();
+    for chunk in chunks {
+        // Spec §1.1 — `source == Code` filter. Sliding-window
+        // fallback chunks carry a `Some("rust")` language label too,
+        // but their `symbol` is None, so the empty-name check below
+        // is the active gate; the source check is belt-and-braces.
+        if chunk.metadata.source != ChunkSource::Code {
+            continue;
+        }
+        let raw_name = match chunk.metadata.symbol.as_deref() {
+            Some(s) if !s.trim().is_empty() => s.trim().to_string(),
+            _ => continue,
+        };
+        let language = chunk
+            .metadata
+            .language
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        // Spec §1.1 fallback — when the language carries no FQN
+        // concept the chunker emits a bare name (`fn parse`).
+        // Compose `<path>::<name>` so two same-named symbols in
+        // different files don't collide on the natural key.
+        let qualified_name = if raw_name.contains("::") || raw_name.contains('.') {
+            raw_name.clone()
+        } else {
+            format!("{path}::{raw_name}")
+        };
+        let key = symbol_natural_key(repo, &language, &qualified_name);
+        // Coalesce duplicates inside this single event — multiple
+        // chunks can technically report the same FQN if a
+        // declaration appears twice (e.g. an `impl` block with the
+        // same name as the type). The coalescer handles this across
+        // batches; we de-dupe within the same patch up front so the
+        // emitted node count matches the unique-symbol count.
+        if !emitted.insert(key.clone()) {
+            continue;
+        }
+        let mut props = BTreeMap::new();
+        props.insert("natural_key".to_string(), Value::String(key.clone()));
+        props.insert("name".to_string(), Value::String(raw_name.clone()));
+        props.insert("repo".to_string(), Value::String(repo.to_string()));
+        props.insert("language".to_string(), Value::String(language));
+        props.insert(
+            "qualified_name".to_string(),
+            Value::String(qualified_name.clone()),
+        );
+        // Display surface — the bare name reads better in Nexus
+        // than the `repo|lang|qname` triple the natural key carries.
+        stamp_display_label(&mut props, &raw_name);
+        patch.nodes.push(NodeOp {
+            label: "Symbol".to_string(),
+            natural_key: key.clone(),
+            props,
+        });
+        patch.edges.push(EdgeOp {
+            edge_type: "DEFINES".to_string(),
+            from_label: "Symbol".to_string(),
+            from_key: key,
+            to_label: "Artifact".to_string(),
+            to_key: artifact_key.clone(),
+            props: BTreeMap::new(),
+        });
     }
 }
 

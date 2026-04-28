@@ -400,7 +400,25 @@ impl Tool for PreThinkingTool {
         let out: PreThinkingOutput =
             cortex_pre_thinking::pipeline::run(&input, query_fn, ctx.pt_metrics.clone()).await;
 
+        // When the upstream `QueryResponse` carried a structural
+        // notice (the `repo_not_indexed` path added for issue
+        // hivellm/cortex#1), surface it as the MCP soft-error reason
+        // so the caller can distinguish "scope was never indexed"
+        // from "scope is fine but no signal" — both used to land
+        // here as `empty_bundle`.
         if out.bundle.is_empty() {
+            if let Some(n) = &out.notice {
+                return Ok(ToolResult::soft_error(
+                    &n.code,
+                    &n.message,
+                    json!({
+                        "intent": out.intent.label(),
+                        "fail_open": out.fail_open,
+                        "latency_ms": out.latency_ms,
+                        "hint": n.hint,
+                    }),
+                ));
+            }
             return Ok(ToolResult::soft_error(
                 reasons::EMPTY_BUNDLE,
                 "pre-thinking produced an empty bundle (fail-open path)",
@@ -412,14 +430,22 @@ impl Tool for PreThinkingTool {
             ));
         }
 
-        Ok(ToolResult::ok(json!({
+        let mut payload = json!({
             "bundle": out.bundle,
             "intent": out.intent.label(),
             "query_id": out.query_id,
             "steps_applied": out.steps_applied,
             "latency_ms": out.latency_ms,
             "fail_open": out.fail_open,
-        })))
+        });
+        if let Some(n) = out.notice {
+            payload["notice"] = json!({
+                "code": n.code,
+                "message": n.message,
+                "hint": n.hint,
+            });
+        }
+        Ok(ToolResult::ok(payload))
     }
 }
 

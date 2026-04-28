@@ -28,9 +28,13 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE CONSTRAINT law_id IF NOT EXISTS FOR (l:Law) REQUIRE l.id IS UNIQUE",
     "CREATE CONSTRAINT violation_id IF NOT EXISTS FOR (v:LawViolation) REQUIRE v.id IS UNIQUE",
     "CREATE CONSTRAINT repo_name IF NOT EXISTS FOR (r:Repo) REQUIRE r.name IS UNIQUE",
+    // phase4c — Symbol nodes carry a composite natural key so the
+    // DEFINES edge MERGE matches the same Symbol across re-runs.
+    "CREATE CONSTRAINT symbol_natural_key IF NOT EXISTS FOR (s:Symbol) REQUIRE s.natural_key IS UNIQUE",
     "CREATE INDEX artifact_repo_path IF NOT EXISTS FOR (a:Artifact) ON (a.repo, a.path)",
     "CREATE INDEX turn_ts IF NOT EXISTS FOR (t:Turn) ON (t.ts)",
     "CREATE INDEX tool_call_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name)",
+    "CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name)",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like

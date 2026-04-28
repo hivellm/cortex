@@ -93,6 +93,7 @@ mod tests {
             laws_active: Vec::new(),
             budget: Default::default(),
             debug: Default::default(),
+            notice: None,
         };
         let n = redact_response(&mut resp);
         assert!(n >= 1);
@@ -109,6 +110,7 @@ mod tests {
             laws_active: Vec::new(),
             budget: Default::default(),
             debug: Default::default(),
+            notice: None,
         };
         assert_eq!(redact_response(&mut resp), 0);
         assert!(resp.debug.errors.is_empty());

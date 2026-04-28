@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use cortex_api::{
-    build_router, AclStore, CALLER_HEADER, InMemoryCache, MemoryAuditPublisher,
+    build_router, AclStore, CALLER_HEADER, InMemoryCache, LaneHit, MemoryAuditPublisher,
     MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryRequest,
     QueryResponse, QueryService, RateConfig, RateLimiter,
 };
@@ -24,6 +24,12 @@ type TestHandles = (
 );
 
 fn build_test_service() -> TestHandles {
+    build_test_service_with_indexed_repos(None)
+}
+
+fn build_test_service_with_indexed_repos(
+    lane: impl Into<Option<Arc<MemoryKeywordLane>>>,
+) -> TestHandles {
     let v = Arc::new(MemoryVectorLane::new());
     let k = Arc::new(MemoryKeywordLane::new());
     let g = Arc::new(MemoryGraphLane::new());
@@ -35,6 +41,7 @@ fn build_test_service() -> TestHandles {
         acl: Arc::new(AclStore::new()),
         rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
         audit: audit.clone(),
+        indexed_repos: lane.into(),
     };
     (Arc::new(svc), v, k, g, audit)
 }
@@ -202,6 +209,7 @@ async fn rate_limited_caller_gets_429_with_retry_after_header() {
             rps_burst: 1,
         })),
         audit: Arc::new(MemoryAuditPublisher::new()),
+        indexed_repos: None,
     };
     let svc = Arc::new(svc);
     let app = build_router(svc);
@@ -267,6 +275,7 @@ async fn lane_failure_does_not_block_other_lanes() {
         acl: Arc::new(AclStore::new()),
         rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
         audit: Arc::new(MemoryAuditPublisher::new()),
+        indexed_repos: None,
     });
     let app = build_router(svc);
     let req = pre_change_request("x", None);
@@ -300,6 +309,7 @@ async fn budget_exceeded_truncates_response() {
         acl: Arc::new(AclStore::new()),
         rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
         audit: Arc::new(MemoryAuditPublisher::new()),
+        indexed_repos: None,
     });
     let app = build_router(svc);
     let mut req = pre_change_request("x", None);
@@ -511,4 +521,62 @@ async fn status_endpoint_returns_service_pid_and_uptime() {
     assert!(body["pid"].as_u64().unwrap_or(0) > 0);
     assert!(body["uptime_ms"].is_u64());
     assert!(!body["version"].as_str().unwrap_or("").is_empty());
+    assert!(
+        body["indexed_repos"].is_array(),
+        "status must always carry an indexed_repos array (issue hivellm/cortex#1)",
+    );
+}
+
+#[tokio::test]
+async fn status_indexed_repos_reports_seeded_repo_slugs() {
+    // Seed a snapshot lane with mixed-casing repo values — the
+    // status lookup must canonicalise through `slug_for_repo` so the
+    // emitted list matches the form `notice.repo_not_indexed` checks
+    // against.
+    let lane = Arc::new(MemoryKeywordLane::new());
+    lane.seed(
+        "cortex-code",
+        vec![
+            LaneHit {
+                doc_id: "h1".into(),
+                text: "indexed".into(),
+                repo: Some("Cortex".into()),
+                path: None,
+                symbol: None,
+                content_hash: None,
+                score: 0.9,
+                ts: 0,
+                severity: None,
+                extras: Default::default(),
+            },
+            LaneHit {
+                doc_id: "h2".into(),
+                text: "indexed".into(),
+                repo: Some("Vectorizer".into()),
+                path: None,
+                symbol: None,
+                content_hash: None,
+                score: 0.5,
+                ts: 0,
+                severity: None,
+                extras: Default::default(),
+            },
+        ],
+    );
+    let (svc, _v, _k, _g, _) = build_test_service_with_indexed_repos(Some(lane));
+    let app = build_router(svc);
+    let request = Request::builder()
+        .method("GET")
+        .uri("/v1/status")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(request).await.unwrap();
+    let body = read_json(resp).await;
+    let repos: Vec<String> = body["indexed_repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(repos, vec!["cortex".to_string(), "vectorizer".to_string()]);
 }
