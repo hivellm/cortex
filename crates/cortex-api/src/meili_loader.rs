@@ -316,6 +316,31 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // Classifier-stamped fields. These are how the Sonnet/Haiku
+    // classifier output reaches the dashboard — `topics` is the
+    // controlled-vocab tag list, `pii_risk` is the redaction
+    // signal, `severity` (above) tracks the law-violation
+    // disposition for governance kinds. The Classifications view
+    // surfaces all three so the user can see what the classifier
+    // is producing across the corpus.
+    let topics: Vec<String> = doc
+        .get("topics")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let pii_risk = doc
+        .get("pii_risk")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let summary_text = doc
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
     // The body field for non-Turn kinds is a JSON-encoded string of
     // the envelope payload. Decode once; if the inner shape parses,
     // hoist the meaningful fields into extras so the dashboard
@@ -332,6 +357,24 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
     // `lane_label()` reads this field; without it, dev fallback hits
     // surface as `source = "vector"` and the audit drift returns.
     extras.insert("source".to_string(), Value::String("keyword".to_string()));
+
+    // Classifier output — every classified Meili doc carries these
+    // fields. Stamping them on extras lets the dashboard's
+    // Classifications view aggregate topics + severity + pii_risk
+    // across the corpus without re-fetching from Meili.
+    if !topics.is_empty() {
+        let arr: Vec<Value> = topics
+            .iter()
+            .map(|t| Value::String(t.clone()))
+            .collect();
+        extras.insert("topics".to_string(), Value::Array(arr));
+    }
+    if let Some(pii) = pii_risk.as_deref() {
+        extras.insert("pii_risk".to_string(), Value::String(pii.to_string()));
+    }
+    if let Some(s) = summary_text.as_deref() {
+        extras.insert("summary".to_string(), Value::String(s.to_string()));
+    }
 
     let symbol: &'static str;
     let text: String;

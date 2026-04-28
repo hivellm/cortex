@@ -1607,3 +1607,106 @@ a { color: inherit; text-decoration: none; }
   overflow-y: auto;
   line-height: 1.5;
 }
+
+/* ─────────── Classifications view ─────────── */
+.cls-h2 {
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  margin: 24px 0 10px;
+}
+.topic-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.topic-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-1);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  transition: border-color 0.12s, background 0.12s;
+}
+.topic-chip:hover {
+  border-color: var(--accent-dim);
+}
+.topic-chip.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.topic-chip__count {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--bg-0);
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--fg-3);
+}
+.topic-chip.is-active .topic-chip__count {
+  background: var(--accent);
+  color: var(--bg-0);
+}
+.cls-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cls-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cls-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cls-card__kind {
+  display: inline-block;
+  padding: 1px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 10px;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cls-card__path {
+  font-size: 10.5px;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cls-card__summary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--fg-1);
+}
+.cls-card__topics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}

@@ -239,6 +239,35 @@ export type SessionSummary = {
   repos: string[];
 };
 
+/// One classified-event row surfaced on the Classifications view.
+/// Mirrors `ClassificationRow` server-side.
+export type ClassificationRow = {
+  event_id: string;
+  kind: string;
+  repo: string | null;
+  path: string | null;
+  topics: string[];
+  severity: string | null;
+  pii_risk: string | null;
+  summary: string;
+  ts: number;
+  at: string;
+};
+
+/// Aggregate counts the Classifications view renders alongside the rows.
+export type ClassificationStats = {
+  total: number;
+  top_topics: { topic: string; count: number }[];
+  by_severity: { kind: string; count: number }[];
+  by_pii_risk: { kind: string; count: number }[];
+  by_repo: { repo: string; count: number }[];
+};
+
+export type ClassificationsBody = {
+  stats: ClassificationStats;
+  rows: ClassificationRow[];
+};
+
 /// One hand-off snapshot (`.rulebook/handoff/*.md`). Used by the
 /// per-project Handoffs view so a user resuming work can pull the
 /// last hand-off without grepping every repo by hand.
@@ -319,6 +348,24 @@ export const api = {
       `/v1/dashboard/handoffs${q ? `?${q}` : ""}`,
     );
   },
+  classifications: (filters?: {
+    repo?: string;
+    topic?: string;
+    severity?: string;
+    kind?: string;
+    limit?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (filters?.repo) params.set("repo", filters.repo);
+    if (filters?.topic) params.set("topic", filters.topic);
+    if (filters?.severity) params.set("severity", filters.severity);
+    if (filters?.kind) params.set("kind", filters.kind);
+    if (filters?.limit) params.set("limit", String(filters.limit));
+    const q = params.toString();
+    return getJson<ClassificationsBody>(
+      `/v1/dashboard/classifications${q ? `?${q}` : ""}`,
+    );
+  },
   laws: () => getJson<LawRow[]>("/v1/dashboard/laws"),
   violations: () => getJson<ViolationRow[]>("/v1/dashboard/violations"),
   analyses: () => getJson<AnalysisRow[]>("/v1/dashboard/analyses"),
@@ -326,10 +373,19 @@ export const api = {
   trust: () => getJson<TrustMatrix>("/v1/dashboard/trust"),
   decisionDetail: (id: string) =>
     getJson<DecisionDetail>(`/v1/dashboard/decisions/${encodeURIComponent(id)}`),
-  graph: (sessionId?: string, limit = 60) => {
+  /// Pull the graph panorama. `repos` narrows the canvas to the
+  /// listed projects' artifacts (sessions / decisions / memories
+  /// stay regardless so the cross-project knowledge spine remains
+  /// visible). Each repo is sent as its own `repo=<name>` query
+  /// parameter — same wire shape `applyFilters` uses for the other
+  /// dashboard endpoints.
+  graph: (sessionId?: string, limit = 60, repos?: string[]) => {
     const params = new URLSearchParams();
     if (sessionId) params.set("session_id", sessionId);
     params.set("limit", String(limit));
+    if (repos && repos.length > 0) {
+      for (const r of repos) params.append("repo", r);
+    }
     return getJson<GraphPayload>(`/v1/dashboard/graph?${params.toString()}`);
   },
   status: () => getJson<StatusBody>("/v1/status"),
