@@ -27,6 +27,6 @@ pub use prompt::{PromptTemplate, TOPIC_VOCAB_V1};
 pub use statics::StaticClassifier;
 pub use stats::{ClassifierSpend, PricingTable};
 pub use types::{
-    Classifier, ClassifierMode, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk,
-    RedactionSuggestion, Severity,
+    Classifier, ClassifierMode, ClassifierOutput, ClassifierSource, EnrichmentInput,
+    ExtractedEntity, ExtractedRelation, PiiRisk, RedactionSuggestion, Severity,
 };
