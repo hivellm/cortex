@@ -300,9 +300,11 @@ async fn main() -> Result<()> {
             graph_memory.clone()
         }
     };
+    let analyzer = StdArc::new(cortex_api::analyzer::Analyzer::from_env());
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword_memory.clone(),
         nexus: nexus_client,
+        analyzer,
     };
 
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);

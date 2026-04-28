@@ -43,6 +43,9 @@ pub struct DashboardState {
     /// keyword lane so dev iterations without a live Nexus stay
     /// usable.
     pub nexus: Option<Arc<NexusClient>>,
+    /// Sonnet-backed session analyzer. Shared so the in-memory
+    /// summary cache survives across requests; built once at boot.
+    pub analyzer: Arc<crate::analyzer::Analyzer>,
 }
 
 /// Build the dashboard sub-router carrying the `/v1/dashboard/*` JSON
@@ -66,6 +69,10 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/decisions/{id}", get(decision_detail))
         .route("/v1/dashboard/conversations", get(conversations_list))
         .route("/v1/dashboard/conversations/{session_id}", get(conversation_detail))
+        .route(
+            "/v1/dashboard/conversations/{session_id}/summary",
+            get(conversation_summary),
+        )
         .route("/v1/dashboard/handoffs", get(handoffs))
         .with_state(state)
 }
@@ -1774,6 +1781,34 @@ async fn conversation_detail(
     (StatusCode::OK, Json(detail)).into_response()
 }
 
+/// Sonnet-backed session summary. Pulls every event from the named
+/// session, hands them to the analyzer (which shells out to the
+/// local `claude` CLI with `--model claude-sonnet-4-6`), and
+/// returns a structured summary + key actions + cross-references.
+/// Cached server-side keyed by `(session_id, last_event_ts)` so a
+/// dashboard refresh doesn't re-burn the call.
+async fn conversation_summary(
+    State(state): State<DashboardState>,
+    Path(session_id): Path<String>,
+) -> Response {
+    match state.analyzer.summarize_session(&state.lane, &session_id).await {
+        Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(reason) => {
+            // 503 with a structured body — the GUI shows a graceful
+            // "summary unavailable" instead of treating this as a
+            // hard outage. Most likely cause is `claude` not on
+            // PATH or the model returning malformed JSON; the
+            // reason field tells the user which.
+            let body = serde_json::json!({
+                "error": "summary_unavailable",
+                "reason": reason,
+                "session_id": session_id,
+            });
+            (StatusCode::SERVICE_UNAVAILABLE, Json(body)).into_response()
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // /v1/dashboard/handoffs
 // ---------------------------------------------------------------------
@@ -1942,29 +1977,40 @@ async fn query_nexus_graph(
     //
     // Tuple: (from_label, from_id_prop, from_label_prop, from_kind,
     //         rel, to_label, to_id_prop, to_label_prop, to_kind)
+    // `*_label_prop` resolves the human-readable display name for
+    // each endpoint. The mapper writes `name` on every node kind
+    // (Turn = user message, Decision = title, Session/Memory = best-
+    // effort short label). Defaulting to `id` made the canvas a wall
+    // of ULIDs — `name` lets the explorer show "fixes" / "docs:
+    // move..." instead of "01KQ8534N93Y1MA28...".
     let edge_specs: &[(&str, &str, &str, &str, &str, &str, &str, &str, &str)] = &[
-        ("Session", "id", "id", "session", "HAS_TURN", "Turn", "id", "id", "turn"),
-        ("Session", "id", "id", "session", "REMEMBERS", "Memory", "id", "id", "memory"),
-        ("Turn", "id", "id", "turn", "HAS_TOOL_CALL", "ToolCall", "id", "tool_name", "tool_call"),
+        ("Session", "id", "name", "session", "HAS_TURN", "Turn", "id", "name", "turn"),
+        ("Session", "id", "name", "session", "REMEMBERS", "Memory", "id", "name", "memory"),
+        ("Turn", "id", "name", "turn", "HAS_TOOL_CALL", "ToolCall", "id", "name", "tool_call"),
         // Session→ToolCall is the mapper's fallback anchor for tool_call
         // events without a `parent_event_id` (bootstrap envelopes ship
         // without one — see `cortex-graph/src/mapper.rs::emit_tool_call`).
         // Without this row the dashboard misses every backfilled
         // HAS_TOOL_CALL because the canonical `(:Turn)-[:HAS_TOOL_CALL]->`
         // pattern matches zero on bootstrap data.
-        ("Session", "id", "id", "session", "HAS_TOOL_CALL", "ToolCall", "id", "tool_name", "tool_call"),
-        ("Turn", "id", "id", "turn", "HAS_AGENT_CALL", "AgentCall", "id", "agent_type", "agent_call"),
-        ("Session", "id", "id", "session", "HAS_AGENT_CALL", "AgentCall", "id", "agent_type", "agent_call"),
-        ("ToolCall", "id", "tool_name", "tool_call", "TOUCHED", "Artifact", "natural_key", "path", "artifact"),
-        ("Artifact", "natural_key", "path", "artifact", "IN_REPO", "Repo", "name", "name", "repo"),
-        ("LawViolation", "id", "law_id", "violation", "OBSERVED_IN", "Turn", "id", "id", "turn"),
-        ("LawViolation", "id", "law_id", "violation", "OF", "Law", "id", "title", "law"),
-        ("Decision", "id", "title", "decision", "SUPERSEDES", "Decision", "id", "title", "decision"),
+        ("Session", "id", "name", "session", "HAS_TOOL_CALL", "ToolCall", "id", "name", "tool_call"),
+        ("Turn", "id", "name", "turn", "HAS_AGENT_CALL", "AgentCall", "id", "name", "agent_call"),
+        ("Session", "id", "name", "session", "HAS_AGENT_CALL", "AgentCall", "id", "name", "agent_call"),
+        ("ToolCall", "id", "name", "tool_call", "TOUCHED", "Artifact", "natural_key", "name", "artifact"),
+        ("Artifact", "natural_key", "name", "artifact", "IN_REPO", "Repo", "name", "name", "repo"),
+        ("LawViolation", "id", "name", "violation", "OBSERVED_IN", "Turn", "id", "name", "turn"),
+        ("LawViolation", "id", "name", "violation", "OF", "Law", "id", "name", "law"),
+        ("Decision", "id", "name", "decision", "SUPERSEDES", "Decision", "id", "name", "decision"),
     ];
 
-    // Per-relation budget. The Nexus Cypher dialect ignores `LIMIT $param`,
-    // so the integer is inlined into the query string.
-    let per_rel_limit = (limit / edge_specs.len()).max(8).min(limit);
+    // Per-relation budget. Each MATCH gets the full node-count cap so
+    // the rarest relationships land first and the densest one
+    // (IN_REPO, ~28k rows on Cortex) is allowed to fill the rest of
+    // the budget. The early-break on `nodes_by_id.len() >= limit`
+    // inside the row loop bounds total memory regardless of
+    // per-relation supply. The integer is inlined into the query
+    // string because the Nexus Cypher dialect ignores `LIMIT $param`.
+    let per_rel_limit = limit;
 
     for (from_label, from_id_p, from_lbl_p, from_kind, rel, to_label, to_id_p, to_lbl_p, to_kind) in
         edge_specs
@@ -2085,12 +2131,14 @@ async fn query_nexus_graph(
     // domain. Skipped when session-anchored: in that mode we want
     // a focused subgraph, not a domain dump.
     if session_id.is_none() && nodes_by_id.len() < limit {
+        // Same `name`-as-label convention as the edge_specs above —
+        // the mapper writes a human-readable `name` on every kind.
         let label_specs: &[(&str, &str, &str, &str)] = &[
-            ("Decision", "id", "title", "decision"),
-            ("Law", "id", "title", "law"),
-            ("Analysis", "id", "title", "analysis"),
+            ("Decision", "id", "name", "decision"),
+            ("Law", "id", "name", "law"),
+            ("Analysis", "id", "name", "analysis"),
             ("Repo", "name", "name", "repo"),
-            ("Memory", "id", "id", "memory"),
+            ("Memory", "id", "name", "memory"),
         ];
         let remaining = limit - nodes_by_id.len();
         let per_label = (remaining / label_specs.len()).max(3);
@@ -2534,7 +2582,7 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -2563,7 +2611,7 @@ mod tests {
             turn_hit("middle prompt", "Cortex", 200),
             turn_hit("newest prompt", "Cortex", 300),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -2590,7 +2638,7 @@ mod tests {
             turn_hit("HNSW recall floor benchmark", "Vectorizer", 100),
             turn_hit("unrelated thoughts", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -2616,7 +2664,7 @@ mod tests {
             turn_hit("a", "Cortex", 100),
             turn_hit("b", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -2643,7 +2691,7 @@ mod tests {
                 .map(|i| turn_hit(&format!("p{i}"), "X", i))
                 .collect(),
         );
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -2668,7 +2716,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
             turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -2691,7 +2739,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
             turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -2718,7 +2766,7 @@ mod tests {
             tool_call_hit("Edit", "x", "Cortex", 200),
             turn_hit("note V", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {

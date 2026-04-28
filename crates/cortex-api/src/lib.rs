@@ -12,6 +12,7 @@
 #![warn(missing_docs)]
 
 pub mod acl;
+pub mod analyzer;
 pub mod archive_loader;
 pub mod audit;
 pub mod cache;

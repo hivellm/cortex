@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Tag } from "../atoms/Tag";
-import { api } from "../lib/api";
+import { api, type SessionSummary } from "../lib/api";
 
 /// Conversations view — chat-history lens over `kind=turn` envelopes.
 /// The list pane shows one row per session (chat thread); selecting
@@ -150,6 +150,19 @@ function ConversationDetailPane({
   detail?: Awaited<ReturnType<typeof api.conversation>>;
   loading: boolean;
 }) {
+  // Sonnet-generated summary. Disabled by default — analysis costs
+  // money and shouldn't run unprompted; user clicks "Analyze with
+  // Sonnet" to trigger. The query stays enabled after first click
+  // so the cache survives view re-mounts.
+  const [analyzeRequested, setAnalyzeRequested] = useState(false);
+  const summaryQ = useQuery({
+    queryKey: ["conversation-summary", sessionId],
+    queryFn: () => api.conversationSummary(sessionId!),
+    enabled: !!sessionId && analyzeRequested,
+    retry: 0,
+    staleTime: Infinity,
+  });
+
   if (!sessionId) {
     return <div className="conv-detail conv-detail--empty">Select a conversation</div>;
   }
@@ -170,7 +183,28 @@ function ConversationDetailPane({
         <span className="muted" style={{ marginLeft: "auto", fontSize: 11 }}>
           {detail.turns.length} turn{detail.turns.length === 1 ? "" : "s"}
         </span>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          onClick={() => setAnalyzeRequested(true)}
+          disabled={summaryQ.isFetching}
+          title="Run Sonnet to summarise this session and surface its key actions, references, and topics"
+          style={{ fontSize: 11, padding: "4px 10px" }}
+        >
+          {summaryQ.isFetching
+            ? "Analyzing…"
+            : summaryQ.data
+              ? "Re-analyze"
+              : "Analyze with Sonnet"}
+        </button>
       </header>
+      {analyzeRequested ? (
+        <SummaryPane
+          summary={summaryQ.data}
+          loading={summaryQ.isFetching}
+          error={summaryQ.error as Error | null}
+        />
+      ) : null}
       <div className="conv-transcript">
         {detail.turns.length === 0 ? (
           <Empty msg="No turns recorded under this session." />
@@ -199,6 +233,71 @@ function ConversationDetailPane({
         )}
       </div>
     </section>
+  );
+}
+
+function SummaryPane({
+  summary,
+  loading,
+  error,
+}: {
+  summary: SessionSummary | undefined;
+  loading: boolean;
+  error: Error | null;
+}) {
+  if (loading) {
+    return (
+      <div className="conv-summary conv-summary--loading">
+        Asking Sonnet to summarise this session… (typical 10–40 s)
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="conv-summary conv-summary--error">
+        <strong>Summary unavailable.</strong>{" "}
+        Likely the local <code>claude</code> CLI isn't on PATH or returned malformed JSON.
+        Check the cortex-api log for the exact reason.
+      </div>
+    );
+  }
+  if (!summary) return null;
+  return (
+    <div className="conv-summary">
+      <div className="conv-summary__head">
+        <span className="conv-summary__badge">Sonnet · sonnet-4-6</span>
+        {summary.topics.length > 0 ? (
+          <span className="conv-summary__topics">
+            {summary.topics.map((t) => (
+              <Tag key={t}>#{t}</Tag>
+            ))}
+          </span>
+        ) : null}
+      </div>
+      <p className="conv-summary__body">{summary.summary}</p>
+      {summary.key_actions.length > 0 ? (
+        <>
+          <div className="conv-summary__section-label">Key actions</div>
+          <ul className="conv-summary__list">
+            {summary.key_actions.map((a, i) => (
+              <li key={i}>{a}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {summary.references.length > 0 ? (
+        <>
+          <div className="conv-summary__section-label">References</div>
+          <div className="conv-summary__refs">
+            {summary.references.map((r, i) => (
+              <Tag key={i} tone="accent">
+                {r}
+              </Tag>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
   );
 }
 

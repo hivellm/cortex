@@ -228,6 +228,17 @@ export type ConversationDetail = {
   turns: ConversationTurn[];
 };
 
+/// Sonnet-generated structured summary of one chat session. The
+/// analyzer endpoint backs this — Conversations view fetches it on
+/// demand and renders it above the raw transcript.
+export type SessionSummary = {
+  summary: string;
+  key_actions: string[];
+  references: string[];
+  topics: string[];
+  repos: string[];
+};
+
 /// One hand-off snapshot (`.rulebook/handoff/*.md`). Used by the
 /// per-project Handoffs view so a user resuming work can pull the
 /// last hand-off without grepping every repo by hand.
@@ -295,6 +306,10 @@ export const api = {
   conversation: (sessionId: string) =>
     getJson<ConversationDetail>(
       `/v1/dashboard/conversations/${encodeURIComponent(sessionId)}`,
+    ),
+  conversationSummary: (sessionId: string) =>
+    getJson<SessionSummary>(
+      `/v1/dashboard/conversations/${encodeURIComponent(sessionId)}/summary`,
     ),
   handoffs: (repo?: string) => {
     const params = new URLSearchParams();
