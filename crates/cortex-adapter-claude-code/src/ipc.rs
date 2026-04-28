@@ -10,10 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use serde_json::Value;
-#[cfg(windows)]
 use tokio::io::AsyncWriteExt;
-#[cfg(not(windows))]
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::dispatcher::{Dispatcher, HookResponse};
 #[cfg(not(windows))]
@@ -106,17 +103,40 @@ async fn serve_unix(
 
 #[cfg(not(windows))]
 async fn handle_unix(stream: tokio::net::UnixStream, dispatcher: Arc<Dispatcher>) -> Result<()> {
-    let (read_half, mut write_half) = stream.into_split();
-    let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
-    let n = reader.read_line(&mut line).await?;
-    if n == 0 {
-        return Ok(());
+    use tokio::io::AsyncReadExt;
+    let (mut read_half, mut write_half) = stream.into_split();
+    // Read until the accumulated buffer parses as a complete JSON
+    // value. The historical `read_line` implementation stopped at the
+    // first `\n`, which mangled any pretty-printed payload from a
+    // hook that pre-formatted its frame across multiple lines.
+    let mut buf = Vec::with_capacity(64 * 1024);
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = read_half.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        let mut de = serde_json::Deserializer::from_slice(&buf).into_iter::<serde_json::Value>();
+        match de.next() {
+            Some(Ok(value)) => {
+                let line = serde_json::to_string(&value).unwrap_or_default();
+                let response = handle_line(&line, dispatcher).await;
+                let mut bytes = serde_json::to_vec(&response)?;
+                bytes.push(b'\n');
+                write_half.write_all(&bytes).await?;
+                break;
+            }
+            Some(Err(e)) if e.is_eof() => continue,
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "ipc frame parse error; replying empty");
+                let bytes = b"{}\n".to_vec();
+                write_half.write_all(&bytes).await?;
+                break;
+            }
+            None => continue,
+        }
     }
-    let response = handle_line(&line, dispatcher).await;
-    let mut bytes = serde_json::to_vec(&response)?;
-    bytes.push(b'\n');
-    write_half.write_all(&bytes).await?;
     write_half.shutdown().await.ok();
     Ok(())
 }
@@ -173,21 +193,43 @@ async fn handle_pipe(
     dispatcher: Arc<Dispatcher>,
 ) -> Result<()> {
     use tokio::io::AsyncReadExt;
-    let mut buf = Vec::with_capacity(8 * 1024);
-    let mut chunk = [0u8; 4096];
+    // Read until the accumulated buffer parses as a complete JSON
+    // value. The original implementation cut at the first `\n`, which
+    // truncated any pretty-printed payload (Claude Code's PostToolUse
+    // stdin can have newlines BETWEEN fields when the model decides
+    // to format the JSON multi-line). Truncated JSON failed to
+    // deserialize; the dispatcher returned `{}` and the envelope was
+    // dropped silently — exactly the "Bash never appears in
+    // timeline" bug the user reported on 2026-04-28.
+    let mut buf = Vec::with_capacity(64 * 1024);
+    let mut chunk = [0u8; 8192];
     loop {
         let n = server.read(&mut chunk).await?;
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&chunk[..n]);
-        if let Some(idx) = buf.iter().position(|b| *b == b'\n') {
-            let line = String::from_utf8_lossy(&buf[..idx]).into_owned();
-            let response = handle_line(&line, dispatcher).await;
-            let mut bytes = serde_json::to_vec(&response)?;
-            bytes.push(b'\n');
-            server.write_all(&bytes).await?;
-            break;
+        let mut de = serde_json::Deserializer::from_slice(&buf).into_iter::<serde_json::Value>();
+        match de.next() {
+            Some(Ok(value)) => {
+                let line = serde_json::to_string(&value).unwrap_or_default();
+                let response = handle_line(&line, dispatcher).await;
+                let mut bytes = serde_json::to_vec(&response)?;
+                bytes.push(b'\n');
+                server.write_all(&bytes).await?;
+                break;
+            }
+            Some(Err(e)) if e.is_eof() => {
+                // Need more bytes — JSON object still unbalanced.
+                continue;
+            }
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "ipc frame parse error; replying empty");
+                let bytes = b"{}\n".to_vec();
+                server.write_all(&bytes).await?;
+                break;
+            }
+            None => continue,
         }
     }
     server.shutdown().await.ok();
