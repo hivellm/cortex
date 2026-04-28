@@ -13,10 +13,10 @@ if [ -f .env ]; then
     set +a
 fi
 
-: "${VECTORIZER_URL:=http://127.0.0.1:15001}"
-: "${NEXUS_URL:=http://127.0.0.1:15002}"
-: "${SYNAP_URL:=http://127.0.0.1:15003}"
-: "${MEILI_URL:=http://127.0.0.1:15004}"
+: "${VECTORIZER_URL:=http://127.0.0.1:17001}"
+: "${NEXUS_URL:=http://127.0.0.1:17002}"
+: "${SYNAP_URL:=http://127.0.0.1:17003}"
+: "${MEILI_URL:=http://127.0.0.1:17004}"
 : "${MEILI_MASTER_KEY:=cortex-dev-master-key}"
 
 plan() {

@@ -36,7 +36,7 @@ pub struct MeiliKeywordLane {
 }
 
 impl MeiliKeywordLane {
-    /// Build a new lane against `base_url` (e.g. `http://127.0.0.1:15004`).
+    /// Build a new lane against `base_url` (e.g. `http://127.0.0.1:17004`).
     /// `api_key` is the Meili master / search key (required when the
     /// server enforces auth, optional in the no-auth dev profile).
     pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Result<Self, String> {

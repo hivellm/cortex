@@ -38,8 +38,8 @@ rather than silently piling everything into `docs`.
 
 | Variable                     | Default                            | Notes                                              |
 |------------------------------|------------------------------------|----------------------------------------------------|
-| `CORTEX_FULLTEXT_SYNAP_URL`  | `http://127.0.0.1:15003`           | Synap base URL.                                    |
-| `CORTEX_FULLTEXT_MEILI_URL`  | `http://127.0.0.1:15004`           | Meilisearch base URL.                              |
+| `CORTEX_FULLTEXT_SYNAP_URL`  | `http://127.0.0.1:17003`           | Synap base URL.                                    |
+| `CORTEX_FULLTEXT_MEILI_URL`  | `http://127.0.0.1:17004`           | Meilisearch base URL.                              |
 | `CORTEX_FULLTEXT_MEILI_KEY`  | `cortex-dev-master-key`            | Meili master key.                                  |
 | `CORTEX_FULLTEXT_PREFIX`     | `cortex-`                          | Per-deployment namespace prefix.                   |
 | `CORTEX_FULLTEXT_BATCH`      | `64`                               | Documents per Meili upsert batch.                  |

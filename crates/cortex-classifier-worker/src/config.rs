@@ -45,7 +45,7 @@ pub struct ClassifierWorkerConfig {
 impl Default for ClassifierWorkerConfig {
     fn default() -> Self {
         Self {
-            synap_url: "http://127.0.0.1:15003".to_string(),
+            synap_url: "http://127.0.0.1:17003".to_string(),
             mode: ClassifierMode::Static,
             workers: 2,
             batch_size: 32,

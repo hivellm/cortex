@@ -75,7 +75,7 @@ Stack: Electron + React + TypeScript + Vite + React Query + Cytoscape (graph). S
 
 ## Observed UX issues / opportunities
 
-1. **Single-backend hard-coded** ([gui/src/lib/api.ts](../../../gui/src/lib/api.ts) → `http://127.0.0.1:15011`). Defeats the cross-team / multi-environment use case. Phase3 task in flight.
+1. **Single-backend hard-coded** ([gui/src/lib/api.ts](../../../gui/src/lib/api.ts) → `http://127.0.0.1:17000`). Defeats the cross-team / multi-environment use case. Phase3 task in flight.
 2. **No retrieval-quality UI feedback.** When `/v1/query` returns a thin bundle (because Meili has no Rulebook docs, say), the GUI does not surface "this answer is degraded — coverage is at 33%". Users will conclude Cortex is bad rather than that the index is incomplete.
 3. **No "doctor" panel.** A single dashboard view that runs `cortex doctor consistency` and renders the result table would catch fan-out drift the moment it appears, instead of weeks later.
 4. **Trust score view exists in routes (`/v1/dashboard/trust`) but is a stub.** Either remove it from the GUI until governance lands, or label it explicitly as "coming with spec 14".

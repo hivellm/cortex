@@ -3,7 +3,7 @@
 ## Why
 
 The GUI today hard-codes a single Cortex backend at
-`http://127.0.0.1:15011` (in [gui/src/lib/api.ts](../../../gui/src/lib/api.ts)).
+`http://127.0.0.1:17000` (in [gui/src/lib/api.ts](../../../gui/src/lib/api.ts)).
 That's fine for "one developer, one local stack" but breaks the
 moment a Cortex instance lives anywhere else: a shared dev server,
 a staging/prod deployment on HivehubCloud, or even a teammate's
@@ -33,7 +33,7 @@ Add a first-class "connections" surface to the GUI:
 - Electron persists the store in `userData/connections.json` (with
   tokens left in the OS keychain via `safeStorage` when available).
 - Local default: a built-in `local` connection pointing at
-  `http://127.0.0.1:15011`, non-removable, always present.
+  `http://127.0.0.1:17000`, non-removable, always present.
 - CORS / `cortex-api` side: document the allowed-origin list and
   the `Authorization: Bearer …` flow; if the API needs config
   changes for browser CORS, surface them as a follow-up note.

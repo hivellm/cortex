@@ -9,7 +9,7 @@ and expose CRUD operations through a single store hook.
 #### Scenario: Built-in local connection seeded on first launch
 Given a fresh install with no `connections.json`
 When the GUI boots
-Then a built-in `local` connection (id=`local`, label=`Local`, baseUrl=`http://127.0.0.1:15011`, auth=`none`) is present
+Then a built-in `local` connection (id=`local`, label=`Local`, baseUrl=`http://127.0.0.1:17000`, auth=`none`) is present
 And `local` cannot be deleted
 And `local` is the active connection
 
@@ -93,7 +93,7 @@ And the dropdown row for `Staging` (when not active) shows a red dot
 ### Requirement: api.ts base URL is dynamic
 The fetchers in `gui/src/lib/api.ts` MUST resolve the base URL from
 the active connection at call time rather than the previous hard-coded
-`http://127.0.0.1:15011` constant.
+`http://127.0.0.1:17000` constant.
 
 #### Scenario: Fetcher binds to the active connection
 Given the active connection's `baseUrl` is `https://cortex.example.com`

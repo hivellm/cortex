@@ -29,7 +29,7 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 
 ### Prerequisites
 
-- `cortex-api` running on `http://127.0.0.1:15011` (the default).
+- `cortex-api` running on `http://127.0.0.1:17000` (the default).
 - `cortex-mcp-server` and `cortex-adapter-claude` on `PATH`. From this repo:
   ```bash
   cargo install --path crates/cortex-mcp-server
@@ -95,7 +95,7 @@ The plugin's `.mcp.json` carries two env vars the MCP server reads:
 
 | Var | Default | Purpose |
 |---|---|---|
-| `CORTEX_API_URL` | `http://127.0.0.1:15011` | `cortex-api` base URL |
+| `CORTEX_API_URL` | `http://127.0.0.1:17000` | `cortex-api` base URL |
 | `CORTEX_ADAPTER_SOCK` | `~/.cortex/adapter-claude.sock` | Adapter UDS for `cortex_status` |
 
 Override per-machine by editing `.mcp.json` in your local plugin install.

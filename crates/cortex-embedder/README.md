@@ -79,7 +79,7 @@ The crate is `#![forbid(unsafe_code)]` and `#![warn(missing_docs)]`.
 
 | Variable                          | Default                       | Notes                                  |
 |-----------------------------------|-------------------------------|----------------------------------------|
-| `CORTEX_EMBEDDER_VECTORIZER_URL`  | `http://localhost:15001`      | Vectorizer base URL.                   |
+| `CORTEX_EMBEDDER_VECTORIZER_URL`  | `http://localhost:17001`      | Vectorizer base URL.                   |
 | `CORTEX_EMBEDDER_SYNAP_URL`       | `http://localhost:18443`      |                                        |
 | `CORTEX_EMBEDDER_CONSUMER_GROUP`  | `cortex-embedder`             | Synap consumer group identity.         |
 | `CORTEX_EMBEDDER_BATCH`           | `64`                          | Max chunks per upsert call.            |

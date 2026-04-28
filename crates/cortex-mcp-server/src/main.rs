@@ -24,7 +24,8 @@ struct Cli {
     cmd: Cmd,
 
     /// Override the Cortex API URL. Defaults to `$CORTEX_API_URL` or
-    /// `http://127.0.0.1:15011`.
+    /// `http://127.0.0.1:17000` (the workspace's canonical
+    /// `CORTEX_API_PORT`).
     #[arg(long, global = true)]
     api_url: Option<String>,
 }

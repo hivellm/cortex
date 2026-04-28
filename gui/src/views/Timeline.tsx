@@ -245,7 +245,7 @@ export function TimelineView() {
     // Renderer hits the absolute API in production builds (file://)
     // and Vite's proxy in dev — same logic the polling fetcher uses.
     const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
-    const root = isFile ? "http://127.0.0.1:15011" : "";
+    const root = isFile ? "http://127.0.0.1:17000" : "";
     return tail ? `${root}${base}?${tail}` : `${root}${base}`;
   }, [live, filters.session_id, filters.repo, filters.kind]);
 

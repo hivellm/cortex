@@ -55,12 +55,12 @@ otherwise) to produce a cross-event session summary.
 
 | Variable                     | Default                            | Notes                                                  |
 |------------------------------|------------------------------------|--------------------------------------------------------|
-| `CORTEX_API_BIND`            | `127.0.0.1:15011`                  | HTTP listen address.                                   |
-| `CORTEX_API_VECTORIZER_URL`  | `http://127.0.0.1:15001`           | Vectorizer base URL.                                   |
-| `CORTEX_API_NEXUS_URL`       | `http://127.0.0.1:15002`           | Nexus base URL.                                        |
-| `CORTEX_API_MEILI_URL`       | `http://127.0.0.1:15004`           | Meilisearch base URL.                                  |
+| `CORTEX_API_BIND`            | `127.0.0.1:17000`                  | HTTP listen address.                                   |
+| `CORTEX_API_VECTORIZER_URL`  | `http://127.0.0.1:17001`           | Vectorizer base URL.                                   |
+| `CORTEX_API_NEXUS_URL`       | `http://127.0.0.1:17002`           | Nexus base URL.                                        |
+| `CORTEX_API_MEILI_URL`       | `http://127.0.0.1:17004`           | Meilisearch base URL.                                  |
 | `CORTEX_API_MEILI_KEY`       | `cortex-dev-master-key`            | Meili master key.                                      |
-| `CORTEX_API_SYNAP_URL`       | `http://127.0.0.1:15003`           | Synap base URL (for the SSE timeline bridge).          |
+| `CORTEX_API_SYNAP_URL`       | `http://127.0.0.1:17003`           | Synap base URL (for the SSE timeline bridge).          |
 | `CORTEX_ANALYZER_MODEL`      | `claude-sonnet-4-6`                | Sonnet model id used by the cross-event analyzer.      |
 | `CORTEX_ANALYZER_API_KEY`    | (none)                             | Falls back to `ANTHROPIC_API_KEY`. Skips CLI when set. |
 

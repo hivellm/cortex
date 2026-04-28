@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
         let endpoint = args
             .synap_endpoint
             .clone()
-            .unwrap_or_else(|| "http://127.0.0.1:15003".to_string());
+            .unwrap_or_else(|| "http://127.0.0.1:17003".to_string());
         let handle = Arc::new(
             SynapHandle::new(&endpoint)
                 .with_context(|| format!("synap connect {endpoint}"))?,

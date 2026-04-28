@@ -1,7 +1,7 @@
 //! `cortex-api` binary — Axum daemon binding `POST /v1/query`.
 //!
 //! Spec 11 §HTTP endpoint: the daemon listens on
-//! `127.0.0.1:15011` by default. Live lane wiring (Vectorizer,
+//! `127.0.0.1:17000` by default. Live lane wiring (Vectorizer,
 //! Meilisearch, Nexus) drops into [`Orchestrator::new`]; the
 //! current binary stands up the lane traits with
 //! [`MemoryVectorLane`] / [`MemoryKeywordLane`] / [`MemoryGraphLane`]
@@ -27,10 +27,10 @@ use tracing_subscriber::{fmt, EnvFilter};
 #[derive(Debug, Clone, Parser)]
 #[command(name = "cortex-api", version, about)]
 struct Cli {
-    /// Bind address. Matches `.env` `CORTEX_API_PORT` (15000) so a
+    /// Bind address. Matches `.env` `CORTEX_API_PORT` (17000) so a
     /// supervisor booting from env settings stays in sync with the
     /// GUI's hardcoded `BASE_URL`.
-    #[arg(long, default_value = "127.0.0.1:15000")]
+    #[arg(long, default_value = "127.0.0.1:17000")]
     bind: SocketAddr,
     /// Verbose tracing output.
     #[arg(long)]

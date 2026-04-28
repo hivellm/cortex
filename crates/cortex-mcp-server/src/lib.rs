@@ -32,5 +32,7 @@ pub use tools::{PreThinkingTool, QueryTool, StatusTool, Tool, ToolContext, ToolR
 pub use validate::{validate_plugin, ValidationReport};
 
 /// Default Cortex API URL — matches the env var fall-back used by
-/// the binary entry point and the `.mcp.json` shipped with the plugin.
-pub const DEFAULT_API_URL: &str = "http://127.0.0.1:15011";
+/// the binary entry point and the `.mcp.json` shipped with the
+/// plugin. Port 17000 mirrors `.env CORTEX_API_PORT=17000`, the
+/// canonical bind cortex-api uses across the workspace.
+pub const DEFAULT_API_URL: &str = "http://127.0.0.1:17000";

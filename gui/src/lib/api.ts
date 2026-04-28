@@ -8,12 +8,12 @@
  */
 
 const BASE_URL = (() => {
-  // In dev the renderer hits Vite's `/v1/*` proxy → 127.0.0.1:15000.
+  // In dev the renderer hits Vite's `/v1/*` proxy → 127.0.0.1:17000.
   // In production (built Electron) we hit the daemon directly.
   // Port matches `.env` `CORTEX_API_PORT` so a single supervisor
   // booting cortex-api from env settings stays in sync with the GUI.
   if (typeof window !== "undefined" && window.location.protocol === "file:") {
-    return "http://127.0.0.1:15000";
+    return "http://127.0.0.1:17000";
   }
   return "";
 })();
@@ -164,6 +164,12 @@ export type AnalysisRow = {
   verdict: string;
   decision_id: string | null;
   occurred_at: string;
+  /** Owning repo. Present for phase4e bootstrap-imported audits and
+   * for spec-15 envelopes that anchor to a project. */
+  repo?: string;
+  /** Repo-rooted markdown path for bootstrap-imported audits — lets
+   * the GUI deep-link the source file. Absent for spec-15 envelopes. */
+  source_path?: string;
 };
 
 export type ToolStat = {

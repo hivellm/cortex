@@ -45,7 +45,7 @@ libraries and the worker dedicated to the wire bridge.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `CORTEX_CLASSIFIER_SYNAP_URL` | `http://127.0.0.1:15003` | Synap base URL. Falls back to `SYNAP_URL`. |
+| `CORTEX_CLASSIFIER_SYNAP_URL` | `http://127.0.0.1:17003` | Synap base URL. Falls back to `SYNAP_URL`. |
 | `CORTEX_CLASSIFIER_MODE` | `static` | `static` or `cli`. |
 | `CORTEX_CLASSIFIER_WORKERS` | `2` | Concurrent pull tasks. |
 | `CORTEX_CLASSIFIER_BATCH` | `32` | Max messages per pull. |

@@ -32,7 +32,7 @@ pub struct IngestionConfig {
 impl Default for IngestionConfig {
     fn default() -> Self {
         Self {
-            bind: "127.0.0.1:15000".parse().expect("hardcoded addr parses"),
+            bind: "127.0.0.1:17000".parse().expect("hardcoded addr parses"),
             archive_root: PathBuf::from("./data/archive"),
             synap_url: None,
             archive_zstd_level: cortex_storage::ArchiveLayout::COMPRESSION_LEVEL,

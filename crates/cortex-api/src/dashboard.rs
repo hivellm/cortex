@@ -1233,24 +1233,33 @@ async fn violations(State(state): State<DashboardState>) -> Response {
 // /v1/dashboard/analyses
 // ---------------------------------------------------------------------
 
-/// One analysis row — shape mirrors `MOCK.analyses`. Sourced from
-/// `kind=analysis` envelopes; populated when spec-15 (Deep Analysis
-/// workflow) starts producing them.
+/// One analysis row — sourced from `kind=analysis` envelopes via two
+/// upstream paths:
+///
+/// - **phase4e bootstrap-imported audits** (`docs/analysis/**/*.md`):
+///   carry `{ title, status, body, source_path }`. `repo` is the owning
+///   project; `source_path` deep-links the on-disk markdown. Spec-15
+///   fields (panel, judge, rounds, duration) are absent and surface as
+///   empty defaults.
+/// - **spec-15 deep-analysis envelopes** (when the workflow ships):
+///   carry the full debate metadata. Both shapes flow through this row.
 #[derive(Debug, Clone, Serialize)]
 pub struct AnalysisRow {
-    /// Analysis id.
+    /// Analysis id (event id for imports; `analysis_id` for spec-15).
     pub id: String,
-    /// Free-text title.
+    /// Free-text title — H1 of the imported markdown, or `question`
+    /// for spec-15.
     pub title: String,
-    /// `running` | `concluded` | `cancelled`.
+    /// `draft` | `running` | `concluded` | `cancelled`. Imports default
+    /// to whatever the markdown's `Status:` line says (or `draft`).
     pub status: String,
-    /// Panelist identifiers (model / agent names).
+    /// Panelist identifiers (model / agent names). Empty for imports.
     pub panel: Vec<String>,
-    /// Identifier of the judging model / human.
+    /// Identifier of the judging model / human. Empty for imports.
     pub judge: String,
-    /// Number of debate rounds.
+    /// Number of debate rounds. Zero for imports.
     pub rounds: u32,
-    /// Total wall-clock duration in seconds.
+    /// Total wall-clock duration in seconds. Zero for imports.
     pub duration_s: u32,
     /// Final verdict body (Markdown).
     pub verdict: String,
@@ -1258,6 +1267,15 @@ pub struct AnalysisRow {
     pub decision_id: Option<String>,
     /// Relative time label.
     pub occurred_at: String,
+    /// Owning repo — read off the envelope's `context_repo` so the GUI
+    /// can group / filter analyses per project. `None` when the analysis
+    /// is not anchored to a repo (rare; spec-15 cross-repo debates).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Repo-rooted source path for imported audits — lets the GUI deep-
+    /// link to the underlying markdown. Absent for spec-15 envelopes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
 }
 
 async fn analyses(State(state): State<DashboardState>) -> Response {
@@ -1265,21 +1283,50 @@ async fn analyses(State(state): State<DashboardState>) -> Response {
     let rows: Vec<AnalysisRow> = hits
         .into_iter()
         .filter(|h| h.symbol.as_deref() == Some("analysis"))
-        .map(|h| AnalysisRow {
-            id: h
-                .doc_id
-                .strip_prefix("archive|")
-                .unwrap_or(&h.doc_id)
-                .to_string(),
-            title: clip(h.text.lines().next().unwrap_or(""), 120),
-            status: "concluded".to_string(),
-            panel: Vec::new(),
-            judge: String::new(),
-            rounds: 0,
-            duration_s: 0,
-            verdict: clip(&h.text, 800),
-            decision_id: None,
-            occurred_at: ts_to_relative(h.ts),
+        .map(|h| {
+            // Prefer the parsed extras the meili_loader stamped over
+            // best-effort string-munging on `h.text`. The first non-
+            // empty body line is the fallback when extras are absent
+            // (in-memory archive lane path).
+            let title = h
+                .extras
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| clip(h.text.lines().next().unwrap_or(""), 120));
+            let status = h
+                .extras
+                .get("status")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("draft")
+                .to_string();
+            let source_path = h
+                .extras
+                .get("source_path")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .or_else(|| h.path.clone());
+            AnalysisRow {
+                id: h
+                    .doc_id
+                    .strip_prefix("archive|")
+                    .unwrap_or(&h.doc_id)
+                    .to_string(),
+                title,
+                status,
+                panel: Vec::new(),
+                judge: String::new(),
+                rounds: 0,
+                duration_s: 0,
+                verdict: clip(&h.text, 800),
+                decision_id: None,
+                occurred_at: ts_to_relative(h.ts),
+                repo: h.repo.clone(),
+                source_path,
+            }
         })
         .collect();
     (StatusCode::OK, Json(rows)).into_response()

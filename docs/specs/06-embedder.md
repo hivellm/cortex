@@ -153,7 +153,7 @@ Rule table:
 
 ```rust
 pub struct VectorizerClient {
-    base_url: Url,                           // e.g. http://localhost:15002
+    base_url: Url,                           // e.g. http://localhost:17002
     api_key: Option<String>,
     http: reqwest::Client,
     retry: RetryPolicy,                      // 3 attempts, exp backoff 100ms/400ms/1600ms

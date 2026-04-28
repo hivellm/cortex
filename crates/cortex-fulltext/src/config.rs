@@ -42,7 +42,7 @@ impl Default for FulltextConfig {
         Self {
             meili_url: "http://127.0.0.1:7700".to_string(),
             meili_api_key: None,
-            synap_url: "http://127.0.0.1:15003".to_string(),
+            synap_url: "http://127.0.0.1:17003".to_string(),
             synap_group: "cortex-fulltext".to_string(),
             index_prefix: "cortex-".to_string(),
             workers: 4,

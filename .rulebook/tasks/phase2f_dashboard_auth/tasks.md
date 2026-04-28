@@ -20,7 +20,7 @@
 ## 4. Live verification
 - [ ] 4.1 Mint a key via `cortex-api admin issue-api-key --scope dashboard --label local-gui`; copy the cleartext.
 - [ ] 4.2 Reload the GUI — the modal pops; paste the key; renderer reconnects with all 12 dashboard endpoints + the SSE stream returning data.
-- [ ] 4.3 `curl -H "Authorization: Bearer <key>" http://127.0.0.1:15011/v1/dashboard/overview` returns 200; without the header returns 401 with the spec-shaped body.
+- [ ] 4.3 `curl -H "Authorization: Bearer <key>" http://127.0.0.1:17000/v1/dashboard/overview` returns 200; without the header returns 401 with the spec-shaped body.
 - [ ] 4.4 `curl -H "Authorization: Bearer <revoked-key>"` after `revoke-api-key` returns 401.
 
 ## 5. Tail (mandatory — enforced by rulebook v5.3.0)

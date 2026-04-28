@@ -8,7 +8,7 @@ The system SHALL provide a `cortex-classifier-worker` binary inside the
 the enriched stream.
 
 #### Scenario: Bootstrap event flows end-to-end
-Given Synap is reachable at `http://127.0.0.1:15003`
+Given Synap is reachable at `http://127.0.0.1:17003`
 And `cortex.events.bootstrap` contains one `artifact.code` envelope
 When `cortex-classifier-worker` runs one iteration
 Then exactly one `EnrichedEvent` envelope is published on `cortex.events.enriched`

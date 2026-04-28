@@ -65,10 +65,10 @@ impl Default for AdapterSection {
 }
 
 fn default_endpoint() -> String {
-    "http://127.0.0.1:15010".to_string()
+    "http://127.0.0.1:17010".to_string()
 }
 fn default_api_endpoint() -> String {
-    "http://127.0.0.1:15011".to_string()
+    "http://127.0.0.1:17000".to_string()
 }
 fn default_timeout_ms() -> u64 {
     1500
@@ -226,8 +226,8 @@ mod tests {
     fn parses_full_example_from_spec_10() {
         let body = r#"
 [adapter]
-endpoint = "http://127.0.0.1:15010"
-api_endpoint = "http://127.0.0.1:15011"
+endpoint = "http://127.0.0.1:17010"
+api_endpoint = "http://127.0.0.1:17000"
 timeout_ms = 1500
 queue_bounded = 2048
 

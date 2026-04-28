@@ -100,8 +100,8 @@ All published envelopes set `tool = "claude-code"`, `schema_version = "1"`, `str
 
 ```toml
 [adapter]
-endpoint = "http://127.0.0.1:15010"          # cortex-core ingestion router
-api_endpoint = "http://127.0.0.1:15011"      # cortex-api (query, law check)
+endpoint = "http://127.0.0.1:17010"          # cortex-core ingestion router
+api_endpoint = "http://127.0.0.1:17000"      # cortex-api (query, law check)
 timeout_ms = 1500                             # per request; hard cap
 queue_bounded = 2048                          # in-memory queue for async publish
 
@@ -236,7 +236,7 @@ cortex.adapter.pre_thinking.bundle_bytes  histogram
 cortex.adapter.laws.blocks                counter, labels: law_id
 ```
 
-Logs are structured JSON lines. The daemon exposes a tiny HTTP endpoint (`http://127.0.0.1:15020/metrics`) for Prometheus scraping when enabled.
+Logs are structured JSON lines. The daemon exposes a tiny HTTP endpoint (`http://127.0.0.1:17020/metrics`) for Prometheus scraping when enabled.
 
 ## Acceptance criteria
 

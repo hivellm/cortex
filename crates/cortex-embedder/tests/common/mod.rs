@@ -25,7 +25,7 @@ pub fn it_enabled() -> bool {
 /// Default Vectorizer base URL for integration tests.
 pub fn vectorizer_url() -> String {
     std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:15001".to_string())
+        .unwrap_or_else(|_| "http://127.0.0.1:17001".to_string())
 }
 
 /// Optional Vectorizer admin password (SDK treats it as API key).

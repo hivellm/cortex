@@ -29,7 +29,7 @@ impl GraphTransport {
 /// Graph-writer worker configuration.
 #[derive(Debug, Clone)]
 pub struct GraphConfig {
-    /// Nexus base URL. Default `http://127.0.0.1:15002`. Scheme drives the
+    /// Nexus base URL. Default `http://127.0.0.1:17002`. Scheme drives the
     /// transport choice when [`GraphConfig::transport`] is `Auto`.
     pub nexus_url: String,
     /// Forced transport selector.
@@ -61,9 +61,9 @@ pub struct GraphConfig {
 impl Default for GraphConfig {
     fn default() -> Self {
         Self {
-            nexus_url: "http://127.0.0.1:15002".to_string(),
+            nexus_url: "http://127.0.0.1:17002".to_string(),
             transport: GraphTransport::Auto,
-            synap_url: "http://127.0.0.1:15003".to_string(),
+            synap_url: "http://127.0.0.1:17003".to_string(),
             synap_group: "cortex-graph".to_string(),
             workers: 4,
             patch_batch: 256,

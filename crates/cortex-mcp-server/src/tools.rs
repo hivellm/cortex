@@ -46,7 +46,7 @@ pub const CALLER: &str = "claude-code-plugin";
 /// Shared dependencies passed to every tool invocation.
 #[derive(Clone)]
 pub struct ToolContext {
-    /// Base URL for the Cortex daemon (`http://127.0.0.1:15011` by default).
+    /// Base URL for the Cortex daemon (`http://127.0.0.1:17000` by default).
     pub api_url: String,
     /// Reusable HTTP client.
     pub http: reqwest::Client,

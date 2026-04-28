@@ -43,7 +43,7 @@ language but does not import from `assets/`.
 ## Develop
 
 ```bash
-# Backend running on 127.0.0.1:15011 with archive seed:
+# Backend running on 127.0.0.1:17000 with archive seed:
 CORTEX_ARCHIVE_ROOT=~/.cortex/archive cargo run -p cortex-api
 
 # In gui/:
@@ -53,7 +53,7 @@ pnpm dev               # vite + electron, reload on file change
 
 Renderer dev server runs on `http://127.0.0.1:5173`. Electron auto-loads
 it once `wait-on tcp:5173` clears. The Vite dev proxy forwards `/v1/*`
-to `http://127.0.0.1:15011`, so fetch() calls in the renderer resolve
+to `http://127.0.0.1:17000`, so fetch() calls in the renderer resolve
 without CORS.
 
 ## Build

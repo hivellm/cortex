@@ -253,7 +253,7 @@ async fn schema_bootstrap_against_live_nexus_when_enabled() {
         return;
     }
     let cfg = GraphConfig {
-        nexus_url: "http://127.0.0.1:15002".into(),
+        nexus_url: "http://127.0.0.1:17002".into(),
         ..GraphConfig::default()
     };
     let client = LiveNexusClient::new(cfg).expect("construct live client");
@@ -274,7 +274,7 @@ async fn write_tx_against_live_nexus_when_enabled() {
         return;
     }
     let cfg = GraphConfig {
-        nexus_url: "http://127.0.0.1:15002".into(),
+        nexus_url: "http://127.0.0.1:17002".into(),
         ..GraphConfig::default()
     };
     let client = LiveNexusClient::new(cfg).expect("construct live client");

@@ -33,7 +33,7 @@ the same configuration surface drives both:
 
 | Variable                     | Default                            |
 |------------------------------|------------------------------------|
-| `CORTEX_API_URL`             | `http://127.0.0.1:15011`           |
+| `CORTEX_API_URL`             | `http://127.0.0.1:17000`           |
 | `CORTEX_MCP_LOG_LEVEL`       | `info`                             |
 
 ## Run

@@ -29,14 +29,14 @@ Provide a single `docker-compose.yml` (plus a small `bin/cortex-up` wrapper) tha
 
 | Service           | Image                                                  | Ports (host:container) | Volume                 | Health |
 |-------------------|--------------------------------------------------------|------------------------|------------------------|--------|
-| `vectorizer`      | `hivellm/vectorizer:2.5.1`                             | `15001:15001`          | `vec-data:/data`       | `/health` |
-| `nexus`           | `hivehub/nexus:v1.14.0`                                | `15002:15474`          | `nexus-data:/data`     | `/health` |
-| `synap`           | `hivellm/synap:0.11.0`                                 | `15003:15003`          | `synap-data:/data`     | `PING`    |
-| `meilisearch`     | `getmeili/meilisearch:v1.10`                           | `15004:7700`           | `meili-data:/meili_data`| `/health`|
-| `cortex-api`      | (built locally from `./cortex-api/Dockerfile`)         | `15000:15000`          | `cortex-cas:/cas`, `cortex-archive:/archive`, `cortex-meta:/meta` | `/healthz` |
+| `vectorizer`      | `hivellm/vectorizer:2.5.1`                             | `17001:17001`          | `vec-data:/data`       | `/health` |
+| `nexus`           | `hivehub/nexus:v1.14.0`                                | `17002:15474`          | `nexus-data:/data`     | `/health` |
+| `synap`           | `hivellm/synap:0.11.0`                                 | `17003:17003`          | `synap-data:/data`     | `PING`    |
+| `meilisearch`     | `getmeili/meilisearch:v1.10`                           | `17004:7700`           | `meili-data:/meili_data`| `/health`|
+| `cortex-api`      | (built locally from `./cortex-api/Dockerfile`)         | `17000:17000`          | `cortex-cas:/cas`, `cortex-archive:/archive`, `cortex-meta:/meta` | `/healthz` |
 | `cortex-workers`  | (built locally from `./cortex-workers/Dockerfile`)     | —                      | shares `cortex-cas`, `cortex-archive`, `cortex-meta` | `/healthz` |
 
-Port range `15000–15099` is reserved for Cortex local dev, picked to avoid collisions with the standalone defaults of each Hive service when running outside Cortex.
+Port range `17000–15099` is reserved for Cortex local dev, picked to avoid collisions with the standalone defaults of each Hive service when running outside Cortex.
 
 ### Networks
 
@@ -61,13 +61,13 @@ All volumes are **named** (not bind mounts) so a `docker volume rm` reset is one
 ```dotenv
 # Cortex
 CORTEX_LOG_LEVEL=info
-CORTEX_API_PORT=15000
+CORTEX_API_PORT=17000
 CORTEX_BIND=127.0.0.1
 
 # Backends (internal hostnames on the cortex-net bridge)
-VECTORIZER_URL=http://vectorizer:15001
-NEXUS_URL=http://nexus:15002
-SYNAP_URL=redis://synap:15003
+VECTORIZER_URL=http://vectorizer:17001
+NEXUS_URL=http://nexus:17002
+SYNAP_URL=redis://synap:17003
 MEILI_URL=http://meilisearch:7700
 MEILI_MASTER_KEY=cortex-dev-master-key   # dev only
 
@@ -153,19 +153,19 @@ All defined inline in compose, 5 s interval, 30 s start-period, 3 retries. Failu
 ```yaml
 vectorizer:
   healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:15001/health"]
+    test: ["CMD", "curl", "-f", "http://localhost:17001/health"]
 nexus:
   healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:15002/health"]
+    test: ["CMD", "curl", "-f", "http://localhost:17002/health"]
 synap:
   healthcheck:
-    test: ["CMD", "redis-cli", "-p", "15003", "PING"]
+    test: ["CMD", "redis-cli", "-p", "17003", "PING"]
 meilisearch:
   healthcheck:
     test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
 cortex-api:
   healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:15000/healthz"]
+    test: ["CMD", "curl", "-f", "http://localhost:17000/healthz"]
 ```
 
 ### Override files
@@ -202,7 +202,7 @@ $ bin/cortex-up
         8 Meilisearch indexes created
         6 Synap streams + 5 KV namespaces declared
         SQLite metadata schema applied
-Cortex is up at http://127.0.0.1:15000  →  http://127.0.0.1:15000/dashboard
+Cortex is up at http://127.0.0.1:17000  →  http://127.0.0.1:17000/dashboard
 ```
 
 ## Acceptance criteria
@@ -220,7 +220,7 @@ Cortex is up at http://127.0.0.1:15000  →  http://127.0.0.1:15000/dashboard
 
 1. **Compose, not Kubernetes, for v1.** Kubernetes lives in Phase 5. Compose covers single-node dev + small-team self-host, which is all v1 needs.
 2. **Named volumes default; bind mounts opt-in.** Avoid host-permission headaches on first run.
-3. **Port range `15000–15099`.** Sequential, easy to remember, away from common dev tools.
+3. **Port range `17000–15099`.** Sequential, easy to remember, away from common dev tools.
 4. **Synap exposed via Redis protocol** (it speaks RESP); reuse Redis CLI for diagnostics.
 5. **Distroless final images** for Cortex services — small, secure, no shell to be hijacked.
 6. **No TLS in v1 dev.** Default bind is `127.0.0.1` and the network is internal. Production override adds Caddy as TLS reverse proxy.

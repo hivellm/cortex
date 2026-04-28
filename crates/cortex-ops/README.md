@@ -33,7 +33,7 @@ to environment variables (`VECTORIZER_URL`, `NEXUS_URL`, `MEILI_URL`,
 
 ```bash
 cortex-ops doctor
-cortex-ops doctor --vectorizer-url http://localhost:15001 --nexus-url http://localhost:7474
+cortex-ops doctor --vectorizer-url http://localhost:17001 --nexus-url http://localhost:7474
 ```
 
 Exit code is `0` only when every backend reports healthy.

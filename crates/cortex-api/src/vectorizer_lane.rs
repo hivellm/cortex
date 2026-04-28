@@ -41,7 +41,7 @@ impl std::fmt::Debug for VectorizerLane {
 }
 
 impl VectorizerLane {
-    /// Build a new lane against `base_url` (e.g. `http://127.0.0.1:15001`).
+    /// Build a new lane against `base_url` (e.g. `http://127.0.0.1:17001`).
     /// `api_key` is the Vectorizer JWT / X-API-Key (optional in
     /// no-auth dev). Wraps the SDK's `ClientConfig` rather than
     /// re-implementing transport — the same path

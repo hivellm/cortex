@@ -18,7 +18,7 @@ export default defineConfig({
       // Forward `/v1/*` API calls to cortex-api during dev so the
       // browser's same-origin policy doesn't bite on fetch().
       "/v1": {
-        target: "http://127.0.0.1:15000",
+        target: "http://127.0.0.1:17000",
         changeOrigin: true,
       },
     },

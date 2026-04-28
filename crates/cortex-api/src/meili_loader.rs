@@ -195,6 +195,8 @@ fn family_of(uid: &str) -> Option<&'static str> {
         Some("decisions")
     } else if uid.ends_with("-governance") {
         Some("governance")
+    } else if uid.ends_with("-analyses") {
+        Some("analyses")
     } else if uid.ends_with("-misc") {
         Some("misc")
     } else if uid.ends_with("-turns") {
@@ -459,7 +461,7 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
             extras.insert("body_markdown".to_string(), Value::String(body_md.clone()));
             text = body_md;
         }
-        ("misc", "analysis") => {
+        ("misc", "analysis") | ("analyses", "analysis") => {
             symbol = "analysis";
             let title = parsed_body
                 .as_ref()
@@ -467,6 +469,10 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
                 .and_then(|v| v.as_str())
                 .unwrap_or(event_id)
                 .to_string();
+            // Spec-15 deep-analysis envelopes carry the conclusion under
+            // `verdict`; phase4e bootstrap-imported audits carry it under
+            // `body`. Try both before falling back to the raw doc body so
+            // either source produces a useful card body in the GUI.
             let body_md = parsed_body
                 .as_ref()
                 .and_then(|b| b.get("verdict"))
@@ -474,7 +480,27 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
                 .and_then(|v| v.as_str())
                 .unwrap_or(body_raw)
                 .to_string();
+            // phase4e payloads tag a `status` (default `draft`) and a
+            // `source_path` pointing back at the on-disk markdown so the
+            // GUI can deep-link the file. Spec-15 envelopes do not carry
+            // these fields; missing values stay omitted from extras.
+            let status = parsed_body
+                .as_ref()
+                .and_then(|b| b.get("status"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let source_path = parsed_body
+                .as_ref()
+                .and_then(|b| b.get("source_path"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             extras.insert("title".to_string(), Value::String(title));
+            if let Some(s) = status {
+                extras.insert("status".to_string(), Value::String(s));
+            }
+            if let Some(p) = source_path {
+                extras.insert("source_path".to_string(), Value::String(p));
+            }
             extras.insert("body_markdown".to_string(), Value::String(body_md.clone()));
             text = body_md;
         }
@@ -579,10 +605,59 @@ mod tests {
         assert_eq!(family_of("cortex-vectorizer-governance"), Some("governance"));
         assert_eq!(family_of("cortex-rulebook-misc"), Some("misc"));
         assert_eq!(family_of("cortex-cortex-turns"), Some("turns"));
+        assert_eq!(family_of("cortex-cortex-analyses"), Some("analyses"));
+        assert_eq!(family_of("cortex-rulebook-analyses"), Some("analyses"));
         assert_eq!(family_of("cortex-cortex-code"), None);
         assert_eq!(family_of("cortex-cortex-docs"), None);
         assert_eq!(family_of("cortex-decisions"), Some("decisions")); // legacy
+        assert_eq!(family_of("cortex-analyses"), Some("analyses")); // legacy
         assert_eq!(family_of("not-a-cortex-index"), None);
+    }
+
+    #[test]
+    fn doc_to_hit_imported_analysis_extracts_title_status_and_source_path() {
+        // phase4e bootstrap shape: `{ title, status, body, source_path }`.
+        let inner = serde_json::json!({
+            "title": "Cortex — System Analysis (2026-04-28)",
+            "status": "draft",
+            "body": "# Cortex — System Analysis (2026-04-28)\n\nBody.",
+            "source_path": "docs/analysis/cortex/00-index.md"
+        });
+        let body_str = serde_json::to_string(&inner).unwrap();
+        let doc = serde_json::json!({
+            "id": "01ANALYSIS00000000000000A1",
+            "event_id": "01ANALYSIS00000000000000A1",
+            "kind": "analysis",
+            "repo": "Cortex",
+            "path": "docs/analysis/cortex/00-index.md",
+            "body": body_str,
+            "ts": 1_750_000_000_000_i64,
+        });
+        let (symbol, hit) = doc_to_hit(&doc, "analyses").expect("must produce a hit");
+        assert_eq!(symbol, "analysis");
+        assert_eq!(hit.repo.as_deref(), Some("Cortex"));
+        assert_eq!(
+            hit.path.as_deref(),
+            Some("docs/analysis/cortex/00-index.md")
+        );
+        assert_eq!(
+            hit.extras.get("title").and_then(|v| v.as_str()),
+            Some("Cortex — System Analysis (2026-04-28)")
+        );
+        assert_eq!(
+            hit.extras.get("status").and_then(|v| v.as_str()),
+            Some("draft")
+        );
+        assert_eq!(
+            hit.extras.get("source_path").and_then(|v| v.as_str()),
+            Some("docs/analysis/cortex/00-index.md")
+        );
+        assert!(hit
+            .extras
+            .get("body_markdown")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .starts_with("# Cortex"));
     }
 
     #[test]

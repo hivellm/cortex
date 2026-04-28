@@ -73,8 +73,8 @@ Daemon-side env vars:
 
 | Variable                            | Default                       | Notes                                              |
 |-------------------------------------|-------------------------------|----------------------------------------------------|
-| `CORTEX_ADAPTER_SYNAP_URL`          | `http://127.0.0.1:15003`      | Synap base URL.                                    |
-| `CORTEX_ADAPTER_API_URL`            | `http://127.0.0.1:15011`      | `cortex-api` base URL for pre-thinking lookups.    |
+| `CORTEX_ADAPTER_SYNAP_URL`          | `http://127.0.0.1:17003`      | Synap base URL.                                    |
+| `CORTEX_ADAPTER_API_URL`            | `http://127.0.0.1:17000`      | `cortex-api` base URL for pre-thinking lookups.    |
 | `CORTEX_ADAPTER_PRE_THINKING_KB`    | `32`                          | Per-bundle cap (KB).                               |
 | `CORTEX_ADAPTER_PRE_THINKING_TIMEOUT_MS` | `1500`                   | Soft cap; daemon emits an empty bundle past it.    |
 

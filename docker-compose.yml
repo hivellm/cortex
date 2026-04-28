@@ -9,7 +9,7 @@ services:
       VECTORIZER_ADMIN_PASSWORD: ${VECTORIZER_ADMIN_PASSWORD:-cortex-dev-admin}
     networks: [cortex-net]
     ports:
-      - "${VECTORIZER_HOST_PORT:-15001}:15002"
+      - "${VECTORIZER_HOST_PORT:-17001}:17002"
     volumes:
       - vec-data:/data
     restart: unless-stopped
@@ -19,7 +19,7 @@ services:
     container_name: cortex-nexus
     networks: [cortex-net]
     ports:
-      - "${NEXUS_HOST_PORT:-15002}:15474"
+      - "${NEXUS_HOST_PORT:-17002}:15474"
     volumes:
       - nexus-data:/data
     healthcheck:
@@ -35,7 +35,7 @@ services:
     container_name: cortex-synap
     networks: [cortex-net]
     ports:
-      - "${SYNAP_HOST_PORT:-15003}:15500"
+      - "${SYNAP_HOST_PORT:-17003}:15500"
       - "${SYNAP_WS_HOST_PORT:-15013}:15501"
       - "${SYNAP_RESP_HOST_PORT:-16379}:6379"
     volumes:
@@ -53,7 +53,7 @@ services:
     container_name: cortex-meilisearch
     networks: [cortex-net]
     ports:
-      - "${MEILI_HOST_PORT:-15004}:7700"
+      - "${MEILI_HOST_PORT:-17004}:7700"
     volumes:
       - meili-data:/meili_data
     environment:
