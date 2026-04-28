@@ -175,11 +175,16 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         Kind::Turn => {
             let turn: Turn = serde_json::from_value(env.payload.clone()).ok()?;
             let asst_owned = turn.assistant_message.clone();
-            let text = match asst_owned.as_deref() {
-                Some(asst) if !asst.is_empty() => {
-                    format!("{}\n\n{asst}", turn.user_message)
-                }
-                _ => turn.user_message.clone(),
+            // Stop envelopes carry `user_message = ""` + `assistant_message = Some(<text>)`;
+            // the prior `format!("{}\n\n{asst}", "")` produced `"\n\n<text>"`, which made
+            // the Live timeline row appear with an empty title (the `lines().next()` in
+            // `title_from_hit` returns the first empty line) and a blank-leading detail.
+            // Mirror the meili_loader's three-way branch so each side prints clean.
+            let text = match (turn.user_message.as_str(), asst_owned.as_deref()) {
+                (u, Some(a)) if !u.is_empty() && !a.is_empty() => format!("{u}\n\n{a}"),
+                (u, _) if !u.is_empty() => u.to_string(),
+                (_, Some(a)) if !a.is_empty() => a.to_string(),
+                _ => String::new(),
             };
             turn_user_message = Some(turn.user_message);
             turn_assistant_message = asst_owned;
@@ -394,6 +399,36 @@ mod tests {
         assert!(hits[0].text.contains("ef_search"));
         assert_eq!(hits[0].repo.as_deref(), Some("Cortex"));
         assert!(hits[0].doc_id.starts_with("archive|"));
+    }
+
+    /// Stop-hook turn envelopes carry `user_message = ""` and the
+    /// assistant's reply on `assistant_message`. The dashboard timeline
+    /// row's title is derived from `text.lines().next()`, so the prior
+    /// `format!("{}\n\n{asst}", "")` produced a leading empty line and
+    /// the row appeared blank — what the user reported on 2026-04-28
+    /// ("AI responses stopped showing in Live timeline").
+    #[test]
+    fn stop_envelope_text_starts_with_assistant_message_not_blank_line() {
+        let mut env = turn_envelope("ignored — overwritten by Stop payload below");
+        env.event_id = "01STOP000000000000000000Z2".to_string();
+        env.payload = serde_json::to_value(Turn {
+            user_message: String::new(),
+            assistant_message: Some("the model's reply".to_string()),
+            tokens: None,
+            tool_call_event_ids: Vec::new(),
+        })
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_archive_file(dir.path(), &[env]);
+        let (report, hits) = load_lane_hits(dir.path());
+        assert_eq!(report.hits_seeded, 1);
+        assert_eq!(hits.len(), 1);
+        let text = &hits[0].text;
+        assert!(
+            !text.starts_with('\n'),
+            "Stop turn text must not start with a newline (title would render blank): {text:?}"
+        );
+        assert_eq!(text, "the model's reply");
     }
 
     #[test]
