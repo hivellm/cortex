@@ -659,14 +659,28 @@ fn collect_lane_hits(lane: &MemoryKeywordLane) -> Vec<crate::lanes::LaneHit> {
         Ok(g) => g,
         Err(_) => return Vec::new(),
     };
-    // Aggregate every seeded index. The archive_loader writes under
-    // `cortex-code`; the meili_loader (decisions / violations /
-    // memories / analyses / turns) seeds under `cortex-meili-*`.
-    // Each seed is a complete snapshot for its family, so flat-
-    // chaining them never double-counts.
+    // Aggregate every seeded index, deduping by `doc_id`.
+    //
+    // The earlier comment claimed each seed is a "complete snapshot
+    // for its family" so flat-chaining was safe — that claim is
+    // wrong. `archive_loader::load_into_keyword_lane` deliberately
+    // fans the same hit list into three aliases (`cortex-code`,
+    // `cortex-docs`, `cortex-decisions`) so spec-11 free-search /
+    // pre-change-context strategies hit non-empty results regardless
+    // of which alias they look up. Without dedup the dashboard
+    // timeline shows every event 3x; the user spotted this on
+    // 2026-04-28. Keeping the first occurrence preserves the lane's
+    // existing per-alias query semantics while collapsing the
+    // duplicates the dashboard never wanted.
     let mut out: Vec<crate::lanes::LaneHit> = Vec::new();
+    let mut seen: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
     for hits in g.values() {
-        out.extend(hits.iter().cloned());
+        for h in hits {
+            if seen.insert(h.doc_id.clone()) {
+                out.push(h.clone());
+            }
+        }
     }
     out
 }
