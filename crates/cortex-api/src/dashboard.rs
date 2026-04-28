@@ -691,6 +691,13 @@ pub(crate) fn raw_value(v: &Value) -> Value {
 pub struct DecisionRow {
     /// Decision id (`DEC-NNNN` or ULID).
     pub id: String,
+    /// Repo this decision belongs to (the project that owns the
+    /// `.rulebook/decisions/*.md` file). Multiple Hive repos ship
+    /// their own ADRs — without this field the dashboard can't
+    /// tell whether a decision is Cortex's, Nexus's, or another
+    /// project's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     /// Title — free text from the payload.
     pub title: String,
     /// `proposed` | `active` | `superseded` | `deprecated`.
@@ -796,6 +803,7 @@ fn build_decision_rows(hits: &[crate::lanes::LaneHit]) -> Vec<DecisionRow> {
         bodies.insert(id.clone(), extras_body.unwrap_or(&h.text).to_string());
         rows.push(DecisionRow {
             id,
+            repo: h.repo.clone(),
             title: title_clean,
             status,
             author: None,
@@ -1548,175 +1556,233 @@ async fn query_nexus_graph(
     session_id: Option<&str>,
     limit: usize,
 ) -> anyhow::Result<GraphPayload> {
-    let mut nodes: Vec<GraphNode> = Vec::new();
-    let mut seen_nodes: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut nodes_by_id: std::collections::HashMap<String, GraphNode> =
+        std::collections::HashMap::new();
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut seen_edges: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    // Per-label node pulls. Each query returns rows of two cells:
-    // `[<key>, <display_label>]` — the rest of the property bag stays
-    // server-side. Limit-per-label keeps the canvas legible while
-    // still giving every kind a chance to appear.
-    let per_label_limit = (limit / 2).max(20).min(limit);
-    // Order: small / interesting kinds first so a tight `limit` still
-    // surfaces every label rather than getting drowned by Artifacts.
-    let label_specs: &[(&str, &str, &str, &str)] = &[
-        // (cypher_label, return_id_prop, return_label_prop, gui_kind)
-        ("Repo", "name", "name", "repo"),
-        ("Decision", "id", "title", "decision"),
-        ("Law", "id", "title", "law"),
-        ("Analysis", "id", "title", "analysis"),
-        ("LawViolation", "id", "law_id", "violation"),
-        ("Memory", "id", "id", "memory"),
-        ("Session", "id", "id", "session"),
-        ("Turn", "id", "id", "turn"),
-        ("ToolCall", "id", "tool_name", "tool_call"),
-        ("AgentCall", "id", "agent_type", "agent_call"),
-        ("Artifact", "natural_key", "path", "artifact"),
+    // Edge-first sampling. The previous node-first strategy pulled
+    // each label independently (10 Sessions, 18 Turns, 18 Memories…)
+    // and then filtered edges to those whose endpoints happened to
+    // overlap. With independent random samples the overlap was
+    // near-zero — a fresh DB returned 98 nodes and 23 edges, mostly
+    // because Sessions and their Turns weren't co-sampled.
+    //
+    // The fix: each MATCH returns BOTH endpoints' id + display label
+    // in one round-trip, and we materialize the nodes inline from
+    // the edge rows. Every edge we keep is guaranteed to have its
+    // endpoints rendered.
+    //
+    // Tuple: (from_label, from_id_prop, from_label_prop, from_kind,
+    //         rel, to_label, to_id_prop, to_label_prop, to_kind)
+    let edge_specs: &[(&str, &str, &str, &str, &str, &str, &str, &str, &str)] = &[
+        ("Session", "id", "id", "session", "HAS_TURN", "Turn", "id", "id", "turn"),
+        ("Session", "id", "id", "session", "REMEMBERS", "Memory", "id", "id", "memory"),
+        ("Turn", "id", "id", "turn", "HAS_TOOL_CALL", "ToolCall", "id", "tool_name", "tool_call"),
+        ("Turn", "id", "id", "turn", "HAS_AGENT_CALL", "AgentCall", "id", "agent_type", "agent_call"),
+        ("ToolCall", "id", "tool_name", "tool_call", "TOUCHED", "Artifact", "natural_key", "path", "artifact"),
+        ("Artifact", "natural_key", "path", "artifact", "IN_REPO", "Repo", "name", "name", "repo"),
+        ("LawViolation", "id", "law_id", "violation", "OBSERVED_IN", "Turn", "id", "id", "turn"),
+        ("LawViolation", "id", "law_id", "violation", "OF", "Law", "id", "title", "law"),
+        ("Decision", "id", "title", "decision", "SUPERSEDES", "Decision", "id", "title", "decision"),
     ];
-    for (cypher_label, id_prop, label_prop, gui_kind) in label_specs {
-        // Anchor at a session when one is supplied — restricts to the
-        // session's first-degree neighbourhood so the canvas stays
-        // focused. Otherwise pull a recent slice of the label.
-        let cy = if session_id.is_some() && *cypher_label != "Session" {
-            format!(
-                "MATCH (s:Session {{ session_id: $sid }})-[]->(n:{cypher_label}) \
-                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
-                 LIMIT $lim"
-            )
-        } else if session_id.is_some() {
-            format!(
-                "MATCH (n:{cypher_label} {{ session_id: $sid }}) \
-                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
-                 LIMIT $lim"
-            )
-        } else {
-            format!(
-                "MATCH (n:{cypher_label}) \
-                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
-                 LIMIT $lim"
-            )
+
+    // Per-relation budget. The Nexus Cypher dialect ignores `LIMIT $param`,
+    // so the integer is inlined into the query string.
+    let per_rel_limit = (limit / edge_specs.len()).max(8).min(limit);
+
+    for (from_label, from_id_p, from_lbl_p, from_kind, rel, to_label, to_id_p, to_lbl_p, to_kind) in
+        edge_specs
+    {
+        if nodes_by_id.len() >= limit {
+            break;
+        }
+        // Session-anchored mode: restrict the edge's "from" side to
+        // descendants of the requested Session. Cheaper than a full
+        // 3-hop path because each rel-spec already names the depth.
+        let cy = match session_id {
+            Some(_) if *from_label == "Session" => format!(
+                "MATCH (a:Session {{ session_id: $sid }})-[r:{rel}]->(b:{to_label}) \
+                 RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                 LIMIT {per_rel_limit}"
+            ),
+            Some(_) if *from_label == "Turn" => format!(
+                "MATCH (s:Session {{ session_id: $sid }})-[:HAS_TURN]->(a:Turn)-[r:{rel}]->(b:{to_label}) \
+                 RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                 LIMIT {per_rel_limit}"
+            ),
+            Some(_) if *from_label == "ToolCall" => format!(
+                "MATCH (s:Session {{ session_id: $sid }})-[:HAS_TURN]->(:Turn)-[:HAS_TOOL_CALL]->(a:ToolCall)-[r:{rel}]->(b:{to_label}) \
+                 RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                 LIMIT {per_rel_limit}"
+            ),
+            Some(_) if *from_label == "LawViolation" => format!(
+                "MATCH (s:Session {{ session_id: $sid }})-[:HAS_TURN]->(t:Turn)<-[:OBSERVED_IN]-(a:LawViolation)-[r:{rel}]->(b:{to_label}) \
+                 RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                 LIMIT {per_rel_limit}"
+            ),
+            // Decision/SUPERSEDES and Artifact/IN_REPO are not
+            // session-scoped — skip when filtering by session.
+            Some(_) => continue,
+            None => format!(
+                "MATCH (a:{from_label})-[r:{rel}]->(b:{to_label}) \
+                 RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                 LIMIT {per_rel_limit}"
+            ),
         };
+
         let mut params: std::collections::HashMap<String, NexusValue> =
             std::collections::HashMap::new();
-        params.insert(
-            "lim".to_string(),
-            NexusValue::Int(per_label_limit as i64),
-        );
         if let Some(sid) = session_id {
             params.insert("sid".to_string(), NexusValue::String(sid.to_string()));
         }
+
         let res = match client.execute_cypher(&cy, Some(params)).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(
-                    cypher_label,
+                    rel,
                     error = %e,
-                    "nexus label pull failed; skipping this label"
+                    "nexus edge pull failed; skipping this relationship"
                 );
                 continue;
             }
         };
+
         for row in &res.rows {
             let cells = match row.as_array() {
                 Some(a) => a,
                 None => continue,
             };
-            let id = cells
-                .first()
-                .and_then(|v| v.as_str().map(String::from).or_else(|| {
-                    if v.is_null() {
-                        None
-                    } else {
-                        Some(v.to_string())
-                    }
-                }))
-                .unwrap_or_default();
-            if id.is_empty() {
+            let from_id = cell_str(cells.first()).unwrap_or_default();
+            let to_id = cell_str(cells.get(2)).unwrap_or_default();
+            if from_id.is_empty() || to_id.is_empty() {
                 continue;
             }
-            let label = cells
-                .get(1)
-                .and_then(|v| v.as_str().map(String::from).or_else(|| {
-                    if v.is_null() {
-                        None
-                    } else {
-                        Some(v.to_string())
-                    }
-                }))
+            let from_lbl = cell_str(cells.get(1))
                 .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| id.clone());
-            if seen_nodes.insert(id.clone()) {
-                nodes.push(GraphNode {
-                    id,
-                    label: clip(&label, 64),
+                .unwrap_or_else(|| from_id.clone());
+            let to_lbl = cell_str(cells.get(3))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| to_id.clone());
+
+            nodes_by_id
+                .entry(from_id.clone())
+                .or_insert_with(|| GraphNode {
+                    id: from_id.clone(),
+                    label: clip(&from_lbl, 64),
                     x: 0,
                     y: 0,
-                    kind: gui_kind.to_string(),
+                    kind: (*from_kind).to_string(),
+                });
+            nodes_by_id
+                .entry(to_id.clone())
+                .or_insert_with(|| GraphNode {
+                    id: to_id.clone(),
+                    label: clip(&to_lbl, 64),
+                    x: 0,
+                    y: 0,
+                    kind: (*to_kind).to_string(),
+                });
+
+            let key = format!("{from_id}|{rel}|{to_id}");
+            if seen_edges.insert(key) {
+                edges.push(GraphEdge {
+                    from: from_id,
+                    to: to_id,
+                    label: (*rel).to_string(),
                 });
             }
-            if nodes.len() >= limit {
+            if nodes_by_id.len() >= limit {
                 break;
             }
         }
-        if nodes.len() >= limit {
-            break;
-        }
     }
 
-    // Edge pulls — one MATCH per relationship type. Each query
-    // returns the ID of each endpoint via the same property the node
-    // pull above used as `id`, so dedup by that string lines up.
-    let edge_specs: &[(&str, &str, &str, &str, &str)] = &[
-        ("Session", "id", "HAS_TURN", "Turn", "id"),
-        ("Session", "id", "REMEMBERS", "Memory", "id"),
-        ("Artifact", "natural_key", "IN_REPO", "Repo", "name"),
-        ("Turn", "id", "HAS_TOOL_CALL", "ToolCall", "id"),
-        ("Turn", "id", "HAS_AGENT_CALL", "AgentCall", "id"),
-        ("ToolCall", "id", "TOUCHED", "Artifact", "natural_key"),
-        ("LawViolation", "id", "OBSERVED_IN", "Turn", "id"),
-        ("LawViolation", "id", "OF", "Law", "id"),
-        ("Decision", "id", "SUPERSEDES", "Decision", "id"),
-    ];
-    for (from_label, from_prop, rel, to_label, to_prop) in edge_specs {
-        let cy = format!(
-            "MATCH (a:{from_label})-[r:{rel}]->(b:{to_label}) \
-             RETURN a.{from_prop} AS from_id, b.{to_prop} AS to_id \
-             LIMIT $lim"
-        );
-        let mut params: std::collections::HashMap<String, NexusValue> =
-            std::collections::HashMap::new();
-        params.insert("lim".to_string(), NexusValue::Int(limit as i64));
-        let res = match client.execute_cypher(&cy, Some(params)).await {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        for row in &res.rows {
-            let cells = match row.as_array() {
-                Some(a) => a,
-                None => continue,
+    // Top-up pass — surface isolated nodes (Decisions without a
+    // SUPERSEDES, Laws without a violation, etc.) so the graph
+    // doesn't show 100% session-tree and hide the rest of the
+    // domain. Skipped when session-anchored: in that mode we want
+    // a focused subgraph, not a domain dump.
+    if session_id.is_none() && nodes_by_id.len() < limit {
+        let label_specs: &[(&str, &str, &str, &str)] = &[
+            ("Decision", "id", "title", "decision"),
+            ("Law", "id", "title", "law"),
+            ("Analysis", "id", "title", "analysis"),
+            ("Repo", "name", "name", "repo"),
+            ("Memory", "id", "id", "memory"),
+        ];
+        let remaining = limit - nodes_by_id.len();
+        let per_label = (remaining / label_specs.len()).max(3);
+
+        for (cypher_label, id_prop, label_prop, gui_kind) in label_specs {
+            if nodes_by_id.len() >= limit {
+                break;
+            }
+            let cy = format!(
+                "MATCH (n:{cypher_label}) \
+                 RETURN n.{id_prop} AS id, n.{label_prop} AS label \
+                 LIMIT {per_label}"
+            );
+            let res = match client
+                .execute_cypher(
+                    &cy,
+                    Some(std::collections::HashMap::<String, NexusValue>::new()),
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => continue,
             };
-            let from = cells.first().and_then(|v| v.as_str()).unwrap_or_default();
-            let to = cells.get(1).and_then(|v| v.as_str()).unwrap_or_default();
-            if from.is_empty() || to.is_empty() {
-                continue;
-            }
-            // Skip edges to nodes the canvas isn't rendering.
-            if !seen_nodes.contains(from) || !seen_nodes.contains(to) {
-                continue;
-            }
-            let key = format!("{from}|{rel}|{to}");
-            if seen_edges.insert(key) {
-                edges.push(GraphEdge {
-                    from: from.to_string(),
-                    to: to.to_string(),
-                    label: rel.to_string(),
-                });
+            for row in &res.rows {
+                let cells = match row.as_array() {
+                    Some(a) => a,
+                    None => continue,
+                };
+                let id = cell_str(cells.first()).unwrap_or_default();
+                if id.is_empty() {
+                    continue;
+                }
+                let label = cell_str(cells.get(1))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| id.clone());
+                nodes_by_id
+                    .entry(id.clone())
+                    .or_insert_with(|| GraphNode {
+                        id,
+                        label: clip(&label, 64),
+                        x: 0,
+                        y: 0,
+                        kind: (*gui_kind).to_string(),
+                    });
+                if nodes_by_id.len() >= limit {
+                    break;
+                }
             }
         }
     }
 
+    let nodes: Vec<GraphNode> = nodes_by_id.into_values().collect();
     Ok(GraphPayload { nodes, edges })
+}
+
+/// Pull a row cell as `String`, accepting either a JSON string or a
+/// non-null scalar (number / bool) that we stringify. Returns `None`
+/// for null / missing cells so the caller can substitute a fallback.
+fn cell_str(v: Option<&serde_json::Value>) -> Option<String> {
+    let v = v?;
+    if v.is_null() {
+        return None;
+    }
+    if let Some(s) = v.as_str() {
+        return Some(s.to_string());
+    }
+    Some(v.to_string())
 }
 
 /// Accumulator that dedups Nexus nodes/edges by id while turning

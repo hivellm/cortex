@@ -232,10 +232,18 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
         }
         // Skip anything that doesn't match a promotion / import pattern
         // — the rescue walk should never re-include random files the
-        // user did not opt in to.
+        // user did not opt in to. Per-repo cortex.toml patterns are
+        // checked first; canonical `.rulebook/*` defaults catch the
+        // common case where a sibling repo carries the standard
+        // rulebook layout but has no cortex.toml of its own (Nexus /
+        // Vectorizer / Rulebook / Synap as of 2026-04-28 — the user
+        // reported their decisions / knowledge / learnings never
+        // surfaced in discovery).
         let promoted = matches_any(&cfg.decisions.promote_patterns, &rel_path)
             || matches_any(&cfg.laws.promote_patterns, &rel_path)
-            || matches_any(&cfg.memories.import_files, &rel_path);
+            || matches_any(&cfg.memories.import_files, &rel_path)
+            || matches_str_globs(RULEBOOK_DECISION_GLOBS, &rel_path)
+            || matches_str_globs(RULEBOOK_MEMORY_GLOBS, &rel_path);
         if !promoted {
             continue;
         }
@@ -275,11 +283,46 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
     out
 }
 
+/// Canonical `.rulebook/*` patterns that ALWAYS promote, regardless
+/// of whether the repo ships a `cortex.toml`. Sibling Hive repos
+/// (Nexus, Vectorizer, Rulebook, Synap, …) don't carry per-repo
+/// cortex.toml today, so the rescue walk's `promoted` check returned
+/// false for every `.rulebook/decisions/*.md` they own — silently
+/// dropping their ADRs / knowledge / learnings on the floor. Hardcoding
+/// the canonical layout makes discovery work out-of-the-box for every
+/// rulebook-managed repo.
+///
+/// The order of this list is significant: `classify_path` and the
+/// rescue walk read it top-to-bottom, so subdirectories that should
+/// be `Decision` must precede the catch-all `.rulebook/**` patterns.
+pub const RULEBOOK_DECISION_GLOBS: &[&str] = &[
+    ".rulebook/decisions/*.md",
+    ".rulebook/decisions/**/*.md",
+];
+
+/// Canonical glob list for non-decision `.rulebook` artifacts:
+/// knowledge (patterns + anti-patterns), learnings, specs, and the
+/// loose top-level memory files (PLANS.md / STATE.md / CLAUDE.md
+/// imports). All of these route to `FileClass::Memory` today — the
+/// emitter records them with title + body + repo, which is enough
+/// for the keyword lane to surface them per-project. A future
+/// `Kind::Knowledge` / `Kind::Learning` discriminator can split
+/// them further without changing this discovery contract.
+pub const RULEBOOK_MEMORY_GLOBS: &[&str] = &[
+    ".rulebook/knowledge/**/*.md",
+    ".rulebook/learnings/**/*.md",
+    ".rulebook/specs/**/*.md",
+    ".rulebook/PLANS.md",
+    ".rulebook/STATE.md",
+    ".rulebook/COMPACT_CONTEXT.md",
+];
+
 /// Classify a repo-relative path against the spec-09 promotion
 /// patterns + extension heuristics.
 ///
 /// Order: explicit promotions (decision / law / memory) win first,
-/// then doc extensions, then code extensions, then `Other`.
+/// then the canonical `.rulebook/*` defaults, then doc extensions,
+/// then code extensions, then `Other`.
 pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
     if matches_any(&cfg.decisions.promote_patterns, rel_path) {
         return FileClass::Decision;
@@ -288,6 +331,16 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
         return FileClass::Law;
     }
     if matches_any(&cfg.memories.import_files, rel_path) {
+        return FileClass::Memory;
+    }
+    // Built-in `.rulebook/*` defaults — apply to every repo whether
+    // or not it ships a cortex.toml. Decisions first so a path like
+    // `.rulebook/decisions/001-foo.md` lands as Decision rather than
+    // being caught by the broader memory globs.
+    if matches_str_globs(RULEBOOK_DECISION_GLOBS, rel_path) {
+        return FileClass::Decision;
+    }
+    if matches_str_globs(RULEBOOK_MEMORY_GLOBS, rel_path) {
         return FileClass::Memory;
     }
     let ext = std::path::Path::new(rel_path)
@@ -310,6 +363,13 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
 /// path segments. The full `globset` machinery is overkill for the
 /// few patterns spec 09 calls out and would pull in another crate.
 pub fn matches_any(patterns: &[String], rel_path: &str) -> bool {
+    patterns.iter().any(|p| glob_match(p, rel_path))
+}
+
+/// `matches_any` for `&[&str]` — used by the canonical `.rulebook/*`
+/// default patterns which live in `&'static [&'static str]` form so
+/// they don't need to allocate `String`s on every call.
+pub fn matches_str_globs(patterns: &[&str], rel_path: &str) -> bool {
     patterns.iter().any(|p| glob_match(p, rel_path))
 }
 
@@ -416,5 +476,79 @@ mod tests {
         // walker's extension filter rather than indexing it as code.
         assert_eq!(classify_path("Cargo.lock", &cfg), FileClass::Other);
         assert_eq!(classify_path("Cargo.toml", &cfg), FileClass::Code);
+    }
+
+    #[test]
+    fn classify_picks_up_canonical_rulebook_layout_without_cortex_toml() {
+        // Nexus / Vectorizer / Rulebook / Synap don't ship cortex.toml
+        // today — `cfg` here mirrors a default-constructed config with
+        // no per-repo promote patterns. The canonical `.rulebook/*`
+        // layout MUST still classify correctly so discovery stops
+        // dropping their ADRs / knowledge / learnings on the floor.
+        let cfg = CortexSection::default();
+
+        // Decisions: top-level + nested.
+        assert_eq!(
+            classify_path(".rulebook/decisions/001-adopt-foo.md", &cfg),
+            FileClass::Decision
+        );
+        assert_eq!(
+            classify_path(".rulebook/decisions/sub/002-bar.md", &cfg),
+            FileClass::Decision
+        );
+
+        // Knowledge — patterns and anti-patterns both land in Memory
+        // (the keyword lane indexes them with title + body + repo).
+        assert_eq!(
+            classify_path(".rulebook/knowledge/patterns/foo.md", &cfg),
+            FileClass::Memory
+        );
+        assert_eq!(
+            classify_path(".rulebook/knowledge/anti-patterns/bar.md", &cfg),
+            FileClass::Memory
+        );
+
+        // Learnings.
+        assert_eq!(
+            classify_path(".rulebook/learnings/2026-04-27-baz.md", &cfg),
+            FileClass::Memory
+        );
+
+        // Specs.
+        assert_eq!(
+            classify_path(".rulebook/specs/RULEBOOK.md", &cfg),
+            FileClass::Memory
+        );
+        assert_eq!(
+            classify_path(".rulebook/specs/sub/sub.md", &cfg),
+            FileClass::Memory
+        );
+
+        // Loose top-level memory files.
+        assert_eq!(classify_path(".rulebook/PLANS.md", &cfg), FileClass::Memory);
+        assert_eq!(classify_path(".rulebook/STATE.md", &cfg), FileClass::Memory);
+
+        // Sanity: a random `.rulebook/random/foo.md` not under a
+        // canonical subdir should NOT be promoted — discovery only
+        // promotes the documented layout, not arbitrary content.
+        assert_eq!(
+            classify_path(".rulebook/random/foo.md", &cfg),
+            FileClass::Doc,
+            "non-canonical .rulebook paths fall through to extension routing"
+        );
+    }
+
+    #[test]
+    fn explicit_promote_patterns_still_take_precedence_over_defaults() {
+        // A repo that promotes `.rulebook/learnings/*.md` to Decision
+        // (unusual but legal) should win over the default Memory
+        // routing — explicit > defaults.
+        let mut cfg = CortexSection::default();
+        cfg.decisions.promote_patterns = vec![".rulebook/learnings/*.md".into()];
+        assert_eq!(
+            classify_path(".rulebook/learnings/x.md", &cfg),
+            FileClass::Decision,
+            "explicit cortex.toml promotion overrides built-in defaults"
+        );
     }
 }
