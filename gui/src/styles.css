@@ -90,7 +90,14 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #app { height: 100%; }
+html, body, #app {
+  height: 100%;
+  /* Lock horizontal scroll across the whole shell — every view
+     should reflow to the viewport width; a sideways scrollbar is
+     never the right answer here. */
+  overflow-x: hidden;
+  max-width: 100vw;
+}
 body {
   margin: 0;
   font-family: var(--font-sans);
@@ -747,7 +754,11 @@ a { color: inherit; text-decoration: none; }
    Inspector (slide-in right panel)
    ============================================================ */
 .inspector-backdrop {
-  position: absolute;
+  /* Fixed (not absolute) so the backdrop always covers the full
+     viewport — the parent grid's `overflow: hidden` was clipping
+     it on narrow viewports and a strip of underlying chrome
+     showed through to the left of the drawer. */
+  position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.35);
   z-index: 20;
@@ -758,11 +769,14 @@ a { color: inherit; text-decoration: none; }
 .inspector-backdrop.is-open { opacity: 1; pointer-events: auto; }
 
 .inspector {
-  position: absolute;
+  position: fixed;
   top: 0;
   right: 0;
   bottom: 0;
-  width: var(--inspector-w);
+  /* Cap at the viewport width so on narrow screens the drawer
+     fills edge-to-edge instead of leaving a visible strip of the
+     underlying app chrome on its left. */
+  width: min(var(--inspector-w), 100vw);
   background: var(--bg-1);
   border-left: 1px solid var(--border);
   z-index: 21;
