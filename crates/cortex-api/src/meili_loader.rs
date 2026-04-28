@@ -505,6 +505,27 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
             text = body_md;
         }
         ("turns", "turn") => {
+            // Bootstrap emits one `turn.historical` event per git
+            // commit (see cortex-bootstrap::emitter::emit_turn_historical),
+            // and the classifier folds those into `Kind::Turn`. They land
+            // in the same `cortex-{repo}-turns` Meili family as real
+            // chat turns, but their payload shape is
+            // `{role:"developer", message, evidence}` — not
+            // `{user_message, assistant_message}`. Without this guard
+            // each bootstrap session_id (one per repo run) appears as
+            // an empty-titled row in the Conversations panel and
+            // every commit inflates the turn count. The body of a
+            // real chat turn arrives as plain concatenated text and
+            // does not parse as JSON, so the bootstrap shape is the
+            // only branch that matches here.
+            if let Some(b) = parsed_body.as_ref() {
+                let has_role = b.get("role").is_some();
+                let has_user_message = b.get("user_message").is_some();
+                let has_assistant_message = b.get("assistant_message").is_some();
+                if has_role && !has_user_message && !has_assistant_message {
+                    return None;
+                }
+            }
             symbol = "turn";
             let user = parsed_body
                 .as_ref()
@@ -729,6 +750,58 @@ mod tests {
         // tool_call lives in `cortex-*-code`; the loader should not
         // touch it from the `decisions` family.
         assert!(doc_to_hit(&doc, "decisions").is_none());
+    }
+
+    #[test]
+    fn doc_to_hit_skips_bootstrap_historical_turn_so_it_does_not_pollute_conversations() {
+        // Regression: cortex-bootstrap stamps one `turn.historical`
+        // event per git commit with payload
+        // `{role, message, evidence}`. Those used to land as
+        // `symbol = "turn"` LaneHits and inflate the Conversations
+        // panel with empty-titled session rows (one per repo
+        // bootstrap run, hundreds of "turns" each). The
+        // ("turns","turn") branch now recognises the bootstrap
+        // shape and short-circuits.
+        let inner = serde_json::json!({
+            "role": "developer",
+            "message": "feat(graph): stamp label/display/caption/name on every node",
+            "evidence": {
+                "files_changed": ["crates/cortex-graph/src/mapper.rs"],
+                "diff_summary": "+12 -3",
+            },
+        });
+        let body_str = serde_json::to_string(&inner).unwrap();
+        let doc = serde_json::json!({
+            "id": "01BOOTSTRAPCOMMIT0000000000",
+            "event_id": "01BOOTSTRAPCOMMIT0000000000",
+            "kind": "turn",
+            "repo": "Cortex",
+            "ts": 1_750_000_000_000_i64,
+            "body": body_str,
+        });
+        assert!(
+            doc_to_hit(&doc, "turns").is_none(),
+            "bootstrap turn.historical events must not surface as conversation turns"
+        );
+    }
+
+    #[test]
+    fn doc_to_hit_keeps_real_chat_turn_with_concatenated_text_body() {
+        // The fulltext builder writes real chat turn bodies as plain
+        // `user_message\nassistant_message` text — not JSON — so
+        // `parsed_body` is None and the bootstrap-shape guard does
+        // not fire. The hit must surface as `symbol = "turn"`.
+        let doc = serde_json::json!({
+            "id": "01CHATTURN0000000000000000",
+            "event_id": "01CHATTURN0000000000000000",
+            "kind": "turn",
+            "repo": "Cortex",
+            "ts": 1_750_000_000_000_i64,
+            "body": "what's up?\n\nhi there",
+        });
+        let (symbol, hit) = doc_to_hit(&doc, "turns").expect("real chat turn projected");
+        assert_eq!(symbol, "turn");
+        assert_eq!(hit.symbol.as_deref(), Some("turn"));
     }
 
     #[test]

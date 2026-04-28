@@ -165,6 +165,11 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
     // pairing can distinguish the user/Stop envelopes by turn_id.
     let mut turn_user_message: Option<String> = None;
     let mut turn_assistant_message: Option<String> = None;
+    // ToolCall + AgentCall payloads carry an optional `duration_ms`.
+    // Captured here so the dashboard's per-minute P95 helper can
+    // reach it via `extras["duration_ms"]` without re-decoding the
+    // payload — phase2g §1.3 (`pre_thinking_p95_ms` series).
+    let mut duration_ms_payload: Option<u64> = None;
 
     let (text, symbol) = match env.kind {
         Kind::Turn => {
@@ -182,6 +187,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         }
         Kind::ToolCall => {
             let tc: ToolCall = serde_json::from_value(env.payload.clone()).ok()?;
+            duration_ms_payload = tc.duration_ms;
             let mut buf = format!("[{}] {}", tc.tool_name, summarize_value(&tc.input, 320));
             if let Some(ref out) = tc.output {
                 if let Some(stdout) = out.stdout.as_deref() {
@@ -196,6 +202,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         }
         Kind::AgentCall => {
             let ac: AgentCall = serde_json::from_value(env.payload.clone()).ok()?;
+            duration_ms_payload = ac.duration_ms;
             let text = format!(
                 "[agent:{}] {}",
                 ac.agent_type,
@@ -255,6 +262,18 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         extras.insert(
             "assistant_message".to_string(),
             serde_json::Value::String(a),
+        );
+    }
+    // Stamp wall-clock duration on extras when the source payload
+    // carried one. The dashboard's `pre_thinking_p95_ms` series
+    // reads it back without round-tripping through `payload`. Turn
+    // envelopes don't carry their own duration today; the proxy is
+    // ToolCall + AgentCall durations which are the closest signal
+    // the lane has until spec-12 lands turn-level latency.
+    if let Some(d) = duration_ms_payload {
+        extras.insert(
+            "duration_ms".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(d)),
         );
     }
 

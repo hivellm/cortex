@@ -38,6 +38,7 @@ tower-http = { workspace = true }
 tokio-stream = "0.1"
 async-stream = "0.3"
 futures = "0.3"
+regex = { workspace = true }
 
 synap-sdk = { workspace = true }
 nexus-graph-sdk = { workspace = true }

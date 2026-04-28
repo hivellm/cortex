@@ -41,12 +41,19 @@ export type KindCount = { kind: string; count: number };
 export type RepoCount = { repo: string; count: number };
 
 /// Time-bucketed series block. `events_per_min` carries 20 minute
-/// buckets; `violations_7d_daily` carries 7 day buckets. Both are
-/// always present — empty buckets are zero so the renderer can draw
-/// a gap-free Sparkline.
+/// buckets; `violations_7d_daily` carries 7 day buckets — both have
+/// no nulls so the Sparkline draws a gap-free line.
+/// `pre_thinking_p95_ms` carries 20 minute buckets too but each slot
+/// is `number | null`; the renderer leaves a gap on null buckets so
+/// the user sees missing-data honestly rather than an implied zero.
+/// `classifier_cost_usd_today` is a 24-slot hourly ribbon — all
+/// zeros until spec-05 lands cost stamping (the parent body's
+/// `classifier_cost_unavailable_until_spec05` flag confirms that).
 export type SeriesBlock = {
   events_per_min: number[];
+  pre_thinking_p95_ms: (number | null)[];
   violations_7d_daily: number[];
+  classifier_cost_usd_today: number[];
 };
 
 export type Overview = {
@@ -55,6 +62,7 @@ export type Overview = {
   kind_breakdown: KindCount[];
   recent_repos: RepoCount[];
   series: SeriesBlock;
+  classifier_cost_unavailable_until_spec05: boolean;
 };
 
 export type TimelineEvent = {
@@ -195,11 +203,13 @@ export type ToolsStatsBody = {
 
 /// Trust matrix — model × repo cells with `[0, 1]` scores. Empty
 /// arrays / map until spec-14 lands the actual computation; the GUI
-/// shows an empty state in that case.
+/// shows an empty state in that case. `source` switches from
+/// `"stub_until_spec14"` to `"derived"` when the real signal lands.
 export type TrustMatrix = {
   models: string[];
   repos: string[];
   scores: Record<string, Record<string, number>>;
+  source: "stub_until_spec14" | "derived";
 };
 
 export type DecisionDetail = DecisionRow & {

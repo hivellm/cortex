@@ -10,6 +10,34 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+/// Domain separator for the SHA-256 → ULID derivation. Bumping this
+/// would invalidate every previously-published `session_id` for the
+/// same Claude UUID, so do not change it without a migration plan.
+const HINT_TO_ULID_DOMAIN: &[u8] = b"cortex-cc-session-v1:";
+
+/// Derive a canonical 26-char Crockford ULID deterministically from a
+/// hint (Claude's session UUID, or `__pid_<n>` for the hint-less
+/// fallback). Determinism is the whole point: when the daemon
+/// restarts mid-chat the in-memory `hint_to_id` map is lost, but the
+/// same hint MUST keep resolving to the same `session_id` so the
+/// dashboard does not split one chat across two session rows.
+fn deterministic_ulid_from_hint(hint: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(HINT_TO_ULID_DOMAIN);
+    hasher.update(hint.as_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // ULID encodes 128 bits as 26 Crockford-base32 chars; the top 3
+    // bits of the leading byte map onto the first symbol (0..7).
+    // Mask the top 2 bits so the first character stays inside the
+    // canonical ULID range and matches readers that assume so.
+    bytes[0] &= 0x3F;
+    let n = u128::from_be_bytes(bytes);
+    ulid::Ulid::from(n).to_string()
+}
 
 /// Per-session state cached by the daemon.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -39,10 +67,14 @@ impl SessionState {
 #[derive(Debug, Default)]
 pub struct SessionManager {
     sessions: Mutex<HashMap<String, SessionState>>,
-    /// Maps the inbound `CLAUDE_SESSION_ID` (or `__pid_<n>` when
-    /// absent) to the canonical ULID we publish on every envelope.
+    /// In-memory memoisation of the (hint → ULID) derivation. The
+    /// derivation itself is deterministic (`SHA256(domain || hint)` →
+    /// 16 bytes → ULID), so this map is a perf cache only — losing
+    /// it (e.g. across daemon restarts) does NOT split sessions
+    /// because the same hint always resolves to the same ULID.
     /// Spec 04's `session_id` regex `^[0-9A-HJ-KM-NP-TV-Z]{26}$` is
-    /// strict, so we never echo a free-form hint back to the wire.
+    /// strict, which is why we never echo a free-form hint back to
+    /// the wire.
     hint_to_id: Mutex<HashMap<String, String>>,
 }
 
@@ -54,9 +86,15 @@ impl SessionManager {
 
     /// Resolve or synthesize a session id.
     ///
-    /// Always returns a 26-char Crockford ULID. The (hint → ULID) and
-    /// (pid → ULID) mappings are cached so every hook in the same
-    /// Claude session resolves to the same canonical id.
+    /// Always returns a 26-char Crockford ULID derived
+    /// deterministically from the hint (or, when absent, from the
+    /// daemon `pid_fallback`). Because the derivation is a pure
+    /// function of the input, every hook in the same Claude session
+    /// resolves to the same canonical id even across daemon
+    /// restarts — the in-memory cache is just an optimisation,
+    /// never the source of truth. Earlier revisions used
+    /// `Ulid::new()` here, which split a single chat across two
+    /// dashboard rows whenever the daemon restarted mid-session.
     pub fn resolve_or_synthesize(&self, hint: Option<&str>, pid_fallback: u32) -> String {
         let key = match hint {
             Some(h) if !h.is_empty() => h.to_string(),
@@ -64,11 +102,11 @@ impl SessionManager {
         };
         if let Ok(mut g) = self.hint_to_id.lock() {
             return g
-                .entry(key)
-                .or_insert_with(|| ulid::Ulid::new().to_string())
+                .entry(key.clone())
+                .or_insert_with(|| deterministic_ulid_from_hint(&key))
                 .clone();
         }
-        ulid::Ulid::new().to_string()
+        deterministic_ulid_from_hint(&key)
     }
 
     /// Register the state for `session_id` if it's new; otherwise
@@ -168,6 +206,27 @@ mod tests {
         // Same pid resolves to the same id across calls (cached).
         let id2 = mgr.resolve_or_synthesize(None, 1234);
         assert_eq!(id, id2);
+    }
+
+    #[test]
+    fn resolution_survives_daemon_restart_for_the_same_hint() {
+        // Regression: a daemon restart used to drop the in-memory
+        // hint→ULID map, so the second hook firing for the same
+        // Claude session UUID got a fresh random ULID and the chat
+        // appeared as two separate rows in the dashboard. The
+        // deterministic derivation guarantees that two independent
+        // SessionManager instances (= two daemon lifetimes) resolve
+        // the same hint to the same ULID.
+        let mgr_before = SessionManager::new();
+        let mgr_after = SessionManager::new();
+        let hint = "11111111-2222-3333-4444-555555555555";
+        let id_before = mgr_before.resolve_or_synthesize(Some(hint), 0);
+        let id_after = mgr_after.resolve_or_synthesize(Some(hint), 0);
+        assert!(is_canonical_ulid(&id_before));
+        assert_eq!(
+            id_before, id_after,
+            "the same Claude session hint must resolve to the same Cortex session_id across daemon restarts"
+        );
     }
 
     #[test]

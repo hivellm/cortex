@@ -58,6 +58,9 @@ GET  /v1/dashboard/analyses
 GET  /v1/analysis/{id}/stream              # already in spec 15; dashboard consumer
 GET  /v1/dashboard/tools/stats?since=...
 GET  /v1/dashboard/trust
+GET  /v1/dashboard/tasks                   # rulebook task list (active + archived)
+GET  /v1/dashboard/tasks/summary           # aggregate counters
+GET  /v1/dashboard/tasks/{id}              # full proposal + sectioned checklist
 ```
 
 All JSON; SSE uses `text/event-stream`.
@@ -114,10 +117,85 @@ The 12 `/v1/dashboard/*` endpoints share a single `MemoryKeywordLane` populated 
 | `/violations` | `symbol = "law_violation"`; surfaces `extras.law_id` and `severity = critical → action = blocked` |
 | `/analyses` | `symbol = "analysis"` |
 | `/tools/stats` | hits with a `tool_call:<name>` symbol; aggregates calls and the 7×24 weekday × hour heatmap |
-| `/trust` | empty until spec-14 ships the `(model, repo)` derivation pipeline — handler returns honest empty arrays |
+| `/trust` | empty until spec-14 ships the `(model, repo)` derivation pipeline — handler returns honest empty arrays plus `source: "stub_until_spec14"` so the GUI shows the right empty-state copy |
+
+#### `/v1/dashboard/overview` — series block (phase2g)
+
+The overview body now carries a `series` block alongside the existing counters. Helpers live in `crates/cortex-api/src/dashboard_series.rs` so the route handler stays compact.
+
+```jsonc
+{
+  "events_total": 1234,
+  "repos_indexed": 6,
+  "kind_breakdown": [...],
+  "recent_repos": [...],
+  "series": {
+    "events_per_min":          [u64; 20],            // 1-minute buckets, oldest-first
+    "pre_thinking_p95_ms":     [u64 | null; 20],     // P95 of `extras.duration_ms`; null on empty buckets
+    "violations_7d_daily":     [u64; 7],             // daily count of `kind=law_violation`
+    "classifier_cost_usd_today": [f64; 24]           // hourly USD; all 0.0 today (see flag below)
+  },
+  "classifier_cost_unavailable_until_spec05": true   // flips to `false` once spec-05 stamps cost on the lane
+}
+```
+
+`pre_thinking_p95_ms` reads `extras["duration_ms"]` — `archive_loader::envelope_to_hit` stamps that field for `ToolCall` and `AgentCall` envelopes. Turns alone do not populate it today; spec-12 owns turn-level latency stamping.
+
+#### `/v1/dashboard/tools/stats` — heatmap matrix (phase2g)
+
+```jsonc
+{
+  "tools": [{ "tool": "Edit", "calls": 42, "avg_ms": 0, "err_rate": 0.0, "share": 0.31 }],
+  "heatmap": {
+    "tz": "UTC",
+    "days": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+    "cells": u32[7][24]   // counts per (weekday, hour) over the last 7 days
+  }
+}
+```
+
+Empty buckets are zeros (not `null`) so the renderer's oklch intensity formula has a clean `0..max` ramp. Hits with no timestamp are dropped — they cannot be placed honestly.
+
+#### `/v1/dashboard/trust` — stub envelope (phase2g)
+
+```jsonc
+{
+  "models": [],
+  "repos":  [],
+  "scores": {},
+  "source": "stub_until_spec14"
+}
+```
+
+Spec 14 lands the real derivation (rolling violation rate per `(model, repo)`). Until then, `source` lets the GUI render a "no data yet" empty state without conditionally hiding the section.
 | `/graph` | bypasses the lane: when `CORTEX_NEXUS_URL` is set, runs `MATCH … RETURN nodes, edges` Cypher; otherwise falls back to a synthetic Session→Turn→ToolCall layout from the lane |
 
 `MemoryKeywordLane` is **not** test-only — it's the production cache layer. The orchestrator (`spec-11`) consumes the same trait, so a future `MeiliKeywordLane` impl can drop in behind the same surface for high-cardinality search without changing any handler.
+
+### Loader 3 — `tasks_loader.rs`
+
+The `/v1/dashboard/tasks*` endpoints do **not** flow through the keyword lane — rulebook tasks are not envelopes, they are filesystem directories the rulebook MCP writes. `tasks_loader.rs` walks them directly:
+
+- Source: `CORTEX_RULEBOOK_ROOT/{tasks,archive}/`. The default falls back to `<cwd>/.rulebook` so a `cargo run` from the repo root just works; an unreachable path yields empty results so cold-stack dev keeps booting.
+- For each task directory it parses:
+  - `id` — directory name; archived dirs strip the `YYYY-MM-DD-` date prefix (the prefix becomes `archived_at`).
+  - `phase` — parsed from the id prefix via `^phase(\d+)([a-z]?)`. `phase2g_dashboard_enriched_metrics` → `("phase2g", 2, "g")`.
+  - `title` — first H1 of `proposal.md` (the leading `Proposal:` is stripped); falls back to the id.
+  - `summary` — first non-heading paragraph of `proposal.md`, trimmed to ~280 chars; rulebook scaffold placeholders (`[Explain why...]`) are skipped.
+  - `progress` — `(done, total)` derived from the `- [x]` / `- [ ]` checkbox count in `tasks.md`.
+  - `status` — read from `.metadata.json` (`pending` / `in-progress` / `completed`); forced to `archived` for anything under `archive/`.
+  - `created_at` / `updated_at` — from `.metadata.json`; archive's date prefix is the fallback when the metadata file is absent.
+- Caching: rows are stored behind a `RwLock`; a 30-second TTL gates full re-scans, and per-task mtime stamps invalidate individual rows when `proposal.md` / `tasks.md` / `.metadata.json` advance between scans.
+
+Endpoints:
+
+| Path | Behaviour |
+|------|-----------|
+| `GET /v1/dashboard/tasks` | Filter knobs: repeated `status=pending|in-progress|completed|archived`, repeated `phase=phase2g|phase4a`, `include_archived=bool` (default `true`), `limit` (default 200, capped at 500), `offset` (default 0), `sort=phase|updated_at|created_at` (default `phase`), `order=asc|desc`. Default sort: phase numeric asc → letter asc → `updated_at` desc. Response: `{ tasks, total, by_phase, by_status }` where `by_phase` / `by_status` are aggregated across the **unfiltered** population so the GUI can render filter chips with stable counts. |
+| `GET /v1/dashboard/tasks/summary` | `{ total, completed, in_progress, pending, archived, completion_pct }` — `completion_pct = (completed + archived) / total * 100`, rounded to one decimal. |
+| `GET /v1/dashboard/tasks/{id}` | Full row + `proposal_md` (full body) + `checklist` (sectioned by H2; preserves file order) + `specs` (recursive listing under the task's `specs/` directory). When the same id exists both active and archived, the active row wins and `also_archived: true` is set on the response.|
+
+The loader is read-only; the rulebook MCP remains the only writer for `.rulebook/{tasks,archive}/`.
 
 ### Per-project Meili settings (spec-08 ↔ spec-16 contract)
 

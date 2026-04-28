@@ -301,10 +301,28 @@ async fn main() -> Result<()> {
         }
     };
     let analyzer = StdArc::new(cortex_api::analyzer::Analyzer::from_env());
+    // Rulebook task loader. `CORTEX_RULEBOOK_ROOT` points at the
+    // `.rulebook/` directory whose `tasks/` + `archive/` subtrees the
+    // dashboard surfaces under `/v1/dashboard/tasks*`. Falls back to
+    // `<cwd>/.rulebook` so a `cargo run` from the repo root just works;
+    // when the path is unreachable the loader yields empty results.
+    let rulebook_root: PathBuf = std::env::var("CORTEX_RULEBOOK_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .map(|p| p.join(".rulebook"))
+                .unwrap_or_else(|_| PathBuf::from(".rulebook"))
+        });
+    tracing::info!(
+        rulebook_root = %rulebook_root.display(),
+        "tasks loader: rooted at .rulebook/"
+    );
+    let tasks = StdArc::new(cortex_api::TaskLoader::new(rulebook_root));
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword_memory.clone(),
         nexus: nexus_client,
         analyzer,
+        tasks,
     };
 
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);

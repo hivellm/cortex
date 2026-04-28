@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::lanes::MemoryKeywordLane;
+use crate::tasks_loader::{ListQuery, SortField, SortOrder, TaskLoader};
 use crate::types::{IncludeField, Intent, QueryRequest, Scope};
 
 /// Shared state for dashboard routes — the seeded keyword lane plus
@@ -46,6 +47,11 @@ pub struct DashboardState {
     /// Sonnet-backed session analyzer. Shared so the in-memory
     /// summary cache survives across requests; built once at boot.
     pub analyzer: Arc<crate::analyzer::Analyzer>,
+    /// Rulebook task loader. Backs the `/v1/dashboard/tasks*`
+    /// endpoints. When the workspace root is unreachable the loader
+    /// transparently yields empty results — cold-stack dev keeps
+    /// booting.
+    pub tasks: Arc<TaskLoader>,
 }
 
 /// Build the dashboard sub-router carrying the `/v1/dashboard/*` JSON
@@ -75,6 +81,9 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         )
         .route("/v1/dashboard/handoffs", get(handoffs))
         .route("/v1/dashboard/classifications", get(classifications))
+        .route("/v1/dashboard/tasks", get(tasks_list))
+        .route("/v1/dashboard/tasks/summary", get(tasks_summary))
+        .route("/v1/dashboard/tasks/{id}", get(tasks_detail))
         .with_state(state)
 }
 
@@ -109,22 +118,39 @@ pub struct OverviewBody {
     /// quantities derivable from the captured lane are emitted —
     /// see [`SeriesBlock`].
     pub series: SeriesBlock,
+    /// Honest "we don't have this signal yet" flag for the
+    /// `series.classifier_cost_usd_today` ribbon. Always `true`
+    /// today; flips to `false` once the spec-05 classifier worker
+    /// stamps per-event cost on the lane and the API can sum them.
+    /// The wire shape stays stable across the cut-over so clients
+    /// don't need a v2 endpoint.
+    pub classifier_cost_unavailable_until_spec05: bool,
 }
 
 /// Time-bucketed series block. Each array carries a fixed number of
-/// buckets, oldest-first, with no nulls — empty buckets are zero so
-/// the front-end Sparkline renders a gap-free line. Only series that
-/// can be computed from the captured envelopes are emitted; latency
-/// and cost series will land when the spec-12 derivation pipeline
-/// and the spec-05 classifier worker start stamping the
-/// corresponding fields.
+/// buckets, oldest-first. `events_per_min` and `violations_7d_daily`
+/// have no nulls — empty buckets are zero so the front-end Sparkline
+/// renders a gap-free line. `pre_thinking_p95_ms` carries `null`
+/// for buckets where no envelope landed with a duration stamp so
+/// the renderer draws a gap rather than a dishonest zero.
 #[derive(Debug, Clone, Serialize)]
 pub struct SeriesBlock {
     /// Total events per minute over the last 20 minutes.
     pub events_per_min: Vec<u64>,
+    /// P95 duration (ms) per minute over the last 20 minutes. The
+    /// signal source is `tool_call` + `agent_call` envelopes that
+    /// carry `duration_ms`; turns alone don't populate the series
+    /// today (spec-12 derivation pipeline owns turn-level latency
+    /// and will widen the source set when it ships).
+    pub pre_thinking_p95_ms: Vec<Option<u64>>,
     /// Daily count of `kind=law_violation` envelopes over the last
     /// 7 days, oldest-first.
     pub violations_7d_daily: Vec<u64>,
+    /// Hourly classifier cost (USD) over the rolling 24 hours,
+    /// oldest-first. All zero today — see
+    /// `classifier_cost_unavailable_until_spec05` on the parent
+    /// body for context.
+    pub classifier_cost_usd_today: Vec<f64>,
 }
 
 /// One row of the per-kind breakdown.
@@ -170,8 +196,14 @@ async fn overview(State(state): State<DashboardState>) -> Response {
 
     let now_ms = chrono::Utc::now().timestamp_millis();
     let series = SeriesBlock {
-        events_per_min: bucket_per_minute(&snapshot, now_ms, 20),
-        violations_7d_daily: bucket_violations_per_day(&snapshot, now_ms, 7),
+        events_per_min: crate::dashboard_series::bucket_per_minute(&snapshot, now_ms, 20),
+        pre_thinking_p95_ms: crate::dashboard_series::bucket_p95_duration_per_minute(
+            &snapshot, now_ms, 20,
+        ),
+        violations_7d_daily: crate::dashboard_series::bucket_violations_per_day(
+            &snapshot, now_ms, 7,
+        ),
+        classifier_cost_usd_today: crate::dashboard_series::classifier_cost_zeros(),
     };
 
     let body = OverviewBody {
@@ -186,73 +218,9 @@ async fn overview(State(state): State<DashboardState>) -> Response {
             .collect(),
         recent_repos: repos_sorted,
         series,
+        classifier_cost_unavailable_until_spec05: true,
     };
     (StatusCode::OK, Json(body)).into_response()
-}
-
-/// Bucket `hits` into `buckets` minute-wide slots ending at `now_ms`.
-/// Slot 0 is the oldest (`now_ms - buckets * 60_000`), slot
-/// `buckets - 1` is the most recent. Hits older than the window are
-/// ignored; hits in the future (clock-skew) collapse into the last
-/// slot.
-fn bucket_per_minute(
-    hits: &[crate::lanes::LaneHit],
-    now_ms: i64,
-    buckets: usize,
-) -> Vec<u64> {
-    let mut out = vec![0u64; buckets];
-    let span_ms = (buckets as i64) * 60_000;
-    let start_ms = now_ms - span_ms;
-    for h in hits {
-        if h.ts <= 0 {
-            continue;
-        }
-        if h.ts < start_ms {
-            continue;
-        }
-        let off = (h.ts - start_ms) / 60_000;
-        let idx = if off < 0 {
-            0
-        } else if off >= buckets as i64 {
-            buckets - 1
-        } else {
-            off as usize
-        };
-        out[idx] += 1;
-    }
-    out
-}
-
-/// Bucket `kind=law_violation` envelopes into `days` day-wide slots
-/// ending at `now_ms`. Slot 0 is the oldest, slot `days - 1` is
-/// today.
-fn bucket_violations_per_day(
-    hits: &[crate::lanes::LaneHit],
-    now_ms: i64,
-    days: usize,
-) -> Vec<u64> {
-    let mut out = vec![0u64; days];
-    let day_ms: i64 = 86_400_000;
-    let span_ms = (days as i64) * day_ms;
-    let start_ms = now_ms - span_ms;
-    for h in hits {
-        if h.symbol.as_deref() != Some("law_violation") {
-            continue;
-        }
-        if h.ts <= 0 || h.ts < start_ms {
-            continue;
-        }
-        let off = (h.ts - start_ms) / day_ms;
-        let idx = if off < 0 {
-            0
-        } else if off >= days as i64 {
-            days - 1
-        } else {
-            off as usize
-        };
-        out[idx] += 1;
-    }
-    out
 }
 
 fn symbol_to_kind(symbol: Option<&str>) -> &'static str {
@@ -1468,10 +1436,17 @@ fn build_tool_heatmap(hits: &[crate::lanes::LaneHit]) -> HeatmapBlock {
 /// surfaces an empty state.
 #[derive(Debug, Clone, Serialize)]
 pub struct TrustMatrix {
+    /// Model names (rows of the matrix).
     pub models: Vec<String>,
+    /// Repo names (columns of the matrix).
     pub repos: Vec<String>,
     /// `scores[model][repo]` → trust score in `[0, 1]`.
     pub scores: std::collections::BTreeMap<String, std::collections::BTreeMap<String, f64>>,
+    /// Provenance hint for the renderer's empty-state copy. Today
+    /// always `"stub_until_spec14"`; flips to `"derived"` once spec
+    /// 14 starts computing rolling violation rates per
+    /// `(model, repo)`.
+    pub source: &'static str,
 }
 
 async fn trust(State(_state): State<DashboardState>) -> Response {
@@ -1479,6 +1454,7 @@ async fn trust(State(_state): State<DashboardState>) -> Response {
         models: Vec::new(),
         repos: Vec::new(),
         scores: std::collections::BTreeMap::new(),
+        source: "stub_until_spec14",
     };
     (StatusCode::OK, Json(body)).into_response()
 }
@@ -1683,13 +1659,71 @@ fn turn_id_of(hit: &crate::lanes::LaneHit) -> Option<String> {
         .map(String::from)
 }
 
+/// `true` when the turn LaneHit is an internal Cortex CLI invocation
+/// (classifier-worker per-event Haiku call, dashboard analyzer Sonnet
+/// session-summary call) rather than a real user chat. Both render
+/// their full prompt template into the spawned `claude -p`'s stdin,
+/// which the adapter then captures verbatim into `user_message` —
+/// flooding the Conversations panel with one row per classified
+/// event. The signature checks for the stable opening sentence of
+/// each prompt template; using `contains` (not `starts_with`) keeps
+/// the match robust against any leading whitespace, redaction
+/// markers, or shell-injected preamble.
+fn is_internal_cortex_turn(hit: &crate::lanes::LaneHit) -> bool {
+    let user_message = hit
+        .extras
+        .get("user_message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let probe = if user_message.is_empty() {
+        hit.text.as_str()
+    } else {
+        user_message
+    };
+    // Classifier-worker prompt — see
+    // `crates/cortex-classifier/prompts/classifier.v1.txt`. Every
+    // per-event Haiku CLI call ships this template verbatim.
+    if probe.contains("You are an event classifier + graph extractor for the Cortex system") {
+        return true;
+    }
+    // Analyzer prompt — see
+    // `crates/cortex-api/src/analyzer.rs::build_prompt`. The
+    // "Analyze with Sonnet" button calls this on demand.
+    if probe.contains("You are analyzing one session of captured Claude Code activity") {
+        return true;
+    }
+    // Defence in depth: when only the assistant side survived the
+    // capture (e.g. user_message stripped by redaction), the
+    // classifier output is still a recognisable JSON shape — a
+    // markdown-fenced object whose top key is "events" and whose
+    // first record carries the classifier-specific
+    // `kind_refinement` field. Real Claude Code chats never reply
+    // with this shape.
+    let assistant_message = hit
+        .extras
+        .get("assistant_message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if assistant_message.contains("\"events\":[{")
+        && assistant_message.contains("\"kind_refinement\"")
+    {
+        return true;
+    }
+    false
+}
+
 async fn conversations_list(State(state): State<DashboardState>) -> Response {
     let hits = collect_lane_hits(&state.lane);
 
-    // Group turn-kind hits by session.
+    // Group turn-kind hits by session. `is_internal_cortex_turn`
+    // drops classifier-worker / analyzer CLI invocations so the
+    // panel shows only real user chats — those tooling calls were
+    // creating one session row per classified event.
     let mut by_session: std::collections::BTreeMap<String, Vec<crate::lanes::LaneHit>> =
         std::collections::BTreeMap::new();
-    for h in hits.into_iter().filter(|h| symbol_to_kind(h.symbol.as_deref()) == "turn") {
+    for h in hits.into_iter().filter(|h| {
+        symbol_to_kind(h.symbol.as_deref()) == "turn" && !is_internal_cortex_turn(h)
+    }) {
         if let Some(sid) = session_id_of(&h) {
             by_session.entry(sid.to_string()).or_default().push(h);
         }
@@ -1769,6 +1803,7 @@ async fn conversation_detail(
     for h in hits.into_iter().filter(|h| {
         session_id_of(h) == Some(session_id.as_str())
             && symbol_to_kind(h.symbol.as_deref()) == "turn"
+            && !is_internal_cortex_turn(h)
     }) {
         if let Some(r) = h.repo.as_deref() {
             repos.insert(r.to_string());
@@ -2908,6 +2943,98 @@ fn synthesize_graph_from_lane(
     GraphPayload { nodes, edges }
 }
 
+// ---------------------------------------------------------------------
+// /v1/dashboard/tasks*
+// ---------------------------------------------------------------------
+
+/// Query params for the list endpoint. `axum-extra::Query` handles the
+/// repeated multi-value params (`status=...&status=...`) directly.
+#[derive(Debug, Default, Deserialize)]
+pub struct TasksListQuery {
+    /// Multi-value status filter.
+    #[serde(default)]
+    pub status: Vec<String>,
+    /// Multi-value phase filter (exact match against the canonical
+    /// phase key, e.g. `phase2g`).
+    #[serde(default)]
+    pub phase: Vec<String>,
+    /// Drop archived rows when set to `false`. Defaults to `true`.
+    #[serde(default)]
+    pub include_archived: Option<bool>,
+    /// Page size (default 200, capped at 500 by the loader).
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Page offset (default 0).
+    #[serde(default)]
+    pub offset: Option<usize>,
+    /// `phase` (default), `updated_at`, or `created_at`.
+    #[serde(default)]
+    pub sort: Option<String>,
+    /// `asc` or `desc`. Defaults to ascending for `phase` and
+    /// descending for the timestamp fields.
+    #[serde(default)]
+    pub order: Option<String>,
+}
+
+fn list_query_from(params: TasksListQuery) -> ListQuery {
+    let sort = match params.sort.as_deref() {
+        Some("updated_at") => SortField::UpdatedAt,
+        Some("created_at") => SortField::CreatedAt,
+        _ => SortField::Phase,
+    };
+    let order = match params.order.as_deref() {
+        Some("asc") => Some(SortOrder::Asc),
+        Some("desc") => Some(SortOrder::Desc),
+        _ => None,
+    };
+    ListQuery {
+        status: params.status,
+        phase: params.phase,
+        include_archived: params.include_archived.unwrap_or(true),
+        limit: params.limit.unwrap_or(200),
+        offset: params.offset.unwrap_or(0),
+        sort,
+        order,
+    }
+}
+
+/// `GET /v1/dashboard/tasks` — filtered list with phase + status
+/// breakdowns. Returns `200` even when the workspace root is missing
+/// (just yields an empty list + zero breakdowns) so the GUI's empty
+/// state is the only thing the user sees on a misconfigured deploy.
+async fn tasks_list(
+    State(state): State<DashboardState>,
+    Query(params): Query<TasksListQuery>,
+) -> Response {
+    let query = list_query_from(params);
+    let body = state.tasks.list(&query);
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// `GET /v1/dashboard/tasks/summary` — aggregate counters for the
+/// sidebar pill + the Tasks-view stats grid.
+async fn tasks_summary(State(state): State<DashboardState>) -> Response {
+    let body = state.tasks.summary();
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// `GET /v1/dashboard/tasks/{id}` — full proposal + sectioned
+/// checklist + listing of `specs/`. Returns `404` when the id is not
+/// found in either the active or archived tree.
+async fn tasks_detail(
+    State(state): State<DashboardState>,
+    Path(id): Path<String>,
+) -> Response {
+    match state.tasks.detail(&id) {
+        Some(body) => (StatusCode::OK, Json(body)).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "task_not_found", "id": id })),
+        )
+            .into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2963,7 +3090,7 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -2992,7 +3119,7 @@ mod tests {
             turn_hit("middle prompt", "Cortex", 200),
             turn_hit("newest prompt", "Cortex", 300),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3019,7 +3146,7 @@ mod tests {
             turn_hit("HNSW recall floor benchmark", "Vectorizer", 100),
             turn_hit("unrelated thoughts", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3045,7 +3172,7 @@ mod tests {
             turn_hit("a", "Cortex", 100),
             turn_hit("b", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3072,7 +3199,7 @@ mod tests {
                 .map(|i| turn_hit(&format!("p{i}"), "X", i))
                 .collect(),
         );
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3090,6 +3217,141 @@ mod tests {
         assert_eq!(parsed.len(), 500);
     }
 
+    fn classifier_internal_turn_hit(session: &str, ts: i64) -> LaneHit {
+        // Simulates one classifier-worker `claude -p` call captured
+        // through the cortex-adapter. Real shape: user_message is
+        // the rendered prompt template, assistant_message is the
+        // classifier's structured JSON.
+        let mut extras = BTreeMap::new();
+        extras.insert("session_id".to_string(), Value::String(session.to_string()));
+        extras.insert(
+            "user_message".to_string(),
+            Value::String(
+                "You are an event classifier + graph extractor for the Cortex system.\nYou will receive a JSON array of events..."
+                    .to_string(),
+            ),
+        );
+        extras.insert(
+            "assistant_message".to_string(),
+            Value::String(
+                "```json\n{\"events\":[{\"event_id\":\"01X\",\"kind_refinement\":\"test\"}]}\n```"
+                    .to_string(),
+            ),
+        );
+        LaneHit {
+            doc_id: format!("archive|{session}"),
+            text: "classifier prompt body".to_string(),
+            repo: Some("Cortex".to_string()),
+            path: None,
+            symbol: Some("turn".to_string()),
+            content_hash: None,
+            score: 1.0,
+            ts,
+            severity: None,
+            extras,
+        }
+    }
+
+    #[tokio::test]
+    async fn conversations_list_hides_classifier_worker_internal_turns() {
+        // Regression: every classifier-worker `claude -p` call goes
+        // through the cortex-adapter hooks and is published as a
+        // Turn envelope. Without `is_internal_cortex_turn` they
+        // flooded /v1/dashboard/conversations with one row per
+        // classified event.
+        let lane = lane_with(vec![
+            classifier_internal_turn_hit("01CLASSIFIER0000000000000A", 100),
+            classifier_internal_turn_hit("01CLASSIFIER0000000000000B", 200),
+            turn_hit_in("01REALCHAT00000000000000001", "real user prompt", "Cortex", 300),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+        };
+        let resp = conversations_list(State(state)).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let rows: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(rows.len(), 1, "only the real chat must remain");
+        assert_eq!(rows[0]["session_id"], "01REALCHAT00000000000000001");
+    }
+
+    #[test]
+    fn is_internal_cortex_turn_recognises_classifier_and_analyzer_prompts() {
+        let mut extras = BTreeMap::new();
+        extras.insert(
+            "user_message".to_string(),
+            Value::String(
+                "You are an event classifier + graph extractor for the Cortex system."
+                    .to_string(),
+            ),
+        );
+        let hit_classifier = LaneHit {
+            doc_id: "x".into(),
+            text: "".into(),
+            repo: None,
+            path: None,
+            symbol: Some("turn".into()),
+            content_hash: None,
+            score: 1.0,
+            ts: 0,
+            severity: None,
+            extras,
+        };
+        assert!(is_internal_cortex_turn(&hit_classifier));
+
+        let mut extras = BTreeMap::new();
+        extras.insert(
+            "user_message".to_string(),
+            Value::String(
+                "You are analyzing one session of captured Claude Code activity."
+                    .to_string(),
+            ),
+        );
+        let hit_analyzer = LaneHit {
+            doc_id: "x".into(),
+            text: "".into(),
+            repo: None,
+            path: None,
+            symbol: Some("turn".into()),
+            content_hash: None,
+            score: 1.0,
+            ts: 0,
+            severity: None,
+            extras,
+        };
+        assert!(is_internal_cortex_turn(&hit_analyzer));
+
+        // Real chat: no internal signature on either side.
+        let mut extras = BTreeMap::new();
+        extras.insert(
+            "user_message".to_string(),
+            Value::String("hey, can you fix this bug?".to_string()),
+        );
+        extras.insert(
+            "assistant_message".to_string(),
+            Value::String("Sure. Let me read the file.".to_string()),
+        );
+        let hit_real = LaneHit {
+            doc_id: "x".into(),
+            text: "hey, can you fix this bug?".into(),
+            repo: None,
+            path: None,
+            symbol: Some("turn".into()),
+            content_hash: None,
+            score: 1.0,
+            ts: 0,
+            severity: None,
+            extras,
+        };
+        assert!(!is_internal_cortex_turn(&hit_real));
+    }
+
     #[tokio::test]
     async fn sessions_groups_by_session_id_and_sorts_by_recency() {
         let lane = lane_with(vec![
@@ -3097,7 +3359,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
             turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -3120,7 +3382,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
             turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3147,7 +3409,7 @@ mod tests {
             tool_call_hit("Edit", "x", "Cortex", 200),
             turn_hit("note V", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3165,6 +3427,152 @@ mod tests {
         let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0]["title"], "note A");
+    }
+
+    #[tokio::test]
+    async fn overview_carries_full_series_block_and_classifier_stub_flag() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let lane = lane_with(vec![
+            turn_hit("a", "Cortex", now - 30_000),
+            tool_call_hit("Edit", "x", "Cortex", now - 60_000),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+        };
+        let resp = overview(State(state)).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let series = &parsed["series"];
+        assert_eq!(series["events_per_min"].as_array().unwrap().len(), 20);
+        assert_eq!(series["pre_thinking_p95_ms"].as_array().unwrap().len(), 20);
+        assert_eq!(series["violations_7d_daily"].as_array().unwrap().len(), 7);
+        assert_eq!(series["classifier_cost_usd_today"].as_array().unwrap().len(), 24);
+        assert_eq!(parsed["classifier_cost_unavailable_until_spec05"], true);
+        // Tool-call hit landed in the window but seeded fixture has no
+        // duration_ms on extras, so every P95 bucket is null.
+        assert!(series["pre_thinking_p95_ms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v.is_null()));
+        // Cost ribbon is 24 zeros until spec-05.
+        assert!(series["classifier_cost_usd_today"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|v| v.as_f64() == Some(0.0)));
+    }
+
+    #[tokio::test]
+    async fn overview_p95_picks_real_value_when_lane_carries_duration_ms() {
+        let now = chrono::Utc::now().timestamp_millis();
+        // Two tool_call hits with duration_ms stamped on extras.
+        // The dashboard helper should produce a non-null P95 for the
+        // bucket they share.
+        let mut hits: Vec<LaneHit> = Vec::new();
+        for d in [10u64, 20, 30, 40, 50, 60, 70, 80, 90, 100] {
+            let mut extras: BTreeMap<String, Value> = BTreeMap::new();
+            extras.insert(
+                "duration_ms".to_string(),
+                Value::Number(serde_json::Number::from(d)),
+            );
+            hits.push(LaneHit {
+                doc_id: format!("archive|d{d}"),
+                text: format!("dur={d}"),
+                repo: Some("Cortex".to_string()),
+                path: None,
+                symbol: Some("tool_call:Edit".to_string()),
+                content_hash: None,
+                score: 1.0,
+                ts: now - 30_000,
+                severity: None,
+                extras,
+            });
+        }
+        let lane = lane_with(hits);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+        };
+        let resp = overview(State(state)).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let p95 = parsed["series"]["pre_thinking_p95_ms"].as_array().unwrap();
+        let last = p95.last().unwrap();
+        assert!(
+            last.as_u64().is_some(),
+            "expected P95 to be populated for the latest bucket, got {last:?}"
+        );
+        let v = last.as_u64().unwrap();
+        assert!(
+            (90..=100).contains(&v),
+            "P95 of 10..100 step 10 should be in [90, 100], got {v}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_stats_emits_seven_by_twentyfour_heatmap() {
+        let lane = lane_with(vec![
+            tool_call_hit("Edit", "x", "Cortex", 100),
+            tool_call_hit("Read", "y", "Cortex", 200),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+        };
+        let resp = tools_stats(State(state)).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["heatmap"]["tz"], "UTC");
+        let days = parsed["heatmap"]["days"].as_array().unwrap();
+        assert_eq!(days.len(), 7);
+        assert_eq!(days[0], "Mon");
+        let cells = parsed["heatmap"]["cells"].as_array().unwrap();
+        assert_eq!(cells.len(), 7);
+        for row in cells {
+            assert_eq!(row.as_array().unwrap().len(), 24);
+        }
+    }
+
+    #[tokio::test]
+    async fn trust_endpoint_returns_stub_until_spec14() {
+        let lane = lane_with(Vec::new());
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+        };
+        let resp = trust(State(state)).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["source"], "stub_until_spec14");
+        assert_eq!(parsed["models"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["repos"].as_array().unwrap().len(), 0);
+        assert!(parsed["scores"].as_object().unwrap().is_empty());
     }
 
     #[test]

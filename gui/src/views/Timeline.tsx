@@ -296,6 +296,10 @@ export function TimelineView() {
   // refresh.
   const eventsPerMin = overviewQ.data?.series?.events_per_min ?? [];
   const violationsDaily = overviewQ.data?.series?.violations_7d_daily ?? [];
+  const preThinkingP95 = overviewQ.data?.series?.pre_thinking_p95_ms ?? [];
+  const classifierCost = overviewQ.data?.series?.classifier_cost_usd_today ?? [];
+  const classifierCostStub =
+    overviewQ.data?.classifier_cost_unavailable_until_spec05 ?? true;
 
   // Track previously-seen ids so we can flash newly-arriving rows.
   // First fetch primes the set without flashing every row.
@@ -394,6 +398,9 @@ export function TimelineView() {
         kindBreakdown={overviewQ.data?.kind_breakdown ?? []}
         eventsPerMin={eventsPerMin}
         violationsDaily={violationsDaily}
+        preThinkingP95={preThinkingP95}
+        classifierCost={classifierCost}
+        classifierCostStub={classifierCostStub}
       />
 
       {hasAnyFilter(filters) ? (
@@ -794,6 +801,9 @@ function TimelineStats({
   kindBreakdown,
   eventsPerMin,
   violationsDaily,
+  preThinkingP95,
+  classifierCost,
+  classifierCostStub,
 }: {
   eventsTotal: number;
   reposIndexed: number;
@@ -801,11 +811,26 @@ function TimelineStats({
   kindBreakdown: { kind: string; count: number }[];
   eventsPerMin: number[];
   violationsDaily: number[];
+  preThinkingP95: (number | null)[];
+  classifierCost: number[];
+  classifierCostStub: boolean;
 }) {
   const turnCount = kindBreakdown.find((k) => k.kind === "turn")?.count ?? 0;
   const toolCount = kindBreakdown.find((k) => k.kind === "tool_call")?.count ?? 0;
   const lastMinute = eventsPerMin[eventsPerMin.length - 1] ?? 0;
   const violations7d = violationsDaily.reduce((s, v) => s + v, 0);
+  // Latest non-null bucket — the "current" P95 reading. Walks
+  // backwards so a gap in the most-recent bucket falls back to the
+  // last real sample without hiding the fact that the freshest
+  // minute had no samples.
+  const latestP95 = (() => {
+    for (let i = preThinkingP95.length - 1; i >= 0; i--) {
+      const v = preThinkingP95[i];
+      if (v != null) return v;
+    }
+    return null;
+  })();
+  const costToday = classifierCost.reduce((s, v) => s + v, 0);
   return (
     <div className="stats-grid" style={{ marginBottom: 14 }}>
       <div className="stat">
@@ -815,6 +840,23 @@ function TimelineStats({
         {eventsPerMin.some((v) => v > 0) ? (
           <div className="stat__spark">
             <Sparkline data={eventsPerMin} color="var(--accent)" />
+          </div>
+        ) : null}
+      </div>
+      <div className="stat">
+        <div className="stat__label">Pre-thinking P95</div>
+        <div className="stat__value tabular">
+          {latestP95 != null ? fmtNum(latestP95) : "—"}
+          {latestP95 != null ? <span className="stat__unit">ms</span> : null}
+        </div>
+        <div className="stat__delta">
+          {latestP95 != null
+            ? "tool/agent durations · last 20 min"
+            : "no duration stamps yet (turns lack latency until spec-12)"}
+        </div>
+        {preThinkingP95.some((v) => v != null) ? (
+          <div className="stat__spark">
+            <Sparkline data={preThinkingP95} color="var(--ok)" />
           </div>
         ) : null}
       </div>
@@ -832,6 +874,22 @@ function TimelineStats({
         <div className="stat__delta">
           {turnCount > 0 ? (toolCount / turnCount).toFixed(1) : "0"} per turn
         </div>
+      </div>
+      <div className="stat">
+        <div className="stat__label">Classifier spend · 24h</div>
+        <div className="stat__value tabular">
+          {classifierCostStub ? "—" : `$${costToday.toFixed(2)}`}
+        </div>
+        <div className="stat__delta">
+          {classifierCostStub
+            ? "unavailable until spec-05 classifier worker"
+            : "rolling 24h, hourly buckets"}
+        </div>
+        {!classifierCostStub && classifierCost.some((v) => v > 0) ? (
+          <div className="stat__spark">
+            <Sparkline data={classifierCost} color="var(--warn)" />
+          </div>
+        ) : null}
       </div>
       <div className="stat">
         <div className="stat__label">Violations · 7d</div>

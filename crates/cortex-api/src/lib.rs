@@ -17,6 +17,7 @@ pub mod archive_loader;
 pub mod audit;
 pub mod cache;
 pub mod dashboard;
+pub mod dashboard_series;
 pub mod fusion;
 pub mod http;
 pub mod lanes;
@@ -30,6 +31,7 @@ pub mod rate_limit;
 pub mod redaction;
 pub mod service;
 pub mod strategies;
+pub mod tasks_loader;
 pub mod types;
 
 pub use acl::{AclDecision, AclStore};
@@ -41,6 +43,11 @@ pub use nexus_graph_lane::NexusGraphLane;
 pub use vectorizer_lane::VectorizerLane;
 pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
 pub use dashboard::{build_dashboard_router, DashboardState};
+pub use tasks_loader::{
+    CachedRowSnapshot, ListQuery, PhaseBreakdown, ProgressCounts, SortField, SortOrder, SpecFile,
+    TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse, TaskLoader, TaskRow,
+    TaskSummary,
+};
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
 pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
 pub use fusion::{rrf_fuse, RRF_K};

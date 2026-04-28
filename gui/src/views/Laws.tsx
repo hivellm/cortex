@@ -205,8 +205,12 @@ export function LawsView() {
         <div className="card__body">
           {trustQ.isLoading ? (
             <Empty msg="Loading trust matrix…" />
-          ) : !trust || trust.models.length === 0 || trust.repos.length === 0 ? (
+          ) : !trust ? (
+            <Empty msg="Trust matrix unavailable." />
+          ) : trust.source === "stub_until_spec14" ? (
             <Empty msg="Spec-14 trust derivation has not run yet. Empty until model × repo scores are stored under cortex.events.violations." />
+          ) : trust.models.length === 0 || trust.repos.length === 0 ? (
+            <Empty msg="Trust derivation reported no signal yet — no observed (model, repo) pairs." />
           ) : (
             <TrustGrid trust={trust} />
           )}
