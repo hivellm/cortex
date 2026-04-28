@@ -48,11 +48,55 @@ impl Publisher for SynapPublisher {
             .get("kind")
             .and_then(|k| k.as_str())
             .unwrap_or("unknown");
-        self.streams
+        // Publish-or-create-then-republish, matching the pattern
+        // already in cortex-bootstrap and cortex-classifier-worker.
+        // Synap does not auto-create rooms on first publish — sending
+        // to a missing room returns "Room … not found", which is
+        // *correct* server behaviour. Cortex owns the room lifecycle.
+        // Without this fallback every ingestion startup against a
+        // fresh Synap drops every envelope until an operator creates
+        // the rooms by hand (which is what the 2026-04-28 silent-loss
+        // incident traced back to).
+        match self
+            .streams
             .publish(stream, kind, envelope.clone())
             .await
-            .map_err(|e| PublisherError::Synap(e.to_string()))?;
-        Ok(())
+        {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                let looks_like_missing_room =
+                    msg.contains("not found") && msg.contains("Room");
+                if !looks_like_missing_room {
+                    return Err(PublisherError::Synap(msg));
+                }
+                tracing::warn!(
+                    stream,
+                    "synap room missing on first publish; creating and retrying"
+                );
+                if let Err(create_err) =
+                    self.streams.create_room(stream, None).await
+                {
+                    // The room may already exist (race with another
+                    // publisher); only treat the error as fatal if
+                    // the second publish ALSO fails.
+                    tracing::debug!(
+                        stream,
+                        error = %create_err,
+                        "synap create_room returned an error; will still retry publish"
+                    );
+                }
+                self.streams
+                    .publish(stream, kind, envelope.clone())
+                    .await
+                    .map_err(|e2| {
+                        PublisherError::Synap(format!(
+                            "publish after create_room still failed: {e2} (initial: {msg})"
+                        ))
+                    })?;
+                Ok(())
+            }
+        }
     }
 }
 

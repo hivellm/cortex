@@ -164,21 +164,57 @@ async fn ingest_batch(
     let mut accepted = 0usize;
     let mut rejected = 0usize;
     let mut errors = Vec::new();
+    let total = envelopes.len();
     for (i, mut envelope) in envelopes.into_iter().enumerate() {
         match process_event(&state, &headers, &mut envelope).await {
             Ok(_) => accepted += 1,
             Err(err) => {
                 rejected += 1;
+                state.metrics.events_rejected.fetch_add(1, Ordering::Relaxed);
+                let event_id = envelope
+                    .get("event_id")
+                    .and_then(|s| s.as_str())
+                    .map(String::from);
+                let kind = envelope
+                    .get("kind")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let session_id = envelope
+                    .get("session_id")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let messages = err.messages();
+                let reason_class = match &err {
+                    IngestError::InvalidJson(_) => "invalid_json",
+                    IngestError::ArchiveFailure(_) => "archive_failure",
+                    IngestError::PublisherFailure(_) => "publisher_failure",
+                };
+                tracing::warn!(
+                    batch_index = i,
+                    event_id = event_id.as_deref().unwrap_or("?"),
+                    kind = %kind,
+                    session_id = %session_id,
+                    reason_class,
+                    errors = ?messages,
+                    "ingest_batch rejected envelope"
+                );
                 errors.push(BatchError {
                     index: i,
-                    event_id: envelope
-                        .get("event_id")
-                        .and_then(|s| s.as_str())
-                        .map(String::from),
-                    errors: err.messages(),
+                    event_id,
+                    errors: messages,
                 });
             }
         }
+    }
+    if rejected > 0 {
+        tracing::warn!(
+            total,
+            accepted,
+            rejected,
+            "ingest_batch finished with rejections (response is 202 Accepted — clients ignoring the body will see silent loss)"
+        );
     }
     (
         StatusCode::ACCEPTED,
@@ -290,13 +326,42 @@ async fn process_event(
         .archive
         .write(stream.tag(), envelope)
         .map_err(|e| IngestError::ArchiveFailure(e.to_string()))?;
-    state
-        .publisher
-        .publish(stream_name, envelope)
-        .await
-        .map_err(|e| IngestError::PublisherFailure(e.to_string()))?;
 
+    // Bump the durability counter as soon as the archive accepts the
+    // envelope. The publisher (synap) call below is best-effort: a
+    // failed publish does NOT undo the archive write, so a post-archive
+    // increment is the honest "this many envelopes survived to disk"
+    // signal. Without this split, a flapping synap connection looked
+    // like total ingestion silence in /metrics even though the archive
+    // (which is what the dashboard reads) was healthy.
     state.metrics.events_received.fetch_add(1, Ordering::Relaxed);
+
+    if let Err(e) = state.publisher.publish(stream_name, envelope).await {
+        // Emit a structured WARN here so the failure is visible in
+        // logs the moment the underlying bus (synap) misbehaves.
+        // The batch path also reports rejected:N back to the caller,
+        // but adapter publishers historically ignore the 202 body —
+        // surfacing it here gives operators a single grep target.
+        let event_id = envelope
+            .get("event_id")
+            .and_then(|s| s.as_str())
+            .unwrap_or("?")
+            .to_string();
+        let kind = envelope
+            .get("kind")
+            .and_then(|s| s.as_str())
+            .unwrap_or("?")
+            .to_string();
+        tracing::warn!(
+            event_id = %event_id,
+            kind = %kind,
+            stream = stream_name,
+            error = %e,
+            "publisher publish failed (envelope IS already archived); returning rejected to caller"
+        );
+        return Err(IngestError::PublisherFailure(e.to_string()));
+    }
+
     match stream {
         StreamPick::Raw => state.metrics.events_routed_raw.fetch_add(1, Ordering::Relaxed),
         StreamPick::Bootstrap => state

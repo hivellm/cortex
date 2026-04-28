@@ -21,6 +21,7 @@ try { $payloadSession = (ConvertFrom-Json $input_text -ErrorAction SilentlyConti
 $logLine = "$ts PostToolUse env_sid=$session payload_sid=$payloadSession pid=$PID"
 Add-Content -Path $logPath -Value $logLine -ErrorAction SilentlyContinue
 $frame = "{`"hook`":`"PostToolUse`",`"session_id`":`"$session`",`"cwd`":`"$($PWD.Path -replace '\\','\\\\')`",`"payload`":$input_text}"
+$errLog = Join-Path $logDir "hook-errors.log"
 try {
     $client = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
     # Bump from 1s → 3s. Hook timeout is 5s (hooks.json); leaving 2s
@@ -35,7 +36,19 @@ try {
     Add-Content -Path $logPath -Value "$ts PostToolUse  -> ok" -ErrorAction SilentlyContinue
     if ($response) { Write-Output $response } else { Write-Output "{}" }
 } catch {
-    Add-Content -Path $logPath -Value "$ts PostToolUse  -> err: $_" -ErrorAction SilentlyContinue
+    # Categorise the failure so a single grep against
+    # hook-errors.log gives the rate per class. The categories
+    # match the silent-loss analysis (`Pipe is broken` vs connect
+    # timeout vs other) — see
+    # docs/analysis/adapter/01-tool-call-archive-loss.md §Sibling
+    # failure mode.
+    $errMsg = $_.ToString()
+    $category = "other"
+    if ($errMsg -match "Pipe is broken|Pipe has been ended") { $category = "pipe_broken" }
+    elseif ($errMsg -match "TimeoutException|Connect.*timed out|Wait.*time") { $category = "connect_timeout" }
+    elseif ($errMsg -match "Access.*denied|Unauthorized") { $category = "access_denied" }
+    Add-Content -Path $logPath -Value "$ts PostToolUse  -> err[$category]: $errMsg" -ErrorAction SilentlyContinue
+    Add-Content -Path $errLog -Value "$ts PostToolUse $category $errMsg" -ErrorAction SilentlyContinue
     Write-Output "{}"
 }
 exit 0

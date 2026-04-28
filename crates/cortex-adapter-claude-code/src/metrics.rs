@@ -17,6 +17,15 @@ pub struct Metrics {
     pub sync_timeouts: Mutex<BTreeMap<String, u64>>,
     /// `cortex.adapter.publisher.errors{status}`.
     pub publisher_errors: Mutex<BTreeMap<String, u64>>,
+    /// `cortex.adapter.publisher.rejected{reason}` — events the
+    /// ingestion side returned in the 202 response body's `errors`
+    /// list. Tracked per error class so silent schema drift surfaces
+    /// in the metrics.
+    pub publisher_rejected: Mutex<BTreeMap<String, u64>>,
+    /// `cortex.adapter.publisher.accepted_total` — envelopes the
+    /// ingestion side reported as accepted in the 202 body. Bumps per
+    /// successful batch only after we parse the response shape.
+    pub publisher_accepted: AtomicU64,
     /// `cortex.adapter.pre_thinking.bundle_bytes` — histogram.
     pub bundle_bytes: Mutex<Vec<u32>>,
     /// `cortex.adapter.laws.blocks{law_id}`.
@@ -60,6 +69,21 @@ impl Metrics {
         if let Ok(mut m) = self.publisher_errors.lock() {
             *m.entry(status.to_string()).or_insert(0) += 1;
         }
+    }
+    /// Increment `publisher.rejected{reason}` — bumped per envelope
+    /// the ingestion 202 response body lists in `errors[]`.
+    pub fn incr_publisher_rejected(&self, reason: &str) {
+        if let Ok(mut m) = self.publisher_rejected.lock() {
+            *m.entry(reason.to_string()).or_insert(0) += 1;
+        }
+    }
+    /// Add `n` to the `publisher.accepted_total` counter.
+    pub fn add_publisher_accepted(&self, n: u64) {
+        self.publisher_accepted.fetch_add(n, Ordering::Relaxed);
+    }
+    /// Read `publisher.accepted_total`.
+    pub fn publisher_accepted(&self) -> u64 {
+        self.publisher_accepted.load(Ordering::Relaxed)
     }
     /// Record a pre-thinking bundle size in bytes.
     pub fn observe_bundle_bytes(&self, bytes: u32) {

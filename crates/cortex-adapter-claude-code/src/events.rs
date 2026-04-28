@@ -174,22 +174,47 @@ pub fn build_event(
     let occurred_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let content_hash = canonical_sha256(&payload_value);
 
+    // Allocate the envelope's canonical event_id up-front so we can
+    // (a) stamp it on the Envelope below, and (b) for Turn envelopes,
+    // record it on the SessionManager so subsequent tool_call /
+    // agent_call envelopes in this turn can reference it via
+    // `parent_event_id`.
+    let event_id = cortex_core::ids::event_id();
+
     // Anchor every child event under its parent Turn so the
     // graph writer can build the canonical Session->Turn->ToolCall
     // chain instead of falling back to Session->ToolCall.
-    // `extras.turn_id` is populated for Turn / ToolCall / AgentCall
-    // and any of their derivatives by `update_correlation` above.
-    // Turn events themselves keep `parent_event_id = None` because
-    // they ARE the parent; the inner `if` short-circuits when the
-    // current envelope is the turn envelope (its event_id is the
-    // turn_id, so a Turn parented on itself is meaningless).
+    //
+    // Earlier revisions used `extras.turn_id` (the `cc-turn-<ulid>`
+    // correlation tag) as `parent_event_id`. That was wrong: spec-04
+    // requires `parent_event_id` to match the canonical
+    // `^[0-9A-HJ-KM-NP-TV-Z]{26}$` (26-char ULID, no prefix). The
+    // graph writer accepted both shapes loosely, but `cortex-ingestion`
+    // validates against the JSON schema and rejected every tool_call
+    // — invisibly, until the 2026-04-28 logging fix made it loud.
+    //
+    // The canonical reference is the actual `event_id` of the Turn
+    // envelope (recorded below via `sessions.record_turn_event_id`).
+    // Turn envelopes themselves keep `parent_event_id = None` (a Turn
+    // parented on itself is meaningless and the schema allows null).
     let parent_event_id = match canonical_kind {
         Kind::Turn => None,
-        _ => extras.turn_id.clone(),
+        _ => sessions.current_turn_event_id(&session_id),
     };
 
+    if matches!(canonical_kind, Kind::Turn) {
+        // Stamp the new turn id BEFORE we publish — even if publish
+        // is async, every subsequent build_event in this process
+        // reads it back synchronously. Both UserPromptSubmit and
+        // Stop emit a Turn envelope; the latter overwrites the
+        // former so a late tool_call between them parents on the
+        // most recent Turn (= the Stop envelope's id, when it has
+        // already fired, otherwise the prompt-side Turn).
+        sessions.record_turn_event_id(&session_id, &event_id);
+    }
+
     Some(Envelope {
-        event_id: cortex_core::ids::event_id(),
+        event_id,
         schema_version: "1".to_string(),
         occurred_at,
         ingested_at: None,
@@ -644,6 +669,84 @@ mod tests {
         .unwrap();
         assert_eq!(cc.tool_use_id.as_deref(), Some("tu-1"));
         assert!(!cc.orphan);
+    }
+
+    #[test]
+    fn tool_call_parent_event_id_is_the_turn_envelope_event_id_not_the_correlation_tag() {
+        // Regression for the 2026-04-28 silent-loss incident: the
+        // adapter used to populate `parent_event_id` with the
+        // `extras.turn_id` correlation tag (`cc-turn-<ulid>`), which
+        // failed the spec-04 schema's `^[0-9A-HJ-KM-NP-TV-Z]{26}$`
+        // pattern and got every tool_call rejected by ingestion at
+        // the validate step. The fix is to reference the Turn
+        // envelope's actual `event_id` (a clean ULID) so the chain
+        // round-trips through validation.
+        let mgr = SessionManager::new();
+        let turn_env = build_event(
+            HookKind::UserPromptSubmit,
+            &frame("UserPromptSubmit", json!({ "prompt": "go" })),
+            &mgr,
+            42,
+        )
+        .expect("UserPromptSubmit must publish");
+        // Turn envelopes have parent_event_id = None.
+        assert!(turn_env.parent_event_id.is_none());
+
+        // Pre creates the correlation slot but does not publish.
+        build_event(
+            HookKind::PreToolUse,
+            &frame(
+                "PreToolUse",
+                json!({ "tool_name": "Edit", "tool_use_id": "tu-7" }),
+            ),
+            &mgr,
+            42,
+        );
+        let tc_env = build_event(
+            HookKind::PostToolUse,
+            &frame(
+                "PostToolUse",
+                json!({
+                    "tool_name": "Edit",
+                    "tool_use_id": "tu-7",
+                    "input": { "file_path": "x.rs" },
+                    "output": { "stdout": "ok", "exit_code": 0 },
+                    "duration_ms": 1
+                }),
+            ),
+            &mgr,
+            42,
+        )
+        .expect("PostToolUse must publish");
+
+        let parent = tc_env
+            .parent_event_id
+            .clone()
+            .expect("tool_call must reference its parent Turn");
+        // Must equal the Turn envelope's event_id verbatim.
+        assert_eq!(parent, turn_env.event_id);
+        // And must satisfy the canonical ULID shape (26 chars, no
+        // `cc-turn-` prefix).
+        assert_eq!(parent.len(), 26);
+        assert!(
+            parent.chars().all(|c| matches!(c,
+                '0'..='9' | 'A'..='H' | 'J'..='K' | 'M'..='N' | 'P'..='T' | 'V'..='Z')),
+            "parent_event_id must be a clean Crockford ULID, got {parent}"
+        );
+        // The correlation tag in extras still carries the prefix —
+        // they're two different identifiers tracked independently.
+        let cc: ClaudeCodeExtras = serde_json::from_value(
+            tc_env
+                .context
+                .extras
+                .get("claude_code")
+                .cloned()
+                .unwrap_or(Value::Null),
+        )
+        .unwrap();
+        let cc_turn = cc.turn_id.expect("extras.turn_id present");
+        assert!(cc_turn.starts_with("cc-turn-"), "got {cc_turn}");
+        assert_ne!(cc_turn, parent);
     }
 
     #[test]

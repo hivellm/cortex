@@ -142,9 +142,44 @@ impl HttpPublisher {
         }
         let n = batch.len();
         match self.post_batch(&batch).await {
-            Ok(()) => {
+            Ok(report) => {
+                // The ingestion `/v1/events/batch` endpoint replies
+                // with `{accepted, rejected, errors[]}` inside an
+                // HTTP 202 (spec 04). Treating "any 2xx" as success
+                // hides every per-envelope rejection — schema drift,
+                // synap room missing, archive backpressure. Parse the
+                // body so the failure surfaces in metrics + logs.
+                self.metrics
+                    .add_publisher_accepted(report.accepted as u64);
                 for e in &batch {
+                    // events_total is "submitted to ingestion", not
+                    // "accepted". The split shows up as a divergence
+                    // between events_total and publisher_accepted in
+                    // /metrics — that gap IS the silent loss.
                     self.metrics.incr_events_total(e.kind.schema_stem());
+                }
+                if report.rejected > 0 {
+                    let sample = report
+                        .errors
+                        .first()
+                        .map(|err| {
+                            format!(
+                                "index={} event_id={:?} errors={:?}",
+                                err.index, err.event_id, err.errors
+                            )
+                        })
+                        .unwrap_or_else(|| "<no error sample>".to_string());
+                    tracing::warn!(
+                        batch_size = n,
+                        accepted = report.accepted,
+                        rejected = report.rejected,
+                        sample = %sample,
+                        "ingestion accepted batch but rejected envelopes inside the 202 body — events archived state depends on the failure class (see ingestion logs)"
+                    );
+                    for err in &report.errors {
+                        let reason = classify_batch_error(&err.errors);
+                        self.metrics.incr_publisher_rejected(reason);
+                    }
                 }
             }
             Err(e) => {
@@ -162,7 +197,7 @@ impl HttpPublisher {
         n
     }
 
-    async fn post_batch(&self, batch: &[Envelope]) -> Result<(), reqwest::Error> {
+    async fn post_batch(&self, batch: &[Envelope]) -> Result<BatchReport, reqwest::Error> {
         let body: Value = json!({
             "events": batch
                 .iter()
@@ -179,7 +214,33 @@ impl HttpPublisher {
             let resp = self.client.post(&url).json(&body).send().await;
             match resp {
                 Ok(r) if r.status().is_success() || r.status().as_u16() == 202 => {
-                    return Ok(());
+                    let bytes = match r.bytes().await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            // Body read failed after a 2xx — treat
+                            // as a successful post with no per-event
+                            // detail, since the server has already
+                            // committed. Log so operators know they
+                            // lost the diagnostic body.
+                            tracing::warn!(
+                                error = %e,
+                                "ingestion 2xx but response body read failed; cannot tell accepted vs rejected"
+                            );
+                            return Ok(BatchReport::all_accepted(batch.len()));
+                        }
+                    };
+                    let report = match serde_json::from_slice::<BatchReport>(&bytes) {
+                        Ok(r) => r,
+                        Err(_) => {
+                            // Older ingestion builds (or /v1/events
+                            // single-event path replays) might not
+                            // ship the canonical envelope. Default
+                            // to "all accepted" which preserves the
+                            // historical caller contract.
+                            BatchReport::all_accepted(batch.len())
+                        }
+                    };
+                    return Ok(report);
                 }
                 Ok(r) if r.status().is_server_error() => {
                     attempt += 1;
@@ -205,6 +266,57 @@ impl HttpPublisher {
                 }
             }
         }
+    }
+}
+
+/// Mirror of cortex-ingestion `BatchResponse` — kept independent so
+/// the adapter doesn't depend on the ingestion crate.
+#[derive(Debug, serde::Deserialize)]
+struct BatchReport {
+    #[serde(default)]
+    accepted: usize,
+    #[serde(default)]
+    rejected: usize,
+    #[serde(default)]
+    errors: Vec<BatchErrorEntry>,
+}
+
+impl BatchReport {
+    fn all_accepted(n: usize) -> Self {
+        Self {
+            accepted: n,
+            rejected: 0,
+            errors: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BatchErrorEntry {
+    #[serde(default)]
+    index: usize,
+    #[serde(default)]
+    event_id: Option<String>,
+    #[serde(default)]
+    errors: Vec<String>,
+}
+
+/// Bucket a batch-error message list into a coarse reason label so
+/// `cortex.adapter.publisher.rejected{reason}` stays low-cardinality.
+/// Anything we don't recognise lands in `other`.
+fn classify_batch_error(messages: &[String]) -> &'static str {
+    if messages.is_empty() {
+        return "empty";
+    }
+    let joined = messages.join(" | ").to_lowercase();
+    if joined.contains("does not match") || joined.contains("required property") {
+        "schema"
+    } else if joined.contains("synap") || joined.contains("publisher:") {
+        "publisher"
+    } else if joined.contains("archive") {
+        "archive"
+    } else {
+        "other"
     }
 }
 

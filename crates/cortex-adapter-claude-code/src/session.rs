@@ -45,8 +45,19 @@ pub struct SessionState {
     /// Sticky `Session.id`.
     pub session_id: String,
     /// Currently-active `Turn.id`. `None` between Stop and the next
-    /// UserPromptSubmit.
+    /// UserPromptSubmit. Carries the `cc-turn-<ulid>` correlation tag
+    /// (NOT a canonical ULID) — survives in `context.extras.claude_code`
+    /// for graph-side disambiguation between turn and tool_call ids.
     pub current_turn: Option<String>,
+    /// Canonical event_id (26-char ULID) of the most recent Turn
+    /// envelope published in this session. Distinct from
+    /// `current_turn`: the latter is a correlation tag, this is the
+    /// actual envelope id that child tool_call / agent_call envelopes
+    /// reference via `parent_event_id`.
+    /// `None` when no Turn has been published yet (= the very first
+    /// hook in a session) — child events fall back to `None` parent
+    /// and the graph writer treats them as session-rooted.
+    pub current_turn_event_id: Option<String>,
     /// `tool_use_id` → `tool_call_id` map for correlating
     /// `PreToolUse` ↔ `PostToolUse` pairs.
     pub tool_calls: HashMap<String, String>,
@@ -58,6 +69,7 @@ impl SessionState {
         Self {
             session_id: session_id.into(),
             current_turn: None,
+            current_turn_event_id: None,
             tool_calls: HashMap::new(),
         }
     }
@@ -129,6 +141,11 @@ impl SessionManager {
                 .entry(session_id.to_string())
                 .or_insert_with(|| SessionState::new(session_id));
             state.current_turn = Some(turn_id.clone());
+            // Reset the canonical Turn event_id so a tool_call that
+            // fires before its UserPromptSubmit-side Turn envelope is
+            // built doesn't accidentally inherit the previous turn's
+            // parent. `build_event` re-stamps it on the next Turn.
+            state.current_turn_event_id = None;
             state.tool_calls.clear();
         }
         turn_id
@@ -142,12 +159,42 @@ impl SessionManager {
             .and_then(|g| g.get(session_id).and_then(|s| s.current_turn.clone()))
     }
 
+    /// Record the canonical `event_id` of the Turn envelope we're
+    /// about to publish. Children of this turn (tool_call, agent_call)
+    /// will reference this id via `parent_event_id`.
+    ///
+    /// Called by `build_event` immediately after generating the Turn
+    /// envelope's id. Idempotent: re-recording overwrites — useful
+    /// when `Stop` emits a second Turn envelope (assistant_message)
+    /// for the same correlation slot.
+    pub fn record_turn_event_id(&self, session_id: &str, event_id: &str) {
+        if let Ok(mut g) = self.sessions.lock() {
+            let state = g
+                .entry(session_id.to_string())
+                .or_insert_with(|| SessionState::new(session_id));
+            state.current_turn_event_id = Some(event_id.to_string());
+        }
+    }
+
+    /// Look up the canonical event_id of the most recent Turn so
+    /// child envelopes can populate their `parent_event_id`.
+    pub fn current_turn_event_id(&self, session_id: &str) -> Option<String> {
+        self.sessions.lock().ok().and_then(|g| {
+            g.get(session_id)
+                .and_then(|s| s.current_turn_event_id.clone())
+        })
+    }
+
     /// Mark the turn closed (Stop hook). Subsequent
     /// `UserPromptSubmit` opens a new one.
     pub fn close_turn(&self, session_id: &str) {
         if let Ok(mut g) = self.sessions.lock() {
             if let Some(state) = g.get_mut(session_id) {
                 state.current_turn = None;
+                // Don't drop current_turn_event_id here: Stop emits
+                // its own Turn envelope, and any in-flight tool_call
+                // races still need the parent. The next open_turn
+                // (= next UserPromptSubmit) clears it cleanly.
             }
         }
     }

@@ -13,6 +13,7 @@ $payloadSession = ""
 try { $payloadSession = (ConvertFrom-Json $input_text -ErrorAction SilentlyContinue).session_id } catch {}
 Add-Content -Path $logPath -Value "$ts SubagentStop env_sid=$session payload_sid=$payloadSession pid=$PID" -ErrorAction SilentlyContinue
 $frame = "{`"hook`":`"SubagentStop`",`"session_id`":`"$session`",`"cwd`":`"$($PWD.Path -replace '\\','\\\\')`",`"payload`":$input_text}"
+$errLog = Join-Path $logDir "hook-errors.log"
 try {
     $client = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
     $client.Connect(3000)
@@ -24,7 +25,13 @@ try {
     Add-Content -Path $logPath -Value "$ts SubagentStop  -> ok" -ErrorAction SilentlyContinue
     if ($response) { Write-Output $response } else { Write-Output "{}" }
 } catch {
-    Add-Content -Path $logPath -Value "$ts SubagentStop  -> err: $_" -ErrorAction SilentlyContinue
+    $errMsg = $_.ToString()
+    $category = "other"
+    if ($errMsg -match "Pipe is broken|Pipe has been ended") { $category = "pipe_broken" }
+    elseif ($errMsg -match "TimeoutException|Connect.*timed out|Wait.*time") { $category = "connect_timeout" }
+    elseif ($errMsg -match "Access.*denied|Unauthorized") { $category = "access_denied" }
+    Add-Content -Path $logPath -Value "$ts SubagentStop  -> err[$category]: $errMsg" -ErrorAction SilentlyContinue
+    Add-Content -Path $errLog -Value "$ts SubagentStop $category $errMsg" -ErrorAction SilentlyContinue
     Write-Output "{}"
 }
 exit 0
