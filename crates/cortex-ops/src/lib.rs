@@ -7,8 +7,16 @@
 #![warn(missing_docs)]
 
 pub mod doctor;
+pub mod probe;
 
 pub use doctor::{
-    coverage_report, render_coverage_markdown, ArchiveProbe, ArchiveSummary, CoverageRow,
-    DoctorReport, MeiliCoverageProbe, PartitionKey,
+    coverage_report, coverage_report_full, render_coverage_markdown, ArchiveProbe, ArchiveSummary,
+    CoverageOptions, CoverageRow, DoctorReport, LiveNexusCoverageProbe,
+    LiveVectorizerCoverageProbe, MeiliCoverageProbe, MemoryNexusCoverageProbe,
+    MemoryVectorizerCoverageProbe, NexusCounts, NexusCoverageScan, PartitionKey,
+    VectorizerCounts, VectorizerCoverageScan,
+};
+pub use probe::{
+    render_query_markdown, run_query_probes, JaccardObservation, MemoryQueryProbe, QueryProbe,
+    QueryReport,
 };

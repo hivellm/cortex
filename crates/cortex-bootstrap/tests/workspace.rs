@@ -69,6 +69,77 @@ fn load_workspace_then_preflight_round_trips() {
     preflight_workspace(&loaded).expect("preflight after load");
 }
 
+/// Phase4g — guard the source-controlled
+/// `bootstrap.workspace.toml.example` template against drift.
+///
+/// The template carries a literal `${HIVE_ROOT}` token the operator
+/// search-and-replaces post-checkout, so `preflight_workspace` cannot
+/// run here (those token-bearing paths do not resolve). Loading via
+/// `load_workspace` is enough to catch the failure modes that
+/// actually fire on the operator path: TOML parse errors, missing
+/// required fields (`id` / `path`), and accidental drift in the entry
+/// count. The 17 expected entries match the HiveLLM repo list
+/// documented in `docs/operations/bootstrap-workspace.md`.
+#[test]
+fn bootstrap_workspace_example_loads() {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let template = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("crate dir has a workspace root")
+        .join("bootstrap.workspace.toml.example");
+    assert!(
+        template.exists(),
+        "template missing at {}",
+        template.display()
+    );
+
+    let cfg = load_workspace(&template).expect("template parses cleanly");
+    assert_eq!(
+        cfg.repos.len(),
+        17,
+        "expected 17 entries in the workspace template, got {}",
+        cfg.repos.len()
+    );
+
+    // Cortex must be entry #0 — the operator usually drives bootstrap
+    // from the Cortex checkout itself, and the orchestrator iterates
+    // entries in declaration order.
+    assert_eq!(cfg.repos[0].id, "Cortex");
+
+    let mut seen = std::collections::BTreeSet::new();
+    for repo in &cfg.repos {
+        assert!(
+            !repo.id.trim().is_empty(),
+            "entry has empty id: {repo:?}",
+        );
+        assert!(
+            seen.insert(repo.id.clone()),
+            "duplicate id `{}` in template",
+            repo.id,
+        );
+        // Path must reference the literal `${HIVE_ROOT}` token so the
+        // operator's search-and-replace target is unambiguous.
+        let path = repo.path.to_string_lossy();
+        assert!(
+            path.contains("${HIVE_ROOT}"),
+            "entry `{}` is missing the ${{HIVE_ROOT}} token: {}",
+            repo.id,
+            path,
+        );
+    }
+
+    // `Cortex` / `Vectorizer` / `Nexus` / `Synap` / `Rulebook` are the
+    // load-bearing repos the rest of the stack depends on. Pin them
+    // explicitly so a future template edit cannot drop them.
+    for required in ["Cortex", "Vectorizer", "Nexus", "Synap", "Rulebook"] {
+        assert!(
+            seen.contains(required),
+            "template is missing required repo `{required}`",
+        );
+    }
+}
+
 #[test]
 fn preflight_aborts_when_one_path_is_missing() {
     let tmp = tempfile::tempdir().unwrap();

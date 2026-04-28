@@ -202,12 +202,49 @@ pub struct CoverageRow {
     /// `numberOfDocuments` from the matching Meili index.
     /// `None` when the index does not exist.
     pub meili_docs: Option<u64>,
+    /// Vector count from the matching Vectorizer collection
+    /// (`cortex-{repo}-{family}`). `None` when the probe was not
+    /// run or the collection does not exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vec_vectors: Option<u64>,
+    /// Artifact count from the Nexus graph for this row's repo.
+    /// Nexus is repo-grain only — the same value repeats for every
+    /// `(repo, *)` row that shares a `repo`. `None` when the probe
+    /// was not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nexus_artifacts: Option<u64>,
     /// `true` when the archive has events for this partition but
     /// Meili is missing the index (or has zero docs).
     pub inconsistent: bool,
-    /// Free-text reason when `inconsistent` is true.
+    /// `true` when both `meili_docs` and `vec_vectors` are positive
+    /// but their ratio exceeds [`CoverageOptions::vec_to_meili_ratio_max`].
+    /// Suspicious rows do **not** flip [`DoctorReport::failed`] —
+    /// chunking can legitimately multiply, but a 50× expansion still
+    /// warrants a manual look.
+    #[serde(default)]
+    pub suspicious: bool,
+    /// Free-text reason when `inconsistent` or `suspicious` is true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+/// Tunable thresholds for [`coverage_report`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoverageOptions {
+    /// Largest tolerated `vec_vectors / meili_docs` ratio before a
+    /// row is flagged `suspicious`. Default `50` — well above the
+    /// expected chunk-fan-out of code (≤ 20) and docs (≤ 10) but
+    /// below an obvious blunder (e.g. forgetting to delete a stale
+    /// collection on rerouting).
+    pub vec_to_meili_ratio_max: u64,
+}
+
+impl Default for CoverageOptions {
+    fn default() -> Self {
+        Self {
+            vec_to_meili_ratio_max: 50,
+        }
+    }
 }
 
 /// Top-level report shape returned by [`coverage_report`] and
@@ -222,8 +259,14 @@ pub struct DoctorReport {
     /// `cortex-{repo}-{family}` shape — surfaced separately so the
     /// operator can clean them up via `phase4a` sweep semantics.
     pub non_canonical_meili_indexes: Vec<String>,
+    /// Names of Vectorizer collections that violate the canonical
+    /// `cortex-{repo}-{family}` shape. Same operator-action contract
+    /// as the Meili siblings — surface, do not auto-clean.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub non_canonical_vectorizer_collections: Vec<String>,
     /// `true` when at least one row has `inconsistent = true`. The
-    /// CLI exits non-zero on this flag.
+    /// CLI exits non-zero on this flag. Suspicious rows do not
+    /// contribute.
     pub failed: bool,
 }
 
@@ -297,7 +340,9 @@ impl<C: MeiliClient + ?Sized + Sync> MeiliCoverageScan for MeiliCoverageProbe<'_
 }
 
 /// Compose the doctor's coverage report from an archive summary
-/// and the Meili partition map.
+/// and the Meili partition map. v1 entry point — preserves the
+/// pre-phase4h shape so callers that don't yet pipe Vectorizer /
+/// Nexus counters keep working.
 ///
 /// A row is marked `inconsistent` when:
 /// - the archive has events for the partition AND
@@ -313,6 +358,35 @@ pub fn coverage_report(
     meili_partitions: BTreeMap<PartitionKey, u64>,
     non_canonical_meili_indexes: Vec<String>,
 ) -> DoctorReport {
+    coverage_report_full(
+        archive,
+        meili_partitions,
+        non_canonical_meili_indexes,
+        BTreeMap::new(),
+        Vec::new(),
+        BTreeMap::new(),
+        CoverageOptions::default(),
+    )
+}
+
+/// Compose the doctor's coverage report from every backend probe.
+/// Callers that want the full archive ↔ Meili ↔ Vectorizer ↔ Nexus
+/// matrix go through this entry. The narrower [`coverage_report`]
+/// remains for v1 clients that only have the archive + Meili axis.
+///
+/// Suspicious-row policy: a row is marked `suspicious` (but not
+/// `inconsistent`) when both `meili_docs > 0` and `vec_vectors > 0`
+/// and `vec_vectors / meili_docs > opts.vec_to_meili_ratio_max`.
+/// Suspicious rows do not flip [`DoctorReport::failed`].
+pub fn coverage_report_full(
+    archive: ArchiveSummary,
+    meili_partitions: BTreeMap<PartitionKey, u64>,
+    non_canonical_meili_indexes: Vec<String>,
+    vec_partitions: BTreeMap<PartitionKey, u64>,
+    non_canonical_vectorizer_collections: Vec<String>,
+    nexus_repo_counts: NexusCounts,
+    opts: CoverageOptions,
+) -> DoctorReport {
     let mut rows: Vec<CoverageRow> = Vec::new();
     let mut keys: std::collections::BTreeSet<PartitionKey> = Default::default();
     for k in archive.partitions.keys() {
@@ -321,12 +395,29 @@ pub fn coverage_report(
     for k in meili_partitions.keys() {
         keys.insert(k.clone());
     }
+    for k in vec_partitions.keys() {
+        keys.insert(k.clone());
+    }
+
+    let nexus_in_use = !nexus_repo_counts.is_empty();
 
     for key in keys {
         let archive_events = archive.partitions.get(&key).copied().unwrap_or(0);
         let meili_docs = meili_partitions.get(&key).copied();
+        let vec_vectors = vec_partitions.get(&key).copied();
+        let nexus_artifacts = if nexus_in_use {
+            // Repo-grain only — every `(repo, *)` row carries the
+            // same value. `None` when the repo is in archive/meili
+            // but the graph hasn't seen it yet.
+            nexus_repo_counts.get(&key.repo).copied()
+        } else {
+            None
+        };
+
         let mut inconsistent = false;
+        let mut suspicious = false;
         let mut reason: Option<String> = None;
+
         if archive_events > 0 {
             match meili_docs {
                 None => {
@@ -346,11 +437,35 @@ pub fn coverage_report(
                 _ => {}
             }
         }
+
+        // Ratio probe — only fires when both sides are present and
+        // populated. A missing Vectorizer probe (no value) is silent;
+        // an empty collection (`Some(0)`) is also silent because the
+        // chunker may legitimately produce zero vectors for an
+        // event with no body.
+        if !inconsistent {
+            if let (Some(meili), Some(vec)) = (meili_docs, vec_vectors) {
+                if meili > 0 && vec > meili.saturating_mul(opts.vec_to_meili_ratio_max) {
+                    suspicious = true;
+                    reason = Some(format!(
+                        "vec/meili ratio {0:.1} exceeds threshold {1} for {2}/{3}",
+                        vec as f64 / meili as f64,
+                        opts.vec_to_meili_ratio_max,
+                        key.repo,
+                        key.family,
+                    ));
+                }
+            }
+        }
+
         rows.push(CoverageRow {
             partition: key,
             archive_events,
             meili_docs,
+            vec_vectors,
+            nexus_artifacts,
             inconsistent,
+            suspicious,
             reason,
         });
     }
@@ -360,6 +475,7 @@ pub fn coverage_report(
         archive,
         rows,
         non_canonical_meili_indexes,
+        non_canonical_vectorizer_collections,
         failed,
     }
 }
@@ -376,31 +492,54 @@ pub fn render_coverage_markdown(report: &DoctorReport) -> String {
         report.archive.partitions.len(),
     ));
     out.push_str(
-        "| repo | family | archive | meili | status |\n\
-         |------|--------|--------:|------:|--------|\n",
+        "| repo | family | archive | meili | vec | nexus | status |\n\
+         |------|--------|--------:|------:|----:|------:|--------|\n",
     );
     for row in &report.rows {
         let meili_str = match row.meili_docs {
             Some(n) => n.to_string(),
             None => "—".to_string(),
         };
+        let vec_str = match row.vec_vectors {
+            Some(n) => n.to_string(),
+            None => "—".to_string(),
+        };
+        let nexus_str = match row.nexus_artifacts {
+            Some(n) => n.to_string(),
+            None => "—".to_string(),
+        };
         let status = if row.inconsistent {
-            row.reason.clone().unwrap_or_else(|| "inconsistent".into())
+            row.reason
+                .clone()
+                .unwrap_or_else(|| "inconsistent".into())
+        } else if row.suspicious {
+            row.reason
+                .clone()
+                .map(|r| format!("suspicious: {r}"))
+                .unwrap_or_else(|| "suspicious".into())
         } else {
             "ok".into()
         };
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
             row.partition.repo,
             row.partition.family,
             row.archive_events,
             meili_str,
+            vec_str,
+            nexus_str,
             status,
         ));
     }
     if !report.non_canonical_meili_indexes.is_empty() {
         out.push_str("\nNon-canonical Meili indexes (sweep candidates):\n");
         for name in &report.non_canonical_meili_indexes {
+            out.push_str(&format!("- {name}\n"));
+        }
+    }
+    if !report.non_canonical_vectorizer_collections.is_empty() {
+        out.push_str("\nNon-canonical Vectorizer collections (sweep candidates):\n");
+        for name in &report.non_canonical_vectorizer_collections {
             out.push_str(&format!("- {name}\n"));
         }
     }
@@ -414,6 +553,251 @@ pub async fn meili_partition_counts<C: MeiliClient + ?Sized + Sync>(
     client: &C,
 ) -> anyhow::Result<(BTreeMap<PartitionKey, u64>, Vec<String>)> {
     MeiliCoverageProbe::new(client).scan().await
+}
+
+/// Per-collection vector count surfaced by a Vectorizer probe.
+/// One row per Vectorizer collection — non-canonical collections are
+/// returned in the second field so the operator can sweep them like
+/// the Meili siblings.
+pub type VectorizerCounts = (BTreeMap<PartitionKey, u64>, Vec<String>);
+
+/// Coverage probe over a Vectorizer cluster. The trait shape mirrors
+/// [`MeiliCoverageScan`] so the report logic can stitch the two
+/// backends with the same partition vocabulary. The Live SDK call is
+/// gated behind [`LiveVectorizerCoverageProbe`]; tests use the
+/// in-memory [`MemoryVectorizerCoverageProbe`].
+#[async_trait]
+pub trait VectorizerCoverageScan: Send + Sync {
+    /// Return the per-`(repo, family)` vector counts plus the list
+    /// of non-canonical collection uids that the Vectorizer cluster
+    /// holds.
+    async fn scan(&self) -> anyhow::Result<VectorizerCounts>;
+}
+
+/// In-memory [`VectorizerCoverageScan`] for unit tests. Seeded via
+/// [`MemoryVectorizerCoverageProbe::seed`].
+#[derive(Debug, Default, Clone)]
+pub struct MemoryVectorizerCoverageProbe {
+    partitions: BTreeMap<PartitionKey, u64>,
+    non_canonical: Vec<String>,
+}
+
+impl MemoryVectorizerCoverageProbe {
+    /// Build an empty probe.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seed the in-memory state with one canonical collection.
+    pub fn seed(&mut self, repo: &str, family: &str, vectors: u64) {
+        self.partitions.insert(
+            PartitionKey {
+                repo: repo.to_string(),
+                family: family.to_string(),
+            },
+            vectors,
+        );
+    }
+
+    /// Seed a non-canonical collection name. The probe surfaces
+    /// these in the second tuple slot but does **not** map them
+    /// onto a partition key (their shape is unknown).
+    pub fn seed_non_canonical(&mut self, name: &str) {
+        self.non_canonical.push(name.to_string());
+    }
+}
+
+#[async_trait]
+impl VectorizerCoverageScan for MemoryVectorizerCoverageProbe {
+    async fn scan(&self) -> anyhow::Result<VectorizerCounts> {
+        Ok((self.partitions.clone(), self.non_canonical.clone()))
+    }
+}
+
+/// Live Vectorizer probe — wraps `vectorizer-sdk`'s authenticated
+/// admin client. Authenticates once via `POST /auth/login`, then
+/// calls `list_collections()` and parses each canonical name back to
+/// `(repo, family)`. The SDK already retries transient transport
+/// failures, so this surface stays plain `anyhow::Result`.
+pub struct LiveVectorizerCoverageProbe {
+    client: vectorizer_sdk::VectorizerClient,
+}
+
+impl LiveVectorizerCoverageProbe {
+    /// Build a Live probe by authenticating against `base_url` with
+    /// the given `username` / `password`. The minted JWT is bound to
+    /// a follow-up SDK client via the `api_key` slot — the SDK
+    /// transport sniffs the three-segment JWT shape and sends it
+    /// as `Authorization: Bearer …`. Same flow `cortex-embedder`'s
+    /// `LiveVectorizerClient::login` follows.
+    pub async fn new(
+        base_url: &str,
+        username: &str,
+        password: &str,
+    ) -> anyhow::Result<Self> {
+        let pre_auth = vectorizer_sdk::ClientConfig {
+            base_url: Some(base_url.to_string()),
+            api_key: None,
+            timeout_secs: Some(30),
+            ..vectorizer_sdk::ClientConfig::default()
+        };
+        let auth_client = vectorizer_sdk::VectorizerClient::new(pre_auth)
+            .map_err(|e| anyhow::anyhow!("vectorizer client: {e}"))?;
+        let token = auth_client
+            .login(username, password)
+            .await
+            .map_err(|e| anyhow::anyhow!("vectorizer login: {e}"))?;
+        let bearer = vectorizer_sdk::ClientConfig {
+            base_url: Some(base_url.to_string()),
+            api_key: Some(token.access_token),
+            timeout_secs: Some(30),
+            ..vectorizer_sdk::ClientConfig::default()
+        };
+        let client = vectorizer_sdk::VectorizerClient::new(bearer)
+            .map_err(|e| anyhow::anyhow!("vectorizer authenticated client: {e}"))?;
+        Ok(Self { client })
+    }
+}
+
+#[async_trait]
+impl VectorizerCoverageScan for LiveVectorizerCoverageProbe {
+    async fn scan(&self) -> anyhow::Result<VectorizerCounts> {
+        let collections = self
+            .client
+            .list_collections()
+            .await
+            .map_err(|e| anyhow::anyhow!("vectorizer list_collections: {e}"))?;
+        let mut partitions: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        let mut non_canonical: Vec<String> = Vec::new();
+        for col in collections {
+            let key = parse_canonical_name(&col.name);
+            let vectors = u64::try_from(col.vector_count).unwrap_or(u64::MAX);
+            match key {
+                Some(k) => {
+                    partitions.insert(k, vectors);
+                }
+                None => non_canonical.push(col.name),
+            }
+        }
+        Ok((partitions, non_canonical))
+    }
+}
+
+/// Repo-grain artifact counts surfaced by a Nexus probe. The map key
+/// is the `Repo.name` value the graph carries; the value is the
+/// number of `Artifact` nodes with an `IN_REPO` edge to that repo.
+pub type NexusCounts = BTreeMap<String, u64>;
+
+/// Coverage probe over the Nexus graph. The graph is repo-grain only
+/// (no family discriminator on the `Artifact` ↔ `Repo` edge), so the
+/// trait returns a flat map keyed on `Repo.name`.
+#[async_trait]
+pub trait NexusCoverageScan: Send + Sync {
+    /// Return the per-repo `Artifact` count.
+    async fn scan(&self) -> anyhow::Result<NexusCounts>;
+}
+
+/// In-memory [`NexusCoverageScan`] for unit tests.
+#[derive(Debug, Default, Clone)]
+pub struct MemoryNexusCoverageProbe {
+    counts: NexusCounts,
+}
+
+impl MemoryNexusCoverageProbe {
+    /// Build an empty probe.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Seed the in-memory state with one repo's artifact count.
+    pub fn seed(&mut self, repo: &str, artifacts: u64) {
+        self.counts.insert(repo.to_string(), artifacts);
+    }
+}
+
+#[async_trait]
+impl NexusCoverageScan for MemoryNexusCoverageProbe {
+    async fn scan(&self) -> anyhow::Result<NexusCounts> {
+        Ok(self.counts.clone())
+    }
+}
+
+/// Live Nexus probe — wraps the same `LiveNexusClient` the writer
+/// uses. Runs the canonical
+/// `MATCH (a:Artifact)-[:IN_REPO]->(r:Repo) RETURN r.name AS repo,
+/// count(a) AS artifacts` query and projects the rows.
+pub struct LiveNexusCoverageProbe {
+    client: cortex_graph::LiveNexusClient,
+}
+
+impl LiveNexusCoverageProbe {
+    /// Build a Live probe from a [`cortex_graph::GraphConfig`] (the
+    /// caller is expected to pull the config from env via
+    /// `GraphConfig::from_env`).
+    pub fn new(config: cortex_graph::GraphConfig) -> anyhow::Result<Self> {
+        let client = cortex_graph::LiveNexusClient::new(config)
+            .map_err(|e| anyhow::anyhow!("nexus client: {e}"))?;
+        Ok(Self { client })
+    }
+}
+
+#[async_trait]
+impl NexusCoverageScan for LiveNexusCoverageProbe {
+    async fn scan(&self) -> anyhow::Result<NexusCounts> {
+        let cypher = "MATCH (a:Artifact)-[:IN_REPO]->(r:Repo) \
+                      RETURN r.name AS repo, count(a) AS artifacts";
+        let result = self
+            .client
+            .execute_with_retry(cypher, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("nexus probe: {e}"))?;
+        let mut out: NexusCounts = BTreeMap::new();
+        for row in &result.rows {
+            // Each row is a JSON array of `[repo_name, artifact_count]`.
+            let arr = match row.as_array() {
+                Some(a) => a,
+                None => continue,
+            };
+            if arr.len() < 2 {
+                continue;
+            }
+            let repo = match arr[0].as_str() {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => continue,
+            };
+            let count = match arr[1].as_u64() {
+                Some(n) => n,
+                None => continue,
+            };
+            out.insert(repo, count);
+        }
+        Ok(out)
+    }
+}
+
+/// Parse a canonical `cortex-{repo}-{family}` name back into a
+/// [`PartitionKey`]. Shared by the Vectorizer probe and tests; the
+/// Meili side has its own copy because it iterates indexes inline.
+fn parse_canonical_name(name: &str) -> Option<PartitionKey> {
+    let rest = name.strip_prefix("cortex-")?;
+    for fam in FAMILIES.iter() {
+        let suffix = format!("-{fam}");
+        if let Some(slug) = rest.strip_suffix(&suffix) {
+            if !slug.is_empty()
+                && slug
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                && !slug.starts_with('-')
+                && !slug.ends_with('-')
+            {
+                return Some(PartitionKey {
+                    repo: slug.to_string(),
+                    family: (*fam).to_string(),
+                });
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -503,9 +887,171 @@ mod tests {
         meili.insert(key("cortex", "code"), 10);
         let report = coverage_report(archive, meili, vec!["cortex-code".into()]);
         let md = render_coverage_markdown(&report);
-        assert!(md.contains("| repo | family | archive | meili | status |"));
-        assert!(md.contains("| cortex | code | 10 | 10 | ok |"));
+        assert!(md.contains("| repo | family | archive | meili | vec | nexus | status |"));
+        assert!(md.contains("| cortex | code | 10 | 10 | — | — | ok |"));
         assert!(md.contains("- cortex-code"));
+    }
+
+    #[tokio::test]
+    async fn memory_vectorizer_probe_buckets_seeded_collections() {
+        let mut probe = MemoryVectorizerCoverageProbe::new();
+        probe.seed("cortex", "code", 4_500);
+        probe.seed("rulebook", "docs", 2_300);
+        probe.seed_non_canonical("legacy-foo");
+
+        let (partitions, non_canon) = probe.scan().await.unwrap();
+        assert_eq!(partitions.len(), 2);
+        assert_eq!(partitions.get(&key("cortex", "code")), Some(&4_500));
+        assert_eq!(partitions.get(&key("rulebook", "docs")), Some(&2_300));
+        assert_eq!(non_canon, vec!["legacy-foo".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn memory_nexus_probe_returns_repo_grain_counts() {
+        let mut probe = MemoryNexusCoverageProbe::new();
+        probe.seed("Cortex", 1862);
+        probe.seed("Rulebook", 770);
+
+        let counts = probe.scan().await.unwrap();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts.get("Cortex"), Some(&1862));
+        assert_eq!(counts.get("Rulebook"), Some(&770));
+    }
+
+    #[test]
+    fn coverage_full_widens_rows_with_vec_and_nexus_columns() {
+        let mut archive = ArchiveSummary::default();
+        archive.partitions.insert(key("cortex", "code"), 1862);
+        archive.partitions.insert(key("cortex", "docs"), 200);
+        archive.envelopes_parsed = 2062;
+        archive.files_visited = 1;
+
+        let mut meili: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        meili.insert(key("cortex", "code"), 1862);
+        meili.insert(key("cortex", "docs"), 200);
+
+        let mut vec_partitions: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        // Healthy chunk fan-out: 5× on code, 3× on docs.
+        vec_partitions.insert(key("cortex", "code"), 9_310);
+        vec_partitions.insert(key("cortex", "docs"), 600);
+
+        let mut nexus: NexusCounts = BTreeMap::new();
+        nexus.insert("cortex".to_string(), 2062);
+
+        let report = coverage_report_full(
+            archive,
+            meili,
+            Vec::new(),
+            vec_partitions,
+            Vec::new(),
+            nexus,
+            CoverageOptions::default(),
+        );
+        assert!(!report.failed);
+        assert_eq!(report.rows.len(), 2);
+        for row in &report.rows {
+            assert_eq!(row.nexus_artifacts, Some(2062));
+            assert!(row.vec_vectors.is_some());
+            assert!(!row.suspicious, "{:?} should not be suspicious", row);
+        }
+
+        let md = render_coverage_markdown(&report);
+        assert!(md.contains("| cortex | code | 1862 | 1862 | 9310 | 2062 | ok |"));
+    }
+
+    #[test]
+    fn coverage_full_marks_extreme_vec_to_meili_ratio_suspicious() {
+        let mut archive = ArchiveSummary::default();
+        archive.partitions.insert(key("cortex", "code"), 100);
+        archive.envelopes_parsed = 100;
+        archive.files_visited = 1;
+        let mut meili: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        meili.insert(key("cortex", "code"), 100);
+        let mut vec_partitions: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        // 100× expansion — well past the default ratio_max of 50.
+        vec_partitions.insert(key("cortex", "code"), 10_000);
+
+        let report = coverage_report_full(
+            archive,
+            meili,
+            Vec::new(),
+            vec_partitions,
+            Vec::new(),
+            BTreeMap::new(),
+            CoverageOptions::default(),
+        );
+        assert!(!report.failed, "suspicious must not flip failed");
+        let row = &report.rows[0];
+        assert!(row.suspicious);
+        assert!(row
+            .reason
+            .as_deref()
+            .unwrap()
+            .contains("ratio"));
+    }
+
+    #[test]
+    fn coverage_full_keeps_inconsistent_priority_over_suspicious() {
+        // Inconsistency (archive populated but meili empty) wins
+        // over the ratio probe — a missing partition is the more
+        // urgent signal.
+        let mut archive = ArchiveSummary::default();
+        archive.partitions.insert(key("cortex", "code"), 100);
+        archive.envelopes_parsed = 100;
+        archive.files_visited = 1;
+        let mut meili: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        meili.insert(key("cortex", "code"), 0);
+        let mut vec_partitions: BTreeMap<PartitionKey, u64> = BTreeMap::new();
+        vec_partitions.insert(key("cortex", "code"), 10_000);
+
+        let report = coverage_report_full(
+            archive,
+            meili,
+            Vec::new(),
+            vec_partitions,
+            Vec::new(),
+            BTreeMap::new(),
+            CoverageOptions::default(),
+        );
+        assert!(report.failed);
+        let row = &report.rows[0];
+        assert!(row.inconsistent);
+        assert!(!row.suspicious);
+    }
+
+    #[test]
+    fn coverage_full_surfaces_non_canonical_vectorizer_collections() {
+        let archive = ArchiveSummary::default();
+        let report = coverage_report_full(
+            archive,
+            BTreeMap::new(),
+            Vec::new(),
+            BTreeMap::new(),
+            vec!["cortex-code".into(), "legacy-foo".into()],
+            BTreeMap::new(),
+            CoverageOptions::default(),
+        );
+        assert_eq!(
+            report.non_canonical_vectorizer_collections,
+            vec!["cortex-code".to_string(), "legacy-foo".to_string()],
+        );
+        let md = render_coverage_markdown(&report);
+        assert!(md.contains("Non-canonical Vectorizer collections"));
+        assert!(md.contains("- cortex-code"));
+    }
+
+    #[test]
+    fn parse_canonical_name_matches_vectorizer_naming() {
+        assert_eq!(
+            parse_canonical_name("cortex-cortex-code"),
+            Some(key("cortex", "code"))
+        );
+        assert_eq!(
+            parse_canonical_name("cortex-cortex-mcp-decisions"),
+            Some(key("cortex-mcp", "decisions"))
+        );
+        assert!(parse_canonical_name("cortex-code").is_none());
+        assert!(parse_canonical_name("legacy-foo").is_none());
     }
 
     #[test]

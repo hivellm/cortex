@@ -32,6 +32,7 @@ async-trait = { workspace = true }
 reqwest = { workspace = true }
 
 synap-sdk = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -27,7 +27,7 @@ use cortex_core::events::Envelope;
 use cortex_embedder::EnrichedEvent;
 use cortex_graph::{
     cypher::{load_from_dir, REQUIRED_TEMPLATES},
-    GraphConfig, GraphWriter, LiveNexusClient, Metrics, NexusGraphWriter,
+    schema, GraphClient, GraphConfig, GraphWriter, LiveNexusClient, Metrics, NexusGraphWriter,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -61,6 +61,20 @@ struct Cli {
     /// status. Useful for isolating which clause Nexus rejects.
     #[arg(long)]
     dump_first_patch: bool,
+    /// Apply the schema-bootstrap statements (constraints + indexes
+    /// from `cortex_graph::schema::SCHEMA_STATEMENTS`) and exit. The
+    /// phase4e backfill runbook calls this before replay so a missing
+    /// `symbol_natural_key` constraint surfaces in one line instead of
+    /// after the full scan.
+    #[arg(long)]
+    ensure_schema_only: bool,
+    /// Run a single Cypher statement and print the [`QueryResult`]
+    /// (columns + rows) as one JSON object on stdout, then exit. Used
+    /// by the runbook's verification probes — keeps the probe surface
+    /// in lockstep with the writer's transport so a working backfill
+    /// implies a working probe.
+    #[arg(long, value_name = "CYPHER")]
+    probe: Option<String>,
 }
 
 #[tokio::main]
@@ -120,6 +134,37 @@ async fn main() -> Result<()> {
             ));
         }
     }
+
+    // Phase4e runbook hooks. Both modes short-circuit before writer
+    // setup so a wrong archive root or missing template directory
+    // doesn't matter when the operator only wants to bootstrap or
+    // probe.
+    if cli.ensure_schema_only {
+        let stmts = schema::statements();
+        client
+            .ensure_schema(&stmts)
+            .await
+            .map_err(|e| anyhow::anyhow!("ensure_schema failed: {e}"))?;
+        println!(
+            "schema bootstrap ok ({} statements applied or already present)",
+            stmts.len()
+        );
+        return Ok(());
+    }
+    if let Some(cypher) = cli.probe.as_deref() {
+        let result = client
+            .execute_with_retry(cypher, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("probe failed: {e}"))?;
+        let payload = serde_json::json!({
+            "columns": result.columns,
+            "rows": result.rows,
+            "execution_time_ms": result.execution_time_ms,
+        });
+        println!("{}", serde_json::to_string(&payload)?);
+        return Ok(());
+    }
+
     let metrics = Arc::new(Metrics::new());
     let writer = Arc::new(NexusGraphWriter::new(
         config.clone(),

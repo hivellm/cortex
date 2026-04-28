@@ -4,13 +4,15 @@
 //! [`Worker`] and runs the pool until SIGINT (Ctrl-C) flips the
 //! shutdown flag.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use cortex_fulltext::{
-    settings_v1_json, sweep_stale_indexes, FulltextConfig, LiveMeiliClient, LiveSynapConsumer,
-    LiveSynapPublisher, MeiliFulltextIndexer, Metrics, SynapHandle, Worker,
+    replay_missing_partitions, settings_v1_json, sweep_stale_indexes, FulltextConfig,
+    LiveMeiliClient, LiveSynapConsumer, LiveSynapPublisher, MeiliFulltextIndexer, Metrics,
+    SynapHandle, Worker,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -57,10 +59,51 @@ async fn main() -> Result<()> {
 
     let indexer = Arc::new(MeiliFulltextIndexer::with_ensured(
         config.clone(),
-        meili_client,
+        meili_client.clone(),
         metrics.clone(),
         Vec::new(),
     ));
+
+    // Phase4f — opt-in boot-time replay-missing-partitions defense.
+    // Walks the archive once after the sweep and replays any
+    // (repo_slug, family) partitions that exist in the archive but not
+    // in Meili. Off by default so a hot restart never triggers a
+    // multi-minute archive scan; ops flips it on after a worker outage
+    // or for a cold archive-only deployment.
+    if std::env::var("CORTEX_FULLTEXT_REPLAY_MISSING")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        let archive_root: PathBuf = std::env::var("CORTEX_ARCHIVE_ROOT")
+            .map(PathBuf::from)
+            .or_else(|_| {
+                std::env::var("USERPROFILE")
+                    .or_else(|_| std::env::var("HOME"))
+                    .map(|home| PathBuf::from(home).join(".cortex").join("archive"))
+            })
+            .context("CORTEX_FULLTEXT_REPLAY_MISSING=1 but no CORTEX_ARCHIVE_ROOT and no HOME/USERPROFILE")?;
+        match replay_missing_partitions(
+            meili_client.as_ref(),
+            indexer.clone(),
+            metrics.as_ref(),
+            &archive_root,
+            &config.index_prefix,
+        )
+        .await
+        {
+            Ok(report) => tracing::info!(
+                examined_archives = report.examined_archives,
+                missing_partitions = report.missing_partitions,
+                replayed_events = report.replayed_events,
+                latency_ms = report.latency_ms,
+                "fulltext replay-missing complete",
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "fulltext replay-missing failed; continuing without replay",
+            ),
+        }
+    }
 
     let synap = Arc::new(
         SynapHandle::new(&config.synap_url)

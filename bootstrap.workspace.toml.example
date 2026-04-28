@@ -1,0 +1,99 @@
+# bootstrap.workspace.toml — phase4g operator template
+#
+# Source-controlled list of every HiveLLM repo `cortex-bootstrap`
+# walks in one invocation. Carry this file as a literal placeholder
+# (no env expansion happens on load). The operator copies it to
+# `bootstrap.workspace.toml` (next to the binary) and replaces the
+# `${HIVE_ROOT}` placeholder with their local checkout root, e.g.:
+#
+#     cp bootstrap.workspace.toml.example bootstrap.workspace.toml
+#     sed -i 's#${HIVE_ROOT}#E:/HiveLLM#g' bootstrap.workspace.toml   # bash
+#     # or, in PowerShell:
+#     (Get-Content bootstrap.workspace.toml.example) `
+#         -replace '\$\{HIVE_ROOT\}', 'E:/HiveLLM' `
+#         | Set-Content bootstrap.workspace.toml
+#
+# Each `[[repo]].id` matches the canonical HiveLLM repo name, which
+# is what `cortex-bootstrap` writes into `.cortex-bootstrap.state.json`
+# as the checkpoint key. Don't change `id` after the first run — it
+# would orphan the prior checkpoint and force a full re-walk.
+#
+# `path` must point at the git checkout. `cortex-bootstrap` looks for
+# `<path>/cortex.toml`; if the project keeps its config elsewhere, set
+# the optional `config = "..."` override on that entry.
+#
+# Verify the file parses (without running the bootstrap) with:
+#
+#     cortex-bootstrap --workspace bootstrap.workspace.toml --estimate
+#
+# The pre-flight check in `cortex_bootstrap::workspace::preflight`
+# fails fast on any missing path / missing `.git/` / missing
+# `cortex.toml` and reports every offender at once.
+
+[[repo]]
+id = "Cortex"
+path = "${HIVE_ROOT}/Cortex"
+
+[[repo]]
+id = "Vectorizer"
+path = "${HIVE_ROOT}/Vectorizer"
+
+[[repo]]
+id = "VectorizerSync"
+path = "${HIVE_ROOT}/VectorizerSync"
+
+[[repo]]
+id = "Nexus"
+path = "${HIVE_ROOT}/Nexus"
+
+[[repo]]
+id = "Synap"
+path = "${HIVE_ROOT}/Synap"
+
+[[repo]]
+id = "Lexum"
+path = "${HIVE_ROOT}/Lexum"
+
+[[repo]]
+id = "Expert"
+path = "${HIVE_ROOT}/Expert"
+
+[[repo]]
+id = "Rulebook"
+path = "${HIVE_ROOT}/Rulebook"
+
+[[repo]]
+id = "HivehubCloud"
+path = "${HIVE_ROOT}/HivehubCloud"
+
+[[repo]]
+id = "HiveGPU"
+path = "${HIVE_ROOT}/HiveGPU"
+
+[[repo]]
+id = "CompressionPrompt"
+path = "${HIVE_ROOT}/CompressionPrompt"
+
+[[repo]]
+id = "Tml"
+path = "${HIVE_ROOT}/Tml"
+
+[[repo]]
+id = "TmlDocs"
+path = "${HIVE_ROOT}/TmlDocs"
+
+[[repo]]
+id = "TmlTextmate"
+path = "${HIVE_ROOT}/TmlTextmate"
+
+[[repo]]
+id = "Transmutation"
+path = "${HIVE_ROOT}/Transmutation"
+
+[[repo]]
+id = "TransmutationLite"
+path = "${HIVE_ROOT}/TransmutationLite"
+
+[[repo]]
+id = "Umicp"
+path = "${HIVE_ROOT}/Umicp"

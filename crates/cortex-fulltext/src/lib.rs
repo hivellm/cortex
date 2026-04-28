@@ -15,6 +15,7 @@
 #![warn(missing_docs)]
 
 pub mod body;
+pub mod boot_replay;
 pub mod builders;
 pub mod config;
 pub mod document;
@@ -40,6 +41,9 @@ pub use metrics::Metrics;
 pub use routing::{
     family_for, family_for_event, index_for, index_for_event, index_name,
     is_canonical_index_name, FAMILIES,
+};
+pub use boot_replay::{
+    missing_partitions, replay_missing_partitions, Partition, ReplayReport,
 };
 pub use sweep::{sweep_stale_indexes, SweepReport};
 pub use settings::{load_settings_v1, settings_v1_json, SETTINGS_V1};

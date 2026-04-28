@@ -44,6 +44,11 @@ pub struct Metrics {
     /// (every kind / topic combination should land in a known bucket;
     /// `cortex-misc` should stay non-zero but small).
     pub routed_total: Mutex<BTreeMap<String, u64>>,
+    /// `cortex_fulltext_replay_events_total{repo, family}` — events
+    /// replayed by the boot-time `replay_missing_partitions` defense.
+    /// The map key is `"<repo_slug>|<family>"` so the partition
+    /// identity stays in lockstep with the canonical index naming.
+    pub replay_events_total: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -124,6 +129,24 @@ impl Metrics {
     /// Snapshot the routed-total counter (test / dashboard helper).
     pub fn routed_snapshot(&self) -> BTreeMap<String, u64> {
         self.routed_total
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    /// Increment the boot-replay counter for `(repo_slug, family)` by
+    /// `n`. Drives `cortex_fulltext_replay_events_total{repo, family}`.
+    pub fn incr_replay_events(&self, repo_slug: &str, family: &str, n: u64) {
+        if let Ok(mut map) = self.replay_events_total.lock() {
+            let key = format!("{repo_slug}|{family}");
+            *map.entry(key).or_insert(0) += n;
+        }
+    }
+
+    /// Snapshot the boot-replay counter (test helper). The keys are
+    /// `"<repo_slug>|<family>"` strings.
+    pub fn replay_events_snapshot(&self) -> BTreeMap<String, u64> {
+        self.replay_events_total
             .lock()
             .map(|guard| guard.clone())
             .unwrap_or_default()

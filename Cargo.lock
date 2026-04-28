@@ -664,6 +664,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+ "zstd",
 ]
 
 [[package]]
@@ -747,12 +748,14 @@ dependencies = [
  "clap",
  "cortex-core",
  "cortex-fulltext",
+ "cortex-graph",
  "cortex-storage",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "vectorizer-sdk",
  "zstd",
 ]
 

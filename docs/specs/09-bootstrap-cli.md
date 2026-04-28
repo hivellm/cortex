@@ -281,7 +281,7 @@ The orchestrator runs in three phases:
 
 The final output is a single summary table on stderr listing every repo with `events`, `dropped`, `duration`, and `status` (`done` / `bypassed` / `failed: <reason>`). The process exits with code `1` when any repo failed.
 
-The actual replay of the user's 17 Hive checkouts against a live cluster is an operations step — see `phase4g_bootstrap_workspace_runbook` for the runbook + workspace.toml authoring task.
+The actual replay of the user's 17 Hive checkouts against a live cluster is an operations step. The runbook lives at [`docs/operations/bootstrap-workspace.md`](../operations/bootstrap-workspace.md); the source-controlled template at [`bootstrap.workspace.toml.example`](../../bootstrap.workspace.toml.example) lists every Hive repo as a literal `${HIVE_ROOT}/<RepoName>` placeholder so a single search-and-replace sufficies. The CI guard at `crates/cortex-bootstrap/tests/workspace.rs::bootstrap_workspace_example_loads` parses the template through `cortex_bootstrap::workspace::load_workspace` so a typo fails CI before reaching the operator.
 
 ### Progress & telemetry
 

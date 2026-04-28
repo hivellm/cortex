@@ -203,18 +203,21 @@ The raw payload is **never** indexed without redaction.
 
 ### Cross-backend consistency doctor (phase4d)
 
-`cortex-ops doctor-consistency` runs out-of-band (operator command, not part of the worker boot path) and reports per-`(repo, family)` coverage between the event archive and Meilisearch. v1 ships the archive ↔ Meili axis; Vectorizer + Nexus probes and the query-overlap probe mode ship in `phase4h_doctor_vec_nexus_probes` and `phase4i_doctor_query_overlap_mode` respectively.
+`cortex-ops doctor-consistency` runs out-of-band (operator command, not part of the worker boot path) and reports per-`(repo, family)` coverage across the event archive, Meilisearch, Vectorizer, and Nexus. The query-overlap probe mode is carved out into `phase4i_doctor_query_overlap_mode`.
 
 Probes:
 
 - **Archive** — walks `$CORTEX_ARCHIVE_ROOT/events/**/raw-*.parquet` (zstd-NDJSON), routes every envelope through `cortex_fulltext::routing::family_for_event` so the partition view exactly matches what the live indexer produces, and aggregates `(repo_slug, family) → envelope_count`. Envelopes without a `kind` or `context.repo` are dropped silently.
 - **Meili** — wraps `cortex_fulltext::MeiliClient::list_indexes` and lifts every canonical `cortex-{repo_slug}-{family}` name into the same partition map. Names that fail `is_canonical_index_name` land in a separate sweep-candidate list (informational; phase4a's boot-time sweep is the actor that drops them).
+- **Vectorizer** (phase4h) — authenticates via `POST /auth/login` (`CORTEX_EMBEDDER_VECTORIZER_USER` / `_PASSWORD`), calls `list_collections()`, parses `cortex-{repo_slug}-{family}` names, and aggregates `(repo_slug, family) → vector_count`. Non-canonical collection names land in a sibling sweep-candidate list. The probe runs only when both URL and credentials are set.
+- **Nexus** (phase4h) — wraps the same `LiveNexusClient` the writer uses and runs `MATCH (a:Artifact)-[:IN_REPO]->(r:Repo) RETURN r.name AS repo, count(a) AS artifacts`. The graph is repo-grain only, so the row's `nexus_artifacts` value repeats for every `(repo, *)` partition that shares a `repo`. Probe runs only when `--nexus` (or `$CORTEX_NEXUS_URL`) is set.
 
 Coverage policy:
 
 - A row is marked **inconsistent** when `archive_events > 0` AND Meili lacks the matching index OR has zero docs in it.
+- A row is marked **suspicious** (but not `inconsistent`) when both `meili_docs > 0` and `vec_vectors > 0` and `vec_vectors / meili_docs > vec_to_meili_ratio_max` (default `50`). Chunking can legitimately multiply but a 50× expansion still warrants a manual look. Suspicious rows do **not** flip `failed`.
 - Meili-only rows (archive empty, Meili populated) are **informational** — they surface in the table but don't fail the run; they're the expected shape after archive rotation or bootstrap-only ingestion.
-- The CLI exits non-zero when any row is inconsistent. JSON output (`--json`) emits the full `DoctorReport` shape.
+- The CLI exits non-zero only when any row is `inconsistent`. JSON output (`--json`) emits the full `DoctorReport` shape with the new `vec_vectors`, `nexus_artifacts`, `suspicious`, and `non_canonical_vectorizer_collections` fields.
 
 Re-running the doctor after a fix proves the fix at the data level, not just the unit-test level. Live runs against the dev cluster have already caught real drift (`gui/code`, `gui/turns`, `rust/code` partitions present in the archive but missing from Meili after the phase4a sweep).
 
@@ -246,6 +249,54 @@ produces zero deletions on subsequent runs.
 The matcher lives in [`cortex_fulltext::routing::is_canonical_index_name`](../../crates/cortex-fulltext/src/routing.rs) and is exercised by `index_name`'s `debug_assert!`, so writer drift is caught in dev / CI before reaching production.
 
 The legacy `for family in FAMILIES { ensure_index(format!("cortex-{family}"), ...) }` boot loop that produced the stale names was removed in phase4a — per-project uids materialise lazily on first upsert via `MeiliFulltextIndexer::ensure_settings`, so eager bootstrap of the un-slugged family set was always orphaning state into Meili.
+
+### Boot-time replay-missing partitions (phase4f)
+
+After the stale-sweep but before the worker pool starts pulling from
+`cortex.events.enriched`, `main.rs` may run `replay_missing_partitions`
+once against the configured Meili cluster. The routine closes the
+recovery hole left after phase4a: even with sweep + lazy `ensure_index`
+in place, the worker still depends on the Synap stream catching every
+event in real time. If the worker crashes before catching up to a
+bootstrap, the Synap stream rotates past the gap, or the stack starts
+cold against an archive-only deployment, the corresponding
+`cortex-{repo_slug}-{family}` partitions never materialise and the
+keyword lane silently degrades to "missing repo".
+
+The routine:
+
+1. Walks Meili via `list_indexes` and parses every canonical-shaped
+   uid back into its `(repo_slug, family)` pair.
+2. Scans `$CORTEX_ARCHIVE_ROOT` (`raw-*.parquet` zstd NDJSON, the
+   same path `cortex-graph-backfill` uses) and computes the union
+   of `(repo_slug, family)` pairs every envelope would route to.
+3. Replays only the envelopes whose pair is in the set difference
+   (archive minus Meili) through the production
+   `MeiliFulltextIndexer::index_batch` upsert path.
+
+Idempotent because Meili keys on the document id derived from
+`content_hash` — re-running on a populated cluster is a no-op.
+
+**Off by default** — gated on `CORTEX_FULLTEXT_REPLAY_MISSING=1` so a
+hot-path restart never triggers a multi-minute archive scan. When
+enabled, the routine reads the archive root from `CORTEX_ARCHIVE_ROOT`
+(or the `~/.cortex/archive` fallback) and the index prefix from the
+existing `FulltextConfig`. Errors are logged at `warn` and the boot
+proceeds without replay; failure to replay never blocks live traffic.
+
+Per-partition observability lands in
+`cortex_fulltext_replay_events_total{repo, family}`. The boot path
+emits exactly one `info` summary at the end of the phase:
+
+```
+fulltext replay-missing complete
+  examined_archives=<N>
+  missing_partitions=<M>
+  replayed_events=<K>
+  latency_ms=<L>
+```
+
+Implementation in [`cortex_fulltext::boot_replay`](../../crates/cortex-fulltext/src/boot_replay.rs).
 
 ### Worker concurrency
 
@@ -284,6 +335,7 @@ cortex.fulltext.errors                counter, labels: status
 cortex.fulltext.skipped_empty         counter
 cortex.fulltext.truncated             counter
 cortex.fulltext.backpressure.active   gauge
+cortex.fulltext.replay_events_total   counter, labels: repo, family
 ```
 
 ## Read path

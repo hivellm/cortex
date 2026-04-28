@@ -49,9 +49,10 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
-    /// Cross-backend consistency checker (phase4d). v1 covers the
-    /// archive ↔ Meili axis; Vectorizer + Nexus probes ship in
-    /// phase4h.
+    /// Cross-backend consistency checker. v1 (phase4d) covered the
+    /// archive ↔ Meili axis; phase4h widens it to Vectorizer +
+    /// Nexus. Each probe is opt-in via its own flag / env var so
+    /// the doctor still runs against partial backends.
     DoctorConsistency {
         /// Archive root (defaults to `$CORTEX_ARCHIVE_ROOT` then
         /// `~/.cortex/archive`).
@@ -65,6 +66,25 @@ enum Command {
         /// `$CORTEX_FULLTEXT_MEILI_API_KEY`).
         #[arg(long)]
         meili_key: Option<String>,
+        /// Vectorizer base URL (defaults to
+        /// `$CORTEX_EMBEDDER_VECTORIZER_URL`). Probe runs only
+        /// when both URL and credentials are present.
+        #[arg(long)]
+        vectorizer: Option<String>,
+        /// Vectorizer admin username (defaults to
+        /// `$CORTEX_EMBEDDER_VECTORIZER_USER`).
+        #[arg(long)]
+        vectorizer_user: Option<String>,
+        /// Vectorizer admin password (defaults to
+        /// `$CORTEX_EMBEDDER_VECTORIZER_PASSWORD`).
+        #[arg(long)]
+        vectorizer_password: Option<String>,
+        /// Nexus base URL (defaults to `$CORTEX_NEXUS_URL`). Probe
+        /// runs only when this is set; the rest of the
+        /// `cortex-graph` env vars (auth, transport) are picked up
+        /// via `GraphConfig::from_env`.
+        #[arg(long)]
+        nexus: Option<String>,
         /// Emit JSON instead of the markdown table.
         #[arg(long)]
         json: bool,
@@ -101,8 +121,21 @@ fn main() -> ExitCode {
             archive_root,
             meili,
             meili_key,
+            vectorizer,
+            vectorizer_user,
+            vectorizer_password,
+            nexus,
             json,
-        } => doctor_consistency(archive_root, meili, meili_key, json),
+        } => doctor_consistency(
+            archive_root,
+            meili,
+            meili_key,
+            vectorizer,
+            vectorizer_user,
+            vectorizer_password,
+            nexus,
+            json,
+        ),
     }
 }
 
@@ -110,10 +143,15 @@ fn main() -> ExitCode {
 /// the report. Read-only end-to-end. Spins up a one-shot Tokio
 /// runtime so the surrounding `main` stays sync (the rest of
 /// `cortex-ops` does not need an async runtime).
+#[allow(clippy::too_many_arguments)]
 fn doctor_consistency(
     archive_root: Option<String>,
     meili: Option<String>,
     meili_key: Option<String>,
+    vectorizer: Option<String>,
+    vectorizer_user: Option<String>,
+    vectorizer_password: Option<String>,
+    nexus: Option<String>,
     json: bool,
 ) -> ExitCode {
     let archive_root = archive_root
@@ -131,6 +169,18 @@ fn doctor_consistency(
         }
     };
     let meili_key = meili_key.or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok());
+    let vectorizer_url = vectorizer
+        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL").ok())
+        .filter(|u| !u.is_empty());
+    let vectorizer_user = vectorizer_user
+        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER").ok())
+        .filter(|u| !u.is_empty());
+    let vectorizer_password = vectorizer_password
+        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok())
+        .filter(|u| !u.is_empty());
+    let nexus_url = nexus
+        .or_else(|| std::env::var("CORTEX_NEXUS_URL").ok())
+        .filter(|u| !u.is_empty());
 
     let archive = match cortex_ops::ArchiveProbe::new(&archive_root).scan() {
         Ok(a) => a,
@@ -160,7 +210,44 @@ fn doctor_consistency(
         }
     };
 
-    let report = cortex_ops::coverage_report(archive, meili_partitions, non_canonical);
+    // Vectorizer probe — only runs when both URL and credentials
+    // are present. A missing-cred deployment falls back to the v1
+    // archive ↔ Meili report.
+    let (vec_partitions, non_canonical_vec) = if let (Some(url), Some(user), Some(pwd)) =
+        (vectorizer_url, vectorizer_user, vectorizer_password)
+    {
+        match runtime.block_on(probe_vectorizer(&url, &user, &pwd)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("vectorizer probe failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        (Default::default(), Vec::new())
+    };
+
+    let nexus_repo_counts = if let Some(url) = nexus_url {
+        match runtime.block_on(probe_nexus(&url)) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("nexus probe failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        Default::default()
+    };
+
+    let report = cortex_ops::coverage_report_full(
+        archive,
+        meili_partitions,
+        non_canonical,
+        vec_partitions,
+        non_canonical_vec,
+        nexus_repo_counts,
+        cortex_ops::CoverageOptions::default(),
+    );
     if json {
         match serde_json::to_string_pretty(&report) {
             Ok(s) => println!("{s}"),
@@ -195,6 +282,32 @@ async fn probe_meili(
     let client = LiveMeiliClient::new(&config)
         .map_err(|e| anyhow::anyhow!("meili client: {e}"))?;
     cortex_ops::doctor::meili_partition_counts(&client).await
+}
+
+async fn probe_vectorizer(
+    url: &str,
+    user: &str,
+    password: &str,
+) -> anyhow::Result<(
+    std::collections::BTreeMap<cortex_ops::PartitionKey, u64>,
+    Vec<String>,
+)> {
+    use cortex_ops::{LiveVectorizerCoverageProbe, VectorizerCoverageScan};
+    let probe = LiveVectorizerCoverageProbe::new(url, user, password).await?;
+    probe.scan().await
+}
+
+async fn probe_nexus(url: &str) -> anyhow::Result<cortex_ops::NexusCounts> {
+    use cortex_graph::GraphConfig;
+    use cortex_ops::{LiveNexusCoverageProbe, NexusCoverageScan};
+    // GraphConfig::from_env reads the rest of the auth / transport
+    // knobs (CORTEX_NEXUS_USER / _PASSWORD, transport selection, …)
+    // so we let the operator set them through the same env vars the
+    // streaming worker already honours.
+    let mut config = GraphConfig::from_env();
+    config.nexus_url = url.to_string();
+    let probe = LiveNexusCoverageProbe::new(config)?;
+    probe.scan().await
 }
 
 fn home_dir() -> Option<std::path::PathBuf> {

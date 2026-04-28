@@ -622,7 +622,7 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
     // Stamp both `name` and a redundant `repo` field so old readers
     // that grep for `repo` keep working.
     let mut repo_props = BTreeMap::new();
-    stamp_display_label(&mut repo_props, &repo.to_string());
+    stamp_display_label(&mut repo_props, repo);
     repo_props.insert("repo".to_string(), Value::String(repo.to_string()));
     patch.nodes.push(NodeOp {
         label: "Repo".to_string(),
@@ -848,7 +848,7 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
     // node ever fails to land.
     if let Some(repo) = event.context_repo.as_deref().filter(|s| !s.is_empty()) {
         let mut repo_props = BTreeMap::new();
-        stamp_display_label(&mut repo_props, &repo.to_string());
+        stamp_display_label(&mut repo_props, repo);
         repo_props.insert("repo".to_string(), Value::String(repo.to_string()));
         patch.nodes.push(NodeOp {
             label: "Repo".to_string(),
