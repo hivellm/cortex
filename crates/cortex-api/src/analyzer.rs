@@ -257,8 +257,6 @@ impl Analyzer {
             &self.cfg.model,
             "--output-format",
             "json",
-            "--max-tokens",
-            "4096",
         ]);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())

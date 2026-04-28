@@ -81,8 +81,6 @@ impl Classifier for HaikuCliClassifier {
             &self.cfg.model,
             "--output-format",
             "json",
-            "--max-tokens",
-            "4096",
         ]);
         for (k, v) in &self.cfg.envs {
             cmd.env(k, v);
