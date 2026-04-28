@@ -201,6 +201,23 @@ The `body` field is the primary searchable text. Selection priority:
 
 The raw payload is **never** indexed without redaction.
 
+### Cross-backend consistency doctor (phase4d)
+
+`cortex-ops doctor-consistency` runs out-of-band (operator command, not part of the worker boot path) and reports per-`(repo, family)` coverage between the event archive and Meilisearch. v1 ships the archive ↔ Meili axis; Vectorizer + Nexus probes and the query-overlap probe mode ship in `phase4h_doctor_vec_nexus_probes` and `phase4i_doctor_query_overlap_mode` respectively.
+
+Probes:
+
+- **Archive** — walks `$CORTEX_ARCHIVE_ROOT/events/**/raw-*.parquet` (zstd-NDJSON), routes every envelope through `cortex_fulltext::routing::family_for_event` so the partition view exactly matches what the live indexer produces, and aggregates `(repo_slug, family) → envelope_count`. Envelopes without a `kind` or `context.repo` are dropped silently.
+- **Meili** — wraps `cortex_fulltext::MeiliClient::list_indexes` and lifts every canonical `cortex-{repo_slug}-{family}` name into the same partition map. Names that fail `is_canonical_index_name` land in a separate sweep-candidate list (informational; phase4a's boot-time sweep is the actor that drops them).
+
+Coverage policy:
+
+- A row is marked **inconsistent** when `archive_events > 0` AND Meili lacks the matching index OR has zero docs in it.
+- Meili-only rows (archive empty, Meili populated) are **informational** — they surface in the table but don't fail the run; they're the expected shape after archive rotation or bootstrap-only ingestion.
+- The CLI exits non-zero when any row is inconsistent. JSON output (`--json`) emits the full `DoctorReport` shape.
+
+Re-running the doctor after a fix proves the fix at the data level, not just the unit-test level. Live runs against the dev cluster have already caught real drift (`gui/code`, `gui/turns`, `rust/code` partitions present in the archive but missing from Meili after the phase4a sweep).
+
 ### Boot-time stale-index sweep (phase4a)
 
 Before the worker pool starts pulling from `cortex.events.enriched`,

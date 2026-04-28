@@ -49,6 +49,26 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Cross-backend consistency checker (phase4d). v1 covers the
+    /// archive ↔ Meili axis; Vectorizer + Nexus probes ship in
+    /// phase4h.
+    DoctorConsistency {
+        /// Archive root (defaults to `$CORTEX_ARCHIVE_ROOT` then
+        /// `~/.cortex/archive`).
+        #[arg(long)]
+        archive_root: Option<String>,
+        /// Meilisearch base URL (defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL`).
+        #[arg(long)]
+        meili: Option<String>,
+        /// Meilisearch master key (defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`).
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Emit JSON instead of the markdown table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -77,7 +97,110 @@ fn main() -> ExitCode {
             synap,
             meili,
         } => doctor(vectorizer, nexus, synap, meili),
+        Command::DoctorConsistency {
+            archive_root,
+            meili,
+            meili_key,
+            json,
+        } => doctor_consistency(archive_root, meili, meili_key, json),
     }
+}
+
+/// Wire the phase4d doctor: scan the archive, probe Meili, render
+/// the report. Read-only end-to-end. Spins up a one-shot Tokio
+/// runtime so the surrounding `main` stays sync (the rest of
+/// `cortex-ops` does not need an async runtime).
+fn doctor_consistency(
+    archive_root: Option<String>,
+    meili: Option<String>,
+    meili_key: Option<String>,
+    json: bool,
+) -> ExitCode {
+    let archive_root = archive_root
+        .or_else(|| std::env::var("CORTEX_ARCHIVE_ROOT").ok())
+        .unwrap_or_else(|| {
+            home_dir()
+                .map(|h| h.join(".cortex/archive").display().to_string())
+                .unwrap_or_else(|| ".cortex/archive".to_string())
+        });
+    let meili_url = match meili.or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok()) {
+        Some(u) if !u.is_empty() => u,
+        _ => {
+            eprintln!("doctor consistency: --meili (or $CORTEX_FULLTEXT_MEILI_URL) is required");
+            return ExitCode::FAILURE;
+        }
+    };
+    let meili_key = meili_key.or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok());
+
+    let archive = match cortex_ops::ArchiveProbe::new(&archive_root).scan() {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("archive scan failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let meili_result = runtime.block_on(probe_meili(&meili_url, meili_key.as_deref()));
+    let (meili_partitions, non_canonical) = match meili_result {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("meili probe failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let report = cortex_ops::coverage_report(archive, meili_partitions, non_canonical);
+    if json {
+        match serde_json::to_string_pretty(&report) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize report: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        print!("{}", cortex_ops::render_coverage_markdown(&report));
+    }
+    if report.failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+async fn probe_meili(
+    url: &str,
+    api_key: Option<&str>,
+) -> anyhow::Result<(
+    std::collections::BTreeMap<cortex_ops::PartitionKey, u64>,
+    Vec<String>,
+)> {
+    use cortex_fulltext::{FulltextConfig, LiveMeiliClient};
+    let config = FulltextConfig {
+        meili_url: url.to_string(),
+        meili_api_key: api_key.map(String::from),
+        ..FulltextConfig::default()
+    };
+    let client = LiveMeiliClient::new(&config)
+        .map_err(|e| anyhow::anyhow!("meili client: {e}"))?;
+    cortex_ops::doctor::meili_partition_counts(&client).await
+}
+
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
 }
 
 fn emit_plan(pretty: bool, slice: PlanSlice) -> anyhow::Result<()> {

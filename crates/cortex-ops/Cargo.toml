@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Cortex operator CLI: seed + doctor for the local stack."
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "cortex-ops"
 path = "src/main.rs"
@@ -14,7 +17,15 @@ path = "src/main.rs"
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
+cortex-fulltext = { path = "../cortex-fulltext" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
+tokio = { workspace = true }
+zstd = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
