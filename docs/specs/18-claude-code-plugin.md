@@ -135,7 +135,21 @@ JSON-RPC 2.0 over stdio (Anthropic's MCP spec, revision `2024-11-05`). Standard 
     } }
 ```
 
-Errors use the standard JSON-RPC codes (`-32700` parse, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal) plus a `data` field carrying the spec-11 reason (`empty_query`, `scope_forbidden`, `rate_limited`).
+Errors use the standard JSON-RPC codes (`-32700` parse, `-32600` invalid request, `-32601` method not found, `-32602` invalid params, `-32603` internal) plus a `data` field carrying the spec-11 reason (`empty_query`, `scope_forbidden`, `rate_limited`, `scope_repo_required`).
+
+### Header injection contract (phase6a)
+
+The MCP server attaches identifying headers to every outbound `/v1/query` call so the daemon's [scope-resolution lanes](11-query-api.md#scope-resolution-phase6a) can derive `scope.repo` for callers that did not provide it explicitly:
+
+| Header           | Source                                                                                  | Daemon lane (audit value) |
+|------------------|-----------------------------------------------------------------------------------------|---------------------------|
+| `x-cortex-caller`| Static `claude-code-plugin` identifier — used for ACL + rate limiting                   | n/a                       |
+| `x-cortex-cwd`   | `std::env::current_dir()` of the MCP server process (which inherits the operator's `cwd`) | `cwd` (basename → slug)   |
+| `x-cortex-repo`  | Reserved for callers that already know the canonical slug (dashboard sidebar today)     | `header`                  |
+
+When the tool's `arguments.scope.repo` is set, the daemon resolves through the `explicit` lane and the headers are informational. When it is missing, `x-cortex-cwd` carries the fallback signal — a `cortex_query` call from `e:/HiveLLM/Cortex` resolves to `scope.repo = "cortex"` without any model-side scope plumbing.
+
+If every lane misses, the daemon returns `422 { "reason": "scope_repo_required" }`. The MCP tool surfaces this as a JSON-RPC `result` with `isError = true` and `data.reason = "scope_repo_required"` so the host can render an actionable hint instead of the silent zero-hit response that motivated the lane (F-003 in the relevance audit). The legacy `cortex-unknown-{family}` fallback is gated behind `CORTEX_ALLOW_UNKNOWN_SCOPE=1` for one deprecation window and removed at the harness gate (`phase6e`).
 
 ### Tool descriptors
 

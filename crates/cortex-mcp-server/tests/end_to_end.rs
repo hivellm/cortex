@@ -269,3 +269,65 @@ async fn tools_call_pre_thinking_returns_bundle_when_upstream_returns_results() 
         "bundle missing the spec-12 leading comment, got: {bundle}"
     );
 }
+
+#[tokio::test]
+async fn tools_call_query_injects_x_cortex_cwd_header() {
+    // Phase6a §3.3 — `cortex_query` MUST stamp the operator's cwd on
+    // the outbound request so the daemon's scope resolver can derive
+    // `scope.repo` from the basename when the body omits it. The
+    // wiremock matcher `header_exists("x-cortex-cwd")` rejects the
+    // request unless the header is present, which surfaces as the
+    // upstream returning 404 → MCP error envelope.
+    let mock = MockServer::start().await;
+
+    let canned = json!({
+        "intent": "free_search",
+        "query_id": "q_cwd_1",
+        "scope_resolved": { "repo": "vectorizer" },
+        "results": {
+            "snippets": [],
+            "decisions": [],
+            "violations": [],
+            "graph_neighbors": [],
+            "similar_turns": []
+        },
+        "laws_active": [],
+        "budget": { "used_ms": 1, "cap_ms": 200, "cache": "miss" },
+        "debug": { "lanes": {} }
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .and(wiremock::matchers::header_exists("x-cortex-cwd"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(canned))
+        .mount(&mock)
+        .await;
+
+    let server = Server::new(ToolContext::new(mock.uri()));
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 41,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_query",
+            "arguments": {
+                "intent": "free_search",
+                "query": "x",
+                "limit": 1, "k": 1, "include": ["snippets"], "budget_ms": 200
+            }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["id"], 41);
+    assert_eq!(
+        resp["result"]["isError"], false,
+        "wiremock matched x-cortex-cwd header — request reached the canned response"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["query_id"], "q_cwd_1");
+}

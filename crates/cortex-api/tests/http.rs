@@ -120,7 +120,7 @@ async fn cache_hit_marks_cache_hit_and_skips_lanes() {
         }],
     );
     let app = build_router(svc.clone());
-    let req = pre_change_request("same query", None);
+    let req = pre_change_request("same query", Some("vectorizer"));
     let _ = app
         .clone()
         .oneshot(
@@ -154,7 +154,7 @@ async fn cache_hit_marks_cache_hit_and_skips_lanes() {
 async fn empty_query_returns_400_with_reason() {
     let (svc, _, _, _, _) = build_test_service();
     let app = build_router(svc);
-    let req = pre_change_request("   ", None);
+    let req = pre_change_request("   ", Some("vectorizer"));
     let resp = app
         .oneshot(
             Request::builder()
@@ -213,7 +213,7 @@ async fn rate_limited_caller_gets_429_with_retry_after_header() {
     };
     let svc = Arc::new(svc);
     let app = build_router(svc);
-    let req = pre_change_request("x", None);
+    let req = pre_change_request("x", Some("vectorizer"));
     let _ = app
         .clone()
         .oneshot(
@@ -248,14 +248,14 @@ async fn lane_failure_does_not_block_other_lanes() {
     let v = Arc::new(MemoryVectorLane::new().with_fail());
     let k = Arc::new(MemoryKeywordLane::new());
     let g = Arc::new(MemoryGraphLane::new());
-    // Scope is None below ⇒ orchestrator picks `cortex-unknown-code`.
+    // Scope = "vectorizer" ⇒ orchestrator hits `cortex-vectorizer-{family}`.
     let mut keyword_extras = std::collections::BTreeMap::new();
     keyword_extras.insert(
         "source".to_string(),
         serde_json::Value::String("keyword".to_string()),
     );
     k.seed(
-        "cortex-unknown-code",
+        "cortex-vectorizer-code",
         vec![cortex_api::LaneHit {
             doc_id: "kk".into(),
             text: "keyword hit".into(),
@@ -278,7 +278,7 @@ async fn lane_failure_does_not_block_other_lanes() {
         indexed_repos: None,
     });
     let app = build_router(svc);
-    let req = pre_change_request("x", None);
+    let req = pre_change_request("x", Some("vectorizer"));
     let resp = app
         .oneshot(
             Request::builder()
@@ -312,7 +312,7 @@ async fn budget_exceeded_truncates_response() {
         indexed_repos: None,
     });
     let app = build_router(svc);
-    let mut req = pre_change_request("x", None);
+    let mut req = pre_change_request("x", Some("vectorizer"));
     req.budget_ms = 100;
     let resp = app
         .oneshot(
@@ -357,7 +357,7 @@ async fn cache_invalidation_drops_repo_entries() {
 #[tokio::test]
 async fn audit_publisher_emits_one_envelope_per_request() {
     let (svc, _, _, _, audit) = build_test_service();
-    let req = pre_change_request("auditable", None);
+    let req = pre_change_request("auditable", Some("vectorizer"));
     let _ = svc.handle("c", req).await;
     let snap = audit.snapshot();
     assert_eq!(snap.len(), 1);
@@ -370,6 +370,7 @@ async fn law_check_returns_only_violations_field() {
     let k = Arc::new(MemoryKeywordLane::new());
     let g = Arc::new(MemoryGraphLane::new());
     let mut extras = cortex_api::Props::new();
+    extras.insert("source".into(), json!("keyword"));
     extras.insert("law_id".into(), json!("LAW-007"));
     extras.insert("violation_id".into(), json!("VIO-1"));
     extras.insert("observed_in".into(), json!("turn:01HX"));
@@ -391,6 +392,7 @@ async fn law_check_returns_only_violations_field() {
     let app = build_router(svc);
     let req: QueryRequest = serde_json::from_value(json!({
         "intent": "law_check",
+        "scope": { "repo": "vectorizer" },
         "query": "no skip hooks",
         "include": ["snippets", "decisions", "violations", "graph_neighbors", "similar_turns"],
     }))
@@ -425,9 +427,9 @@ async fn law_check_returns_only_violations_field() {
 #[tokio::test]
 async fn redaction_strips_aws_key_from_snippet_text_in_response() {
     let (svc, v, _, _, _) = build_test_service();
-    // Scope is None below ⇒ orchestrator picks `cortex-unknown-code`.
+    // Scope = "vectorizer" ⇒ orchestrator hits `cortex-vectorizer-{family}`.
     v.seed(
-        "cortex-unknown-code",
+        "cortex-vectorizer-code",
         vec![cortex_api::LaneHit {
             doc_id: "k".into(),
             text: "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE0000".into(),
@@ -442,7 +444,7 @@ async fn redaction_strips_aws_key_from_snippet_text_in_response() {
         }],
     );
     let app = build_router(svc);
-    let req = pre_change_request("any", None);
+    let req = pre_change_request("any", Some("vectorizer"));
     let resp = app
         .oneshot(
             Request::builder()
@@ -458,6 +460,191 @@ async fn redaction_strips_aws_key_from_snippet_text_in_response() {
     let body = read_json(resp).await;
     let text = body["results"]["snippets"][0]["text"].as_str().unwrap();
     assert!(!text.contains("AKIAIOSFODNN7EXAMPLE0000"));
+}
+
+// ---- phase6a — `/v1/query` HTTP-layer scope resolution ----
+
+#[tokio::test]
+async fn missing_scope_repo_returns_422_scope_repo_required() {
+    // F-003 — the resolver must reject when no lane fires.
+    std::env::remove_var("CORTEX_ALLOW_UNKNOWN_SCOPE");
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let req = pre_change_request("anything", None);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "c")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = read_json(resp).await;
+    assert_eq!(body["reason"], "scope_repo_required");
+}
+
+#[tokio::test]
+async fn x_cortex_cwd_header_resolves_repo_from_basename() {
+    // The MCP server / dashboard inject `x-cortex-cwd`; the daemon
+    // slugifies the basename and runs the request with that scope.
+    std::env::remove_var("CORTEX_ALLOW_UNKNOWN_SCOPE");
+    let (svc, v, _, _, _) = build_test_service();
+    v.seed(
+        "cortex-vectorizer-code",
+        vec![cortex_api::LaneHit {
+            doc_id: "h".into(),
+            text: "ef_search".into(),
+            repo: None,
+            path: None,
+            symbol: None,
+            content_hash: None,
+            score: 0.5,
+            ts: 0,
+            severity: None,
+            extras: Default::default(),
+        }],
+    );
+    let app = build_router(svc);
+    let req = pre_change_request("ef_search", None);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "c")
+                .header("x-cortex-cwd", "/home/user/work/Vectorizer")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    assert_eq!(body["scope_resolved"]["repo"], "vectorizer");
+    assert!(!body["results"]["snippets"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn x_cortex_repo_header_resolves_when_body_omits_scope() {
+    std::env::remove_var("CORTEX_ALLOW_UNKNOWN_SCOPE");
+    let (svc, v, _, _, _) = build_test_service();
+    v.seed(
+        "cortex-cortex-code",
+        vec![cortex_api::LaneHit {
+            doc_id: "h".into(),
+            text: "hi".into(),
+            repo: None,
+            path: None,
+            symbol: None,
+            content_hash: None,
+            score: 0.5,
+            ts: 0,
+            severity: None,
+            extras: Default::default(),
+        }],
+    );
+    let app = build_router(svc);
+    let req = pre_change_request("hi", None);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "c")
+                .header("x-cortex-repo", "Cortex")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    assert_eq!(body["scope_resolved"]["repo"], "cortex");
+}
+
+#[tokio::test]
+async fn audit_envelope_records_scope_resolution_lane() {
+    // The audit trail must show how scope was derived — this is the
+    // signal the dashboard's `query_audit` view uses to flag
+    // misconfigured callers and the harness uses to prove F-003 is
+    // closed.
+    std::env::remove_var("CORTEX_ALLOW_UNKNOWN_SCOPE");
+    let (svc, v, _, _, audit) = build_test_service();
+    v.seed(
+        "cortex-vectorizer-code",
+        vec![cortex_api::LaneHit {
+            doc_id: "h".into(),
+            text: "x".into(),
+            repo: None,
+            path: None,
+            symbol: None,
+            content_hash: None,
+            score: 0.5,
+            ts: 0,
+            severity: None,
+            extras: Default::default(),
+        }],
+    );
+    let app = build_router(svc);
+    let req = pre_change_request("x", None);
+    let _ = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "c")
+                .header("x-cortex-cwd", "/tmp/Vectorizer")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let envelopes = audit.snapshot();
+    assert!(
+        !envelopes.is_empty(),
+        "every successful request must publish exactly one envelope"
+    );
+    let last = envelopes.last().unwrap();
+    assert_eq!(
+        last["scope_resolution"], "cwd",
+        "envelope must record the resolution lane that fired"
+    );
+}
+
+#[tokio::test]
+async fn legacy_unknown_scope_hatch_passes_through_when_env_is_set() {
+    // The deprecation hatch keeps today's behaviour for one window;
+    // when set, a missing scope falls through with `scope_resolution = rejected_legacy`
+    // and the request still reaches the orchestrator.
+    std::env::set_var("CORTEX_ALLOW_UNKNOWN_SCOPE", "1");
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let req = pre_change_request("x", None);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "c")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    std::env::remove_var("CORTEX_ALLOW_UNKNOWN_SCOPE");
+    // The body lacks scope.repo and no lane fires, but the hatch
+    // rescues the request — the daemon answers OK with an empty
+    // result rather than 422.
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 #[tokio::test]

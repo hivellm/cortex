@@ -197,6 +197,20 @@ Per-caller token bucket (`cortex-adapter-claude` / `dashboard` / `analysis` / ot
 | Cache corruption / deserialization error    | Ignore cache, run lanes, overwrite entry                              |
 | Empty query                                 | 400 `reason=empty_query`                                              |
 | ACL deny                                    | 403 `reason=scope_forbidden`                                          |
+| Scope unresolved (phase6a / F-003)          | 422 `reason=scope_repo_required` — see "Scope resolution" below       |
+
+### Scope resolution (phase6a)
+
+`POST /v1/query` MUST resolve `scope.repo` before running the orchestrator. The handler walks the following lanes in order; the first hit wins, and the chosen lane is recorded on the audit envelope as `scope_resolution`:
+
+1. **`request.scope.repo` (explicit)** — round-trip unchanged. Audit value: `explicit`.
+2. **`x-cortex-repo` header** — set by the MCP server (when the tool's input carries an explicit scope), the dashboard sidebar (when the user has a single repo filter active), or any other authenticated caller. Audit value: `header`.
+3. **`x-cortex-cwd` header** — caller hint. The handler runs `cortex_storage::names::slug_for_repo(basename(cwd))` and stamps the slug on `request.scope.repo`. Audit value: `cwd`.
+4. **Reject** — every lane missed. Return `422 { "reason": "scope_repo_required" }`. The previous fallback that routed to the `cortex-unknown-{family}` slug is removed; that slug is empty across all backends and the silent zero-hit response was the largest single relevance gap in the audit (F-003).
+
+A `CORTEX_ALLOW_UNKNOWN_SCOPE=1` escape hatch keeps the legacy fallback alive for one deprecation window: when set, the handler logs `tracing::warn!` and accepts the empty scope with audit value `rejected_legacy`. The hatch is removed at the harness gate (`phase6e`) once the audit shows zero remaining callers.
+
+MCP `cortex_query` injects `x-cortex-cwd` from the operator's working directory; the dashboard injects `x-cortex-repo` from the active sidebar filter; the pre-thinking pipeline keeps populating `request.scope.repo` directly via `scope::derive`. See [`docs/specs/18-claude-code-plugin.md`](18-claude-code-plugin.md) for the MCP-side header contract.
 
 ### Observability
 

@@ -436,6 +436,92 @@ mod tests {
         }
     }
 
+    // ---- phase6a — `resolve_scope` lane coverage ----
+
+    fn empty_headers() -> HeaderMap {
+        HeaderMap::new()
+    }
+
+    fn headers_with(name: &str, value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            axum::http::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+            axum::http::header::HeaderValue::from_str(value).unwrap(),
+        );
+        h
+    }
+
+    #[test]
+    fn resolve_scope_explicit_round_trips_request_repo() {
+        let mut r = req("x");
+        r.scope.repo = Some("Vectorizer".into());
+        let res = resolve_scope(&mut r, &empty_headers()).expect("explicit must succeed");
+        assert_eq!(res, ScopeResolution::Explicit);
+        assert_eq!(r.scope.repo.as_deref(), Some("Vectorizer"));
+    }
+
+    #[test]
+    fn resolve_scope_falls_back_to_x_cortex_repo_header() {
+        let mut r = req("x");
+        let res = resolve_scope(&mut r, &headers_with(HEADER_CORTEX_REPO, "Cortex"))
+            .expect("header lane must succeed");
+        assert_eq!(res, ScopeResolution::Header);
+        assert_eq!(r.scope.repo.as_deref(), Some("Cortex"));
+    }
+
+    #[test]
+    fn resolve_scope_derives_repo_from_x_cortex_cwd_basename() {
+        let mut r = req("x");
+        let res = resolve_scope(
+            &mut r,
+            &headers_with(HEADER_CORTEX_CWD, "/home/user/work/Cortex"),
+        )
+        .expect("cwd lane must succeed");
+        assert_eq!(res, ScopeResolution::Cwd);
+        // basename → slug_for_repo lower-cases.
+        assert_eq!(r.scope.repo.as_deref(), Some("cortex"));
+    }
+
+    #[test]
+    fn resolve_scope_rejects_when_every_lane_misses() {
+        let mut r = req("x");
+        // Make sure the legacy escape hatch is off for this test;
+        // tests run in the same process so we explicitly clear it.
+        std::env::remove_var(ENV_ALLOW_UNKNOWN_SCOPE);
+        let err = resolve_scope(&mut r, &empty_headers()).expect_err("missing must reject");
+        assert_eq!(err, ScopeError::Missing);
+        assert!(r.scope.repo.is_none());
+    }
+
+    #[test]
+    fn resolve_scope_legacy_hatch_passes_through_when_env_set() {
+        let mut r = req("x");
+        std::env::set_var(ENV_ALLOW_UNKNOWN_SCOPE, "1");
+        let res = resolve_scope(&mut r, &empty_headers()).expect("legacy hatch must allow");
+        assert_eq!(res, ScopeResolution::RejectedLegacy);
+        assert!(
+            r.scope.repo.is_none(),
+            "legacy hatch must NOT synthesise a repo — the unknown slug is the audit signal"
+        );
+        std::env::remove_var(ENV_ALLOW_UNKNOWN_SCOPE);
+    }
+
+    #[test]
+    fn resolve_scope_explicit_wins_over_headers() {
+        // Order matters — request body explicit MUST beat any header,
+        // otherwise a misconfigured caller could shadow itself.
+        let mut r = req("x");
+        r.scope.repo = Some("Cortex".into());
+        let mut h = headers_with(HEADER_CORTEX_REPO, "Vectorizer");
+        h.insert(
+            axum::http::header::HeaderName::from_bytes(HEADER_CORTEX_CWD.as_bytes()).unwrap(),
+            axum::http::header::HeaderValue::from_static("/tmp/Synap"),
+        );
+        let res = resolve_scope(&mut r, &h).unwrap();
+        assert_eq!(res, ScopeResolution::Explicit);
+        assert_eq!(r.scope.repo.as_deref(), Some("Cortex"));
+    }
+
     #[tokio::test]
     async fn empty_query_short_circuits_with_400_outcome() {
         let svc = QueryService::with_memory_defaults(build_orchestrator());
