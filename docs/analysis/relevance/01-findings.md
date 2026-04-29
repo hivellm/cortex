@@ -86,7 +86,7 @@ Each finding has stable id `F-NNN`, evidence with file:line citations, the relev
 
 **Confidence:** High — direct read of the projection code.
 
-**Tracked by:** Not tracked. **This is the single highest-leverage *relevance* gap.**
+**Tracked by:** Closed by `phase6b_relevance_lane_extras_contract` (lane-projection contract documented in `docs/specs/11-query-api.md` §Lane projection contract; both live lanes now stamp the contract keys; regression guard at `crates/cortex-api/src/lane_contract.rs`; end-to-end overlay tests in `crates/cortex-api/tests/http.rs`).
 
 ---
 

@@ -269,6 +269,18 @@ impl VectorLane for VectorizerLane {
 /// `extras["source"] = "vector"` so the orchestrator's
 /// source-attribution invariant is met (the keyword-lane fix
 /// flipped the default; both lanes now stamp explicitly).
+/// Crate-internal test seam — drive [`project`] against a
+/// hand-rolled `SearchResult`. The regression guard in
+/// `crate::lane_contract` uses this to exercise the Vectorizer
+/// projection without the SDK transport path.
+#[cfg(test)]
+pub(crate) fn project_search_result(
+    r: vectorizer_sdk::models::SearchResult,
+    req: &VectorRequest,
+) -> LaneHit {
+    project(r, req)
+}
+
 fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> LaneHit {
     let metadata = r.metadata.unwrap_or_default();
     let get_str =
@@ -288,6 +300,25 @@ fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> Lane
         "collection".to_string(),
         serde_json::Value::String(req.collection.clone()),
     );
+
+    // Phase6b — spec-11 lane projection contract. The Vectorizer
+    // bootstrap pipeline (≥3.0.3) places the contract keys directly
+    // under `metadata`, but earlier embedder builds nested them
+    // under `metadata.payload.<key>`. Prefer the canonical
+    // top-level location, fall back to the legacy nesting, so a
+    // mixed corpus during a SDK rollout still surfaces decisions /
+    // turns / law violations correctly.
+    let payload_obj = metadata.get("payload").and_then(|v| v.as_object());
+    for key in crate::lanes::LANE_EXTRAS_KEYS {
+        let from_top = metadata.get(*key).cloned();
+        let from_payload = payload_obj.and_then(|p| p.get(*key).cloned());
+        let val = from_top.or(from_payload);
+        if let Some(v) = val {
+            if !v.is_null() {
+                extras.insert((*key).to_string(), v);
+            }
+        }
+    }
 
     let text = r
         .content

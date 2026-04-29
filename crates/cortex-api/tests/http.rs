@@ -767,3 +767,160 @@ async fn status_indexed_repos_reports_seeded_repo_slugs() {
         .collect();
     assert_eq!(repos, vec!["cortex".to_string(), "vectorizer".to_string()]);
 }
+
+// ----------------------------------------------------------------
+// Phase6b §5 — overlay end-to-end tests.
+//
+// Pre-phase6b, the keyword + vector lanes never stamped the
+// projection-contract keys (`decision_id`, `turn_id`, …) into
+// `LaneHit.extras`, so `derive_decisions` / `derive_similar_turns`
+// produced empty arrays in production even when the matching rows
+// existed upstream. These tests pin the post-fix behaviour: when
+// the seed carries the contract keys, the corresponding overlay
+// surfaces them on the response body.
+// ----------------------------------------------------------------
+
+fn decision_request(query: &str, repo: Option<&str>) -> QueryRequest {
+    let value = json!({
+        "intent": "decision_lookup",
+        "scope": { "repo": repo },
+        "query": query,
+        "include": ["decisions"],
+        "budget_ms": 500,
+    });
+    serde_json::from_value(value).unwrap()
+}
+
+fn similar_problems_request(query: &str, repo: Option<&str>) -> QueryRequest {
+    let value = json!({
+        "intent": "similar_problems",
+        "scope": { "repo": repo },
+        "query": query,
+        "include": ["similar_turns"],
+        "budget_ms": 500,
+    });
+    serde_json::from_value(value).unwrap()
+}
+
+#[tokio::test]
+async fn decision_overlay_surfaces_decision_id_from_extras() {
+    let (svc, _, k, _, _) = build_test_service();
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert(
+        "source".to_string(),
+        Value::String("keyword".to_string()),
+    );
+    extras.insert(
+        "decision_id".to_string(),
+        Value::String("DEC-0042".to_string()),
+    );
+    extras.insert(
+        "decision_status".to_string(),
+        Value::String("accepted".to_string()),
+    );
+    k.seed(
+        "cortex-cortex-decisions",
+        vec![LaneHit {
+            doc_id: "dec-1".into(),
+            text: "Adopt CLAUDE_CONFIG_DIR for classifier subprocess isolation".into(),
+            repo: Some("Cortex".into()),
+            path: Some("decisions/0042-classifier.md".into()),
+            symbol: Some("DEC-0042 Classifier subprocess hookless config".into()),
+            content_hash: Some("sha256:dec0042".into()),
+            score: 0.71,
+            ts: 1_777_400_000,
+            severity: None,
+            extras,
+        }],
+    );
+    let app = build_router(svc);
+    let req = decision_request("classifier subprocess hooks", Some("cortex"));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "phase6b-decision")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    let decisions = body["results"]["decisions"]
+        .as_array()
+        .expect("decisions array on response");
+    assert!(
+        !decisions.is_empty(),
+        "expected at least one decision overlay row when the keyword lane carries decision_id; \
+         got empty array (the phase6b regression that this test guards against)"
+    );
+    assert_eq!(decisions[0]["id"], "DEC-0042");
+    assert_eq!(decisions[0]["status"], "accepted");
+}
+
+#[tokio::test]
+async fn similar_turns_overlay_surfaces_turn_id_from_extras() {
+    let (svc, v, _, _, _) = build_test_service();
+    let mut extras = std::collections::BTreeMap::new();
+    extras.insert("source".to_string(), Value::String("vector".to_string()));
+    extras.insert(
+        "turn_id".to_string(),
+        Value::String("01HTURNFIXTURE0000000000XX".to_string()),
+    );
+    extras.insert(
+        "model".to_string(),
+        Value::String("claude-sonnet-4-6".to_string()),
+    );
+    extras.insert(
+        "summary".to_string(),
+        Value::String("planned the phase6b lane projection contract".into()),
+    );
+    v.seed(
+        "cortex-cortex-turns",
+        vec![LaneHit {
+            doc_id: "turn-1".into(),
+            text: "Discussed lane projection contract for cortex-api".into(),
+            repo: Some("Cortex".into()),
+            path: None,
+            symbol: None,
+            content_hash: Some("sha256:turn0001".into()),
+            score: 0.83,
+            ts: 1_777_400_000,
+            severity: None,
+            extras,
+        }],
+    );
+    let app = build_router(svc);
+    let req = similar_problems_request("phase6b lane projection", Some("cortex"));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "phase6b-similar")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    let turns = body["results"]["similar_turns"]
+        .as_array()
+        .expect("similar_turns array on response");
+    assert!(
+        !turns.is_empty(),
+        "expected at least one similar_turns overlay row when the vector lane carries turn_id; \
+         got empty array (the phase6b regression that this test guards against)"
+    );
+    assert_eq!(turns[0]["turn_id"], "01HTURNFIXTURE0000000000XX");
+    assert_eq!(turns[0]["model"], "claude-sonnet-4-6");
+    assert_eq!(
+        turns[0]["summary"],
+        "planned the phase6b lane projection contract"
+    );
+}

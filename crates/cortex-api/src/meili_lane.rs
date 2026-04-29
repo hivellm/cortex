@@ -74,7 +74,18 @@ impl MeiliKeywordLane {
 /// Spec-08 doc shape (subset) — only the fields the keyword lane
 /// projects into `LaneHit`. Stays serde-flexible: the worker
 /// upserts a richer body, but the lane only needs these.
-#[derive(Debug, Deserialize)]
+///
+/// `extras_raw` (`#[serde(flatten)]`) sweeps up every field on the
+/// document that doesn't map to one of the typed slots above —
+/// including the spec-11 lane-projection-contract keys
+/// (`decision_id`, `turn_id`, `law_id`, …). The Meili upserter
+/// stamps those at the top level of the indexed document, so they
+/// land here and `project` copies them into `LaneHit.extras`.
+///
+/// `meta` (`_meta`) is the legacy nesting used by older fulltext
+/// builds; `project` reads it as a fallback when the same key is
+/// missing from the top level.
+#[derive(Debug, Default, Deserialize)]
 struct MeiliDoc {
     #[serde(default)]
     id: Option<String>,
@@ -102,6 +113,16 @@ struct MeiliDoc {
     /// passed on the search body. `[0, 1]`.
     #[serde(default, rename = "_rankingScore")]
     ranking_score: Option<f64>,
+    /// Legacy nesting — older fulltext-worker builds stamped the
+    /// projection-contract keys under `_meta` instead of the top
+    /// level. `project` reads here as a fallback.
+    #[serde(default, rename = "_meta")]
+    meta: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Catch-all for every field not matched above — captures the
+    /// projection-contract keys (`decision_id`, `turn_id`, etc.)
+    /// the worker writes at the top level.
+    #[serde(flatten)]
+    extras_raw: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +188,19 @@ impl KeywordLane for MeiliKeywordLane {
     }
 }
 
+/// Crate-internal test seam — deserialise an arbitrary upstream
+/// shape into [`MeiliDoc`] and run [`project`] against it. The
+/// regression guard in `crate::lane_contract` uses this to drive
+/// the Meili projection without the live HTTP path.
+#[cfg(test)]
+pub(crate) fn project_doc(
+    json: serde_json::Value,
+    req: &KeywordRequest,
+) -> Result<LaneHit, serde_json::Error> {
+    let doc: MeiliDoc = serde_json::from_value(json)?;
+    Ok(project(doc, req))
+}
+
 /// Project one Meili document into a `LaneHit`. Uses `summary` as
 /// the snippet text when present (the spec-08 body-selection rule
 /// stamps it), otherwise the raw `body`. The `source` label is
@@ -175,6 +209,7 @@ impl KeywordLane for MeiliKeywordLane {
 fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     let event_id = doc
         .event_id
+        .clone()
         .or(doc.id.clone())
         .unwrap_or_else(|| "unknown".to_string());
     // Doc-id namespaces the hit so the orchestrator's RRF bucket is
@@ -187,9 +222,10 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     // empty string when the doc has any text content.
     let text = doc
         .summary
+        .clone()
         .filter(|s| !s.is_empty())
         .or_else(|| doc.title.clone().filter(|s| !s.is_empty()))
-        .or(doc.body)
+        .or_else(|| doc.body.clone())
         .unwrap_or_default();
 
     let mut extras = std::collections::BTreeMap::new();
@@ -199,7 +235,64 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     // produced the hit — the audit caught this (every hit was
     // labelled `"vector"` because the previous double left the field
     // empty).
-    extras.insert("source".to_string(), serde_json::Value::String("keyword".to_string()));
+    extras.insert(
+        "source".to_string(),
+        serde_json::Value::String("keyword".to_string()),
+    );
+
+    // Phase6b — spec-11 lane projection contract.
+    //
+    // Every overlay derivation (`derive_decisions`,
+    // `derive_similar_turns`, `derive_laws`) reads its inputs out of
+    // `extras` directly, so the live keyword lane MUST stamp the
+    // contract keys here. Lookup order matches the documented
+    // contract: `_meta.<key>` (older fulltext-worker shape) wins
+    // over the top-level key, since when both exist the worker is
+    // mid-migration and `_meta` is the canonical post-migration
+    // location.
+    //
+    // `summary` and `severity` overlap with typed slots on
+    // `MeiliDoc` (used for snippet text + the top-level
+    // `LaneHit.severity` field respectively), so `serde_flatten`
+    // does NOT route them through `extras_raw`. The match arms
+    // below pull the typed value as a final fallback so the
+    // contract still fires when the worker stamps only the
+    // top-level field.
+    for key in crate::lanes::LANE_EXTRAS_KEYS {
+        let from_meta = doc.meta.as_ref().and_then(|m| m.get(*key)).cloned();
+        let from_top = doc.extras_raw.get(*key).cloned();
+        let from_typed: Option<serde_json::Value> = match *key {
+            "summary" => doc
+                .summary
+                .clone()
+                .map(serde_json::Value::String),
+            "severity" => doc
+                .severity
+                .clone()
+                .map(serde_json::Value::String),
+            _ => None,
+        };
+        let val = from_meta.or(from_top).or(from_typed);
+        if let Some(v) = val {
+            if !v.is_null() {
+                extras.insert((*key).to_string(), v);
+            }
+        }
+    }
+
+    // §2.3 — surface a debug log when a `kind=decision` doc lands
+    // without a `decision_id`. That's a worker-side projection bug
+    // (`spec-08` requires every decision row to carry the id);
+    // dropping it here would leave the decisions overlay
+    // permanently empty for that row.
+    if doc.kind.as_deref() == Some("decision")
+        && !extras.contains_key("decision_id")
+    {
+        tracing::debug!(
+            doc_id = %doc_id,
+            "decision row without decision_id — worker projection gap"
+        );
+    }
 
     LaneHit {
         doc_id,
@@ -244,6 +337,7 @@ mod tests {
             ts: Some(1714200000000),
             severity: Some("info".into()),
             ranking_score: Some(0.83),
+            ..MeiliDoc::default()
         };
         let hit = project(doc, &req("embedder"));
         assert_eq!(hit.doc_id, "meili|cortex-cortex-code|evt-1");
@@ -262,18 +356,10 @@ mod tests {
     #[test]
     fn projects_falls_back_through_title_then_body() {
         let mut doc = MeiliDoc {
-            id: None,
             event_id: Some("evt-2".into()),
-            kind: None,
-            repo: None,
-            path: None,
             title: Some("Just a title".into()),
             body: Some("body line".into()),
-            summary: None,
-            content_hash: None,
-            ts: None,
-            severity: None,
-            ranking_score: None,
+            ..MeiliDoc::default()
         };
         let hit = project(doc.clone_for_test(), &req("x"));
         assert_eq!(hit.text, "Just a title");
@@ -288,17 +374,7 @@ mod tests {
     fn projects_emits_empty_text_only_when_doc_has_no_content() {
         let doc = MeiliDoc {
             id: Some("evt-3".into()),
-            event_id: None,
-            kind: None,
-            repo: None,
-            path: None,
-            title: None,
-            body: None,
-            summary: None,
-            content_hash: None,
-            ts: None,
-            severity: None,
-            ranking_score: None,
+            ..MeiliDoc::default()
         };
         let hit = project(doc, &req("x"));
         assert_eq!(hit.text, "");
@@ -309,18 +385,8 @@ mod tests {
     #[test]
     fn projects_uses_unknown_event_id_when_both_id_fields_missing() {
         let doc = MeiliDoc {
-            id: None,
-            event_id: None,
-            kind: None,
-            repo: None,
-            path: None,
-            title: None,
             body: Some("body".into()),
-            summary: None,
-            content_hash: None,
-            ts: None,
-            severity: None,
-            ranking_score: None,
+            ..MeiliDoc::default()
         };
         let hit = project(doc, &req("x"));
         assert!(hit.doc_id.ends_with("|unknown"));
@@ -344,6 +410,8 @@ mod tests {
                 ts: self.ts,
                 severity: self.severity.clone(),
                 ranking_score: self.ranking_score,
+                meta: self.meta.clone(),
+                extras_raw: self.extras_raw.clone(),
             }
         }
     }

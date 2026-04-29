@@ -20,6 +20,38 @@ use thiserror::Error;
 
 use crate::types::{Props, Scope};
 
+/// Keys every lane projection MUST stamp into [`LaneHit::extras`]
+/// when the upstream document carries them. This is the spec-11
+/// "Lane projection contract" — see
+/// `docs/specs/11-query-api.md` §Lane projection contract for the
+/// full table of upstream sources and downstream consumers.
+///
+/// Orchestrator overlays read these directly:
+///
+/// - `decision_id` / `decision_status` / `supersedes` →
+///   [`crate::orchestrator::derive_decisions`]
+/// - `turn_id` / `model` / `summary` →
+///   [`crate::orchestrator::derive_similar_turns`]
+/// - `law_id` (with `severity` cross-checked against the
+///   top-level [`LaneHit::severity`] field) →
+///   [`crate::orchestrator::derive_laws`]
+///
+/// Missing keys round-trip as absent — the overlay derivers skip
+/// rows that lack the relevant key gracefully. Live lanes
+/// (`MeiliKeywordLane`, `VectorizerLane`) round-trip these
+/// unchanged when present; tests rely on the `MemoryKeywordLane`
+/// double seeding them directly.
+pub const LANE_EXTRAS_KEYS: &[&str] = &[
+    "decision_id",
+    "decision_status",
+    "supersedes",
+    "turn_id",
+    "model",
+    "summary",
+    "law_id",
+    "severity",
+];
+
 /// One hit returned by any lane. The orchestrator coerces lane
 /// outputs into this shape before fusion.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -43,6 +75,12 @@ pub struct LaneHit {
     /// Severity label (used by the violations overlay tie-break).
     pub severity: Option<String>,
     /// Free-form lane metadata round-tripped to debug.
+    ///
+    /// Spec-11 lane projection contract ([`LANE_EXTRAS_KEYS`]):
+    /// lane impls MUST stamp the contract keys here when the
+    /// upstream document carries them, so the orchestrator's
+    /// overlay derivers can read them out 1:1. Missing keys
+    /// round-trip as absent.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Props,
 }

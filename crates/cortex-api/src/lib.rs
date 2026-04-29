@@ -21,6 +21,8 @@ pub mod dashboard_series;
 pub mod fusion;
 pub mod http;
 pub mod lanes;
+#[cfg(test)]
+mod lane_contract;
 pub mod mcp;
 pub mod meili_lane;
 pub mod meili_loader;

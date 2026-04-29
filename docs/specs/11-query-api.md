@@ -160,6 +160,32 @@ After fusion, the orchestrator annotates results:
 
 Derived edge: given seed nodes from fusion, run KNN in Vectorizer's `cortex-turns` collection with the seed's embedding. Top-5 are returned with `SIMILAR_TO.score`. **Not persisted** — spec 07 §Decisions §3.
 
+### Lane projection contract (phase6b)
+
+Every overlay derivation reads its inputs out of `LaneHit.extras`. Live lane impls (`MeiliKeywordLane`, `VectorizerLane`) MUST stamp the contract keys below into `extras` whenever the upstream document carries them; missing keys round-trip as absent and the overlay deriver skips that row.
+
+The constant `cortex_api::lanes::LANE_EXTRAS_KEYS` is the source of truth and the regression guard at `crates/cortex-api/src/lane_contract.rs` pins it.
+
+| Key | Upstream source | Consumed by |
+|-----|-----------------|-------------|
+| `decision_id` | Meili top-level `decision_id` (or `_meta.decision_id` during fulltext-worker rollouts) / Vectorizer `metadata.decision_id` (or `metadata.payload.decision_id` for legacy embedder builds) | `derive_decisions` |
+| `decision_status` | upstream `status` for decision rows | decisions overlay status badge |
+| `supersedes` | upstream `supersedes[]` array | decision detail link chain |
+| `turn_id` | upstream `turn_id` | `derive_similar_turns` |
+| `model` | upstream `model` (turn rows) | similar_turns overlay |
+| `summary` | upstream `summary` (turn rows; also used as snippet text fallback when `body` is empty) | similar_turns overlay |
+| `law_id` | upstream `law_id` | `derive_laws` |
+| `severity` | upstream `severity` (also projected onto the top-level `LaneHit.severity` field for the violations overlay tie-break) | `derive_laws` / violations overlay |
+
+Lookup precedence in each lane:
+
+- **Meili keyword lane**: `_meta.<key>` (canonical post-migration nesting) → top-level `<key>` → typed slot (only for `summary` / `severity`, which `MeiliDoc` parses into a named field).
+- **Vectorizer lane**: `metadata.<key>` (current SDK ≥ 3.0.3) → `metadata.payload.<key>` (legacy embedder-worker shape).
+
+A `kind = "decision"` document landing without a `decision_id` is a worker-side projection bug: the keyword lane emits `tracing::debug!` when this happens so the gap is visible without flooding production at INFO/WARN.
+
+Closes [F-007 in `docs/analysis/relevance/01-findings.md`](../analysis/relevance/01-findings.md).
+
 ### Caching
 
 - **Key:** `hash(intent || scope || embed(query) || schema_version)`.
