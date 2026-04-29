@@ -1,0 +1,445 @@
+# cortex-relevance-eval — labeled query set (phase6e / F-008)
+#
+# Each entry pairs a query/intent/scope with one or more
+# expected_doc_ids. The harness counts a hit when ANY expected id
+# appears in the top-10 fused snippets — the matcher accepts the
+# canonical composite id (`<repo>|<path>|<content_hash>`), an exact
+# match against `repo`, `path`, `symbol`, `content_hash`, or
+# `collection`, OR a substring of `path`/`symbol`. The substring
+# fall-back lets curators write partial paths like
+# `crates/cortex-api/src/strategies.rs` without chasing chunk hashes.
+#
+# Coverage: 50 entries — 10 per intent across:
+#   pre_change_context · decision_lookup · similar_problems
+#   law_check · explain
+#
+# Adding more queries: see tests/relevance/README.md.
+
+version = 1
+
+# ---------------------------------------------------------------------
+# pre_change_context (10)
+# ---------------------------------------------------------------------
+
+[[queries]]
+id = "rel-001"
+intent = "pre_change_context"
+query = "the meili fan-out worker offset"
+expected_doc_ids = [
+  "crates/cortex-fulltext/src/routing.rs",
+  "crates/cortex-classifier-worker",
+]
+notes = "Operator audit prompt — worker leaves stale offsets in Synap."
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-002"
+intent = "pre_change_context"
+query = "where is the rrf fusion blend implemented"
+expected_doc_ids = ["crates/cortex-api/src/fusion.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-003"
+intent = "pre_change_context"
+query = "intent table that picks pre_change_context vs explain"
+expected_doc_ids = ["crates/cortex-pre-thinking/src/intent_select.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-004"
+intent = "pre_change_context"
+query = "scope.repo defaulting to None in the query strategies"
+expected_doc_ids = ["crates/cortex-api/src/strategies.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-005"
+intent = "pre_change_context"
+query = "vectorizer lane request building and KNN call"
+expected_doc_ids = ["crates/cortex-api/src/vectorizer_lane.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-006"
+intent = "pre_change_context"
+query = "audit envelope shape with query_id"
+expected_doc_ids = ["crates/cortex-api/src/audit.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-007"
+intent = "pre_change_context"
+query = "graph mapper skipping symbol payload"
+expected_doc_ids = ["crates/cortex-graph/src/mapper.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-008"
+intent = "pre_change_context"
+query = "orchestrator parallel fan-out and partial-results handling"
+expected_doc_ids = ["crates/cortex-api/src/orchestrator.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-009"
+intent = "pre_change_context"
+query = "where is the QueryRequest type declared"
+expected_doc_ids = ["crates/cortex-api/src/types.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-010"
+intent = "pre_change_context"
+query = "cortex.events.query_audit publisher path"
+expected_doc_ids = [
+  "crates/cortex-api/src/audit.rs",
+  "crates/cortex-api/src/service.rs",
+]
+[queries.scope]
+repo = "Cortex"
+
+# ---------------------------------------------------------------------
+# decision_lookup (10)
+# ---------------------------------------------------------------------
+
+[[queries]]
+id = "rel-011"
+intent = "decision_lookup"
+query = "decision about adopting Meilisearch over Lexum"
+expected_doc_ids = [".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-012"
+intent = "decision_lookup"
+query = "when did we decide to use the Synap event bus"
+expected_doc_ids = [".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-013"
+intent = "decision_lookup"
+query = "RRF fusion algorithm choice rationale"
+expected_doc_ids = [".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-014"
+intent = "decision_lookup"
+query = "decision on vector dimensionality and embedding model"
+expected_doc_ids = [".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-015"
+intent = "decision_lookup"
+query = "graph backend selection — why Nexus over neo4j"
+expected_doc_ids = [".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-016"
+intent = "decision_lookup"
+query = "spec for the query api endpoint shape"
+expected_doc_ids = ["docs/specs/11-query-api.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-017"
+intent = "decision_lookup"
+query = "policy about destructive git operations in the rulebook"
+expected_doc_ids = [".rulebook/specs", "AGENTS.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-018"
+intent = "decision_lookup"
+query = "governance rule about no shortcuts or stubs"
+expected_doc_ids = [".rulebook/specs", "AGENTS.md", "no-shortcuts.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-019"
+intent = "decision_lookup"
+query = "scope-resolution ADR for the query api"
+expected_doc_ids = [".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-020"
+intent = "decision_lookup"
+query = "decision on task structure and rulebook tail items"
+expected_doc_ids = [".rulebook/specs/RULEBOOK.md", ".rulebook/decisions"]
+[queries.scope]
+repo = "Cortex"
+
+# ---------------------------------------------------------------------
+# similar_problems (10)
+# ---------------------------------------------------------------------
+
+[[queries]]
+id = "rel-021"
+intent = "similar_problems"
+query = "previous turns about meili index reset"
+expected_doc_ids = ["meili", "fan-out", "indexer"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-022"
+intent = "similar_problems"
+query = "past sessions debugging vectorizer collection mismatch"
+expected_doc_ids = ["vectorizer", "collection"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-023"
+intent = "similar_problems"
+query = "earlier work on dashboard backlog series"
+expected_doc_ids = ["dashboard", "backlog"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-024"
+intent = "similar_problems"
+query = "prior debugging of pre-thinking timeout"
+expected_doc_ids = ["pre_thinking", "pre-thinking", "budget"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-025"
+intent = "similar_problems"
+query = "investigations into nexus graph stale edges"
+expected_doc_ids = ["nexus", "graph", "edge"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-026"
+intent = "similar_problems"
+query = "earlier MCP tool registration bugs"
+expected_doc_ids = ["mcp", "tool"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-027"
+intent = "similar_problems"
+query = "prior turns about classifier worker crash loop"
+expected_doc_ids = ["classifier", "worker"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-028"
+intent = "similar_problems"
+query = "previous bootstrapping issues for the local stack"
+expected_doc_ids = ["bootstrap", "stack", "local"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-029"
+intent = "similar_problems"
+query = "earlier work on rate limiting the query api"
+expected_doc_ids = ["rate_limit", "rate-limit"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-030"
+intent = "similar_problems"
+query = "past triage of redaction false positives"
+expected_doc_ids = ["redaction"]
+[queries.scope]
+repo = "Cortex"
+
+# ---------------------------------------------------------------------
+# law_check (10)
+# ---------------------------------------------------------------------
+
+[[queries]]
+id = "rel-031"
+intent = "law_check"
+query = "is force-pushing to main allowed"
+expected_doc_ids = ["git-safety.md", "GIT.md", ".rulebook/specs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-032"
+intent = "law_check"
+query = "are stub implementations allowed in this project"
+expected_doc_ids = ["no-shortcuts.md", ".rulebook/specs", "AGENTS.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-033"
+intent = "law_check"
+query = "rule about parallel file edits"
+expected_doc_ids = ["sequential-editing.md", ".rulebook/specs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-034"
+intent = "law_check"
+query = "do I need a Team to run multiple background agents"
+expected_doc_ids = ["multi-agent-teams.md", "MULTI_AGENT.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-035"
+intent = "law_check"
+query = "rule about running diagnostic checks before tests"
+expected_doc_ids = ["diagnostic-first.md", ".rulebook/specs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-036"
+intent = "law_check"
+query = "policy on retrying a failing fix"
+expected_doc_ids = ["fail-twice-escalate.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-037"
+intent = "law_check"
+query = "rule about reordering tasks in a tasks.md"
+expected_doc_ids = ["follow-task-sequence.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-038"
+intent = "law_check"
+query = "must I research before implementing"
+expected_doc_ids = ["research-first.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-039"
+intent = "law_check"
+query = "what is the handoff trigger rule"
+expected_doc_ids = ["respect-handoff-trigger.md"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-040"
+intent = "law_check"
+query = "rule about deleting files without authorization"
+expected_doc_ids = ["TIER1_PROHIBITIONS.md", "AGENTS.md", "no-shortcuts.md"]
+[queries.scope]
+repo = "Cortex"
+
+# ---------------------------------------------------------------------
+# explain (10)
+# ---------------------------------------------------------------------
+
+[[queries]]
+id = "rel-041"
+intent = "explain"
+query = "how does the rrf fusion blend lane scores"
+expected_doc_ids = ["crates/cortex-api/src/fusion.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-042"
+intent = "explain"
+query = "what does the orchestrator do when a lane errors"
+expected_doc_ids = ["crates/cortex-api/src/orchestrator.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-043"
+intent = "explain"
+query = "how is a snippet hashed for redaction"
+expected_doc_ids = ["crates/cortex-api/src/redaction.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-044"
+intent = "explain"
+query = "where is the keyword lane request built"
+expected_doc_ids = ["crates/cortex-api/src/meili_lane.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-045"
+intent = "explain"
+query = "how does the graph lane query nexus"
+expected_doc_ids = ["crates/cortex-api/src/nexus_graph_lane.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-046"
+intent = "explain"
+query = "what does the analyzer module do"
+expected_doc_ids = ["crates/cortex-api/src/analyzer.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-047"
+intent = "explain"
+query = "how does pre-thinking pipeline derive scope from cwd"
+expected_doc_ids = ["crates/cortex-pre-thinking/src/scope.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-048"
+intent = "explain"
+query = "how does the cache key get built for query results"
+expected_doc_ids = ["crates/cortex-api/src/cache.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-049"
+intent = "explain"
+query = "what does the dashboard series module compute"
+expected_doc_ids = ["crates/cortex-api/src/dashboard_series.rs"]
+[queries.scope]
+repo = "Cortex"
+
+[[queries]]
+id = "rel-050"
+intent = "explain"
+query = "where are ACL checks done for the query api"
+expected_doc_ids = ["crates/cortex-api/src/acl.rs"]
+[queries.scope]
+repo = "Cortex"

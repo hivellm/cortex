@@ -1,0 +1,173 @@
+name: Relevance harness gate
+
+# phase6e — closes F-008. Replays the labeled query set
+# (`tests/relevance/queries.toml`) against a freshly seeded
+# `docker-compose` stack, computes per-intent + global recall@10 and
+# MRR, and gates the PR on a 2pp regression vs the cached `main`
+# baseline. The JSON report is uploaded as a CI artifact and (on
+# merge to main) committed to `.rulebook/learnings/relevance/` so the
+# dashboard can later render the trend.
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - "crates/cortex-api/src/strategies.rs"
+      - "crates/cortex-api/src/orchestrator.rs"
+      - "crates/cortex-api/src/fusion.rs"
+      - "crates/cortex-api/src/meili_lane.rs"
+      - "crates/cortex-api/src/vectorizer_lane.rs"
+      - "crates/cortex-api/src/nexus_graph_lane.rs"
+      - "crates/cortex-api/src/lanes.rs"
+      - "crates/cortex-api/src/service.rs"
+      - "crates/cortex-pre-thinking/src/intent_select.rs"
+      - "crates/cortex-pre-thinking/src/scope.rs"
+      - "crates/cortex-pre-thinking/src/pipeline.rs"
+      - "crates/cortex-cli/**"
+      - "tests/relevance/**"
+      - ".github/workflows/relevance.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  relevance-harness:
+    name: Recall@10 + MRR gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Bring up docker-compose stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --wait
+          docker compose ps
+
+      - name: First-time stack init
+        run: bash bin/cortex-init.sh
+
+      - name: Seed Cortex repo into the local stack
+        env:
+          CORTEX_BOOTSTRAP_FIXTURE_REPOS: "1"
+        run: |
+          # The relevance fixture is scoped to repo "Cortex" — bootstrap
+          # the working tree (this checkout) so every lane has signal.
+          mkdir -p /tmp/cortex-relevance
+          cat > /tmp/cortex-relevance/workspace.toml <<EOF
+          [[repo]]
+          id = "Cortex"
+          path = "${{ github.workspace }}"
+          EOF
+          cargo run --release -q -p cortex-cli --bin cortex-bootstrap -- \
+            --workspace /tmp/cortex-relevance/workspace.toml
+
+      - name: Boot cortex-api in the background
+        env:
+          CORTEX_FULLTEXT_MEILI_URL: http://127.0.0.1:17004
+          CORTEX_FULLTEXT_MEILI_API_KEY: cortex-dev-master-key
+          CORTEX_NEXUS_URL: http://127.0.0.1:17002
+        run: |
+          cargo build --release -q -p cortex-api
+          mkdir -p logs
+          nohup ./target/release/cortex-api \
+            > logs/cortex-api.log 2>&1 &
+          echo $! > logs/cortex-api.pid
+          # Wait for /v1/status — fail fast if the daemon never comes up.
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:17000/v1/status > /dev/null; then
+              echo "cortex-api up after ${i}s"; exit 0;
+            fi
+            sleep 1
+          done
+          echo "cortex-api failed to come up"; tail -200 logs/cortex-api.log; exit 1
+
+      - name: Download baseline report (if present on main)
+        id: baseline
+        uses: dawidd6/action-download-artifact@v6
+        continue-on-error: true
+        with:
+          name: relevance-baseline.json
+          workflow: relevance.yaml
+          branch: main
+          path: baseline/
+
+      - name: Run relevance harness
+        id: harness
+        env:
+          RUST_LOG: info,cortex_relevance_eval=info
+        run: |
+          set -o pipefail
+          mkdir -p target/relevance
+          BASELINE_FLAG=""
+          if [ -f baseline/relevance-baseline.json ]; then
+            BASELINE_FLAG="--baseline baseline/relevance-baseline.json"
+            echo "running with baseline gate"
+          else
+            echo "no baseline yet — recording first run"
+          fi
+          cargo run --release -q -p cortex-cli --bin cortex-relevance-eval -- \
+            --api-url http://127.0.0.1:17000 \
+            --query-set tests/relevance/queries.toml \
+            --out-dir target/relevance \
+            --out-basename "${GITHUB_SHA}" \
+            $BASELINE_FLAG
+
+      - name: Upload run artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relevance-report-${{ github.sha }}
+          path: target/relevance/${{ github.sha }}.json
+          if-no-files-found: warn
+
+      - name: Refresh main baseline artifact
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: actions/upload-artifact@v4
+        with:
+          name: relevance-baseline.json
+          path: target/relevance/${{ github.sha }}.json
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Persist report to .rulebook/learnings/relevance/
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          OUT=".rulebook/learnings/relevance/${DATE}-${GITHUB_SHA}.json"
+          mkdir -p "$(dirname "$OUT")"
+          cp "target/relevance/${GITHUB_SHA}.json" "$OUT"
+          # Skip the commit when the persisted file is byte-identical
+          # to the most recent existing one (no-op runs would otherwise
+          # spam the history).
+          PREV=$(ls -1t .rulebook/learnings/relevance/*.json 2>/dev/null \
+            | grep -v "${DATE}-${GITHUB_SHA}" | head -1 || true)
+          if [ -n "$PREV" ] && cmp -s "$OUT" "$PREV"; then
+            echo "report identical to $PREV — skipping commit"
+            exit 0
+          fi
+          git config user.name "cortex-bot"
+          git config user.email "cortex-bot@hivellm.local"
+          git add "$OUT"
+          git commit -m "ci(relevance): persist report ${DATE}-${GITHUB_SHA:0:12}"
+          git push
+
+      - name: Tear down docker-compose stack
+        if: always()
+        run: |
+          if [ -f logs/cortex-api.pid ]; then
+            kill "$(cat logs/cortex-api.pid)" 2>/dev/null || true
+          fi
+          docker compose down --volumes

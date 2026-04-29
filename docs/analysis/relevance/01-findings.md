@@ -98,4 +98,4 @@ Each finding has stable id `F-NNN`, evidence with file:line citations, the relev
 
 **Confidence:** High.
 
-**Tracked by:** R9, no implementation task.
+**Tracked by:** R9. **Closed by:** [`phase6e_relevance_recall_mrr_harness`](../../../.rulebook/tasks/phase6e_relevance_recall_mrr_harness/proposal.md) — labeled query set + harness binary + CI gate landed; reports persist to `.rulebook/learnings/relevance/`.

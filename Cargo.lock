@@ -528,29 +528,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-bootstrap"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clap",
- "cortex-core",
- "ignore",
- "serde",
- "serde_json",
- "sha2",
- "synap-sdk",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "ulid",
-]
-
-[[package]]
 name = "cortex-classifier"
 version = "0.1.0"
 dependencies = [
@@ -569,23 +546,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-classifier-worker"
+name = "cortex-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "cortex-classifier",
+ "clap",
+ "cortex-api",
  "cortex-core",
- "cortex-embedder",
  "cortex-storage",
+ "cortex-workers",
+ "ignore",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "sha2",
  "synap-sdk",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
+ "ulid",
+ "vectorizer-sdk",
+ "zstd",
 ]
 
 [[package]]
@@ -604,95 +590,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "ulid",
-]
-
-[[package]]
-name = "cortex-embedder"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "cortex-classifier",
- "cortex-core",
- "cortex-storage",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "synap-sdk",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-json",
- "tree-sitter-md",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-toml-ng",
- "tree-sitter-typescript",
- "tree-sitter-yaml",
- "ulid",
- "vectorizer-sdk",
- "wiremock",
-]
-
-[[package]]
-name = "cortex-fulltext"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "cortex-classifier",
- "cortex-core",
- "cortex-embedder",
- "cortex-storage",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "synap-sdk",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "wiremock",
- "zstd",
-]
-
-[[package]]
-name = "cortex-graph"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clap",
- "cortex-classifier",
- "cortex-core",
- "cortex-embedder",
- "nexus-graph-sdk",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha2",
- "synap-sdk",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "wiremock",
- "zstd",
 ]
 
 [[package]]
@@ -750,28 +647,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-ops"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clap",
- "cortex-core",
- "cortex-fulltext",
- "cortex-graph",
- "cortex-storage",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "vectorizer-sdk",
- "zstd",
-]
-
-[[package]]
 name = "cortex-pre-thinking"
 version = "0.1.0"
 dependencies = [
@@ -802,6 +677,47 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "zstd",
+]
+
+[[package]]
+name = "cortex-workers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "cortex-classifier",
+ "cortex-core",
+ "cortex-storage",
+ "nexus-graph-sdk",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "synap-sdk",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-md",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
+ "ulid",
+ "vectorizer-sdk",
+ "wiremock",
  "zstd",
 ]
 

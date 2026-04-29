@@ -308,6 +308,85 @@ cortex.api.query.cache.hits / .misses counter
 6. **No pagination in v1.** Hot-path callers want small bundles; analysis callers drive their own loops.
 7. **Cache key includes a `schema_version`.** Any migration-worthy change to the event or graph schema invalidates every cached bundle on deploy.
 
+## Relevance harness (phase6e)
+
+The canonical relevance gate for this API is the
+[`cortex-relevance-eval`](../../crates/cortex-relevance-eval) binary,
+backed by the labeled query set under
+[`tests/relevance/queries.toml`](../../tests/relevance/queries.toml)
+(≥10 entries per intent across all five intents). Closes
+[F-008](../analysis/relevance/01-findings.md#f-008--relevance-is-unmeasured-there-is-no-labeled-query-set-no-recallk--mrr-harness-no-canary-queries-that-catch-regressions).
+
+### Metrics
+
+For each labeled query, the harness POSTs to `/v1/query` and inspects
+the top-10 fused snippets:
+
+- `recall_at_10` — boolean: did **any** `expected_doc_ids` entry
+  appear in the top-10 snippets? Matches the canonical composite id
+  (`<repo>|<path>|<content_hash>`), any individual snippet field
+  (`repo`, `path`, `symbol`, `content_hash`, `collection`), or a
+  substring of `path` / `symbol`.
+- `mrr` — `1.0 / rank_of_first_match` for hits, `0.0` for misses.
+
+Per-intent buckets and a global aggregate are emitted as
+`recall_at_10_pct` (`matches / total * 100.0`) and `mrr_avg`.
+
+### Report shape
+
+Each run pretty-prints to `target/relevance/<git-sha>.json`:
+
+```jsonc
+{
+  "generated_at": "2026-04-29T12:34:56Z",
+  "git_sha": "abc123",
+  "api_version": "0.1.0",
+  "omitted_intents": [],
+  "per_intent": {
+    "explain":            { "total": 10, "matches": 8, "recall_at_10_pct": 80.0, "mrr_avg": 0.71 },
+    "pre_change_context": { "total": 10, "matches": 7, "recall_at_10_pct": 70.0, "mrr_avg": 0.62 }
+    // …one bucket per intent
+  },
+  "global": { "total": 50, "matches": 38, "recall_at_10_pct": 76.0, "mrr_avg": 0.66 },
+  "queries": [
+    { "id": "rel-001", "intent": "pre_change_context",
+      "query": "...", "recall_at_10": true, "matched_rank": 2,
+      "mrr": 0.5, "matched_doc_id": "crates/.../strategies.rs",
+      "returned": 10 }
+    // …one row per query, sorted by id
+  ]
+}
+```
+
+### Regression gate
+
+CI ([`.github/workflows/relevance.yaml`](../../.github/workflows/relevance.yaml))
+runs the harness on every PR touching a retrieval-path file and on
+every push to `main`. Each PR run is compared against the cached
+`main` baseline:
+
+- **Hard gate** — global `recall_at_10_pct` and `mrr_avg * 100` must
+  stay within `2pp` of baseline. The harness exits `2` on a hard
+  regression and the CI step fails.
+- **Soft gate** — per-intent metrics within the same `2pp` band emit
+  warnings (`soft_regressions: [...]`) but do not fail the run.
+- **Worst-5 surfacing** — the verdict ships the five most-regressed
+  query ids so triagers can re-create the failure locally with
+  `--query-set tests/relevance/queries.toml --baseline ...`.
+
+When `/v1/status` is unreachable, or a fixture's `scope.repo` is not
+in the daemon's `indexed_repos` snapshot, the affected intent buckets
+land in `omitted_intents` and the harness keeps going — partial
+visibility beats a hard failure that hides every other regression.
+
+### Persistence
+
+On merge to `main`, the workflow copies the report to
+`.rulebook/learnings/relevance/<YYYY-MM-DD>-<sha>.json` so the
+dashboard's relevance trend view (spec 16) can render the time series
+without re-running CI. Identical-content reports are skipped to keep
+the history readable.
+
 ## Open questions
 
 1. **Per-intent RRF weighting.** Does `decision_lookup` want to weight keyword higher than vector? Defer to first quality pass.

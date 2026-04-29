@@ -367,6 +367,31 @@ Client emits minimal RUM via a beacon endpoint (`POST /v1/dashboard/rum`): page 
 6. **Monaco for code/law editing.** Familiar, accessible, and already bundled by the scaffold.
 7. **Client-side RUM only.** Server-side route inference would be weaker; the client already has routing state.
 
+## Relevance trend (phase6e — F-008)
+
+The dashboard renders a trend view over the relevance harness reports
+persisted to `.rulebook/learnings/relevance/<YYYY-MM-DD>-<sha>.json`
+(written by [`.github/workflows/relevance.yaml`](../../.github/workflows/relevance.yaml)
+on every push to `main`). The contract:
+
+- **Source of truth** — the JSON files in
+  `.rulebook/learnings/relevance/`. Each file is the harness's
+  `RelevanceReport` shape documented in
+  [spec 11 §Relevance harness](./11-query-api.md#relevance-harness-phase6e).
+- **Series** — global `recall_at_10_pct` and `mrr_avg` over time,
+  plus a per-intent split for triage.
+- **Drill-down** — clicking a point opens the matching report's
+  `queries[]` rows (sorted by id), highlighting `recall_at_10=false`
+  rows so a regression is one click from the failing query.
+- **Worst-N tile** — a static tile listing the latest report's
+  `omitted_intents` so operators can spot when a backend was down for
+  a run (and the report's recall numbers are partial).
+
+The view does not call `/v1/query` itself; it streams the JSON files
+straight from disk so trend rendering is independent of daemon
+health. New reports appear automatically as soon as the CI commit
+lands on `main`.
+
 ## Open questions
 
 1. **Inline debate UI for active Analyses.** Should the dashboard offer a "join as human panelist" button? Possible in principle (panel grows to 4); risks derailing auto-judge reproducibility. Deferred.

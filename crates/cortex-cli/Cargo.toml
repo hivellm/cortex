@@ -1,0 +1,52 @@
+[package]
+name = "cortex-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex operator CLIs: bootstrap walker + cross-backend doctor + relevance harness (consolidates cortex-bootstrap + cortex-ops + cortex-relevance-eval)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cortex-bootstrap"
+path = "src/bin/cortex-bootstrap.rs"
+
+[[bin]]
+name = "cortex-ops"
+path = "src/bin/cortex-ops.rs"
+
+[[bin]]
+name = "cortex-relevance-eval"
+path = "src/bin/cortex-relevance-eval.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+cortex-storage = { path = "../cortex-storage" }
+cortex-workers = { path = "../cortex-workers" }
+cortex-api = { path = "../cortex-api" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+ignore = { workspace = true }
+clap = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+zstd = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+ulid = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["json"] }
+
+vectorizer-sdk = { workspace = true }
+synap-sdk = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

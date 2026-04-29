@@ -20,7 +20,7 @@ fi
 : "${MEILI_MASTER_KEY:=cortex-dev-master-key}"
 
 plan() {
-    cargo run -q -p cortex-ops -- plan --pretty --slice "$1"
+    cargo run -q -p cortex-cli --bin cortex-ops -- plan --pretty --slice "$1"
 }
 
 say() {

@@ -1,0 +1,76 @@
+[package]
+name = "cortex-workers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex event-pipeline workers: classifier + embedder + fulltext + graph (consolidates the four phase-1 worker crates into a single deployable)."
+
+[lib]
+path = "src/lib.rs"
+
+# One [[bin]] per worker — same final binary names as the legacy
+# crates so docker-compose / scripts keep working.
+[[bin]]
+name = "cortex-classifier-worker"
+path = "src/bin/classifier-worker.rs"
+
+[[bin]]
+name = "cortex-embedder-worker"
+path = "src/bin/embedder.rs"
+
+[[bin]]
+name = "cortex-fulltext-worker"
+path = "src/bin/fulltext-indexer.rs"
+
+[[bin]]
+name = "cortex-graph-worker"
+path = "src/bin/graph-writer.rs"
+
+[[bin]]
+name = "cortex-graph-backfill"
+path = "src/bin/graph-backfill.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+cortex-classifier = { path = "../cortex-classifier" }
+cortex-storage = { path = "../cortex-storage" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-trait = { workspace = true }
+sha2 = { workspace = true }
+ulid = { workspace = true }
+reqwest = { workspace = true }
+clap = { workspace = true }
+zstd = { workspace = true }
+
+vectorizer-sdk = { workspace = true }
+nexus-graph-sdk = { workspace = true }
+synap-sdk = { workspace = true }
+
+# Embedder tree-sitter parsers
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-cpp = "0.23"
+tree-sitter-md = "0.5"
+tree-sitter-json = "0.24"
+tree-sitter-yaml = "0.7"
+tree-sitter-toml-ng = "0.7"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+wiremock = "0.6"
