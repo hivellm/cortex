@@ -795,6 +795,41 @@ Closes the *quiet-hours* failure class: a regression like the
 2026-04-28 JSON truncation is now detected in 10 seconds (or 5
 minutes if running on the default schedule) instead of hours.
 
+## 13.11 Observability — dashboard Health view (phase8g)
+
+phase8a–8f produce rich JSON over `/v1/health/*`, but the user
+realistically opens the GUI before the terminal. phase8g surfaces
+the entire health system as a first-class dashboard view at
+`/health`, with the same visual language as Live Timeline /
+Conversations / Decisions.
+
+Layout (top-down):
+1. **Overall banner** — green/yellow/red driven by
+   `health.overview().overall`.
+2. **Subsystems grid** — one card per crate from
+   `health.overview().subsystems[]` (state pill, version, latency).
+3. **Freshness table** — rows sorted by `gap_seconds` desc, colour-
+   coded against the phase8b severity buckets (warn > 60 s,
+   critical > 300 s).
+4. **Divergence table** — adjacent-stage drops where
+   `severity != ok`.
+5. **Version drift** — rendered only when `versions.all_in_sync`
+   is `false`; lists each binary's running SHA vs workspace HEAD
+   plus `behind_by_commits`.
+6. **Config audit** — findings from phase8d's audit where
+   `severity != ok`.
+
+Real-time pulse: NEW `GET /v1/health/stream` SSE endpoint emits a
+combined `HealthSnapshot { overall, freshness, divergence,
+truncated }` every 5 seconds plus a `heartbeat` every 15 s. The
+snapshot is byte-capped at 64 KiB; oversized payloads halve the
+freshness vec until they fit and flip `truncated: true`.
+
+Topbar status pill: every view (Live Timeline, Conversations, …)
+shows a tiny pill in the header carrying the overall health label.
+Click to jump to `/health`. Polls `/v1/health` every 5 s — the
+user can't miss a stack-degraded state while browsing other views.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

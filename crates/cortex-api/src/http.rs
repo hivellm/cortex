@@ -105,6 +105,10 @@ pub fn build_router_with(
                 "/v1/health/config",
                 get(handle_health_config),
             )
+            .route(
+                "/v1/health/stream",
+                get(crate::health::stream_handler),
+            )
             .with_state(health_state);
         // Phase8b — Prometheus-text `/metrics` endpoint exposing the
         // LoaderMetrics counters. The freshness aggregator already

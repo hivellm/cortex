@@ -29,15 +29,18 @@
 //! yet) and the row is therefore `ok` until the second probe lands.
 
 use std::collections::BTreeMap;
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use cortex_health::client::{aggregate, build_client, AggregatorConfig, ProbeTarget};
 use cortex_health::SubsystemStatus;
+use futures::stream::Stream;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -709,6 +712,216 @@ fn parse_u64_map(extras_value: Option<&Value>) -> BTreeMap<String, u64> {
 
 fn sum_u64_map(extras_value: Option<&Value>) -> u64 {
     parse_u64_map(extras_value).values().copied().sum()
+}
+
+/// Phase8g — combined snapshot the `/v1/health/stream` SSE endpoint
+/// emits every 5 seconds. Bundles the four phase8 sub-aggregators
+/// into one payload so the GUI subscribes once instead of polling
+/// five endpoints in lockstep.
+#[derive(Debug, Clone, Serialize)]
+pub struct HealthSnapshot {
+    /// RFC-3339 timestamp the snapshot was assembled.
+    pub generated_at: String,
+    /// Overall traffic-light label (`ok` / `degraded` / `down`).
+    pub overall: String,
+    /// Per-stage `<stage>.<kind>` rows from the freshness aggregator.
+    pub freshness: Vec<FreshnessRow>,
+    /// Adjacent-stage divergence pairs.
+    pub divergence: Vec<DivergenceRow>,
+    /// `true` when at least one row is included; flipped to `false`
+    /// after the byte budget truncates.
+    pub truncated: bool,
+}
+
+/// `GET /v1/health/stream` — SSE handler emitting one `health` event
+/// every 5 s + a `heartbeat` event every 15 s. Reuses the same
+/// per-subscriber loop pattern Live Timeline uses (one `tokio::spawn`
+/// per connection, no shared broadcast channel).
+pub async fn stream_handler(
+    State(state): State<HealthState>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let stream = async_stream::stream! {
+        let mut snapshot = tokio::time::interval(Duration::from_secs(5));
+        snapshot.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+        heartbeat.tick().await;
+        loop {
+            tokio::select! {
+                _ = snapshot.tick() => {
+                    let bundle = build_snapshot(&state).await;
+                    let json = serde_json::to_string(&bundle).unwrap_or_else(|_| "{}".into());
+                    yield Ok::<SseEvent, Infallible>(
+                        SseEvent::default().event("health").data(json)
+                    );
+                }
+                _ = heartbeat.tick() => {
+                    yield Ok::<SseEvent, Infallible>(
+                        SseEvent::default()
+                            .event("heartbeat")
+                            .data(r#"{"ok":true}"#)
+                    );
+                }
+            }
+        }
+    };
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
+}
+
+/// Pure helper that assembles one [`HealthSnapshot`]. Re-runs every
+/// SSE tick — the constituent endpoints are cheap (file reads + a
+/// fan-out probe each) so a fresh snapshot per subscriber is fine
+/// at single-digit-Hz cadence.
+async fn build_snapshot(state: &HealthState) -> HealthSnapshot {
+    let by_name = gather_subsystem_extras().await;
+    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+
+    // Freshness rows — same logic as `freshness_handler` but in-line
+    // so the SSE handler doesn't fan out twice per tick.
+    let mut freshness: Vec<FreshnessRow> = Vec::new();
+    if let Some(adapter) = by_name.get("cortex-adapter") {
+        push_per_label_ts(
+            &mut freshness,
+            now_ms,
+            "adapter.last_frame",
+            adapter.extras.get("last_frame_ts_ms"),
+        );
+        push_per_label_ts(
+            &mut freshness,
+            now_ms,
+            "adapter.last_envelope",
+            adapter.extras.get("last_envelope_ts_ms"),
+        );
+        push_per_label_ts(
+            &mut freshness,
+            now_ms,
+            "adapter.last_publish_ok",
+            adapter.extras.get("last_publish_ok_ts_ms_by_kind"),
+        );
+        if let Some(ms) = adapter.extras.get("last_publish_ok_ts_ms").and_then(|v| v.as_u64()) {
+            freshness.push(freshness_row("adapter.last_publish_ok", ms, now_ms));
+        }
+    }
+    if let Some(ingest) = by_name.get("cortex-ingestion") {
+        push_per_label_ts(
+            &mut freshness,
+            now_ms,
+            "ingestion.last_archive_write",
+            ingest.extras.get("last_archive_write_ts_ms"),
+        );
+        if let Some(ms) = ingest.extras.get("last_batch_accepted_ts_ms").and_then(|v| v.as_u64()) {
+            freshness.push(freshness_row("ingestion.last_batch_accepted", ms, now_ms));
+        }
+    }
+    let arch_ts = state.loader_metrics.archive_last_refresh_ts_ms();
+    freshness.push(freshness_row("api.archive_loader.last_refresh", arch_ts, now_ms));
+    let meili_ts = state.loader_metrics.meili_last_refresh_ts_ms();
+    freshness.push(freshness_row("api.meili_loader.last_refresh", meili_ts, now_ms));
+    for worker in [
+        "cortex-classifier-worker",
+        "cortex-embedder-worker",
+        "cortex-fulltext-worker",
+        "cortex-graph-worker",
+    ] {
+        if let Some(s) = by_name.get(worker) {
+            if let Some(ms) = s.extras.get("last_job_ts_ms").and_then(|v| v.as_u64()) {
+                let key = format!("{}.last_job", short_worker_name(worker));
+                freshness.push(freshness_row(&key, ms, now_ms));
+            }
+        }
+    }
+    freshness.sort_by(|a, b| a.key.cmp(&b.key));
+
+    // Divergence rows — same shape as `divergence_handler`, sharing
+    // the aggregator history Mutex.
+    let now = Instant::now();
+    let pairs = build_divergence_pairs(&by_name);
+    let mut history = state
+        .aggregator
+        .history
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let mut divergence: Vec<DivergenceRow> = Vec::new();
+    for (key, up, down) in pairs {
+        let delta = up.saturating_sub(down);
+        let prev = history.get(&key).cloned().unwrap_or_default();
+        let delta_growth = match prev.captured_at {
+            Some(when) if now.saturating_duration_since(when) >= Duration::from_secs(30) => {
+                i64::try_from(delta).unwrap_or(0) - i64::try_from(prev.delta).unwrap_or(0)
+            }
+            _ => 0,
+        };
+        let severity = if delta_growth > 0 {
+            Severity::from_growth(delta_growth)
+        } else {
+            Severity::Ok
+        };
+        divergence.push(DivergenceRow {
+            pair: key.clone(),
+            upstream: up,
+            downstream: down,
+            delta,
+            delta_growth,
+            severity,
+        });
+        history.insert(
+            key,
+            DivergenceSample {
+                delta,
+                captured_at: Some(now),
+            },
+        );
+    }
+    if let Ok(mut guard) = state.aggregator.history.lock() {
+        *guard = history;
+    }
+    divergence.sort_by(|a, b| a.pair.cmp(&b.pair));
+
+    // Overall — Down beats Degraded beats Ok across all subsystems.
+    let overall = if by_name
+        .values()
+        .any(|s| s.state == cortex_health::HealthState::Down)
+    {
+        "down"
+    } else if by_name
+        .values()
+        .any(|s| s.state == cortex_health::HealthState::Degraded)
+    {
+        "degraded"
+    } else {
+        "ok"
+    };
+
+    // Byte-cap the snapshot at 64 KiB. Truncate freshness rows from
+    // the bottom (the table is sorted by gap_seconds desc inside the
+    // GUI; we sorted alphabetically here so truncation drops the
+    // alphabetic tail, not the most-stale rows). When truncated,
+    // flip the flag.
+    let mut snapshot = HealthSnapshot {
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        overall: overall.to_string(),
+        freshness,
+        divergence,
+        truncated: false,
+    };
+    let serialized = serde_json::to_string(&snapshot).unwrap_or_default();
+    if serialized.len() > 64 * 1024 {
+        // Halve the freshness vec until the snapshot fits.
+        while serde_json::to_string(&snapshot)
+            .map(|s| s.len() > 64 * 1024)
+            .unwrap_or(false)
+            && !snapshot.freshness.is_empty()
+        {
+            let new_len = snapshot.freshness.len() / 2;
+            snapshot.freshness.truncate(new_len.max(1));
+            snapshot.truncated = true;
+        }
+    }
+    snapshot
 }
 
 #[cfg(test)]

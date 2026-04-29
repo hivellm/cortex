@@ -14,6 +14,7 @@ import { GraphView } from "./views/Graph";
 import { ConversationsView } from "./views/Conversations";
 import { HandoffsView } from "./views/Handoffs";
 import { ClassificationsView } from "./views/Classifications";
+import { HealthView } from "./views/Health";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
 import { TweaksProvider, useTweaks } from "./lib/useTweaks";
 import type { Filters } from "./lib/api";
@@ -84,6 +85,8 @@ function AppShell() {
         return <ToolsView />;
       case "graph":
         return <GraphView />;
+      case "health":
+        return <HealthView />;
       default:
         return null;
     }
@@ -96,6 +99,7 @@ function AppShell() {
           collapsed={collapsed}
           onToggleSidebar={onToggleSidebar}
           onOpenTweaks={() => setTweaksOpen(true)}
+          onJumpToHealth={() => setView("health")}
         />
         <Sidebar view={view} setView={setView} collapsed={collapsed} />
         <main className="main">{renderView()}</main>

@@ -476,6 +476,16 @@ export const api = {
     return getJson<GraphPayload>(`/v1/dashboard/graph?${params.toString()}`);
   },
   status: () => getJson<StatusBody>("/v1/status"),
+  // Phase8g — Health view clients. Each method returns the JSON
+  // shape the matching /v1/health/* endpoint emits; types are
+  // mirror-images of the Rust structs. The `freshness`,
+  // `divergence`, and `versions` endpoints are mounted on the
+  // dashboard router so they share the same BASE_URL.
+  healthOverview: () => getJson<HealthOverview>("/v1/health"),
+  healthFreshness: () => getJson<FreshnessRow[]>("/v1/health/freshness"),
+  healthDivergence: () => getJson<DivergenceRow[]>("/v1/health/divergence"),
+  healthVersions: () => getJson<VersionsReport>("/v1/health/versions"),
+  healthConfig: () => getJson<ConfigAudit>("/v1/health/config"),
 };
 
 export type StatusBody = {
@@ -484,3 +494,92 @@ export type StatusBody = {
   pid: number;
   uptime_ms: number;
 };
+
+// ---- Phase8g health view types -------------------------------------
+
+export type HealthState = "ok" | "degraded" | "down";
+
+export type SubsystemStatus = {
+  name: string;
+  state: HealthState;
+  latency_ms: number;
+  last_error?: string;
+  version?: string;
+  since?: string;
+  extras?: Record<string, unknown>;
+};
+
+export type HealthOverview = {
+  overall: HealthState;
+  subsystems: SubsystemStatus[];
+  checked_at: string;
+};
+
+export type FreshnessSeverity = "ok" | "warn" | "critical";
+
+export type FreshnessRow = {
+  key: string;
+  last_event_ts_ms: number;
+  gap_seconds: number;
+  severity: FreshnessSeverity;
+};
+
+export type DivergenceRow = {
+  pair: string;
+  upstream: number;
+  downstream: number;
+  delta: number;
+  delta_growth: number;
+  severity: FreshnessSeverity;
+};
+
+export type VersionRow = {
+  name: string;
+  git_sha: string;
+  git_sha_short: string;
+  build_ts: string;
+  git_dirty: boolean;
+  profile: string;
+  crate_version: string;
+  matches_head: boolean;
+};
+
+export type DriftRow = {
+  binary: string;
+  running_sha: string;
+  expected_sha: string;
+  behind_by_commits: number | null;
+  note?: string;
+};
+
+export type VersionsReport = {
+  head_sha: string;
+  head_sha_short: string;
+  running_binaries: VersionRow[];
+  drift: DriftRow[];
+  all_in_sync: boolean;
+};
+
+export type ConfigFinding = {
+  severity: FreshnessSeverity;
+  source: string;
+  message: string;
+};
+
+export type ConfigAudit = {
+  findings: ConfigFinding[];
+  surfaces_read: number;
+};
+
+export type HealthSnapshot = {
+  generated_at: string;
+  overall: HealthState;
+  freshness: FreshnessRow[];
+  divergence: DivergenceRow[];
+  truncated: boolean;
+};
+
+/// Phase8g — `/v1/health/stream` SSE URL the GUI's `useSSE` hook
+/// subscribes to. Same BASE_URL the polling clients use so dev /
+/// prod swaps behave identically.
+export const HEALTH_STREAM_URL = `${BASE_URL}/v1/health/stream`;

@@ -17,7 +17,8 @@ export type ViewId =
   | "laws"
   | "analysis"
   | "tools"
-  | "graph";
+  | "graph"
+  | "health";
 
 type NavItem = { id: ViewId; label: string; icon: IconName; countSource?: CountKey };
 type CountKey =
@@ -43,6 +44,7 @@ const NAV: NavItem[] = [
   { id: "analysis", label: "Analysis", icon: "analysis", countSource: "analyses" },
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
+  { id: "health", label: "Health", icon: "tools" },
 ];
 
 type SidebarProps = {

@@ -1742,3 +1742,28 @@ a { color: inherit; text-decoration: none; }
   flex-wrap: wrap;
   gap: 4px;
 }
+
+/* Phase8g — Health view */
+.view--health { padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+.health-banner { padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-2); display: flex; align-items: center; gap: 10px; }
+.health-banner--ok { border-color: var(--ok); }
+.health-banner--degraded { border-color: var(--warn); }
+.health-banner--down { border-color: var(--err); }
+.health-pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-family: var(--font-mono); text-transform: uppercase; }
+.health-pill--ok { background: var(--ok); color: black; }
+.health-pill--warn { background: var(--warn, #c89000); color: black; }
+.health-pill--critical { background: var(--err, #c14040); color: white; }
+.health-section { background: var(--bg-2); padding: 12px 14px; border-radius: 6px; border: 1px solid var(--border); }
+.health-section h2 { font-size: 12px; text-transform: uppercase; color: var(--fg-2); margin: 0 0 8px; letter-spacing: 0.05em; }
+.health-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.health-card { padding: 10px; border-radius: 4px; background: var(--bg-1); border: 1px solid var(--border); }
+.health-card__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.health-card__meta { font-size: 11px; color: var(--fg-2); }
+.health-card__error { color: var(--err); font-size: 11px; margin-top: 6px; }
+.health-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.health-table th, .health-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.health-table th { color: var(--fg-2); font-weight: normal; text-transform: uppercase; font-size: 10px; }
+.health-topbar-pill.is-ok .dot { background: var(--ok); }
+.health-topbar-pill.is-degraded .dot { background: var(--warn, #c89000); animation: none; }
+.health-topbar-pill.is-down .dot { background: var(--err, #c14040); animation: none; }
+.health-topbar-pill.is-unknown .dot { background: var(--fg-3); animation: none; }

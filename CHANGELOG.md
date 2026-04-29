@@ -91,6 +91,13 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **NEW `cortex-api` background runner** — opt-in via `CORTEX_CANARY_ENABLED=1`. Ticks every `CORTEX_CANARY_INTERVAL_SECS` (default 300), appends every result to `~/.cortex/canary-history.jsonl`, and POSTs a `law_violation` envelope (severity `critical`, `law_id: canary-<hook>`) on failure via the same path phase8e uses — so quiet-hours regressions surface in the existing Violations dashboard automatically.
 - Closes the quiet-hours failure class: a regression like the 2026-04-28 JSON truncation is now detected in 10s ad-hoc or ~5 minutes scheduled instead of hours.
 
+#### Observability — dashboard Health view (phase8g)
+- **NEW `gui/src/views/Health.tsx`** — first-class Health dashboard surfacing the phase8a–8f system: overall banner, subsystems grid, freshness table sorted by `gap_seconds` desc, divergence table filtered to `severity != ok`, version-drift section (rendered only when `all_in_sync == false`), config audit. Each section degrades gracefully to an empty-state when its endpoint times out.
+- **NEW `GET /v1/health/stream` SSE endpoint** on cortex-api — emits a combined `HealthSnapshot { overall, freshness, divergence, truncated }` every 5 s plus a `heartbeat` every 15 s. Snapshot byte-capped at 64 KiB; oversized payloads halve the freshness vec and flip `truncated: true` so the GUI can render an explicit "showing N of M" hint.
+- **NEW topbar status pill** in the GUI header — visible from every view (Live Timeline, Conversations, Decisions, …) with green/yellow/red dot driven by `/v1/health.overall`. Click jumps to `/health`. Polls every 5 s; the user can't miss a stack-degraded state while browsing.
+- **NEW typed API clients** in `gui/src/lib/api.ts` (`healthOverview`, `healthFreshness`, `healthDivergence`, `healthVersions`, `healthConfig`) + matching TypeScript types (`HealthOverview`, `FreshnessRow`, `DivergenceRow`, `VersionsReport`, `ConfigAudit`, `HealthSnapshot`).
+- 5 new vitest tests in `gui/src/views/Health.test.tsx` covering banner rendering, subsystem cards, divergence-row visibility, config-audit ok-row filtering, freshness gap-label format. `pnpm test` reports 15/15 passing.
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.

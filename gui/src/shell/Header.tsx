@@ -8,12 +8,30 @@ type HeaderProps = {
   collapsed: boolean;
   onToggleSidebar: () => void;
   onOpenTweaks: () => void;
+  /// Phase8g — invoked when the topbar health pill is clicked so the
+  /// shell can navigate to /health from any view.
+  onJumpToHealth?: () => void;
 };
 
-export function Header({ collapsed, onToggleSidebar, onOpenTweaks }: HeaderProps) {
+export function Header({
+  collapsed,
+  onToggleSidebar,
+  onOpenTweaks,
+  onJumpToHealth,
+}: HeaderProps) {
   const statusQ = useQuery({
     queryKey: ["status"],
     queryFn: () => api.status(),
+    refetchInterval: 5000,
+    refetchIntervalInBackground: true,
+    retry: 0,
+  });
+  // Phase8g — overall stack health pill. Polls /v1/health every 5 s
+  // and renders a green/yellow/red dot visible from every view.
+  // Click jumps to /health.
+  const healthQ = useQuery({
+    queryKey: ["health", "overview", "topbar"],
+    queryFn: () => api.healthOverview(),
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
     retry: 0,
@@ -40,6 +58,26 @@ export function Header({ collapsed, onToggleSidebar, onOpenTweaks }: HeaderProps
         </span>
       </div>
       <div className="header__right">
+        <button
+          type="button"
+          className={`status-pill health-topbar-pill is-${
+            healthQ.data?.overall ?? (healthQ.isError ? "down" : "unknown")
+          }`}
+          title={
+            healthQ.data
+              ? `stack ${healthQ.data.overall} · ${healthQ.data.subsystems.length} subsystems · click for /health`
+              : healthQ.isError
+                ? "health stream offline — click for /health"
+                : "loading /v1/health…"
+          }
+          onClick={onJumpToHealth}
+          style={{ cursor: onJumpToHealth ? "pointer" : "default" }}
+        >
+          <span className="dot" />
+          <span className="mono">
+            {healthQ.data?.overall ?? (healthQ.isError ? "down" : "…")}
+          </span>
+        </button>
         <span
           className={`status-pill ${live ? "" : "is-paused"}`}
           title={
