@@ -129,3 +129,91 @@ covering:
 The bookkeeping helpers in `cortex-storage::MetadataStore` carry
 their own round-trip tests (`start_retention_sweep` /
 `finish_retention_sweep` / `list_recent_sweeps`).
+
+## Parquet rollup (phase9b)
+
+Spec 02 §"Event archive (Parquet)" promised a clean rollup
+contract: hourly → daily at 90 d, daily → monthly at 365 d, drop
+monthly at 3 y unless `pii_risk = "low"` or `kind ∈ {decision,
+analysis, law_violation}`. Phase9b implements that contract.
+
+> Despite the `.parquet` filename suffix, the on-disk format is
+> **zstd-compressed line-delimited JSON**. The compactor
+> concatenates source files line-by-line into a single destination,
+> so the schema-stable contract spec 02 promised holds even though
+> the encoding is NDJSON-on-zstd, not Apache Parquet.
+
+### Wire shape
+
+```sh
+cortex-ops rollup \
+    [--time-travel <RFC3339>] \
+    [--dry-run] \
+    [--granularity all|hourly-to-daily|daily-to-monthly|three-year-drop] \
+    [--archive-root PATH] \
+    [--json]
+```
+
+### Granularities
+
+| Granularity | Cutoff | Source layout | Destination |
+|-------------|--------|---------------|-------------|
+| `hourly_to_daily` | 90 d | `events/year=Y/month=M/day=D/hour=*/raw-*.parquet` | `events/year=Y/month=M/day=D/raw-daily.parquet` |
+| `daily_to_monthly` | 365 d | `events/year=Y/month=M/day=*/raw-daily.parquet` | `events/year=Y/month=M/raw-monthly.parquet` |
+| `three_year_drop` | 1 095 d | `events/year=Y/month=M/raw-monthly.parquet` | `events/year=Y/month=M/preserved.parquet` (only records passing the whitelist; otherwise the source is removed outright) |
+
+### 3-year drop whitelist
+
+Records survive when:
+- `kind ∈ {decision, analysis, law_violation}` (always-preserved
+  audit kinds), OR
+- `redactions[]` carries `"pii_risk:low"` (string form) or
+  `{"pii_risk": "low"}` (object form).
+
+### Atomicity
+
+Every compaction is **read → write `<dest>.tmp` → `sync_all` →
+`rename` → `unlink sources`**:
+
+- A crash between `sync_all` and `rename` leaves an orphan `.tmp`
+  that the next run cleans up via `quarantine_pre_existing`.
+- A crash between `rename` and `unlink sources` leaves the dest
+  durable + sources intact; the next run re-attempts and the row-
+  count assertion (`sources_rows == dest_rows`) catches the
+  duplicate.
+- Row-count mismatch returns `RollupError::RowMismatch` and removes
+  the tmp; the sources stay alone for the operator to inspect.
+
+### Corruption quarantine
+
+Files matching `*.corrupted*`, orphan `*.tmp`, or any file that
+fails the zstd decode get moved to
+`events/_quarantine/<original-relpath>` with a sibling `.reason`
+text file describing why. The query layer skips paths under
+`_quarantine/` because the lane walker filters on `extension ==
+"parquet"`. Quarantine is **best-effort**: filesystem failures log
+at WARN and the run continues — losing a quarantine line is
+preferable to crashing the rollup.
+
+### Reporting
+
+`RollupCounts { files_in, files_out, bytes_reclaimed, quarantined,
+records_dropped, records_preserved }` is returned per granularity
+plus a totals row. The CLI prints both; `--json` ships the same
+shape for downstream tooling.
+
+### Test surface
+
+11 unit tests in `crates/cortex-retention/src/parquet_rollup.rs`:
+
+- `granularity_default_cutoffs_match_spec`
+- `enumerate_returns_empty_when_no_partitions_exist`
+- `enumerate_skips_partitions_younger_than_cutoff`
+- `enumerate_returns_91_day_old_day_for_hourly_to_daily`
+- `compact_partition_merges_sources_atomically_and_unlinks`
+- `three_year_drop_preserves_decisions_and_drops_high_pii_turns`
+- `three_year_drop_removes_monthly_outright_when_nothing_passes`
+- `quarantine_pre_existing_moves_corrupted_and_tmp_files`
+- `rollup_counts_merge_accumulates_every_field`
+- `record_passes_whitelist_recognises_each_audit_kind`
+- `granularity_serde_round_trips_via_snake_case`

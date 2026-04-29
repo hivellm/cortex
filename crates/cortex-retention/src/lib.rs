@@ -27,6 +27,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod parquet_rollup;
+
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
