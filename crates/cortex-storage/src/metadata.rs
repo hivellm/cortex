@@ -4,7 +4,7 @@
 //! session lifecycle, repo registry, bootstrap job progress, classifier
 //! spend, law registry mirror, trust scores, retention sweeps, API keys.
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 
@@ -185,6 +185,79 @@ impl MetadataStore {
             .optional()?;
         Ok(row)
     }
+
+    /// Record an hour of classifier spend; idempotent additive upsert.
+    /// `hour` MUST be the canonical RFC3339 truncated-to-hour form
+    /// (`YYYY-MM-DDTHH:00:00Z`); use [`hour_bucket_rfc3339`] to derive
+    /// it from a wall-clock timestamp.
+    pub fn record_classifier_spend_hourly(
+        &self,
+        hour: &str,
+        calls: u64,
+        tokens_in: u64,
+        tokens_out: u64,
+        est_usd_cents: u64,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO classifier_spend_hourly (hour, calls, tokens_in, tokens_out, est_usd_cents)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(hour) DO UPDATE SET
+               calls = calls + excluded.calls,
+               tokens_in = tokens_in + excluded.tokens_in,
+               tokens_out = tokens_out + excluded.tokens_out,
+               est_usd_cents = est_usd_cents + excluded.est_usd_cents",
+            params![
+                hour,
+                calls as i64,
+                tokens_in as i64,
+                tokens_out as i64,
+                est_usd_cents as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Read every hourly bucket whose key falls inside `[since_hour,
+    /// until_hour]` (both inclusive). The result is sorted ascending
+    /// by `hour` so the dashboard renderer can index oldest-first.
+    pub fn classifier_spend_hourly_window(
+        &self,
+        since_hour: &str,
+        until_hour: &str,
+    ) -> Result<Vec<HourlySpendRow>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT hour, calls, tokens_in, tokens_out, est_usd_cents
+               FROM classifier_spend_hourly
+              WHERE hour >= ?1 AND hour <= ?2
+              ORDER BY hour ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![since_hour, until_hour], |r| {
+                Ok(HourlySpendRow {
+                    hour: r.get::<_, String>(0)?,
+                    spend: ClassifierSpend {
+                        calls: r.get::<_, i64>(1)? as u64,
+                        tokens_in: r.get::<_, i64>(2)? as u64,
+                        tokens_out: r.get::<_, i64>(3)? as u64,
+                        est_usd_cents: r.get::<_, i64>(4)? as u64,
+                    },
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+}
+
+/// Truncate `ts` to the nearest UTC hour, returning the canonical
+/// `YYYY-MM-DDTHH:00:00Z` key the `classifier_spend_hourly` table
+/// uses. Centralised so the writer and the reader can't drift.
+pub fn hour_bucket_rfc3339(ts: DateTime<Utc>) -> String {
+    let truncated = ts
+        .with_minute(0)
+        .and_then(|t| t.with_second(0))
+        .and_then(|t| t.with_nanosecond(0))
+        .unwrap_or(ts);
+    truncated.format("%Y-%m-%dT%H:00:00Z").to_string()
 }
 
 /// Row from the `classifier_spend` table.
@@ -198,5 +271,15 @@ pub struct ClassifierSpend {
     pub tokens_out: u64,
     /// Running spend estimate in US cents.
     pub est_usd_cents: u64,
+}
+
+/// One row of the hourly classifier spend table — the canonical
+/// `hour` bucket key plus the rolled-up [`ClassifierSpend`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HourlySpendRow {
+    /// `YYYY-MM-DDTHH:00:00Z` UTC hour bucket.
+    pub hour: String,
+    /// Accumulated calls / tokens / cents.
+    pub spend: ClassifierSpend,
 }
 

@@ -578,6 +578,7 @@ dependencies = [
  "cortex-classifier",
  "cortex-core",
  "cortex-embedder",
+ "cortex-storage",
  "serde",
  "serde_json",
  "synap-sdk",

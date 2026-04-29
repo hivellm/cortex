@@ -22,10 +22,11 @@ use anyhow::Result;
 use async_trait::async_trait;
 use cortex_classifier::{
     Classifier, ClassifierOutput, ClassifierSource, ClassifierStack, EnrichmentInput, PiiRisk,
-    Severity,
+    PricingTable, Severity,
 };
 use cortex_core::events::{Envelope, Kind};
 use cortex_embedder::EnrichedEvent;
+use cortex_storage::{hour_bucket_rfc3339, MetadataStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use synap_sdk::stream::StreamManager;
@@ -490,6 +491,20 @@ pub struct Worker {
     pub publisher: Arc<dyn SynapPublisher>,
     /// Source streams to drain (typically `[STREAM_RAW, STREAM_BOOTSTRAP]`).
     pub input_streams: Vec<String>,
+    /// Optional metadata store. When `Some`, every successful classify
+    /// publishes a row into `classifier_spend_hourly` (+ `classifier_spend`)
+    /// so the dashboard's `series.classifier_cost_usd_today` ribbon
+    /// has real data. `None` keeps tests and cold-stack dev clean —
+    /// the worker still classifies, it just doesn't book the spend.
+    ///
+    /// Wrapped in a [`Mutex`] because `rusqlite::Connection` is `Send`
+    /// but not `Sync`, and the worker is shared across the tokio
+    /// pool via `Arc<Worker>`.
+    pub metadata: Option<Arc<Mutex<MetadataStore>>>,
+    /// Pricing table the cost roll-up uses. Defaults to
+    /// [`PricingTable::HAIKU_4_5`]; override via [`Self::with_pricing`]
+    /// if the worker is wired to a different model.
+    pub pricing: PricingTable,
     /// In-memory de-dup of already-classified event ids (at-least-once delivery guard).
     processed: Mutex<BTreeSet<String>>,
 }
@@ -509,6 +524,8 @@ impl Worker {
             consumer,
             publisher,
             input_streams: vec![STREAM_RAW.to_string(), STREAM_BOOTSTRAP.to_string()],
+            metadata: None,
+            pricing: PricingTable::HAIKU_4_5,
             processed: Mutex::new(BTreeSet::new()),
         }
     }
@@ -523,6 +540,20 @@ impl Worker {
         publisher: Arc<dyn SynapPublisher>,
     ) -> Self {
         Self::new(config, Arc::new(stack), consumer, publisher)
+    }
+
+    /// Attach a metadata store so per-event spend rolls up into
+    /// `classifier_spend_hourly`. The dashboard reads that table to
+    /// render `series.classifier_cost_usd_today`.
+    pub fn with_metadata(mut self, store: Arc<Mutex<MetadataStore>>) -> Self {
+        self.metadata = Some(store);
+        self
+    }
+
+    /// Override the pricing table used for the cost roll-up.
+    pub fn with_pricing(mut self, pricing: PricingTable) -> Self {
+        self.pricing = pricing;
+        self
     }
 
     /// Convenience for tests / single-stream drivers.
@@ -670,8 +701,53 @@ impl Worker {
             }
             return Err(err);
         }
+
+        // 5. Book per-hour spend so the dashboard's
+        // `classifier_cost_usd_today` ribbon has real data.
+        // Static-fallback hits land here with `tokens_in/out = 0`,
+        // so the recorded spend is honestly zero — the call counter
+        // still ticks, which keeps "we ran something" observable.
+        self.record_spend(&enriched.classifier);
+
         self.consumer.ack(stream, offset).await?;
         Ok(())
+    }
+
+    fn record_spend(&self, output: &ClassifierOutput) {
+        let Some(store) = self.metadata.as_ref() else {
+            return;
+        };
+        let now = chrono::Utc::now();
+        let hour = hour_bucket_rfc3339(now);
+        let day = now.format("%Y-%m-%d").to_string();
+        let cents = self
+            .pricing
+            .spend_cents(output.tokens_in as u64, output.tokens_out as u64);
+        let guard = match store.lock() {
+            Ok(g) => g,
+            // Another worker poisoned the lock — recover the inner
+            // value rather than dropping the spend record.
+            Err(p) => p.into_inner(),
+        };
+        if let Err(err) = guard.record_classifier_spend_hourly(
+            &hour,
+            1,
+            output.tokens_in as u64,
+            output.tokens_out as u64,
+            cents,
+        ) {
+            tracing::warn!(error = %err, hour = %hour, "record_classifier_spend_hourly failed");
+            return;
+        }
+        if let Err(err) = guard.record_classifier_spend(
+            &day,
+            1,
+            output.tokens_in as u64,
+            output.tokens_out as u64,
+            cents,
+        ) {
+            tracing::warn!(error = %err, day = %day, "record_classifier_spend failed");
+        }
     }
 }
 

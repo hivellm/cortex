@@ -6,6 +6,9 @@
 //! land here alongside the existing `events_per_min` /
 //! `violations_7d_daily` helpers re-exported from the parent module.
 
+use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
+use cortex_storage::{hour_bucket_rfc3339, MetadataStore};
+
 use crate::lanes::LaneHit;
 
 /// Length of the `classifier_cost_usd_today` series. 24 hour-wide
@@ -158,6 +161,57 @@ fn percentile(sorted: &[u64], p: u8) -> u64 {
 /// worker ships.
 pub fn classifier_cost_zeros() -> Vec<f64> {
     vec![0.0; CLASSIFIER_COST_BUCKETS]
+}
+
+/// Read the rolling-24h classifier cost ribbon from the metadata
+/// store. Returns `(series, is_stub)` where `is_stub = true` means
+/// "no spend data found in the window" — the dashboard surfaces that
+/// flag verbatim so the GUI keeps printing "—" instead of a
+/// dishonest `$0.00` until the classifier-worker has booked at least
+/// one classification.
+///
+/// `now` defines the upper edge of the window; the returned series
+/// has [`CLASSIFIER_COST_BUCKETS`] hour-wide slots, oldest-first,
+/// each carrying the USD spend for that UTC hour bucket.
+pub fn read_classifier_cost_24h(store: &MetadataStore, now: DateTime<Utc>) -> (Vec<f64>, bool) {
+    let mut out = vec![0.0_f64; CLASSIFIER_COST_BUCKETS];
+    // Span the 24 buckets ending at the hour that contains `now`.
+    let now_hour_truncated = now
+        .with_minute(0)
+        .and_then(|t| t.with_second(0))
+        .and_then(|t| t.with_nanosecond(0))
+        .unwrap_or(now);
+    let oldest = now_hour_truncated - ChronoDuration::hours((CLASSIFIER_COST_BUCKETS as i64) - 1);
+    let since_key = hour_bucket_rfc3339(oldest);
+    let until_key = hour_bucket_rfc3339(now_hour_truncated);
+    let rows = match store.classifier_spend_hourly_window(&since_key, &until_key) {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(error = %err, "classifier_spend_hourly_window failed; ribbon stays stubbed");
+            return (out, true);
+        }
+    };
+    if rows.is_empty() {
+        return (out, true);
+    }
+    for row in rows {
+        // Map the bucket key back to an offset 0..24. Lexicographic
+        // ordering of the canonical RFC3339 hour key matches calendar
+        // order, so a parse-then-diff is the reliable path.
+        let parsed = match DateTime::parse_from_rfc3339(&row.hour) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(err) => {
+                tracing::warn!(error = %err, hour = %row.hour, "skipping malformed hour key");
+                continue;
+            }
+        };
+        let delta_hours = (parsed - oldest).num_hours();
+        if delta_hours < 0 || delta_hours >= CLASSIFIER_COST_BUCKETS as i64 {
+            continue;
+        }
+        out[delta_hours as usize] = (row.spend.est_usd_cents as f64) / 100.0;
+    }
+    (out, false)
 }
 
 #[cfg(test)]

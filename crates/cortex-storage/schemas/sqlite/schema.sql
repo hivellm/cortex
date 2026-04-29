@@ -60,6 +60,19 @@ CREATE TABLE IF NOT EXISTS classifier_spend (
     est_usd_cents  INTEGER NOT NULL DEFAULT 0
 );
 
+-- Classifier spend bucketed by UTC hour. The dashboard's
+-- `series.classifier_cost_usd_today` ribbon needs hour-granular data
+-- to draw 24 buckets; the daily roll-up above is too coarse for that.
+-- `hour` is RFC3339 truncated to the hour (`YYYY-MM-DDTHH:00:00Z`) so
+-- both the writer and the reader sort/range it lexicographically.
+CREATE TABLE IF NOT EXISTS classifier_spend_hourly (
+    hour           TEXT PRIMARY KEY,
+    calls          INTEGER NOT NULL DEFAULT 0,
+    tokens_in      INTEGER NOT NULL DEFAULT 0,
+    tokens_out     INTEGER NOT NULL DEFAULT 0,
+    est_usd_cents  INTEGER NOT NULL DEFAULT 0
+);
+
 -- Law registry mirror (authoritative copy is on disk; this supports fast queries).
 CREATE TABLE IF NOT EXISTS laws (
     law_id         TEXT PRIMARY KEY,

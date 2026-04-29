@@ -18,6 +18,7 @@ use cortex_classifier_worker::{
     ClassifierMode, ClassifierWorkerConfig, LiveSynapConsumer, LiveSynapPublisher, SynapHandle,
     Worker,
 };
+use cortex_storage::MetadataStore;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
@@ -43,7 +44,30 @@ async fn main() -> Result<()> {
     let cache: Box<dyn ClassifierCache> = Box::new(InMemoryCache::default());
     let stack = build_stack_for_mode(&config, cache, budget);
 
-    let worker = Arc::new(Worker::with_stack(config, stack, consumer, publisher));
+    let metadata_path = resolve_metadata_db_path();
+    let metadata = match MetadataStore::open(&metadata_path) {
+        Ok(store) => {
+            tracing::info!(
+                metadata_db = %metadata_path.display(),
+                "metadata store opened — classifier_spend_hourly will accumulate"
+            );
+            Some(Arc::new(std::sync::Mutex::new(store)))
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                metadata_db = %metadata_path.display(),
+                "metadata store unavailable — running without spend recording"
+            );
+            None
+        }
+    };
+
+    let mut worker = Worker::with_stack(config, stack, consumer, publisher);
+    if let Some(store) = metadata {
+        worker = worker.with_metadata(store);
+    }
+    let worker = Arc::new(worker);
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_handle = shutdown.clone();
@@ -57,6 +81,30 @@ async fn main() -> Result<()> {
     });
 
     worker.run_pool(shutdown).await
+}
+
+/// Resolve the SQLite metadata database path. Precedence:
+/// 1. `CORTEX_METADATA_DB` (full path override).
+/// 2. `${CORTEX_HOME}/metadata.sqlite` when `CORTEX_HOME` is set.
+/// 3. `<home>/.cortex/metadata.sqlite` (cross-platform default).
+fn resolve_metadata_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("CORTEX_HOME") {
+        return PathBuf::from(home).join("metadata.sqlite");
+    }
+    home_dir().join(".cortex").join("metadata.sqlite")
+}
+
+fn home_dir() -> PathBuf {
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h);
+    }
+    if let Ok(h) = std::env::var("USERPROFILE") {
+        return PathBuf::from(h);
+    }
+    PathBuf::from(".")
 }
 
 /// Build the production classifier stack that matches the configured mode.
