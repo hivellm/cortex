@@ -112,3 +112,140 @@ fn chunks_are_deterministic_across_runs() {
         assert_eq!(ca.metadata.byte_range, cb.metadata.byte_range);
     }
 }
+
+// ---- Per-language grammar coverage ----
+//
+// Each test exercises a different tree-sitter grammar so the symbol
+// extraction path for that language gets walked. The minimum body
+// that survives `--name-only` filtering is a single top-level
+// declaration. Tests assert at least one chunk lands and the
+// language label is stamped — they intentionally don't check the
+// extracted symbol name (those rules vary across grammar versions).
+
+fn assert_one_chunk_with_language(path: &str, src: &str, lang_label: &str) {
+    let event = make_event(path, src);
+    let chunks = CodeChunker::new().chunk(&event).unwrap();
+    assert!(
+        !chunks.is_empty(),
+        "{path}: expected at least one chunk for {lang_label}"
+    );
+    assert_eq!(
+        chunks[0].metadata.language.as_deref(),
+        Some(lang_label),
+        "language label should be {lang_label}"
+    );
+}
+
+#[test]
+fn typescript_function_declaration() {
+    assert_one_chunk_with_language(
+        "lib.ts",
+        "export function greet(name: string): string {\n  return `Hello ${name}`;\n}\n",
+        "typescript",
+    );
+}
+
+#[test]
+fn tsx_component_function() {
+    assert_one_chunk_with_language(
+        "comp.tsx",
+        "export function Comp(): JSX.Element {\n  return null;\n}\n",
+        "tsx",
+    );
+}
+
+#[test]
+fn javascript_function_and_class() {
+    assert_one_chunk_with_language(
+        "lib.js",
+        "function greet(name) { return 'Hello ' + name; }\nclass Greeter { greet(){} }\n",
+        "javascript",
+    );
+}
+
+#[test]
+fn python_def_and_class() {
+    assert_one_chunk_with_language(
+        "lib.py",
+        "def greet(name):\n    return f'Hello {name}'\n\nclass Greeter:\n    pass\n",
+        "python",
+    );
+}
+
+#[test]
+fn go_func_declaration() {
+    assert_one_chunk_with_language(
+        "lib.go",
+        "package main\n\nfunc Greet(name string) string {\n  return name\n}\n",
+        "go",
+    );
+}
+
+#[test]
+fn java_class_declaration() {
+    assert_one_chunk_with_language(
+        "Lib.java",
+        "public class Greeter {\n  public String greet(String name) { return name; }\n}\n",
+        "java",
+    );
+}
+
+#[test]
+fn c_function_definition() {
+    assert_one_chunk_with_language(
+        "lib.c",
+        "#include <stdio.h>\nint greet(const char* n) { printf(\"%s\\n\", n); return 0; }\n",
+        "c",
+    );
+}
+
+#[test]
+fn cpp_function_definition() {
+    assert_one_chunk_with_language(
+        "lib.cpp",
+        "namespace ns { int greet(const char* n) { return 0; } }\n",
+        "cpp",
+    );
+}
+
+#[test]
+fn json_top_level_object_chunks() {
+    // JSON grammars treat the document root as a "value"; at minimum
+    // the chunker should not error out.
+    let event = make_event("data.json", "{\"k\": \"v\", \"n\": 42}\n");
+    let _ = CodeChunker::new().chunk(&event).unwrap();
+}
+
+#[test]
+fn yaml_document_chunks() {
+    let event = make_event("data.yaml", "key: value\nlist:\n  - a\n  - b\n");
+    let _ = CodeChunker::new().chunk(&event).unwrap();
+}
+
+#[test]
+fn toml_document_chunks() {
+    let event = make_event("Cargo.toml", "[package]\nname = \"x\"\nversion = \"0.1.0\"\n");
+    let _ = CodeChunker::new().chunk(&event).unwrap();
+}
+
+#[test]
+fn header_file_uses_c_grammar() {
+    let event = make_event(
+        "lib.h",
+        "#ifndef LIB_H\n#define LIB_H\nint greet(const char* n);\n#endif\n",
+    );
+    let _ = CodeChunker::new().chunk(&event).unwrap();
+}
+
+#[test]
+fn empty_text_returns_empty() {
+    let event = make_event("empty.rs", "");
+    assert!(CodeChunker::new().chunk(&event).unwrap().is_empty());
+}
+
+#[test]
+fn missing_path_returns_empty() {
+    let mut event = make_event("any.rs", "fn x() {}\n");
+    event.context_path = None;
+    assert!(CodeChunker::new().chunk(&event).unwrap().is_empty());
+}
