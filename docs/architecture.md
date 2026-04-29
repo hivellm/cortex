@@ -676,6 +676,46 @@ but the running `cortex-api.exe` had been built before the commit —
 no way to ask the running daemon "what git SHA were you built from?"
 turned a 5-minute fix into a 2-hour mystery.
 
+## 13.8 Observability — config coherence (phase8d)
+
+`cortex-api`'s NEW `GET /v1/health/config` endpoint and the new
+`cortex-ops doctor-config` subcommand share a single pure-function
+audit that compares **what the config files say** to **what the
+running processes are actually using** to **what should be coherent
+across surfaces**.
+
+Surfaces audited:
+- `.env` — `CORTEX_*_URL` family, plus arbitrary `KEY=VALUE` lines
+- `~/.cortex/adapter.toml` — `[adapter] endpoint`, `api_endpoint`
+- `cortex-plugin/.mcp.json` — `mcpServers.cortex.env.CORTEX_API_URL`
+- `cortex-plugin/hooks/hooks.json` — registered hooks list
+
+Cross-checks:
+- `adapter.toml.endpoint` MUST equal `.env CORTEX_INGESTION_URL`
+- `adapter.toml.api_endpoint` MUST equal `.env CORTEX_API_URL`
+- `.mcp.json CORTEX_API_URL` MUST equal `.env CORTEX_API_URL`
+- `hooks.json` MUST register all 7 canonical Claude Code hooks
+  (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
+  `SubagentStop`, `SessionStart`, `Notification`)
+- Every `*_URL` in `.env` MUST parse with an explicit port
+
+Severity rules:
+- `severity: critical` — port mismatch between `adapter.toml` and
+  `.env` (the 2026-04-28 bug).
+- `severity: warn` — missing optional surface (no
+  `~/.cortex/adapter.toml`), missing canonical hook(s).
+- `severity: ok` — everything aligns.
+
+CLI exit codes (`cortex-ops doctor-config`,
+`scripts/doctor-config.{bat,sh}`): `0` ok, `1` warn, `2` critical.
+Suitable for CI gates and operator quick-check.
+
+Closes the 2026-04-28 incident's *first* wrong turn: the adapter
+was talking to `:15010` while ingestion was bound to `:17010`, the
+config file had the right value, but a stale daemon was holding
+the old endpoint in memory. The audit catches the disagreement
+before it matters; phase8c catches the stale daemon.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

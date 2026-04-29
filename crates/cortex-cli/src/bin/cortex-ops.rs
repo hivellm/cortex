@@ -49,6 +49,24 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Phase8d — config-coherence audit. Read-only static analysis
+    /// of every config surface (`.env`, `~/.cortex/adapter.toml`,
+    /// `cortex-plugin/.mcp.json`, `cortex-plugin/hooks/hooks.json`)
+    /// + cross-checks (e.g. adapter.endpoint must match
+    /// CORTEX_INGESTION_URL). Exit codes: `0` all ok, `1` any warn,
+    /// `2` any critical.
+    DoctorConfig {
+        /// Workspace root (defaults to current dir). The audit
+        /// expects `.env` and `cortex-plugin/` under this path.
+        #[arg(long)]
+        workspace: Option<String>,
+        /// Override `~/.cortex/adapter.toml` location (CI / fixtures).
+        #[arg(long)]
+        adapter_toml: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Cross-backend consistency checker. v1 (phase4d) covered the
     /// archive ↔ Meili axis; phase4h widens it to Vectorizer +
     /// Nexus. Each probe is opt-in via its own flag / env var so
@@ -130,6 +148,11 @@ fn main() -> ExitCode {
             synap,
             meili,
         } => doctor(vectorizer, nexus, synap, meili),
+        Command::DoctorConfig {
+            workspace,
+            adapter_toml,
+            json,
+        } => doctor_config(workspace, adapter_toml, json),
         Command::DoctorConsistency {
             archive_root,
             meili,
@@ -656,6 +679,58 @@ fn emit_plan(pretty: bool, slice: PlanSlice) -> anyhow::Result<()> {
     };
     println!("{rendered}");
     Ok(())
+}
+
+/// Phase8d — `cortex-ops doctor-config`. Runs the cortex-api config
+/// audit (read-only, static analysis) and renders either a plain-text
+/// table or JSON. Exit codes match `Severity`: 0=ok, 1=warn, 2=critical.
+fn doctor_config(
+    workspace: Option<String>,
+    adapter_toml: Option<String>,
+    json: bool,
+) -> ExitCode {
+    use cortex_api::config_audit::{run_audit_with, AuditOptions, AuditPaths, Severity};
+
+    let workspace = workspace
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let mut paths = AuditPaths::default_for_workspace(&workspace);
+    if let Some(p) = adapter_toml {
+        paths.adapter_toml = std::path::PathBuf::from(p);
+    }
+    // Phase8d — `full()` adds live-port + cargo-tree -d scans on
+    // top of the file-only static analysis so the CLI surfaces the
+    // 2026-04-28 incident class (config says :17010 but daemon
+    // bound :15010).
+    let audit = run_audit_with(&paths, AuditOptions::full());
+    if json {
+        match serde_json::to_string_pretty(&audit) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize audit: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops doctor-config");
+        println!("workspace: {}", workspace.display());
+        println!("surfaces read: {}\n", audit.surfaces_read);
+        for f in &audit.findings {
+            let marker = match f.severity {
+                Severity::Ok => "ok      ",
+                Severity::Warn => "WARN    ",
+                Severity::Critical => "CRITICAL",
+            };
+            println!("{marker}  [{}] {}", f.source, f.message);
+        }
+        println!("\nworst severity: {:?}", audit.worst_severity());
+    }
+    match audit.worst_severity() {
+        Severity::Ok => ExitCode::SUCCESS,
+        Severity::Warn => ExitCode::from(1),
+        Severity::Critical => ExitCode::from(2),
+    }
 }
 
 fn doctor(

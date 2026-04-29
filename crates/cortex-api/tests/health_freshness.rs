@@ -164,6 +164,32 @@ async fn versions_endpoint_carries_self_row_with_compile_baked_sha() {
 }
 
 #[tokio::test]
+async fn config_endpoint_returns_audit_with_findings_array() {
+    // Phase8d — /v1/health/config runs the config audit against the
+    // current working directory's .env / adapter.toml / etc. On the
+    // test runner those files don't exist, so the audit will surface
+    // a fistful of "not found" / "could not read" findings. The test
+    // asserts the response shape, not the specific findings — the
+    // audit logic itself is covered by config_audit unit tests.
+    let router = build_test_router();
+    let (status, body) = get_json(router, "/v1/health/config").await;
+    assert_eq!(status, StatusCode::OK, "config must answer 200");
+    assert!(
+        body.get("findings").and_then(|v| v.as_array()).is_some(),
+        "audit must return a findings array, got: {body:?}"
+    );
+    assert!(body.get("surfaces_read").and_then(|v| v.as_u64()).is_some());
+    // Each finding row carries the documented shape.
+    if let Some(arr) = body.get("findings").and_then(|v| v.as_array()) {
+        for f in arr {
+            assert!(f.get("severity").and_then(|v| v.as_str()).is_some());
+            assert!(f.get("source").and_then(|v| v.as_str()).is_some());
+            assert!(f.get("message").and_then(|v| v.as_str()).is_some());
+        }
+    }
+}
+
+#[tokio::test]
 async fn metrics_endpoint_renders_loader_metrics_in_prom_text() {
     // Phase8b — `/metrics` on cortex-api carries the LoaderMetrics
     // counters so an external scraper picks them up alongside the

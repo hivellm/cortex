@@ -72,6 +72,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **NEW CI gate** — `.github/workflows/version-coherence.yml` rejects PRs whose committed `target/release/<bin>` mtime is older than the most-recent source mtime in the owning crate (defensive — the project doesn't normally commit `target/`).
 - Closes the 2026-04-28 incident where the source had the fix but `cortex-api.exe` had been built before the commit and there was no way to ask the running daemon "what git SHA were you built from?".
 
+#### Observability — config coherence (phase8d)
+- **NEW `cortex_api::config_audit` module** — pure-function audit of every config surface (`.env`, `~/.cortex/adapter.toml`, `cortex-plugin/.mcp.json`, `cortex-plugin/hooks/hooks.json`) plus cross-checks (e.g. `adapter.toml.endpoint` MUST equal `.env CORTEX_INGESTION_URL`). Each surface has its own typed reader (`read_env_file`, `read_adapter_toml`, `read_mcp_json`, `read_hooks_json`) returning `ReadError::NotFound`/`ReadError::Parse` instead of panicking.
+- **NEW `GET /v1/health/config` endpoint** on `cortex-api` — runs the audit server-side via `spawn_blocking`, returns the `ConfigAudit { findings[], surfaces_read }` JSON. The dashboard renders findings as a table; CI curls and gates on `worst_severity`.
+- **NEW `cortex-ops doctor-config` subcommand** + `scripts/doctor-config.{bat,sh}` — run the same audit locally. Exit codes: `0` all ok, `1` any warn, `2` any critical. Supports `--json` for machine-readable output and `--workspace` / `--adapter-toml` overrides for fixtures.
+- Closes the 2026-04-28 incident's first wrong turn: the adapter was talking to `:15010` while ingestion was bound to `:17010`, the config file had the right value, but a stale daemon was holding the old endpoint in memory. The audit names the discrepancy as `severity: critical` with a single-line message containing both ports.
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.

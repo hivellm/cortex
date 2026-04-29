@@ -101,6 +101,10 @@ pub fn build_router_with(
                 "/v1/health/versions",
                 get(crate::health::versions_handler),
             )
+            .route(
+                "/v1/health/config",
+                get(handle_health_config),
+            )
             .with_state(health_state);
         // Phase8b — Prometheus-text `/metrics` endpoint exposing the
         // LoaderMetrics counters. The freshness aggregator already
@@ -264,6 +268,21 @@ async fn handle_v1_health(State(state): State<ApiState>) -> Response {
     report.subsystems.sort_by(|a, b| a.name.cmp(&b.name));
     let recomputed = cortex_health::HealthReport::aggregate(report.subsystems);
     (StatusCode::OK, Json(recomputed)).into_response()
+}
+
+/// Phase8d — `GET /v1/health/config` answers with the same audit
+/// `cortex-ops doctor-config` produces. Read-only static analysis;
+/// no external probes, so the call is cheap (file reads only). The
+/// dashboard renders the audit findings as a table; CI can curl
+/// the endpoint and gate on `worst_severity`.
+async fn handle_health_config(_state: State<crate::health::HealthState>) -> Response {
+    // The audit is pure-function over local file paths; no aggregator
+    // history needed. Run inside `spawn_blocking` so the reqwest /
+    // axum runtime never blocks on a slow filesystem.
+    let audit = tokio::task::spawn_blocking(crate::config_audit::audit_default)
+        .await
+        .unwrap_or_default();
+    (StatusCode::OK, Json(audit)).into_response()
 }
 
 async fn handle_status(State(state): State<ApiState>) -> Response {
