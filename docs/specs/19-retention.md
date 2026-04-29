@@ -680,3 +680,112 @@ Unit tests in `crates/cortex-cli/src/ops/log_rotate.rs`:
 Read-side awareness test in `crates/cortex-storage/src/metadata.rs`:
 
 - `union_read_returns_identical_totals_before_and_after_rollup`
+
+## Auto-memory consolidator (phase9h)
+
+Claude Code's auto-memory writes one Markdown file per memory under
+`~/.claude/projects/<project-slug>/memory/*.md` plus a top-level
+`MEMORY.md` index. The index is loaded into every Claude Code session
+context and is truncated past line 200 — so the more entries the
+auto-memory accumulates, the more frequently a human needs to prune
+them. Phase9h treats that directory like any other Cortex memory
+store: embed every entry, cluster near-duplicates, ask a merge agent
+to produce one denser entry per cluster, archive the originals,
+regenerate the index.
+
+### CLI
+
+```
+cortex-ops memory-consolidate \
+    [--project <slug>] \
+    [--threshold 0.78] \
+    [--drift-floor 0.6] \
+    [--max-clusters N] \
+    [--apply] \
+    [--memory-dir PATH] \
+    [--json]
+```
+
+Default mode is preview-only: the run reads the directory, prints
+the cluster plan, and exits without touching any file. `--apply`
+must be supplied to mutate the filesystem.
+
+### Project slug
+
+The slug derives from the working tree path the same way Claude
+Code does: every `:`, `/`, or `\\` becomes a single `-`. So
+`e:\HiveLLM\Cortex` → `e--HiveLLM-Cortex`, matching
+`~/.claude/projects/e--HiveLLM-Cortex/memory/` exactly.
+
+### Discovery
+
+The walker reads every `*.md` other than `MEMORY.md` (and anything
+inside `_archive/`). Files whose YAML frontmatter is missing or
+invalid are surfaced as warnings — they're left in place but never
+clustered.
+
+### Clustering
+
+Each surviving file's body is embedded once and clusters form by
+greedy cosine grouping inside each `type` bucket: a file attaches
+to the highest-similarity existing cluster whose representative is
+≥ `threshold` (default 0.78), otherwise it starts a new cluster of
+size 1. The matcher NEVER mixes types — `feedback` and `project`
+entries with byte-identical bodies stay in separate clusters.
+
+### Sonnet merge + drift guard
+
+Clusters of size ≥ 2 go to the merger, which produces one merged
+[`MergedMemory`](../../crates/cortex-cli/src/ops/memory_consolidate.rs)
+preserving every concrete instruction from the inputs. The
+orchestrator then re-embeds the merged body and compares it to
+every source body; if any source-to-merged cosine drops below
+`drift_floor` (default 0.6), the merge is rejected and the cluster
+remains intact. The cluster surfaces as `SkippedDrift` in the
+report.
+
+The prompt template is
+[`CONSOLIDATE_AUTO_MEMORY_V1`](../../crates/cortex-classifier/src/prompt.rs)
+and ships with the [`cortex-classifier`](../../crates/cortex-classifier/prompts/consolidate_auto_memory.v1.txt)
+crate.
+
+### Apply step
+
+When `--apply` is supplied for a successful merge:
+
+1. Source files move into `memory/_archive/<RFC3339>/<original>` —
+   never deleted, always preserved for replay.
+2. The merged body lands at `memory/consolidated_<short-hash>.md`,
+   where `<short-hash>` is the first 8 hex chars of SHA-256 over
+   the rendered file (frontmatter + body).
+3. `MEMORY.md` is regenerated from the surviving files'
+   frontmatter — one line per entry, capped at 150 chars, no
+   YAML frontmatter on the index itself.
+
+### Idempotence
+
+Re-running `--apply` immediately after a successful run finds zero
+clusters of size ≥ 2 (every survivor sits in its own
+`Singleton` cluster) and exits without writing anything new.
+
+### Test surface (memory consolidator, phase9h)
+
+17 unit tests in `crates/cortex-cli/src/ops/memory_consolidate.rs`:
+
+- `slug_replaces_drive_colon_with_double_dash_and_separator_with_single`
+- `slug_strips_trailing_separators`
+- `parse_memory_body_extracts_frontmatter_and_body`
+- `parse_memory_body_strips_quotes_around_values`
+- `parse_memory_body_rejects_missing_close_marker`
+- `parse_memory_body_rejects_unknown_type`
+- `read_memory_dir_skips_index_and_collects_warnings`
+- `hashing_embedder_returns_unit_norm_vectors`
+- `cosine_self_similarity_is_one`
+- `cluster_groups_near_duplicates_within_same_type`
+- `cluster_never_mixes_types`
+- `dry_run_leaves_directory_untouched`
+- `apply_archives_originals_and_writes_consolidated`
+- `re_run_after_apply_finds_no_clusters`
+- `drifted_merge_is_rejected_and_originals_remain`
+- `render_index_caps_each_line_at_150_chars`
+- `render_memory_body_round_trips_through_parser`

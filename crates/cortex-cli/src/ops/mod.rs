@@ -8,6 +8,7 @@
 
 pub mod doctor;
 pub mod log_rotate;
+pub mod memory_consolidate;
 pub mod probe;
 
 pub use log_rotate::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};

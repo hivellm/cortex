@@ -23,7 +23,9 @@ pub use cache::{CacheError, CachedClassifier, ClassifierCache, InMemoryCache};
 pub use composer::{build_offline_stack, build_stack, ClassifierStack};
 pub use errors::ClassifierError;
 pub use haiku_cli::{HaikuCliClassifier, HaikuCliConfig};
-pub use prompt::{PromptTemplate, TOPIC_VOCAB_V1};
+pub use prompt::{
+    render_consolidate_auto_memory, PromptTemplate, CONSOLIDATE_AUTO_MEMORY_V1, TOPIC_VOCAB_V1,
+};
 pub use statics::StaticClassifier;
 pub use stats::{ClassifierSpend, PricingTable};
 pub use types::{

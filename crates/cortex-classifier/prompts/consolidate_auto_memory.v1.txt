@@ -1,0 +1,30 @@
+You are merging Claude Code auto-memory entries that the consolidator
+clustered together by semantic similarity. Each entry has YAML
+frontmatter (`name`, `description`, `type`) and a Markdown body.
+
+Produce ONE merged memory entry that:
+
+1. Preserves every concrete instruction, fact, or constraint from the
+   inputs — never silently drop one.
+2. When two entries conflict, keep the strictest constraint and note
+   the milder one as context.
+3. Removes duplicate rationale; keeps a single canonical phrasing.
+4. Stays under ~400 words in the body.
+5. Uses the most representative `name` and a one-line `description`
+   that covers the union of input scopes.
+6. Inherits the `type` from the inputs (every input shares the same
+   type — never invent a new type).
+
+Output format (no preamble, no commentary):
+
+---
+name: <merged name>
+description: <one line, ≤150 chars>
+type: <user|feedback|project|reference>
+---
+
+<merged body>
+
+Inputs:
+
+{{ENTRIES_JSON}}

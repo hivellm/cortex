@@ -156,6 +156,38 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase9h — Claude Code auto-memory consolidator. Embeds every
+    /// `*.md` under `~/.claude/projects/<slug>/memory/`, clusters
+    /// near-duplicates within each `type`, and asks the merge agent
+    /// to produce one denser entry per cluster. Default mode is
+    /// dry-run; pass `--apply` to mutate the filesystem (archive
+    /// originals + write `consolidated_<hash>.md` + regenerate
+    /// `MEMORY.md`).
+    MemoryConsolidate {
+        /// Project slug under `~/.claude/projects/`. Defaults to the
+        /// slug derived from the current working directory.
+        #[arg(long)]
+        project: Option<String>,
+        /// Cosine cutoff for greedy clustering.
+        #[arg(long, default_value_t = 0.78)]
+        threshold: f32,
+        /// Source-to-merged cosine floor for the drift guard.
+        #[arg(long, default_value_t = 0.6)]
+        drift_floor: f32,
+        /// Maximum clusters to merge in one run. Omit for unlimited.
+        #[arg(long)]
+        max_clusters: Option<usize>,
+        /// Mutate the filesystem. Without this flag the run is a
+        /// preview only.
+        #[arg(long)]
+        apply: bool,
+        /// Override the memory directory (debugging / fixtures).
+        #[arg(long)]
+        memory_dir: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase9g — SQLite metadata reaper. Aggregates aged
     /// `bootstrap_jobs` (status='success') / `sessions` /
     /// `classifier_spend` rows into rollup tables, deletes the
@@ -463,6 +495,23 @@ fn main() -> ExitCode {
             archive_root,
             json,
         } => rollup(time_travel, dry_run, granularity, archive_root, json),
+        Command::MemoryConsolidate {
+            project,
+            threshold,
+            drift_floor,
+            max_clusters,
+            apply,
+            memory_dir,
+            json,
+        } => memory_consolidate(
+            project,
+            threshold,
+            drift_floor,
+            max_clusters,
+            apply,
+            memory_dir,
+            json,
+        ),
         Command::MetadataReap {
             time_travel,
             dry_run,
@@ -1879,6 +1928,190 @@ fn retention_sweep(
         }
     }
     exit
+}
+
+/// Phase9h — `cortex-ops memory-consolidate`. Embeds, clusters, and
+/// merges Claude Code's auto-memory directory. Today's binding wires
+/// the deterministic in-process embedder + rule-based merger so the
+/// CLI runs offline; the production Sonnet driver lands when the
+/// classifier surface exposes a streaming agent client.
+fn memory_consolidate(
+    project: Option<String>,
+    threshold: f32,
+    drift_floor: f32,
+    max_clusters: Option<usize>,
+    apply: bool,
+    memory_dir: Option<String>,
+    json: bool,
+) -> ExitCode {
+    use cortex_cli::ops::memory_consolidate::{
+        memory_dir_for, resolve_project_slug, run, ClusterOutcome, HashingEmbedder, Plan,
+        RuleMerger,
+    };
+
+    let dir: std::path::PathBuf = match memory_dir {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let slug = match project {
+                Some(s) => s,
+                None => {
+                    let cwd = match std::env::current_dir() {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("memory-consolidate: cwd: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    };
+                    resolve_project_slug(&cwd)
+                }
+            };
+            let home = match home_dir() {
+                Some(h) => h,
+                None => {
+                    eprintln!("memory-consolidate: HOME / USERPROFILE unset");
+                    return ExitCode::FAILURE;
+                }
+            };
+            memory_dir_for(&home, &slug)
+        }
+    };
+
+    let plan = Plan {
+        now: chrono::Utc::now(),
+        threshold,
+        drift_floor,
+        max_clusters,
+        apply,
+    };
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let embedder = HashingEmbedder::default();
+    let merger = RuleMerger;
+    let report = match runtime.block_on(run(&dir, &plan, &embedder, &merger)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("memory-consolidate: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if json {
+        let payload = serde_json::json!({
+            "memory_dir": dir.display().to_string(),
+            "files_in": report.files_in,
+            "files_out": report.files_out,
+            "applied": report.applied,
+            "archive_dir": report.archive_dir.as_ref().map(|p| p.display().to_string()),
+            "warnings": report
+                .warnings
+                .iter()
+                .map(|(p, msg)| {
+                    serde_json::json!({
+                        "path": p.display().to_string(),
+                        "reason": msg,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "clusters": report
+                .clusters
+                .iter()
+                .map(|c| {
+                    let outcome = match &c.outcome {
+                        ClusterOutcome::Singleton => serde_json::json!({"kind": "singleton"}),
+                        ClusterOutcome::Merged {
+                            consolidated_filename,
+                            frontmatter,
+                        } => serde_json::json!({
+                            "kind": "merged",
+                            "consolidated_filename": consolidated_filename,
+                            "frontmatter": {
+                                "name": frontmatter.name,
+                                "description": frontmatter.description,
+                                "type": frontmatter.kind.as_str(),
+                            },
+                        }),
+                        ClusterOutcome::SkippedDrift { min_cosine } => {
+                            serde_json::json!({
+                                "kind": "skipped_drift",
+                                "min_cosine": min_cosine,
+                            })
+                        }
+                        ClusterOutcome::SkippedAgentError { reason } => {
+                            serde_json::json!({
+                                "kind": "skipped_agent_error",
+                                "reason": reason,
+                            })
+                        }
+                    };
+                    serde_json::json!({
+                        "type": c.kind.as_str(),
+                        "members": c.members,
+                        "outcome": outcome,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops memory-consolidate");
+        println!("memory_dir:  {}", dir.display());
+        println!("files_in:    {}", report.files_in);
+        println!("files_out:   {}", report.files_out);
+        println!("applied:     {}", report.applied);
+        if let Some(p) = &report.archive_dir {
+            println!("archive_dir: {}", p.display());
+        }
+        if !report.warnings.is_empty() {
+            println!("warnings:");
+            for (p, msg) in &report.warnings {
+                println!("  {} — {msg}", p.display());
+            }
+        }
+        if report.clusters.is_empty() {
+            println!("clusters:   (none)");
+        } else {
+            println!("clusters:");
+            for c in &report.clusters {
+                let detail = match &c.outcome {
+                    ClusterOutcome::Singleton => "singleton".to_string(),
+                    ClusterOutcome::Merged {
+                        consolidated_filename,
+                        ..
+                    } => format!("merged → {consolidated_filename}"),
+                    ClusterOutcome::SkippedDrift { min_cosine } => {
+                        format!("skipped (drift, min_cosine={min_cosine:.2})")
+                    }
+                    ClusterOutcome::SkippedAgentError { reason } => {
+                        format!("skipped (agent: {reason})")
+                    }
+                };
+                println!(
+                    "  [{}] {} files: {}",
+                    c.kind.as_str(),
+                    c.members.len(),
+                    detail
+                );
+                for m in &c.members {
+                    println!("    - {m}");
+                }
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// Phase9g — `cortex-ops metadata-reap`. Aggregates aged SQLite rows
