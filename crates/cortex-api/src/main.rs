@@ -427,6 +427,34 @@ async fn main() -> Result<()> {
         tracing::info!("silent-drop watcher disabled by config");
     }
 
+    // Phase8f — opt-in synthetic canary runner. When
+    // `CORTEX_CANARY_ENABLED=1`, fire a fake hook frame through the
+    // real IPC pipe every `interval_secs` (default 300) and assert
+    // it lands in the archive within `deadline_secs` (default 10).
+    // On failure, emit a `law_violation` envelope via the same
+    // path phase8e uses. Off by default — operators flip the env
+    // var when they want quiet-hours regression coverage.
+    if std::env::var("CORTEX_CANARY_ENABLED")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
+        .unwrap_or(false)
+    {
+        let mut canary_cfg = cortex_api::canary::CanaryConfig::default();
+        canary_cfg.enabled = true;
+        if let Ok(secs) = std::env::var("CORTEX_CANARY_INTERVAL_SECS").map(|s| s.parse::<u64>()) {
+            if let Ok(s) = secs {
+                canary_cfg.interval_secs = s.max(10);
+            }
+        }
+        if let Ok(secs) = std::env::var("CORTEX_CANARY_DEADLINE_SECS").map(|s| s.parse::<u64>()) {
+            if let Ok(s) = secs {
+                canary_cfg.deadline_secs = s.max(1);
+            }
+        }
+        tokio::spawn(cortex_api::canary::run_canary_loop(canary_cfg));
+    } else {
+        tracing::info!("canary runner disabled (set CORTEX_CANARY_ENABLED=1 to enable)");
+    }
+
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     let app = cortex_api::build_router_with(service, Some(dashboard_state));

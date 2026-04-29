@@ -753,6 +753,48 @@ divergence between `adapter.frames_parsed` and
 envelope in the GUI within ~60 seconds of the truncation hitting,
 with a message naming both counter values.
 
+## 13.10 Observability — synthetic E2E canary (phase8f)
+
+phase8a–8e watch *real* traffic. During quiet hours (no claude-code
+activity) the pipeline could be silently broken for hours and no
+divergence would fire because no events are flowing. phase8f closes
+that gap with a synthetic canary: every N seconds, fire a known
+fake hook frame through the real IPC path and assert it lands in
+the archive within a deadline. Failures emit a `law_violation`
+envelope via the same alert path phase8e uses.
+
+The canary frame mimics the 2026-04-28 regression vector verbatim:
+pretty-printed JSON with newlines between top-level fields and
+multi-line `\n`-escaped strings inside `tool_response.stdout`. A
+canary that mimics that behavior would have caught the truncation
+regression the moment it landed.
+
+Components:
+- **Library** — `cortex_api::canary` exports `run_canary_once`
+  (round-trip via `send_frame_via_ipc` + `poll_archive_for_marker`),
+  `build_canary_frame` (per-hook fixture builder), and
+  `run_canary_loop` (the background runner).
+- **CLI** — `cortex-ops canary --hook=PostToolUse` invokes the
+  same library function and exits 0/1/2 per the outcome bucket.
+  `scripts/canary.{bat,sh}` thin wrappers.
+- **Background runner** — opt-in via
+  `CORTEX_CANARY_ENABLED=1` env var (off by default to keep cold
+  dev quiet). When on, ticks every `CORTEX_CANARY_INTERVAL_SECS`
+  (default 300), records every result to
+  `~/.cortex/canary-history.jsonl`, and POSTs a `law_violation`
+  envelope on failure (`law_id: canary-PostToolUse`, severity
+  `critical`).
+- **History** — `canary-history.jsonl` is append-only; a `tail -f`
+  is the operator's view of recent canary outcomes.
+
+CLI exit codes (`cortex-ops canary`, `scripts/canary.{bat,sh}`):
+`0` round-trip success, `1` transport / connect error, `2`
+deadline elapsed without observing the marker.
+
+Closes the *quiet-hours* failure class: a regression like the
+2026-04-28 JSON truncation is now detected in 10 seconds (or 5
+minutes if running on the default schedule) instead of hours.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

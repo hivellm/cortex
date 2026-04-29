@@ -85,6 +85,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **Optional escalation hooks** — `SilentDropConfig.webhook_url` POSTs the envelope to a webhook on every transition; `write_to_handoff: true` appends a `[silent-drop alert]`-prefixed line to `.rulebook/handoff/_pending.md` on every Critical transition so the next session inherits the context.
 - Closes the 2026-04-28 silent-drop incident verbatim: the divergence between `adapter.frames_parsed` and `adapter.envelopes_built` would surface as a `law_violation` envelope within ~60s of the truncation hitting, instead of the ~2h log-grep search that actually found it.
 
+#### Observability — synthetic E2E canary (phase8f)
+- **NEW `cortex_api::canary` module** — fires a synthetic hook frame through the real IPC pipe (`\\.\pipe\cortex-adapter-claude` on Windows, `~/.cortex/adapter-claude.sock` on Unix) and polls `/v1/dashboard/timeline/recent` for the embedded marker until a configurable deadline elapses. Frame body deliberately mimics the 2026-04-28 regression vector: pretty-printed JSON with multi-line `\n`-escaped strings inside `tool_response.stdout`.
+- **NEW `cortex-ops canary` subcommand** + `scripts/canary.{bat,sh}` — exit codes `0` round-trip success, `1` transport error, `2` deadline timeout. Suitable for ad-hoc smoke checks and CI gates.
+- **NEW `cortex-api` background runner** — opt-in via `CORTEX_CANARY_ENABLED=1`. Ticks every `CORTEX_CANARY_INTERVAL_SECS` (default 300), appends every result to `~/.cortex/canary-history.jsonl`, and POSTs a `law_violation` envelope (severity `critical`, `law_id: canary-<hook>`) on failure via the same path phase8e uses — so quiet-hours regressions surface in the existing Violations dashboard automatically.
+- Closes the quiet-hours failure class: a regression like the 2026-04-28 JSON truncation is now detected in 10s ad-hoc or ~5 minutes scheduled instead of hours.
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.
