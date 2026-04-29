@@ -476,6 +476,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-api",
+ "cortex-build",
  "cortex-core",
  "cortex-health",
  "cortex-pre-thinking",
@@ -504,6 +505,7 @@ dependencies = [
  "axum-extra",
  "chrono",
  "clap",
+ "cortex-build",
  "cortex-core",
  "cortex-health",
  "cortex-storage",
@@ -527,6 +529,14 @@ dependencies = [
  "vectorizer-sdk",
  "wiremock",
  "zstd",
+]
+
+[[package]]
+name = "cortex-build"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -556,6 +566,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-api",
+ "cortex-build",
  "cortex-core",
  "cortex-storage",
  "cortex-workers",
@@ -616,6 +627,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "cortex-build",
  "cortex-core",
  "cortex-health",
  "cortex-storage",
@@ -642,6 +654,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-api",
+ "cortex-build",
  "cortex-pre-thinking",
  "reqwest 0.12.28",
  "serde",
@@ -696,6 +709,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "cortex-build",
  "cortex-classifier",
  "cortex-core",
  "cortex-health",

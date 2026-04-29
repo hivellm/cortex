@@ -22,11 +22,15 @@ path = "src/bin/cortex-ops.rs"
 name = "cortex-relevance-eval"
 path = "src/bin/cortex-relevance-eval.rs"
 
+[build-dependencies]
+cortex-build = { path = "../cortex-build" }
+
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-workers = { path = "../cortex-workers" }
 cortex-api = { path = "../cortex-api" }
+cortex-build = { path = "../cortex-build" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

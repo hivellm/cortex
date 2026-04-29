@@ -112,8 +112,12 @@ async fn main() -> Result<()> {
     );
     let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let worker_for_health = worker.clone();
+    // Phase8c — version block in /healthz extras.
+    let version_block = serde_json::to_value(cortex_build::version_info!())
+        .unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         let mut extras = serde_json::Map::new();
+        extras.insert("version".into(), version_block.clone());
         extras.insert("workers_configured".into(), serde_json::json!(2u64));
         extras.insert(
             "jobs_processed_total".into(),

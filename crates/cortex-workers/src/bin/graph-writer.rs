@@ -85,8 +85,12 @@ async fn main() -> Result<()> {
     );
     let metrics_for_health = worker.metrics.clone();
     let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    // Phase8c — version block in /healthz extras.
+    let version_block = serde_json::to_value(cortex_build::version_info!())
+        .unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         let mut extras = serde_json::Map::new();
+        extras.insert("version".into(), version_block.clone());
         extras.insert(
             "edges_dropped_total".into(),
             serde_json::json!(metrics_for_health.edges_dropped_total()),

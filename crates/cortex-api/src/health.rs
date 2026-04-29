@@ -144,6 +144,43 @@ pub struct HealthState {
     /// LoaderMetrics shared with the dashboard. Read directly so a
     /// fan-out probe to the cortex-api self URL is unnecessary.
     pub loader_metrics: Arc<crate::LoaderMetrics>,
+    /// Phase8c — workspace HEAD captured once at boot. The drift
+    /// aggregator compares each running binary's `git_sha` against
+    /// this value. `None` means the daemon couldn't run `git
+    /// rev-parse HEAD` at boot (no git on PATH, no working tree) —
+    /// drift detection degrades gracefully to "head unknown".
+    pub head_sha: Option<Arc<HeadSha>>,
+}
+
+/// Cached snapshot of `git rev-parse HEAD` taken once at boot.
+#[derive(Debug, Clone)]
+pub struct HeadSha {
+    /// Full 40-char SHA.
+    pub full: String,
+    /// First 7 chars.
+    pub short: String,
+}
+
+impl HeadSha {
+    /// Resolve `git rev-parse HEAD` once. Returns `None` when git is
+    /// unavailable or the command failed.
+    pub fn resolve_now() -> Option<Self> {
+        use std::process::Command;
+        let out = Command::new("git").args(["rev-parse", "HEAD"]).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let full = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if full.is_empty() {
+            return None;
+        }
+        let short = if full.len() >= 7 {
+            full[..7].to_string()
+        } else {
+            full.clone()
+        };
+        Some(Self { full, short })
+    }
 }
 
 /// Probe every subsystem (same target list as `/v1/health`) and
@@ -205,6 +242,217 @@ async fn gather_subsystem_extras() -> BTreeMap<String, SubsystemStatus> {
         by_name.insert(sub.name.clone(), sub);
     }
     by_name
+}
+
+/// One row in the `/v1/health/versions` table — per running binary.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunningBinaryVersion {
+    /// Subsystem name (matches `/healthz`'s `name` field).
+    pub name: String,
+    /// Full git SHA the binary was built from. `"unknown"` when the
+    /// binary was built outside a git working tree.
+    pub git_sha: String,
+    /// 7-char short form of `git_sha`.
+    pub git_sha_short: String,
+    /// RFC-3339 build timestamp.
+    pub build_ts: String,
+    /// `true` when the binary was built from a dirty working tree.
+    pub git_dirty: bool,
+    /// `"debug"` or `"release"`.
+    pub profile: String,
+    /// Cargo crate version (`CARGO_PKG_VERSION`).
+    pub crate_version: String,
+    /// `true` when the running SHA matches workspace HEAD.
+    pub matches_head: bool,
+}
+
+/// One row in the `/v1/health/versions.drift[]` table — present only
+/// when a binary's `git_sha` differs from workspace HEAD.
+#[derive(Debug, Clone, Serialize)]
+pub struct DriftRow {
+    /// Subsystem name.
+    pub binary: String,
+    /// SHA the running binary was built from.
+    pub running_sha: String,
+    /// Workspace HEAD at the moment cortex-api booted.
+    pub expected_sha: String,
+    /// `git rev-list <running_sha>..HEAD --count`. `None` when the
+    /// running SHA is unreachable from HEAD (force-pushed branch).
+    pub behind_by_commits: Option<u64>,
+    /// Free-text explanation when `behind_by_commits` is `None`.
+    pub note: Option<String>,
+}
+
+/// Top-level body returned by `/v1/health/versions`.
+#[derive(Debug, Clone, Serialize)]
+pub struct VersionsReport {
+    /// Workspace HEAD captured once at boot. `"unknown"` when git
+    /// was unavailable.
+    pub head_sha: String,
+    /// 7-char short form of [`Self::head_sha`].
+    pub head_sha_short: String,
+    /// Per-running-binary version rows.
+    pub running_binaries: Vec<RunningBinaryVersion>,
+    /// Drift rows — only populated when a binary's SHA != head.
+    pub drift: Vec<DriftRow>,
+    /// `true` iff `drift` is empty.
+    pub all_in_sync: bool,
+}
+
+/// `GET /v1/health/versions` handler.
+pub async fn versions_handler(State(state): State<HealthState>) -> Response {
+    let by_name = gather_subsystem_extras().await;
+    let head = state
+        .head_sha
+        .as_ref()
+        .map(|h| (h.full.clone(), h.short.clone()))
+        .unwrap_or_else(|| ("unknown".to_string(), "unknown".to_string()));
+    let head_sha = head.0;
+    let head_sha_short = head.1;
+
+    // Self-row: cortex-api's own version block, read in-process.
+    let self_version = crate::self_version_info();
+    let self_running = RunningBinaryVersion {
+        name: "cortex-api".to_string(),
+        matches_head: head_sha != "unknown" && self_version.git_sha == head_sha,
+        git_sha: self_version.git_sha.clone(),
+        git_sha_short: self_version.git_sha_short.clone(),
+        build_ts: self_version.build_ts.clone(),
+        git_dirty: self_version.git_dirty,
+        profile: self_version.profile.clone(),
+        crate_version: self_version.crate_version.clone(),
+    };
+
+    let mut running_binaries: Vec<RunningBinaryVersion> = Vec::new();
+    running_binaries.push(self_running);
+    for (name, status) in &by_name {
+        if let Some(version_value) = status.extras.get("version") {
+            if let Some(row) = version_row_from_json(name, version_value, &head_sha) {
+                running_binaries.push(row);
+            }
+        }
+    }
+    running_binaries.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Drift rows — only when SHA != head AND head is known.
+    let mut drift: Vec<DriftRow> = Vec::new();
+    if head_sha != "unknown" {
+        for row in &running_binaries {
+            if row.git_sha == "unknown" || row.matches_head {
+                continue;
+            }
+            let (behind, note) = behind_by_commits(&row.git_sha, &head_sha);
+            drift.push(DriftRow {
+                binary: row.name.clone(),
+                running_sha: row.git_sha.clone(),
+                expected_sha: head_sha.clone(),
+                behind_by_commits: behind,
+                note,
+            });
+        }
+    }
+
+    let all_in_sync = drift.is_empty() && head_sha != "unknown";
+    let report = VersionsReport {
+        head_sha,
+        head_sha_short,
+        running_binaries,
+        drift,
+        all_in_sync,
+    };
+    (StatusCode::OK, Json(report)).into_response()
+}
+
+fn version_row_from_json(
+    name: &str,
+    raw: &Value,
+    head_sha: &str,
+) -> Option<RunningBinaryVersion> {
+    let obj = raw.as_object()?;
+    let git_sha = obj
+        .get("git_sha")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let git_sha_short = obj
+        .get("git_sha_short")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let build_ts = obj
+        .get("build_ts")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let git_dirty = obj.get("git_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+    let profile = obj
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let crate_version = obj
+        .get("crate_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let matches_head = head_sha != "unknown" && git_sha == head_sha;
+    Some(RunningBinaryVersion {
+        name: name.to_string(),
+        git_sha,
+        git_sha_short,
+        build_ts,
+        git_dirty,
+        profile,
+        crate_version,
+        matches_head,
+    })
+}
+
+/// Run `git rev-list <running_sha>..HEAD --count`. Returns
+/// `(Some(count), None)` on success, `(None, Some(reason))` when
+/// the running SHA isn't reachable from HEAD (typical on a force-
+/// pushed branch or a tarball build).
+fn behind_by_commits(running_sha: &str, head_sha: &str) -> (Option<u64>, Option<String>) {
+    use std::process::Command;
+    if running_sha == head_sha {
+        return (Some(0), None);
+    }
+    if running_sha == "unknown" {
+        return (
+            None,
+            Some("running sha unknown (binary built outside git)".to_string()),
+        );
+    }
+    let out = match Command::new("git")
+        .args([
+            "rev-list",
+            &format!("{running_sha}..HEAD"),
+            "--count",
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => {
+            return (
+                None,
+                Some("git rev-list failed (no git binary)".to_string()),
+            );
+        }
+    };
+    if !out.status.success() {
+        return (
+            None,
+            Some("running sha unreachable from HEAD".to_string()),
+        );
+    }
+    let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    match trimmed.parse::<u64>() {
+        Ok(n) => (Some(n), None),
+        Err(_) => (
+            None,
+            Some(format!("git rev-list emitted unexpected output: {trimmed}")),
+        ),
+    }
 }
 
 /// `GET /v1/health/freshness` handler.
@@ -602,5 +850,79 @@ mod tests {
             .expect("tool_call pair must exist");
         assert_eq!(tool_row.1, 100);
         assert_eq!(tool_row.2, 100);
+    }
+
+    #[test]
+    fn version_row_marks_match_when_sha_equals_head() {
+        let raw = serde_json::json!({
+            "git_sha": "abc1234567890abc1234567890abc1234567890a",
+            "git_sha_short": "abc1234",
+            "build_ts": "2026-04-29T12:00:00Z",
+            "git_dirty": false,
+            "profile": "release",
+            "crate_version": "0.1.0"
+        });
+        let row = version_row_from_json(
+            "cortex-x",
+            &raw,
+            "abc1234567890abc1234567890abc1234567890a",
+        )
+        .unwrap();
+        assert!(row.matches_head);
+        assert_eq!(row.git_sha_short, "abc1234");
+        assert!(!row.git_dirty);
+    }
+
+    #[test]
+    fn version_row_marks_drift_when_sha_differs_from_head() {
+        let raw = serde_json::json!({
+            "git_sha": "abc1234567890abc1234567890abc1234567890a",
+            "git_sha_short": "abc1234",
+            "build_ts": "2026-04-29T12:00:00Z",
+            "git_dirty": true,
+            "profile": "debug",
+            "crate_version": "0.1.0"
+        });
+        let row = version_row_from_json("cortex-x", &raw, "def5678").unwrap();
+        assert!(!row.matches_head);
+        assert!(row.git_dirty);
+        assert_eq!(row.profile, "debug");
+    }
+
+    #[test]
+    fn version_row_handles_unknown_sentinel_fields() {
+        let raw = serde_json::json!({
+            "git_sha": "unknown",
+            "git_sha_short": "unknown",
+            "build_ts": "unknown",
+            "git_dirty": false,
+            "profile": "unknown",
+            "crate_version": "0.1.0"
+        });
+        let row = version_row_from_json("cortex-x", &raw, "head").unwrap();
+        // matches_head MUST be false when SHA is unknown — the
+        // aggregator can't validate freshness without a real SHA.
+        assert!(!row.matches_head);
+        assert_eq!(row.git_sha, "unknown");
+    }
+
+    #[test]
+    fn version_row_returns_none_for_non_object_input() {
+        assert!(version_row_from_json("x", &Value::Null, "h").is_none());
+        assert!(version_row_from_json("x", &Value::String("nope".into()), "h").is_none());
+    }
+
+    #[test]
+    fn behind_by_commits_returns_zero_when_running_eq_head() {
+        let (n, note) = behind_by_commits("abc", "abc");
+        assert_eq!(n, Some(0));
+        assert!(note.is_none());
+    }
+
+    #[test]
+    fn behind_by_commits_explains_when_running_unknown() {
+        let (n, note) = behind_by_commits("unknown", "abc");
+        assert!(n.is_none());
+        assert!(note.unwrap().contains("running sha unknown"));
     }
 }

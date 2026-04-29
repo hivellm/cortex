@@ -86,6 +86,12 @@ async fn healthz(State(state): State<AppState>) -> Response {
         env!("CARGO_PKG_VERSION"),
         started_at,
     );
+    // Phase8c — version block (git_sha + build_ts + git_dirty) so
+    // the cortex-api drift aggregator can flag stale running
+    // binaries.
+    let version_block = serde_json::to_value(cortex_build::version_info!())
+        .unwrap_or(serde_json::Value::Null);
+    status.extras.insert("version".into(), version_block);
     // Archive root writability — the readwrite property of the
     // mount that backs the events archive. A non-writable root is
     // hard-down: every ingest call would fail.

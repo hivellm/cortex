@@ -117,6 +117,53 @@ async fn divergence_endpoint_is_mounted_on_router_with_dashboard() {
 }
 
 #[tokio::test]
+async fn versions_endpoint_carries_self_row_with_compile_baked_sha() {
+    // Phase8c — the versions handler self-reports cortex-api's own
+    // version block (read from the cortex-build env vars stamped at
+    // compile time). Even on a cold stack with no fan-out targets
+    // up, the self-row MUST be present.
+    let router = build_test_router();
+    let (status, body) = get_json(router, "/v1/health/versions").await;
+    assert_eq!(status, StatusCode::OK, "versions must answer 200");
+    let running = body
+        .get("running_binaries")
+        .and_then(|v| v.as_array())
+        .expect("running_binaries is an array");
+    let names: Vec<&str> = running
+        .iter()
+        .filter_map(|row| row.get("name").and_then(|v| v.as_str()))
+        .collect();
+    assert!(
+        names.contains(&"cortex-api"),
+        "self-row for cortex-api must always be present, got: {names:?}"
+    );
+    let self_row = running
+        .iter()
+        .find(|row| row.get("name").and_then(|v| v.as_str()) == Some("cortex-api"))
+        .expect("self row");
+    // Each row MUST carry the documented version-block fields.
+    for field in [
+        "git_sha",
+        "git_sha_short",
+        "build_ts",
+        "git_dirty",
+        "profile",
+        "crate_version",
+        "matches_head",
+    ] {
+        assert!(
+            self_row.get(field).is_some(),
+            "self row missing field: {field}"
+        );
+    }
+    // Top-level shape invariants.
+    assert!(body.get("head_sha").is_some());
+    assert!(body.get("head_sha_short").is_some());
+    assert!(body.get("drift").and_then(|v| v.as_array()).is_some());
+    assert!(body.get("all_in_sync").and_then(|v| v.as_bool()).is_some());
+}
+
+#[tokio::test]
 async fn metrics_endpoint_renders_loader_metrics_in_prom_text() {
     // Phase8b — `/metrics` on cortex-api carries the LoaderMetrics
     // counters so an external scraper picks them up alongside the

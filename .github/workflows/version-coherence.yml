@@ -1,0 +1,98 @@
+name: Version coherence
+
+# Phase8c — refuse to merge when committed `target/release/<binary>.exe`
+# files are older than the Rust source files in the same crate. This
+# is a structural guard against the 2026-04-28 incident class where
+# a contributor fixed code, ran `cargo build --release`, but the
+# wrong binary kept running in production because the build output
+# wasn't actually newer than the touched source.
+#
+# Note: the project does NOT typically commit `target/`; the gate
+# is defensive. When `target/release/*.exe` is absent the workflow
+# treats it as "no committed binary to check" and passes — committing
+# a stale binary is the only thing this catches.
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - 'crates/**'
+      - 'target/release/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+permissions:
+  contents: read
+
+jobs:
+  version-coherence:
+    name: Reject stale committed release binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # Need history so source-vs-binary mtime ordering is honest;
+          # a shallow clone collapses commit times into the checkout
+          # time and turns this gate into a no-op.
+          fetch-depth: 0
+
+      - name: Detect committed release binaries
+        id: detect
+        run: |
+          # The repo does not commit binaries by convention. Skip
+          # silently when there are none — the gate exists for the
+          # rare case where someone deliberately checks one in.
+          if [ ! -d target/release ]; then
+            echo "no committed target/release; nothing to check"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Reject stale committed binaries
+        if: steps.detect.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          # For every committed binary under target/release, find its
+          # owning crate (heuristic: crate name == binary name minus
+          # any `.exe`) and compare the binary's mtime in HEAD against
+          # the most-recent source mtime in HEAD. Both timestamps are
+          # taken from `git log -1 --format=%ct` to avoid being fooled
+          # by checkout-time mtimes.
+          fail=0
+          while IFS= read -r bin; do
+            base=$(basename "$bin" .exe)
+            crate=""
+            for c in crates/*/; do
+              name=$(awk -F\" '/^name *=/{print $2; exit}' "$c/Cargo.toml" || true)
+              if [ -n "$name" ] && [ "$name" = "$base" ]; then
+                crate="$c"
+                break
+              fi
+            done
+            if [ -z "$crate" ]; then
+              echo "could not map $bin to an owning crate; skipping" >&2
+              continue
+            fi
+            bin_ts=$(git log -1 --format=%ct -- "$bin" || echo "")
+            if [ -z "$bin_ts" ]; then
+              continue
+            fi
+            newest_src_ts=0
+            newest_src_path=""
+            while IFS= read -r src; do
+              ts=$(git log -1 --format=%ct -- "$src" || echo "0")
+              if [ "${ts:-0}" -gt "$newest_src_ts" ]; then
+                newest_src_ts="$ts"
+                newest_src_path="$src"
+              fi
+            done < <(git ls-tree -r --name-only HEAD "$crate" | grep -E '\.rs$' || true)
+            if [ "$newest_src_ts" -gt "$bin_ts" ]; then
+              echo "::error file=$bin::stale committed binary; source $newest_src_path is newer ($newest_src_ts > $bin_ts) — rebuild before committing"
+              fail=1
+            fi
+          done < <(git ls-tree -r --name-only HEAD target/release | grep -E '(\.exe|^target/release/[^.]+$)' || true)
+          exit $fail

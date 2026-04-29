@@ -64,6 +64,14 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - Closes the 2026-04-28 JSON-truncation incident class: a divergence row of shape `adapter.frames_parsed → adapter.envelopes_built ≈ N delta_growth` would have fired within seconds instead of the ~2 h grep-the-logs trace that actually found it.
 - Canonical metric catalogue: [`docs/metrics.md`](docs/metrics.md). Architecture writeup: [`docs/architecture.md` §13.6](docs/architecture.md#136-observability--pipeline-stage-metrics--freshness-phase8b).
 
+#### Observability — version coherence (phase8c)
+- **NEW [`cortex-build`](crates/cortex-build/) crate** — workspace-shared build-time emitter. `emit_version_env()` from each crate's `build.rs` stamps `CORTEX_GIT_SHA` / `CORTEX_GIT_SHA_SHORT` / `CORTEX_BUILD_TS` / `CORTEX_GIT_DIRTY` / `CORTEX_BUILD_PROFILE` via `cargo:rustc-env`; the runtime `version_info!()` macro reads them back as a `VersionInfo` struct.
+- **Every binary's `/healthz` extras carries a `version` block** — adapter, ingestion, cortex-api, and all four workers stamp `git_sha`, `build_ts`, `git_dirty`, `profile`, `crate_version` so the running binary's provenance is observable.
+- **NEW `GET /v1/health/versions`** on cortex-api — fans out, parses `extras.version`, computes drift against workspace HEAD captured once at boot, returns `{ head_sha, running_binaries[], drift[], all_in_sync }`. `behind_by_commits` is computed via `git rev-list <running_sha>..HEAD --count` per drifted binary.
+- **NEW operator scripts** — `scripts/doctor-versions.{bat,sh}` curl the endpoint, print a table, exit non-zero when `all_in_sync == false`.
+- **NEW CI gate** — `.github/workflows/version-coherence.yml` rejects PRs whose committed `target/release/<bin>` mtime is older than the most-recent source mtime in the owning crate (defensive — the project doesn't normally commit `target/`).
+- Closes the 2026-04-28 incident where the source had the fix but `cortex-api.exe` had been built before the commit and there was no way to ask the running daemon "what git SHA were you built from?".
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.

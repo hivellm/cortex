@@ -14,10 +14,14 @@ path = "src/lib.rs"
 name = "cortex-api"
 path = "src/main.rs"
 
+[build-dependencies]
+cortex-build = { path = "../cortex-build" }
+
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-health = { path = "../cortex-health", features = ["client"] }
+cortex-build = { path = "../cortex-build" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

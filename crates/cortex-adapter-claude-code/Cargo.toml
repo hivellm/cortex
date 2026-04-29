@@ -14,11 +14,15 @@ path = "src/lib.rs"
 name = "cortex-adapter-claude"
 path = "src/main.rs"
 
+[build-dependencies]
+cortex-build = { path = "../cortex-build" }
+
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-api = { path = "../cortex-api" }
 cortex-pre-thinking = { path = "../cortex-pre-thinking" }
 cortex-health = { path = "../cortex-health", features = ["server"] }
+cortex-build = { path = "../cortex-build" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

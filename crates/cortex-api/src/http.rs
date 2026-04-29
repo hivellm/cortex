@@ -81,9 +81,12 @@ pub fn build_router_with(
         // alongside the dashboard routes. Both endpoints share the
         // dashboard's `loader_metrics` Arc and a fresh aggregator
         // history so their probes stay consistent across calls.
+        // Phase8c — additionally mount /v1/health/versions and
+        // capture workspace HEAD once at boot.
         let health_state = crate::health::HealthState {
             aggregator: Arc::new(crate::health::HealthAggregatorState::new()),
             loader_metrics: dash.loader_metrics.clone(),
+            head_sha: crate::health::HeadSha::resolve_now().map(Arc::new),
         };
         let health_router = Router::new()
             .route(
@@ -93,6 +96,10 @@ pub fn build_router_with(
             .route(
                 "/v1/health/divergence",
                 get(crate::health::divergence_handler),
+            )
+            .route(
+                "/v1/health/versions",
+                get(crate::health::versions_handler),
             )
             .with_state(health_state);
         // Phase8b — Prometheus-text `/metrics` endpoint exposing the
@@ -136,6 +143,11 @@ async fn handle_healthz(State(state): State<ApiState>) -> Response {
         env!("CARGO_PKG_VERSION"),
         started_at,
     );
+    // Phase8c — version block (git_sha + build_ts + git_dirty) so
+    // the drift aggregator can flag stale running binaries.
+    let version_block = serde_json::to_value(cortex_build::version_info!())
+        .unwrap_or(serde_json::Value::Null);
+    status.extras.insert("version".into(), version_block);
     let indexed_repos = state
         .service
         .indexed_repos

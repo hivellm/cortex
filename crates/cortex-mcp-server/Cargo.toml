@@ -14,9 +14,13 @@ path = "src/lib.rs"
 name = "cortex-mcp-server"
 path = "src/main.rs"
 
+[build-dependencies]
+cortex-build = { path = "../cortex-build" }
+
 [dependencies]
 cortex-api = { path = "../cortex-api" }
 cortex-pre-thinking = { path = "../cortex-pre-thinking" }
+cortex-build = { path = "../cortex-build" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

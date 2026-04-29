@@ -1,0 +1,19 @@
+[package]
+name = "cortex-build"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Phase8b build-time version emitter — git_sha + build_ts + dirty flag baked into every Cortex binary."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Intentionally dep-free at runtime. The build-side helpers shell out
+# to `git`; the runtime helpers read `env!()` baked at compile time.
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -32,11 +32,15 @@ path = "src/bin/graph-writer.rs"
 name = "cortex-graph-backfill"
 path = "src/bin/graph-backfill.rs"
 
+[build-dependencies]
+cortex-build = { path = "../cortex-build" }
+
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-classifier = { path = "../cortex-classifier" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-health = { path = "../cortex-health", features = ["server"] }
+cortex-build = { path = "../cortex-build" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

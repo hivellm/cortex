@@ -98,6 +98,22 @@ from "process restarted recently".
 |----------|---------|
 | `GET /v1/health/freshness` | Flat array of `{ key, last_event_ts_ms, gap_seconds, severity }` rows keyed by `<stage>.<kind>`. |
 | `GET /v1/health/divergence` | Adjacent-stage counter pairs as `{ pair, upstream, downstream, delta, delta_growth, severity }` rows. |
+| `GET /v1/health/versions` (phase8c) | `{ head_sha, head_sha_short, running_binaries[], drift[], all_in_sync }` — workspace HEAD captured once at boot vs each running binary's compile-baked `git_sha`. `drift[]` lists binaries whose SHA != HEAD plus `behind_by_commits` from `git rev-list`. |
+
+### Version block (phase8c)
+
+Every `/healthz` endpoint exposes an `extras.version` object stamped
+at compile time by the [`cortex-build`](../crates/cortex-build/)
+crate:
+
+| Field | Description |
+|-------|-------------|
+| `git_sha` | Full 40-char SHA of workspace HEAD when built. `"unknown"` outside a git tree. |
+| `git_sha_short` | First 7 chars of `git_sha`. |
+| `build_ts` | UTC RFC-3339 build timestamp. |
+| `git_dirty` | `true` when `git status --porcelain` had output at build time. |
+| `profile` | `"debug"` or `"release"`. |
+| `crate_version` | `CARGO_PKG_VERSION` of the calling crate. |
 
 ### Severity buckets
 

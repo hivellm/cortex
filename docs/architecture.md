@@ -629,6 +629,53 @@ actually found it.
 See [`docs/metrics.md`](metrics.md) for the canonical metric names
 + labels each crate exposes.
 
+## 13.7 Observability — version coherence (phase8c)
+
+`/v1/health/freshness` answers "is data still moving?". Version
+coherence answers a different but equally common operator question:
+**is the running binary actually the one I just built?**
+
+Every Cortex binary embeds at compile time, via the new
+[`cortex-build`](../crates/cortex-build/) helper invoked from each
+crate's `build.rs`:
+
+- `git_sha` (full + 7-char short)
+- `build_ts` (UTC RFC-3339)
+- `git_dirty` (`true` if `git status --porcelain` had output at build
+  time)
+- `profile` (`debug` / `release`)
+- `crate_version` (`CARGO_PKG_VERSION` of the calling crate)
+
+The block lands in `/healthz extras.version` on every long-running
+binary. Cortex-api's NEW `GET /v1/health/versions` aggregator fans
+out, parses the version blocks, computes drift against the workspace
+HEAD captured once at boot, and returns:
+
+```json
+{
+  "head_sha": "<workspace HEAD>",
+  "running_binaries": [{ "name": "...", "git_sha": "...", "matches_head": false, ... }],
+  "drift": [{ "binary": "...", "running_sha": "...",
+              "expected_sha": "...", "behind_by_commits": 3 }],
+  "all_in_sync": false
+}
+```
+
+`scripts/doctor-versions.{bat,sh}` curls the endpoint, prints a
+table, and exits non-zero when `all_in_sync == false`. Wire into
+operator workflows ("did I forget to restart cortex-adapter after
+the last `cargo build`?") and CI smoke jobs.
+
+A separate GitHub Action (`.github/workflows/version-coherence.yml`)
+defends the rare path where someone commits a release binary into
+the repo: the workflow rejects PRs whose `target/release/<bin>` mtime
+is older than the most-recent source mtime in the owning crate.
+
+Closes the 2026-04-28 incident class where the source had the fix
+but the running `cortex-api.exe` had been built before the commit —
+no way to ask the running daemon "what git SHA were you built from?"
+turned a 5-minute fix into a 2-hour mystery.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

@@ -177,10 +177,18 @@ async fn run_daemon(
     // shutdown (out of scope for this commit — the health stays
     // honest while the process is up).
     metrics.set_ipc_pipe_alive(true);
+    // Phase8c — capture version block once at boot (compile-time
+    // env vars never change for the running process), avoid re-
+    // building it on every /healthz probe.
+    let version_block = serde_json::to_value(cortex_build::version_info!())
+        .unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         use cortex_health::server::HealthSnapshot;
         use cortex_health::{HealthState, DEFAULT_FRESHNESS_DEGRADED_SECS};
         let mut extras = serde_json::Map::new();
+        // Phase8c — `version` block lets the cortex-api drift
+        // aggregator detect "running binary != source HEAD".
+        extras.insert("version".into(), version_block.clone());
         let queue_depth = metrics_for_health.publisher_queue_depth();
         let wal_bytes = metrics_for_health.wal_bytes();
         let last_publish_ok_ts_ms = metrics_for_health.last_publish_ok_ts_ms();

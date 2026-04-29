@@ -62,6 +62,14 @@ pub use lanes::{
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
 pub use loader_metrics::LoaderMetrics;
+
+/// Phase8c — capture cortex-api's own compile-time version block.
+/// Wraps the [`cortex_build::version_info!`] macro so the `health`
+/// module (and tests) can read it without expanding the macro at
+/// every call site.
+pub fn self_version_info() -> cortex_build::VersionInfo {
+    cortex_build::version_info!()
+}
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
 pub use orchestrator::Orchestrator;
 pub use rate_limit::{RateConfig, RateDecision, RateLimiter};
