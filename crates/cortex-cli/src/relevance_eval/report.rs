@@ -372,4 +372,133 @@ mod tests {
         let v = RegressionVerdict::evaluate(&current, &baseline, 2.0);
         assert_eq!(v.worst_queries.first().map(|s| s.as_str()), Some("a"));
     }
+
+    // ---- Persistence + per-intent regression branches ----
+
+    #[test]
+    fn write_pretty_creates_directory_and_emits_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = synthesize_report(IntentScores::default(), Vec::new());
+        let target = dir.path().join("nested");
+        let path = report.write_pretty(&target, "abc123").expect("write");
+        let raw = std::fs::read_to_string(&path).expect("read back");
+        let parsed: RelevanceReport = serde_json::from_str(&raw).expect("parse");
+        assert_eq!(parsed.git_sha, "deadbeef");
+        assert_eq!(parsed.api_version.as_deref(), Some("0.1.0"));
+        assert!(path.ends_with("abc123.json"));
+    }
+
+    #[test]
+    fn load_round_trips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut report = synthesize_report(IntentScores::default(), vec![qr("a", true, Some(2))]);
+        report
+            .per_intent
+            .insert("explain".into(), IntentScores {
+                total: 1,
+                matches: 1,
+                recall_at_10_pct: 100.0,
+                mrr_avg: 0.5,
+            });
+        let path = report.write_pretty(dir.path(), "round-trip").unwrap();
+        let parsed = RelevanceReport::load(&path).expect("load");
+        assert_eq!(parsed.queries.len(), 1);
+        assert_eq!(
+            parsed.per_intent.get("explain").map(|s| s.matches),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn load_returns_error_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.json");
+        let err = RelevanceReport::load(&missing).unwrap_err().to_string();
+        assert!(err.contains("read baseline"), "{err}");
+    }
+
+    #[test]
+    fn per_intent_regression_records_soft_warnings() {
+        let mut baseline = synthesize_report(IntentScores::default(), Vec::new());
+        baseline.per_intent.insert(
+            "explain".into(),
+            IntentScores {
+                total: 10,
+                matches: 9,
+                recall_at_10_pct: 90.0,
+                mrr_avg: 0.8,
+            },
+        );
+        let mut current = synthesize_report(IntentScores::default(), Vec::new());
+        current.per_intent.insert(
+            "explain".into(),
+            IntentScores {
+                total: 10,
+                matches: 6,
+                recall_at_10_pct: 60.0,
+                mrr_avg: 0.5,
+            },
+        );
+        let v = RegressionVerdict::evaluate(&current, &baseline, 2.0);
+        // No global change (both globals at default 0.0), but the
+        // explain bucket dropped 30pp on recall — soft regression.
+        assert!(v.soft_regressions.contains(&"explain".to_string()));
+        assert!(
+            (v.per_intent_recall_delta_pp.get("explain").copied().unwrap() - -30.0).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn missing_per_intent_in_current_uses_default() {
+        // A baseline-only intent not present in current must show
+        // up as a regression equal to -baseline_value, not panic.
+        let mut baseline = synthesize_report(IntentScores::default(), Vec::new());
+        baseline.per_intent.insert(
+            "law_check".into(),
+            IntentScores {
+                total: 5,
+                matches: 5,
+                recall_at_10_pct: 100.0,
+                mrr_avg: 1.0,
+            },
+        );
+        let current = synthesize_report(IntentScores::default(), Vec::new());
+        let v = RegressionVerdict::evaluate(&current, &baseline, 2.0);
+        assert_eq!(
+            v.per_intent_recall_delta_pp.get("law_check").copied(),
+            Some(-100.0)
+        );
+        assert!(v.soft_regressions.contains(&"law_check".to_string()));
+    }
+
+    #[test]
+    fn worst_queries_caps_to_5() {
+        let baseline = synthesize_report(
+            IntentScores::default(),
+            (0..10)
+                .map(|i| qr(&format!("rel-{i:02}"), true, Some(1)))
+                .collect(),
+        );
+        let current = synthesize_report(
+            IntentScores::default(),
+            (0..10)
+                .map(|i| qr(&format!("rel-{i:02}"), false, None))
+                .collect(),
+        );
+        let v = RegressionVerdict::evaluate(&current, &baseline, 2.0);
+        assert_eq!(v.worst_queries.len(), 5);
+    }
+
+    #[test]
+    fn intent_scores_serde_round_trips() {
+        let s = IntentScores {
+            total: 7,
+            matches: 4,
+            recall_at_10_pct: 57.14,
+            mrr_avg: 0.5,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: IntentScores = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, s);
+    }
 }

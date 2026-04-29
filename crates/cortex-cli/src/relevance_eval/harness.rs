@@ -589,4 +589,115 @@ mod tests {
         assert_eq!(report.queries[0].id, "rel-001");
         assert_eq!(report.queries[1].id, "rel-002");
     }
+
+    #[test]
+    fn first_match_exact_content_hash_field() {
+        let snippets = vec![snip(1, "x.rs", Some("sha256:abc"))];
+        let m = first_match_rank(&snippets, &["sha256:abc".to_string()], 10);
+        assert_eq!(m.as_ref().map(|(r, _)| *r), Some(1));
+    }
+
+    #[test]
+    fn first_match_exact_collection_field() {
+        let snippets = vec![snip(1, "x.rs", None)];
+        let m = first_match_rank(&snippets, &["cortex-Cortex-code".to_string()], 10);
+        assert_eq!(m.as_ref().map(|(r, _)| *r), Some(1));
+    }
+
+    #[test]
+    fn first_match_substring_against_symbol() {
+        let mut s = snip(1, "x.rs", None);
+        s.symbol = Some("PreThinkingTool".into());
+        let m = first_match_rank(&[s], &["ThinkingTool".to_string()], 10);
+        assert_eq!(m.as_ref().map(|(r, _)| *r), Some(1));
+    }
+
+    #[test]
+    fn first_match_ignores_empty_expected_string() {
+        let snippets = vec![snip(1, "x.rs", None)];
+        let m = first_match_rank(&snippets, &["".to_string()], 10);
+        assert_eq!(m, None);
+    }
+
+    #[test]
+    fn scored_query_into_query_result_round_trip() {
+        let s = ScoredQuery {
+            id: "rel-001".into(),
+            intent: "explain".into(),
+            query: "q".into(),
+            recall_at_10: true,
+            matched_rank: Some(3),
+            mrr: 1.0 / 3.0,
+            matched_doc_id: Some("path.rs".into()),
+            returned: 8,
+        };
+        let q: QueryResult = s.clone().into();
+        assert_eq!(q.id, s.id);
+        assert_eq!(q.intent, s.intent);
+        assert_eq!(q.matched_rank, Some(3));
+        assert_eq!(q.matched_doc_id.as_deref(), Some("path.rs"));
+        assert_eq!(q.returned, 8);
+    }
+
+    #[test]
+    fn harness_options_default_uses_spec_constants() {
+        let o = HarnessOptions::default();
+        assert_eq!(o.api_url, "http://127.0.0.1:17000");
+        assert_eq!(o.budget_ms, 1_500);
+        assert_eq!(o.top_k, 10);
+    }
+
+    #[test]
+    fn http_fetcher_new_succeeds() {
+        // Constructor builds a reqwest client + remembers the base
+        // URL. We only assert it constructs cleanly — actual HTTP
+        // behaviour is exercised against a live cortex-api by the
+        // CI relevance gate.
+        let f = HttpFetcher::new("http://127.0.0.1:17000", 500).expect("HttpFetcher");
+        // Smoke: the constructed type is Send + Sync (compile-time
+        // gate on SnippetFetcher trait bounds).
+        fn assert_sf<T: SnippetFetcher>(_: &T) {}
+        assert_sf(&f);
+    }
+
+    #[tokio::test]
+    async fn fake_fetcher_default_status_snapshot_is_all_healthy() {
+        // The default trait impl returns an empty StatusSnapshot
+        // (no indexed_repos, not unreachable). Cover by using a
+        // fetcher that doesn't override `status_snapshot`.
+        struct EmptyFetcher;
+        #[async_trait::async_trait]
+        impl SnippetFetcher for EmptyFetcher {
+            async fn fetch(&self, _q: &LabeledQuery) -> Result<QueryResponse> {
+                anyhow::bail!("not used")
+            }
+        }
+        let f = EmptyFetcher;
+        let snap = f.status_snapshot().await;
+        assert!(snap.indexed_repos.is_empty());
+        assert!(!snap.unreachable);
+        assert!(snap.api_version.is_none());
+    }
+
+    #[tokio::test]
+    async fn fetch_failure_records_zero_score_row() {
+        // FakeFetcher returns Err for unknown ids → run_harness must
+        // record a miss row with mrr=0 and continue.
+        let fetcher = FakeFetcher {
+            per_query: BTreeMap::new(),
+        };
+        let set = QuerySet {
+            version: 1,
+            queries: vec![lq("rel-001", vec!["a.rs"])],
+        };
+        let report = run_harness(&fetcher, &set, &HarnessOptions::default(), "sha")
+            .await
+            .unwrap();
+        assert_eq!(report.global.total, 1);
+        assert_eq!(report.global.matches, 0);
+        let row = &report.queries[0];
+        assert!(!row.recall_at_10);
+        assert_eq!(row.mrr, 0.0);
+        assert_eq!(row.returned, 0);
+    }
 }

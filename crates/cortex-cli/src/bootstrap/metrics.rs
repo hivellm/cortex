@@ -110,3 +110,123 @@ impl Metrics {
             .unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_registry_is_zeroed() {
+        let m = Metrics::new();
+        assert!(m.files_walked.lock().unwrap().is_empty());
+        assert!(m.files_dropped.lock().unwrap().is_empty());
+        assert!(m.events_emitted.lock().unwrap().is_empty());
+        assert!(m.bytes_processed.lock().unwrap().is_empty());
+        assert!(m.commits_walked.lock().unwrap().is_empty());
+        assert!(m.repo_duration_s.lock().unwrap().is_empty());
+        assert!(m.errors.lock().unwrap().is_empty());
+        assert!(m.publish_latency_ms.lock().unwrap().is_empty());
+        assert_eq!(m.redactions.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn incr_files_walked_per_repo() {
+        let m = Metrics::new();
+        m.incr_files_walked("alpha");
+        m.incr_files_walked("alpha");
+        m.incr_files_walked("beta");
+        let map = m.files_walked.lock().unwrap();
+        assert_eq!(map.get("alpha"), Some(&2));
+        assert_eq!(map.get("beta"), Some(&1));
+    }
+
+    #[test]
+    fn incr_files_dropped_per_repo_reason_pair() {
+        let m = Metrics::new();
+        m.incr_files_dropped("alpha", "oversize");
+        m.incr_files_dropped("alpha", "oversize");
+        m.incr_files_dropped("alpha", "binary");
+        let map = m.files_dropped.lock().unwrap();
+        assert_eq!(
+            map.get(&("alpha".to_string(), "oversize".to_string())),
+            Some(&2)
+        );
+        assert_eq!(
+            map.get(&("alpha".to_string(), "binary".to_string())),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn incr_events_emitted_and_total_for_repo() {
+        let m = Metrics::new();
+        m.incr_events_emitted("alpha", "artifact.code");
+        m.incr_events_emitted("alpha", "artifact.code");
+        m.incr_events_emitted("alpha", "artifact.doc");
+        m.incr_events_emitted("beta", "artifact.code");
+        assert_eq!(m.events_total_for("alpha"), 3);
+        assert_eq!(m.events_total_for("beta"), 1);
+        assert_eq!(m.events_total_for("gamma"), 0);
+    }
+
+    #[test]
+    fn incr_bytes_processed_accumulates() {
+        let m = Metrics::new();
+        m.incr_bytes_processed("alpha", 100);
+        m.incr_bytes_processed("alpha", 250);
+        assert_eq!(
+            m.bytes_processed.lock().unwrap().get("alpha"),
+            Some(&350)
+        );
+    }
+
+    #[test]
+    fn incr_commits_walked_per_repo() {
+        let m = Metrics::new();
+        m.incr_commits_walked("alpha");
+        m.incr_commits_walked("alpha");
+        assert_eq!(m.commits_walked.lock().unwrap().get("alpha"), Some(&2));
+    }
+
+    #[test]
+    fn observe_repo_duration_overwrites_per_repo() {
+        let m = Metrics::new();
+        m.observe_repo_duration("alpha", 1.5);
+        m.observe_repo_duration("alpha", 3.2);
+        assert_eq!(m.repo_duration_s.lock().unwrap().get("alpha"), Some(&3.2));
+    }
+
+    #[test]
+    fn incr_errors_keyed_per_repo_stage() {
+        let m = Metrics::new();
+        m.incr_errors("alpha", "publish");
+        m.incr_errors("alpha", "publish");
+        m.incr_errors("alpha", "walk");
+        assert_eq!(
+            m.errors
+                .lock()
+                .unwrap()
+                .get(&("alpha".to_string(), "publish".to_string())),
+            Some(&2)
+        );
+    }
+
+    #[test]
+    fn observe_publish_latency_appends() {
+        let m = Metrics::new();
+        m.observe_publish_latency(11);
+        m.observe_publish_latency(22);
+        assert_eq!(
+            m.publish_latency_ms.lock().unwrap().as_slice(),
+            &[11, 22]
+        );
+    }
+
+    #[test]
+    fn incr_redactions_atomic() {
+        let m = Metrics::new();
+        m.incr_redactions(5);
+        m.incr_redactions(7);
+        assert_eq!(m.redactions.load(Ordering::Relaxed), 12);
+    }
+}

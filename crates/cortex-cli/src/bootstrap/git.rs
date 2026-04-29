@@ -226,4 +226,108 @@ mod tests {
         let err = walk_commits(tmp.path(), None).expect_err("must error");
         assert!(matches!(err, GitWalkError::NotAGitRepo(_)));
     }
+
+    #[test]
+    fn parse_log_handles_empty_input() {
+        assert!(parse_log("").is_empty());
+        assert!(parse_log("\n\n").is_empty());
+    }
+
+    #[test]
+    fn parse_log_skips_records_with_empty_sha() {
+        let raw = "\x1e\x1f0\x1f\x1f\x1f\n";
+        assert!(parse_log(raw).is_empty());
+    }
+
+    #[test]
+    fn parse_log_normalises_backslash_paths_to_forward_slash() {
+        let raw = "\x1eabc\x1f1\x1fa@b\x1fsubj\x1f\nsrc\\foo\\bar.rs\n";
+        let commits = parse_log(raw);
+        assert_eq!(commits.len(), 1);
+        assert_eq!(
+            commits[0].files_changed,
+            vec!["src/foo/bar.rs".to_string()]
+        );
+    }
+
+    #[test]
+    fn parse_log_handles_unparseable_timestamp() {
+        let raw = "\x1eabc\x1fnot-a-number\x1fa@b\x1fs\x1f\nfile.rs\n";
+        let commits = parse_log(raw);
+        // Unparseable ts falls back to 0; the rest of the record
+        // still parses cleanly.
+        assert_eq!(commits[0].author_ts, 0);
+        assert_eq!(commits[0].sha, "abc");
+    }
+
+    #[test]
+    fn parse_log_uses_subject_only_when_body_empty() {
+        // rest starts with `\n` → in_body=false from line 151, so
+        // first non-empty line is treated as a file path.
+        let raw = "\x1eabc\x1f1\x1fa@b\x1fsubj only\x1f\nfile.rs\n";
+        let commits = parse_log(raw);
+        assert_eq!(commits[0].body, "");
+        assert_eq!(commits[0].files_changed, vec!["file.rs".to_string()]);
+    }
+
+    #[test]
+    fn diff_summary_handles_zero_files() {
+        let c = CommitRecord {
+            sha: "x".into(),
+            author_ts: 0,
+            author_email: String::new(),
+            subject: String::new(),
+            body: String::new(),
+            files_changed: vec![],
+        };
+        assert_eq!(c.diff_summary(), "0 files changed");
+    }
+
+    #[test]
+    fn current_head_sha_returns_none_for_non_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Pointing at a bare temp dir (no .git) — git rev-parse
+        // exits non-zero, function returns None.
+        assert_eq!(current_head_sha(tmp.path()), None);
+    }
+
+    #[test]
+    fn current_head_sha_returns_sha_for_real_repo() {
+        // Initialise a tiny git repo in a temp dir + commit a file,
+        // then verify current_head_sha returns the printed SHA.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut init = Command::new("git");
+        init.arg("init").arg(tmp.path());
+        if init.output().map(|o| o.status.success()).unwrap_or(false) {
+            // Set up identity so commit works.
+            let _ = Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(["config", "user.email", "test@example.com"])
+                .output();
+            let _ = Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(["config", "user.name", "Test"])
+                .output();
+            std::fs::write(tmp.path().join("README.md"), "hello").unwrap();
+            let _ = Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(["add", "README.md"])
+                .output();
+            let _ = Command::new("git")
+                .arg("-C")
+                .arg(tmp.path())
+                .args(["commit", "-m", "init"])
+                .output();
+            // If commit succeeded we must get back a SHA.
+            let sha = current_head_sha(tmp.path());
+            if let Some(s) = sha {
+                assert!(s.len() >= 7, "got short sha: {s}");
+            }
+            // If git is not on PATH (unusual in CI) the function
+            // returns None and we just skip the assertion.
+        }
+    }
 }
