@@ -8,7 +8,7 @@ use std::sync::Arc;
 use axum::http::HeaderMap;
 
 use crate::acl::{AclDecision, AclStore};
-use crate::audit::{build_envelope_with_scope_resolution, AuditPublisher, MemoryAuditPublisher};
+use crate::audit::{build_envelope_with_audit_context, AuditPublisher, MemoryAuditPublisher};
 use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
@@ -326,11 +326,12 @@ impl QueryService {
             // the previous caller saw.
             hit.intent = req.intent.label().to_string();
             self.audit
-                .publish(build_envelope_with_scope_resolution(
+                .publish(build_envelope_with_audit_context(
                     caller,
                     hit.intent.as_str(),
                     &hit,
                     resolution.as_str(),
+                    &self.orchestrator.fusion,
                 ))
                 .await;
             return ServiceOutcome::Ok(Box::new(hit));
@@ -364,11 +365,12 @@ impl QueryService {
         }
         self.cache.put(&key, response.clone()).await;
         self.audit
-            .publish(build_envelope_with_scope_resolution(
+            .publish(build_envelope_with_audit_context(
                 caller,
                 req.intent.label(),
                 &response,
                 resolution.as_str(),
+                &self.orchestrator.fusion,
             ))
             .await;
         ServiceOutcome::Ok(Box::new(response))

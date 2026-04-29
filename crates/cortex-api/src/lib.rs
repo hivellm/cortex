@@ -52,7 +52,7 @@ pub use tasks_loader::{
 };
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
 pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
-pub use fusion::{rrf_fuse, RRF_K};
+pub use fusion::{rrf_fuse, FusionConfig, DEFAULT_RRF_ALPHA, RRF_K};
 pub use http::{build_router, build_router_with, CALLER_HEADER};
 pub use lanes::{
     GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit, MemoryGraphLane,

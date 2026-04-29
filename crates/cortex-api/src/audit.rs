@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use crate::fusion::FusionConfig;
 use crate::types::QueryResponse;
 
 /// Stream name spec 11 declares for the audit envelope.
@@ -95,6 +96,35 @@ pub fn build_envelope_with_scope_resolution(
             "scope_resolution".to_string(),
             Value::String(scope_resolution.to_string()),
         );
+    }
+    env
+}
+
+/// Phase6c — build the audit envelope with the phase6a
+/// scope-resolution field AND the fusion-tuning fields
+/// (`fusion_alpha`, `fusion_k`). The harness in phase6e relies on
+/// these to attribute relevance regressions to fusion-config
+/// changes; without them, an A/B that flips `alpha` from 0.7 →
+/// 0.5 looks like a model regression instead of a tuning move.
+pub fn build_envelope_with_audit_context(
+    caller: &str,
+    intent: &str,
+    response: &QueryResponse,
+    scope_resolution: &str,
+    fusion: &FusionConfig,
+) -> Value {
+    let mut env =
+        build_envelope_with_scope_resolution(caller, intent, response, scope_resolution);
+    if let Some(obj) = env.as_object_mut() {
+        // `fusion_alpha` is serialised as the f32 value the
+        // operator set (or the clamped default); JSON's number
+        // type loses the f32-vs-f64 distinction so consumers
+        // round-trip through f64 without surprise.
+        obj.insert(
+            "fusion_alpha".to_string(),
+            json!(fusion.alpha as f64),
+        );
+        obj.insert("fusion_k".to_string(), json!(fusion.k));
     }
     env
 }

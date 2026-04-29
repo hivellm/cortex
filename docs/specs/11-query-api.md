@@ -144,9 +144,38 @@ struct Plan {
 ### Fan-out + fusion
 
 - Lanes execute in parallel with `tokio::join_all`. Each lane carries its own sub-budget (the orchestrator splits the total `budget_ms` with a 40/40/20 default: vector / keyword / graph).
-- **Reciprocal Rank Fusion** (Cormack et al., 2009): `score(d) = Σ 1 / (60 + rank_lane(d))`. Lane weights are tunable but default to uniform.
-- Tie-breaks: prefer recency (higher `ts`) then `severity` (critical > notable > info).
+- **Score-aware Reciprocal Rank Fusion** (phase6c — extends Cormack et al. 2009 with the lane-native score the lanes already capture into `LaneHit.score`):
+
+  ```text
+  fused(d) = Σ_lanes [ alpha * (1 / (k + rank_lane(d)))
+                     + (1 - alpha) * lane.normalized_score(d) ]
+  ```
+
+  - `alpha = 1.0` reproduces the pre-phase6c positional-only RRF byte-for-byte (regression escape hatch).
+  - `alpha = 0.0` ranks by summed normalised native score alone.
+  - Default `alpha = 0.7` biases toward RRF stability while letting strong lane-native scores break weak-positional ties so a single weak graph hit at rank 1 doesn't outrank a dense vector top-3.
+  - `k` defaults to 60 (Cormack et al.). Larger `k` flattens the per-lane curve; smaller `k` emphasises rank-1 hits.
+- Tie-breaks: prefer recency (higher `ts`) then `severity` (critical > notable > info), then `doc_id` for determinism.
 - Max per-field output is `limit` (response field; default 20). If fusion yields more, the tail is dropped.
+
+#### Per-lane normalised score convention
+
+Each lane's `LaneHit.score` is mapped onto `[0.0, 1.0]` by `LaneHit::normalized_score()` (NaN / infinity collapse to `0.0`). Lanes that already produce `[0,1]`-valued scores round-trip unchanged:
+
+| Lane | Native score | Normalisation |
+|------|--------------|---------------|
+| Vectorizer | cosine similarity, `[0, 1]` | identity |
+| Meili keyword | `_rankingScore`, `[0, 1]` | identity |
+| Nexus graph | currently `0.0` (no contribution) | identity until `phase4c` lands path-length-derived scoring (`1.0` direct neighbour → `0.5` 2-hop → `0.25` 3-hop) |
+
+#### Tuning knobs
+
+| Env var | Type | Default | Range |
+|---------|------|---------|-------|
+| `CORTEX_RRF_ALPHA` | `f32` | `0.7` | `[0.0, 1.0]` (clamped; out-of-range logs WARN and falls back to default) |
+| `CORTEX_RRF_K` | `u32` | `60` | `>= 1` (clamped; `0` logs WARN and falls back to default) |
+
+The resolved `(alpha, k)` lands on every audit envelope as `fusion_alpha` / `fusion_k` so phase6e's recall/MRR harness can attribute regressions to fusion-tuning changes without re-running the queries. Closes [F-005 in `docs/analysis/relevance/01-findings.md`](../analysis/relevance/01-findings.md).
 
 ### Overlays
 

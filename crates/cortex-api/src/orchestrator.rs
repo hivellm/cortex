@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use crate::fusion::rrf_fuse;
+use crate::fusion::{rrf_fuse, FusionConfig};
 use crate::lanes::{GraphLane, KeywordLane, LaneHit, VectorLane};
 use crate::strategies::{build_plan, Overlay, Plan};
 use crate::types::{
@@ -29,10 +29,19 @@ pub struct Orchestrator {
     pub keyword: Arc<dyn KeywordLane>,
     /// Graph-lane client.
     pub graph: Arc<dyn GraphLane>,
+    /// Phase6c — score-aware RRF tuning. `Default::default` keeps
+    /// the spec-11 documented defaults; the live binary overrides
+    /// via `with_fusion(FusionConfig::new(env_alpha, env_k))` at
+    /// boot so tests, in-tree fixtures, and the dashboard helper
+    /// don't have to thread the config through their own
+    /// constructors.
+    pub fusion: FusionConfig,
 }
 
 impl Orchestrator {
     /// Build a new orchestrator wrapping the three lane clients.
+    /// Phase6c default fusion config is `alpha = 0.7`, `k = 60`;
+    /// override with [`Orchestrator::with_fusion`].
     pub fn new(
         vector: Arc<dyn VectorLane>,
         keyword: Arc<dyn KeywordLane>,
@@ -42,7 +51,17 @@ impl Orchestrator {
             vector,
             keyword,
             graph,
+            fusion: FusionConfig::default(),
         }
+    }
+
+    /// Phase6c — replace the default fusion config with one parsed
+    /// from `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` (or any test
+    /// override). Builder method so existing
+    /// [`Orchestrator::new`] callers stay unchanged.
+    pub fn with_fusion(mut self, fusion: FusionConfig) -> Self {
+        self.fusion = fusion;
+        self
     }
 
     /// Run the request end-to-end. The caller decides whether to
@@ -147,11 +166,14 @@ impl Orchestrator {
         );
 
         // ---- Fuse ----
-        let mut fused = rrf_fuse(vec![
-            vector_result.hits.clone(),
-            keyword_result.hits.clone(),
-            graph_result.hits.clone(),
-        ]);
+        let mut fused = rrf_fuse(
+            vec![
+                vector_result.hits.clone(),
+                keyword_result.hits.clone(),
+                graph_result.hits.clone(),
+            ],
+            &self.fusion,
+        );
         // Post-fusion dedupe + degenerate-hit filter. `rrf_fuse` only
         // dedupes by `doc_id`, so the same artifact lands twice when
         // the keyword lane (`meili|...`) and vector lane (`vec|...`)

@@ -350,7 +350,14 @@ async fn main() -> Result<()> {
         metadata,
     };
 
-    let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);
+    let fusion = resolve_fusion_config_from_env();
+    tracing::info!(
+        alpha = fusion.alpha,
+        k = fusion.k,
+        "fusion config resolved (CORTEX_RRF_ALPHA / CORTEX_RRF_K)"
+    );
+    let orchestrator =
+        Orchestrator::new(vector, keyword.clone(), graph).with_fusion(fusion);
     // Wire the `keyword_memory` snapshot into the service so
     // `/v1/status.indexed_repos` and `notice.repo_not_indexed` (issue
     // hivellm/cortex#1) read from the same source the dashboard does.
@@ -427,4 +434,54 @@ fn init_tracing(verbose: bool) {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("{level},cortex_api={level}")));
     fmt().with_env_filter(filter).with_target(true).init();
+}
+
+/// Phase6c — read the score-aware RRF knobs from the environment.
+///
+/// `CORTEX_RRF_ALPHA` (`f32`, default
+/// [`cortex_api::fusion::DEFAULT_RRF_ALPHA`] = 0.7) is the blend
+/// weight between positional RRF and the lane-native score.
+/// `CORTEX_RRF_K` (`u32`, default 60) is the RRF stabilisation
+/// constant. Out-of-range values log `WARN` and fall back to the
+/// default — `FusionConfig::new` clamps anyway, but logging at
+/// the boundary tells the operator the env var was visible.
+fn resolve_fusion_config_from_env() -> cortex_api::fusion::FusionConfig {
+    let default = cortex_api::fusion::FusionConfig::default();
+    let alpha = match std::env::var("CORTEX_RRF_ALPHA") {
+        Ok(raw) => match raw.trim().parse::<f32>() {
+            Ok(v) if (0.0..=1.0).contains(&v) => v,
+            Ok(v) => {
+                tracing::warn!(
+                    raw = %raw,
+                    parsed = v,
+                    "CORTEX_RRF_ALPHA out of [0.0, 1.0]; using default"
+                );
+                default.alpha
+            }
+            Err(e) => {
+                tracing::warn!(
+                    raw = %raw,
+                    error = %e,
+                    "CORTEX_RRF_ALPHA not a float; using default"
+                );
+                default.alpha
+            }
+        },
+        Err(_) => default.alpha,
+    };
+    let k = match std::env::var("CORTEX_RRF_K") {
+        Ok(raw) => match raw.trim().parse::<u32>() {
+            Ok(v) if v >= 1 => v,
+            Ok(v) => {
+                tracing::warn!(raw = %raw, parsed = v, "CORTEX_RRF_K must be >= 1; using default");
+                default.k
+            }
+            Err(e) => {
+                tracing::warn!(raw = %raw, error = %e, "CORTEX_RRF_K not a u32; using default");
+                default.k
+            }
+        },
+        Err(_) => default.k,
+    };
+    cortex_api::fusion::FusionConfig::new(alpha, k)
 }

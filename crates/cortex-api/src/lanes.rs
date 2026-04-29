@@ -85,6 +85,27 @@ pub struct LaneHit {
     pub extras: Props,
 }
 
+impl LaneHit {
+    /// Phase6c — clamp the lane-native score onto the canonical
+    /// `[0.0, 1.0]` interval so the score-aware fusion blend can
+    /// combine it with positional RRF without per-lane scaling.
+    ///
+    /// Lanes that already produce `[0,1]`-valued scores (Vectorizer
+    /// cosine similarity, Meili `_rankingScore`) round-trip
+    /// unchanged. The Nexus graph lane currently emits `0.0` per
+    /// hit, so its native contribution is zero until phase4c
+    /// stamps a path-length-derived score
+    /// (`1.0` direct neighbour → `0.5` 2-hop → `0.25` 3-hop) — see
+    /// `docs/analysis/relevance/01-findings.md` §F-002. NaN /
+    /// infinity collapse to `0.0`.
+    pub fn normalized_score(&self) -> f64 {
+        if self.score.is_nan() || self.score.is_infinite() {
+            return 0.0;
+        }
+        self.score.clamp(0.0, 1.0)
+    }
+}
+
 /// Failure modes raised by lane clients.
 #[derive(Debug, Error)]
 pub enum LaneError {

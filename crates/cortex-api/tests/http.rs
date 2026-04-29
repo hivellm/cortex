@@ -361,7 +361,31 @@ async fn audit_publisher_emits_one_envelope_per_request() {
     let _ = svc.handle("c", req).await;
     let snap = audit.snapshot();
     assert_eq!(snap.len(), 1);
-    assert_eq!(snap[0]["intent"], "pre_change_context");
+    let env = &snap[0];
+    assert_eq!(env["intent"], "pre_change_context");
+    // Phase6a — `scope_resolution` lands on every envelope so the
+    // dashboard can flag misconfigured callers.
+    assert!(
+        env.get("scope_resolution").is_some(),
+        "scope_resolution missing from audit envelope: {env}"
+    );
+    // Phase6c — fusion-tuning fields land on every envelope so
+    // the harness in phase6e can attribute relevance regressions
+    // to fusion-config changes.
+    let alpha = env
+        .get("fusion_alpha")
+        .and_then(|v| v.as_f64())
+        .expect("audit envelope must carry fusion_alpha");
+    let k = env
+        .get("fusion_k")
+        .and_then(|v| v.as_u64())
+        .expect("audit envelope must carry fusion_k");
+    // Default config is alpha=0.7, k=60 (DEFAULT_RRF_ALPHA, RRF_K).
+    assert!(
+        (alpha - 0.7_f64).abs() < 1e-5,
+        "expected default fusion_alpha 0.7, got {alpha}"
+    );
+    assert_eq!(k, 60, "expected default fusion_k=60, got {k}");
 }
 
 #[tokio::test]

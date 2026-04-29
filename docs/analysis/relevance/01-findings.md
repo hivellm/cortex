@@ -62,7 +62,7 @@ Each finding has stable id `F-NNN`, evidence with file:line citations, the relev
 
 **Confidence:** High (RRF is canonical, but its known weakness is exactly imbalanced lanes).
 
-**Tracked by:** Not tracked. Phase-3 retrieval-quality slot in [`docs/analysis/cortex/10-improvement-roadmap.md`](../cortex/10-improvement-roadmap.md) would surface this.
+**Tracked by:** Closed by `phase6c_relevance_score_aware_rrf` — score-aware blend in `crates/cortex-api/src/fusion.rs` (`fused = α · positional + (1-α) · normalized_native`, default `α = 0.7`); `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` env knobs stamped on the audit envelope as `fusion_alpha` / `fusion_k`; regression test `weak_graph_hit_does_not_outrank_dense_vector_top3` in `fusion::tests` pins the win condition.
 
 ---
 
