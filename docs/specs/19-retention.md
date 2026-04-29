@@ -301,3 +301,96 @@ lands as those crates expose their CAS-reference iterators.
 - `fix_refcounts_writes_observed_to_store`
 - `fix_refcounts_no_op_on_empty_drift`
 - `batches_split_candidates_evenly`
+
+## PII retention enforcement (phase9d)
+
+Spec 01 §"PII tiers" defines three classes; phase9d enforces them.
+Records with `pii_risk = null` AND age ≥ 90 d enter the medium
+path automatically (defaulting to `low` would silently retain
+unclassified PII forever — the safety net closes that gap).
+
+### Cohort matrix
+
+| Cohort | Match | Action | Redaction tag |
+|--------|-------|--------|---------------|
+| `High30d` | `pii_risk = "high"` AND `age >= 30 d` | Parquet body blanked, Vectorizer + Meili docs purged, CAS refcount decremented | `pii_high_30d` |
+| `Medium90d` | `pii_risk = "medium"` AND `age >= 90 d` | Body re-summarized to ≤512 tokens, re-embedded, re-indexed; CAS refcount decremented | `pii_medium_90d` |
+| `NullSafety90d` | `pii_risk = null` AND `age >= 90 d` | Same as `Medium90d`; emits a `cortex.warnings` event for classifier-coverage audit | `pii_medium_90d` |
+
+Records with `pii_risk = "low"` are never redacted. Records whose
+`payload.redacted` is already set short-circuit the matcher
+(idempotence guard).
+
+### Cross-store ordering
+
+The library mandates the order so a partial run never leaves the
+public surface holding raw PII:
+
+- **High path**: Parquet rewrite → Vectorizer delete → Meili
+  delete → CAS decrement.
+- **Medium / null-safety path**: summarize → re-embed → re-index
+  → Parquet rewrite → CAS decrement. The re-embed / re-index run
+  BEFORE the Parquet rewrite so the public surface is never
+  without the new summary.
+
+A failure mid-flight rolls FORWARD on the next sweep — re-runs
+converge because `classify` filters out already-redacted rows
+and the medium path re-summarizes from the existing body if it
+still exists.
+
+### `PiiBackend` trait surface
+
+The runner is library-only; production wires the live storage
+clients (Vectorizer SDK, Meili HTTP, CAS store, classifier
+client) through the `PiiBackend` trait. Tests use
+`MemoryPiiBackend` for in-memory round-trips.
+
+```rust
+#[async_trait]
+pub trait PiiBackend: Send + Sync {
+    async fn rewrite_row(&self, event_id, kind, new_body, redaction_tag) -> Result<...>;
+    async fn delete_vector(&self, event_id, kind) -> Result<...>;
+    async fn delete_meili(&self, event_id, kind) -> Result<...>;
+    async fn decrement_cas(&self, body_ref) -> Result<...>;
+    async fn summarize(&self, original) -> Result<String>;
+    async fn reembed_and_upsert(&self, event_id, kind, summary) -> Result<String>;
+    async fn reindex_meili(&self, event_id, kind, summary) -> Result<...>;
+    async fn emit_warning(&self, event_id, message) -> Result<...>;
+}
+```
+
+### CLI surface
+
+```sh
+cortex-ops pii-enforce \
+    [--time-travel <RFC3339>] \
+    [--dry-run] \
+    [--cohort high|medium|null] \
+    [--json]
+```
+
+Today's CLI is a synthetic preview against a built-in cohort
+suite (one record per cohort + a fresh no-op + an already-
+redacted idempotence guard) so operators can verify the matcher
+contract before phase9k wires the production backend.
+
+### Test surface (PII enforcement, phase9d)
+
+16 unit tests in `crates/cortex-retention/src/pii_enforce.rs`:
+
+- `pii_risk_round_trips_via_serde`
+- `classify_high_at_31_days_picks_high_cohort`
+- `classify_medium_at_91_days_picks_medium_cohort`
+- `classify_null_at_91_days_falls_back_to_medium_safety`
+- `classify_low_is_never_redacted`
+- `classify_under_threshold_is_left_alone`
+- `classify_already_redacted_record_is_idempotent`
+- `cohort_redaction_tag_matches_spec`
+- `high_path_runs_in_parquet_vector_meili_cas_order`
+- `medium_path_summarises_re_embeds_and_re_indexes`
+- `null_safety_path_emits_warning_and_runs_medium`
+- `dry_run_records_outcomes_but_does_not_mutate`
+- `cohort_filter_skips_other_cohorts`
+- `already_redacted_target_is_skipped`
+- `high_path_records_error_when_vector_delete_fails`
+- `report_cohort_counts_json_round_trips`

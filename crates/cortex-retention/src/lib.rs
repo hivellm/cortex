@@ -29,6 +29,7 @@
 
 pub mod cas_vacuum;
 pub mod parquet_rollup;
+pub mod pii_enforce;
 
 use std::collections::BTreeMap;
 

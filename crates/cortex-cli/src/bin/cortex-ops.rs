@@ -49,6 +49,35 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Phase9d — PII retention enforcement. Drops `pii_risk=high`
+    /// raw payloads at 30 d (Parquet body blanked, Vectorizer +
+    /// Meili records purged, CAS refcount decremented) and re-
+    /// summarizes `pii_risk=medium` records at 90 d via the
+    /// classifier. Records with `pii_risk=null` enter the medium
+    /// path automatically (defaulting to `low` would silently
+    /// retain unclassified PII).
+    ///
+    /// The library surface (`cortex_retention::pii_enforce`)
+    /// exposes the matcher + cohort logic + run_enforcement
+    /// orchestrator. The production backend (live Vectorizer /
+    /// Meili / CAS / classifier wiring) lands when phase9k's cron
+    /// scheduler integrates the retention jobs end-to-end. Today's
+    /// CLI surface is a documentation + dry-run probe so operators
+    /// can preview cohort assignments against synthetic targets.
+    PiiEnforce {
+        /// Override "now" for tests + scheduled runs.
+        #[arg(long, value_name = "RFC3339")]
+        time_travel: Option<String>,
+        /// Print the cohort assignment without backend mutation.
+        #[arg(long)]
+        dry_run: bool,
+        /// Limit to one cohort.
+        #[arg(long)]
+        cohort: Option<String>,
+        /// Emit JSON instead of plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase9c — CAS vacuum. Deletes blobs whose `refcount = 0`
     /// AND `last_referenced < now - 30 d`, then `VACUUM`s the
     /// metadata DB when the freelist exceeds 25 % of pages.
@@ -280,6 +309,12 @@ fn main() -> ExitCode {
             json,
         } => doctor_config(workspace, adapter_toml, json),
         Command::DoctorAlerts { state_dir, json } => doctor_alerts(state_dir, json),
+        Command::PiiEnforce {
+            time_travel,
+            dry_run,
+            cohort,
+            json,
+        } => pii_enforce(time_travel, dry_run, cohort, json),
         Command::CasVacuum {
             time_travel,
             dry_run,
@@ -979,6 +1014,140 @@ fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Phase9d — `cortex-ops pii-enforce`. Today's surface is a
+/// dry-run probe against the documented cohort matrix; the live
+/// backend wiring (Vectorizer / Meili / CAS / classifier) lands
+/// with phase9k's cron scheduler. The CLI prints the cohort
+/// assignment for a synthetic suite so operators can verify the
+/// matcher logic against the spec ladder before the production
+/// run executes.
+fn pii_enforce(
+    time_travel: Option<String>,
+    dry_run: bool,
+    cohort: Option<String>,
+    json: bool,
+) -> ExitCode {
+    use cortex_retention::pii_enforce::{
+        run_enforcement, EnforcementPlan, MemoryPiiBackend, PiiCohort, PiiRisk, PiiTarget,
+    };
+
+    let now = match time_travel {
+        Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(e) => {
+                eprintln!("--time-travel parse error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => chrono::Utc::now(),
+    };
+
+    let mut plan = EnforcementPlan::default_for(now);
+    plan.dry_run = dry_run;
+    plan.cohort_filter = match cohort.as_deref() {
+        None => None,
+        Some("high") => Some(PiiCohort::High30d),
+        Some("medium") => Some(PiiCohort::Medium90d),
+        Some("null") | Some("null_safety") => Some(PiiCohort::NullSafety90d),
+        Some(other) => {
+            eprintln!("--cohort: unknown value `{other}` (expected high|medium|null)");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Synthetic preview suite: one record per cohort + a fresh
+    // record (no-op) + an already-redacted record (idempotence).
+    // The synthetic shape lets operators verify the matcher
+    // contract without a live archive read; the production walker
+    // lands with phase9k.
+    let targets = vec![
+        PiiTarget {
+            event_id: "01PREVIEW-HIGH".to_string(),
+            kind: "turn".to_string(),
+            pii_risk: Some(PiiRisk::High),
+            occurred_at: now - chrono::Duration::days(31),
+            body_ref: Some("sha256:preview-high".to_string()),
+            redacted: None,
+        },
+        PiiTarget {
+            event_id: "01PREVIEW-MEDIUM".to_string(),
+            kind: "turn".to_string(),
+            pii_risk: Some(PiiRisk::Medium),
+            occurred_at: now - chrono::Duration::days(91),
+            body_ref: Some("sha256:preview-medium".to_string()),
+            redacted: None,
+        },
+        PiiTarget {
+            event_id: "01PREVIEW-NULL".to_string(),
+            kind: "turn".to_string(),
+            pii_risk: None,
+            occurred_at: now - chrono::Duration::days(95),
+            body_ref: Some("sha256:preview-null".to_string()),
+            redacted: None,
+        },
+        PiiTarget {
+            event_id: "01PREVIEW-FRESH".to_string(),
+            kind: "turn".to_string(),
+            pii_risk: Some(PiiRisk::High),
+            occurred_at: now - chrono::Duration::days(5),
+            body_ref: None,
+            redacted: None,
+        },
+        PiiTarget {
+            event_id: "01PREVIEW-DONE".to_string(),
+            kind: "turn".to_string(),
+            pii_risk: Some(PiiRisk::High),
+            occurred_at: now - chrono::Duration::days(200),
+            body_ref: None,
+            redacted: Some("pii_high_30d".to_string()),
+        },
+    ];
+
+    let backend = MemoryPiiBackend::new();
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = match runtime.block_on(run_enforcement(&plan, &backend, targets)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("pii-enforce: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if json {
+        match serde_json::to_string_pretty(&report) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops pii-enforce (preview)");
+        println!("now:           {}", now.to_rfc3339());
+        println!("dry_run:       {dry_run}");
+        println!("examined:      {}", report.examined);
+        println!("applied:       {}", report.applied);
+        println!("skipped:       {}", report.skipped);
+        println!("warnings:      {}", report.null_safety_warnings);
+        if !report.cohort_counts.is_empty() {
+            println!("cohort counts:");
+            for (k, v) in &report.cohort_counts {
+                println!("  {k}: {v}");
+            }
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// Phase9c — `cortex-ops cas-vacuum`. Drops orphaned CAS blobs and
