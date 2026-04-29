@@ -38,6 +38,7 @@ regex = "1.12"
 tempfile = "3.27"
 rusqlite = { version = "0.39", features = ["bundled", "serde_json"] }
 zstd = "0.13"
+flate2 = "1.0"
 tokio = { version = "1.52", features = ["full"] }
 axum = { version = "0.8", features = ["macros"] }
 tower = "0.5"

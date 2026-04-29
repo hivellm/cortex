@@ -214,7 +214,20 @@ CREATE TABLE retention_sweeps (sweep_id TEXT PRIMARY KEY, started_at, finished_a
 
 -- API keys / users (basic; defer richer RBAC to Vectorizer/Nexus native)
 CREATE TABLE api_keys (key_hash TEXT PRIMARY KEY, name, scopes, created_at, last_used_at);
+
+-- Phase9g — metadata reaper rollups (`cortex-ops metadata-reap`).
+-- Aged success rows in `bootstrap_jobs`, `sessions`, and
+-- `classifier_spend` collapse into these summary tables so the
+-- metadata DB stays bounded. Failed bootstrap rows are NEVER rolled.
+CREATE TABLE bootstrap_jobs_daily (day TEXT, repo_path TEXT, runs, total_files, total_chunks, PRIMARY KEY (day, repo_path));
+CREATE TABLE sessions_monthly    (year_month TEXT, tool TEXT, repo TEXT, count, total_event_count, PRIMARY KEY (year_month, tool, repo));
+CREATE TABLE classifier_spend_monthly (year_month TEXT PRIMARY KEY, calls, tokens_in, tokens_out, est_usd_cents);
 ```
+
+Read-side helpers (`cortex_storage::union_read_*`) transparently
+union the raw rows still in the source table with the rolled
+summary so dashboard queries that span the rollup boundary stay
+continuous after the reaper runs.
 
 ## Design
 

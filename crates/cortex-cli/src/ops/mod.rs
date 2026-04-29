@@ -7,7 +7,10 @@
 #![warn(missing_docs)]
 
 pub mod doctor;
+pub mod log_rotate;
 pub mod probe;
+
+pub use log_rotate::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
 
 pub use doctor::{
     coverage_report, coverage_report_full, render_coverage_markdown, scan_hash_coverage,

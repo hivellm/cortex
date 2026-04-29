@@ -369,6 +369,276 @@ impl MetadataStore {
     }
 }
 
+/// Phase9g — assert the metadata reaper's rollup tables exist on
+/// `conn`. The schema bundled with [`MetadataStore`] already creates
+/// them at every open via [`SCHEMA_SQL`]; this helper is exposed so
+/// callers that hold a borrowed connection (e.g. the reaper running
+/// inside a `BEGIN IMMEDIATE` transaction on the same DB) can be
+/// explicit about the dependency. Idempotent — uses
+/// `CREATE TABLE IF NOT EXISTS`.
+pub fn apply_phase9g_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS bootstrap_jobs_daily (
+            day          TEXT NOT NULL,
+            repo_path    TEXT NOT NULL,
+            runs         INTEGER NOT NULL DEFAULT 0,
+            total_files  INTEGER NOT NULL DEFAULT 0,
+            total_chunks INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (day, repo_path)
+        );
+        CREATE TABLE IF NOT EXISTS sessions_monthly (
+            year_month        TEXT NOT NULL,
+            tool              TEXT NOT NULL,
+            repo              TEXT NOT NULL,
+            count             INTEGER NOT NULL DEFAULT 0,
+            total_event_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (year_month, tool, repo)
+        );
+        CREATE TABLE IF NOT EXISTS classifier_spend_monthly (
+            year_month     TEXT PRIMARY KEY,
+            calls          INTEGER NOT NULL DEFAULT 0,
+            tokens_in      INTEGER NOT NULL DEFAULT 0,
+            tokens_out     INTEGER NOT NULL DEFAULT 0,
+            est_usd_cents  INTEGER NOT NULL DEFAULT 0
+        );",
+    )?;
+    Ok(())
+}
+
+/// Phase9g — daily bootstrap-job series suitable for the dashboard.
+/// Output is sorted oldest-first by `day`. Each entry sums the raw
+/// `bootstrap_jobs` rows still living in the store with the
+/// already-rolled `bootstrap_jobs_daily` rows so a chart that spans
+/// the rollup boundary stays continuous after the reaper runs.
+///
+/// `since` and `until` are RFC-3339 timestamps; the helper truncates
+/// them to `YYYY-MM-DD` so the day-level grouping is stable across
+/// invocations.
+pub fn union_read_bootstrap_jobs(
+    conn: &Connection,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<BootstrapDailyRow>, MetadataError> {
+    let since_day = since.format("%Y-%m-%d").to_string();
+    let until_day = until.format("%Y-%m-%d").to_string();
+    let mut acc: std::collections::BTreeMap<(String, String), BootstrapDailyRow> =
+        std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT substr(finished_at, 1, 10) AS day,
+                    repo_path,
+                    COUNT(*),
+                    COALESCE(SUM(files_processed), 0),
+                    COALESCE(SUM(chunks_emitted), 0)
+               FROM bootstrap_jobs
+              WHERE status = 'success'
+                AND substr(finished_at, 1, 10) >= ?1
+                AND substr(finished_at, 1, 10) <= ?2
+              GROUP BY day, repo_path",
+        )?;
+        let rows = stmt.query_map(params![since_day, until_day], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)? as u64,
+                r.get::<_, i64>(3)? as u64,
+                r.get::<_, i64>(4)? as u64,
+            ))
+        })?;
+        for row in rows {
+            let (day, repo_path, runs, total_files, total_chunks) = row?;
+            acc.insert(
+                (day.clone(), repo_path.clone()),
+                BootstrapDailyRow {
+                    day,
+                    repo_path,
+                    runs,
+                    total_files,
+                    total_chunks,
+                },
+            );
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT day, repo_path, runs, total_files, total_chunks
+               FROM bootstrap_jobs_daily
+              WHERE day >= ?1 AND day <= ?2",
+        )?;
+        let rows = stmt.query_map(params![since_day, until_day], |r| {
+            Ok(BootstrapDailyRow {
+                day: r.get(0)?,
+                repo_path: r.get(1)?,
+                runs: r.get::<_, i64>(2)? as u64,
+                total_files: r.get::<_, i64>(3)? as u64,
+                total_chunks: r.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        for row in rows {
+            let row = row?;
+            let key = (row.day.clone(), row.repo_path.clone());
+            match acc.get_mut(&key) {
+                Some(existing) => {
+                    existing.runs = existing.runs.saturating_add(row.runs);
+                    existing.total_files = existing.total_files.saturating_add(row.total_files);
+                    existing.total_chunks = existing.total_chunks.saturating_add(row.total_chunks);
+                }
+                None => {
+                    acc.insert(key, row);
+                }
+            }
+        }
+    }
+    Ok(acc.into_values().collect())
+}
+
+/// Phase9g — monthly session series unioned across raw `sessions`
+/// rows and the rolled `sessions_monthly` table. `since`/`until`
+/// are truncated to `YYYY-MM`.
+pub fn union_read_sessions(
+    conn: &Connection,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<SessionsMonthlyRow>, MetadataError> {
+    let since_month = since.format("%Y-%m").to_string();
+    let until_month = until.format("%Y-%m").to_string();
+    let mut acc: std::collections::BTreeMap<(String, String, String), SessionsMonthlyRow> =
+        std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT substr(started_at, 1, 7) AS year_month,
+                    tool,
+                    COALESCE(repo, ''),
+                    COUNT(*),
+                    COALESCE(SUM(event_count), 0)
+               FROM sessions
+              WHERE substr(started_at, 1, 7) >= ?1
+                AND substr(started_at, 1, 7) <= ?2
+              GROUP BY year_month, tool, COALESCE(repo, '')",
+        )?;
+        let rows = stmt.query_map(params![since_month, until_month], |r| {
+            Ok(SessionsMonthlyRow {
+                year_month: r.get(0)?,
+                tool: r.get(1)?,
+                repo: r.get(2)?,
+                count: r.get::<_, i64>(3)? as u64,
+                total_event_count: r.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        for row in rows {
+            let row = row?;
+            acc.insert(
+                (row.year_month.clone(), row.tool.clone(), row.repo.clone()),
+                row,
+            );
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT year_month, tool, repo, count, total_event_count
+               FROM sessions_monthly
+              WHERE year_month >= ?1 AND year_month <= ?2",
+        )?;
+        let rows = stmt.query_map(params![since_month, until_month], |r| {
+            Ok(SessionsMonthlyRow {
+                year_month: r.get(0)?,
+                tool: r.get(1)?,
+                repo: r.get(2)?,
+                count: r.get::<_, i64>(3)? as u64,
+                total_event_count: r.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        for row in rows {
+            let row = row?;
+            let key = (row.year_month.clone(), row.tool.clone(), row.repo.clone());
+            match acc.get_mut(&key) {
+                Some(existing) => {
+                    existing.count = existing.count.saturating_add(row.count);
+                    existing.total_event_count = existing
+                        .total_event_count
+                        .saturating_add(row.total_event_count);
+                }
+                None => {
+                    acc.insert(key, row);
+                }
+            }
+        }
+    }
+    Ok(acc.into_values().collect())
+}
+
+/// Phase9g — monthly classifier-spend series unioned across the raw
+/// daily `classifier_spend` rows and the rolled
+/// `classifier_spend_monthly` table.
+pub fn union_read_classifier_spend(
+    conn: &Connection,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> Result<Vec<ClassifierSpendMonthlyRow>, MetadataError> {
+    let since_month = since.format("%Y-%m").to_string();
+    let until_month = until.format("%Y-%m").to_string();
+    let mut acc: std::collections::BTreeMap<String, ClassifierSpendMonthlyRow> =
+        std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT substr(day, 1, 7) AS year_month,
+                    COALESCE(SUM(calls), 0),
+                    COALESCE(SUM(tokens_in), 0),
+                    COALESCE(SUM(tokens_out), 0),
+                    COALESCE(SUM(est_usd_cents), 0)
+               FROM classifier_spend
+              WHERE substr(day, 1, 7) >= ?1
+                AND substr(day, 1, 7) <= ?2
+              GROUP BY year_month",
+        )?;
+        let rows = stmt.query_map(params![since_month, until_month], |r| {
+            Ok(ClassifierSpendMonthlyRow {
+                year_month: r.get(0)?,
+                calls: r.get::<_, i64>(1)? as u64,
+                tokens_in: r.get::<_, i64>(2)? as u64,
+                tokens_out: r.get::<_, i64>(3)? as u64,
+                est_usd_cents: r.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        for row in rows {
+            let row = row?;
+            acc.insert(row.year_month.clone(), row);
+        }
+    }
+    {
+        let mut stmt = conn.prepare(
+            "SELECT year_month, calls, tokens_in, tokens_out, est_usd_cents
+               FROM classifier_spend_monthly
+              WHERE year_month >= ?1 AND year_month <= ?2",
+        )?;
+        let rows = stmt.query_map(params![since_month, until_month], |r| {
+            Ok(ClassifierSpendMonthlyRow {
+                year_month: r.get(0)?,
+                calls: r.get::<_, i64>(1)? as u64,
+                tokens_in: r.get::<_, i64>(2)? as u64,
+                tokens_out: r.get::<_, i64>(3)? as u64,
+                est_usd_cents: r.get::<_, i64>(4)? as u64,
+            })
+        })?;
+        for row in rows {
+            let row = row?;
+            match acc.get_mut(&row.year_month) {
+                Some(existing) => {
+                    existing.calls = existing.calls.saturating_add(row.calls);
+                    existing.tokens_in = existing.tokens_in.saturating_add(row.tokens_in);
+                    existing.tokens_out = existing.tokens_out.saturating_add(row.tokens_out);
+                    existing.est_usd_cents =
+                        existing.est_usd_cents.saturating_add(row.est_usd_cents);
+                }
+                None => {
+                    acc.insert(row.year_month.clone(), row);
+                }
+            }
+        }
+    }
+    Ok(acc.into_values().collect())
+}
+
 /// Truncate `ts` to the nearest UTC hour, returning the canonical
 /// `YYYY-MM-DDTHH:00:00Z` key the `classifier_spend_hourly` table
 /// uses. Centralised so the writer and the reader can't drift.
@@ -423,6 +693,51 @@ pub struct HourlySpendRow {
     pub hour: String,
     /// Accumulated calls / tokens / cents.
     pub spend: ClassifierSpend,
+}
+
+/// Phase9g — one row of the bootstrap series (raw + rolled).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapDailyRow {
+    /// `YYYY-MM-DD` UTC day bucket.
+    pub day: String,
+    /// Repo this row aggregates.
+    pub repo_path: String,
+    /// Number of successful runs in the bucket.
+    pub runs: u64,
+    /// Sum of `files_processed` across the bucket.
+    pub total_files: u64,
+    /// Sum of `chunks_emitted` across the bucket.
+    pub total_chunks: u64,
+}
+
+/// Phase9g — one row of the sessions series (raw + rolled).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionsMonthlyRow {
+    /// `YYYY-MM` UTC month bucket.
+    pub year_month: String,
+    /// Tool name (`claude-code`, `codex`, …).
+    pub tool: String,
+    /// Repo path; empty string when the source row left it NULL.
+    pub repo: String,
+    /// Number of sessions in the bucket.
+    pub count: u64,
+    /// Sum of `event_count` across the bucket.
+    pub total_event_count: u64,
+}
+
+/// Phase9g — one row of the classifier-spend series (raw + rolled).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClassifierSpendMonthlyRow {
+    /// `YYYY-MM` UTC month bucket.
+    pub year_month: String,
+    /// Sum of classifier calls.
+    pub calls: u64,
+    /// Sum of input tokens.
+    pub tokens_in: u64,
+    /// Sum of output tokens.
+    pub tokens_out: u64,
+    /// Sum of estimated spend in US cents.
+    pub est_usd_cents: u64,
 }
 
 
@@ -556,5 +871,89 @@ mod tests {
         }
         assert_eq!(store.list_recent_sweeps(2).unwrap().len(), 2);
         assert_eq!(store.list_recent_sweeps(100).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn union_read_returns_identical_totals_before_and_after_rollup() {
+        // Phase9g 5.2 — sanity-check the read-side union: the
+        // combined raw + rolled view MUST yield the same daily /
+        // monthly totals before and after a reaper run.
+        let store = MetadataStore::open_in_memory().unwrap();
+        // Seed a repo + 5 success bootstrap rows landing 35 days
+        // ago (rollup-eligible) plus 2 success rows landing 5 days
+        // ago (still raw).
+        store
+            .conn()
+            .execute(
+                "INSERT INTO repos (path, name) VALUES (?1, ?2)",
+                params!["/repo/x", "/repo/x"],
+            )
+            .unwrap();
+        let aged = now() - chrono::Duration::days(35);
+        let fresh = now() - chrono::Duration::days(5);
+        for i in 0..5 {
+            store
+                .conn()
+                .execute(
+                    "INSERT INTO bootstrap_jobs
+                        (job_id, repo_path, started_at, finished_at,
+                         files_processed, chunks_emitted, status)
+                     VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'success')",
+                    params![format!("01A{i}"), "/repo/x", aged.to_rfc3339(), 10_i64, 100_i64],
+                )
+                .unwrap();
+        }
+        for i in 0..2 {
+            store
+                .conn()
+                .execute(
+                    "INSERT INTO bootstrap_jobs
+                        (job_id, repo_path, started_at, finished_at,
+                         files_processed, chunks_emitted, status)
+                     VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'success')",
+                    params![format!("01B{i}"), "/repo/x", fresh.to_rfc3339(), 1_i64, 7_i64],
+                )
+                .unwrap();
+        }
+        let since = now() - chrono::Duration::days(60);
+        let until = now();
+        // Pre-rollup totals.
+        let pre = union_read_bootstrap_jobs(store.conn(), since, until).unwrap();
+        let pre_runs: u64 = pre.iter().map(|r| r.runs).sum();
+        let pre_files: u64 = pre.iter().map(|r| r.total_files).sum();
+        let pre_chunks: u64 = pre.iter().map(|r| r.total_chunks).sum();
+        assert_eq!(pre_runs, 7);
+        assert_eq!(pre_files, 5 * 10 + 2);
+        assert_eq!(pre_chunks, 5 * 100 + 2 * 7);
+        // Apply rollup directly via the same SQL the reaper uses.
+        let cutoff = (now() - chrono::Duration::days(30)).to_rfc3339();
+        store
+            .conn()
+            .execute(
+                "INSERT INTO bootstrap_jobs_daily (day, repo_path, runs, total_files, total_chunks)
+                      SELECT substr(finished_at, 1, 10), repo_path, COUNT(*),
+                             COALESCE(SUM(files_processed), 0),
+                             COALESCE(SUM(chunks_emitted), 0)
+                        FROM bootstrap_jobs
+                       WHERE status = 'success' AND finished_at < ?1
+                       GROUP BY substr(finished_at, 1, 10), repo_path",
+                params![cutoff],
+            )
+            .unwrap();
+        store
+            .conn()
+            .execute(
+                "DELETE FROM bootstrap_jobs WHERE status='success' AND finished_at < ?1",
+                params![cutoff],
+            )
+            .unwrap();
+        // Post-rollup totals.
+        let post = union_read_bootstrap_jobs(store.conn(), since, until).unwrap();
+        let post_runs: u64 = post.iter().map(|r| r.runs).sum();
+        let post_files: u64 = post.iter().map(|r| r.total_files).sum();
+        let post_chunks: u64 = post.iter().map(|r| r.total_chunks).sum();
+        assert_eq!(pre_runs, post_runs);
+        assert_eq!(pre_files, post_files);
+        assert_eq!(pre_chunks, post_chunks);
     }
 }

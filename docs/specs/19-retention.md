@@ -570,3 +570,113 @@ matches.
 - `update_failure_propagates_to_runner`
 - `report_meili_prune_json_round_trips`
 - `batch_size_splits_large_runs_into_chunks`
+
+## Metadata reaping (phase9g)
+
+The metadata DB (`~/.cortex/metadata.sqlite`) collects three classes
+of rows that grow without bound today: `bootstrap_jobs` (one row per
+successful run), `sessions` (one row per Claude Code / agent
+session), and `classifier_spend` (one row per UTC day). Plus two
+operational logs that live next to the DB (`hook-invocations.log`,
+`hook-errors.log`).
+
+Phase9g consolidates the rows we don't need at high resolution into
+parallel rollup tables and rotates the logs so the operator's home
+directory is bounded.
+
+### CLI
+
+```
+cortex-ops metadata-reap \
+    [--time-travel <RFC3339>] \
+    [--dry-run] \
+    [--target all|bootstrap_jobs|sessions|classifier_spend|logs] \
+    [--metadata-db PATH] \
+    [--log-dir PATH] \
+    [--skip-logs] \
+    [--json]
+```
+
+### Rollups
+
+| Source                | Trigger                                                    | Sink                       | Bucket key                          |
+|-----------------------|------------------------------------------------------------|----------------------------|-------------------------------------|
+| `bootstrap_jobs`      | `status='success' AND finished_at < now - 30 d`            | `bootstrap_jobs_daily`     | `(day, repo_path)`                  |
+| `sessions`            | `started_at < now - 365 d`                                 | `sessions_monthly`         | `(year_month, tool, repo)`          |
+| `classifier_spend`    | `day < (now - 365 d)`                                      | `classifier_spend_monthly` | `year_month`                        |
+
+`bootstrap_jobs.status='failed'` rows are NEVER rolled — they stay
+raw for full-detail debugging. Sessions whose `repo` is NULL collapse
+into the empty-string `repo` bucket so the SQLite primary key
+constraint stays satisfied.
+
+Each target runs inside its own `BEGIN IMMEDIATE` transaction
+(aggregate UPSERT + DELETE). Idempotence: re-running with no new
+aged rows is a no-op (zero deletions, zero rolled rows added).
+
+### Vacuum
+
+After every rollup, the runner reads `PRAGMA freelist_count` and
+`PRAGMA page_count`. When `freelist / page_count > 0.25`, the runner
+issues `VACUUM` to reclaim disk. The wall-clock duration surfaces as
+`ReapReport.vacuum_ms`.
+
+### Hook log rotation
+
+`~/.cortex/hook-invocations.log` and `~/.cortex/hook-errors.log` are
+rotated to `<name>.<YYYY-MM-DD>.gz` when they exceed 5 MB or 7 days
+of age. Rotation is rename-first (`mv live → staged → gzip`) so a
+concurrent appender holding `O_APPEND` continues writing into the
+moved-aside file until it reopens — those bytes ARE captured in the
+gzip output. The 8 most recent rotations per file are retained;
+older rotations are unlinked.
+
+### Bookkeeping
+
+`metadata-reap` writes one `retention_sweeps` row per invocation
+(same machinery as phase9a) with `records_demoted = sum(collapsed
+across all targets)` and `tier_transitions_json` carrying the full
+breakdown plus log-rotation counters. The dashboard's retention
+view (phase9i) renders the row alongside every other sweep.
+
+### Read-side awareness
+
+`cortex_storage::union_read_bootstrap_jobs`, `union_read_sessions`,
+and `union_read_classifier_spend` transparently union the raw rows
+still living in the source table with the rolled summary tables.
+Dashboard queries that span >30 days for bootstrap or >365 days for
+sessions / spend MUST go through the union helper so the totals
+stay continuous after the reaper runs.
+
+### Test surface (metadata reap, phase9g)
+
+Unit tests in `crates/cortex-retention/src/metadata_reap.rs`:
+
+- `plan_default_uses_spec_thresholds`
+- `bootstrap_success_row_thirty_one_days_old_collapses`
+- `bootstrap_failed_row_is_preserved`
+- `bootstrap_multiple_runs_same_day_aggregate_into_one_bucket`
+- `sessions_year_old_rows_collapse_to_monthly`
+- `sessions_with_null_repo_collapse_to_empty_string_bucket`
+- `classifier_spend_year_old_rows_collapse_to_monthly`
+- `re_run_with_no_aged_rows_is_a_noop`
+- `dry_run_records_counters_without_mutating`
+- `target_filter_runs_only_one_rollup`
+- `rerun_with_already_rolled_bucket_increments_existing_row`
+- `report_metadata_reap_json_round_trips`
+- `vacuum_runs_when_freelist_ratio_high`
+
+Unit tests in `crates/cortex-cli/src/ops/log_rotate.rs`:
+
+- `opts_default_uses_spec_thresholds`
+- `missing_file_is_a_noop`
+- `empty_file_is_a_noop`
+- `fresh_small_file_does_not_rotate`
+- `six_megabyte_file_triggers_rotation`
+- `day_suffix_collisions_use_a_monotonic_counter`
+- `keeps_only_n_most_recent_rotations`
+- `old_file_past_age_threshold_rotates_even_when_small`
+
+Read-side awareness test in `crates/cortex-storage/src/metadata.rs`:
+
+- `union_read_returns_identical_totals_before_and_after_rollup`

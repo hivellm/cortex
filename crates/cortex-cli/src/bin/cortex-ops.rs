@@ -156,6 +156,42 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase9g — SQLite metadata reaper. Aggregates aged
+    /// `bootstrap_jobs` (status='success') / `sessions` /
+    /// `classifier_spend` rows into rollup tables, deletes the
+    /// sources, then rotates `~/.cortex/hook-invocations.log` and
+    /// `~/.cortex/hook-errors.log` to dated `.gz` siblings when they
+    /// exceed the size or age threshold. Failed bootstrap rows stay
+    /// raw. Re-running with no aged rows is a no-op.
+    MetadataReap {
+        /// Override "now" so the 30 / 365-day boundaries are
+        /// deterministic for tests + scheduled runs.
+        #[arg(long, value_name = "RFC3339")]
+        time_travel: Option<String>,
+        /// Print the candidate counters without mutating SQLite or
+        /// rotating logs.
+        #[arg(long)]
+        dry_run: bool,
+        /// Restrict the SQL rollup to one target.
+        #[arg(long, value_enum, default_value_t = MetadataReapTargetArg::All)]
+        target: MetadataReapTargetArg,
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` then `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Directory containing `hook-invocations.log` and
+        /// `hook-errors.log`. Defaults to `<home>/.cortex`.
+        #[arg(long)]
+        log_dir: Option<String>,
+        /// Skip the log rotator. Useful when the operator runs the
+        /// reaper from inside a container that mounts the host's
+        /// `~/.cortex` read-only.
+        #[arg(long)]
+        skip_logs: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase9b — archive rollup compactor. Merges hourly Parquet
     /// files older than 90 d into one daily file per `day=`, daily
     /// files older than 365 d into one monthly file per `month=`,
@@ -332,6 +368,35 @@ enum RollupGranularityArg {
     ThreeYearDrop,
 }
 
+/// Phase9g — `cortex.toml [retention.metadata]` overrides for the
+/// log rotator. The reaper's SQL retention horizons land directly on
+/// [`cortex_retention::metadata_reap::ReapPlan`]; the rotator knobs
+/// don't have a home there, so the CLI threads them through this
+/// small struct.
+#[derive(Debug, Default, Clone, Copy)]
+struct LogConfigOverrides {
+    max_bytes: Option<u64>,
+    max_age_days: Option<u32>,
+    keep_rotations: Option<usize>,
+}
+
+/// Phase9g — target selector for `cortex-ops metadata-reap`. Mirrors
+/// [`cortex_retention::metadata_reap::ReapTarget`] but lives in the
+/// CLI to keep the clap-derive surface here.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum MetadataReapTargetArg {
+    /// Run every rollup target.
+    All,
+    /// Roll only `bootstrap_jobs` → `bootstrap_jobs_daily`.
+    BootstrapJobs,
+    /// Roll only `sessions` → `sessions_monthly`.
+    Sessions,
+    /// Roll only `classifier_spend` → `classifier_spend_monthly`.
+    ClassifierSpend,
+    /// Skip every rollup; only rotate the hook logs.
+    Logs,
+}
+
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum PlanSlice {
     All,
@@ -398,6 +463,23 @@ fn main() -> ExitCode {
             archive_root,
             json,
         } => rollup(time_travel, dry_run, granularity, archive_root, json),
+        Command::MetadataReap {
+            time_travel,
+            dry_run,
+            target,
+            metadata_db,
+            log_dir,
+            skip_logs,
+            json,
+        } => metadata_reap(
+            time_travel,
+            dry_run,
+            target,
+            metadata_db,
+            log_dir,
+            skip_logs,
+            json,
+        ),
         Command::RetentionSweep {
             time_travel,
             dry_run,
@@ -1797,6 +1879,317 @@ fn retention_sweep(
         }
     }
     exit
+}
+
+/// Phase9g — `cortex-ops metadata-reap`. Aggregates aged SQLite rows
+/// into rollup tables, deletes the sources, and rotates the operator
+/// hook logs. Bookkeeping rides on the same `retention_sweeps` row
+/// machinery as phase9a so the dashboard sees one entry per run.
+fn metadata_reap(
+    time_travel: Option<String>,
+    dry_run: bool,
+    target: MetadataReapTargetArg,
+    metadata_db: Option<String>,
+    log_dir: Option<String>,
+    skip_logs: bool,
+    json: bool,
+) -> ExitCode {
+    use cortex_cli::ops::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
+    use cortex_retention::metadata_reap::{run, ReapPlan, ReapTarget};
+    use cortex_storage::MetadataStore;
+
+    let now = match time_travel {
+        Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(e) => {
+                eprintln!("--time-travel parse error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => chrono::Utc::now(),
+    };
+
+    let metadata_path = metadata_db
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("CORTEX_METADATA_DB").ok().map(std::path::PathBuf::from)
+        })
+        .unwrap_or_else(|| {
+            home_dir()
+                .map(|h| h.join(".cortex").join("metadata.sqlite"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cortex/metadata.sqlite"))
+        });
+
+    let log_dir = log_dir
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            home_dir()
+                .map(|h| h.join(".cortex"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cortex"))
+        });
+
+    // SQLite rollup. The `Logs` target skips this branch entirely.
+    let only_logs = matches!(target, MetadataReapTargetArg::Logs);
+    let mut store = if only_logs {
+        None
+    } else {
+        match MetadataStore::open(&metadata_path) {
+            Ok(s) => Some(s),
+            Err(e) => {
+                eprintln!("metadata open ({}): {e}", metadata_path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    };
+
+    let sweep_id = cortex_retention::new_sweep_id();
+    if let Some(s) = store.as_ref() {
+        if let Err(e) = s.start_retention_sweep(&sweep_id, now, 3600) {
+            eprintln!("metadata-reap: {e}");
+            // Code 2 — another sweep in flight (per spec).
+            return ExitCode::from(2);
+        }
+    }
+
+    let mut plan = ReapPlan::default_for(now);
+    plan.dry_run = dry_run;
+    plan.target = match target {
+        MetadataReapTargetArg::All => ReapTarget::All,
+        MetadataReapTargetArg::BootstrapJobs => ReapTarget::BootstrapJobs,
+        MetadataReapTargetArg::Sessions => ReapTarget::Sessions,
+        MetadataReapTargetArg::ClassifierSpend => ReapTarget::ClassifierSpend,
+        MetadataReapTargetArg::Logs => ReapTarget::All, // unused (only_logs branch above)
+    };
+
+    // Apply `cortex.toml [retention.metadata]` overrides when the
+    // file is present in `<home>/.cortex/cortex.toml`. Missing file,
+    // missing section, missing keys all silently fall back to the
+    // spec defaults.
+    let cortex_toml = home_dir()
+        .map(|h| h.join(".cortex").join("cortex.toml"))
+        .filter(|p| p.exists());
+    let mut log_overrides = LogConfigOverrides::default();
+    if let Some(p) = cortex_toml.as_ref() {
+        match std::fs::read_to_string(p) {
+            Ok(body) => match body.parse::<toml::Value>() {
+                Ok(root) => {
+                    if let Some(section) = root
+                        .get("retention")
+                        .and_then(|v| v.get("metadata"))
+                        .and_then(|v| v.as_table())
+                    {
+                        if let Some(v) =
+                            section.get("bootstrap_retain_days").and_then(|v| v.as_integer())
+                        {
+                            plan.bootstrap_retain_days = v;
+                        }
+                        if let Some(v) =
+                            section.get("sessions_retain_days").and_then(|v| v.as_integer())
+                        {
+                            plan.sessions_retain_days = v;
+                        }
+                        if let Some(v) =
+                            section.get("spend_retain_days").and_then(|v| v.as_integer())
+                        {
+                            plan.spend_retain_days = v;
+                        }
+                        if let Some(v) =
+                            section.get("log_max_bytes").and_then(|v| v.as_integer())
+                        {
+                            log_overrides.max_bytes = u64::try_from(v).ok();
+                        }
+                        if let Some(v) =
+                            section.get("log_max_age_days").and_then(|v| v.as_integer())
+                        {
+                            log_overrides.max_age_days = u32::try_from(v).ok();
+                        }
+                        if let Some(v) =
+                            section.get("log_keep_rotations").and_then(|v| v.as_integer())
+                        {
+                            log_overrides.keep_rotations = usize::try_from(v).ok();
+                        }
+                    }
+                }
+                Err(e) => tracing::warn!(error=%e, "cortex.toml parse failed"),
+            },
+            Err(e) => tracing::warn!(error=%e, "cortex.toml read failed"),
+        }
+    }
+
+    let report = if let Some(s) = store.as_mut() {
+        match run(s.conn_mut(), &plan) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("metadata-reap: {e}");
+                let _ = s.finish_retention_sweep(
+                    &sweep_id,
+                    chrono::Utc::now(),
+                    0,
+                    0,
+                    "{}",
+                    "failed",
+                );
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        cortex_retention::metadata_reap::ReapReport::default()
+    };
+
+    // Log rotation. Always runs unless `--skip-logs`. The reaper
+    // tolerates failures here (operator may have a read-only mount)
+    // — they surface in the report payload but never fail the run.
+    let mut log_outcomes: Vec<(std::path::PathBuf, LogRotateOutcome)> = Vec::new();
+    if !skip_logs && !dry_run {
+        let mut log_opts = LogRotateOpts::default_for(now);
+        if let Some(v) = log_overrides.max_bytes {
+            log_opts.max_bytes = v;
+        }
+        if let Some(v) = log_overrides.max_age_days {
+            log_opts.max_age_days = v;
+        }
+        if let Some(v) = log_overrides.keep_rotations {
+            log_opts.keep_rotations = v;
+        }
+        for name in ["hook-invocations.log", "hook-errors.log"] {
+            let p = log_dir.join(name);
+            match rotate_if_needed(&p, &log_opts) {
+                Ok(o) => log_outcomes.push((p, o)),
+                Err(e) => {
+                    tracing::warn!(error=%e, path=%p.display(), "log rotation failed");
+                }
+            }
+        }
+    }
+
+    // Bookkeeping. `records_demoted` carries the SUM of source rows
+    // collapsed across all targets so the dashboard's existing
+    // ribbon stays meaningful; `tier_transitions_json` carries the
+    // per-target breakdown plus log-rotation counters.
+    let collapsed_total = report.bootstrap_jobs_collapsed
+        + report.sessions_collapsed
+        + report.spend_collapsed;
+    let bookkeeping_json = bookkeeping_payload(&report, &log_outcomes);
+    let finished_at = chrono::Utc::now();
+    if let Some(s) = store.as_ref() {
+        let status = "success";
+        if let Err(e) = s.finish_retention_sweep(
+            &sweep_id,
+            finished_at,
+            collapsed_total,
+            0,
+            &bookkeeping_json,
+            status,
+        ) {
+            eprintln!("metadata-reap: bookkeeping write failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "sweep_id": sweep_id,
+            "started_at": now.to_rfc3339(),
+            "finished_at": finished_at.to_rfc3339(),
+            "dry_run": dry_run,
+            "target": format!("{:?}", target).to_lowercase(),
+            "metadata_reap": serde_json::from_str::<serde_json::Value>(
+                &report.metadata_reap_json(),
+            )
+            .unwrap_or_else(|_| serde_json::json!({})),
+            "log_rotations": log_outcomes
+                .iter()
+                .map(|(p, o)| {
+                    serde_json::json!({
+                        "path": p.display().to_string(),
+                        "rotated": o.rotated,
+                        "source_bytes": o.source_bytes,
+                        "gz_path": o.gz_path.as_ref().map(|p| p.display().to_string()),
+                        "pruned": o.pruned.iter().map(|p| p.display().to_string())
+                            .collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops metadata-reap");
+        println!("sweep_id:        {sweep_id}");
+        println!("now:             {}", now.to_rfc3339());
+        println!("dry_run:         {dry_run}");
+        println!("metadata_db:     {}", metadata_path.display());
+        println!(
+            "bootstrap_jobs:  collapsed={} buckets={}",
+            report.bootstrap_jobs_collapsed, report.bootstrap_daily_buckets
+        );
+        println!(
+            "sessions:        collapsed={} buckets={}",
+            report.sessions_collapsed, report.sessions_monthly_buckets
+        );
+        println!(
+            "classifier_spend:collapsed={} buckets={}",
+            report.spend_collapsed, report.spend_monthly_buckets
+        );
+        println!(
+            "free_pages:      ratio={:.2} did_vacuum={} vacuum_ms={}",
+            report.free_pages_ratio, report.did_vacuum, report.vacuum_ms
+        );
+        if log_outcomes.is_empty() {
+            println!("logs:            (skipped)");
+        } else {
+            println!("logs:");
+            for (p, o) in &log_outcomes {
+                if o.rotated {
+                    println!(
+                        "  rotated {} ({} B) → {}",
+                        p.display(),
+                        o.source_bytes,
+                        o.gz_path
+                            .as_ref()
+                            .map(|q| q.display().to_string())
+                            .unwrap_or_default()
+                    );
+                    if !o.pruned.is_empty() {
+                        for old in &o.pruned {
+                            println!("    pruned {}", old.display());
+                        }
+                    }
+                } else {
+                    println!("  skipped {} ({} B)", p.display(), o.source_bytes);
+                }
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn bookkeeping_payload(
+    report: &cortex_retention::metadata_reap::ReapReport,
+    log_outcomes: &[(std::path::PathBuf, cortex_cli::ops::LogRotateOutcome)],
+) -> String {
+    let metadata_reap = serde_json::from_str::<serde_json::Value>(&report.metadata_reap_json())
+        .unwrap_or_else(|_| serde_json::json!({}));
+    let logs: Vec<serde_json::Value> = log_outcomes
+        .iter()
+        .map(|(p, o)| {
+            serde_json::json!({
+                "path": p.display().to_string(),
+                "rotated": o.rotated,
+                "source_bytes": o.source_bytes,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "metadata_reap": metadata_reap,
+        "log_rotations": logs,
+    })
+    .to_string()
 }
 
 /// Phase8f — `cortex-ops canary`. Sends a synthetic frame through

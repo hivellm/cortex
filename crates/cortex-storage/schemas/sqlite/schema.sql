@@ -118,3 +118,38 @@ CREATE TABLE IF NOT EXISTS api_keys (
     last_used_at  TEXT,
     revoked_at    TEXT
 );
+
+-- Phase9g — metadata reaper rollups.
+-- Bootstrap success rows ≥ 30 d collapse here (one row per day+repo).
+-- Failed rows stay in `bootstrap_jobs` for full-detail debugging.
+CREATE TABLE IF NOT EXISTS bootstrap_jobs_daily (
+    day          TEXT NOT NULL,
+    repo_path    TEXT NOT NULL,
+    runs         INTEGER NOT NULL DEFAULT 0,
+    total_files  INTEGER NOT NULL DEFAULT 0,
+    total_chunks INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, repo_path)
+);
+
+-- Sessions older than 365 d collapse here (one row per
+-- year-month + tool + repo). The `repo` and `tool` columns may be
+-- empty strings when the source `sessions` row left them NULL —
+-- SQLite primary keys do not allow NULL columns.
+CREATE TABLE IF NOT EXISTS sessions_monthly (
+    year_month         TEXT NOT NULL,
+    tool               TEXT NOT NULL,
+    repo               TEXT NOT NULL,
+    count              INTEGER NOT NULL DEFAULT 0,
+    total_event_count  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (year_month, tool, repo)
+);
+
+-- `classifier_spend` rows older than 365 d collapse here (one row
+-- per year-month). Aggregates the daily counters losslessly.
+CREATE TABLE IF NOT EXISTS classifier_spend_monthly (
+    year_month     TEXT PRIMARY KEY,
+    calls          INTEGER NOT NULL DEFAULT 0,
+    tokens_in      INTEGER NOT NULL DEFAULT 0,
+    tokens_out     INTEGER NOT NULL DEFAULT 0,
+    est_usd_cents  INTEGER NOT NULL DEFAULT 0
+);

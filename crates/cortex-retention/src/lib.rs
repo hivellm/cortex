@@ -29,6 +29,7 @@
 
 pub mod cas_vacuum;
 pub mod meili_prune;
+pub mod metadata_reap;
 pub mod parquet_rollup;
 pub mod pii_enforce;
 pub mod turn_digest;

@@ -49,6 +49,7 @@ ulid = { workspace = true }
 reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json"] }
+flate2 = { workspace = true }
 
 vectorizer-sdk = { workspace = true }
 synap-sdk = { workspace = true }
