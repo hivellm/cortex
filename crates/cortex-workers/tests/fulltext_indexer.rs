@@ -340,3 +340,128 @@ async fn batches_chunk_by_upsert_batch_size() {
         .collect();
     assert_eq!(upserts, vec![4, 4, 1]);
 }
+
+#[tokio::test]
+async fn await_task_branch_runs_and_succeeds() {
+    // With `await_task = true` the indexer reaches `wait_task` after
+    // every upsert; the memory client returns `Succeeded` by default,
+    // so the batch must complete without error and report all docs
+    // upserted. (The MemoryMeiliClient does not log wait_task calls
+    // into its `calls` log, so observation goes through the report.)
+    let client = Arc::new(MemoryMeiliClient::new());
+    let metrics = Arc::new(Metrics::new());
+    let cfg = FulltextConfig {
+        await_task: true,
+        upsert_batch: 4,
+        ..FulltextConfig::default()
+    };
+    let indexer = MeiliFulltextIndexer::new(cfg, client.clone(), metrics);
+    let evt = event(
+        "tc-await",
+        Kind::ToolCall,
+        json!({
+            "tool_name": "Edit",
+            "input": {"command": "x"},
+            "outcome": "success",
+            "touched": [],
+        }),
+    );
+    let report = indexer.index_batch(&[evt]).await.expect("await branch");
+    assert_eq!(report.documents_upserted, 1);
+}
+
+#[tokio::test]
+async fn with_ensured_skips_settings_for_seeded_indexes() {
+    let client = Arc::new(MemoryMeiliClient::new());
+    let metrics = Arc::new(Metrics::new());
+    let cfg = FulltextConfig {
+        upsert_batch: 4,
+        ..FulltextConfig::default()
+    };
+    // Pre-seed the cortex-code index as already-ensured. The
+    // indexer must NOT call ensure_index for it on the first batch.
+    // Index name follows `cortex-{slug}-{family}` — no context_repo
+    // → slug is `unknown`; ToolCall → family `code`.
+    let indexer = MeiliFulltextIndexer::with_ensured(
+        cfg,
+        client.clone(),
+        metrics,
+        vec!["cortex-vectorizer-code".to_string()],
+    );
+    let evt = event(
+        "tc-ensured",
+        Kind::ToolCall,
+        json!({
+            "tool_name": "Edit",
+            "input": {"command": "x"},
+            "outcome": "success",
+            "touched": [],
+        }),
+    );
+    indexer.index_batch(&[evt]).await.expect("ensured branch");
+    let ensure_names: Vec<String> = client
+        .calls_snapshot()
+        .into_iter()
+        .filter_map(|c| match c {
+            MemoryCall::EnsureIndex { name, .. } => Some(name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ensure_names,
+        Vec::<String>::new(),
+        "pre-seeded index must not trigger ensure_index — saw {:?}",
+        ensure_names
+    );
+}
+
+#[tokio::test]
+async fn ensure_settings_runs_only_once_per_index() {
+    let (client, indexer, _metrics) = build_indexer();
+    let evt_a = event(
+        "a-1",
+        Kind::ToolCall,
+        json!({
+            "tool_name": "Edit",
+            "input": {"command": "1"},
+            "outcome": "success",
+            "touched": [],
+        }),
+    );
+    let evt_b = event(
+        "a-2",
+        Kind::ToolCall,
+        json!({
+            "tool_name": "Edit",
+            "input": {"command": "2"},
+            "outcome": "success",
+            "touched": [],
+        }),
+    );
+    // Two batches against the same index → ensure_index should only
+    // fire once.
+    indexer.index_batch(&[evt_a]).await.unwrap();
+    indexer.index_batch(&[evt_b]).await.unwrap();
+    let ensure_calls: usize = client
+        .calls_snapshot()
+        .into_iter()
+        .filter(|c| matches!(c, MemoryCall::EnsureIndex { .. }))
+        .count();
+    assert_eq!(
+        ensure_calls, 1,
+        "ensure_index must only be called once per index across batches"
+    );
+}
+
+#[test]
+fn config_and_metrics_accessors_round_trip() {
+    let client = Arc::new(MemoryMeiliClient::new());
+    let metrics = Arc::new(Metrics::new());
+    let cfg = FulltextConfig {
+        upsert_batch: 32,
+        ..FulltextConfig::default()
+    };
+    let indexer = MeiliFulltextIndexer::new(cfg.clone(), client, metrics.clone());
+    assert_eq!(indexer.config().upsert_batch, 32);
+    assert!(Arc::ptr_eq(indexer.metrics(), &metrics));
+}

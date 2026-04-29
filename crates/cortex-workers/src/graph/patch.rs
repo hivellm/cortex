@@ -68,6 +68,84 @@ impl GraphPatch {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(label: &str, key: &str) -> NodeOp {
+        NodeOp {
+            label: label.into(),
+            natural_key: key.into(),
+            props: BTreeMap::new(),
+        }
+    }
+
+    fn edge(t: &str) -> EdgeOp {
+        EdgeOp {
+            edge_type: t.into(),
+            from_label: "A".into(),
+            from_key: "a".into(),
+            to_label: "B".into(),
+            to_key: "b".into(),
+            props: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn empty_patch_is_empty_and_round_trips_default() {
+        let p = GraphPatch::empty();
+        assert!(p.is_empty());
+        let d = GraphPatch::default();
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn patch_with_node_or_edge_is_not_empty() {
+        let mut p = GraphPatch::empty();
+        p.nodes.push(node("Turn", "t1"));
+        assert!(!p.is_empty());
+        let mut q = GraphPatch::empty();
+        q.edges.push(edge("HAS_TURN"));
+        assert!(!q.is_empty());
+    }
+
+    #[test]
+    fn patch_serde_round_trips() {
+        let mut p = GraphPatch::empty();
+        p.nodes.push(node("Artifact", "repo|src/lib.rs|sha256:abc"));
+        p.edges.push(edge("IN_REPO"));
+        let json = serde_json::to_string(&p).unwrap();
+        let parsed: GraphPatch = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.nodes.len(), 1);
+        assert_eq!(parsed.edges.len(), 1);
+        assert_eq!(parsed.nodes[0].label, "Artifact");
+        assert_eq!(parsed.edges[0].edge_type, "IN_REPO");
+    }
+
+    #[test]
+    fn write_report_default_is_zeroed() {
+        let r = GraphWriteReport::default();
+        assert_eq!(r.nodes_upserted, 0);
+        assert_eq!(r.edges_upserted, 0);
+        assert_eq!(r.nodes_deduped, 0);
+        assert_eq!(r.edges_deduped, 0);
+        assert!(r.by_label.is_empty());
+        assert_eq!(r.latency_ms, 0);
+    }
+
+    #[test]
+    fn write_report_serde_round_trips() {
+        let mut r = GraphWriteReport::default();
+        r.nodes_upserted = 3;
+        r.edges_upserted = 2;
+        r.by_label.insert("Turn".into(), 1);
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: GraphWriteReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.nodes_upserted, 3);
+        assert_eq!(parsed.by_label.get("Turn"), Some(&1));
+    }
+}
+
 /// Per-batch report returned by [`crate::GraphWriter::write_batch`].
 ///
 /// Mirrors spec 07 §Inputs/Outputs exactly. The `by_label` map records

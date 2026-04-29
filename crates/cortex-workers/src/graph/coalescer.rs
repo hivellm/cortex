@@ -99,3 +99,119 @@ pub fn coalesce(patches: Vec<GraphPatch>) -> (GraphPatch, CoalesceStats) {
 
     (GraphPatch { nodes, edges }, stats)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn node(label: &str, key: &str, props: Vec<(&str, serde_json::Value)>) -> NodeOp {
+        NodeOp {
+            label: label.into(),
+            natural_key: key.into(),
+            props: props.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        }
+    }
+
+    fn edge(t: &str, from: &str, to: &str) -> EdgeOp {
+        EdgeOp {
+            edge_type: t.into(),
+            from_label: "A".into(),
+            from_key: from.into(),
+            to_label: "B".into(),
+            to_key: to.into(),
+            props: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn coalesce_dedupes_nodes_by_label_and_key() {
+        let p1 = GraphPatch {
+            nodes: vec![node("Turn", "t-1", vec![("a", json!(1))])],
+            edges: vec![],
+        };
+        let p2 = GraphPatch {
+            nodes: vec![
+                node("Turn", "t-1", vec![("b", json!(2))]),
+                node("Turn", "t-2", vec![]),
+            ],
+            edges: vec![],
+        };
+        let (out, stats) = coalesce(vec![p1, p2]);
+        // Two unique nodes (t-1 and t-2); 1 dedup hit.
+        assert_eq!(out.nodes.len(), 2);
+        assert_eq!(stats.node_dedup_hits, 1);
+        // Order preserved by first-seen.
+        assert_eq!(out.nodes[0].natural_key, "t-1");
+        assert_eq!(out.nodes[1].natural_key, "t-2");
+        // Props merged: t-1 has both `a` and `b`.
+        assert_eq!(out.nodes[0].props.get("a"), Some(&json!(1)));
+        assert_eq!(out.nodes[0].props.get("b"), Some(&json!(2)));
+    }
+
+    #[test]
+    fn coalesce_does_not_dedupe_edges() {
+        let p = GraphPatch {
+            nodes: vec![],
+            edges: vec![
+                edge("TOUCHED", "tc-1", "art-1"),
+                edge("TOUCHED", "tc-1", "art-1"),
+                edge("TOUCHED", "tc-1", "art-1"),
+            ],
+        };
+        let (out, stats) = coalesce(vec![p]);
+        // All three edges preserved; edge_dedup_hits stays at 0.
+        assert_eq!(out.edges.len(), 3);
+        assert_eq!(stats.edge_dedup_hits, 0);
+    }
+
+    #[test]
+    fn coalesce_empty_input_yields_empty_patch() {
+        let (out, stats) = coalesce(Vec::new());
+        assert!(out.is_empty());
+        assert_eq!(stats.node_dedup_hits, 0);
+        assert_eq!(stats.edge_dedup_hits, 0);
+    }
+
+    #[test]
+    fn coalesce_preserves_first_seen_order_across_patches() {
+        let p1 = GraphPatch {
+            nodes: vec![node("X", "1", vec![]), node("X", "2", vec![])],
+            edges: vec![],
+        };
+        let p2 = GraphPatch {
+            nodes: vec![node("X", "3", vec![]), node("X", "1", vec![])],
+            edges: vec![],
+        };
+        let (out, stats) = coalesce(vec![p1, p2]);
+        let keys: Vec<&str> = out.nodes.iter().map(|n| n.natural_key.as_str()).collect();
+        assert_eq!(keys, vec!["1", "2", "3"]);
+        assert_eq!(stats.node_dedup_hits, 1);
+    }
+
+    #[test]
+    fn later_props_overwrite_earlier_for_same_key() {
+        let p1 = GraphPatch {
+            nodes: vec![node("X", "1", vec![("k", json!("first"))])],
+            edges: vec![],
+        };
+        let p2 = GraphPatch {
+            nodes: vec![node("X", "1", vec![("k", json!("second"))])],
+            edges: vec![],
+        };
+        let (out, _) = coalesce(vec![p1, p2]);
+        assert_eq!(out.nodes[0].props.get("k"), Some(&json!("second")));
+    }
+
+    #[test]
+    fn coalescer_new_and_reset() {
+        let mut c = PatchCoalescer::new();
+        c.seen_nodes.insert(("X".into(), "1".into()));
+        c.seen_edges.insert(("a".into(), "b".into(), "c".into(), "d".into(), "e".into()));
+        assert_eq!(c.seen_nodes.len(), 1);
+        assert_eq!(c.seen_edges.len(), 1);
+        c.reset();
+        assert!(c.seen_nodes.is_empty());
+        assert!(c.seen_edges.is_empty());
+    }
+}

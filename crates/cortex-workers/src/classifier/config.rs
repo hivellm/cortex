@@ -150,4 +150,101 @@ mod tests {
         assert_eq!(ClassifierMode::parse("none"), ClassifierMode::Disabled);
         assert_eq!(ClassifierMode::parse(" disabled "), ClassifierMode::Disabled);
     }
+
+    use std::sync::Mutex;
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const ALL_KEYS: &[&str] = &[
+        "CORTEX_CLASSIFIER_SYNAP_URL",
+        "SYNAP_URL",
+        "CORTEX_CLASSIFIER_MODE",
+        "CORTEX_CLASSIFIER_WORKERS",
+        "CORTEX_CLASSIFIER_BATCH",
+        "CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS",
+        "CORTEX_CLASSIFIER_PROMPT_VERSION",
+        "CLAUDE_CODE_BIN",
+        "CORTEX_CLASSIFIER_MODEL",
+        "CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS",
+    ];
+    fn clear_all() {
+        for k in ALL_KEYS {
+            env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn from_env_returns_defaults_when_unset() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        let cfg = ClassifierWorkerConfig::from_env();
+        let def = ClassifierWorkerConfig::default();
+        assert_eq!(cfg.synap_url, def.synap_url);
+        assert_eq!(cfg.mode, def.mode);
+        assert_eq!(cfg.workers, def.workers);
+        assert_eq!(cfg.batch_size, def.batch_size);
+        assert_eq!(cfg.cli_timeout_secs, def.cli_timeout_secs);
+    }
+
+    #[test]
+    fn from_env_overrides_each_field() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        env::set_var("CORTEX_CLASSIFIER_SYNAP_URL", "http://syn:9");
+        env::set_var("CORTEX_CLASSIFIER_MODE", "cli");
+        env::set_var("CORTEX_CLASSIFIER_WORKERS", "4");
+        env::set_var("CORTEX_CLASSIFIER_BATCH", "16");
+        env::set_var("CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS", "5000");
+        env::set_var("CORTEX_CLASSIFIER_PROMPT_VERSION", "v9");
+        env::set_var("CLAUDE_CODE_BIN", "/usr/local/bin/claude");
+        env::set_var("CORTEX_CLASSIFIER_MODEL", "claude-haiku-test");
+        env::set_var("CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS", "120");
+
+        let cfg = ClassifierWorkerConfig::from_env();
+        assert_eq!(cfg.synap_url, "http://syn:9");
+        assert_eq!(cfg.mode, ClassifierMode::Cli);
+        assert_eq!(cfg.workers, 4);
+        assert_eq!(cfg.batch_size, 16);
+        assert_eq!(cfg.daily_limit_cents, 5000);
+        assert_eq!(cfg.prompt_version, "v9");
+        assert_eq!(cfg.claude_bin, "/usr/local/bin/claude");
+        assert_eq!(cfg.model, "claude-haiku-test");
+        assert_eq!(cfg.cli_timeout_secs, 120);
+
+        clear_all();
+    }
+
+    #[test]
+    fn synap_url_falls_back_to_synap_url_env() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        env::set_var("SYNAP_URL", "http://generic:9000");
+        let cfg = ClassifierWorkerConfig::from_env();
+        assert_eq!(cfg.synap_url, "http://generic:9000");
+        // Specific var beats the generic one.
+        env::set_var("CORTEX_CLASSIFIER_SYNAP_URL", "http://specific:9100");
+        let cfg2 = ClassifierWorkerConfig::from_env();
+        assert_eq!(cfg2.synap_url, "http://specific:9100");
+        clear_all();
+    }
+
+    #[test]
+    fn parse_usize_rejects_zero() {
+        let _g = ENV_LOCK.lock().unwrap();
+        env::set_var("CORTEX_CLASSIFIER_WORKERS", "0");
+        // 0 is filtered out — falls back to default 2.
+        assert_eq!(parse_usize("CORTEX_CLASSIFIER_WORKERS", 2), 2);
+        env::set_var("CORTEX_CLASSIFIER_WORKERS", "abc");
+        assert_eq!(parse_usize("CORTEX_CLASSIFIER_WORKERS", 7), 7);
+        env::remove_var("CORTEX_CLASSIFIER_WORKERS");
+    }
+
+    #[test]
+    fn parse_u64_rejects_garbage() {
+        let _g = ENV_LOCK.lock().unwrap();
+        env::set_var("CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS", "??");
+        assert_eq!(parse_u64("CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS", 100), 100);
+        env::set_var("CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS", "999");
+        assert_eq!(parse_u64("CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS", 100), 999);
+        env::remove_var("CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS");
+    }
 }

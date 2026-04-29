@@ -123,3 +123,109 @@ fn parse_u64(key: &str, fallback: u64) -> u64 {
         .and_then(|raw| raw.parse::<u64>().ok())
         .unwrap_or(fallback)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const ALL_KEYS: &[&str] = &[
+        "CORTEX_GRAPH_NEXUS_URL",
+        "CORTEX_GRAPH_TRANSPORT",
+        "CORTEX_GRAPH_SYNAP_URL",
+        "CORTEX_GRAPH_SYNAP_GROUP",
+        "CORTEX_GRAPH_WORKERS",
+        "CORTEX_GRAPH_PATCH_BATCH",
+        "CORTEX_GRAPH_FLUSH_MS",
+        "CORTEX_GRAPH_MAX_RETRY",
+        "CORTEX_GRAPH_NEXUS_USER",
+        "CORTEX_GRAPH_NEXUS_PASSWORD",
+        "CORTEX_GRAPH_OUT_OF_ORDER_BUFFER_SECS",
+    ];
+    fn clear_all() {
+        for k in ALL_KEYS {
+            env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn defaults_match_spec() {
+        let d = GraphConfig::default();
+        assert_eq!(d.nexus_url, "http://127.0.0.1:17002");
+        assert_eq!(d.transport, GraphTransport::Auto);
+        assert_eq!(d.synap_group, "cortex-graph");
+        assert_eq!(d.workers, 4);
+        assert_eq!(d.patch_batch, 256);
+        assert_eq!(d.flush_ms, 500);
+        assert_eq!(d.max_retry, 3);
+        assert!(d.nexus_user.is_none());
+        assert!(d.nexus_password.is_none());
+        assert_eq!(d.out_of_order_buffer_secs, 30);
+    }
+
+    #[test]
+    fn transport_parses_each_alias() {
+        assert_eq!(GraphTransport::parse("auto"), Some(GraphTransport::Auto));
+        assert_eq!(GraphTransport::parse("AUTO"), Some(GraphTransport::Auto));
+        assert_eq!(GraphTransport::parse("rpc"), Some(GraphTransport::Rpc));
+        assert_eq!(GraphTransport::parse("bolt"), Some(GraphTransport::Rpc));
+        assert_eq!(GraphTransport::parse("nexus"), Some(GraphTransport::Rpc));
+        assert_eq!(GraphTransport::parse("http"), Some(GraphTransport::Http));
+        assert_eq!(GraphTransport::parse("HTTPS"), Some(GraphTransport::Http));
+        assert_eq!(GraphTransport::parse("garbage"), None);
+        assert_eq!(GraphTransport::parse(""), None);
+    }
+
+    #[test]
+    fn from_env_returns_defaults_when_unset() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        let cfg = GraphConfig::from_env();
+        let def = GraphConfig::default();
+        assert_eq!(cfg.nexus_url, def.nexus_url);
+        assert_eq!(cfg.transport, def.transport);
+    }
+
+    #[test]
+    fn from_env_overrides_each_field() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        env::set_var("CORTEX_GRAPH_NEXUS_URL", "http://nx:1");
+        env::set_var("CORTEX_GRAPH_TRANSPORT", "http");
+        env::set_var("CORTEX_GRAPH_SYNAP_URL", "http://sy:2");
+        env::set_var("CORTEX_GRAPH_SYNAP_GROUP", "g7");
+        env::set_var("CORTEX_GRAPH_WORKERS", "11");
+        env::set_var("CORTEX_GRAPH_PATCH_BATCH", "128");
+        env::set_var("CORTEX_GRAPH_FLUSH_MS", "1500");
+        env::set_var("CORTEX_GRAPH_MAX_RETRY", "9");
+        env::set_var("CORTEX_GRAPH_NEXUS_USER", "u");
+        env::set_var("CORTEX_GRAPH_NEXUS_PASSWORD", "p");
+        env::set_var("CORTEX_GRAPH_OUT_OF_ORDER_BUFFER_SECS", "10");
+
+        let cfg = GraphConfig::from_env();
+        assert_eq!(cfg.nexus_url, "http://nx:1");
+        assert_eq!(cfg.transport, GraphTransport::Http);
+        assert_eq!(cfg.synap_group, "g7");
+        assert_eq!(cfg.workers, 11);
+        assert_eq!(cfg.patch_batch, 128);
+        assert_eq!(cfg.flush_ms, 1500);
+        assert_eq!(cfg.max_retry, 9);
+        assert_eq!(cfg.nexus_user.as_deref(), Some("u"));
+        assert_eq!(cfg.nexus_password.as_deref(), Some("p"));
+        assert_eq!(cfg.out_of_order_buffer_secs, 10);
+
+        clear_all();
+    }
+
+    #[test]
+    fn from_env_unknown_transport_falls_back_to_default() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        env::set_var("CORTEX_GRAPH_TRANSPORT", "carrier-pigeon");
+        let cfg = GraphConfig::from_env();
+        assert_eq!(cfg.transport, GraphTransport::Auto);
+        clear_all();
+    }
+}

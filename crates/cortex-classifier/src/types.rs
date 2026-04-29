@@ -233,3 +233,189 @@ impl<T: Classifier + ?Sized> Classifier for Box<T> {
         (**self).classify_batch(events).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn severity_as_str_round_trips() {
+        assert_eq!(Severity::Info.as_str(), "info");
+        assert_eq!(Severity::Notable.as_str(), "notable");
+        assert_eq!(Severity::Critical.as_str(), "critical");
+    }
+
+    #[test]
+    fn severity_serde_uses_lowercase() {
+        for (s, lit) in [
+            (Severity::Info, "\"info\""),
+            (Severity::Notable, "\"notable\""),
+            (Severity::Critical, "\"critical\""),
+        ] {
+            assert_eq!(serde_json::to_string(&s).unwrap(), lit);
+            let back: Severity = serde_json::from_str(lit).unwrap();
+            assert_eq!(back, s);
+        }
+    }
+
+    #[test]
+    fn pii_risk_as_str_and_serde() {
+        for (s, lit) in [
+            (PiiRisk::Low, "\"low\""),
+            (PiiRisk::Medium, "\"medium\""),
+            (PiiRisk::High, "\"high\""),
+        ] {
+            assert_eq!(serde_json::to_string(&s).unwrap(), lit);
+            let back: PiiRisk = serde_json::from_str(lit).unwrap();
+            assert_eq!(back, s);
+        }
+        assert_eq!(PiiRisk::Low.as_str(), "low");
+        assert_eq!(PiiRisk::Medium.as_str(), "medium");
+        assert_eq!(PiiRisk::High.as_str(), "high");
+    }
+
+    #[test]
+    fn classifier_source_as_str_and_serde() {
+        for (s, lit) in [
+            (ClassifierSource::HaikuCli, "\"haiku_cli\""),
+            (ClassifierSource::HaikuSdk, "\"haiku_sdk\""),
+            (ClassifierSource::Cache, "\"cache\""),
+            (ClassifierSource::StaticFallback, "\"static_fallback\""),
+        ] {
+            assert_eq!(serde_json::to_string(&s).unwrap(), lit);
+            let back: ClassifierSource = serde_json::from_str(lit).unwrap();
+            assert_eq!(back, s);
+            assert_eq!(s.as_str(), lit.trim_matches('"'));
+        }
+    }
+
+    #[test]
+    fn classifier_mode_serde_lowercase() {
+        for (m, lit) in [
+            (ClassifierMode::Cli, "\"cli\""),
+            (ClassifierMode::Sdk, "\"sdk\""),
+        ] {
+            assert_eq!(serde_json::to_string(&m).unwrap(), lit);
+            let back: ClassifierMode = serde_json::from_str(lit).unwrap();
+            assert_eq!(back, m);
+        }
+    }
+
+    #[test]
+    fn extracted_entity_label_skipped_when_none() {
+        let e = ExtractedEntity {
+            entity_type: "decision".into(),
+            identifier: "DEC-0042".into(),
+            label: None,
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        assert!(!s.contains("label"));
+        let with_label = ExtractedEntity {
+            label: Some("ADR-42".into()),
+            ..e.clone()
+        };
+        let s2 = serde_json::to_string(&with_label).unwrap();
+        assert!(s2.contains("\"label\":\"ADR-42\""));
+    }
+
+    #[test]
+    fn extracted_relation_round_trips() {
+        let r = ExtractedRelation {
+            from: "this_event".into(),
+            relation: "IMPLEMENTS".into(),
+            to: "DEC-0042".into(),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let back: ExtractedRelation = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn enrichment_input_round_trips() {
+        let i = EnrichmentInput {
+            event_id: "01TEST".into(),
+            kind: Kind::Turn,
+            content_hash: "sha256:abc".into(),
+            redacted_payload: json!({"hi": 1}),
+            context_repo: Some("repo".into()),
+        };
+        let json = serde_json::to_string(&i).unwrap();
+        let back: EnrichmentInput = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.event_id, i.event_id);
+        assert_eq!(back.kind, Kind::Turn);
+    }
+
+    #[test]
+    fn classifier_output_defaults_for_entities_relations() {
+        // Missing entities/relations in input JSON should deserialise
+        // as empty vecs (the `#[serde(default)]` attr).
+        let raw = serde_json::json!({
+            "event_id": "01X",
+            "kind_refinement": null,
+            "topics": [],
+            "severity": "info",
+            "pii_risk": "low",
+            "redaction_suggestions": [],
+            "summary": null,
+            "source": "static_fallback",
+            "prompt_version": "v1",
+            "model": "static-v1",
+            "latency_ms": 0,
+            "tokens_in": 0,
+            "tokens_out": 0,
+        });
+        let out: ClassifierOutput = serde_json::from_value(raw).unwrap();
+        assert!(out.entities.is_empty());
+        assert!(out.relations.is_empty());
+    }
+
+    // Cover the Box<dyn Classifier> blanket impl with a deterministic
+    // in-memory implementation that returns a static-fallback record
+    // per input.
+    struct StaticEchoClassifier;
+    #[async_trait]
+    impl Classifier for StaticEchoClassifier {
+        async fn classify_batch(
+            &self,
+            events: &[EnrichmentInput],
+        ) -> Result<Vec<ClassifierOutput>, crate::errors::ClassifierError> {
+            Ok(events
+                .iter()
+                .map(|e| ClassifierOutput {
+                    event_id: e.event_id.clone(),
+                    kind_refinement: None,
+                    topics: vec![],
+                    severity: Severity::Info,
+                    pii_risk: PiiRisk::Low,
+                    redaction_suggestions: vec![],
+                    summary: None,
+                    entities: Vec::new(),
+                    relations: Vec::new(),
+                    source: ClassifierSource::StaticFallback,
+                    prompt_version: "v1".into(),
+                    model: "static-echo".into(),
+                    latency_ms: 0,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                })
+                .collect())
+        }
+    }
+
+    #[tokio::test]
+    async fn box_dyn_classifier_dispatches_through_blanket_impl() {
+        let echo: Box<dyn Classifier> = Box::new(StaticEchoClassifier);
+        let inp = EnrichmentInput {
+            event_id: "X".into(),
+            kind: Kind::Turn,
+            content_hash: "h".into(),
+            redacted_payload: json!({}),
+            context_repo: None,
+        };
+        let out = echo.classify_batch(&[inp]).await.unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event_id, "X");
+        assert_eq!(out[0].source, ClassifierSource::StaticFallback);
+    }
+}

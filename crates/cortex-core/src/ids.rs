@@ -83,3 +83,82 @@ pub fn session_id() -> String {
     SessionId::new().to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_id_new_and_default_match() {
+        let a = EventId::new();
+        let b = EventId::default();
+        // Both are Ulid::new() — content differs, type matches.
+        assert_eq!(a.to_string().len(), 26);
+        assert_eq!(b.to_string().len(), 26);
+    }
+
+    #[test]
+    fn session_id_new_and_default_match() {
+        let a = SessionId::new();
+        let b = SessionId::default();
+        assert_eq!(a.to_string().len(), 26);
+        assert_eq!(b.to_string().len(), 26);
+    }
+
+    #[test]
+    fn event_id_round_trips_through_string() {
+        let id = EventId::new();
+        let s = id.to_string();
+        let parsed: EventId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn session_id_round_trips_through_string() {
+        let id = SessionId::new();
+        let s = id.to_string();
+        let parsed: SessionId = s.parse().unwrap();
+        assert_eq!(parsed, id);
+    }
+
+    #[test]
+    fn event_id_rejects_garbage() {
+        let err: Result<EventId, _> = "not-a-ulid".parse();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn session_id_rejects_garbage() {
+        let err: Result<SessionId, _> = "definitely_not_a_ulid".parse();
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn convenience_helpers_yield_distinct_ulids() {
+        let a = event_id();
+        let b = event_id();
+        assert_eq!(a.len(), 26);
+        assert_eq!(b.len(), 26);
+        assert_ne!(a, b);
+        let c = session_id();
+        assert_eq!(c.len(), 26);
+    }
+
+    #[test]
+    fn ids_are_serde_transparent() {
+        let id = EventId::new();
+        let json = serde_json::to_string(&id).unwrap();
+        // Transparent serde — the JSON is the bare ULID string, not
+        // a wrapper object.
+        assert!(json.starts_with('"'));
+        assert!(!json.contains("EventId"));
+        let back: EventId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, id);
+
+        let sid = SessionId::new();
+        let sjson = serde_json::to_string(&sid).unwrap();
+        assert!(!sjson.contains("SessionId"));
+        let sback: SessionId = serde_json::from_str(&sjson).unwrap();
+        assert_eq!(sback, sid);
+    }
+}
+

@@ -507,3 +507,177 @@ fn elapsed_ms(start: Instant) -> u32 {
         .min(u32::MAX as u128) as u32
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cortex_classifier::{ClassifierSource, PiiRisk, Severity};
+
+    fn classifier(event_id: &str) -> ClassifierOutput {
+        ClassifierOutput {
+            event_id: event_id.into(),
+            kind_refinement: None,
+            topics: vec![],
+            severity: Severity::Info,
+            pii_risk: PiiRisk::Low,
+            redaction_suggestions: vec![],
+            summary: None,
+            entities: Vec::new(),
+            relations: Vec::new(),
+            source: ClassifierSource::StaticFallback,
+            prompt_version: "v1".into(),
+            model: "static-v1".into(),
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+        }
+    }
+
+    fn event_with_path(path: Option<&str>, payload: Value) -> EnrichedEvent {
+        EnrichedEvent {
+            event_id: "01EVT".into(),
+            kind: Kind::Artifact,
+            content_hash: "h".into(),
+            redacted_payload: payload,
+            classifier: classifier("01EVT"),
+            context_repo: Some("Cortex".into()),
+            context_path: path.map(String::from),
+            parent_event_id: None,
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn embed_error_event_id_for_each_variant() {
+        let e1 = EmbedError::OversizeWithoutSummary {
+            event_id: "x".into(),
+        };
+        let e2 = EmbedError::Vectorizer {
+            event_id: "y".into(),
+            detail: "err".into(),
+        };
+        let e3 = EmbedError::Chunker {
+            event_id: "z".into(),
+            detail: "err".into(),
+        };
+        assert_eq!(e1.event_id(), "x");
+        assert_eq!(e2.event_id(), "y");
+        assert_eq!(e3.event_id(), "z");
+    }
+
+    #[test]
+    fn embed_error_from_tuple_attaches_event_id() {
+        let v_err = VectorizerClientError::Transport("boom".into());
+        let e: EmbedError = ("evt-1", v_err).into();
+        match e {
+            EmbedError::Vectorizer { event_id, detail } => {
+                assert_eq!(event_id, "evt-1");
+                assert!(detail.contains("boom"));
+            }
+            _ => panic!("expected Vectorizer variant"),
+        }
+    }
+
+    #[test]
+    fn embed_error_serde_round_trips() {
+        let e = EmbedError::OversizeWithoutSummary {
+            event_id: "42".into(),
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        // The internally-tagged "cause" + snake-case rename apply.
+        assert!(json.contains("\"cause\":\"oversize_without_summary\""));
+        let back: EmbedError = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, e);
+    }
+
+    #[test]
+    fn embed_error_display_matches_thiserror_template() {
+        let e = EmbedError::Chunker {
+            event_id: "abc".into(),
+            detail: "parse-fail".into(),
+        };
+        let s = e.to_string();
+        assert!(s.contains("abc") && s.contains("parse-fail"));
+    }
+
+    // ---- chunker_for routing ----
+
+    use crate::embedder::vectorizer_client::MemoryVectorizerClient;
+
+    fn embedder() -> VectorizerEmbedder {
+        let cfg = EmbedderConfig::default();
+        let client = Arc::new(MemoryVectorizerClient::default());
+        VectorizerEmbedder::new(cfg, client)
+    }
+
+    // Verify chunker_for branches by observing the chunk-output
+    // shape each picker produces. Code chunker decorates with
+    // `language` metadata; doc chunker stamps source=Doc; fallback
+    // stamps source=Sliding. Pointer equality is unreliable here
+    // because Rust may collapse identical zero-sized type refs to
+    // the same address.
+
+    fn output_source_for(e: &VectorizerEmbedder, evt: &EnrichedEvent) -> ChunkSource {
+        let chunker = e.chunker_for(evt);
+        let chunks = chunker.chunk(evt).expect("chunker did not error");
+        chunks
+            .first()
+            .map(|c| c.metadata.source)
+            .unwrap_or(ChunkSource::FallbackWindow)
+    }
+
+    #[test]
+    fn chunker_for_picks_doc_for_markdown_extension() {
+        let e = embedder();
+        let evt = event_with_path(Some("README.md"), serde_json::json!({"text": "# hi"}));
+        assert_eq!(output_source_for(&e, &evt), ChunkSource::Doc);
+    }
+
+    #[test]
+    fn chunker_for_picks_code_for_known_extension() {
+        let e = embedder();
+        let evt = event_with_path(
+            Some("src/main.rs"),
+            serde_json::json!({"text": "fn main(){}"}),
+        );
+        assert_eq!(output_source_for(&e, &evt), ChunkSource::Code);
+    }
+
+    #[test]
+    fn chunker_for_picks_doc_when_text_starts_with_heading() {
+        let e = embedder();
+        let evt = event_with_path(None, serde_json::json!({"text": "# Title\n\nbody"}));
+        assert_eq!(output_source_for(&e, &evt), ChunkSource::Doc);
+    }
+
+    #[test]
+    fn chunker_for_falls_back_for_unknown_path() {
+        let e = embedder();
+        let evt = event_with_path(
+            Some("data.bin.unknown"),
+            serde_json::json!({"text": "raw bytes here"}),
+        );
+        assert_eq!(output_source_for(&e, &evt), ChunkSource::FallbackWindow);
+    }
+
+    #[test]
+    fn with_schema_replaces_default() {
+        let cfg = EmbedderConfig::default();
+        let client = Arc::new(MemoryVectorizerClient::default());
+        let custom = CollectionSchema {
+            dim: 1024,
+            ..CollectionSchema::default()
+        };
+        let e = VectorizerEmbedder::new(cfg, client).with_schema(custom.clone());
+        assert_eq!(e.collection_schema.dim, 1024);
+    }
+
+    #[test]
+    fn with_metrics_uses_provided_registry() {
+        let cfg = EmbedderConfig::default();
+        let client = Arc::new(MemoryVectorizerClient::default());
+        let m = Arc::new(Metrics::new());
+        let e = VectorizerEmbedder::with_metrics(cfg, client, m.clone());
+        assert!(Arc::ptr_eq(&e.metrics, &m));
+    }
+}
+

@@ -123,3 +123,98 @@ impl Metrics {
             .unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_registry_starts_zeroed() {
+        let m = Metrics::new();
+        assert!(m.nodes_upserted.lock().unwrap().is_empty());
+        assert!(m.edges_upserted.lock().unwrap().is_empty());
+        assert_eq!(m.dedup_hits_nodes.load(Ordering::Relaxed), 0);
+        assert_eq!(m.dedup_hits_edges.load(Ordering::Relaxed), 0);
+        assert!(m.tx_latency_ms.lock().unwrap().is_empty());
+        assert!(m.tx_size.lock().unwrap().is_empty());
+        assert!(m.errors.lock().unwrap().is_empty());
+        assert!(m.orphans.lock().unwrap().is_empty());
+        assert_eq!(m.backpressure_active.load(Ordering::Relaxed), 0);
+        assert!(m.edges_dropped_snapshot().is_empty());
+    }
+
+    #[test]
+    fn incr_nodes_upserted_accumulates_per_label() {
+        let m = Metrics::new();
+        m.incr_nodes_upserted("Turn", 2);
+        m.incr_nodes_upserted("Turn", 3);
+        m.incr_nodes_upserted("Artifact", 1);
+        let map = m.nodes_upserted.lock().unwrap();
+        assert_eq!(map.get("Turn"), Some(&5));
+        assert_eq!(map.get("Artifact"), Some(&1));
+    }
+
+    #[test]
+    fn incr_edges_upserted_accumulates_per_type() {
+        let m = Metrics::new();
+        m.incr_edges_upserted("HAS_TURN", 4);
+        m.incr_edges_upserted("HAS_TURN", 1);
+        let map = m.edges_upserted.lock().unwrap();
+        assert_eq!(map.get("HAS_TURN"), Some(&5));
+    }
+
+    #[test]
+    fn dedup_counters_are_atomic() {
+        let m = Metrics::new();
+        m.incr_dedup_hits_nodes(7);
+        m.incr_dedup_hits_nodes(3);
+        m.incr_dedup_hits_edges(1);
+        assert_eq!(m.dedup_hits_nodes.load(Ordering::Relaxed), 10);
+        assert_eq!(m.dedup_hits_edges.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn observe_latency_and_size_appends() {
+        let m = Metrics::new();
+        m.observe_tx_latency(11);
+        m.observe_tx_latency(22);
+        m.observe_tx_size(50);
+        assert_eq!(m.tx_latency_ms.lock().unwrap().as_slice(), &[11, 22]);
+        assert_eq!(m.tx_size.lock().unwrap().as_slice(), &[50]);
+    }
+
+    #[test]
+    fn errors_and_orphans_keyed_counters() {
+        let m = Metrics::new();
+        m.incr_errors("transient");
+        m.incr_errors("transient");
+        m.incr_errors("permanent");
+        m.incr_orphans("Turn");
+        assert_eq!(m.errors.lock().unwrap().get("transient"), Some(&2));
+        assert_eq!(m.errors.lock().unwrap().get("permanent"), Some(&1));
+        assert_eq!(m.orphans.lock().unwrap().get("Turn"), Some(&1));
+    }
+
+    #[test]
+    fn set_backpressure_round_trips() {
+        let m = Metrics::new();
+        m.set_backpressure(true);
+        assert_eq!(m.backpressure_active.load(Ordering::Relaxed), 1);
+        m.set_backpressure(false);
+        assert_eq!(m.backpressure_active.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn edges_dropped_keyed_per_type_and_snapshot_clones() {
+        let m = Metrics::new();
+        m.incr_edges_dropped("IN_REPO");
+        m.incr_edges_dropped("IN_REPO");
+        m.incr_edges_dropped("HAS_TURN");
+        let snap = m.edges_dropped_snapshot();
+        assert_eq!(snap.get("IN_REPO"), Some(&2));
+        assert_eq!(snap.get("HAS_TURN"), Some(&1));
+        // Snapshot is a clone — mutating the source doesn't affect it.
+        m.incr_edges_dropped("IN_REPO");
+        assert_eq!(snap.get("IN_REPO"), Some(&2));
+    }
+}
