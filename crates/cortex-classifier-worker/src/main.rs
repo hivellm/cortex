@@ -30,6 +30,21 @@ async fn main() -> Result<()> {
     let config = ClassifierWorkerConfig::from_env();
     tracing::info!(?config, "loaded cortex-classifier-worker config");
 
+    // `CORTEX_CLASSIFIER_MODE=disabled` (or `off` / `none`) is the
+    // operator escape hatch for "don't run classification right
+    // now" — exit 0 before consuming the input streams or opening
+    // a Synap connection. Process supervisors that loop on
+    // non-zero exit (systemd, docker restart=always, …) treat this
+    // as healthy so they don't churn the binary. Re-enable by
+    // flipping the env to `cli` (LLM-backed) or `static`
+    // (deterministic offline fallback) and restarting the worker.
+    if matches!(config.mode, ClassifierMode::Disabled) {
+        tracing::info!(
+            "CORTEX_CLASSIFIER_MODE=disabled — classifier worker exiting cleanly without consuming events"
+        );
+        return Ok(());
+    }
+
     let synap = Arc::new(
         SynapHandle::new(&config.synap_url)
             .with_context(|| format!("synap connect {}", config.synap_url))?,
@@ -125,5 +140,14 @@ fn build_stack_for_mode(
             let backend: Box<dyn Classifier> = Box::new(HaikuCliClassifier::new(cli_cfg));
             build_stack(backend, cache, budget, config.prompt_version.clone())
         }
+        // `main` short-circuits with a clean exit before this
+        // match runs whenever the operator sets
+        // `CORTEX_CLASSIFIER_MODE=disabled`, so reaching this arm
+        // would mean the early-exit guard was lost in a refactor.
+        // `unreachable!` makes that bug loud instead of silently
+        // running the worker against an unconfigured backend.
+        ClassifierMode::Disabled => unreachable!(
+            "build_stack_for_mode called with Disabled — main() should have exited 0 before now"
+        ),
     }
 }

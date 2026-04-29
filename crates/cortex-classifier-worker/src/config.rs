@@ -10,12 +10,20 @@ pub enum ClassifierMode {
     Static,
     /// Spawn `claude -p ...` (Claude Code CLI) for each batch.
     Cli,
+    /// Worker is disabled — `main` logs an INFO line and exits 0
+    /// without consuming the input streams. Operator escape hatch
+    /// for "the LLM-backed classifier isn't earning its cost
+    /// today, but I don't want to delete the deployment plumbing".
+    /// Set `CORTEX_CLASSIFIER_MODE=disabled` (or `off`) in the
+    /// environment.
+    Disabled,
 }
 
 impl ClassifierMode {
     fn parse(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
             "cli" | "haiku" | "haiku_cli" => ClassifierMode::Cli,
+            "disabled" | "off" | "none" => ClassifierMode::Disabled,
             _ => ClassifierMode::Static,
         }
     }
@@ -128,5 +136,18 @@ mod tests {
         assert_eq!(ClassifierMode::parse("static"), ClassifierMode::Static);
         assert_eq!(ClassifierMode::parse(""), ClassifierMode::Static);
         assert_eq!(ClassifierMode::parse("garbage"), ClassifierMode::Static);
+    }
+
+    #[test]
+    fn mode_parse_recognises_disabled_aliases() {
+        // `disabled` is the canonical operator escape hatch
+        // (`docs/ops/...`); `off` and `none` are friendlier
+        // aliases since both spellings show up in operator
+        // env-var checklists.
+        assert_eq!(ClassifierMode::parse("disabled"), ClassifierMode::Disabled);
+        assert_eq!(ClassifierMode::parse("DISABLED"), ClassifierMode::Disabled);
+        assert_eq!(ClassifierMode::parse("off"), ClassifierMode::Disabled);
+        assert_eq!(ClassifierMode::parse("none"), ClassifierMode::Disabled);
+        assert_eq!(ClassifierMode::parse(" disabled "), ClassifierMode::Disabled);
     }
 }
