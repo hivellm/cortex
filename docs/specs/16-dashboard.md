@@ -61,6 +61,8 @@ GET  /v1/dashboard/trust
 GET  /v1/dashboard/tasks                   # rulebook task list (active + archived)
 GET  /v1/dashboard/tasks/summary           # aggregate counters
 GET  /v1/dashboard/tasks/{id}              # full proposal + sectioned checklist
+GET  /v1/retention/sweeps?limit=N&since=   # phase9i — recent retention_sweeps rows + per-stage breakdown
+GET  /v1/retention/state                   # phase9i — archive bytes by age bucket + cas totals + scheduled next-runs
 ```
 
 All JSON; SSE uses `text/event-stream`.
@@ -398,6 +400,47 @@ lands on `main`.
 2. **Cross-repo filtering.** When a session spans repos (rare but real), do we show a multi-chip filter or collapse to first repo? Leaning multi-chip but need real-data evidence.
 3. **Embedded provider pricing.** The tools-cost tile is informative; do we display a daily spend budget like the classifier's? Revisit when `cortex-analysis` accumulates cost data.
 
+## Retention view (phase9i)
+
+The Retention tab sits between Memory and Decisions in the sidebar
+and consumes the two new endpoints listed above:
+
+- `/v1/retention/sweeps?limit=N&since=RFC3339` — newest-first rows
+  from `retention_sweeps` joined with the per-stage breakdown
+  (`tier_transitions_json` parsed into a `stages` object). Stage
+  keys mirror the sweeper module names: `sweep`, `parquet_rollup`,
+  `cas_vacuum`, `pii_enforce`, `turn_digest`, `meili_prune`,
+  `metadata_reap`. The GUI uses the key set to project one card
+  per sweep type, including state, last-run relative time, and
+  bytes reclaimed.
+- `/v1/retention/state` — compact snapshot:
+  - `archive_bytes` bucketed `le_30d` / `30d_to_365d` / `gt_365d`,
+    plus a `total` and an `available: bool` flag (false when the
+    archive root is missing — handler stays honest about cold
+    boots).
+  - `cas` rows + bytes (read directly from `cas.sqlite`).
+  - `collections` and `meili_indexes` are present-but-empty until
+    a live SDK probe is wired through `DashboardState`.
+  - `next_runs` carries one row per sweep type with `next_run`
+    set to `"never"` until phase9k publishes a cron schedule.
+
+The view itself (`gui/src/views/Retention.tsx`):
+
+- Failure banner — red bar appears when any sweep type has
+  `status='failed'` in its two most recent rows; surfaces the most
+  recent `last_error` from the stages payload.
+- Header card row — one card per sweep type, color-coded
+  ok / degraded / failed / never, last-run relative time, bytes
+  reclaimed.
+- 30-day reclamation sparkline derived from each row's
+  `bytes_reclaimed` stage counter.
+- Sortable storage breakdown table sourcing the archive +
+  CAS rows (sortable by source name, size now, or delta).
+- Live log strip — subscribes to `/v1/dashboard/timeline/stream`
+  and filters for events whose `kind` starts with `retention.`.
+  The list is capped at 100 entries and surfaces the SSE
+  connected/disconnected pill.
+
 ## References
 
 - Architecture §5.6 (Dashboard views), §5.3 (retrieval consumed by Memory).
@@ -406,5 +449,6 @@ lands on `main`.
 - Spec 13 — Laws DSL (authoring target, lint consumer).
 - Spec 14 — Governance engine (Trust scores table).
 - Spec 15 — Deep Analysis (Analysis library + live stream).
+- Spec 19 — Retention (sweepers whose history feeds the new tab).
 - Vectorizer dashboard scaffold: `e:/HiveLLM/Vectorizer/dashboard`.
 - TanStack Router / Query docs.

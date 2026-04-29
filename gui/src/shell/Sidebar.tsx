@@ -11,6 +11,7 @@ export type ViewId =
   | "search"
   | "conversations"
   | "memory"
+  | "retention"
   | "decisions"
   | "handoffs"
   | "classifications"
@@ -37,6 +38,7 @@ const NAV: NavItem[] = [
   { id: "search", label: "Search", icon: "memory" },
   { id: "conversations", label: "Conversations", icon: "memory", countSource: "conversations" },
   { id: "memory", label: "Memory", icon: "memory", countSource: "events" },
+  { id: "retention", label: "Retention", icon: "archive" },
   { id: "decisions", label: "Decisions", icon: "decision", countSource: "decisions" },
   { id: "handoffs", label: "Handoffs", icon: "memory", countSource: "handoffs" },
   { id: "classifications", label: "Classifications", icon: "analysis", countSource: "classifications" },

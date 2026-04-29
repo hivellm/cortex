@@ -1767,3 +1767,20 @@ a { color: inherit; text-decoration: none; }
 .health-topbar-pill.is-degraded .dot { background: var(--warn, #c89000); animation: none; }
 .health-topbar-pill.is-down .dot { background: var(--err, #c14040); animation: none; }
 .health-topbar-pill.is-unknown .dot { background: var(--fg-3); animation: none; }
+
+/* Phase9i — Retention view */
+.retention-banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--err, #c14040); background: color-mix(in oklch, var(--err, #c14040) 12%, var(--bg-2)); margin: 0 16px 12px; }
+.retention-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; padding: 0 16px 12px; }
+.retention-card { padding: 10px 12px; border-radius: 6px; background: var(--bg-2); border: 1px solid var(--border); display: flex; flex-direction: column; gap: 4px; }
+.retention-card__head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.retention-card__dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.retention-card__label { font-size: 12px; color: var(--fg-1); }
+.retention-card__meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--fg-2); }
+.retention-section { background: var(--bg-2); padding: 12px 14px; border-radius: 6px; border: 1px solid var(--border); margin: 0 16px 12px; }
+.retention-section__title { display: flex; align-items: center; gap: 6px; font-size: 12px; text-transform: uppercase; color: var(--fg-2); margin: 0 0 8px; letter-spacing: 0.05em; }
+.retention-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.retention-table th, .retention-table td { padding: 4px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.retention-table th { color: var(--fg-2); font-weight: normal; text-transform: uppercase; font-size: 10px; cursor: pointer; user-select: none; }
+.retention-log { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; font-size: 12px; }
+.retention-log li { padding: 4px 8px; border-bottom: 1px solid var(--border); }
+.retention-log li:last-child { border-bottom: none; }

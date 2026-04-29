@@ -681,6 +681,28 @@ Read-side awareness test in `crates/cortex-storage/src/metadata.rs`:
 
 - `union_read_returns_identical_totals_before_and_after_rollup`
 
+## Observability (phase9i)
+
+Every sweeper stamps one `retention_sweeps` row per invocation and
+emits one `cortex.events.enriched` event of `kind=retention.*`. The
+dashboard's Retention tab (spec
+[16-dashboard.md §"Retention view"](16-dashboard.md))
+subscribes to both surfaces:
+
+- `GET /v1/retention/sweeps?limit=N&since=RFC3339` — recent rows
+  with the per-stage JSON breakdown surfaced as a `stages` object
+  the GUI projects into one card per sweep type.
+- `GET /v1/retention/state` — `archive_bytes` bucketed by age,
+  `cas` totals, `next_runs` (all `"never"` until phase9k publishes
+  a cron schedule).
+- `GET /v1/dashboard/timeline/stream` — SSE; the GUI filters for
+  events whose `kind` starts with `retention.` and renders the
+  last 100 in a live log strip.
+
+Together these close the observability loop on Phase 9: a sweeper
+that fails twice in a row surfaces a red banner in the Retention
+tab without anyone needing to grep `retention_sweeps`.
+
 ## Auto-memory consolidator (phase9h)
 
 Claude Code's auto-memory writes one Markdown file per memory under

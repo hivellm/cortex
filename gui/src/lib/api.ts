@@ -486,6 +486,60 @@ export const api = {
   healthDivergence: () => getJson<DivergenceRow[]>("/v1/health/divergence"),
   healthVersions: () => getJson<VersionsReport>("/v1/health/versions"),
   healthConfig: () => getJson<ConfigAudit>("/v1/health/config"),
+
+  // Phase9i — retention dashboard endpoints. `sweeps` is paginated
+  // by `limit`; `state` is a compact snapshot. Both are cached via
+  // TanStack Query at the call site.
+  retentionSweeps: (limit = 50, since?: string) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(limit));
+    if (since) params.set("since", since);
+    return getJson<RetentionSweepRow[]>(`/v1/retention/sweeps?${params.toString()}`);
+  },
+  retentionState: () => getJson<RetentionStateBody>("/v1/retention/state"),
+};
+
+// Phase9i — retention dashboard types. Mirror-images of the Rust
+// `RetentionSweepBody` / `RetentionStateBody` structs.
+export type RetentionSweepRow = {
+  sweep_id: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  records_demoted: number;
+  records_dropped: number;
+  /// Per-stage counters parsed from `tier_transitions_json`. Keys
+  /// are stage names; values carry the stage's own JSON shape.
+  stages: Record<string, unknown>;
+};
+
+export type RetentionArchiveBuckets = {
+  le_30d: number;
+  "30d_to_365d": number;
+  gt_365d: number;
+  total: number;
+  root: string;
+  available: boolean;
+};
+
+export type RetentionCasTotals = {
+  rows: number;
+  bytes: number;
+  available: boolean;
+  path: string;
+};
+
+export type RetentionScheduledRun = {
+  sweep: string;
+  next_run: string;
+};
+
+export type RetentionStateBody = {
+  collections: unknown[];
+  archive_bytes: RetentionArchiveBuckets;
+  meili_indexes: unknown[];
+  cas: RetentionCasTotals;
+  next_runs: RetentionScheduledRun[];
 };
 
 export type StatusBody = {

@@ -34,7 +34,8 @@ export type IconName =
   | "tag"
   | "git"
   | "block"
-  | "alert";
+  | "alert"
+  | "archive";
 
 type IconProps = { name: IconName; size?: number; stroke?: number };
 
@@ -108,6 +109,8 @@ export function Icon({ name, size = 16, stroke = 1.6 }: IconProps): JSX.Element 
       return (<svg {...props}><circle cx="12" cy="12" r="9"/><path d="M5.5 5.5l13 13"/></svg>);
     case "alert":
       return (<svg {...props}><path d="M12 3l10 17H2L12 3z"/><path d="M12 10v5M12 18v.5" strokeWidth="2"/></svg>);
+    case "archive":
+      return (<svg {...props}><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>);
     default:
       return null;
   }
