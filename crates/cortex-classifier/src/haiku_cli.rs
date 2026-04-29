@@ -228,12 +228,41 @@ impl Classifier for HaikuCliClassifier {
         let cleaned = strip_code_fence(&inner_text);
         let inner: ClassifierOutputBatch = serde_json::from_str(cleaned.trim())?;
 
-        if inner.events.len() != events.len() {
-            return Err(ClassifierError::LengthMismatch {
-                expected: events.len(),
-                actual: inner.events.len(),
-            });
-        }
+        // The model is supposed to return exactly one record per input
+        // in arrival order, but sonnet occasionally emits extra
+        // entries (an echoed example or a duplicate). When that
+        // happens, fall back to matching by `event_id` so a single
+        // bad record doesn't drop the whole batch into the static
+        // fallback path. Strict zip is kept for the equal-length
+        // happy path because it's the canonical contract and indexes
+        // are cheaper than HashMap lookups.
+        let records = if inner.events.len() == events.len() {
+            inner.events
+        } else {
+            tracing::warn!(
+                expected = events.len(),
+                actual = inner.events.len(),
+                "classifier returned non-canonical batch size; matching by event_id"
+            );
+            let mut by_id: std::collections::HashMap<String, ClassifierRecord> = inner
+                .events
+                .into_iter()
+                .filter_map(|rec| rec.event_id.clone().map(|id| (id, rec)))
+                .collect();
+            let mut aligned: Vec<ClassifierRecord> = Vec::with_capacity(events.len());
+            for input in events {
+                match by_id.remove(&input.event_id) {
+                    Some(rec) => aligned.push(rec),
+                    None => {
+                        return Err(ClassifierError::LengthMismatch {
+                            expected: events.len(),
+                            actual: aligned.len(),
+                        });
+                    }
+                }
+            }
+            aligned
+        };
 
         let latency_ms = started.elapsed().as_millis() as u32;
         let tokens_in = outer.tokens.as_ref().and_then(|t| t.input).unwrap_or(0);
@@ -241,7 +270,7 @@ impl Classifier for HaikuCliClassifier {
 
         Ok(events
             .iter()
-            .zip(inner.events)
+            .zip(records)
             .map(|(input, rec)| ClassifierOutput {
                 event_id: input.event_id.clone(),
                 kind_refinement: rec.kind_refinement,
