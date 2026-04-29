@@ -318,11 +318,36 @@ async fn main() -> Result<()> {
         "tasks loader: rooted at .rulebook/"
     );
     let tasks = StdArc::new(cortex_api::TaskLoader::new(rulebook_root));
+
+    // SQLite metadata store powering `series.classifier_cost_usd_today`.
+    // Opened best-effort — when the file is unreachable (first boot
+    // before `cortex-classifier-worker` ran, permission issues, etc.)
+    // the dashboard ribbon stays "—" until the worker creates the DB.
+    let metadata_path = resolve_metadata_db_path();
+    let metadata = match cortex_storage::MetadataStore::open(&metadata_path) {
+        Ok(store) => {
+            tracing::info!(
+                metadata_db = %metadata_path.display(),
+                "metadata store opened — classifier cost ribbon enabled"
+            );
+            Some(StdArc::new(std::sync::Mutex::new(store)))
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                metadata_db = %metadata_path.display(),
+                "metadata store unavailable — classifier cost ribbon stays empty"
+            );
+            None
+        }
+    };
+
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword_memory.clone(),
         nexus: nexus_client,
         analyzer,
         tasks,
+        metadata,
     };
 
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph);
@@ -339,6 +364,33 @@ async fn main() -> Result<()> {
     let app = cortex_api::build_router_with(service, Some(dashboard_state));
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Resolve the SQLite metadata database path. Precedence:
+/// 1. `CORTEX_METADATA_DB` (full path override).
+/// 2. `${CORTEX_HOME}/metadata.sqlite` when `CORTEX_HOME` is set.
+/// 3. `<home>/.cortex/metadata.sqlite` (cross-platform default).
+///
+/// Centralised so the API and the classifier-worker resolve the same
+/// file — they share the database (worker writes, API reads).
+fn resolve_metadata_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("CORTEX_HOME") {
+        return PathBuf::from(home).join("metadata.sqlite");
+    }
+    home_dir().join(".cortex").join("metadata.sqlite")
+}
+
+fn home_dir() -> PathBuf {
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h);
+    }
+    if let Ok(h) = std::env::var("USERPROFILE") {
+        return PathBuf::from(h);
+    }
+    PathBuf::from(".")
 }
 
 /// Build a Nexus client from `CORTEX_NEXUS_URL` (or `NEXUS_URL` as
