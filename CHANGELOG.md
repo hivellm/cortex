@@ -98,6 +98,12 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **NEW typed API clients** in `gui/src/lib/api.ts` (`healthOverview`, `healthFreshness`, `healthDivergence`, `healthVersions`, `healthConfig`) + matching TypeScript types (`HealthOverview`, `FreshnessRow`, `DivergenceRow`, `VersionsReport`, `ConfigAudit`, `HealthSnapshot`).
 - 5 new vitest tests in `gui/src/views/Health.test.tsx` covering banner rendering, subsystem cards, divergence-row visibility, config-audit ok-row filtering, freshness gap-label format. `pnpm test` reports 15/15 passing.
 
+#### Observability — CI smoke gate (phase8h)
+- **NEW `.github/workflows/health-smoke.yml`** — runs on every PR + push to main, matrix `[ubuntu-latest, windows-latest]`, 12-minute budget. Boots the full stack (cortex-ingestion + cortex-api + cortex-adapter-claude-code), polls `/v1/health`, then runs `health` + `doctor-versions` + `doctor-config` + `cortex-ops canary` in series. Any non-clean exit fails the PR. Failure path uploads `$CORTEX_HOME/logs/*.log` as a named artifact for postmortem.
+- **NEW `scripts/ci/boot-stack.{sh,bat}` + `teardown-stack.{sh,bat}`** — reusable boot helpers. Honour `CORTEX_HOME` for concurrent-run isolation. `boot-stack` waits for `/v1/health.overall` to reach `ok` or `degraded` (60 s timeout); `teardown-stack` reads `$CORTEX_PIDS_FILE` and SIGTERM (then SIGKILL after 5 s) every spawned daemon.
+- **NEW `.github/PULL_REQUEST_TEMPLATE.md`** — adds a "Health checks" section with checkboxes for `scripts/health`, `scripts/doctor-versions`, `scripts/doctor-config`, `scripts/canary` outcomes. Soft cultural signal that complements the automated workflow gate.
+- Closes the regression-reaches-main failure class: a bug like the 2026-04-28 JSON truncation cannot merge because the canary in CI would round-trip a multi-line `\n`-escaped frame and observe the missing envelope.
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.

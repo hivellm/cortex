@@ -1,0 +1,162 @@
+name: Health smoke
+
+# Phase8h — boot the full Cortex stack inside CI for every PR and
+# run the synthetic canary plus the doctor checks against it. If the
+# canary times out or any doctor check flags a critical finding, the
+# workflow fails the PR.
+#
+# Today's `cargo test` suite uses in-process fakes (MemoryPublisher,
+# MemoryKeywordLane, …). It would not have caught the 2026-04-28
+# JSON truncation bug because the bug only manifested over a real
+# named pipe with a real binary. CI must boot the binaries.
+#
+# External services (Vectorizer / Nexus / Synap / Meili) are NOT
+# booted — the cortex-api Memory* lane fallbacks let the smoke run
+# exercise the adapter → ingestion → archive path end-to-end without
+# them. The doctor checks treat the missing services as `degraded`,
+# which is the expected smoke shape.
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+  push:
+    branches: [main, master, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  health-smoke:
+    name: Health smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build workspace (release)
+        run: cargo build --release --workspace --bins
+
+      # Boot the stack. Each runner gets an isolated CORTEX_HOME so
+      # parallel jobs (matrix or rerun) don't collide on the
+      # checkout's `~/.cortex` shadow.
+      - name: Boot stack (Linux)
+        if: runner.os == 'Linux'
+        env:
+          CORTEX_HOME: ${{ runner.temp }}/cortex-home-${{ github.run_id }}-${{ github.run_attempt }}
+          CORTEX_BOOT_TIMEOUT_SECS: '90'
+        run: |
+          chmod +x scripts/ci/boot-stack.sh
+          scripts/ci/boot-stack.sh
+
+      - name: Boot stack (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CORTEX_HOME: ${{ runner.temp }}\cortex-home-${{ github.run_id }}-${{ github.run_attempt }}
+          CORTEX_BOOT_TIMEOUT_SECS: '90'
+        run: scripts\ci\boot-stack.bat
+        shell: cmd
+
+      # Doctor checks — each must exit non-zero to fail the job. The
+      # workflow keeps every check independent so the artifact upload
+      # captures whichever step caught the regression.
+      - name: cortex-doctor health
+        id: doctor_health
+        env:
+          CORTEX_API_URL: http://127.0.0.1:17000
+        run: |
+          # Aggregator overall: 0 ok, 1 degraded, 2 down, 3 unreachable.
+          # Smoke gate accepts 0 + 1 (the empty-stack lanes degrade
+          # gracefully). 2/3 fail the PR.
+          set +e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            scripts/health.bat
+          else
+            chmod +x scripts/health.sh
+            scripts/health.sh
+          fi
+          rc=$?
+          if [ "$rc" -gt 1 ]; then exit 1; fi
+        shell: bash
+
+      - name: cortex-doctor versions
+        id: doctor_versions
+        env:
+          CORTEX_API_URL: http://127.0.0.1:17000
+        run: |
+          set +e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            scripts/doctor-versions.bat
+          else
+            chmod +x scripts/doctor-versions.sh
+            scripts/doctor-versions.sh
+          fi
+          rc=$?
+          # Exit 0 ok, 1 drift, 2 unreachable. CI treats drift as
+          # critical because the workflow just built every binary
+          # in-place — drift means cargo cached a stale artifact.
+          if [ "$rc" -ne 0 ]; then exit 1; fi
+        shell: bash
+
+      - name: cortex-doctor config
+        id: doctor_config
+        run: |
+          set +e
+          cargo run --quiet --release -p cortex-cli --bin cortex-ops -- doctor-config --json
+          rc=$?
+          # Exit 0 ok, 1 warn, 2 critical. Smoke gate treats critical
+          # as failing; warns are allowed (e.g. missing adapter.toml
+          # in a fresh CI checkout).
+          if [ "$rc" -ge 2 ]; then exit 1; fi
+        shell: bash
+
+      - name: cortex-doctor canary
+        id: doctor_canary
+        env:
+          CORTEX_API_URL: http://127.0.0.1:17000
+        run: |
+          set +e
+          cargo run --quiet --release -p cortex-cli --bin cortex-ops -- canary --hook=PostToolUse --deadline-secs=15 --json
+          rc=$?
+          # 0 success, 1 transport error, 2 timeout. Both 1 and 2
+          # fail the PR — the whole point of the canary is regression
+          # detection.
+          if [ "$rc" -ne 0 ]; then exit 1; fi
+        shell: bash
+
+      - name: Upload stack logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cortex-logs-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/cortex-home-${{ github.run_id }}-${{ github.run_attempt }}/logs/**
+          if-no-files-found: warn
+
+      - name: Teardown stack (Linux)
+        if: always() && runner.os == 'Linux'
+        env:
+          CORTEX_HOME: ${{ runner.temp }}/cortex-home-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          chmod +x scripts/ci/teardown-stack.sh
+          scripts/ci/teardown-stack.sh
+
+      - name: Teardown stack (Windows)
+        if: always() && runner.os == 'Windows'
+        env:
+          CORTEX_HOME: ${{ runner.temp }}\cortex-home-${{ github.run_id }}-${{ github.run_attempt }}
+        run: scripts\ci\teardown-stack.bat
+        shell: cmd

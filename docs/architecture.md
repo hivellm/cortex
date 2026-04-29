@@ -830,6 +830,64 @@ shows a tiny pill in the header carrying the overall health label.
 Click to jump to `/health`. Polls `/v1/health` every 5 s — the
 user can't miss a stack-degraded state while browsing other views.
 
+## 13.12 Observability — CI smoke gate (phase8h)
+
+phase8a–8g detect issues in *production*. phase8h closes the loop:
+prevent the issues from reaching production at all by booting the
+full Cortex stack inside CI for every PR and running the synthetic
+canary plus the doctor checks against it. If the canary times out
+or any doctor check flags a critical finding, the workflow fails
+the PR.
+
+Today's `cargo test` suite uses in-process fakes
+(`MemoryPublisher`, `MemoryKeywordLane`, …). It would not have
+caught the 2026-04-28 JSON truncation bug because the bug only
+manifested over a real named pipe with a real binary. CI must
+boot the binaries.
+
+Components:
+- **NEW `.github/workflows/health-smoke.yml`** — runs on every PR
+  and push to main, matrix `[ubuntu-latest, windows-latest]`,
+  12-minute budget per matrix entry.
+- **NEW `scripts/ci/boot-stack.{sh,bat}`** — spawn cortex-ingestion,
+  cortex-api, cortex-adapter-claude-code in the background; wait
+  for `/v1/health` to report `ok` or `degraded` (60 s timeout);
+  pid file at `$CORTEX_PIDS_FILE` for teardown.
+- **NEW `scripts/ci/teardown-stack.{sh,bat}`** — read the pid file
+  and SIGTERM (then SIGKILL after 5 s) every spawned daemon.
+  Idempotent.
+- **CORTEX_HOME isolation** — every run gets
+  `${{ runner.temp }}/cortex-home-<run_id>-<attempt>` so concurrent
+  matrix legs don't collide on a shared `~/.cortex`.
+
+Doctor checks gate the PR (each must exit clean):
+1. `scripts/health.{bat,sh}` (phase8a) — overall ≤ degraded.
+2. `scripts/doctor-versions.{bat,sh}` (phase8c) — no drift between
+   running binaries and HEAD (CI just built them, drift means a
+   stale cargo cache).
+3. `scripts/doctor-config.{bat,sh}` (phase8d) — no critical
+   findings (warns allowed; e.g. missing adapter.toml in a fresh
+   CI checkout).
+4. `cortex-ops canary --hook=PostToolUse --deadline-secs=15`
+   (phase8f) — synthetic frame round-trips through real IPC.
+
+Failure path: when any step fails, the workflow uploads the
+`$CORTEX_HOME/logs/*.log` files as a named artifact
+(`cortex-logs-<os>-<run_id>-<attempt>`) so the PR author can
+download and inspect them without re-running CI locally.
+
+External services (Vectorizer / Nexus / Synap / Meili) are NOT
+booted — the cortex-api `Memory*` lane fallbacks already let the
+stack boot without them, and the doctor checks treat the missing
+services as `degraded`, which is the expected smoke shape.
+Live-service integration runs in a separate nightly workflow
+once that's worth the runner cost.
+
+NEW `.github/PULL_REQUEST_TEMPLATE.md` carries a soft "Health
+checks" section with checkboxes for the four scripts. The
+workflow is the enforced gate; the template raises author
+awareness.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)
