@@ -49,6 +49,34 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Phase9e — LLM turn digest summarizer. Bucketizes turns
+    /// older than 30 d by `(repo, ISO_year_week, top_topic)` and
+    /// produces one Sonnet-driven `:Memory{memory_type="turn_digest"}`
+    /// per non-empty bucket whose size ≥ 5. Idempotent (already-
+    /// digested buckets are no-ops; `--rebuild` re-summarizes in
+    /// place); cost-aware via the per-run budget ceiling.
+    ///
+    /// Today's CLI is a synthetic-suite preview against the
+    /// in-memory backend; the production walker (Parquet + classifier
+    /// + embedder + Nexus + Parquet rewriter) lands with phase9k.
+    TurnDigest {
+        /// Override "now" for tests + scheduled runs.
+        #[arg(long, value_name = "RFC3339")]
+        time_travel: Option<String>,
+        /// Print the bucket plan + per-bucket outcomes without
+        /// classifier mutation.
+        #[arg(long)]
+        dry_run: bool,
+        /// Re-summarize buckets that already have a digest.
+        #[arg(long)]
+        rebuild: bool,
+        /// Per-run budget ceiling in US cents.
+        #[arg(long, default_value_t = 500)]
+        budget_cents: u64,
+        /// Emit JSON instead of plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase9d — PII retention enforcement. Drops `pii_risk=high`
     /// raw payloads at 30 d (Parquet body blanked, Vectorizer +
     /// Meili records purged, CAS refcount decremented) and re-
@@ -309,6 +337,13 @@ fn main() -> ExitCode {
             json,
         } => doctor_config(workspace, adapter_toml, json),
         Command::DoctorAlerts { state_dir, json } => doctor_alerts(state_dir, json),
+        Command::TurnDigest {
+            time_travel,
+            dry_run,
+            rebuild,
+            budget_cents,
+            json,
+        } => turn_digest(time_travel, dry_run, rebuild, budget_cents, json),
         Command::PiiEnforce {
             time_travel,
             dry_run,
@@ -1014,6 +1049,109 @@ fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Phase9e — `cortex-ops turn-digest`. Today's surface is a
+/// synthetic preview against the in-memory backend; the production
+/// pipeline (Parquet walker → classifier → embedder → Nexus →
+/// Parquet rewriter) lands with phase9k's cron scheduler. The CLI
+/// prints the bucket plan + per-bucket outcomes so operators can
+/// verify the spec contract before phase9k runs the live pipeline.
+fn turn_digest(
+    time_travel: Option<String>,
+    dry_run: bool,
+    rebuild: bool,
+    budget_cents: u64,
+    json: bool,
+) -> ExitCode {
+    use cortex_retention::turn_digest::{
+        run_turn_digest, DigestPlan, MemoryDigestBackend, Turn,
+    };
+
+    let now = match time_travel {
+        Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(e) => {
+                eprintln!("--time-travel parse error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => chrono::Utc::now(),
+    };
+
+    let mut plan = DigestPlan::default_for(now);
+    plan.dry_run = dry_run;
+    plan.rebuild = rebuild;
+    plan.max_usd_cents_per_run = budget_cents;
+
+    // Synthetic preview suite — 8 turns @ 60 days under (alpha,
+    // ISO_week, "auth") plus 8 turns under (alpha, same week,
+    // "ingestion"). Bucketize emits 2 buckets ≥ min_bucket_size=5.
+    let mut turns = Vec::new();
+    for topic in ["auth", "ingestion"] {
+        for i in 0..8 {
+            turns.push(Turn {
+                event_id: format!("01PREVIEW-{topic}-{i}"),
+                repo: "alpha".to_string(),
+                occurred_at: now - chrono::Duration::days(60),
+                top_topic: topic.to_string(),
+                summarized_by: None,
+            });
+        }
+    }
+
+    let backend = MemoryDigestBackend::new();
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let report = match runtime.block_on(run_turn_digest(&plan, &backend, turns)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("turn-digest: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if json {
+        match serde_json::to_string_pretty(&report) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops turn-digest (preview)");
+        println!("now:                  {}", now.to_rfc3339());
+        println!("dry_run:              {dry_run}");
+        println!("rebuild:              {rebuild}");
+        println!("budget_cents:         {budget_cents}");
+        println!("examined:             {}", report.examined);
+        println!("buckets_done:         {}", report.buckets_done);
+        println!("already_digested:     {}", report.already_digested);
+        println!("buckets_pending:      {}", report.buckets_pending);
+        println!("usd_cents:            {}", report.usd_cents);
+        for o in &report.outcomes {
+            let label = if o.digested {
+                "OK      "
+            } else if o.already_digested {
+                "ALREADY "
+            } else if o.error.is_some() {
+                "FAILED  "
+            } else {
+                "PENDING "
+            };
+            println!("  {label}  {}", o.key);
+        }
+    }
+    ExitCode::SUCCESS
 }
 
 /// Phase9d — `cortex-ops pii-enforce`. Today's surface is a

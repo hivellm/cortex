@@ -394,3 +394,103 @@ contract before phase9k wires the production backend.
 - `already_redacted_target_is_skipped`
 - `high_path_records_error_when_vector_delete_fails`
 - `report_cohort_counts_json_round_trips`
+
+## LLM turn digest summarizer (phase9e)
+
+Phase9a–9d shrink storage record-by-record. They keep one row per
+turn forever — a repo with 10 000 daily turns over a year yields
+3.6 M `:Turn` nodes plus 3.6 M Vectorizer vectors plus 3.6 M Meili
+docs, most of which is noisy back-and-forth nobody will ever query
+individually. Phase9e produces a dense weekly digest per `(repo,
+ISO_year_week, top_topic)` so the long tail becomes a small set of
+queryable narratives.
+
+### Cohort matrix
+
+Turns enter the digest pipeline when **all** of the following hold:
+
+- `occurred_at < now - digest_after_days` (default 30 d)
+- `payload.summarized_by` is `None` (idempotence guard)
+- The bucket size ≥ `min_bucket_size` (default 5)
+
+Single-turn weeks fall below the threshold and are left for the
+phase9b parquet rollup to consolidate.
+
+### Bucket key
+
+`(repo, year_week, top_topic)` — `year_week` uses the ISO 8601
+label (`YYYY-Www`) so weeks span midnight Sunday→Sunday across
+timezones. `top_topic` falls back to `"other"` for untagged turns.
+
+### `DigestBackend` trait surface
+
+The orchestrator is library-only; production wires the live
+classifier (Sonnet via `cortex-classifier`) + embedder + Nexus
+writer + Parquet rewriter. Tests use `MemoryDigestBackend` for
+in-memory round-trips with one-shot failure injection.
+
+```rust
+#[async_trait]
+pub trait DigestBackend: Send + Sync {
+    async fn lookup_existing(&self, repo, year_week, top_topic) -> Result<Option<String>>;
+    async fn summarize(&self, bucket) -> Result<DigestResult>;
+    async fn persist_digest(&self, bucket, digest) -> Result<String>;
+    async fn tag_source_turns(&self, digest_event_id, event_ids) -> Result<()>;
+}
+```
+
+`persist_digest` does the entire write fan-out in one call:
+`cortex.events.enriched` emit + embed + Nexus `:Memory` insert +
+`(:Memory)-[:SUMMARIZES]->(:Turn)` edges. Returns the digest event
+id so the orchestrator's follow-up `tag_source_turns` call sets
+`payload.summarized_by` on every source turn's Parquet row.
+
+### Cost ceiling
+
+`max_usd_cents_per_run` (default 500) caps the per-run spend.
+The orchestrator checks the running total before each
+`lookup_existing` call so a budget cut-off resumes from the same
+point on the next run. Buckets the cut-off cut surface in
+`buckets_pending` for the dashboard's retention view.
+
+### Idempotence
+
+`run_turn_digest` calls `lookup_existing(repo, year_week, top_topic)`
+before the classifier; an existing digest short-circuits unless
+`--rebuild` is on. A re-run with no new old turns reports
+`buckets_done = 0`, `already_digested = N`, `usd_cents = 0`.
+
+### CLI surface
+
+```sh
+cortex-ops turn-digest \
+    [--time-travel <RFC3339>] \
+    [--dry-run] \
+    [--rebuild] \
+    [--budget-cents N] \
+    [--json]
+```
+
+Today's CLI runs against a synthetic 16-target preview suite
+covering two topics in one week so operators can verify the
+bucketize + budget + persist contract before phase9k wires the
+production walker.
+
+### Test surface (turn digest, phase9e)
+
+14 unit tests in `crates/cortex-retention/src/turn_digest.rs`:
+
+- `iso_year_week_uses_rfc_label`
+- `bucket_key_is_pipe_joined`
+- `bucketize_groups_old_turns_by_repo_week_topic`
+- `bucketize_filters_below_min_size`
+- `bucketize_excludes_fresh_turns`
+- `bucketize_excludes_already_digested_turns`
+- `run_persists_one_digest_per_bucket_in_call_order`
+- `idempotent_re_run_does_not_call_summarize`
+- `rebuild_flag_re_summarises_existing_buckets`
+- `dry_run_records_pending_without_calling_classifier`
+- `budget_ceiling_stops_run_cleanly`
+- `per_bucket_failure_records_error_and_continues`
+- `report_turn_digest_json_round_trips`
+- `plan_default_uses_spec_thresholds`

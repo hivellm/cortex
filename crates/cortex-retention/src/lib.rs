@@ -30,6 +30,7 @@
 pub mod cas_vacuum;
 pub mod parquet_rollup;
 pub mod pii_enforce;
+pub mod turn_digest;
 
 use std::collections::BTreeMap;
 
