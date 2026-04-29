@@ -103,7 +103,7 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
         include: vec![IncludeField::Snippets, IncludeField::GraphNeighbors],
         budget_ms: 1000,
     };
-    let resp = orch.run(&req).await;
+    let (resp, _rewritten) = orch.run(&req).await;
     assert_eq!(resp.results.graph_neighbors.len(), 1);
     let neigh = &resp.results.graph_neighbors[0];
     assert_eq!(neigh.from, "DEC-0042");
@@ -182,7 +182,7 @@ async fn fail_open_when_nexus_unreachable_through_orchestrator() {
         include: vec![IncludeField::Snippets, IncludeField::GraphNeighbors],
         budget_ms: 1000,
     };
-    let resp = orch.run(&req).await;
+    let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.graph_neighbors.is_empty());
     assert!(
         resp.debug.errors.contains_key("graph"),

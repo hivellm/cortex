@@ -160,6 +160,77 @@ async fn run_daemon(
         signal_shutdown.notify_waiters();
     });
 
+    // Phase8a — admin /healthz listener. Spawned independently so a
+    // crash in the IPC path doesn't break health probes (and vice
+    // versa). Port comes from CORTEX_ADAPTER_ADMIN_PORT (default
+    // 17011 — published in cortex_health::DEFAULT_ADAPTER_ADMIN_PORT).
+    let admin_port = std::env::var("CORTEX_ADAPTER_ADMIN_PORT")
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok())
+        .unwrap_or(cortex_health::DEFAULT_ADAPTER_ADMIN_PORT);
+    let metrics_for_health = metrics.clone();
+    let started_at = chrono::Utc::now().to_rfc3339();
+    // The IPC pipe is alive once `serve()` starts accepting; stamp
+    // it true here and rely on `serve()` to flip it false on
+    // shutdown (out of scope for this commit — the health stays
+    // honest while the process is up).
+    metrics.set_ipc_pipe_alive(true);
+    let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
+        use cortex_health::server::HealthSnapshot;
+        use cortex_health::{HealthState, DEFAULT_FRESHNESS_DEGRADED_SECS};
+        let mut extras = serde_json::Map::new();
+        let queue_depth = metrics_for_health.publisher_queue_depth();
+        let wal_bytes = metrics_for_health.wal_bytes();
+        let last_publish_ok_ts_ms = metrics_for_health.last_publish_ok_ts_ms();
+        let ipc_alive = metrics_for_health.ipc_pipe_alive();
+        extras.insert("publisher_queue_depth".into(), serde_json::json!(queue_depth));
+        extras.insert("wal_bytes".into(), serde_json::json!(wal_bytes));
+        extras.insert(
+            "last_publish_ok_ts_ms".into(),
+            serde_json::json!(last_publish_ok_ts_ms),
+        );
+        extras.insert("ipc_pipe_alive".into(), serde_json::json!(ipc_alive));
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        let stale = last_publish_ok_ts_ms > 0
+            && now_ms.saturating_sub(last_publish_ok_ts_ms)
+                > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000;
+        let (state, last_error) = if !ipc_alive {
+            (HealthState::Down, Some("ipc pipe not alive".to_string()))
+        } else if stale || wal_bytes > 0 {
+            (
+                HealthState::Degraded,
+                Some(format!(
+                    "publisher stalled (last_publish_ok={last_publish_ok_ts_ms}ms, wal_bytes={wal_bytes})"
+                )),
+            )
+        } else {
+            (HealthState::Ok, None)
+        };
+        HealthSnapshot {
+            state,
+            last_error,
+            extras,
+        }
+    });
+    let admin_started_at = started_at.clone();
+    tokio::spawn(async move {
+        if let Err(e) = cortex_health::server::serve_standalone(
+            admin_port,
+            "cortex-adapter",
+            env!("CARGO_PKG_VERSION"),
+            admin_started_at,
+            provider,
+        )
+        .await
+        {
+            tracing::warn!(error = %e, port = admin_port, "admin /healthz listener failed");
+        }
+    });
+    tracing::info!(
+        admin_port,
+        "cortex-adapter admin /healthz listening on http://0.0.0.0:{admin_port}/healthz"
+    );
+
     tracing::info!(
         endpoint = %adapter.endpoint,
         api_endpoint = %adapter.api_endpoint,

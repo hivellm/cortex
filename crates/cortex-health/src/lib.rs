@@ -10,6 +10,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "server")]
+pub mod server;
+
+#[cfg(feature = "client")]
+pub mod client;
+
 use serde::{Deserialize, Serialize};
 
 /// Health state of one subsystem.

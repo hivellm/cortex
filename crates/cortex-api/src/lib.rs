@@ -28,6 +28,7 @@ pub mod meili_lane;
 pub mod meili_loader;
 pub mod nexus_graph_lane;
 pub mod orchestrator;
+pub mod query_rewrite;
 pub mod vectorizer_lane;
 pub mod rate_limit;
 pub mod redaction;

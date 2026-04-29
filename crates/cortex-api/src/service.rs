@@ -8,10 +8,13 @@ use std::sync::Arc;
 use axum::http::HeaderMap;
 
 use crate::acl::{AclDecision, AclStore};
-use crate::audit::{build_envelope_with_audit_context, AuditPublisher, MemoryAuditPublisher};
+use crate::audit::{
+    build_envelope_with_rewrite_context, AuditPublisher, MemoryAuditPublisher,
+};
 use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
+use crate::query_rewrite::RewrittenQuery;
 use crate::rate_limit::{RateConfig, RateDecision, RateLimiter};
 use crate::redaction::redact_response;
 use crate::types::{Notice, QueryRequest, QueryResponse, Scope};
@@ -342,20 +345,35 @@ impl QueryService {
             // request — the cached entry was stamped with whatever
             // the previous caller saw.
             hit.intent = req.intent.label().to_string();
+            // Phase6f §5.2 — even on cache hit we stamp the
+            // rewriter context so the dashboard can correlate
+            // hit/miss rates with the active strategy. The cache
+            // doesn't store the per-call RewrittenQuery (it pre-
+            // dates phase6f), so we re-run the rewriter against
+            // the original request to keep the audit field
+            // populated. The rewriter's own cache (when Sonnet)
+            // collapses this back to a hash lookup.
+            let rewritten = self
+                .orchestrator
+                .rewriter
+                .rewrite(&req.query, req.intent)
+                .await
+                .unwrap_or_else(|_| RewrittenQuery::passthrough(&req.query));
             self.audit
-                .publish(build_envelope_with_audit_context(
+                .publish(build_envelope_with_rewrite_context(
                     caller,
                     hit.intent.as_str(),
                     &hit,
                     resolution.as_str(),
                     &self.orchestrator.fusion,
                     intent_trigger.as_deref(),
+                    &rewritten,
                 ))
                 .await;
             return ServiceOutcome::Ok(Box::new(hit));
         }
 
-        let mut response = self.orchestrator.run(&req).await;
+        let (mut response, rewritten) = self.orchestrator.run(&req).await;
         redact_response(&mut response);
         // Stamp ACL + scope echo before caching so the audit layer
         // sees the canonical view. The echoed `repo` carries the
@@ -383,13 +401,14 @@ impl QueryService {
         }
         self.cache.put(&key, response.clone()).await;
         self.audit
-            .publish(build_envelope_with_audit_context(
+            .publish(build_envelope_with_rewrite_context(
                 caller,
                 req.intent.label(),
                 &response,
                 resolution.as_str(),
                 &self.orchestrator.fusion,
                 intent_trigger.as_deref(),
+                &rewritten,
             ))
             .await;
         ServiceOutcome::Ok(Box::new(response))

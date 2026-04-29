@@ -50,7 +50,7 @@ Each finding has stable id `F-NNN`, evidence with file:line citations, the relev
 
 **Confidence:** High.
 
-**Tracked by:** Not tracked. Candidate for a new task.
+**Tracked by:** Not tracked. **Closed by:** [`phase6f_relevance_query_rewriting_pre_pass`](../../../.rulebook/tasks/phase6f_relevance_query_rewriting_pre_pass/proposal.md) — `QueryRewriter` trait + three impls (`passthrough` / `noun_phrase` / `sonnet`) wired into the orchestrator pre-fan-out and stamped on the audit envelope. See [spec 11 §Query rewriting](../../specs/11-query-api.md#query-rewriting-phase6f).
 
 ---
 
@@ -99,3 +99,17 @@ Each finding has stable id `F-NNN`, evidence with file:line citations, the relev
 **Confidence:** High.
 
 **Tracked by:** R9. **Closed by:** [`phase6e_relevance_recall_mrr_harness`](../../../.rulebook/tasks/phase6e_relevance_recall_mrr_harness/proposal.md) — labeled query set + harness binary + CI gate landed; reports persist to `.rulebook/learnings/relevance/`.
+
+---
+
+## F-009 — Meili artifact projection prefers path over body. The keyword lane lands every `kind=artifact` hit with `text = "<path>"` instead of the file content; code-side terms (`JWT`, `refresh_token`, function/struct names) are invisible to the projected snippet text.
+
+**Evidence:** [`crates/cortex-api/src/meili_lane.rs:175-216`](../../../crates/cortex-api/src/meili_lane.rs) — pre-phase6g `project()` used a fixed `summary > title > body` chain. Artifact docs written by the bootstrap walker have `summary = ""`, `title = path`, `body = real content`, so the chain stopped at `title`. 2026-04-28 live-stack probe: `free_search "JWT refresh vectorizer auth" / scope=cortex` returned `crates/cortex-api/src/main.rs` and `docker-compose.yml` but **not** `crates/cortex-api/src/vectorizer_lane.rs` — the only file in the repo that contains `LoginCreds` / `refresh_token`.
+
+**Impact:** Every "Cortex didn't find the obvious file" complaint that traces back to artifact-kind docs. Meili's BM25 ranking already considered `body` (the index settings include it in `searchableAttributes`), so the right file *was* found — it just got projected through the wrong field on the way back to the orchestrator. The fused snippet ladder then ranked file paths against curated summaries; paths lost on text length and dropped out of the top-10.
+
+**Severity:** Medium — single read-side bug; the index data is correct.
+
+**Confidence:** High — verified by direct probe + read of the projection function.
+
+**Tracked by:** Not previously tracked. **Closed by:** [`phase6g_relevance_meili_body_projection`](../../../.rulebook/tasks/phase6g_relevance_meili_body_projection/proposal.md) — `MeiliKeywordLane::project` now uses a kind-aware precedence chain (`body > summary > title` for artifact / law_violation; curated kinds keep `summary > title > body`; turn-shaped kinds use `summary > body > title`). See [spec 08 §Read-side projection](../../specs/08-fulltext-indexer.md#read-side-projection-phase6g).

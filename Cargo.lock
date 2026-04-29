@@ -477,6 +477,7 @@ dependencies = [
  "clap",
  "cortex-api",
  "cortex-core",
+ "cortex-health",
  "cortex-pre-thinking",
  "reqwest 0.12.28",
  "serde",
@@ -504,6 +505,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-core",
+ "cortex-health",
  "cortex-storage",
  "futures",
  "nexus-graph-sdk",
@@ -596,9 +598,14 @@ dependencies = [
 name = "cortex-health"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
 ]
 
 [[package]]
@@ -610,6 +617,7 @@ dependencies = [
  "axum",
  "chrono",
  "cortex-core",
+ "cortex-health",
  "cortex-storage",
  "reqwest 0.12.28",
  "serde",
@@ -690,6 +698,7 @@ dependencies = [
  "clap",
  "cortex-classifier",
  "cortex-core",
+ "cortex-health",
  "cortex-storage",
  "nexus-graph-sdk",
  "reqwest 0.12.28",

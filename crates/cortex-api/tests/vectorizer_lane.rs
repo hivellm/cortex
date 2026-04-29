@@ -143,8 +143,8 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
     };
-    let resp_alpha = orch.run(&req_alpha).await;
-    let resp_beta = orch.run(&req_beta).await;
+    let (resp_alpha, _) = orch.run(&req_alpha).await;
+    let (resp_beta, _) = orch.run(&req_beta).await;
 
     let alpha_text: Vec<_> = resp_alpha
         .results
@@ -196,7 +196,7 @@ async fn fail_open_when_vectorizer_unreachable_through_orchestrator() {
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
     };
-    let resp = orch.run(&req).await;
+    let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.snippets.is_empty());
     assert!(
         resp.debug.errors.contains_key("vector"),

@@ -10,7 +10,28 @@ description = "Shared health-report types and aggregator for the Cortex stack (p
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+# `server` pulls in axum + tokio so worker binaries can spawn an
+# admin /healthz listener with a one-line call. Crates that already
+# own an axum Router (cortex-api, cortex-ingestion) skip this
+# feature and mount the SubsystemStatus serializer inline.
+server = ["dep:axum", "dep:tokio", "dep:tracing"]
+# `client` pulls in reqwest so the cortex-api aggregator can fan
+# out across `/healthz` URLs without re-implementing the probe loop.
+client = ["dep:reqwest", "dep:tokio"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
+axum = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+reqwest = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }

@@ -396,6 +396,31 @@ async fn audit_publisher_emits_one_envelope_per_request() {
         "intent_trigger key must be present (null is allowed)"
     );
     assert!(env["intent_trigger"].is_null());
+    // Phase6f — the rewriter context lands on every envelope so
+    // the harness can attribute uplift to the active strategy and
+    // operators can debug why a query routed where it did. The
+    // default test wiring uses the passthrough rewriter, so both
+    // queries echo the original prompt and the strategy stamps
+    // accordingly.
+    assert_eq!(
+        env.get("query_rewrite_strategy").and_then(|v| v.as_str()),
+        Some("passthrough"),
+        "query_rewrite_strategy must be present in audit envelope: {env}"
+    );
+    assert!(
+        env.get("vector_query")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        "vector_query must be present + non-empty: {env}"
+    );
+    assert!(
+        env.get("keyword_query")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        "keyword_query must be present + non-empty: {env}"
+    );
 }
 
 #[tokio::test]

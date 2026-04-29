@@ -34,7 +34,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let metrics = Arc::new(Metrics::default());
-    let state = AppState::new(archive.clone(), publisher, metrics);
+    let state = AppState::new(archive.clone(), publisher, metrics)
+        .with_archive_root(cfg.archive_root.clone());
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(cfg.bind).await?;

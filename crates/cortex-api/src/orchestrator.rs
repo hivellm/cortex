@@ -13,6 +13,7 @@ use serde_json::json;
 
 use crate::fusion::{rrf_fuse, FusionConfig};
 use crate::lanes::{GraphLane, KeywordLane, LaneHit, VectorLane};
+use crate::query_rewrite::{PassthroughRewriter, QueryRewriter, RewrittenQuery};
 use crate::strategies::{build_plan, Overlay, Plan};
 use crate::types::{
     empty_response, BudgetReport, DecisionRef, GraphNeighbor, IncludeField, Intent, LawRef,
@@ -36,6 +37,13 @@ pub struct Orchestrator {
     /// don't have to thread the config through their own
     /// constructors.
     pub fusion: FusionConfig,
+    /// Phase6f — pre-fan-out query rewriter. Defaults to
+    /// [`PassthroughRewriter`] so existing constructors and tests
+    /// reproduce today's behaviour. The live binary swaps in
+    /// [`crate::query_rewrite::NounPhraseRewriter`] (default) or
+    /// [`crate::query_rewrite::SonnetRewriter`] based on
+    /// `CORTEX_QUERY_REWRITER`.
+    pub rewriter: Arc<dyn QueryRewriter>,
 }
 
 impl Orchestrator {
@@ -52,6 +60,7 @@ impl Orchestrator {
             keyword,
             graph,
             fusion: FusionConfig::default(),
+            rewriter: Arc::new(PassthroughRewriter),
         }
     }
 
@@ -64,11 +73,59 @@ impl Orchestrator {
         self
     }
 
-    /// Run the request end-to-end. The caller decides whether to
-    /// short-circuit on a cache hit before invoking this.
-    pub async fn run(&self, req: &QueryRequest) -> QueryResponse {
+    /// Phase6f — install a query rewriter that fires once before
+    /// per-lane fan-out. Builder method so existing
+    /// [`Orchestrator::new`] callers stay unchanged; default is
+    /// [`PassthroughRewriter`] (today's behaviour).
+    pub fn with_rewriter(mut self, rewriter: Arc<dyn QueryRewriter>) -> Self {
+        self.rewriter = rewriter;
+        self
+    }
+
+    /// Run the request end-to-end and return the response paired
+    /// with the [`RewrittenQuery`] the rewriter produced (so the
+    /// caller can stamp the audit envelope). The caller decides
+    /// whether to short-circuit on a cache hit before invoking this.
+    pub async fn run(&self, req: &QueryRequest) -> (QueryResponse, RewrittenQuery) {
         let started = Instant::now();
-        let plan = build_plan(req);
+
+        // Phase6f §4.1 — rewrite the prompt once, then patch each
+        // per-lane request's `query` field with the appropriate
+        // rewritten string. The rewriter's `Result` collapses to a
+        // passthrough on failure so a flaky upstream never fails the
+        // user-facing call here.
+        let rewritten = match self.rewriter.rewrite(&req.query, req.intent).await {
+            Ok(r) => r,
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    "query rewriter returned an error; falling back to passthrough"
+                );
+                RewrittenQuery::passthrough(&req.query)
+            }
+        };
+
+        let mut plan = build_plan(req);
+        for v in plan.vectors.iter_mut() {
+            v.query = rewritten.vector_query.clone();
+        }
+        for k in plan.keywords.iter_mut() {
+            k.query = rewritten.keyword_query.clone();
+        }
+        // The graph lane today binds the original prompt as the
+        // `query` Cypher param (most templates ignore it; the few
+        // that match against text use the noun-phrase form). We
+        // stamp the vector_query for consistency — same shape as
+        // the embedding lane sees.
+        for g in plan.graphs.iter_mut() {
+            if let Some(obj) = g.params.as_object_mut() {
+                obj.insert(
+                    "query".to_string(),
+                    serde_json::Value::String(rewritten.vector_query.clone()),
+                );
+            }
+        }
+        let plan = plan;
         let total_budget = Duration::from_millis(req.budget_ms.max(1));
         let split = plan.split_pct;
 
@@ -255,7 +312,7 @@ impl Orchestrator {
             response.results.graph_neighbors.clear();
             response.results.similar_turns.clear();
         }
-        response
+        (response, rewritten)
     }
 }
 

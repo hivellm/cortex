@@ -30,6 +30,11 @@ pub struct AppState {
     pub publisher: Arc<dyn Publisher>,
     /// Metrics.
     pub metrics: Arc<Metrics>,
+    /// Phase8a — process start instant + writable archive root the
+    /// `/healthz` handler reports on.
+    pub started_at: Arc<std::time::Instant>,
+    /// Archive root path (best-effort writability probe in `/healthz`).
+    pub archive_root: Arc<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -43,7 +48,17 @@ impl AppState {
             archive,
             publisher,
             metrics,
+            started_at: Arc::new(std::time::Instant::now()),
+            archive_root: Arc::new(std::path::PathBuf::new()),
         }
+    }
+
+    /// Phase8a — record the resolved archive root so `/healthz` can
+    /// surface a writability probe extra. The boot path in `main.rs`
+    /// chains `with_archive_root(cfg.archive_root)` after `new()`.
+    pub fn with_archive_root(mut self, root: std::path::PathBuf) -> Self {
+        self.archive_root = Arc::new(root);
+        self
     }
 }
 
@@ -51,14 +66,84 @@ impl AppState {
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/v1/healthz", get(healthz))
         .route("/metrics", get(metrics))
         .route("/v1/events", post(ingest_one))
         .route("/v1/events/batch", post(ingest_batch))
         .with_state(state)
 }
 
-async fn healthz() -> &'static str {
-    "ok"
+async fn healthz(State(state): State<AppState>) -> Response {
+    use cortex_health::{HealthState, SubsystemStatus, DEFAULT_FRESHNESS_DEGRADED_SECS};
+    let started_at = chrono::Utc::now()
+        .checked_sub_signed(chrono::Duration::milliseconds(
+            i64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(0),
+        ))
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let mut status = SubsystemStatus::ok(
+        "cortex-ingestion",
+        env!("CARGO_PKG_VERSION"),
+        started_at,
+    );
+    // Archive root writability — the readwrite property of the
+    // mount that backs the events archive. A non-writable root is
+    // hard-down: every ingest call would fail.
+    let root = state.archive_root.as_ref().clone();
+    let archive_writable = if root.as_os_str().is_empty() {
+        // No root configured (test harness path) — report as
+        // unknown rather than failing the probe. The metric still
+        // surfaces in extras so the operator can see the gap.
+        false
+    } else {
+        // Probe by trying to create + remove a tiny file. Avoids
+        // the "directory exists" trap of `metadata()` (read-only
+        // mounts still return success there).
+        let probe = root.join(".cortex-ingestion-healthz");
+        let writable = std::fs::write(&probe, b"ok").is_ok();
+        if writable {
+            let _ = std::fs::remove_file(&probe);
+        }
+        writable
+    };
+    status.extras.insert(
+        "archive_root".into(),
+        serde_json::Value::String(root.display().to_string()),
+    );
+    status.extras.insert(
+        "archive_writable".into(),
+        serde_json::Value::Bool(archive_writable),
+    );
+    // Last-batch-accepted timestamp — Metrics tracks the last
+    // successful ingest. Stale > 60s flips the state to degraded
+    // (the upstream caller went silent).
+    let last_batch_ts_ms = state.metrics.last_batch_accepted_ts_ms();
+    status.extras.insert(
+        "last_batch_accepted_ts_ms".into(),
+        serde_json::json!(last_batch_ts_ms),
+    );
+    let now_ms = chrono::Utc::now().timestamp_millis() as u64;
+    let stale = last_batch_ts_ms > 0
+        && now_ms.saturating_sub(last_batch_ts_ms)
+            > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000;
+    if !archive_writable && !root.as_os_str().is_empty() {
+        status.state = HealthState::Down;
+        status.last_error = Some(format!(
+            "archive root not writable: {}",
+            root.display()
+        ));
+    } else if stale {
+        status.state = HealthState::Degraded;
+        status.last_error = Some(format!(
+            "no batch accepted in last {} secs",
+            DEFAULT_FRESHNESS_DEGRADED_SECS
+        ));
+    }
+    let http_status = match status.state {
+        HealthState::Ok | HealthState::Degraded => StatusCode::OK,
+        HealthState::Down => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (http_status, axum::Json(status)).into_response()
 }
 
 async fn metrics(State(state): State<AppState>) -> Response {
@@ -369,6 +454,9 @@ async fn process_event(
             .events_routed_bootstrap
             .fetch_add(1, Ordering::Relaxed),
     };
+    // Phase8a — stamp the most recent successful ingest so
+    // /healthz can detect "no batch in last 60s" and downgrade.
+    state.metrics.record_batch_accepted_now();
     Ok((stream_name, hits))
 }
 

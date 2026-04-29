@@ -555,6 +555,35 @@ Throughput target v1: **500 events/sec sustained**, **2 000 events/sec burst**, 
 
 ---
 
+## 13.5 Observability — health endpoints (phase8a)
+
+Every long-running Cortex binary exposes a `GET /healthz` returning
+a [`SubsystemStatus`](../crates/cortex-health/src/lib.rs) JSON
+record (`{name, state, latency_ms, last_error?, version, since,
+extras}`). `cortex-api` aggregates them into a single
+`GET /v1/health` report whose `overall` is the worst observed
+state across the stack — `Down` > `Degraded` > `Ok`.
+
+```
+operator → /v1/health on cortex-api (port 17000)
+            ├─ self-report (cortex-api uptime, indexed_repos)
+            ├─ /healthz on cortex-adapter-claude-code (port 17011)
+            ├─ /v1/healthz on cortex-ingestion (port 17010)
+            └─ /healthz on each worker (17021..17024)
+```
+
+Per-probe budget is 1.5 s. A failed probe marks the row `Down`
+with a `last_error` reason but never fails the aggregator call,
+so a single dead worker can't take down the whole report. The
+operator scripts `scripts/health.sh` / `scripts/health.bat` print
+the report and exit `0`/`1`/`2`/`3` for `ok`/`degraded`/`down`/
+`unreachable` — wire into CI smoke jobs to catch silent stack
+degradation in <2 s.
+
+Closes the 2026-04-28 incident class where every component
+looked individually healthy but the stack was silently degraded
+(adapter publisher had stalled; the gap took ~2 hours to trace).
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

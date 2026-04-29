@@ -151,4 +151,19 @@ impl Metrics {
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
+
+    /// Phase8a — sum of every per-index `documents_total` counter,
+    /// surfaced as `documents_total` in the `/healthz` extras.
+    pub fn documents_total(&self) -> u64 {
+        self.documents_total
+            .lock()
+            .map(|m| m.values().copied().sum())
+            .unwrap_or(0)
+    }
+
+    /// Phase8a — read the cumulative skipped-empty counter so the
+    /// /healthz endpoint can flag a worker stuck on bad input.
+    pub fn skipped_empty_total(&self) -> u64 {
+        self.skipped_empty.load(Ordering::Relaxed)
+    }
 }

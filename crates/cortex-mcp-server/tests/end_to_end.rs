@@ -1,7 +1,7 @@
 //! End-to-end MCP server tests:
-//! - `tools/call cortex.query` against a wiremock'd `cortex-api`.
-//! - `tools/call cortex.status` against a wiremock'd `/v1/status`.
-//! - `tools/call cortex.query` returns a soft-error envelope when
+//! - `tools/call cortex_query` against a wiremock'd `cortex-api`.
+//! - `tools/call cortex_status` against a wiremock'd `/v1/status`.
+//! - `tools/call cortex_query` returns a soft-error envelope when
 //!   the upstream API is unreachable.
 //!
 //! Each test boots a [`Server`] with a [`ToolContext`] pointing at a
@@ -46,7 +46,7 @@ async fn tools_call_query_round_trips_through_wiremock() {
         "id": 1,
         "method": "tools/call",
         "params": {
-            "name": "cortex.query",
+            "name": "cortex_query",
             "arguments": {
                 "intent": "free_search",
                 "query": "ef_search",
@@ -96,7 +96,7 @@ async fn tools_call_query_surfaces_spec_11_reason_on_4xx() {
         "id": 7,
         "method": "tools/call",
         "params": {
-            "name": "cortex.query",
+            "name": "cortex_query",
             "arguments": {
                 "intent": "free_search",
                 "query": "x",
@@ -130,7 +130,7 @@ async fn tools_call_query_returns_api_unreachable_when_upstream_dead() {
         "id": 9,
         "method": "tools/call",
         "params": {
-            "name": "cortex.query",
+            "name": "cortex_query",
             "arguments": {
                 "intent": "free_search",
                 "query": "x",
@@ -169,7 +169,7 @@ async fn tools_call_status_reports_reachable_when_v1_status_responds() {
         "jsonrpc": "2.0",
         "id": 11,
         "method": "tools/call",
-        "params": { "name": "cortex.status", "arguments": {} }
+        "params": { "name": "cortex_status", "arguments": {} }
     });
     let raw = server
         .handle_frame(frame.to_string().as_bytes())
@@ -191,7 +191,7 @@ async fn tools_call_status_marks_api_unreachable_on_dead_upstream() {
         "jsonrpc": "2.0",
         "id": 13,
         "method": "tools/call",
-        "params": { "name": "cortex.status", "arguments": {} }
+        "params": { "name": "cortex_status", "arguments": {} }
     });
     let raw = server
         .handle_frame(frame.to_string().as_bytes())
@@ -245,7 +245,7 @@ async fn tools_call_pre_thinking_returns_bundle_when_upstream_returns_results() 
         "id": 21,
         "method": "tools/call",
         "params": {
-            "name": "cortex.pre_thinking",
+            "name": "cortex_pre_thinking",
             "arguments": {
                 "user_prompt": "what is the ef_search default?",
                 "cwd": tmp.path().to_string_lossy(),

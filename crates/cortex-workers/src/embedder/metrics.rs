@@ -100,4 +100,19 @@ impl Metrics {
         self.oversize_without_summary
             .fetch_add(1, Ordering::Relaxed);
     }
+
+    /// Phase8a — sum of every per-source `chunks_total_*` counter,
+    /// surfaced in the `/healthz` extras as `chunks_written_total`.
+    pub fn chunks_written_total(&self) -> u64 {
+        self.chunks_total_code.load(Ordering::Relaxed)
+            + self.chunks_total_doc.load(Ordering::Relaxed)
+            + self.chunks_total_summary.load(Ordering::Relaxed)
+            + self.chunks_total_fallback_window.load(Ordering::Relaxed)
+            + self.chunks_total_raw_oversize.load(Ordering::Relaxed)
+    }
+
+    /// Phase8a — read the cumulative Vectorizer-error counter.
+    pub fn vectorizer_errors_total(&self) -> u64 {
+        self.vectorizer_errors.load(Ordering::Relaxed)
+    }
 }

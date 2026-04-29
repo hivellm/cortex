@@ -201,11 +201,58 @@ pub(crate) fn project_doc(
     Ok(project(doc, req))
 }
 
-/// Project one Meili document into a `LaneHit`. Uses `summary` as
-/// the snippet text when present (the spec-08 body-selection rule
-/// stamps it), otherwise the raw `body`. The `source` label is
-/// always `"keyword"` so the orchestrator's source-attribution
-/// stays honest.
+/// Phase6g — bytes threshold above which a projected body emits a
+/// `tracing::debug!` so operators can flag oversized chunks. Mirrors
+/// the upstream value the fulltext worker uses to decide whether to
+/// route a body through the summary-substitution path
+/// (`cortex_workers::fulltext::OVERSIZE_BODY_BYTES = 4 KiB`); kept
+/// as a local const because the API crate does not depend on the
+/// workers crate (avoids the cyclic-feeling reverse dep).
+const PROJECTED_BODY_DEBUG_BYTES: usize = 4 * 1024;
+
+/// Phase6g — pick the field that actually carries searchable
+/// content for `kind`. The pre-phase6g chain (`summary > title >
+/// body`) was wrong for `kind=artifact`: code/doc files have
+/// `summary = ""`, `title = path`, `body = real content`, so the
+/// chain stopped at `title` and every artifact hit landed in the
+/// response with `text = "<path>"`. Meili's BM25 ranking already
+/// considered `body`, so the bug was purely read-side: the right
+/// document was found, then projected through the wrong field.
+///
+/// Per-kind precedence:
+///
+/// | kind                          | precedence                   |
+/// | ----------------------------- | ---------------------------- |
+/// | `artifact`, `law_violation`   | `body > summary > title`     |
+/// | `decision`, `analysis`,       | `summary > title > body`     |
+/// | `memory`                      |                              |
+/// | `turn`, `tool_call`,          | `summary > body > title`     |
+/// | `agent_call`                  |                              |
+/// | _anything else / `None`_      | `summary > title > body`     |
+///
+/// Each branch returns a `Vec<&Option<String>>` of references to
+/// the typed `MeiliDoc` fields in the chosen order; the caller
+/// picks the first non-empty one. Returning references keeps the
+/// hot path allocation-free.
+fn projection_chain<'a>(
+    kind: Option<&str>,
+    summary: &'a Option<String>,
+    title: &'a Option<String>,
+    body: &'a Option<String>,
+) -> [&'a Option<String>; 3] {
+    match kind {
+        Some("artifact") | Some("law_violation") => [body, summary, title],
+        Some("decision") | Some("analysis") | Some("memory") => [summary, title, body],
+        Some("turn") | Some("tool_call") | Some("agent_call") => [summary, body, title],
+        _ => [summary, title, body],
+    }
+}
+
+/// Project one Meili document into a `LaneHit`. Uses a kind-aware
+/// precedence chain to pick the most-content-bearing field for
+/// `LaneHit.text` (phase6g). The `source` label is always
+/// `"keyword"` so the orchestrator's source-attribution stays
+/// honest.
 fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     let event_id = doc
         .event_id
@@ -216,17 +263,24 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     // distinct from archive / vector hits keyed on the same event.
     let doc_id = format!("meili|{}|{}", req.index, event_id);
 
-    // Prefer the curated summary when the worker stamped one;
-    // otherwise the title gives shape; otherwise the raw body. Each
-    // fallback is a smaller-but-still-honest projection — never an
-    // empty string when the doc has any text content.
-    let text = doc
-        .summary
-        .clone()
-        .filter(|s| !s.is_empty())
-        .or_else(|| doc.title.clone().filter(|s| !s.is_empty()))
-        .or_else(|| doc.body.clone())
+    // Phase6g — kind-aware text projection. See `projection_chain`
+    // for the per-kind table. Each fallback is a smaller-but-still-
+    // honest projection — never an empty string when the doc has
+    // any text content.
+    let chain = projection_chain(doc.kind.as_deref(), &doc.summary, &doc.title, &doc.body);
+    let text = chain
+        .iter()
+        .find_map(|slot| slot.as_ref().filter(|s| !s.is_empty()).cloned())
         .unwrap_or_default();
+    if text.len() > PROJECTED_BODY_DEBUG_BYTES {
+        tracing::debug!(
+            doc_id = %doc_id,
+            kind = ?doc.kind,
+            bytes = text.len(),
+            threshold = PROJECTED_BODY_DEBUG_BYTES,
+            "projected body exceeds debug threshold; orchestrator trim ladder will clamp"
+        );
+    }
 
     let mut extras = std::collections::BTreeMap::new();
     // The orchestrator's `lane_label` reads `extras["source"]` and
@@ -414,5 +468,175 @@ mod tests {
                 extras_raw: self.extras_raw.clone(),
             }
         }
+    }
+
+    // ---- Phase6g — kind-aware projection regression set ----
+
+    fn doc_with(
+        kind: &str,
+        title: Option<&str>,
+        body: Option<&str>,
+        summary: Option<&str>,
+    ) -> MeiliDoc {
+        MeiliDoc {
+            event_id: Some("evt-x".into()),
+            kind: Some(kind.into()),
+            path: title.map(String::from),
+            title: title.map(String::from),
+            body: body.map(String::from),
+            summary: summary.map(String::from),
+            ..MeiliDoc::default()
+        }
+    }
+
+    #[test]
+    fn artifact_kind_prefers_body_over_path_title() {
+        // Pre-phase6g regression: artifact docs landed with `text =
+        // path` because the chain stopped at `title`. With the new
+        // chain, body wins and the actual file content reaches the
+        // bundle. This is the headline behaviour change.
+        let doc = doc_with(
+            "artifact",
+            Some("crates/cortex-api/src/vectorizer_lane.rs"),
+            Some("pub struct LoginCreds { ... } pub fn refresh_token() {}"),
+            None,
+        );
+        let hit = project(doc, &req("LoginCreds"));
+        assert_eq!(
+            hit.text, "pub struct LoginCreds { ... } pub fn refresh_token() {}",
+            "artifact text must surface body, not the file path"
+        );
+        // The path is preserved separately on `LaneHit.path` — no
+        // information lost, only the masking removed.
+        assert_eq!(
+            hit.path.as_deref(),
+            Some("crates/cortex-api/src/vectorizer_lane.rs")
+        );
+    }
+
+    #[test]
+    fn artifact_kind_falls_through_to_summary_when_body_empty() {
+        let doc = doc_with(
+            "artifact",
+            Some("README.md"),
+            None,
+            Some("project overview"),
+        );
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "project overview");
+    }
+
+    #[test]
+    fn artifact_kind_falls_through_to_title_when_body_and_summary_empty() {
+        let doc = doc_with("artifact", Some("README.md"), None, None);
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "README.md");
+    }
+
+    #[test]
+    fn law_violation_kind_prefers_body() {
+        // Violation messages live in body — same shape as artifact.
+        let doc = doc_with(
+            "law_violation",
+            Some("LAW-007"),
+            Some("operator ran git push --force on main"),
+            None,
+        );
+        let hit = project(doc, &req("force push"));
+        assert_eq!(hit.text, "operator ran git push --force on main");
+    }
+
+    #[test]
+    fn decision_kind_keeps_summary_first() {
+        // Curated kinds always have a summary; the inverted chain
+        // would surface raw body and lose the curated lede. Pin the
+        // summary-first contract for decision/analysis/memory.
+        let doc = doc_with(
+            "decision",
+            Some("ADR-0042"),
+            Some("long body verbatim"),
+            Some("Adopt Meilisearch over Lexum (curated)"),
+        );
+        let hit = project(doc, &req("meili"));
+        assert_eq!(hit.text, "Adopt Meilisearch over Lexum (curated)");
+    }
+
+    #[test]
+    fn analysis_kind_falls_through_to_title_when_summary_empty() {
+        let doc = doc_with(
+            "analysis",
+            Some("Relevance audit 2026-04"),
+            Some("body verbatim"),
+            None,
+        );
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "Relevance audit 2026-04");
+    }
+
+    #[test]
+    fn memory_kind_falls_through_to_body_when_summary_and_title_empty() {
+        let doc = doc_with("memory", None, Some("note body"), None);
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "note body");
+    }
+
+    #[test]
+    fn turn_kind_uses_summary_then_body_then_title() {
+        // Turn / tool_call / agent_call: summary first (classifier
+        // crops the wall of text), body second (raw transcript when
+        // no summary), title last.
+        let doc = doc_with(
+            "turn",
+            Some("title"),
+            Some("body verbatim"),
+            Some("classifier summary"),
+        );
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "classifier summary");
+
+        let doc_no_summary = doc_with("turn", Some("title"), Some("body verbatim"), None);
+        let hit2 = project(doc_no_summary, &req("x"));
+        assert_eq!(hit2.text, "body verbatim");
+
+        let doc_only_title = doc_with("turn", Some("title"), None, None);
+        let hit3 = project(doc_only_title, &req("x"));
+        assert_eq!(hit3.text, "title");
+    }
+
+    #[test]
+    fn tool_call_kind_uses_same_chain_as_turn() {
+        let doc = doc_with("tool_call", Some("Edit"), Some("touched src/lib.rs"), None);
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "touched src/lib.rs");
+    }
+
+    #[test]
+    fn unknown_kind_falls_back_to_summary_title_body() {
+        let doc = doc_with("widget", Some("title"), Some("body"), Some("summary"));
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "summary");
+    }
+
+    #[test]
+    fn missing_kind_uses_default_chain() {
+        let mut doc = doc_with("widget", Some("title"), Some("body"), None);
+        doc.kind = None;
+        let hit = project(doc, &req("x"));
+        // Default chain matches today's behaviour for kind-less docs.
+        assert_eq!(hit.text, "title");
+    }
+
+    #[test]
+    fn artifact_with_all_fields_empty_returns_empty_text() {
+        // Orchestrator's degenerate-hit filter drops these — the
+        // projection just hands back an empty string. Confirm the
+        // chain doesn't panic on the all-None case.
+        let doc = MeiliDoc {
+            event_id: Some("evt-empty".into()),
+            kind: Some("artifact".into()),
+            ..MeiliDoc::default()
+        };
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "");
     }
 }

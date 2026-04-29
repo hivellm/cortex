@@ -356,8 +356,10 @@ async fn main() -> Result<()> {
         k = fusion.k,
         "fusion config resolved (CORTEX_RRF_ALPHA / CORTEX_RRF_K)"
     );
-    let orchestrator =
-        Orchestrator::new(vector, keyword.clone(), graph).with_fusion(fusion);
+    let rewriter = resolve_query_rewriter_from_env();
+    let orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
+        .with_fusion(fusion)
+        .with_rewriter(rewriter);
     // Wire the `keyword_memory` snapshot into the service so
     // `/v1/status.indexed_repos` and `notice.repo_not_indexed` (issue
     // hivellm/cortex#1) read from the same source the dashboard does.
@@ -484,4 +486,49 @@ fn resolve_fusion_config_from_env() -> cortex_api::fusion::FusionConfig {
         Err(_) => default.k,
     };
     cortex_api::fusion::FusionConfig::new(alpha, k)
+}
+
+/// Phase6f — pick the [`cortex_api::query_rewrite::QueryRewriter`]
+/// implementation from `CORTEX_QUERY_REWRITER`.
+///
+/// Recognised values:
+/// - `noun_phrase` (default) — deterministic noun-phrase strip, no
+///   network call.
+/// - `sonnet` — Anthropic Sonnet rewrite per cache miss; falls back
+///   to noun-phrase on timeout / upstream error so a flaky upstream
+///   never fails the user-facing call.
+/// - `passthrough` — kill-switch reproducing the pre-phase6f
+///   behaviour (prompt copied verbatim to every lane).
+///
+/// Unknown values log a `WARN` and fall back to `noun_phrase`.
+fn resolve_query_rewriter_from_env() -> Arc<dyn cortex_api::query_rewrite::QueryRewriter> {
+    use cortex_api::query_rewrite::{
+        NounPhraseRewriter, PassthroughRewriter, SonnetRewriter,
+    };
+    let raw = std::env::var("CORTEX_QUERY_REWRITER")
+        .ok()
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty());
+    let strategy = match raw.as_deref() {
+        None | Some("noun_phrase") => "noun_phrase",
+        Some("sonnet") => "sonnet",
+        Some("passthrough") => "passthrough",
+        Some(other) => {
+            tracing::warn!(
+                raw = %other,
+                "CORTEX_QUERY_REWRITER unknown; falling back to noun_phrase"
+            );
+            "noun_phrase"
+        }
+    };
+    tracing::info!(
+        rewriter = strategy,
+        "query rewriter resolved (CORTEX_QUERY_REWRITER)"
+    );
+    match strategy {
+        "noun_phrase" => Arc::new(NounPhraseRewriter::new()),
+        "sonnet" => Arc::new(SonnetRewriter::from_env()),
+        "passthrough" => Arc::new(PassthroughRewriter),
+        _ => unreachable!("strategy normalised above"),
+    }
 }

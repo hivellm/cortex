@@ -201,6 +201,39 @@ The `body` field is the primary searchable text. Selection priority:
 
 The raw payload is **never** indexed without redaction.
 
+### Read-side projection (phase6g)
+
+When [`cortex_api::meili_lane`](../../crates/cortex-api/src/meili_lane.rs)
+projects a Meili hit back into a `LaneHit` for the orchestrator,
+the field that becomes `LaneHit.text` is **kind-aware**. The
+pre-phase6g chain (`summary > title > body`) was wrong for
+`kind=artifact`: code/doc files have `summary = ""`,
+`title = path`, `body = real content`, so the chain stopped at
+`title` and every artifact hit landed with `text = "<path>"`,
+masking the actual file content. Closes
+[F-009](../analysis/relevance/01-findings.md#f-009--meili-artifact-projection-prefers-path-over-body).
+
+| `doc.kind`                           | Precedence for `LaneHit.text`     |
+| ------------------------------------ | --------------------------------- |
+| `artifact`, `law_violation`          | `body > summary > title`          |
+| `decision`, `analysis`, `memory`     | `summary > title > body`          |
+| `turn`, `tool_call`, `agent_call`    | `summary > body > title`          |
+| _anything else / `None`_             | `summary > title > body`          |
+
+`LaneHit.path` is populated separately, so demoting `path` from
+`text` does not lose information — it just stops it from masking
+the body. Bodies above `4 KiB` emit a `tracing::debug!` so
+operators can flag oversized chunks; the orchestrator's existing
+trim ladder enforces the per-snippet byte cap.
+
+The fulltext-worker write path also gained an additive guard
+(`crates/cortex-workers/src/fulltext/builders.rs`): when
+`select_body` produces text but `body`, `summary`, AND `title` all
+end up empty after derivation, `tracing::warn!` records the
+`event_id` + `content_hash` so the upstream emitter can be traced.
+The doc is still written — the warn is informational, not a write
+gate.
+
 ### Cross-backend consistency doctor (phase4d)
 
 `cortex-ops doctor-consistency` runs out-of-band (operator command, not part of the worker boot path) and reports per-`(repo, family)` coverage across the event archive, Meilisearch, Vectorizer, and Nexus. The query-overlap probe mode is carved out into `phase4i_doctor_query_overlap_mode`.

@@ -14,6 +14,9 @@ use cortex_classifier::{
     build_offline_stack, build_stack, BudgetTracker, Classifier, ClassifierCache, ClassifierStack,
     HaikuCliClassifier, HaikuCliConfig, InMemoryCache, PricingTable,
 };
+use cortex_workers::admin_health::{
+    resolve_port_from_env, rules, spawn_health_listener, DEFAULT_CLASSIFIER_PORT,
+};
 use cortex_workers::classifier::{
     ClassifierMode, ClassifierWorkerConfig, LiveSynapConsumer, LiveSynapPublisher, SynapHandle,
     Worker,
@@ -94,6 +97,36 @@ async fn main() -> Result<()> {
         tracing::info!("ctrl-c received; initiating shutdown");
         shutdown_handle.store(true, Ordering::Relaxed);
     });
+
+    // Phase8a §2.7 — admin /healthz listener. The classifier
+    // worker doesn't carry a metric registry yet, so the snapshot
+    // reports the process as alive (Synap connection succeeded
+    // above — otherwise we'd have errored out before reaching
+    // here) and surfaces the configured worker pool size as an
+    // extra. The freshness rule keeps the report honest: until
+    // the worker observes its first message, the state stays
+    // `Degraded` with a "warming up" reason.
+    let port = resolve_port_from_env(
+        "CORTEX_CLASSIFIER_HEALTH_PORT",
+        DEFAULT_CLASSIFIER_PORT,
+    );
+    let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
+        let mut extras = serde_json::Map::new();
+        extras.insert("workers_configured".into(), serde_json::json!(2u64));
+        let (state, last_error) = rules::freshness_state(started_ms, None);
+        cortex_health::server::HealthSnapshot {
+            state,
+            last_error,
+            extras,
+        }
+    });
+    spawn_health_listener(
+        port,
+        "cortex-classifier-worker",
+        env!("CARGO_PKG_VERSION"),
+        provider,
+    );
 
     worker.run_pool(shutdown).await
 }

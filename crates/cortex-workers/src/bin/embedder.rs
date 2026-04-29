@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
+use cortex_workers::admin_health::{
+    resolve_port_from_env, rules, spawn_health_listener, DEFAULT_EMBEDDER_PORT,
+};
 use cortex_workers::embedder::{
     EmbedderConfig, LiveSynapConsumer, LiveSynapPublisher, LiveVectorizerClient, Metrics,
     SynapHandle, VectorizerEmbedder, Worker,
@@ -98,6 +101,39 @@ async fn main() -> Result<()> {
         tracing::info!("ctrl-c received; initiating shutdown");
         shutdown_handle.store(true, Ordering::Relaxed);
     });
+
+    // Phase8a §2.8 — admin /healthz listener. Reads chunks-written
+    // / vectorizer-errors counters from the shared Metrics
+    // registry so the report carries the live throughput signal.
+    let port = resolve_port_from_env(
+        "CORTEX_EMBEDDER_HEALTH_PORT",
+        DEFAULT_EMBEDDER_PORT,
+    );
+    let metrics_for_health = worker.metrics.clone();
+    let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
+        let mut extras = serde_json::Map::new();
+        extras.insert(
+            "chunks_written_total".into(),
+            serde_json::json!(metrics_for_health.chunks_written_total()),
+        );
+        extras.insert(
+            "vectorizer_errors_total".into(),
+            serde_json::json!(metrics_for_health.vectorizer_errors_total()),
+        );
+        let (state, last_error) = rules::freshness_state(started_ms, None);
+        cortex_health::server::HealthSnapshot {
+            state,
+            last_error,
+            extras,
+        }
+    });
+    spawn_health_listener(
+        port,
+        "cortex-embedder-worker",
+        env!("CARGO_PKG_VERSION"),
+        provider,
+    );
 
     worker.run_pool(shutdown).await
 }

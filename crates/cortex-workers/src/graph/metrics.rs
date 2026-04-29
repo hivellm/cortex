@@ -122,6 +122,15 @@ impl Metrics {
             .map(|guard| guard.clone())
             .unwrap_or_default()
     }
+
+    /// Phase8a — sum of every per-type `edges_dropped` counter,
+    /// surfaced as `edges_dropped_total` in the `/healthz` extras.
+    pub fn edges_dropped_total(&self) -> u64 {
+        self.edges_dropped
+            .lock()
+            .map(|m| m.values().copied().sum())
+            .unwrap_or(0)
+    }
 }
 
 #[cfg(test)]

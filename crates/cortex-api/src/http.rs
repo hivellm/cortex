@@ -73,11 +73,144 @@ pub fn build_router_with(
     let mut router = Router::new()
         .route("/v1/query", post(handle_query))
         .route("/v1/status", get(handle_status))
+        .route("/healthz", get(handle_healthz))
+        .route("/v1/health", get(handle_v1_health))
         .with_state(state);
     if let Some(dash) = dashboard {
         router = router.merge(crate::dashboard::build_dashboard_router(dash));
     }
     router
+}
+
+async fn handle_healthz(State(state): State<ApiState>) -> Response {
+    use cortex_health::{HealthState, SubsystemStatus};
+    let started_at = chrono::Utc::now()
+        .checked_sub_signed(chrono::Duration::milliseconds(
+            i64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(0),
+        ))
+        .map(|t| t.to_rfc3339())
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+    let mut status = SubsystemStatus::ok(
+        "cortex-api",
+        env!("CARGO_PKG_VERSION"),
+        started_at,
+    );
+    let indexed_repos = state
+        .service
+        .indexed_repos
+        .as_ref()
+        .map(|lane| lane.indexed_repos())
+        .unwrap_or_default();
+    status.extras.insert(
+        "indexed_repos".into(),
+        serde_json::Value::Array(
+            indexed_repos
+                .iter()
+                .map(|s| serde_json::Value::String(s.clone()))
+                .collect(),
+        ),
+    );
+    status
+        .extras
+        .insert("uptime_ms".into(), serde_json::json!(state.started_at.elapsed().as_millis() as u64));
+    // Phase8a §2.2 — `degraded` when the keyword-lane snapshot is
+    // unavailable. The lane is the canonical source for repo
+    // coverage; without it the query path returns degraded results
+    // but the daemon itself is still answering.
+    if state.service.indexed_repos.is_none() {
+        status.state = HealthState::Degraded;
+        status.last_error = Some("keyword-lane snapshot not wired (no indexed_repos source)".into());
+    }
+    let http_status = match status.state {
+        HealthState::Ok | HealthState::Degraded => StatusCode::OK,
+        HealthState::Down => StatusCode::SERVICE_UNAVAILABLE,
+    };
+    (http_status, Json(status)).into_response()
+}
+
+async fn handle_v1_health(State(state): State<ApiState>) -> Response {
+    use cortex_health::client::{aggregate, build_client, AggregatorConfig, ProbeTarget};
+    use cortex_health::SubsystemStatus;
+
+    // Discover probe targets from env. Empty values fall back to
+    // the localhost defaults so the operator gets a useful report
+    // out of the box on a single-host install.
+    let mut targets: Vec<ProbeTarget> = Vec::new();
+    let candidates: &[(&'static str, &str, &str)] = &[
+        (
+            "cortex-adapter",
+            "CORTEX_ADAPTER_ADMIN_URL",
+            "http://127.0.0.1:17011/healthz",
+        ),
+        (
+            "cortex-ingestion",
+            "CORTEX_INGESTION_URL",
+            "http://127.0.0.1:17010/v1/healthz",
+        ),
+        (
+            "cortex-classifier-worker",
+            "CORTEX_CLASSIFIER_WORKER_URL",
+            "http://127.0.0.1:17021/healthz",
+        ),
+        (
+            "cortex-embedder-worker",
+            "CORTEX_EMBEDDER_WORKER_URL",
+            "http://127.0.0.1:17022/healthz",
+        ),
+        (
+            "cortex-fulltext-worker",
+            "CORTEX_FULLTEXT_WORKER_URL",
+            "http://127.0.0.1:17023/healthz",
+        ),
+        (
+            "cortex-graph-worker",
+            "CORTEX_GRAPH_WORKER_URL",
+            "http://127.0.0.1:17024/healthz",
+        ),
+    ];
+    for (name, key, default) in candidates {
+        let url = std::env::var(key)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| (*default).to_string());
+        targets.push(ProbeTarget {
+            name,
+            url,
+        });
+    }
+
+    // Self-report — the aggregator is part of cortex-api, so we
+    // emit a synthetic Ok row instead of fanning out to ourselves
+    // and risking a deadlock on a busy worker pool.
+    let mut self_report = SubsystemStatus::ok(
+        "cortex-api",
+        env!("CARGO_PKG_VERSION"),
+        chrono::Utc::now().to_rfc3339(),
+    );
+    self_report
+        .extras
+        .insert("uptime_ms".into(), serde_json::json!(state.started_at.elapsed().as_millis() as u64));
+
+    let client = match build_client(&AggregatorConfig::default()) {
+        Ok(c) => c,
+        Err(err) => {
+            // Couldn't build the HTTP client — emit a degraded
+            // self-row so the operator sees the failure mode
+            // explicitly.
+            let report = cortex_health::client::unknown_targets_report(
+                "cortex-api",
+                format!("aggregator client init failed: {err}"),
+            );
+            return (StatusCode::OK, Json(report)).into_response();
+        }
+    };
+    let mut report = aggregate(&client, &targets, &AggregatorConfig::default()).await;
+    // Insert the self-row so the table is complete; aggregator
+    // re-sorts after.
+    report.subsystems.push(self_report);
+    report.subsystems.sort_by(|a, b| a.name.cmp(&b.name));
+    let recomputed = cortex_health::HealthReport::aggregate(report.subsystems);
+    (StatusCode::OK, Json(recomputed)).into_response()
 }
 
 async fn handle_status(State(state): State<ApiState>) -> Response {

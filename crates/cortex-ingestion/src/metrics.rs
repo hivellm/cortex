@@ -23,6 +23,11 @@ pub struct Metrics {
     pub publisher_errors: AtomicU64,
     /// Archive write errors.
     pub archive_errors: AtomicU64,
+    /// Phase8a — Unix-epoch milliseconds of the most recent
+    /// successfully accepted batch. `0` until the first ingest
+    /// completes; `/healthz` reads this to detect "no batch in last
+    /// 60s" and downgrade to `degraded`.
+    pub last_batch_accepted_ts_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -63,7 +68,26 @@ impl Metrics {
             "cortex_archive_errors {}\n",
             self.archive_errors.load(Ordering::Relaxed)
         ));
+        out.push_str("# TYPE cortex_last_batch_accepted_ts_ms gauge\n");
+        out.push_str(&format!(
+            "cortex_last_batch_accepted_ts_ms {}\n",
+            self.last_batch_accepted_ts_ms.load(Ordering::Relaxed)
+        ));
         out
+    }
+
+    /// Stamp the current Unix-epoch ms onto
+    /// `last_batch_accepted_ts_ms`. Called from the ingest path
+    /// after a successful publish.
+    pub fn record_batch_accepted_now(&self) {
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        self.last_batch_accepted_ts_ms.store(now_ms, Ordering::Relaxed);
+    }
+
+    /// Read the most recent accepted-batch timestamp in
+    /// Unix-epoch ms. `0` means no batch has been accepted yet.
+    pub fn last_batch_accepted_ts_ms(&self) -> u64 {
+        self.last_batch_accepted_ts_ms.load(Ordering::Relaxed)
     }
 }
 

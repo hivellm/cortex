@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::fusion::FusionConfig;
+use crate::query_rewrite::RewrittenQuery;
 use crate::types::QueryResponse;
 
 /// Stream name spec 11 declares for the audit envelope.
@@ -144,6 +145,45 @@ pub fn build_envelope_with_audit_context(
                 Some(k) => Value::String(k.to_string()),
                 None => Value::Null,
             },
+        );
+    }
+    env
+}
+
+/// Phase6f — extends [`build_envelope_with_audit_context`] with the
+/// query-rewriter context (`query_rewrite_strategy`, `vector_query`,
+/// `keyword_query`). The harness in phase6e attributes uplift to
+/// the rewriter via these fields; operators read them when a
+/// specific query routed somewhere unexpected.
+pub fn build_envelope_with_rewrite_context(
+    caller: &str,
+    intent: &str,
+    response: &QueryResponse,
+    scope_resolution: &str,
+    fusion: &FusionConfig,
+    intent_trigger: Option<&str>,
+    rewritten: &RewrittenQuery,
+) -> Value {
+    let mut env = build_envelope_with_audit_context(
+        caller,
+        intent,
+        response,
+        scope_resolution,
+        fusion,
+        intent_trigger,
+    );
+    if let Some(obj) = env.as_object_mut() {
+        obj.insert(
+            "query_rewrite_strategy".to_string(),
+            Value::String(rewritten.strategy.to_string()),
+        );
+        obj.insert(
+            "vector_query".to_string(),
+            Value::String(rewritten.vector_query.clone()),
+        );
+        obj.insert(
+            "keyword_query".to_string(),
+            Value::String(rewritten.keyword_query.clone()),
         );
     }
     env

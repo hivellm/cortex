@@ -36,6 +36,7 @@ path = "src/bin/graph-backfill.rs"
 cortex-core = { path = "../cortex-core" }
 cortex-classifier = { path = "../cortex-classifier" }
 cortex-storage = { path = "../cortex-storage" }
+cortex-health = { path = "../cortex-health", features = ["server"] }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

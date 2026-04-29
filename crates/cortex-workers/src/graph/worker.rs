@@ -575,7 +575,10 @@ pub struct Worker {
     writer: Arc<dyn GraphWriter>,
     consumer: Arc<dyn SynapConsumer>,
     publisher: Arc<dyn SynapPublisher>,
-    metrics: Arc<Metrics>,
+    /// Shared metrics registry. Public so the binary entrypoint
+    /// can read the counters from its admin `/healthz` listener
+    /// (phase8a).
+    pub metrics: Arc<Metrics>,
     backpressure: Arc<BackpressureState>,
     buffer: Arc<OutOfOrderBuffer>,
     processed: Mutex<BTreeSet<String>>,

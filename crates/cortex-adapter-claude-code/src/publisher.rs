@@ -151,6 +151,11 @@ impl HttpPublisher {
                 // body so the failure surfaces in metrics + logs.
                 self.metrics
                     .add_publisher_accepted(report.accepted as u64);
+                if report.accepted > 0 {
+                    // Phase8a — stamp the most recent successful
+                    // publish so /healthz can detect publisher stall.
+                    self.metrics.record_publish_ok_now();
+                }
                 for e in &batch {
                     // events_total is "submitted to ingestion", not
                     // "accepted". The split shows up as a divergence

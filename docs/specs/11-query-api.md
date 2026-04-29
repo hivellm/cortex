@@ -189,6 +189,22 @@ After fusion, the orchestrator annotates results:
 
 Derived edge: given seed nodes from fusion, run KNN in Vectorizer's `cortex-turns` collection with the seed's embedding. Top-5 are returned with `SIMILAR_TO.score`. **Not persisted** — spec 07 §Decisions §3.
 
+### Snippet `text` field — kind-aware projection (phase6g)
+
+`Snippet.text` is the projected document body the orchestrator
+hands back to callers. The keyword lane
+([`crates/cortex-api/src/meili_lane.rs`](../../crates/cortex-api/src/meili_lane.rs))
+picks the source field with a kind-aware precedence chain — see
+[spec 08 §Read-side projection](./08-fulltext-indexer.md#read-side-projection-phase6g)
+for the table. The short version: artifact / law_violation hits
+project from `body` first (so the actual file content / violation
+message reaches the bundle); curated kinds (decision / analysis /
+memory) keep `summary > title > body`; turn-shaped kinds use
+`summary > body > title`. `Snippet.path` is populated separately,
+so the operator-visible context (file path, repo) is preserved
+even when `text` switches to body content. Closes
+[F-009](../analysis/relevance/01-findings.md).
+
 ### Lane projection contract (phase6b)
 
 Every overlay derivation reads its inputs out of `LaneHit.extras`. Live lane impls (`MeiliKeywordLane`, `VectorizerLane`) MUST stamp the contract keys below into `extras` whenever the upstream document carries them; missing keys round-trip as absent and the overlay deriver skips that row.
@@ -386,6 +402,78 @@ On merge to `main`, the workflow copies the report to
 dashboard's relevance trend view (spec 16) can render the time series
 without re-running CI. Identical-content reports are skipped to keep
 the history readable.
+
+## Query rewriting (phase6f)
+
+A pre-pass between intent selection and lane fan-out rewrites the
+free-form prompt into queries optimised for each lane. Closes
+[F-004](../analysis/relevance/01-findings.md). The
+[`QueryRewriter`](../../crates/cortex-api/src/query_rewrite.rs)
+trait has three shipped implementations:
+
+| Strategy | When | What it does |
+|---|---|---|
+| `passthrough` | kill-switch / A/B baseline | Copies the prompt verbatim into both lanes; reproduces the pre-phase6f behaviour. |
+| `noun_phrase` | **default** | Deterministic, no LLM. Strips leading question words (`why`/`how`/`what`/...), drops a curated stop-list, keeps tokens that look like identifiers (camelCase / snake_case / kebab-case / paths / file extensions). Same string goes to both lanes. |
+| `sonnet` | opt-in | Spawns the Claude Code CLI (`claude -p - --model <model> --output-format json`) per cache miss and parses the JSON envelope; produces distinct `vector_query` and `keyword_query`. Cached by `sha256(prompt + intent)` for 24h. On timeout / missing binary / non-zero exit / malformed JSON, transparently falls back to `noun_phrase` and stamps the audit envelope as `sonnet_fallback_noun_phrase` so operators can tell the two paths apart. **No Anthropic API key required** — same CLI pattern as `cortex-classifier` and `cortex-api/src/analyzer.rs::invoke_cli`. |
+
+### Selection
+
+Set `CORTEX_QUERY_REWRITER` to `noun_phrase` (default), `sonnet`,
+or `passthrough`. Unknown values log a `WARN` and fall back to
+`noun_phrase`. The boot log records the resolved strategy:
+
+```
+INFO query rewriter resolved (CORTEX_QUERY_REWRITER) rewriter=noun_phrase
+```
+
+The `sonnet` path honours `CLAUDE_CODE_BIN` (path to the
+`claude` binary; default resolved against `PATH`),
+`CORTEX_REWRITER_MODEL` (default `claude-sonnet-4-6`), and
+`CORTEX_REWRITER_TIMEOUT_MS` (default `1500`). When the binary is
+missing or fails to spawn, every Sonnet call lands on the
+fallback path and the rewriter returns the deterministic
+`noun_phrase` strip — deployments that opt in without the CLI
+installed still get useful rewrites rather than failing user
+requests. The Cortex stack never uses the Anthropic HTTP API
+directly; this matches `cortex-classifier` and the analyzer's
+`invoke_cli` path so operations only need the CLI on `PATH`.
+
+### Audit envelope additions
+
+Every audit envelope now stamps three new fields:
+
+- `query_rewrite_strategy` — `"passthrough"` / `"noun_phrase"` /
+  `"sonnet"` / `"sonnet_fallback_noun_phrase"`
+- `vector_query` — what landed on the vector lane
+- `keyword_query` — what landed on the keyword lane
+
+The phase6e harness uses these to attribute uplift to the
+rewriter; operators read them when a query routes somewhere
+unexpected.
+
+### Pipeline order
+
+```
+HTTP /v1/query
+  → resolve_scope (phase6a)
+  → intent_select (phase6d)
+  → cache lookup
+    └─ miss → Orchestrator::run
+         ├─ rewriter.rewrite(prompt, intent)   ← phase6f
+         ├─ build_plan(req)
+         ├─ patch plan.{vectors,keywords,graphs}.query with rewritten output
+         └─ fan-out + RRF (phase6c) + overlays
+  → cache.put + audit.publish (with rewrite + fusion + scope context)
+```
+
+### Decision rule for shipping `sonnet`
+
+The phase6e harness is re-run against `passthrough`, `noun_phrase`,
+and `sonnet`. `sonnet` becomes the default ONLY if its global
+`recall@10` beats `noun_phrase` by ≥3pp; otherwise `noun_phrase`
+stays the default and `sonnet` remains opt-in. The decision is
+documented in `.rulebook/learnings/relevance/<date>-rewriter-decision.md`.
 
 ## Open questions
 

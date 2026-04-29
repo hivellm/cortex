@@ -32,6 +32,17 @@ pub struct Metrics {
     pub law_blocks: Mutex<BTreeMap<String, u64>>,
     /// `cortex.adapter.overflow.wal_bytes` — gauge sample.
     pub wal_bytes: AtomicU64,
+    /// Phase8a — Unix-epoch ms of the most recent successful publish.
+    /// `0` until the first envelope ships. `/healthz` reads this to
+    /// detect publisher stall and downgrade to `degraded`.
+    pub last_publish_ok_ts_ms: AtomicU64,
+    /// Phase8a — current publisher queue depth (in-memory bounded
+    /// channel between hook callbacks and the HTTP publisher).
+    pub publisher_queue_depth: AtomicU64,
+    /// Phase8a — `1` while the IPC pipe (named pipe / Unix socket)
+    /// is bound + accepting connections, `0` when the listener has
+    /// torn down.
+    pub ipc_pipe_alive: AtomicU64,
 }
 
 impl Metrics {
@@ -104,5 +115,34 @@ impl Metrics {
     /// Read the WAL gauge.
     pub fn wal_bytes(&self) -> u64 {
         self.wal_bytes.load(Ordering::Relaxed)
+    }
+
+    /// Phase8a — stamp `last_publish_ok_ts_ms` to the current
+    /// Unix-epoch ms. Called from the publisher's success path.
+    pub fn record_publish_ok_now(&self) {
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        self.last_publish_ok_ts_ms.store(now_ms, Ordering::Relaxed);
+    }
+    /// Phase8a — read the most recent successful-publish timestamp.
+    /// `0` means the publisher has never succeeded since boot.
+    pub fn last_publish_ok_ts_ms(&self) -> u64 {
+        self.last_publish_ok_ts_ms.load(Ordering::Relaxed)
+    }
+    /// Phase8a — set the current queue depth gauge.
+    pub fn set_publisher_queue_depth(&self, depth: u64) {
+        self.publisher_queue_depth.store(depth, Ordering::Relaxed);
+    }
+    /// Phase8a — read the queue depth gauge.
+    pub fn publisher_queue_depth(&self) -> u64 {
+        self.publisher_queue_depth.load(Ordering::Relaxed)
+    }
+    /// Phase8a — flip the IPC-pipe-alive flag.
+    pub fn set_ipc_pipe_alive(&self, alive: bool) {
+        self.ipc_pipe_alive
+            .store(if alive { 1 } else { 0 }, Ordering::Relaxed);
+    }
+    /// Phase8a — read the IPC-pipe-alive flag.
+    pub fn ipc_pipe_alive(&self) -> bool {
+        self.ipc_pipe_alive.load(Ordering::Relaxed) == 1
     }
 }

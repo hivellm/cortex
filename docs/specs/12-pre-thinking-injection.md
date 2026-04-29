@@ -140,6 +140,18 @@ Every audit envelope carries:
 
 Closes [F-006 in `docs/analysis/relevance/01-findings.md`](../analysis/relevance/01-findings.md).
 
+### Query rewriting
+
+Phase6f inserts a single rewrite step **after** intent selection and
+**before** the orchestrator's per-lane fan-out. The rewriter sees
+the user prompt + selected intent, and produces distinct
+`vector_query` / `keyword_query` strings that are stamped onto each
+lane request and the audit envelope. Three implementations ship —
+deterministic noun-phrase strip (default), Sonnet rewrite (opt-in,
+with cache + fallback), passthrough (kill-switch). Selected via
+`CORTEX_QUERY_REWRITER`. Full contract in
+[spec 11 §Query rewriting](./11-query-api.md#query-rewriting-phase6f).
+
 ### Budget-aware section caps
 
 Per section, soft caps:

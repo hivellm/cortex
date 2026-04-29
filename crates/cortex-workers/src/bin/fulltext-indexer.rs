@@ -9,6 +9,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use cortex_workers::admin_health::{
+    resolve_port_from_env, rules, spawn_health_listener, DEFAULT_FULLTEXT_PORT,
+};
 use cortex_workers::fulltext::{
     replay_missing_partitions, settings_v1_json, sweep_stale_indexes, FulltextConfig,
     LiveMeiliClient, LiveSynapConsumer, LiveSynapPublisher, MeiliFulltextIndexer, Metrics,
@@ -130,6 +133,37 @@ async fn main() -> Result<()> {
         tracing::info!("ctrl-c received; initiating shutdown");
         shutdown_handle.store(true, Ordering::Relaxed);
     });
+
+    // Phase8a §2.9 — admin /healthz listener.
+    let port = resolve_port_from_env(
+        "CORTEX_FULLTEXT_HEALTH_PORT",
+        DEFAULT_FULLTEXT_PORT,
+    );
+    let metrics_for_health = worker.metrics.clone();
+    let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
+        let mut extras = serde_json::Map::new();
+        extras.insert(
+            "documents_total".into(),
+            serde_json::json!(metrics_for_health.documents_total()),
+        );
+        extras.insert(
+            "skipped_empty_total".into(),
+            serde_json::json!(metrics_for_health.skipped_empty_total()),
+        );
+        let (state, last_error) = rules::freshness_state(started_ms, None);
+        cortex_health::server::HealthSnapshot {
+            state,
+            last_error,
+            extras,
+        }
+    });
+    spawn_health_listener(
+        port,
+        "cortex-fulltext-worker",
+        env!("CARGO_PKG_VERSION"),
+        provider,
+    );
 
     worker.run_pool(shutdown).await
 }

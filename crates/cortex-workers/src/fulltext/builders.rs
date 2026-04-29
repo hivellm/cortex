@@ -64,6 +64,26 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
     let kind_label = kind_label(event.kind);
     let language = detect_language(event);
 
+    // Phase6g §2 — surface write-side bugs where every read-side
+    // projection field comes back empty. The lane's read-side
+    // projection (kind-aware `body > summary > title` for
+    // `kind=artifact`, or the inverted chain for curated kinds)
+    // produces an empty `LaneHit.text` in this case, and the
+    // orchestrator's degenerate-hit filter then drops the row from
+    // the bundle entirely. Logging here lets operators identify
+    // which upstream payloads caused the silent drop without
+    // changing write semantics — `BodySource::Empty` is the only
+    // path that returns early; this branch fires when `select_body`
+    // produced text that is neither curated nor displayable.
+    if chosen.body.is_empty() && summary.unwrap_or("").is_empty() && title.is_empty() {
+        tracing::warn!(
+            event_id = %event.event_id,
+            kind = kind_label,
+            content_hash = %event.content_hash,
+            "fulltext doc has no body, summary, or title — read-side projection will be empty"
+        );
+    }
+
     let mut doc = Document {
         id,
         event_id: event.event_id.clone(),

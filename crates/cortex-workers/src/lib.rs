@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod admin_health;
 pub mod classifier;
 pub mod embedder;
 pub mod fulltext;
