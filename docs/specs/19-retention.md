@@ -202,7 +202,7 @@ records_dropped, records_preserved }` is returned per granularity
 plus a totals row. The CLI prints both; `--json` ships the same
 shape for downstream tooling.
 
-### Test surface
+### Test surface (parquet rollup)
 
 11 unit tests in `crates/cortex-retention/src/parquet_rollup.rs`:
 
@@ -217,3 +217,87 @@ shape for downstream tooling.
 - `rollup_counts_merge_accumulates_every_field`
 - `record_passes_whitelist_recognises_each_audit_kind`
 - `granularity_serde_round_trips_via_snake_case`
+
+## CAS vacuum (phase9c)
+
+Spec 02 §"CAS (content-addressable store) for large blobs"
+promised a weekly vacuum job. Phase9c implements that contract.
+
+### Wire shape
+
+```sh
+cortex-ops cas-vacuum \
+    [--time-travel <RFC3339>] \
+    [--dry-run] \
+    [--force] \
+    [--cas-db PATH] \
+    [--json]
+```
+
+### Eligibility
+
+A blob is vacuum-eligible when **`refcount == 0` AND
+`last_referenced < now - min_age_days`** (default `min_age_days = 30`,
+configurable via `cortex.toml [retention.cas]`).
+
+### Atomicity + concurrency
+
+- Per-batch transactions (256 rows at a time) keep `SQLITE_BUSY`
+  from blocking ingestion for more than a couple ms at once.
+- Each batch uses `BEGIN IMMEDIATE` so a concurrent ingestion path
+  can still serve `retain` / `release` calls without holding an
+  exclusive lock.
+- The `DELETE FROM cas_blobs WHERE hash = ? AND refcount = 0`
+  predicate guards against a TOCTOU: if a concurrent path bumped
+  the refcount between the candidate read and the delete, the row
+  stays.
+
+### Reclamation
+
+Post-delete, the runner reads `PRAGMA freelist_count` and
+`PRAGMA page_count`. When `freelist_count / page_count >
+vacuum_ratio` (default `0.25`), the runner issues `VACUUM` to
+reclaim disk. The wall-clock duration surfaces as
+`VacuumReport.vacuum_ms` so dashboards can flag pathological runs.
+
+### Catastrophic-deletion safeguard
+
+The runner refuses when the candidate set covers more than 50 %
+of total blobs unless `--force` is passed. A live run errors with
+`VacuumError::SafeguardTripped`; a dry run still produces the
+report with `safeguard_tripped: true` so operators can preview the
+problem without erroring out.
+
+### Refcount audit
+
+`audit_refcounts(store, references)` recomputes the expected
+refcount for every hash by counting external references the
+caller supplies, then compares against `cas_blobs.refcount`.
+Returns `Vec<RefcountDrift { hash, claimed, observed }>`.
+`fix_refcounts(store, drift)` writes the observed values back
+inside one `BEGIN IMMEDIATE` transaction.
+
+The CLI surface is library-only at phase9c — operators that want
+the audit pass call into `cortex_retention::cas_vacuum` from
+their own bin or wire it through phase9k's cron scheduler. The
+audit shape is stable; the integration with each external
+reference source (Vectorizer / Nexus / Meili payload walkers)
+lands as those crates expose their CAS-reference iterators.
+
+### Test surface (CAS vacuum)
+
+13 unit tests in `crates/cortex-retention/src/cas_vacuum.rs`:
+
+- `opts_default_uses_thirty_day_cutoff`
+- `orphan_blob_older_than_thirty_days_is_deleted`
+- `referenced_blob_is_preserved_even_when_old`
+- `dry_run_records_counts_but_does_not_delete`
+- `safeguard_refuses_when_more_than_half_would_drop`
+- `safeguard_overridable_by_force`
+- `safeguard_does_not_trip_on_empty_store`
+- `audit_refcounts_reports_under_count_drift`
+- `audit_refcounts_reports_over_count_drift`
+- `audit_refcounts_returns_empty_when_aligned`
+- `fix_refcounts_writes_observed_to_store`
+- `fix_refcounts_no_op_on_empty_drift`
+- `batches_split_candidates_evenly`

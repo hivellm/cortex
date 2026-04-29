@@ -219,6 +219,94 @@ impl CasStore {
         Ok(dropped as u64)
     }
 
+    /// Phase9c — list vacuum-eligible blobs (refcount == 0 AND
+    /// last_referenced < cutoff). Returns at most `limit` rows in
+    /// stable hash-order so a batched delete can checkpoint mid-run.
+    pub fn select_vacuumable(
+        &self,
+        cutoff: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<Vec<VacuumCandidate>, CasError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT hash, size FROM cas_blobs
+              WHERE refcount = 0 AND last_referenced < ?1
+              ORDER BY hash
+              LIMIT ?2",
+        )?;
+        let rows: Result<Vec<_>, _> = stmt
+            .query_map(params![cutoff.to_rfc3339(), limit as i64], |row| {
+                Ok(VacuumCandidate {
+                    hash: row.get::<_, String>(0)?,
+                    size: row.get::<_, i64>(1)? as u64,
+                })
+            })?
+            .collect();
+        Ok(rows?)
+    }
+
+    /// Phase9c — delete every row whose hash appears in `hashes`,
+    /// inside one `BEGIN IMMEDIATE` transaction. Returns the number
+    /// of rows actually deleted (may differ from `hashes.len()` when
+    /// a concurrent ingestion path bumped the refcount mid-flight).
+    pub fn delete_blobs(&mut self, hashes: &[String]) -> Result<u64, CasError> {
+        if hashes.is_empty() {
+            return Ok(0);
+        }
+        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut total: u64 = 0;
+        {
+            let mut stmt = tx.prepare(
+                "DELETE FROM cas_blobs WHERE hash = ?1 AND refcount = 0",
+            )?;
+            for h in hashes {
+                total += stmt.execute(params![h])? as u64;
+            }
+        }
+        tx.commit()?;
+        Ok(total)
+    }
+
+    /// Phase9c — total number of blobs in the store, used by the
+    /// safeguard (`would_drop / total_blobs > 0.5` ⇒ refuse without
+    /// `--force`).
+    pub fn total_blob_count(&self) -> Result<u64, CasError> {
+        let n: i64 = self
+            .conn
+            .query_row("SELECT count(*) FROM cas_blobs", [], |r| r.get(0))?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// Phase9c — sum of `size` (uncompressed bytes) across all
+    /// blobs. Used by the report's `bytes_reclaimed` estimate.
+    pub fn total_blob_bytes(&self) -> Result<u64, CasError> {
+        let n: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(SUM(size), 0) FROM cas_blobs",
+                [],
+                |r| r.get(0),
+            )?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// Phase9c — borrow the underlying connection mutably so the
+    /// runner can issue `VACUUM` against the same `CasStore`.
+    pub fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
+}
+
+/// One row returned by [`CasStore::select_vacuumable`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VacuumCandidate {
+    /// Prefixed hash (`sha256:<hex>`).
+    pub hash: String,
+    /// Original (uncompressed) byte size — used by the runner to
+    /// project `bytes_reclaimed` before the actual delete.
+    pub size: u64,
+}
+
+impl CasStore {
     /// Borrow the underlying SQLite connection. Used by integration tests
     /// that need to assert raw row counts or compressed-blob byte sizes.
     pub fn conn(&self) -> &Connection {

@@ -696,6 +696,7 @@ dependencies = [
  "cortex-build",
  "cortex-core",
  "cortex-storage",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

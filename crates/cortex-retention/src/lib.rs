@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cas_vacuum;
 pub mod parquet_rollup;
 
 use std::collections::BTreeMap;
