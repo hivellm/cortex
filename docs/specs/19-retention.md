@@ -494,3 +494,79 @@ production walker.
 - `per_bucket_failure_records_error_and_continues`
 - `report_turn_digest_json_round_trips`
 - `plan_default_uses_spec_thresholds`
+
+## Meili archival pruner (phase9f)
+
+Meili holds the full body of every turn / tool_call indefinitely.
+Phase9f blanks those bodies after 90 d, caps `summary` at 4 KiB,
+and stamps `pruned: true` + `pruned_at`. The document is **never**
+deleted — the keyword lane still surfaces it on a `summary` match.
+
+### Wire shape
+
+```sh
+cortex-ops meili-prune \
+    [--time-travel <RFC3339>] \
+    [--dry-run] \
+    [--rebuild] \
+    [--batch-size N] \
+    [--json]
+```
+
+### Eligibility
+
+A document enters the pruner when **all** hold:
+
+- `index ∈ {cortex_turns, cortex_tool_calls}`
+- `occurred_at < now - prune_after_days` (default 90 d)
+- `pruned == false` (idempotence guard); `--rebuild` accepts
+  already-pruned docs
+
+### Summary cap
+
+Summaries longer than `summary_cap_bytes` (default 4 096) get
+truncated with the canonical `…` (3-byte UTF-8 ellipsis) so the
+post-prune length is exactly `cap_bytes`. The cap walker rounds
+back to a UTF-8 char boundary so multibyte codepoints never get
+sliced mid-character.
+
+### `MeiliBackend` trait surface
+
+```rust
+#[async_trait]
+pub trait MeiliBackend: Send + Sync {
+    async fn enumerate_prunable(&self, index, cutoff, accept_pruned, batch_size) -> Result<Vec<MeiliDoc>>;
+    async fn update_documents(&self, index, ops: &[PruneOp]) -> Result<()>;
+}
+```
+
+Production wires the live Meili SDK; the production
+`enumerate_prunable` impl translates the call into the
+`filter = "occurred_at < <cutoff> AND pruned != true"` Meili
+query. `update_documents` ships the partial-update payload and
+awaits the task to terminal state.
+
+The trait deliberately omits `delete_documents` — pruning never
+deletes; the keyword lane still surfaces pruned rows on summary
+matches.
+
+### Test surface (Meili prune, phase9f)
+
+16 unit tests in `crates/cortex-retention/src/meili_prune.rs`:
+
+- `plan_default_uses_spec_thresholds`
+- `cap_summary_returns_unchanged_when_under_cap`
+- `cap_summary_truncates_with_ellipsis_marker`
+- `cap_summary_rounds_to_char_boundary`
+- `cap_summary_handles_cap_smaller_than_ellipsis`
+- `enumerate_excludes_fresh_documents`
+- `enumerate_excludes_already_pruned_unless_accept`
+- `run_prunes_91_day_old_documents_in_each_index`
+- `re_run_after_commit_is_a_no_op`
+- `rebuild_re_prunes_already_pruned_docs`
+- `dry_run_records_skipped_without_calling_update`
+- `oversize_summary_is_capped_with_ellipsis`
+- `enumerate_failure_propagates_to_runner`
+- `update_failure_propagates_to_runner`
+- `report_meili_prune_json_round_trips`
+- `batch_size_splits_large_runs_into_chunks`
