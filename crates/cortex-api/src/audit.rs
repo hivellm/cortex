@@ -106,12 +106,20 @@ pub fn build_envelope_with_scope_resolution(
 /// these to attribute relevance regressions to fusion-config
 /// changes; without them, an A/B that flips `alpha` from 0.7 →
 /// 0.5 looks like a model regression instead of a tuning move.
+///
+/// Phase6d — also accepts an optional `intent_trigger` (the
+/// keyword that fired the intent selector). `None` means the
+/// prompt fell through to the safe default (`pre_change_context`)
+/// with no explicit rule match. Stamped on every envelope so the
+/// dashboard can attribute routing changes to the specific rule
+/// that fired.
 pub fn build_envelope_with_audit_context(
     caller: &str,
     intent: &str,
     response: &QueryResponse,
     scope_resolution: &str,
     fusion: &FusionConfig,
+    intent_trigger: Option<&str>,
 ) -> Value {
     let mut env =
         build_envelope_with_scope_resolution(caller, intent, response, scope_resolution);
@@ -125,6 +133,18 @@ pub fn build_envelope_with_audit_context(
             json!(fusion.alpha as f64),
         );
         obj.insert("fusion_k".to_string(), json!(fusion.k));
+        // Phase6d — explicit Null on fallback so the dashboard can
+        // tell "no rule matched" apart from "this envelope was
+        // emitted by an older daemon that didn't record the
+        // trigger". The selector returns `None` only on the
+        // safe-default path.
+        obj.insert(
+            "intent_trigger".to_string(),
+            match intent_trigger {
+                Some(k) => Value::String(k.to_string()),
+                None => Value::Null,
+            },
+        );
     }
     env
 }

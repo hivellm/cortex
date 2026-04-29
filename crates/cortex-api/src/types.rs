@@ -23,6 +23,12 @@ pub enum Intent {
     LawCheck,
     /// Free-form keyword + vector blend with no overlays.
     FreeSearch,
+    /// Phase6d — navigational / explanatory prompts ("how does X
+    /// work", "what is X", "where is X defined"). Vector +
+    /// keyword fan-out on `code` + `docs` topics; **no decision /
+    /// law / similar-turn overlays** because the user is asking
+    /// to read code, not to consult policy. Closes F-006.
+    Explain,
 }
 
 impl Intent {
@@ -34,6 +40,7 @@ impl Intent {
             Intent::SimilarProblems => "similar_problems",
             Intent::LawCheck => "law_check",
             Intent::FreeSearch => "free_search",
+            Intent::Explain => "explain",
         }
     }
 }

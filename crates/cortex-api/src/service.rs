@@ -25,6 +25,15 @@ pub const HEADER_CORTEX_REPO: &str = "x-cortex-repo";
 /// [`cortex_storage::names::slug_for_repo`].
 pub const HEADER_CORTEX_CWD: &str = "x-cortex-cwd";
 
+/// Phase6d header — keyword that triggered the intent selector
+/// (e.g. `how does`). The pre-thinking pipeline sets this when it
+/// dispatches to `/v1/query`; direct callers (MCP, dashboard,
+/// GUI) leave it empty and the audit envelope records
+/// `intent_trigger: null`. Stamped on every audit emit so the
+/// dashboard can attribute routing changes to the specific rule
+/// that fired.
+pub const HEADER_CORTEX_INTENT_TRIGGER: &str = "x-cortex-intent-trigger";
+
 /// Env var honouring the legacy "fall back to the unknown slug"
 /// behaviour. When set to `1`, the resolver does NOT reject a
 /// missing scope; it logs a deprecation warning and returns
@@ -279,7 +288,8 @@ impl QueryService {
     /// [`QueryService::handle_with_headers`] so the audit envelope
     /// records the resolution lane.
     pub async fn handle(&self, caller: &str, req: QueryRequest) -> ServiceOutcome {
-        self.handle_resolved(caller, req, ScopeResolution::Explicit).await
+        self.handle_resolved(caller, req, ScopeResolution::Explicit, None)
+            .await
     }
 
     /// Phase6a entry point. Resolves the scope from `headers`
@@ -296,7 +306,13 @@ impl QueryService {
             Ok(r) => r,
             Err(ScopeError::Missing) => return ServiceOutcome::EmptyScope,
         };
-        self.handle_resolved(caller, req, resolution).await
+        let intent_trigger = headers
+            .get(HEADER_CORTEX_INTENT_TRIGGER)
+            .and_then(|v| v.to_str().ok())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        self.handle_resolved(caller, req, resolution, intent_trigger)
+            .await
     }
 
     async fn handle_resolved(
@@ -304,6 +320,7 @@ impl QueryService {
         caller: &str,
         req: QueryRequest,
         resolution: ScopeResolution,
+        intent_trigger: Option<String>,
     ) -> ServiceOutcome {
         if req.query.trim().is_empty() {
             return ServiceOutcome::EmptyQuery;
@@ -332,6 +349,7 @@ impl QueryService {
                     &hit,
                     resolution.as_str(),
                     &self.orchestrator.fusion,
+                    intent_trigger.as_deref(),
                 ))
                 .await;
             return ServiceOutcome::Ok(Box::new(hit));
@@ -371,6 +389,7 @@ impl QueryService {
                 &response,
                 resolution.as_str(),
                 &self.orchestrator.fusion,
+                intent_trigger.as_deref(),
             ))
             .await;
         ServiceOutcome::Ok(Box::new(response))

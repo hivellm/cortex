@@ -116,17 +116,29 @@ If `repo` can't be resolved, the adapter issues the query with repo-less scope a
 
 ### `intent` selection
 
-Rule-based (no ML). The `user_prompt` is classified by cheap keyword match:
+Rule-based (no ML). The `user_prompt` is classified by cheap case-insensitive substring match. Phase6d expanded the table with the `Explain` intent + richer keyword coverage on the existing four; the selector now also returns the matched keyword (`MatchedIntent { intent, trigger }`) so the audit envelope can record `intent_trigger` for routing telemetry.
 
-| Signal in prompt                                              | Intent                   |
-|---------------------------------------------------------------|--------------------------|
-| contains "refactor", "modify", "rewrite", "change", tool edits | `pre_change_context`     |
-| contains "why", "who decided", "should we"                    | `decision_lookup`        |
-| contains "stuck", "keep failing", "doesn't work"              | `similar_problems`       |
-| contains "can I", "is it allowed", "blocked"                  | `law_check`              |
-| otherwise                                                      | `pre_change_context`     |
+| Signal in prompt                                                                                                                  | Intent                | Plan summary |
+|-----------------------------------------------------------------------------------------------------------------------------------|-----------------------|--------------|
+| `how does`, `what is`, `what's`, `explain`, `show me`, `where is`, `where does`, `find usages`, `find references`, `look up`, `definition of` | `explain` (phase6d)   | vector + keyword on `code`+`docs` (k/limit capped at 8); **no** decisions / laws / similar-turns / graph overlays. Vector-heavy 60/40 split. Closes F-006. |
+| `why did we pick`, `why do we use`, `history of`, `why did`, `why do`, `who decided`, `should we`, `why is`                       | `decision_lookup`     | vector + keyword on `decisions` collection, supersession-chain graph leg, decisions overlay only |
+| `have we seen`, `did we hit`, `stuck`, `keep failing`, `keeps failing`, `kept failing`, `doesn't work`, `doesnt work`, `isn't working` | `similar_problems`    | vector on `turns` + analysis-decision graph, `similar_turns` overlay |
+| `is this allowed`, `am i allowed`, `would this violate`, `can i `, `is it allowed`, `blocked`, `permitted`                        | `law_check`           | keyword on `governance` + law-violation graph, violations overlay |
+| `refactor`, `modify`, `rewrite`, `change`, `edit`                                                                                  | `pre_change_context`  | three-lane fan-out + full overlay set (default) |
+| (no rule matched)                                                                                                                  | `pre_change_context`  | safe default; `intent_trigger` lands as `null` on the audit envelope |
+
+Order of evaluation matters: `explain` fires *before* `decision_lookup` so a prompt like "explain why we picked X" routes navigationally (the user wants to read code/docs, not consult an ADR). The `pre_change_context` keywords stay last because their verbs are common.
 
 `pre_change_context` is the safe default — it pulls the broadest mix.
+
+#### Audit envelope
+
+Every audit envelope carries:
+
+- `intent` — the resolved intent label (`explain`, `decision_lookup`, …).
+- `intent_trigger` — the keyword that fired (`Some(&'static str)` from the rule table) or `null` when the prompt fell through to the default.
+
+Closes [F-006 in `docs/analysis/relevance/01-findings.md`](../analysis/relevance/01-findings.md).
 
 ### Budget-aware section caps
 

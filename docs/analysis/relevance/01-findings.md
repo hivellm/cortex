@@ -74,7 +74,7 @@ Each finding has stable id `F-NNN`, evidence with file:line citations, the relev
 
 **Confidence:** Medium-high.
 
-**Tracked by:** Not tracked.
+**Tracked by:** Closed by `phase6d_relevance_intent_table_expansion` — new `Intent::Explain` variant with a 11-keyword routing table + extended phrasings on `decision_lookup`/`similar_problems`/`law_check`; selector now returns `MatchedIntent { intent, trigger }` and the audit envelope stamps `intent_trigger`. Spec updated at `docs/specs/12-pre-thinking-injection.md` §intent selection.
 
 ---
 

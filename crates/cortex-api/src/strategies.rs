@@ -89,6 +89,7 @@ pub fn build_plan(req: &QueryRequest) -> Plan {
         Intent::SimilarProblems => similar_problems(req),
         Intent::LawCheck => law_check(req),
         Intent::FreeSearch => free_search(req),
+        Intent::Explain => explain(req),
     }
 }
 
@@ -219,6 +220,65 @@ fn law_check(req: &QueryRequest) -> Plan {
     }
 }
 
+/// Phase6d — `Intent::Explain` plan factory.
+///
+/// Navigational / explanatory prompts ("how does X work", "what is
+/// X", "where is X defined") need the *retrieval* shape of
+/// `pre_change_context` (vector + keyword fan-out on `code` /
+/// `docs`) but NOT its overlay set: surfacing decisions / laws /
+/// similar-turns on a code-reading question burns budget and
+/// crowds the snippet ladder with policy noise.
+///
+/// Graph leg: today the `edge_artifact_definitions` strategy
+/// hasn't shipped yet (tracked under phase4c). We omit the graph
+/// leg entirely until that lands rather than reusing
+/// `edge_artifact_touched_neighbours`, which surfaces files the
+/// user *touched* — irrelevant to "explain X" prompts.
+fn explain(req: &QueryRequest) -> Plan {
+    let collections = vec![repo_scoped(req, "code"), repo_scoped(req, "docs")];
+    let vectors = collections
+        .into_iter()
+        .map(|c| VectorRequest {
+            collection: c,
+            query: req.query.clone(),
+            // Phase6d — modest fan-out (8 per lane). Explanatory
+            // questions usually resolve from the top-3 — pulling
+            // 50 vectors burns the trim ladder for no gain.
+            k: req.k.min(8),
+            scope: req.scope.clone(),
+        })
+        .collect();
+    let keywords = vec![repo_scoped(req, "code"), repo_scoped(req, "docs")]
+        .into_iter()
+        .map(|i| KeywordRequest {
+            index: i,
+            query: req.query.clone(),
+            limit: req.limit.min(8),
+            scope: req.scope.clone(),
+        })
+        .collect();
+    Plan {
+        vectors,
+        keywords,
+        // No graph leg until phase4c lands `edge_artifact_definitions`.
+        graphs: Vec::new(),
+        // Snippets only — explicitly empty even when the caller
+        // asked for `decisions` / `violations` / `similar_turns`,
+        // because explanatory prompts shouldn't carry policy
+        // noise. The orchestrator's overlay-derivation step
+        // collapses to a no-op when the allow list is empty.
+        overlays: overlays_from_include(&req.include, &[]),
+        // Vector-heavy split for navigational prompts: cosine
+        // similarity recovers semantic-near matches the keyword
+        // tokenizer misses on free-form English questions.
+        split_pct: BudgetSplit {
+            vector: 60,
+            keyword: 40,
+            graph: 0,
+        },
+    }
+}
+
 fn free_search(req: &QueryRequest) -> Plan {
     let vectors = vec![VectorRequest {
         collection: repo_scoped(req, "code"),
@@ -321,5 +381,61 @@ mod tests {
         r.include = vec![IncludeField::Snippets];
         let plan = build_plan(&r);
         assert!(plan.overlays.is_empty());
+    }
+
+    // ---- Phase6d Explain plan ----
+
+    #[test]
+    fn explain_uses_vector_and_keyword_no_graph_no_overlays() {
+        // Even when the caller asks for the full overlay set, the
+        // Explain plan strips them — navigational prompts must not
+        // burn budget on decisions / laws / similar-turns.
+        let plan = build_plan(&req(Intent::Explain));
+        assert_eq!(plan.vectors.len(), 2, "code + docs collections");
+        assert_eq!(plan.keywords.len(), 2, "code + docs indexes");
+        assert!(
+            plan.graphs.is_empty(),
+            "no graph leg until phase4c lands edge_artifact_definitions"
+        );
+        assert!(
+            plan.overlays.is_empty(),
+            "Explain must NOT carry decisions / violations / similar_turns / graph_neighbors overlays"
+        );
+        // Vector-heavy split — semantic similarity recovers
+        // English-question hits the keyword tokenizer misses.
+        assert_eq!(plan.split_pct.vector, 60);
+        assert_eq!(plan.split_pct.keyword, 40);
+        assert_eq!(plan.split_pct.graph, 0);
+    }
+
+    #[test]
+    fn explain_caps_per_lane_fan_out_at_eight() {
+        let mut r = req(Intent::Explain);
+        // Caller asked for k=50 / limit=20; Explain caps at 8 to
+        // avoid wasting the trim ladder on irrelevant tail hits.
+        r.k = 50;
+        r.limit = 20;
+        let plan = build_plan(&r);
+        assert!(
+            plan.vectors.iter().all(|v| v.k == 8),
+            "vector k capped at 8: got {:?}",
+            plan.vectors.iter().map(|v| v.k).collect::<Vec<_>>()
+        );
+        assert!(
+            plan.keywords.iter().all(|kw| kw.limit == 8),
+            "keyword limit capped at 8: got {:?}",
+            plan.keywords.iter().map(|kw| kw.limit).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn explain_preserves_smaller_caller_caps() {
+        let mut r = req(Intent::Explain);
+        // Caller asked for less than the cap — honour their value.
+        r.k = 3;
+        r.limit = 5;
+        let plan = build_plan(&r);
+        assert!(plan.vectors.iter().all(|v| v.k == 3));
+        assert!(plan.keywords.iter().all(|kw| kw.limit == 5));
     }
 }

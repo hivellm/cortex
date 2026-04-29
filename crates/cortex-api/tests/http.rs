@@ -386,6 +386,16 @@ async fn audit_publisher_emits_one_envelope_per_request() {
         "expected default fusion_alpha 0.7, got {alpha}"
     );
     assert_eq!(k, 60, "expected default fusion_k=60, got {k}");
+    // Phase6d — the in-process `handle()` entry point doesn't
+    // carry a header map, so `intent_trigger` lands as
+    // `Value::Null` (the explicit "no trigger forwarded" signal).
+    // The HTTP-path test `audit_envelope_carries_intent_trigger_from_header`
+    // below exercises the populated case.
+    assert!(
+        env.get("intent_trigger").is_some(),
+        "intent_trigger key must be present (null is allowed)"
+    );
+    assert!(env["intent_trigger"].is_null());
 }
 
 #[tokio::test]
@@ -790,6 +800,158 @@ async fn status_indexed_repos_reports_seeded_repo_slugs() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert_eq!(repos, vec!["cortex".to_string(), "vectorizer".to_string()]);
+}
+
+// ----------------------------------------------------------------
+// Phase6d §5 — Explain intent end-to-end test + audit-trigger
+// fixture.
+// ----------------------------------------------------------------
+
+fn explain_request(query: &str, repo: Option<&str>) -> QueryRequest {
+    let value = json!({
+        "intent": "explain",
+        "scope": { "repo": repo },
+        "query": query,
+        "include": ["snippets", "decisions", "violations", "graph_neighbors", "similar_turns"],
+        "budget_ms": 500,
+    });
+    serde_json::from_value(value).unwrap()
+}
+
+#[tokio::test]
+async fn explain_intent_returns_snippets_with_no_overlay_noise() {
+    let (svc, v, k, _g, _audit) = build_test_service();
+    // Seed both lanes so the snippet ladder has something to
+    // surface; ALSO seed with content that *would* trigger
+    // decision / similar-turn overlays if the Explain plan
+    // forgot to strip them. Phase6b made overlays read directly
+    // from the lane projection contract, so this is a real test
+    // — without the strip, decisions[] would be non-empty.
+    let mut decision_extras = std::collections::BTreeMap::new();
+    decision_extras.insert(
+        "source".to_string(),
+        Value::String("vector".to_string()),
+    );
+    decision_extras.insert(
+        "decision_id".to_string(),
+        Value::String("DEC-EXPLAIN-LEAK".to_string()),
+    );
+    decision_extras.insert(
+        "decision_status".to_string(),
+        Value::String("accepted".to_string()),
+    );
+    v.seed(
+        "cortex-cortex-code",
+        vec![LaneHit {
+            doc_id: "code-1".into(),
+            text: "fn meili_fan_out(...)".into(),
+            repo: Some("Cortex".into()),
+            path: Some("crates/cortex-api/src/meili_lane.rs".into()),
+            symbol: Some("meili_fan_out".into()),
+            content_hash: Some("sha256:explain1".into()),
+            score: 0.92,
+            ts: 1_777_400_000,
+            severity: None,
+            extras: decision_extras.clone(),
+        }],
+    );
+    let mut keyword_extras = std::collections::BTreeMap::new();
+    keyword_extras.insert(
+        "source".to_string(),
+        Value::String("keyword".to_string()),
+    );
+    k.seed(
+        "cortex-cortex-docs",
+        vec![LaneHit {
+            doc_id: "doc-1".into(),
+            text: "The Meili fan-out maps requests onto per-repo indexes".into(),
+            repo: Some("Cortex".into()),
+            path: Some("docs/specs/08-fulltext-indexer.md".into()),
+            symbol: None,
+            content_hash: Some("sha256:explain2".into()),
+            score: 0.55,
+            ts: 1_777_400_000,
+            severity: None,
+            extras: keyword_extras,
+        }],
+    );
+
+    let app = build_router(svc);
+    let req = explain_request("explain how the meili fan-out works", Some("cortex"));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "phase6d-explain")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = read_json(resp).await;
+    assert_eq!(body["intent"], "explain");
+    let snippets = body["results"]["snippets"]
+        .as_array()
+        .expect("snippets array");
+    assert!(
+        !snippets.is_empty(),
+        "Explain must surface at least one snippet from the seeded code/docs lanes"
+    );
+    // The Explain plan strips overlays even when the caller's
+    // `include` array asks for them — phase6d §What Changes.
+    assert!(
+        body["results"]["decisions"].as_array().map_or(true, |a| a.is_empty()),
+        "Explain must produce empty decisions overlay even with a `decision_id` in extras"
+    );
+    assert!(
+        body["results"]["violations"].as_array().map_or(true, |a| a.is_empty()),
+        "Explain must produce empty violations overlay"
+    );
+    assert!(
+        body["results"]["similar_turns"].as_array().map_or(true, |a| a.is_empty()),
+        "Explain must produce empty similar_turns overlay"
+    );
+    assert!(
+        body["results"]["graph_neighbors"].as_array().map_or(true, |a| a.is_empty()),
+        "Explain runs no graph leg until phase4c lands edge_artifact_definitions"
+    );
+}
+
+#[tokio::test]
+async fn audit_envelope_carries_intent_trigger_from_header() {
+    // Phase6d §3.2 — the HTTP boundary reads
+    // `x-cortex-intent-trigger`. The pre-thinking pipeline sets it
+    // when it dispatches; direct callers leave it absent and the
+    // envelope's `intent_trigger` lands as Null (asserted in the
+    // existing `audit_publisher_emits_one_envelope_per_request`
+    // case).
+    let (svc, _, _, _, audit) = build_test_service();
+    let app = build_router(svc);
+    let req = explain_request("explain how the audit envelope works", Some("cortex"));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "phase6d-trigger")
+                .header("x-cortex-intent-trigger", "explain")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let snap = audit.snapshot();
+    let env = snap.last().expect("audit envelope present");
+    assert_eq!(env["intent"], "explain");
+    assert_eq!(
+        env["intent_trigger"], "explain",
+        "header value must round-trip onto the envelope"
+    );
 }
 
 // ----------------------------------------------------------------

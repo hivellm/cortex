@@ -139,17 +139,30 @@ impl SyncClient {
         let http = self.client.clone();
         let metrics = self.metrics.clone();
 
+        // Phase6d — re-derive the intent trigger keyword off the
+        // prompt so the audit envelope can record `intent_trigger`.
+        // The pipeline's own `select_intent` call drops the trigger,
+        // so we duplicate the (pure-function) match here. Empty
+        // string means "no rule fired"; the service treats that as
+        // an absent header and the audit envelope stamps
+        // `intent_trigger: null`.
+        let intent_trigger = cortex_pre_thinking::intent_select::select_matched(prompt)
+            .trigger
+            .unwrap_or("")
+            .to_string();
+
         let query_fn = Arc::new(ClosureQueryFn(move |req: QueryRequest| {
             let url = url.clone();
             let http = http.clone();
             let metrics = metrics.clone();
+            let trigger = intent_trigger.clone();
             async move {
                 let send_started = Instant::now();
-                let resp = tokio::time::timeout(
-                    timeout,
-                    http.post(&url).json(&req).send(),
-                )
-                .await;
+                let mut http_req = http.post(&url);
+                if !trigger.is_empty() {
+                    http_req = http_req.header("x-cortex-intent-trigger", &trigger);
+                }
+                let resp = tokio::time::timeout(timeout, http_req.json(&req).send()).await;
                 let latency_ms =
                     u32::try_from(send_started.elapsed().as_millis()).unwrap_or(u32::MAX);
                 metrics.observe_sync_latency("UserPromptSubmit", latency_ms);
