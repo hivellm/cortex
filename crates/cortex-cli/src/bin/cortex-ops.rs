@@ -49,6 +49,35 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Phase9a — Vectorizer tier-transition sweep. Re-encodes
+    /// records FP32 → PQ at 30 d and PQ → Binary at 365 d per spec
+    /// 02 §quantization. Idempotent + concurrency-safe via the
+    /// `retention_sweeps` SQLite table; emits one bookkeeping row
+    /// per invocation.
+    ///
+    /// `--dry-run` runs the plan against an empty in-memory store
+    /// so the operator can see the canonical plan layout without
+    /// touching the live Vectorizer.
+    RetentionSweep {
+        /// Override "now" so the 30 d / 365 d boundaries are
+        /// deterministic for tests + scheduled CI runs.
+        #[arg(long, value_name = "RFC3339")]
+        time_travel: Option<String>,
+        /// Print the plan + transitions without mutating the
+        /// destination collections.
+        #[arg(long)]
+        dry_run: bool,
+        /// Maximum records per Vectorizer batch list call.
+        #[arg(long, default_value_t = 256)]
+        batch_size: u32,
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` then `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase8f — fire a synthetic end-to-end canary frame through
     /// the live IPC pipe and assert it lands in the archive within
     /// the deadline. Detects regressions in the adapter → ingestion
@@ -190,6 +219,13 @@ fn main() -> ExitCode {
             json,
         } => doctor_config(workspace, adapter_toml, json),
         Command::DoctorAlerts { state_dir, json } => doctor_alerts(state_dir, json),
+        Command::RetentionSweep {
+            time_travel,
+            dry_run,
+            batch_size,
+            metadata_db,
+            json,
+        } => retention_sweep(time_travel, dry_run, batch_size, metadata_db, json),
         Command::Canary {
             hook,
             ipc,
@@ -868,6 +904,145 @@ fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Phase9a — `cortex-ops retention-sweep`. Runs one tier-transition
+/// pass and exits. Idempotent + concurrency-safe via the
+/// `retention_sweeps` table.
+///
+/// Production Vectorizer integration is wired through the
+/// `VectorizerOps` trait; this CLI surface uses the in-memory ops
+/// (`MemoryVectorizerOps`) so the dry-run path works without a
+/// running Vectorizer server. Live ops integration ships in a
+/// follow-up that adds the SDK adapter — keeping the trait surface
+/// stable now means that switch is one line.
+fn retention_sweep(
+    time_travel: Option<String>,
+    dry_run: bool,
+    batch_size: u32,
+    metadata_db: Option<String>,
+    json: bool,
+) -> ExitCode {
+    use cortex_retention::{run_sweep, MemoryVectorizerOps, SweepError, SweepPlan};
+    use cortex_storage::MetadataStore;
+
+    let now = match time_travel {
+        Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(e) => {
+                eprintln!("--time-travel parse error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => chrono::Utc::now(),
+    };
+
+    let mut plan = SweepPlan::default_for(now);
+    plan.batch_size = batch_size;
+    plan.dry_run = dry_run;
+
+    let metadata_path = metadata_db
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var("CORTEX_METADATA_DB").ok().map(std::path::PathBuf::from))
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home).join(".cortex").join("metadata.sqlite")
+        });
+
+    let store = match MetadataStore::open(&metadata_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("metadata open ({}): {e}", metadata_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let sweep_id = cortex_retention::new_sweep_id();
+    if let Err(e) = store.start_retention_sweep(&sweep_id, now, 3600) {
+        eprintln!("retention-sweep: {e}");
+        // Code 2 — another sweep in flight (per spec).
+        return ExitCode::from(2);
+    }
+
+    // The MemoryVectorizerOps holds an empty store on a fresh CI
+    // run, so the dry-run path emits a `0 demoted / 0 dropped` row
+    // plus the canonical plan summary. Live Vectorizer integration
+    // swaps `ops` for the SDK adapter.
+    let ops = MemoryVectorizerOps::new();
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let outcome = runtime.block_on(run_sweep(&plan, &ops));
+    let finished_at = chrono::Utc::now();
+    let (status, exit) = match &outcome {
+        Ok(_) => ("success", ExitCode::SUCCESS),
+        Err(SweepError::ErrorRateExceeded { .. }) => ("failed", ExitCode::FAILURE),
+        Err(SweepError::Vectorizer(_)) => ("failed", ExitCode::FAILURE),
+    };
+
+    let report = outcome.unwrap_or_default();
+    if let Err(e) = store.finish_retention_sweep(
+        &sweep_id,
+        finished_at,
+        report.records_demoted,
+        report.records_dropped,
+        &report.tier_transitions_json(),
+        status,
+    ) {
+        eprintln!("retention-sweep: bookkeeping write failed: {e}");
+        return ExitCode::FAILURE;
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "sweep_id": sweep_id,
+            "started_at": now.to_rfc3339(),
+            "finished_at": finished_at.to_rfc3339(),
+            "status": status,
+            "dry_run": dry_run,
+            "records_demoted": report.records_demoted,
+            "records_dropped": report.records_dropped,
+            "tier_transitions": report.tier_transitions,
+            "transitions": report.transitions,
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops retention-sweep");
+        println!("sweep_id:   {sweep_id}");
+        println!("now:        {}", now.to_rfc3339());
+        println!("dry_run:    {dry_run}");
+        println!("status:     {status}");
+        println!(
+            "demoted:    {}    dropped: {}",
+            report.records_demoted, report.records_dropped
+        );
+        if report.tier_transitions.is_empty() {
+            println!("transitions: (none — every collection within thresholds)");
+        } else {
+            println!("transitions:");
+            for (key, count) in &report.tier_transitions {
+                println!("  {key}: {count}");
+            }
+        }
+    }
+    exit
 }
 
 /// Phase8f — `cortex-ops canary`. Sends a synthetic frame through

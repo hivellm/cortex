@@ -95,13 +95,18 @@ CREATE TABLE IF NOT EXISTS trust_scores (
 );
 
 -- Retention sweep bookkeeping.
+-- `status` is the phase9a concurrency lock — 'running' is held by an
+-- in-flight sweep; 'success' / 'failed' / 'abandoned' are terminal.
+-- The sweep CLI exits with code 2 when it finds a 'running' row whose
+-- `started_at` is newer than the abandon-grace window (1 h).
 CREATE TABLE IF NOT EXISTS retention_sweeps (
     sweep_id              TEXT PRIMARY KEY,
     started_at            TEXT NOT NULL,
     finished_at           TEXT,
     records_demoted       INTEGER NOT NULL DEFAULT 0,
     records_dropped       INTEGER NOT NULL DEFAULT 0,
-    tier_transitions_json TEXT
+    tier_transitions_json TEXT,
+    status                TEXT NOT NULL DEFAULT 'success'
 );
 
 -- API key registry.
