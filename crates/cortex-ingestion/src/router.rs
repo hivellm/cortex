@@ -122,6 +122,27 @@ async fn healthz(State(state): State<AppState>) -> Response {
         "last_batch_accepted_ts_ms".into(),
         serde_json::json!(last_batch_ts_ms),
     );
+    // Phase8b — surface the per-kind throughput + freshness so the
+    // cortex-api freshness aggregator can pivot per kind without a
+    // separate /metrics scrape. Each map is a JSON object keyed by
+    // the canonical kind (`turn`, `tool_call`, …).
+    status.extras.insert(
+        "events_received_total".into(),
+        serde_json::to_value(state.metrics.events_received_snapshot()).unwrap_or_default(),
+    );
+    status.extras.insert(
+        "events_archived_total".into(),
+        serde_json::to_value(state.metrics.events_archived_snapshot()).unwrap_or_default(),
+    );
+    status.extras.insert(
+        "events_rejected_total".into(),
+        serde_json::to_value(state.metrics.events_rejected_snapshot()).unwrap_or_default(),
+    );
+    status.extras.insert(
+        "last_archive_write_ts_ms".into(),
+        serde_json::to_value(state.metrics.last_archive_write_ts_snapshot())
+            .unwrap_or_default(),
+    );
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
     let stale = last_batch_ts_ms > 0
         && now_ms.saturating_sub(last_batch_ts_ms)
@@ -332,6 +353,7 @@ impl IngestError {
         match self {
             IngestError::InvalidJson(errors) => {
                 state.metrics.events_rejected.fetch_add(1, Ordering::Relaxed);
+                state.metrics.incr_events_rejected_reason("invalid_json");
                 (
                     StatusCode::BAD_REQUEST,
                     Json(serde_json::json!({ "stream": STREAM_EVENTS_INVALID, "errors": errors })),
@@ -340,6 +362,7 @@ impl IngestError {
             }
             IngestError::ArchiveFailure(e) => {
                 state.metrics.archive_errors.fetch_add(1, Ordering::Relaxed);
+                state.metrics.incr_events_rejected_reason("archive_failure");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": "archive_failure", "detail": e })),
@@ -351,6 +374,9 @@ impl IngestError {
                     .metrics
                     .publisher_errors
                     .fetch_add(1, Ordering::Relaxed);
+                state
+                    .metrics
+                    .incr_events_rejected_reason("publisher_failure");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({ "error": "publisher_failure", "detail": e })),
@@ -403,8 +429,25 @@ async fn process_event(
     // Validate AFTER redaction so the stored shape is exactly what we ship.
     if let Err(errs) = cortex_core::validate_event(envelope) {
         let msgs = errs.iter().map(|e| e.to_string()).collect();
+        // Phase8b — track validation drops by coarse reason so the
+        // freshness aggregator's `ingestion.rejected.validation` row
+        // surfaces schema drift the moment it lands.
+        state.metrics.incr_events_rejected_reason("validation");
         return Err(IngestError::InvalidJson(msgs));
     }
+
+    // Phase8b — pivot the per-kind received counter BEFORE the
+    // archive write so a hard archive failure (disk full, permission)
+    // still leaves a footprint in the freshness aggregator's
+    // `ingestion.received.<kind>` row. The pair with
+    // `events_archived_total{kind}` after the write is the smoking
+    // gun for archive backpressure.
+    let kind_label = envelope
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    state.metrics.incr_events_received_kind(&kind_label);
 
     // Archive first (durability contract), then publish.
     state
@@ -420,6 +463,8 @@ async fn process_event(
     // like total ingestion silence in /metrics even though the archive
     // (which is what the dashboard reads) was healthy.
     state.metrics.events_received.fetch_add(1, Ordering::Relaxed);
+    // Phase8b — per-kind durability stamp + last_archive_write_ts.
+    state.metrics.incr_events_archived_kind(&kind_label);
 
     if let Err(e) = state.publisher.publish(stream_name, envelope).await {
         // Emit a structured WARN here so the failure is visible in

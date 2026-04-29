@@ -135,7 +135,9 @@ async fn run_daemon(
     let sync = Arc::new(SyncClient::new(&adapter, metrics.clone()));
     let sessions = Arc::new(SessionManager::new());
     let pid = std::process::id();
-    let dispatcher = Arc::new(Dispatcher::new(sessions, publisher.clone(), sync, pid));
+    let dispatcher = Arc::new(
+        Dispatcher::new(sessions, publisher.clone(), sync, pid).with_metrics(metrics.clone()),
+    );
 
     let shutdown = Arc::new(tokio::sync::Notify::new());
     let _flusher = spawn_flusher(
@@ -190,6 +192,57 @@ async fn run_daemon(
             serde_json::json!(last_publish_ok_ts_ms),
         );
         extras.insert("ipc_pipe_alive".into(), serde_json::json!(ipc_alive));
+
+        // Phase8b — surface the per-stage divergence counters and
+        // freshness timestamps so the cortex-api freshness aggregator
+        // can pivot without scraping `/metrics` in addition to
+        // `/healthz`. Each map is a JSON object keyed by hook (frames)
+        // or canonical kind (envelopes / publishes).
+        let frames_received = metrics_for_health.frames_received_snapshot();
+        let frames_parsed = metrics_for_health.frames_parsed_snapshot();
+        let envelopes_built = metrics_for_health.envelopes_built_snapshot();
+        let envelopes_publish_ok = metrics_for_health.envelopes_publish_ok_snapshot();
+        let envelopes_publish_fail = metrics_for_health.envelopes_publish_fail_snapshot();
+        let last_frame_ts = metrics_for_health.last_frame_ts_snapshot();
+        let last_envelope_ts = metrics_for_health.last_envelope_ts_snapshot();
+        let last_publish_ok_ts_by_kind =
+            metrics_for_health.last_publish_ok_ts_by_kind_snapshot();
+        extras.insert(
+            "frames_received_total".into(),
+            serde_json::to_value(&frames_received).unwrap_or_default(),
+        );
+        extras.insert(
+            "frames_parsed_total".into(),
+            serde_json::to_value(&frames_parsed).unwrap_or_default(),
+        );
+        extras.insert(
+            "frames_parse_error_total".into(),
+            serde_json::json!(metrics_for_health.frames_parse_error_total()),
+        );
+        extras.insert(
+            "envelopes_built_total".into(),
+            serde_json::to_value(&envelopes_built).unwrap_or_default(),
+        );
+        extras.insert(
+            "envelopes_publish_ok_total".into(),
+            serde_json::to_value(&envelopes_publish_ok).unwrap_or_default(),
+        );
+        extras.insert(
+            "envelopes_publish_fail_total".into(),
+            serde_json::to_value(&envelopes_publish_fail).unwrap_or_default(),
+        );
+        extras.insert(
+            "last_frame_ts_ms".into(),
+            serde_json::to_value(&last_frame_ts).unwrap_or_default(),
+        );
+        extras.insert(
+            "last_envelope_ts_ms".into(),
+            serde_json::to_value(&last_envelope_ts).unwrap_or_default(),
+        );
+        extras.insert(
+            "last_publish_ok_ts_ms_by_kind".into(),
+            serde_json::to_value(&last_publish_ok_ts_by_kind).unwrap_or_default(),
+        );
         let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
         let stale = last_publish_ok_ts_ms > 0
             && now_ms.saturating_sub(last_publish_ok_ts_ms)
@@ -213,13 +266,21 @@ async fn run_daemon(
         }
     });
     let admin_started_at = started_at.clone();
+    // Phase8b — expose `/metrics` on the same admin port so a single
+    // scrape target picks up both health JSON and the Prometheus-text
+    // counters. The renderer reads from the shared metrics registry,
+    // so the per-hook / per-kind counts are live per scrape.
+    let metrics_for_prom = metrics.clone();
+    let metrics_renderer: cortex_health::server::MetricsRenderer =
+        std::sync::Arc::new(move || metrics_for_prom.render_prom());
     tokio::spawn(async move {
-        if let Err(e) = cortex_health::server::serve_standalone(
+        if let Err(e) = cortex_health::server::serve_standalone_with_metrics(
             admin_port,
             "cortex-adapter",
             env!("CARGO_PKG_VERSION"),
             admin_started_at,
             provider,
+            Some(metrics_renderer),
         )
         .await
         {

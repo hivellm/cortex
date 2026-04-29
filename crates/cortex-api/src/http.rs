@@ -77,7 +77,48 @@ pub fn build_router_with(
         .route("/v1/health", get(handle_v1_health))
         .with_state(state);
     if let Some(dash) = dashboard {
+        // Phase8b — mount /v1/health/freshness + /v1/health/divergence
+        // alongside the dashboard routes. Both endpoints share the
+        // dashboard's `loader_metrics` Arc and a fresh aggregator
+        // history so their probes stay consistent across calls.
+        let health_state = crate::health::HealthState {
+            aggregator: Arc::new(crate::health::HealthAggregatorState::new()),
+            loader_metrics: dash.loader_metrics.clone(),
+        };
+        let health_router = Router::new()
+            .route(
+                "/v1/health/freshness",
+                get(crate::health::freshness_handler),
+            )
+            .route(
+                "/v1/health/divergence",
+                get(crate::health::divergence_handler),
+            )
+            .with_state(health_state);
+        // Phase8b — Prometheus-text `/metrics` endpoint exposing the
+        // LoaderMetrics counters. The freshness aggregator already
+        // surfaces the same numbers in JSON, but a parallel Prom
+        // endpoint keeps cortex-api consistent with cortex-ingestion
+        // (which already exposes one) so an external scraper picks
+        // up every stage uniformly.
+        let metrics_state = dash.loader_metrics.clone();
+        let metrics_router = Router::new()
+            .route(
+                "/metrics",
+                get({
+                    let m = metrics_state.clone();
+                    move || async move {
+                        (
+                            StatusCode::OK,
+                            [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+                            m.render_prom(),
+                        )
+                    }
+                }),
+            );
         router = router.merge(crate::dashboard::build_dashboard_router(dash));
+        router = router.merge(health_router);
+        router = router.merge(metrics_router);
     }
     router
 }

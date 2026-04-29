@@ -502,6 +502,10 @@ impl Worker {
                     continue;
                 }
             };
+            // Phase8b — stamp jobs_processed + last_job_ts. The bump
+            // is conditional on handled > 0 so an idle poll never
+            // looks like ongoing work to the freshness aggregator.
+            self.metrics.record_jobs_processed(handled as u64);
             if handled == 0 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }

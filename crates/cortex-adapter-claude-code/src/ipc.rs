@@ -258,10 +258,23 @@ pub(crate) async fn handle_line(line: &str, dispatcher: Arc<Dispatcher>) -> Hook
     let frame = match serde_json::from_str::<HookFrame>(trimmed) {
         Ok(f) => f,
         Err(e) => {
+            // Phase8b — bump the unlabelled parse-error counter so a
+            // sudden spike of malformed frames surfaces in /metrics
+            // even though we can't attribute the hook.
+            if let Some(m) = dispatcher.metrics() {
+                m.incr_frames_parse_error();
+            }
             tracing::warn!(error = %e, "malformed hook frame; replying empty");
             return HookResponse::empty();
         }
     };
+    // Phase8b — frames_received_total{hook} is stamped only after
+    // the JSON parses (we don't know the hook label otherwise); the
+    // unlabelled `frames_parse_error_total` counter above completes
+    // the received-vs-parsed picture for malformed payloads.
+    if let Some(m) = dispatcher.metrics() {
+        m.incr_frames_received(&frame.hook);
+    }
     dispatcher.dispatch(frame).await
 }
 

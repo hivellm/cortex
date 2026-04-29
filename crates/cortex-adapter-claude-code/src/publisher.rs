@@ -156,12 +156,31 @@ impl HttpPublisher {
                     // publish so /healthz can detect publisher stall.
                     self.metrics.record_publish_ok_now();
                 }
-                for e in &batch {
+                // Phase8b — accepted vs rejected per-envelope split.
+                // BatchReport.errors carries indices the ingestion
+                // side rejected; everything not in that index list
+                // counts as `publish_ok{kind}`. That keeps the counter
+                // truthful — without the split, all rejected envelopes
+                // would still bump `publish_ok` and the divergence
+                // signal disappears.
+                let rejected_indices: std::collections::BTreeSet<usize> = report
+                    .errors
+                    .iter()
+                    .map(|err| err.index)
+                    .collect();
+                for (i, e) in batch.iter().enumerate() {
                     // events_total is "submitted to ingestion", not
                     // "accepted". The split shows up as a divergence
                     // between events_total and publisher_accepted in
                     // /metrics — that gap IS the silent loss.
                     self.metrics.incr_events_total(e.kind.schema_stem());
+                    if rejected_indices.contains(&i) {
+                        self.metrics
+                            .incr_envelopes_publish_fail(e.kind.schema_stem());
+                    } else {
+                        self.metrics
+                            .incr_envelopes_publish_ok(e.kind.schema_stem());
+                    }
                 }
                 if report.rejected > 0 {
                     let sample = report
@@ -191,6 +210,13 @@ impl HttpPublisher {
                 tracing::warn!(error = %e, "publisher batch failed; spilling to WAL");
                 self.metrics.incr_publisher_error("network");
                 for evt in batch {
+                    // Phase8b — every envelope in a network-failed
+                    // batch counts as `publish_fail{kind}`. The WAL
+                    // replay path will re-deliver later; until then,
+                    // built-vs-publish_ok diverges by exactly the
+                    // batch size, which is the WAL-spill smoking gun.
+                    self.metrics
+                        .incr_envelopes_publish_fail(evt.kind.schema_stem());
                     if let Ok(v) = serde_json::to_value(&evt) {
                         if let Err(e) = self.wal.append(&v) {
                             tracing::warn!(error = %e, "wal append after publish failure failed");

@@ -681,6 +681,8 @@ impl Worker {
                     continue;
                 }
             };
+            // Phase8b — bump the per-stage activity counters.
+            self.metrics.record_jobs_processed(handled as u64);
             if handled == 0 {
                 tokio::time::sleep(idle).await;
             }

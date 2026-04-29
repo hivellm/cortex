@@ -19,8 +19,8 @@ use clap::Parser;
 use std::sync::Arc as StdArc;
 
 use cortex_api::{
-    GraphLane, KeywordLane, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, MeiliKeywordLane,
-    NexusGraphLane, Orchestrator, QueryService, VectorLane, VectorizerLane,
+    GraphLane, KeywordLane, LoaderMetrics, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane,
+    MeiliKeywordLane, NexusGraphLane, Orchestrator, QueryService, VectorLane, VectorizerLane,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -45,6 +45,10 @@ async fn main() -> Result<()> {
     let vector_memory = Arc::new(MemoryVectorLane::new());
     let keyword_memory = Arc::new(MemoryKeywordLane::new());
     let graph_memory = Arc::new(MemoryGraphLane::new());
+    // Phase8b — single LoaderMetrics shared by archive_loader,
+    // meili_loader, the dashboard freshness handler, and the
+    // /metrics renderer. Each refresh task gets a clone of the Arc.
+    let loader_metrics = Arc::new(LoaderMetrics::new());
 
     // Live vector lane: when CORTEX_VECTORIZER_URL is set and the
     // SDK's `health_check` succeeds, swap the in-memory double for
@@ -183,7 +187,11 @@ async fn main() -> Result<()> {
     // the live spec-06 / spec-07 / spec-08 indexers ship.
     if let Ok(root) = std::env::var("CORTEX_ARCHIVE_ROOT") {
         let archive_root = PathBuf::from(&root);
-        let initial = cortex_api::load_into_keyword_lane(&archive_root, &keyword_memory);
+        let initial = cortex_api::archive_loader::load_into_keyword_lane_with_metrics(
+            &archive_root,
+            &keyword_memory,
+            Some(loader_metrics.as_ref()),
+        );
         tracing::info!(
             archive_root = %root,
             files_visited = initial.files_visited,
@@ -199,11 +207,16 @@ async fn main() -> Result<()> {
             .unwrap_or(30)
             .max(1);
         let lane = keyword_memory.clone();
+        let metrics_for_loop = loader_metrics.clone();
         tokio::spawn(async move {
             let interval = Duration::from_secs(refresh_secs);
             loop {
                 tokio::time::sleep(interval).await;
-                let report = cortex_api::load_into_keyword_lane(&archive_root, &lane);
+                let report = cortex_api::archive_loader::load_into_keyword_lane_with_metrics(
+                    &archive_root,
+                    &lane,
+                    Some(metrics_for_loop.as_ref()),
+                );
                 tracing::debug!(
                     archive_root = %archive_root.display(),
                     files_visited = report.files_visited,
@@ -226,10 +239,11 @@ async fn main() -> Result<()> {
     // var is absent — cold-stack dev keeps working.
     if let Ok(meili_url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
         let meili_api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok();
-        match cortex_api::load_meili_into_keyword_lane(
+        match cortex_api::meili_loader::load_meili_into_keyword_lane_with_metrics(
             &meili_url,
             meili_api_key.as_deref(),
             &keyword_memory,
+            Some(loader_metrics.as_ref()),
         )
         .await
         {
@@ -263,12 +277,18 @@ async fn main() -> Result<()> {
         let lane = keyword_memory.clone();
         let url = meili_url.clone();
         let key = meili_api_key.clone();
+        let metrics_for_loop = loader_metrics.clone();
         tokio::spawn(async move {
             let interval = Duration::from_secs(refresh_secs);
             loop {
                 tokio::time::sleep(interval).await;
-                match cortex_api::load_meili_into_keyword_lane(&url, key.as_deref(), &lane)
-                    .await
+                match cortex_api::meili_loader::load_meili_into_keyword_lane_with_metrics(
+                    &url,
+                    key.as_deref(),
+                    &lane,
+                    Some(metrics_for_loop.as_ref()),
+                )
+                .await
                 {
                     Ok(report) => tracing::debug!(
                         meili_url = %url,
@@ -348,6 +368,7 @@ async fn main() -> Result<()> {
         analyzer,
         tasks,
         metadata,
+        loader_metrics: loader_metrics.clone(),
     };
 
     let fusion = resolve_fusion_config_from_env();

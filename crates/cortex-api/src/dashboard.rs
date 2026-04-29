@@ -59,6 +59,11 @@ pub struct DashboardState {
     /// because `rusqlite::Connection` is `Send` but not `Sync`, and
     /// dashboard handlers are dispatched across the tokio runtime.
     pub metadata: Option<Arc<std::sync::Mutex<cortex_storage::MetadataStore>>>,
+    /// Phase8b — shared loader metrics registry. Bumped from the
+    /// archive_loader + meili_loader refresh tasks; surfaced via
+    /// `/healthz` extras and the new `/v1/health/freshness`
+    /// endpoint so a stalled loader localises immediately.
+    pub loader_metrics: Arc<crate::LoaderMetrics>,
 }
 
 /// Build the dashboard sub-router carrying the `/v1/dashboard/*` JSON
@@ -3159,7 +3164,7 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3237,7 +3242,7 @@ mod tests {
         let mut c = tool_call_hit("Edit", "third", "Cortex", 300);
         c.content_hash = Some("sha256:aaa".into());
         let lane = lane_with(vec![a, b, c]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3266,7 +3271,7 @@ mod tests {
             turn_hit("middle prompt", "Cortex", 200),
             turn_hit("newest prompt", "Cortex", 300),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3294,7 +3299,7 @@ mod tests {
             turn_hit("HNSW recall floor benchmark", "Vectorizer", 100),
             turn_hit("unrelated thoughts", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3320,7 +3325,7 @@ mod tests {
             turn_hit("a", "Cortex", 100),
             turn_hit("b", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3347,7 +3352,7 @@ mod tests {
                 .map(|i| turn_hit(&format!("p{i}"), "X", i))
                 .collect(),
         );
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3421,6 +3426,7 @@ mod tests {
                 std::path::PathBuf::from("__tests_no_rulebook__"),
             )),
             metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
         let resp = conversations_list(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3509,7 +3515,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
             turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -3532,7 +3538,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
             turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3560,7 +3566,7 @@ mod tests {
             tool_call_hit("Edit", "x", "Cortex", 200),
             turn_hit("note V", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3595,6 +3601,7 @@ mod tests {
                 std::path::PathBuf::from("__tests_no_rulebook__"),
             )),
             metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
         let resp = overview(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3657,6 +3664,7 @@ mod tests {
                 std::path::PathBuf::from("__tests_no_rulebook__"),
             )),
             metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
         let resp = overview(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3690,6 +3698,7 @@ mod tests {
                 std::path::PathBuf::from("__tests_no_rulebook__"),
             )),
             metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
         let resp = tools_stats(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3718,6 +3727,7 @@ mod tests {
                 std::path::PathBuf::from("__tests_no_rulebook__"),
             )),
             metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
         let resp = trust(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)

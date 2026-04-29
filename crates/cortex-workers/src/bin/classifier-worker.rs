@@ -15,7 +15,7 @@ use cortex_classifier::{
     HaikuCliClassifier, HaikuCliConfig, InMemoryCache, PricingTable,
 };
 use cortex_workers::admin_health::{
-    resolve_port_from_env, rules, spawn_health_listener, DEFAULT_CLASSIFIER_PORT,
+    resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_CLASSIFIER_PORT,
 };
 use cortex_workers::classifier::{
     ClassifierMode, ClassifierWorkerConfig, LiveSynapConsumer, LiveSynapPublisher, SynapHandle,
@@ -111,21 +111,40 @@ async fn main() -> Result<()> {
         DEFAULT_CLASSIFIER_PORT,
     );
     let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+    let worker_for_health = worker.clone();
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         let mut extras = serde_json::Map::new();
         extras.insert("workers_configured".into(), serde_json::json!(2u64));
-        let (state, last_error) = rules::freshness_state(started_ms, None);
+        extras.insert(
+            "jobs_processed_total".into(),
+            serde_json::json!(worker_for_health.jobs_processed_total()),
+        );
+        let last_job_ts_ms = worker_for_health.last_job_ts_ms();
+        extras.insert(
+            "last_job_ts_ms".into(),
+            serde_json::json!(last_job_ts_ms),
+        );
+        let activity_ts = if last_job_ts_ms > 0 {
+            last_job_ts_ms
+        } else {
+            started_ms
+        };
+        let (state, last_error) = rules::freshness_state(activity_ts, None);
         cortex_health::server::HealthSnapshot {
             state,
             last_error,
             extras,
         }
     });
-    spawn_health_listener(
+    let worker_for_prom = worker.clone();
+    let renderer: cortex_health::server::MetricsRenderer =
+        std::sync::Arc::new(move || worker_for_prom.render_prom());
+    spawn_health_listener_with_metrics(
         port,
         "cortex-classifier-worker",
         env!("CARGO_PKG_VERSION"),
         provider,
+        Some(renderer),
     );
 
     worker.run_pool(shutdown).await

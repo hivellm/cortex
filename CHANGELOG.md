@@ -52,6 +52,18 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **Workspace ports migrated** from `1500x` → `1700x` to avoid conflicts with stand-alone Vectorizer / Synap installations.
 - **Doctor + smoke targets** — `make doctor` health-probes every backend; `make smoke` runs `up + doctor + plan`.
 
+#### Observability — pipeline stage metrics & freshness (phase8b)
+- **Per-stage divergence counters across the whole pipeline.** Each stage now exports per-kind / per-hook counters via `/healthz` extras *and* a Prometheus-text `/metrics` endpoint mounted on the same listener:
+  - `cortex-adapter-claude-code` — `frames_received_total{hook}`, `frames_parsed_total{hook}`, `frames_parse_error_total`, `envelopes_built_total{kind}`, `envelopes_publish_ok_total{kind}`, `envelopes_publish_fail_total{kind}`, `last_frame_ts_ms{hook}`, `last_envelope_ts_ms{kind}`, `last_publish_ok_ts_ms{kind}`.
+  - `cortex-ingestion` — `events_received_total{kind}`, `events_archived_total{kind}`, `events_rejected_total{reason}`, `last_archive_write_ts_ms{kind}`.
+  - `cortex-api` — `archive_loader_envelopes_seeded_total{kind}`, `meili_loader_docs_seeded_total{family}`, `*_last_refresh_ts_ms`.
+  - Workers — `*_jobs_processed_total`, `*_last_job_ts_ms` per worker.
+- **NEW `GET /v1/health/freshness`** on `cortex-api` — fans out the same probes `/v1/health` uses, parses the per-stage `last_*_ts` extras, and returns a flat array of `{ key, last_event_ts_ms, gap_seconds, severity }` rows keyed `<stage>.<kind>`. Severity buckets: `gap_seconds > 60` → `warn`, `> 300` → `critical`.
+- **NEW `GET /v1/health/divergence`** on `cortex-api` — pairs adjacent-stage counters (`adapter.frames_parsed → adapter.envelopes_built → adapter.envelopes_publish_ok → ingestion.events_archived`) and reports `{ pair, upstream, downstream, delta, delta_growth, severity }` rows. The aggregator caches the previous probe's delta in process memory so `delta_growth > 0` localises a silent drop to the offending boundary in seconds.
+- **`cortex-health::server` now mounts an optional `/metrics` Prometheus-text endpoint** alongside `/healthz` (`serve_standalone_with_metrics` / `router_with_metrics`). Workers and the adapter wire it through `spawn_health_listener_with_metrics`.
+- Closes the 2026-04-28 JSON-truncation incident class: a divergence row of shape `adapter.frames_parsed → adapter.envelopes_built ≈ N delta_growth` would have fired within seconds instead of the ~2 h grep-the-logs trace that actually found it.
+- Canonical metric catalogue: [`docs/metrics.md`](docs/metrics.md). Architecture writeup: [`docs/architecture.md` §13.6](docs/architecture.md#136-observability--pipeline-stage-metrics--freshness-phase8b).
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.

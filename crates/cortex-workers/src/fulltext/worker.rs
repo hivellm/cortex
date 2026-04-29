@@ -441,6 +441,10 @@ impl Worker {
                     continue;
                 }
             };
+            // Phase8b — bump jobs_processed + stamp last_job_ts when
+            // run_once produced work. Idle polls are skipped so the
+            // freshness aggregator keeps an honest gap-grows signal.
+            self.metrics.record_jobs_processed(handled as u64);
             if handled == 0 {
                 tokio::time::sleep(idle).await;
             }

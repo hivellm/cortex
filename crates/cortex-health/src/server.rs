@@ -57,12 +57,21 @@ impl Default for HealthSnapshot {
 /// the live snapshot.
 pub type SnapshotProvider = Arc<dyn Fn() -> HealthSnapshot + Send + Sync>;
 
+/// Closure type the listener calls per `/metrics` scrape to render
+/// the Prometheus text-format payload. Phase8b — the freshness +
+/// divergence aggregators read counters out of `/healthz` extras,
+/// but a parallel `/metrics` endpoint keeps the Prometheus story
+/// consistent with `cortex-ingestion` (which already exposes one)
+/// so an external scraper can collect lock-step counters.
+pub type MetricsRenderer = Arc<dyn Fn() -> String + Send + Sync>;
+
 #[derive(Clone)]
 struct ServerState {
     name: &'static str,
     version: &'static str,
     since: String,
     provider: SnapshotProvider,
+    metrics: Option<MetricsRenderer>,
 }
 
 /// Build the `/healthz` router. Exposed so callers that already own
@@ -74,15 +83,32 @@ pub fn router(
     since: String,
     provider: SnapshotProvider,
 ) -> Router {
+    router_with_metrics(name, version, since, provider, None)
+}
+
+/// Build the `/healthz` router with an optional `/metrics`
+/// Prometheus-text endpoint mounted on the same listener. Phase8b —
+/// every long-running Cortex binary exposes `/metrics` so the
+/// per-stage counters land in a uniform scrape surface.
+pub fn router_with_metrics(
+    name: &'static str,
+    version: &'static str,
+    since: String,
+    provider: SnapshotProvider,
+    metrics: Option<MetricsRenderer>,
+) -> Router {
     let state = ServerState {
         name,
         version,
         since,
         provider,
+        metrics,
     };
-    Router::new()
-        .route("/healthz", get(handle_healthz))
-        .with_state(state)
+    let mut router = Router::new().route("/healthz", get(handle_healthz));
+    if state.metrics.is_some() {
+        router = router.route("/metrics", get(handle_metrics));
+    }
+    router.with_state(state)
 }
 
 async fn handle_healthz(State(state): State<ServerState>) -> impl IntoResponse {
@@ -101,6 +127,20 @@ async fn handle_healthz(State(state): State<ServerState>) -> impl IntoResponse {
     (http_status, Json(status))
 }
 
+async fn handle_metrics(State(state): State<ServerState>) -> impl IntoResponse {
+    let body = match state.metrics.as_ref() {
+        Some(renderer) => renderer(),
+        // Should never reach this branch — `/metrics` route is only
+        // registered when `metrics` is `Some`. Defense-in-depth.
+        None => String::new(),
+    };
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
+}
+
 /// Spawn an axum server bound to `0.0.0.0:port` serving `/healthz`.
 /// Awaits indefinitely — caller wraps in `tokio::spawn`. On bind
 /// failure returns the I/O error so the caller can decide whether
@@ -113,7 +153,21 @@ pub async fn serve_standalone(
     since: String,
     provider: SnapshotProvider,
 ) -> std::io::Result<()> {
-    let app = router(name, version, since, provider);
+    serve_standalone_with_metrics(port, name, version, since, provider, None).await
+}
+
+/// `serve_standalone` with an optional Prometheus-text `/metrics`
+/// renderer mounted on the same port. Phase8b — workers and the
+/// adapter expose stage counters via this path.
+pub async fn serve_standalone_with_metrics(
+    port: u16,
+    name: &'static str,
+    version: &'static str,
+    since: String,
+    provider: SnapshotProvider,
+    metrics: Option<MetricsRenderer>,
+) -> std::io::Result<()> {
+    let app = router_with_metrics(name, version, since, provider, metrics);
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(port, name, "health endpoint listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -205,6 +259,54 @@ mod tests {
         let (status, body) = invoke_router(r).await;
         assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(body.state, HealthState::Down);
+    }
+
+    #[tokio::test]
+    async fn metrics_route_renders_when_provider_set() {
+        // Phase8b — when a metrics renderer is wired, the same
+        // listener exposes `/metrics` with the renderer's output.
+        // When it isn't, the route is absent entirely so an external
+        // scraper sees a 404 rather than an empty body.
+        use tower::ServiceExt;
+        let provider = fixed_provider(HealthState::Ok, 0);
+        let renderer: MetricsRenderer = Arc::new(|| "# TYPE foo counter\nfoo 7\n".to_string());
+        let r = router_with_metrics(
+            "cortex-test",
+            "0.1.0",
+            "now".into(),
+            provider,
+            Some(renderer),
+        );
+        let resp = r
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("foo 7"));
+    }
+
+    #[tokio::test]
+    async fn metrics_route_absent_when_no_renderer_wired() {
+        use tower::ServiceExt;
+        let provider = fixed_provider(HealthState::Ok, 0);
+        let r = router("cortex-test", "0.1.0", "now".into(), provider);
+        let resp = r
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

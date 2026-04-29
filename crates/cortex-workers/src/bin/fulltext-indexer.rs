@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use cortex_workers::admin_health::{
-    resolve_port_from_env, rules, spawn_health_listener, DEFAULT_FULLTEXT_PORT,
+    resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_FULLTEXT_PORT,
 };
 use cortex_workers::fulltext::{
     replay_missing_partitions, settings_v1_json, sweep_stale_indexes, FulltextConfig,
@@ -134,7 +134,7 @@ async fn main() -> Result<()> {
         shutdown_handle.store(true, Ordering::Relaxed);
     });
 
-    // Phase8a §2.9 — admin /healthz listener.
+    // Phase8a §2.9 / Phase8b §4.3 — admin /healthz + /metrics.
     let port = resolve_port_from_env(
         "CORTEX_FULLTEXT_HEALTH_PORT",
         DEFAULT_FULLTEXT_PORT,
@@ -151,18 +151,36 @@ async fn main() -> Result<()> {
             "skipped_empty_total".into(),
             serde_json::json!(metrics_for_health.skipped_empty_total()),
         );
-        let (state, last_error) = rules::freshness_state(started_ms, None);
+        extras.insert(
+            "jobs_processed_total".into(),
+            serde_json::json!(metrics_for_health.jobs_processed_total()),
+        );
+        let last_job_ts_ms = metrics_for_health.last_job_ts_ms();
+        extras.insert(
+            "last_job_ts_ms".into(),
+            serde_json::json!(last_job_ts_ms),
+        );
+        let activity_ts = if last_job_ts_ms > 0 {
+            last_job_ts_ms
+        } else {
+            started_ms
+        };
+        let (state, last_error) = rules::freshness_state(activity_ts, None);
         cortex_health::server::HealthSnapshot {
             state,
             last_error,
             extras,
         }
     });
-    spawn_health_listener(
+    let metrics_for_prom = worker.metrics.clone();
+    let renderer: cortex_health::server::MetricsRenderer =
+        std::sync::Arc::new(move || metrics_for_prom.render_prom());
+    spawn_health_listener_with_metrics(
         port,
         "cortex-fulltext-worker",
         env!("CARGO_PKG_VERSION"),
         provider,
+        Some(renderer),
     );
 
     worker.run_pool(shutdown).await

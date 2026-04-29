@@ -60,6 +60,7 @@ fn build_router(root: &std::path::Path) -> axum::Router {
         analyzer: Arc::new(cortex_api::analyzer::Analyzer::from_env()),
         tasks: Arc::new(TaskLoader::new(root).with_ttl(Duration::from_millis(0))),
         metadata: None,
+        loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
     };
     build_dashboard_router(state)
 }

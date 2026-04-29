@@ -584,6 +584,51 @@ Closes the 2026-04-28 incident class where every component
 looked individually healthy but the stack was silently degraded
 (adapter publisher had stalled; the gap took ~2 hours to trace).
 
+## 13.6 Observability — pipeline stage metrics & freshness (phase8b)
+
+`/v1/health` answers "is each component alive?". `/v1/health/freshness`
+and `/v1/health/divergence` answer the question phase8a couldn't:
+**is data still moving?**
+
+Every pipeline stage now exports a per-kind `last_*_ts_ms` and a
+matching `*_total{kind|hook}` counter via `/healthz` extras *and* a
+parallel Prometheus-text `/metrics` endpoint mounted on the same
+listener. The freshness aggregator on cortex-api fans out across
+the stack, parses the per-kind extras, and returns a flat table
+keyed `<stage>.<kind>` with `gap_seconds` derived from "now -
+last_event_ts". The divergence aggregator pairs adjacent stages
+(`adapter.frames_parsed → adapter.envelopes_built →
+adapter.envelopes_publish_ok → ingestion.events_archived`) so a
+silent drop localises to the offending boundary in seconds.
+
+```
+operator → /v1/health/freshness  on cortex-api
+operator → /v1/health/divergence on cortex-api
+              │
+              ├─ /healthz on cortex-adapter (port 17011)
+              │     extras: frames_received_total / frames_parsed_total
+              │             envelopes_built_total / envelopes_publish_ok_total
+              │             last_frame_ts_ms / last_envelope_ts_ms
+              ├─ /v1/healthz on cortex-ingestion (port 17010)
+              │     extras: events_received_total / events_archived_total
+              │             events_rejected_total / last_archive_write_ts_ms
+              └─ /healthz on each worker (17021..17024)
+                    extras: jobs_processed_total / last_job_ts_ms
+```
+
+Severity rules:
+- `gap_seconds > 60` → `warn`; `gap_seconds > 300` → `critical`
+- `delta_growth_60s > 10` → `warn`; `delta_growth_60s > 50` → `critical`
+
+The 2026-04-28 JSON-truncation incident would have surfaced as a
+divergence row of shape
+`adapter.frames_parsed → adapter.envelopes_built ≈ 100 delta_growth`
+within seconds — instead of the ~2 h grep-the-logs search that
+actually found it.
+
+See [`docs/metrics.md`](metrics.md) for the canonical metric names
++ labels each crate exposes.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

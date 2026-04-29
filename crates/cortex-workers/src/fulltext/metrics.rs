@@ -49,6 +49,11 @@ pub struct Metrics {
     /// The map key is `"<repo_slug>|<family>"` so the partition
     /// identity stays in lockstep with the canonical index naming.
     pub replay_events_total: Mutex<BTreeMap<String, u64>>,
+    /// Phase8b — total Synap messages the worker has processed end
+    /// to end. Bumped after each `run_once` returns a non-zero count.
+    pub jobs_processed_total: AtomicU64,
+    /// Phase8b — Unix-epoch ms of the most recent successful job.
+    pub last_job_ts_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -165,5 +170,55 @@ impl Metrics {
     /// /healthz endpoint can flag a worker stuck on bad input.
     pub fn skipped_empty_total(&self) -> u64 {
         self.skipped_empty.load(Ordering::Relaxed)
+    }
+
+    /// Phase8b — record `n` jobs processed, stamping `last_job_ts_ms`
+    /// at the same instant.
+    pub fn record_jobs_processed(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        self.jobs_processed_total.fetch_add(n, Ordering::Relaxed);
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        self.last_job_ts_ms.store(now_ms, Ordering::Relaxed);
+    }
+    /// Phase8b — read the cumulative jobs-processed counter.
+    pub fn jobs_processed_total(&self) -> u64 {
+        self.jobs_processed_total.load(Ordering::Relaxed)
+    }
+    /// Phase8b — read the most-recent-job timestamp.
+    pub fn last_job_ts_ms(&self) -> u64 {
+        self.last_job_ts_ms.load(Ordering::Relaxed)
+    }
+
+    /// Phase8b — render the fulltext counters in Prometheus text format.
+    pub fn render_prom(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        out.push_str("# TYPE cortex_fulltext_jobs_processed_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_fulltext_jobs_processed_total {}",
+            self.jobs_processed_total()
+        );
+        out.push_str("# TYPE cortex_fulltext_last_job_ts_ms gauge\n");
+        let _ = writeln!(
+            out,
+            "cortex_fulltext_last_job_ts_ms {}",
+            self.last_job_ts_ms()
+        );
+        out.push_str("# TYPE cortex_fulltext_documents_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_fulltext_documents_total {}",
+            self.documents_total()
+        );
+        out.push_str("# TYPE cortex_fulltext_skipped_empty_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_fulltext_skipped_empty_total {}",
+            self.skipped_empty_total()
+        );
+        out
     }
 }

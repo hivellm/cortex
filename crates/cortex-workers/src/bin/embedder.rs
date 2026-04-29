@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use cortex_workers::admin_health::{
-    resolve_port_from_env, rules, spawn_health_listener, DEFAULT_EMBEDDER_PORT,
+    resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_EMBEDDER_PORT,
 };
 use cortex_workers::embedder::{
     EmbedderConfig, LiveSynapConsumer, LiveSynapPublisher, LiveVectorizerClient, Metrics,
@@ -102,9 +102,11 @@ async fn main() -> Result<()> {
         shutdown_handle.store(true, Ordering::Relaxed);
     });
 
-    // Phase8a §2.8 — admin /healthz listener. Reads chunks-written
-    // / vectorizer-errors counters from the shared Metrics
-    // registry so the report carries the live throughput signal.
+    // Phase8a §2.8 / Phase8b §4.2 — admin /healthz + /metrics.
+    // Reads jobs_processed / chunks_written / vectorizer_errors from
+    // the shared Metrics registry. Freshness uses the per-job
+    // last_job_ts (when the worker has processed at least one job)
+    // and falls back to the boot timestamp until then.
     let port = resolve_port_from_env(
         "CORTEX_EMBEDDER_HEALTH_PORT",
         DEFAULT_EMBEDDER_PORT,
@@ -121,18 +123,36 @@ async fn main() -> Result<()> {
             "vectorizer_errors_total".into(),
             serde_json::json!(metrics_for_health.vectorizer_errors_total()),
         );
-        let (state, last_error) = rules::freshness_state(started_ms, None);
+        extras.insert(
+            "jobs_processed_total".into(),
+            serde_json::json!(metrics_for_health.jobs_processed_total()),
+        );
+        let last_job_ts_ms = metrics_for_health.last_job_ts_ms();
+        extras.insert(
+            "last_job_ts_ms".into(),
+            serde_json::json!(last_job_ts_ms),
+        );
+        let activity_ts = if last_job_ts_ms > 0 {
+            last_job_ts_ms
+        } else {
+            started_ms
+        };
+        let (state, last_error) = rules::freshness_state(activity_ts, None);
         cortex_health::server::HealthSnapshot {
             state,
             last_error,
             extras,
         }
     });
-    spawn_health_listener(
+    let metrics_for_prom = worker.metrics.clone();
+    let renderer: cortex_health::server::MetricsRenderer =
+        std::sync::Arc::new(move || metrics_for_prom.render_prom());
+    spawn_health_listener_with_metrics(
         port,
         "cortex-embedder-worker",
         env!("CARGO_PKG_VERSION"),
         provider,
+        Some(renderer),
     );
 
     worker.run_pool(shutdown).await

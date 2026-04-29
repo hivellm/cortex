@@ -78,6 +78,18 @@ pub fn load_lane_hits(archive_root: &Path) -> (LoadReport, Vec<LaneHit>) {
 /// One-call helper that loads + seeds the lane under [`DEFAULT_INDEX`].
 /// Returns the report so the caller can log it.
 pub fn load_into_keyword_lane(archive_root: &Path, lane: &MemoryKeywordLane) -> LoadReport {
+    load_into_keyword_lane_with_metrics(archive_root, lane, None)
+}
+
+/// Phase8b — same as [`load_into_keyword_lane`] but also stamps the
+/// per-kind seed counters and `last_refresh_ts_ms` on a shared
+/// [`crate::LoaderMetrics`] registry. The freshness aggregator reads
+/// these to flag a stalled loader.
+pub fn load_into_keyword_lane_with_metrics(
+    archive_root: &Path,
+    lane: &MemoryKeywordLane,
+    metrics: Option<&crate::LoaderMetrics>,
+) -> LoadReport {
     let (report, hits) = load_lane_hits(archive_root);
     if !hits.is_empty() {
         // Seed the indexes the spec-11 strategies hit for free-search
@@ -87,6 +99,37 @@ pub fn load_into_keyword_lane(archive_root: &Path, lane: &MemoryKeywordLane) -> 
         for index in ["cortex-code", "cortex-docs", "cortex-decisions"] {
             lane.seed(index, hits.clone());
         }
+    }
+    if let Some(m) = metrics {
+        // Phase8b — stamp the per-kind cumulative seed count by
+        // walking the hits exactly once. The lane is replaced on
+        // every refresh, so the counter is "envelopes ever seen by
+        // the loader" rather than "currently in the lane" — which
+        // keeps it monotonic.
+        let mut by_kind: std::collections::BTreeMap<&str, u64> =
+            std::collections::BTreeMap::new();
+        for hit in &hits {
+            let kind = hit
+                .symbol
+                .as_deref()
+                .map(|sym| {
+                    if sym.starts_with("tool_call") {
+                        "tool_call"
+                    } else if sym.starts_with("agent_call") {
+                        "agent_call"
+                    } else if sym == "turn" {
+                        "turn"
+                    } else {
+                        "other"
+                    }
+                })
+                .unwrap_or("other");
+            *by_kind.entry(kind).or_insert(0) += 1;
+        }
+        for (kind, n) in by_kind {
+            m.add_archive_envelopes_seeded(kind, n);
+        }
+        m.record_archive_refresh_now();
     }
     report
 }

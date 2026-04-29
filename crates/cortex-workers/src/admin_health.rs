@@ -11,7 +11,9 @@
 //! `/healthz` returning [`cortex_health::SubsystemStatus`]. The
 //! aggregator on cortex-api fans out across them at `/v1/health`.
 
-use cortex_health::server::{serve_standalone, SnapshotProvider};
+use cortex_health::server::{
+    serve_standalone, serve_standalone_with_metrics, MetricsRenderer, SnapshotProvider,
+};
 
 /// Spawn the admin `/healthz` listener on `port` for the given
 /// `subsystem_name`. Failures (port already bound, OS error)
@@ -41,6 +43,46 @@ pub fn spawn_health_listener(
     tracing::info!(
         subsystem = subsystem_name,
         port,
+        "admin /healthz listening on http://0.0.0.0:{port}/healthz"
+    );
+}
+
+/// Phase8b — same as [`spawn_health_listener`] but also mounts a
+/// Prometheus-text `/metrics` endpoint on the same port. Workers
+/// pass their own renderer so the per-stage counters land in a
+/// uniform scrape surface.
+pub fn spawn_health_listener_with_metrics(
+    port: u16,
+    subsystem_name: &'static str,
+    crate_version: &'static str,
+    provider: SnapshotProvider,
+    metrics: Option<MetricsRenderer>,
+) {
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let has_metrics = metrics.is_some();
+    tokio::spawn(async move {
+        if let Err(e) = serve_standalone_with_metrics(
+            port,
+            subsystem_name,
+            crate_version,
+            started_at,
+            provider,
+            metrics,
+        )
+        .await
+        {
+            tracing::warn!(
+                subsystem = subsystem_name,
+                port,
+                error = %e,
+                "admin /healthz listener failed; worker continues without health endpoint"
+            );
+        }
+    });
+    tracing::info!(
+        subsystem = subsystem_name,
+        port,
+        metrics = has_metrics,
         "admin /healthz listening on http://0.0.0.0:{port}/healthz"
     );
 }

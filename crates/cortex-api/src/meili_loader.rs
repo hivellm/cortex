@@ -105,6 +105,36 @@ pub async fn load_meili_into_keyword_lane(
     meili_api_key: Option<&str>,
     lane: &MemoryKeywordLane,
 ) -> Result<MeiliLoadReport, MeiliLoadError> {
+    load_meili_into_keyword_lane_with_metrics(meili_url, meili_api_key, lane, None).await
+}
+
+/// Phase8b — same as [`load_meili_into_keyword_lane`] but also stamps
+/// the per-family seed counters and `last_refresh_ts_ms` on a shared
+/// [`crate::LoaderMetrics`] registry so the freshness aggregator can
+/// flag a stalled meili refresh.
+pub async fn load_meili_into_keyword_lane_with_metrics(
+    meili_url: &str,
+    meili_api_key: Option<&str>,
+    lane: &MemoryKeywordLane,
+    metrics: Option<&crate::LoaderMetrics>,
+) -> Result<MeiliLoadReport, MeiliLoadError> {
+    let report = run_load_meili(meili_url, meili_api_key, lane).await?;
+    if let Some(m) = metrics {
+        m.add_meili_docs_seeded("decisions", report.decisions_seeded as u64);
+        m.add_meili_docs_seeded("violations", report.violations_seeded as u64);
+        m.add_meili_docs_seeded("memories", report.memories_seeded as u64);
+        m.add_meili_docs_seeded("analyses", report.analyses_seeded as u64);
+        m.add_meili_docs_seeded("turns", report.turns_seeded as u64);
+        m.record_meili_refresh_now();
+    }
+    Ok(report)
+}
+
+async fn run_load_meili(
+    meili_url: &str,
+    meili_api_key: Option<&str>,
+    lane: &MemoryKeywordLane,
+) -> Result<MeiliLoadReport, MeiliLoadError> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()

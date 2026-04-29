@@ -19,8 +19,10 @@ pub mod cache;
 pub mod dashboard;
 pub mod dashboard_series;
 pub mod fusion;
+pub mod health;
 pub mod http;
 pub mod lanes;
+pub mod loader_metrics;
 #[cfg(test)]
 mod lane_contract;
 pub mod mcp;
@@ -59,6 +61,7 @@ pub use lanes::{
     GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit, MemoryGraphLane,
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
+pub use loader_metrics::LoaderMetrics;
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
 pub use orchestrator::Orchestrator;
 pub use rate_limit::{RateConfig, RateDecision, RateLimiter};

@@ -39,6 +39,14 @@ pub struct Metrics {
     pub backpressure_active: AtomicU64,
     /// `cortex.embedder.oversize_without_summary`.
     pub oversize_without_summary: AtomicU64,
+    /// Phase8b — total Synap messages the worker has processed end
+    /// to end. Bumped after each `run_once` returns a non-zero count.
+    pub jobs_processed_total: AtomicU64,
+    /// Phase8b — Unix-epoch ms of the most recent successful job.
+    /// `0` until the worker handles its first message; the freshness
+    /// aggregator flags the row as `degraded` when the gap exceeds
+    /// 60 s.
+    pub last_job_ts_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -114,5 +122,63 @@ impl Metrics {
     /// Phase8a — read the cumulative Vectorizer-error counter.
     pub fn vectorizer_errors_total(&self) -> u64 {
         self.vectorizer_errors.load(Ordering::Relaxed)
+    }
+
+    /// Phase8b — record `n` jobs processed, stamping the freshness
+    /// timestamp at the same instant. `n == 0` is a no-op so an idle
+    /// poll loop never bumps the freshness signal.
+    pub fn record_jobs_processed(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        self.jobs_processed_total.fetch_add(n, Ordering::Relaxed);
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        self.last_job_ts_ms.store(now_ms, Ordering::Relaxed);
+    }
+    /// Phase8b — read the cumulative jobs-processed counter.
+    pub fn jobs_processed_total(&self) -> u64 {
+        self.jobs_processed_total.load(Ordering::Relaxed)
+    }
+    /// Phase8b — read the most-recent-job timestamp (Unix-epoch ms).
+    pub fn last_job_ts_ms(&self) -> u64 {
+        self.last_job_ts_ms.load(Ordering::Relaxed)
+    }
+
+    /// Phase8b — render the embedder counters in Prometheus text
+    /// format. Used by the admin `/metrics` endpoint.
+    pub fn render_prom(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        out.push_str("# TYPE cortex_embedder_jobs_processed_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_embedder_jobs_processed_total {}",
+            self.jobs_processed_total()
+        );
+        out.push_str("# TYPE cortex_embedder_last_job_ts_ms gauge\n");
+        let _ = writeln!(
+            out,
+            "cortex_embedder_last_job_ts_ms {}",
+            self.last_job_ts_ms()
+        );
+        out.push_str("# TYPE cortex_embedder_chunks_written_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_embedder_chunks_written_total {}",
+            self.chunks_written_total()
+        );
+        out.push_str("# TYPE cortex_embedder_vectorizer_errors_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_embedder_vectorizer_errors_total {}",
+            self.vectorizer_errors_total()
+        );
+        out.push_str("# TYPE cortex_embedder_dedup_hits_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_embedder_dedup_hits_total {}",
+            self.dedup_hits.load(Ordering::Relaxed)
+        );
+        out
     }
 }

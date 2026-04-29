@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::events::{build_event, HookFrame, HookKind};
+use crate::metrics::Metrics;
 use crate::publisher::Publisher;
 use crate::session::SessionManager;
 use crate::sync_paths::SyncClient;
@@ -90,6 +91,13 @@ pub struct Dispatcher {
     publisher: Arc<dyn Publisher>,
     sync: Arc<SyncClient>,
     pid: u32,
+    /// Phase8b — optional metrics registry. The dispatcher stamps
+    /// `frames_parsed_total{hook}` + `envelopes_built_total{kind}`
+    /// + `last_frame_ts{hook}` + `last_envelope_ts{kind}` here so
+    /// the freshness aggregator can pivot per stage. Tests construct
+    /// the dispatcher without metrics — the increments are no-ops in
+    /// that case.
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl Dispatcher {
@@ -105,12 +113,39 @@ impl Dispatcher {
             publisher,
             sync,
             pid,
+            metrics: None,
         }
+    }
+
+    /// Phase8b — attach a metrics registry so per-hook /
+    /// per-kind counters land alongside the dispatch path. Returns
+    /// `self` so the caller can chain the construction.
+    pub fn with_metrics(mut self, metrics: Arc<Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+
+    /// Phase8b — read-only access to the dispatcher's metrics
+    /// registry. Used by the IPC handler to bump
+    /// `frames_received_total{hook}` once the JSON parses without
+    /// re-threading the registry through every entrypoint.
+    pub fn metrics(&self) -> Option<&Arc<Metrics>> {
+        self.metrics.as_ref()
     }
 
     /// Handle one hook frame end-to-end. Always returns a response —
     /// internal errors degrade to [`HookResponse::empty`].
     pub async fn dispatch(&self, frame: HookFrame) -> HookResponse {
+        // Phase8b — bump `frames_parsed_total{hook}` + stamp the per-
+        // hook freshness ts. The IPC handler bumped
+        // `frames_received_total{hook}` upstream when the JSON
+        // deserialised; this counter pairs with it so a divergence
+        // (received > parsed for one hook) localises a malformed
+        // payload to the hook label.
+        if let Some(m) = self.metrics.as_ref() {
+            m.incr_frames_parsed(&frame.hook);
+        }
+
         let kind = match HookKind::parse(&frame.hook) {
             Some(k) => k,
             None => {
@@ -168,6 +203,15 @@ impl Dispatcher {
         // canonical kind for PreToolUse / Stop / SessionStart /
         // Notification, so they're sync-only.
         if let Some(env) = envelope {
+            // Phase8b — stamp `envelopes_built_total{kind}` +
+            // `last_envelope_ts{kind}` BEFORE handing to the
+            // publisher. The publisher's success path stamps
+            // `envelopes_publish_ok_total{kind}`; the gap between
+            // built vs publish_ok is the "queue dropped or WAL
+            // spilled" signal.
+            if let Some(m) = self.metrics.as_ref() {
+                m.incr_envelopes_built(env.kind.schema_stem());
+            }
             self.publisher.publish(env).await;
         }
 

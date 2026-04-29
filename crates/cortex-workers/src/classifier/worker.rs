@@ -507,6 +507,11 @@ pub struct Worker {
     pub pricing: PricingTable,
     /// In-memory de-dup of already-classified event ids (at-least-once delivery guard).
     processed: Mutex<BTreeSet<String>>,
+    /// Phase8b — total Synap messages the worker has processed end
+    /// to end. Bumped after each `run_once` returns a non-zero count.
+    pub jobs_processed_total: AtomicU64,
+    /// Phase8b — Unix-epoch ms of the most recent successful job.
+    pub last_job_ts_ms: AtomicU64,
 }
 
 impl Worker {
@@ -527,7 +532,47 @@ impl Worker {
             metadata: None,
             pricing: PricingTable::HAIKU_4_5,
             processed: Mutex::new(BTreeSet::new()),
+            jobs_processed_total: AtomicU64::new(0),
+            last_job_ts_ms: AtomicU64::new(0),
         }
+    }
+
+    /// Phase8b — record `n` jobs processed (called after each
+    /// `run_once`). `n == 0` is a no-op so idle polls don't refresh
+    /// the freshness signal.
+    pub fn record_jobs_processed(&self, n: u64) {
+        if n == 0 {
+            return;
+        }
+        self.jobs_processed_total.fetch_add(n, Ordering::Relaxed);
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        self.last_job_ts_ms.store(now_ms, Ordering::Relaxed);
+    }
+    /// Phase8b — read the cumulative jobs-processed counter.
+    pub fn jobs_processed_total(&self) -> u64 {
+        self.jobs_processed_total.load(Ordering::Relaxed)
+    }
+    /// Phase8b — read the most-recent-job timestamp.
+    pub fn last_job_ts_ms(&self) -> u64 {
+        self.last_job_ts_ms.load(Ordering::Relaxed)
+    }
+    /// Phase8b — render the classifier counters in Prometheus text format.
+    pub fn render_prom(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        out.push_str("# TYPE cortex_classifier_jobs_processed_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_classifier_jobs_processed_total {}",
+            self.jobs_processed_total()
+        );
+        out.push_str("# TYPE cortex_classifier_last_job_ts_ms gauge\n");
+        let _ = writeln!(
+            out,
+            "cortex_classifier_last_job_ts_ms {}",
+            self.last_job_ts_ms()
+        );
+        out
     }
 
     /// Build a worker bound to a [`ClassifierStack`]. The stack is the
@@ -590,6 +635,8 @@ impl Worker {
                     continue;
                 }
             };
+            // Phase8b — bump the per-stage activity counters.
+            self.record_jobs_processed(handled as u64);
             if handled == 0 {
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
