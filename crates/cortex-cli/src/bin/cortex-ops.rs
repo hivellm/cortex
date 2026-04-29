@@ -49,6 +49,19 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Phase8e — list active silent-drop alerts. Walks
+    /// `~/.cortex/alerts/*.json` produced by the cortex-api
+    /// silent-drop watcher and renders one row per pair. Exit `0`
+    /// when no Critical alerts are active, `2` when any are.
+    DoctorAlerts {
+        /// Override the alerts directory (defaults to
+        /// `~/.cortex/alerts`).
+        #[arg(long)]
+        state_dir: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase8d — config-coherence audit. Read-only static analysis
     /// of every config surface (`.env`, `~/.cortex/adapter.toml`,
     /// `cortex-plugin/.mcp.json`, `cortex-plugin/hooks/hooks.json`)
@@ -153,6 +166,7 @@ fn main() -> ExitCode {
             adapter_toml,
             json,
         } => doctor_config(workspace, adapter_toml, json),
+        Command::DoctorAlerts { state_dir, json } => doctor_alerts(state_dir, json),
         Command::DoctorConsistency {
             archive_root,
             meili,
@@ -730,6 +744,99 @@ fn doctor_config(
         Severity::Ok => ExitCode::SUCCESS,
         Severity::Warn => ExitCode::from(1),
         Severity::Critical => ExitCode::from(2),
+    }
+}
+
+/// Phase8e — `cortex-ops doctor-alerts`. Lists every persisted
+/// silent-drop alert under `~/.cortex/alerts/<pair>.json` (or the
+/// `--state-dir` override). Exit codes: `0` no Critical alerts
+/// active, `2` at least one Critical.
+fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
+    use cortex_api::silent_drop::{AlertState, PairState};
+
+    let dir: std::path::PathBuf = match state_dir {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".to_string());
+            std::path::PathBuf::from(home).join(".cortex").join("alerts")
+        }
+    };
+
+    let mut rows: Vec<(String, PairState)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let raw = match std::fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let state: PairState = match serde_json::from_str(&raw) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let pair = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
+            rows.push((pair, state));
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let any_critical = rows
+        .iter()
+        .any(|(_, s)| matches!(s.alert, AlertState::Critical));
+
+    if json {
+        let payload = serde_json::json!({
+            "state_dir": dir.display().to_string(),
+            "any_critical": any_critical,
+            "alerts": rows
+                .iter()
+                .map(|(p, s)| serde_json::json!({
+                    "pair": p,
+                    "state": &s.alert,
+                    "recovery_streak": s.recovery_streak,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("serialize alerts: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        println!("cortex-ops doctor-alerts");
+        println!("state_dir:    {}", dir.display());
+        println!("any_critical: {any_critical}\n");
+        if rows.is_empty() {
+            println!("(no persisted alert state — silent-drop watcher idle or no alerts since boot)");
+        } else {
+            for (pair, state) in &rows {
+                let label = match state.alert {
+                    AlertState::Ok => "ok      ",
+                    AlertState::Warn { .. } => "WARN    ",
+                    AlertState::Critical => "CRITICAL",
+                };
+                println!(
+                    "{label}  {} (recovery_streak={})",
+                    pair, state.recovery_streak
+                );
+            }
+        }
+    }
+    if any_critical {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 

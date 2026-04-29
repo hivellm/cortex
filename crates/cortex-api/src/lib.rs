@@ -24,6 +24,7 @@ pub mod health;
 pub mod http;
 pub mod lanes;
 pub mod loader_metrics;
+pub mod silent_drop;
 #[cfg(test)]
 mod lane_contract;
 pub mod mcp;

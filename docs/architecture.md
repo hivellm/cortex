@@ -716,6 +716,43 @@ config file had the right value, but a stale daemon was holding
 the old endpoint in memory. The audit catches the disagreement
 before it matters; phase8c catches the stale daemon.
 
+## 13.9 Observability — silent-drop detector (phase8e)
+
+phase8b added counters at every stage; phase8c added "is the
+running binary the right one?"; phase8d added "are the configs
+coherent?". phase8e closes the loop with the *detector*: a
+background watcher in `cortex-api` that polls the same divergence
+data the `/v1/health/divergence` endpoint surfaces and emits a
+`law_violation` envelope whenever a sustained drop transitions
+`Ok → Warn` or `Warn → Critical`.
+
+The crucial difference from phase8b: this is a push channel. The
+alert envelope lands in the durable archive AND the in-memory
+keyword lane, so it shows up in the existing Live Timeline and
+Violations dashboard without anyone having to remember to call
+the divergence endpoint.
+
+Debouncing rules:
+- `Ok → Warn`: 2 consecutive polls observe `delta_growth >
+  warn_delta` (default 10). Avoids transient bursts.
+- `Warn → Critical`: a single poll exceeding `critical_delta`
+  (default 50) suffices.
+- Recovery: 5 consecutive polls observe non-growing delta.
+
+Per-pair state persists at `~/.cortex/alerts/<pair>.json` so a
+restart does not re-fire alerts the previous run already flagged.
+Optional escalation hooks (gated by `SilentDropConfig`):
+- `webhook_url` — every transition is POSTed here as JSON.
+- `write_to_handoff` — every Critical transition appends a single
+  `[silent-drop alert]`-prefixed line to
+  `.rulebook/handoff/_pending.md` so the next session sees it.
+
+Closes the 2026-04-28 silent-drop incident class verbatim: the
+divergence between `adapter.frames_parsed` and
+`adapter.envelopes_built` would have surfaced as a `law_violation`
+envelope in the GUI within ~60 seconds of the truncation hitting,
+with a message naming both counter values.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

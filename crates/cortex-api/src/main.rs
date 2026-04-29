@@ -389,6 +389,44 @@ async fn main() -> Result<()> {
             .with_indexed_repos(keyword_memory.clone()),
     );
 
+    // Phase8e — silent-drop watcher. Polls the same divergence
+    // pairs the /v1/health/divergence endpoint surfaces and emits
+    // `law_violation` envelopes on sustained drops. The watcher
+    // owns its own aggregator history (independent from the HTTP
+    // endpoint's) so the polling cadence stays predictable.
+    let silent_drop_cfg = cortex_api::silent_drop::SilentDropConfig::default();
+    if silent_drop_cfg.enabled {
+        let watcher_lane = keyword_memory.clone();
+        let interval = std::time::Duration::from_secs(silent_drop_cfg.poll_interval_secs.max(5));
+        let watcher_aggregator =
+            std::sync::Arc::new(cortex_api::health::HealthAggregatorState::new());
+        let mut watcher = cortex_api::silent_drop::SilentDropWatcher::new(
+            silent_drop_cfg,
+            watcher_aggregator,
+        );
+        watcher.hydrate_from_disk();
+        tokio::spawn(async move {
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+                .unwrap_or_default();
+            tracing::info!(
+                interval_secs = interval.as_secs(),
+                "silent-drop watcher started"
+            );
+            let mut ticker = tokio::time::interval(interval);
+            // Skip the immediate first tick so the watcher gives
+            // every subsystem time to bind /healthz before probing.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                watcher.tick(&client, &watcher_lane).await;
+            }
+        });
+    } else {
+        tracing::info!("silent-drop watcher disabled by config");
+    }
+
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     let app = cortex_api::build_router_with(service, Some(dashboard_state));

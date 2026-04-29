@@ -78,6 +78,13 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **NEW `cortex-ops doctor-config` subcommand** + `scripts/doctor-config.{bat,sh}` — run the same audit locally. Exit codes: `0` all ok, `1` any warn, `2` any critical. Supports `--json` for machine-readable output and `--workspace` / `--adapter-toml` overrides for fixtures.
 - Closes the 2026-04-28 incident's first wrong turn: the adapter was talking to `:15010` while ingestion was bound to `:17010`, the config file had the right value, but a stale daemon was holding the old endpoint in memory. The audit names the discrepancy as `severity: critical` with a single-line message containing both ports.
 
+#### Observability — silent-drop detector (phase8e)
+- **NEW background watcher in `cortex-api`** (`crates/cortex-api/src/silent_drop.rs`) — polls the same divergence pairs `/v1/health/divergence` surfaces, runs each pair through a debounced state machine (`Ok → Warn` requires 2 consecutive polls > `warn_delta`; `Warn → Critical` fires on 1 poll > `critical_delta`; recovery requires 5 consecutive non-growing polls), and emits `law_violation` envelopes on every transition.
+- **Push channel** — each alert envelope lands in the durable archive (POSTed to cortex-ingestion `/v1/events/batch`) AND the in-memory `MemoryKeywordLane` so the alert shows up in the existing Live Timeline + Violations dashboard within ~1s, no manual endpoint poll needed.
+- **Per-pair state persists** at `~/.cortex/alerts/<pair>.json` so a daemon restart does not re-fire alerts the previous run already flagged.
+- **Optional escalation hooks** — `SilentDropConfig.webhook_url` POSTs the envelope to a webhook on every transition; `write_to_handoff: true` appends a `[silent-drop alert]`-prefixed line to `.rulebook/handoff/_pending.md` on every Critical transition so the next session inherits the context.
+- Closes the 2026-04-28 silent-drop incident verbatim: the divergence between `adapter.frames_parsed` and `adapter.envelopes_built` would surface as a `law_violation` envelope within ~60s of the truncation hitting, instead of the ~2h log-grep search that actually found it.
+
 ### Decisions
 - **[ADR-001](.rulebook/decisions/001-bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved.md)** — Bypass Vectorizer SDK for `insert` + `get_vector`, use direct `reqwest` until the SDK / server drift is resolved.
 - **[ADR-002](.rulebook/decisions/002-classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle.md)** — Classifier worker lives in a separate crate to avoid the classifier ↔ embedder cycle.

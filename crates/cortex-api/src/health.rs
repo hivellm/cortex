@@ -72,6 +72,12 @@ impl Severity {
             Severity::Ok
         }
     }
+    /// Phase8e — same growth thresholds the silent-drop watcher
+    /// uses to map a row to a severity bucket. Exposed so the
+    /// watcher and the HTTP endpoint share one classification.
+    pub(crate) fn from_growth_for_silent_drop(growth: i64) -> Self {
+        Self::from_growth(growth)
+    }
 }
 
 /// One row in the `/v1/health/freshness` table.
@@ -115,16 +121,16 @@ pub struct DivergenceRow {
 /// Per-pair history slot the divergence aggregator keeps in memory
 /// to compute `delta_growth` between probes.
 #[derive(Debug, Clone, Default)]
-struct DivergenceSample {
-    delta: u64,
-    captured_at: Option<Instant>,
+pub(crate) struct DivergenceSample {
+    pub(crate) delta: u64,
+    pub(crate) captured_at: Option<Instant>,
 }
 
 /// In-process state shared by both endpoints — the per-pair history
 /// table the divergence aggregator consults to produce `delta_growth`.
 #[derive(Debug, Default)]
 pub struct HealthAggregatorState {
-    history: Mutex<BTreeMap<String, DivergenceSample>>,
+    pub(crate) history: Mutex<BTreeMap<String, DivergenceSample>>,
 }
 
 impl HealthAggregatorState {
@@ -188,7 +194,7 @@ impl HeadSha {
 /// 5xx still appear in the map as `Down` rows so the freshness /
 /// divergence endpoints can flag them honestly instead of dropping
 /// the row silently.
-async fn gather_subsystem_extras() -> BTreeMap<String, SubsystemStatus> {
+pub(crate) async fn gather_subsystem_extras() -> BTreeMap<String, SubsystemStatus> {
     let candidates: &[(&'static str, &str, &str)] = &[
         (
             "cortex-adapter",
@@ -590,7 +596,7 @@ pub async fn divergence_handler(State(state): State<HealthState>) -> Response {
 
 /// Pull the canonical divergence pairs from the gathered extras.
 /// Returns `(pair_key, upstream_total, downstream_total)` rows.
-fn build_divergence_pairs(by_name: &BTreeMap<String, SubsystemStatus>) -> Vec<(String, u64, u64)> {
+pub(crate) fn build_divergence_pairs(by_name: &BTreeMap<String, SubsystemStatus>) -> Vec<(String, u64, u64)> {
     let mut out: Vec<(String, u64, u64)> = Vec::new();
 
     let adapter = by_name.get("cortex-adapter");
