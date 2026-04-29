@@ -336,4 +336,71 @@ mod tests {
         assert_eq!(cost.len(), CLASSIFIER_COST_BUCKETS);
         assert!(cost.iter().all(|v| *v == 0.0));
     }
+
+    #[test]
+    fn read_classifier_cost_24h_returns_stub_when_window_is_empty() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let now = Utc::now();
+        let (series, is_stub) = read_classifier_cost_24h(&store, now);
+        assert_eq!(series.len(), CLASSIFIER_COST_BUCKETS);
+        assert!(series.iter().all(|v| *v == 0.0));
+        assert!(is_stub, "empty window must keep the dashboard tile dashed");
+    }
+
+    #[test]
+    fn read_classifier_cost_24h_maps_hour_keys_to_oldest_first_slots() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        // Anchor `now` at a specific hour so the bucket math is
+        // deterministic (no flake on hour-rollover boundaries).
+        let now = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 4, 28, 23, 30, 0).unwrap();
+        let now_hour = now
+            .with_minute(0)
+            .and_then(|t| t.with_second(0))
+            .and_then(|t| t.with_nanosecond(0))
+            .unwrap();
+        let oldest = now_hour - ChronoDuration::hours((CLASSIFIER_COST_BUCKETS as i64) - 1);
+
+        // Slot 0 (oldest hour) — 5 cents.
+        store
+            .record_classifier_spend_hourly(&hour_bucket_rfc3339(oldest), 1, 0, 0, 5)
+            .unwrap();
+        // Slot 12 — 200 cents (= $2.00).
+        store
+            .record_classifier_spend_hourly(
+                &hour_bucket_rfc3339(oldest + ChronoDuration::hours(12)),
+                3,
+                0,
+                0,
+                200,
+            )
+            .unwrap();
+        // Slot 23 (current hour) — 50 cents.
+        store
+            .record_classifier_spend_hourly(&hour_bucket_rfc3339(now_hour), 2, 0, 0, 50)
+            .unwrap();
+        // Outside the 24h window — must NOT appear in the series.
+        store
+            .record_classifier_spend_hourly(
+                &hour_bucket_rfc3339(oldest - ChronoDuration::hours(2)),
+                1,
+                0,
+                0,
+                999,
+            )
+            .unwrap();
+
+        let (series, is_stub) = read_classifier_cost_24h(&store, now);
+        assert!(!is_stub, "ribbon must flip to live data once the worker writes");
+        assert_eq!(series.len(), CLASSIFIER_COST_BUCKETS);
+        assert!((series[0] - 0.05).abs() < f64::EPSILON);
+        assert!((series[12] - 2.00).abs() < f64::EPSILON);
+        assert!((series[23] - 0.50).abs() < f64::EPSILON);
+        // Every untouched slot stays zero.
+        for (idx, v) in series.iter().enumerate() {
+            if idx == 0 || idx == 12 || idx == 23 {
+                continue;
+            }
+            assert_eq!(*v, 0.0, "unexpected non-zero at slot {idx}");
+        }
+    }
 }
