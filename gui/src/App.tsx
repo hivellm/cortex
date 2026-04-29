@@ -4,6 +4,7 @@ import { Header } from "./shell/Header";
 import { Sidebar, type ViewId } from "./shell/Sidebar";
 import { Tweaks } from "./shell/Tweaks";
 import { TimelineView } from "./views/Timeline";
+import { SearchView } from "./views/Search";
 import { MemoryView } from "./views/Memory";
 import { DecisionsView } from "./views/Decisions";
 import { LawsView } from "./views/Laws";
@@ -63,6 +64,8 @@ function AppShell() {
     switch (view) {
       case "timeline":
         return <TimelineView />;
+      case "search":
+        return <SearchView />;
       case "conversations":
         return <ConversationsView />;
       case "memory":

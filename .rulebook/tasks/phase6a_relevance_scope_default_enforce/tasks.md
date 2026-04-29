@@ -17,8 +17,8 @@
 
 ## 4. Dashboard / GUI caller
 - [x] 4.1 In `gui/src/lib/api.ts`, the existing `query()` helper accepts a body — extend it to accept an optional `repo` and emit `x-cortex-repo` when set
-- [ ] 4.2 Wire the active sidebar `filters.repo[0]` (when exactly one repo is active) into the helper from `gui/src/views/` callers — no change when `filters.repo` is empty / multi-valued (the user is browsing globally; a 422 is the right error)
-- [ ] 4.3 Surface a friendly toast / inline error in the GUI when the dashboard receives `422 scope_repo_required` so the user understands they need to pick a repo
+- [x] 4.2 Wire the active sidebar `filters.repo[0]` (when exactly one repo is active) into the helper from `gui/src/views/` callers — implemented as a new `gui/src/views/Search.tsx` (the first GUI consumer of `postQuery`); registered under sidebar id `search`; passes `opts.repo` only when `filters.repo` has exactly one entry, undefined for empty / multi-valued (the user is browsing globally; the daemon's 422 is the right error). Vitest cases pin the contract.
+- [x] 4.3 Surface a friendly toast / inline error in the GUI when the dashboard receives `422 scope_repo_required` so the user understands they need to pick a repo. Inline alert in `Search.tsx` ("Scope required: Pick exactly one repository in the sidebar so the relevance lane can route to a real collection. …"); covered by the `renders the inline 'Scope required' alert` vitest case in `Search.test.tsx`.
 
 ## 5. Spec docs
 - [x] 5.1 In `docs/specs/11-query-api.md`, add `422 scope_repo_required` to the error table and document the resolution order
@@ -28,4 +28,4 @@
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
 - [x] 6.1 Update or create documentation covering the implementation — extend `docs/specs/11-query-api.md` and `docs/specs/18-mcp-server.md` per §5; cross-link from `docs/analysis/relevance/01-findings.md` §F-003
 - [x] 6.2 Write tests covering the new behavior — unit tests in `service.rs` for each resolution lane and the rejection path; integration test in `crates/cortex-api/tests/http.rs` asserting `422` body shape and audit envelope `scope_resolution` field; MCP-side integration test asserting outbound `x-cortex-cwd` header
-- [x] 6.3 Run tests and confirm they pass — `cargo test -p cortex-api -p cortex-mcp-server --lib --tests` (118 + 6 lib + 40 + 1 phase6a integration green), `pnpm exec tsc --noEmit` clean, `pnpm test` 5/5 green. NOTE: `cargo clippy --all-targets -- -D warnings` flags pre-existing `type_complexity` lints in `dashboard.rs` that are out of scope for phase6a; all phase6a-touched files pass clippy individually.
+- [x] 6.3 Run tests and confirm they pass — `cargo test -p cortex-api -p cortex-mcp-server --lib --tests` (118 + 6 lib + 40 + 1 phase6a integration green), `pnpm exec tsc --noEmit` clean, `pnpm test` 10/10 green (5 Timeline + 5 Search; the 5 Search cases pin §4.2 single-repo / empty / multi forwarding plus §4.3 422 + generic-error banner branches). NOTE: `cargo clippy --all-targets -- -D warnings` flags pre-existing `type_complexity` lints in `dashboard.rs` that are out of scope for phase6a; all phase6a-touched files pass clippy individually.
