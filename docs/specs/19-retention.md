@@ -681,6 +681,119 @@ Read-side awareness test in `crates/cortex-storage/src/metadata.rs`:
 
 - `union_read_returns_identical_totals_before_and_after_rollup`
 
+## Scheduler (phase9k)
+
+The retention pipeline is dangerous and high-frequency: nightly
+sweeps, weekly vacuums, ad-hoc digests. Phase9k owns the cron
+machinery so a fresh install runs the full pipeline without any
+external scheduler.
+
+### Registry table
+
+`cron_jobs` lives in the SQLite metadata DB:
+
+| column          | type    | role                                                                |
+|-----------------|---------|---------------------------------------------------------------------|
+| `name`          | TEXT PK | Stable identifier (`retention.sweep`, `retention.metadata_reap`, …).|
+| `schedule`      | TEXT    | 5-field cron expression (`m h dom mon dow`), UTC.                    |
+| `command`       | TEXT    | Shell command line the scheduler spawns.                             |
+| `enabled`       | INT     | `1` to fire, `0` to skip.                                            |
+| `last_run_at`   | TEXT    | RFC-3339 of the last run start.                                      |
+| `last_status`   | TEXT    | `success` / `failed` / `lock_held`.                                  |
+| `next_run_at`   | TEXT    | Next firing — recomputed from `schedule` after every run.            |
+| `last_error`    | TEXT    | First line of stderr when `last_status='failed'`.                    |
+| `last_stdout`   | TEXT    | Tail of the last child's stdout (capped at 64 KB).                   |
+| `last_stderr`   | TEXT    | Tail of the last child's stderr (capped at 64 KB).                   |
+| `failure_streak`| INT     | Consecutive failures; reset to 0 on success.                         |
+| `last_warning_at` | TEXT  | Stamp from the most recent `schedule.repeated_failure` warning.      |
+
+`apply_phase9k_schema(conn)` ensures the table exists at every
+`cortex-ops` boot.
+
+### Defaults
+
+`seed_defaults` (called by the daemon on startup) inserts eight
+rows via `INSERT OR IGNORE`:
+
+| name                          | schedule       | command                                  | enabled |
+|-------------------------------|----------------|------------------------------------------|---------|
+| `retention.sweep`             | `0 3 * * *`    | `cortex-ops retention-sweep`             | yes     |
+| `retention.rollup`            | `0 4 * * *`    | `cortex-ops rollup`                      | yes     |
+| `retention.cas_vacuum`        | `30 4 * * 1`   | `cortex-ops cas-vacuum --force`          | yes     |
+| `retention.pii_enforce`       | `0 5 * * *`    | `cortex-ops pii-enforce`                 | yes     |
+| `retention.turn_digest`       | `0 6 * * 0`    | `cortex-ops turn-digest --budget-cents 500` | yes  |
+| `retention.meili_prune`       | `30 5 * * *`   | `cortex-ops meili-prune`                 | yes     |
+| `retention.metadata_reap`     | `45 5 * * *`   | `cortex-ops metadata-reap`               | yes     |
+| `retention.memory_consolidate`| `0 7 * * 0`    | `cortex-ops memory-consolidate --apply`  | no      |
+
+Operators who disable a job retain that setting across restarts —
+seeding is idempotent.
+
+### Scheduler loop
+
+The scheduler ticks at most every 30 s. Each tick:
+
+1. Calls `select_due_cron_jobs(now)` — `enabled=1 AND
+   next_run_at <= now`, sorted by `next_run_at` ASC then `name` ASC.
+2. For every due job, acquires a per-name in-process semaphore so
+   concurrent ticks (or a `run-now` racing the timer) serialise.
+3. Calls the registered [`Runner`] — production wires
+   `ProcessRunner` (spawns `cmd /C ...` on Windows, `sh -c ...`
+   elsewhere); tests use `MemoryRunner`.
+4. Captures the tail of stdout / stderr (capped at 64 KB each)
+   and translates the exit code:
+   - `0` → `success`
+   - `2` → `lock_held` (the underlying retention subcommand's
+     advisory lock is the authority — the scheduler defers).
+   - any other → `failed`
+5. Writes `last_run_at`, `last_status`, `last_error`,
+   `last_stdout`, `last_stderr`, `failure_streak`, and the new
+   `next_run_at` (re-derived from `schedule`).
+
+### CLI surface
+
+```
+cortex-ops schedule list                          # table
+cortex-ops schedule show <name>                   # full row + stdout/stderr tail
+cortex-ops schedule enable <name>
+cortex-ops schedule disable <name>
+cortex-ops schedule set <name> "<5-field cron>"   # validates + recomputes next_run_at
+cortex-ops schedule run-now <name>                # bypasses timer, honours advisory lock
+cortex-ops schedule seed-defaults                 # idempotent
+cortex-ops schedule tick [--time-travel RFC3339]  # one tick (in-memory runner)
+```
+
+`run-now` exits with code 2 (`lock_held`) when another run is
+already in flight against the underlying `retention_sweeps.status`
+row — operators get a clear "lock held" message instead of a
+double-execution.
+
+### Repeated-failure observability
+
+When a job's `failure_streak` reaches 2, the scheduler queues a
+`RepeatedFailureWarning { name, recent_failures, last_error }`.
+The same job will not raise a second warning within a 24 h
+window — `last_warning_at` is the dedup pivot. The phase9i
+dashboard banner (spec
+[16-dashboard.md §"Retention view"](16-dashboard.md))
+surfaces these warnings without further work.
+
+### Test surface (scheduler, phase9k)
+
+11 unit tests in `crates/cortex-cli/src/ops/scheduler.rs`:
+
+- `parse_schedule_accepts_five_six_and_seven_field_forms`
+- `next_after_advances_for_daily_schedule`
+- `seed_defaults_inserts_eight_jobs_idempotently`
+- `tick_runs_due_job_and_advances_next_run`
+- `tick_skips_disabled_jobs`
+- `run_now_records_outcome_and_advances_next_run`
+- `run_now_propagates_lock_held_status`
+- `two_consecutive_failures_emit_repeated_failure_warning`
+- `third_consecutive_failure_does_not_double_warn`
+- `semaphore_serialises_runs_for_same_name`
+- `trail_capped_returns_tail_only_when_exceeding_cap`
+
 ## CI canary (phase9j)
 
 The retention pipeline is dangerous: it deletes data, rewrites

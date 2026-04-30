@@ -283,6 +283,22 @@ All errors carry enough context to be actionable in logs without exposing payloa
 
 *(none — defaults locked)*
 
+## Daemon side-channels
+
+`cortex-ops` is the long-running operator-facing daemon. Beyond the
+plan / doctor / canary surfaces it owns two cron-style background
+loops:
+
+- **Phase8f** — silent-drop alert watcher.
+- **Phase9k** — retention scheduler. Ticks at most every 30 s,
+  picks every `cron_jobs` row whose `enabled=1 AND next_run_at <=
+  now`, spawns the configured command via the platform shell, and
+  records the outcome on the row. Defaults are seeded on first
+  start (eight retention jobs; `memory_consolidate` opt-in) so a
+  fresh install runs the full Phase 9 pipeline without an external
+  scheduler. See [`docs/specs/19-retention.md` §"Scheduler
+  (phase9k)"](19-retention.md) for the full contract.
+
 ## References
 
 - Spec 01 — Event schema (consumes; amends pre-/post-redaction hash policy).

@@ -119,6 +119,27 @@ CREATE TABLE IF NOT EXISTS api_keys (
     revoked_at    TEXT
 );
 
+-- Phase9k — cron scheduler registry. One row per scheduled job;
+-- the cortex-ops daemon ticks every 30 s, picks rows where
+-- `enabled=1 AND next_run_at <= now`, spawns the configured command,
+-- and updates the row with the run's outcome.
+CREATE TABLE IF NOT EXISTS cron_jobs (
+    name           TEXT PRIMARY KEY,
+    schedule       TEXT NOT NULL,
+    command        TEXT NOT NULL,
+    enabled        INTEGER NOT NULL DEFAULT 1,
+    last_run_at    TEXT,
+    last_status    TEXT,
+    next_run_at    TEXT,
+    last_error     TEXT,
+    last_stdout    TEXT,
+    last_stderr    TEXT,
+    failure_streak INTEGER NOT NULL DEFAULT 0,
+    last_warning_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS cron_jobs_due ON cron_jobs (enabled, next_run_at);
+
 -- Phase9g — metadata reaper rollups.
 -- Bootstrap success rows ≥ 30 d collapse here (one row per day+repo).
 -- Failed rows stay in `bootstrap_jobs` for full-detail debugging.

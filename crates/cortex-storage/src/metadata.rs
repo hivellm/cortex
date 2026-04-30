@@ -338,6 +338,178 @@ impl MetadataStore {
         Ok(())
     }
 
+    // ---------- phase9k cron scheduler helpers ----------
+
+    /// Insert a cron-job row if `name` is not already present.
+    /// Returns `true` when a new row was inserted, `false` when the
+    /// row already existed (used by the daemon to seed defaults
+    /// idempotently).
+    pub fn upsert_cron_job_if_absent(
+        &self,
+        name: &str,
+        schedule: &str,
+        command: &str,
+        enabled: bool,
+        next_run_at: &str,
+    ) -> Result<bool, MetadataError> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO cron_jobs (name, schedule, command, enabled, next_run_at)
+                  VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                name,
+                schedule,
+                command,
+                if enabled { 1_i64 } else { 0_i64 },
+                next_run_at
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// List every cron job, sorted ascending by `name`.
+    pub fn list_cron_jobs(&self) -> Result<Vec<CronJob>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, schedule, command, enabled, last_run_at,
+                    last_status, next_run_at, last_error, last_stdout,
+                    last_stderr, failure_streak, last_warning_at
+               FROM cron_jobs ORDER BY name",
+        )?;
+        let rows = stmt
+            .query_map([], cron_job_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Look up one cron job by name.
+    pub fn get_cron_job(&self, name: &str) -> Result<Option<CronJob>, MetadataError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT name, schedule, command, enabled, last_run_at,
+                        last_status, next_run_at, last_error, last_stdout,
+                        last_stderr, failure_streak, last_warning_at
+                   FROM cron_jobs WHERE name = ?1",
+                params![name],
+                cron_job_from_row,
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Toggle the `enabled` flag. Returns the row count affected
+    /// (0 when `name` is unknown).
+    pub fn set_cron_job_enabled(
+        &self,
+        name: &str,
+        enabled: bool,
+    ) -> Result<usize, MetadataError> {
+        let n = self.conn.execute(
+            "UPDATE cron_jobs SET enabled = ?1 WHERE name = ?2",
+            params![if enabled { 1_i64 } else { 0_i64 }, name],
+        )?;
+        Ok(n)
+    }
+
+    /// Update `schedule` and `next_run_at` for a job. Returns the
+    /// row count affected.
+    pub fn set_cron_job_schedule(
+        &self,
+        name: &str,
+        schedule: &str,
+        next_run_at: &str,
+    ) -> Result<usize, MetadataError> {
+        let n = self.conn.execute(
+            "UPDATE cron_jobs SET schedule = ?1, next_run_at = ?2 WHERE name = ?3",
+            params![schedule, next_run_at, name],
+        )?;
+        Ok(n)
+    }
+
+    /// Records the outcome of a run. `stdout_tail` and `stderr_tail`
+    /// should already be capped at 64 KB by the caller.
+    /// `failure_streak` is incremented on `failed` and reset to 0
+    /// on `success`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_cron_run(
+        &self,
+        name: &str,
+        last_run_at: DateTime<Utc>,
+        status: &str,
+        stdout_tail: Option<&str>,
+        stderr_tail: Option<&str>,
+        last_error: Option<&str>,
+        next_run_at: &str,
+    ) -> Result<u32, MetadataError> {
+        // Read current streak first.
+        let streak: i64 = self
+            .conn
+            .query_row(
+                "SELECT failure_streak FROM cron_jobs WHERE name = ?1",
+                params![name],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let new_streak = if status == "failed" { streak + 1 } else { 0 };
+        self.conn.execute(
+            "UPDATE cron_jobs SET
+                last_run_at    = ?1,
+                last_status    = ?2,
+                last_stdout    = ?3,
+                last_stderr    = ?4,
+                last_error     = ?5,
+                next_run_at    = ?6,
+                failure_streak = ?7
+              WHERE name = ?8",
+            params![
+                last_run_at.to_rfc3339(),
+                status,
+                stdout_tail,
+                stderr_tail,
+                last_error,
+                next_run_at,
+                new_streak,
+                name,
+            ],
+        )?;
+        Ok(new_streak.max(0) as u32)
+    }
+
+    /// Stamp `last_warning_at` so the repeated-failure event is
+    /// deduped within a 24-hour window.
+    pub fn touch_cron_warning(
+        &self,
+        name: &str,
+        ts: DateTime<Utc>,
+    ) -> Result<usize, MetadataError> {
+        let n = self.conn.execute(
+            "UPDATE cron_jobs SET last_warning_at = ?1 WHERE name = ?2",
+            params![ts.to_rfc3339(), name],
+        )?;
+        Ok(n)
+    }
+
+    /// Return every job whose `enabled=1 AND next_run_at <= now`.
+    pub fn select_due_cron_jobs(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<CronJob>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name, schedule, command, enabled, last_run_at,
+                    last_status, next_run_at, last_error, last_stdout,
+                    last_stderr, failure_streak, last_warning_at
+               FROM cron_jobs
+              WHERE enabled = 1
+                AND next_run_at IS NOT NULL
+                AND next_run_at <= ?1
+              ORDER BY next_run_at ASC, name ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![now.to_rfc3339()], cron_job_from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
     /// Read every hourly bucket whose key falls inside `[since_hour,
     /// until_hour]` (both inclusive). The result is sorted ascending
     /// by `hour` so the dashboard renderer can index oldest-first.
@@ -367,6 +539,33 @@ impl MetadataStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+}
+
+/// Phase9k — assert the cron scheduler registry exists on `conn`.
+/// Mirrors [`apply_phase9g_schema`]: the bundled `schema.sql`
+/// already creates the table at every open, but the cortex-ops
+/// daemon calls this helper at startup so the dependency is
+/// explicit and the daemon doesn't have to re-`MetadataStore::open`
+/// just to land the column-adds for older DBs.
+pub fn apply_phase9k_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS cron_jobs (
+            name           TEXT PRIMARY KEY,
+            schedule       TEXT NOT NULL,
+            command        TEXT NOT NULL,
+            enabled        INTEGER NOT NULL DEFAULT 1,
+            last_run_at    TEXT,
+            last_status    TEXT,
+            next_run_at    TEXT,
+            last_error     TEXT,
+            last_stdout    TEXT,
+            last_stderr    TEXT,
+            failure_streak INTEGER NOT NULL DEFAULT 0,
+            last_warning_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS cron_jobs_due ON cron_jobs (enabled, next_run_at);",
+    )?;
+    Ok(())
 }
 
 /// Phase9g — assert the metadata reaper's rollup tables exist on
@@ -693,6 +892,55 @@ pub struct HourlySpendRow {
     pub hour: String,
     /// Accumulated calls / tokens / cents.
     pub spend: ClassifierSpend,
+}
+
+/// Phase9k — one row of the cron_jobs registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CronJob {
+    /// Stable job identifier (`retention.sweep`, …).
+    pub name: String,
+    /// 5-field cron expression. UTC.
+    pub schedule: String,
+    /// Shell command line the scheduler spawns.
+    pub command: String,
+    /// `true` when the scheduler will pick the row up.
+    pub enabled: bool,
+    /// RFC-3339 timestamp of the last run start.
+    pub last_run_at: Option<String>,
+    /// Last run status: `success` / `failed` / `running`.
+    pub last_status: Option<String>,
+    /// RFC-3339 timestamp of the next scheduled run.
+    pub next_run_at: Option<String>,
+    /// First line of stderr (or other diagnostic) when the last run
+    /// failed. Capped at 256 chars.
+    pub last_error: Option<String>,
+    /// Tail of the most recent stdout (capped at 64 KB by the
+    /// scheduler).
+    pub last_stdout: Option<String>,
+    /// Tail of the most recent stderr (capped at 64 KB).
+    pub last_stderr: Option<String>,
+    /// Number of consecutive failures. Reset to 0 on success.
+    pub failure_streak: u32,
+    /// RFC-3339 timestamp the last `schedule.repeated_failure`
+    /// warning fired — used to dedup within a 24 h window.
+    pub last_warning_at: Option<String>,
+}
+
+fn cron_job_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CronJob> {
+    Ok(CronJob {
+        name: row.get(0)?,
+        schedule: row.get(1)?,
+        command: row.get(2)?,
+        enabled: row.get::<_, i64>(3)? != 0,
+        last_run_at: row.get(4)?,
+        last_status: row.get(5)?,
+        next_run_at: row.get(6)?,
+        last_error: row.get(7)?,
+        last_stdout: row.get(8)?,
+        last_stderr: row.get(9)?,
+        failure_streak: row.get::<_, i64>(10)?.max(0) as u32,
+        last_warning_at: row.get(11)?,
+    })
 }
 
 /// Phase9g — one row of the bootstrap series (raw + rolled).
