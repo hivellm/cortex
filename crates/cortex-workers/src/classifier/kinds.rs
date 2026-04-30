@@ -27,6 +27,8 @@ pub fn kind_from_bootstrap(kind: &str) -> Result<Kind, KindMapError> {
         "tool_call" | "tool.call" => Ok(Kind::ToolCall),
         "agent_call" | "agent.call" => Ok(Kind::AgentCall),
         "analysis.imported" | "analysis" => Ok(Kind::Analysis),
+        "knowledge.imported" | "knowledge" => Ok(Kind::Knowledge),
+        "learning.imported" | "learning" => Ok(Kind::Learning),
         _ => Err(KindMapError::Unknown(kind.to_string())),
     }
 }

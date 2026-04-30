@@ -83,6 +83,15 @@ pub const COLLECTION_ANALYSIS_FP32: &str = "cortex.analysis.fp32";
 pub const COLLECTION_MEMORY_FP32: &str = "cortex.memory.fp32";
 /// Law definitions.
 pub const COLLECTION_LAW_FP32: &str = "cortex.law.fp32";
+/// phase10e — pattern / anti-pattern entries (Rulebook
+/// `rulebook_knowledge_add`). Single hot-tier; no warm tier
+/// because the corpus is small + dense + worth keeping at full
+/// precision.
+pub const COLLECTION_KNOWLEDGE_FP32: &str = "cortex.knowledge.fp32";
+/// phase10e — implementation insights (Rulebook
+/// `rulebook_learn_capture`). Same shape as
+/// [`COLLECTION_KNOWLEDGE_FP32`].
+pub const COLLECTION_LEARNING_FP32: &str = "cortex.learning.fp32";
 /// Cold fallback (binary-quantized).
 pub const COLLECTION_COLD_BINARY: &str = "cortex.cold.binary";
 
@@ -103,6 +112,10 @@ pub const INDEX_ANALYSES: &str = "cortex_analyses";
 pub const INDEX_MEMORIES: &str = "cortex_memories";
 /// Laws index.
 pub const INDEX_LAWS: &str = "cortex_laws";
+/// phase10e — knowledge entries (pattern / anti-pattern).
+pub const INDEX_KNOWLEDGE: &str = "cortex_knowledge";
+/// phase10e — learning entries (implementation insights).
+pub const INDEX_LEARNINGS: &str = "cortex_learnings";
 
 /// Every known Meilisearch index.
 pub const ALL_INDEXES: &[&str] = &[
@@ -114,6 +127,8 @@ pub const ALL_INDEXES: &[&str] = &[
     INDEX_ANALYSES,
     INDEX_MEMORIES,
     INDEX_LAWS,
+    INDEX_KNOWLEDGE,
+    INDEX_LEARNINGS,
 ];
 
 // ---------- Nexus graph ----------

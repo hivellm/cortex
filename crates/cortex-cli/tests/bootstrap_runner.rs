@@ -112,7 +112,8 @@ async fn end_to_end_emits_one_event_per_recognised_kind() {
     .await
     .expect("run_repo");
 
-    assert_eq!(report.repo_id, "Fixture");
+    // phase10d — `repo_id` lowercased on the canonical wire form.
+    assert_eq!(report.repo_id, "fixture");
     assert!(report.events_published >= 4);
 
     // Spec-09 promotions must produce one event each.
@@ -123,7 +124,7 @@ async fn end_to_end_emits_one_event_per_recognised_kind() {
     assert!(!publisher.by_kind("artifact.doc").is_empty());
 
     // Checkpoint marks the repo done.
-    assert!(checkpoint.is_repo_done("Fixture"));
+    assert!(checkpoint.is_repo_done("fixture"));
 }
 
 #[tokio::test]
@@ -158,7 +159,7 @@ async fn idempotent_replay_reuses_checkpoint_resume() {
     // every entry <= last_file as already-published and emit nothing.
     let last_file = checkpoint
         .repos
-        .get("Fixture")
+        .get("fixture")
         .and_then(|p| p.last_file.clone());
     let publisher2 = Arc::new(MemoryPublisher::new());
     let pub_dyn2: Arc<dyn Publisher> = publisher2.clone();
@@ -337,8 +338,8 @@ async fn checkpoint_persists_atomically_to_disk() {
     let cp_path = repo.path().join(".cortex-bootstrap.state.json");
     cortex_cli::bootstrap::write_atomic(&cp_path, &checkpoint).unwrap();
     let reloaded = cortex_cli::bootstrap::load_checkpoint(&cp_path).unwrap();
-    assert!(reloaded.is_repo_done("Fixture"));
-    let progress = reloaded.repos.get("Fixture").unwrap();
+    assert!(reloaded.is_repo_done("fixture"));
+    let progress = reloaded.repos.get("fixture").unwrap();
     assert!(progress.events_emitted >= 4);
     assert!(progress.last_file.is_some());
 }
@@ -396,6 +397,333 @@ async fn since_filter_passes_through_to_git_walker() {
     assert_eq!(report.commits_walked, 0);
 }
 
+// ---- phase10e — knowledge + learnings walker ----
+
+#[tokio::test]
+async fn walker_emits_knowledge_and_learning_envelopes_from_rulebook() {
+    use cortex_cli::bootstrap::run_repo;
+
+    let repo = make_fixture_repo();
+    // Add canonical .rulebook/{knowledge,learnings} entries —
+    // both top-level and nested so the test pins the
+    // recursive-glob behaviour.
+    fs::create_dir_all(repo.path().join(".rulebook/knowledge/patterns")).unwrap();
+    fs::create_dir_all(repo.path().join(".rulebook/knowledge/anti-patterns")).unwrap();
+    fs::create_dir_all(repo.path().join(".rulebook/learnings")).unwrap();
+    fs::write(
+        repo.path().join(".rulebook/knowledge/patterns/use-rrf-fusion.md"),
+        "# Use RRF fusion\n\nReciprocal-rank fusion stabilises lane blends.\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path()
+            .join(".rulebook/knowledge/anti-patterns/silently-revert.md"),
+        "# Never silently revert\n\nFix forward; uncommitted work is sacred.\n",
+    )
+    .unwrap();
+    fs::write(
+        repo.path().join(".rulebook/learnings/2026-04-30-phase10c.md"),
+        "# phase10c learning\n\nFile-level body hash is the right dedup key.\n",
+    )
+    .unwrap();
+
+    let cfg = fixture_config();
+    let publisher = Arc::new(MemoryPublisher::new());
+    let pub_dyn: Arc<dyn Publisher> = publisher.clone();
+    let mut checkpoint = Checkpoint::new("now".into());
+    let runner_cfg = RunnerConfig {
+        repo_id: "Fixture".into(),
+        stream: "cortex.events.bootstrap".into(),
+        since: None,
+        dry_run: false,
+    };
+    run_repo(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn,
+        Arc::new(Metrics::new()),
+        &mut checkpoint,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let knowledge_envs = publisher.by_kind("knowledge.imported");
+    let learning_envs = publisher.by_kind("learning.imported");
+    assert_eq!(
+        knowledge_envs.len(),
+        2,
+        "two knowledge files (pattern + anti-pattern) must each emit one envelope"
+    );
+    assert_eq!(
+        learning_envs.len(),
+        1,
+        "one learning file must emit one envelope"
+    );
+    // §1.2 — `category` discriminates pattern vs anti-pattern.
+    let categories: std::collections::HashSet<String> = knowledge_envs
+        .iter()
+        .map(|e| {
+            e.redacted_payload["category"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
+        .collect();
+    assert!(categories.contains("pattern"));
+    assert!(categories.contains("anti-pattern"));
+    // §3.2 — body inline; the markdown must round-trip verbatim
+    // so the embedder + Meili see the real source content.
+    let pattern_body = knowledge_envs
+        .iter()
+        .find(|e| e.redacted_payload["category"] == "pattern")
+        .map(|e| e.redacted_payload["body"].as_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    assert!(
+        pattern_body.contains("Reciprocal-rank fusion"),
+        "pattern body must contain the markdown verbatim, got {pattern_body:?}"
+    );
+}
+
+// ---- phase10d — repo casing canonicalization ----
+
+#[test]
+fn canonical_repo_lowercases_mixed_case_input() {
+    use cortex_cli::bootstrap::canonical_repo;
+    assert_eq!(canonical_repo("Cortex"), "cortex");
+    assert_eq!(canonical_repo("cortex"), "cortex");
+    assert_eq!(canonical_repo("Hive-Hub"), "hive-hub");
+    assert_eq!(canonical_repo(""), "");
+}
+
+#[tokio::test]
+async fn walker_emits_repo_in_canonical_lowercase() {
+    let repo = make_fixture_repo();
+    let cfg = fixture_config();
+    let publisher = Arc::new(MemoryPublisher::new());
+    let pub_dyn: Arc<dyn Publisher> = publisher.clone();
+    let mut checkpoint = Checkpoint::new("now".into());
+    // Mixed-case repo id — the walker MUST lowercase it before
+    // stamping `source.repo` so downstream lanes / scope filters
+    // resolve `repo: "Cortex"` and `repo: "cortex"` to the same
+    // rows.
+    let runner_cfg = RunnerConfig {
+        repo_id: "Cortex".into(),
+        stream: "cortex.events.bootstrap".into(),
+        since: None,
+        dry_run: false,
+    };
+    run_repo(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn,
+        Arc::new(Metrics::new()),
+        &mut checkpoint,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let envelopes = publisher.snapshot();
+    assert!(!envelopes.is_empty(), "publisher must receive at least one event");
+    for (_stream, env) in &envelopes {
+        let repo_field = env.source["repo"].as_str().unwrap_or("");
+        assert_eq!(
+            repo_field, "cortex",
+            "every emitted envelope must carry canonical lowercase repo, got {repo_field:?}"
+        );
+    }
+}
+
+// ---- phase10c — bootstrap dedup ledger ----
+
+#[tokio::test]
+async fn rerun_with_no_changes_publishes_zero_new_events() {
+    use cortex_cli::bootstrap::run_repo_with_dedup;
+    use std::sync::{Arc, Mutex};
+
+    let repo = make_fixture_repo();
+    let cfg = fixture_config();
+    let dedup = Arc::new(Mutex::new(
+        cortex_storage::MetadataStore::open_in_memory().unwrap(),
+    ));
+    let runner_cfg = RunnerConfig {
+        repo_id: "Fixture".into(),
+        stream: "cortex.events.bootstrap".into(),
+        since: None,
+        dry_run: false,
+    };
+
+    // First run — publishes everything, ledger fills up.
+    let publisher = Arc::new(MemoryPublisher::new());
+    let pub_dyn: Arc<dyn Publisher> = publisher.clone();
+    let mut checkpoint = Checkpoint::new("now".into());
+    let report1 = run_repo_with_dedup(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn,
+        Arc::new(Metrics::new()),
+        &mut checkpoint,
+        None,
+        None,
+        Some(dedup.clone()),
+    )
+    .await
+    .unwrap();
+    assert!(report1.events_published >= 4);
+    assert_eq!(report1.files_suppressed, 0, "first run has nothing to suppress");
+    let ledger_rows = dedup
+        .lock()
+        .unwrap()
+        .bootstrap_seen_count(Some("fixture"))
+        .unwrap();
+    assert!(
+        ledger_rows >= 4,
+        "ledger must record at least one row per published file"
+    );
+
+    // Second run with the same files — every emit must be
+    // suppressed.
+    let publisher2 = Arc::new(MemoryPublisher::new());
+    let pub_dyn2: Arc<dyn Publisher> = publisher2.clone();
+    let mut checkpoint2 = Checkpoint::new("now".into());
+    let report2 = run_repo_with_dedup(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn2,
+        Arc::new(Metrics::new()),
+        &mut checkpoint2,
+        None,
+        None,
+        Some(dedup.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report2.events_published, 0,
+        "re-run with no file changes must publish zero events"
+    );
+    assert!(
+        report2.files_suppressed > 0,
+        "files_suppressed must surface the dedup count"
+    );
+    assert_eq!(
+        publisher2.count(),
+        0,
+        "publisher must NOT receive duplicate events on a re-run"
+    );
+}
+
+#[tokio::test]
+async fn rerun_after_editing_one_file_publishes_only_that_file() {
+    use cortex_cli::bootstrap::run_repo_with_dedup;
+    use std::sync::{Arc, Mutex};
+
+    let repo = make_fixture_repo();
+    let cfg = fixture_config();
+    let dedup = Arc::new(Mutex::new(
+        cortex_storage::MetadataStore::open_in_memory().unwrap(),
+    ));
+    let runner_cfg = RunnerConfig {
+        repo_id: "Fixture".into(),
+        stream: "cortex.events.bootstrap".into(),
+        since: None,
+        dry_run: false,
+    };
+
+    // Run #1.
+    let mut checkpoint = Checkpoint::new("now".into());
+    let publisher1 = Arc::new(MemoryPublisher::new());
+    let pub_dyn1: Arc<dyn Publisher> = publisher1.clone();
+    run_repo_with_dedup(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn1,
+        Arc::new(Metrics::new()),
+        &mut checkpoint,
+        None,
+        None,
+        Some(dedup.clone()),
+    )
+    .await
+    .unwrap();
+
+    // Edit one file.
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn hnsw_search(k: usize) -> usize { k * 2 }\n",
+    )
+    .unwrap();
+
+    // Run #2 — only the edited file publishes.
+    let publisher2 = Arc::new(MemoryPublisher::new());
+    let pub_dyn2: Arc<dyn Publisher> = publisher2.clone();
+    let mut checkpoint2 = Checkpoint::new("now".into());
+    let report2 = run_repo_with_dedup(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn2,
+        Arc::new(Metrics::new()),
+        &mut checkpoint2,
+        None,
+        None,
+        Some(dedup.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        report2.events_published, 1,
+        "exactly one event published — the one edited file"
+    );
+    assert!(report2.files_suppressed >= 4, "every other file is suppressed");
+    let code_events = publisher2.by_kind("artifact.code");
+    assert_eq!(code_events.len(), 1);
+    assert_eq!(code_events[0].source["path"], "src/lib.rs");
+}
+
+#[test]
+fn preflight_flags_lane_inflation_only_when_ledger_empty() {
+    use cortex_cli::bootstrap::{preflight_likely_duplicates, PerClassCounts};
+
+    // Empty ledger + lane > 2 × disk → flagged.
+    let disk = PerClassCounts {
+        decision: 2,
+        law: 12,
+        analysis: 4,
+    };
+    let inflated = PerClassCounts {
+        decision: 26, // 13×
+        law: 37,      // ~3×
+        analysis: 33, // ~8×
+    };
+    let r = preflight_likely_duplicates(true, &disk, &inflated);
+    assert!(r.likely_duplicates);
+    assert_eq!(r.flagged.len(), 3);
+
+    // Same lane numbers but ledger non-empty → suppressed (a
+    // populated ledger means the dedup walker already ran; a
+    // separate lane cleanup is the operator's call).
+    let r2 = preflight_likely_duplicates(false, &disk, &inflated);
+    assert!(!r2.likely_duplicates);
+    assert!(r2.flagged.is_empty());
+
+    // Empty ledger but lane within 2× → no flag.
+    let healthy = PerClassCounts {
+        decision: 3,
+        law: 14,
+        analysis: 5,
+    };
+    let r3 = preflight_likely_duplicates(true, &disk, &healthy);
+    assert!(!r3.likely_duplicates);
+}
+
 #[test]
 fn classify_path_via_public_api() {
     let mut cfg = CortexSection::default();
@@ -408,6 +736,34 @@ fn classify_path_via_public_api() {
         cortex_cli::bootstrap::classify_path("src/lib.rs", &cfg),
         cortex_cli::bootstrap::FileClass::Code
     );
+}
+
+#[test]
+fn dedup_duplicates_helper_groups_paths_with_same_content_hash() {
+    // phase10c — synthetic 3× duplicate set. The CLI surface
+    // (`cortex-ops bootstrap-dedup --dry-run`) uses
+    // `bootstrap_seen_duplicates_by_hash` under the hood; this
+    // test exercises that helper directly so the regression
+    // signal is local and fast.
+    let store = cortex_storage::MetadataStore::open_in_memory().unwrap();
+    let now = chrono::Utc::now();
+    for path in ["a.md", "b.md", "c.md"] {
+        store
+            .bootstrap_seen_upsert("R", path, "sha256:dup", None, now)
+            .unwrap();
+    }
+    store
+        .bootstrap_seen_upsert("R", "unique.md", "sha256:other", None, now)
+        .unwrap();
+    let groups = store.bootstrap_seen_duplicates_by_hash("R").unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].count, 3);
+    assert_eq!(groups[0].content_hash, "sha256:dup");
+
+    // The helper is repeatable: calling it twice on the same
+    // store yields the same answer (idempotent / no mutation).
+    let groups2 = store.bootstrap_seen_duplicates_by_hash("R").unwrap();
+    assert_eq!(groups, groups2);
 }
 
 #[test]

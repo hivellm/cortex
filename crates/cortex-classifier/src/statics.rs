@@ -204,6 +204,19 @@ fn classify_one(kind: &Kind, payload: &Value) -> (Option<String>, Vec<String>, S
         Kind::Memory => {
             topics.push("memory".into());
         }
+        // phase10e — knowledge + learnings carry their own
+        // canonical topic and route to dedicated collections /
+        // indexes downstream. No severity bump (they are
+        // reference material, not a notable event).
+        Kind::Knowledge => {
+            topics.push("knowledge".into());
+            if let Some(cat) = payload.get("category").and_then(|v| v.as_str()) {
+                topics.push(cat.to_string());
+            }
+        }
+        Kind::Learning => {
+            topics.push("learning".into());
+        }
         Kind::Artifact => {
             topics.push("code".into());
             if let Some(l) = payload.get("language").and_then(|v| v.as_str()) {

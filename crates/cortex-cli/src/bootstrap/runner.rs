@@ -3,10 +3,13 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
+use chrono::Utc;
+use cortex_storage::MetadataStore;
+use sha2::{Digest, Sha256};
 
 use super::checkpoint::Checkpoint;
 use super::config::CortexSection;
@@ -31,9 +34,24 @@ pub struct RepoRunReport {
     pub commits_walked: u64,
     /// Wall-clock duration in seconds.
     pub duration_secs: f64,
+    /// phase10c — files whose redacted-body hash matched a prior
+    /// `bootstrap_seen` ledger row. The walker computed events but
+    /// suppressed publication so duplicates do not pile up in the
+    /// downstream lane.
+    pub files_suppressed: u64,
     /// `true` when the run completed without an error.
     pub completed: bool,
 }
+
+/// phase10c — opt-in dedup hook. The runner consults the ledger
+/// before publishing each file's events; identical content_hash
+/// since the last run is suppressed (only the `last_run_id` is
+/// refreshed). Wrapped in an `Arc<Mutex<...>>` because
+/// [`MetadataStore`]'s `rusqlite::Connection` is `Send` but not
+/// `Sync`, and the runner may execute under a parallel
+/// orchestrator (`run_repos_parallel`). Pass `None` to bypass
+/// dedup entirely (existing call sites stay unchanged).
+pub type DedupStore = Arc<Mutex<MetadataStore>>;
 
 /// Configuration block carried through the runner — a strict subset
 /// of the CLI / `cortex.toml` shape, narrowed to what the runner
@@ -56,6 +74,9 @@ pub struct RunnerConfig {
 /// Walks files, runs every accepted file through the emitter, walks
 /// git commits, publishes each event, and updates the checkpoint as
 /// it goes.
+///
+/// Calls [`run_repo_with_dedup`] with `dedup = None`. Existing
+/// callers keep their signatures unchanged.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_repo(
     repo_root: &Path,
@@ -67,8 +88,48 @@ pub async fn run_repo(
     last_file: Option<String>,
     last_git_ref: Option<String>,
 ) -> Result<RepoRunReport> {
+    run_repo_with_dedup(
+        repo_root,
+        runner_cfg,
+        repo_cfg,
+        publisher,
+        metrics,
+        checkpoint,
+        last_file,
+        last_git_ref,
+        None,
+    )
+    .await
+}
+
+/// phase10c — same as [`run_repo`] but also consults a dedup
+/// ledger. The walker computes the redacted-body
+/// `content_hash = sha256(body)` for every accepted file. Before
+/// publishing the file's events, it looks up `bootstrap_seen(repo,
+/// path)`; if the stored hash matches, it suppresses publication
+/// (counted as `files_suppressed`) and refreshes the ledger's
+/// `last_run_id`. If the hash changed (or the row is absent), it
+/// publishes as usual and upserts the ledger.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_repo_with_dedup(
+    repo_root: &Path,
+    runner_cfg: &RunnerConfig,
+    repo_cfg: &CortexSection,
+    publisher: Arc<dyn Publisher>,
+    metrics: Arc<Metrics>,
+    checkpoint: &mut Checkpoint,
+    last_file: Option<String>,
+    last_git_ref: Option<String>,
+    dedup: Option<DedupStore>,
+) -> Result<RepoRunReport> {
     let started = Instant::now();
-    let repo_id = runner_cfg.repo_id.clone();
+    // phase10d — canonical repo casing is **lowercase**. Walker
+    // emission stamps the lowercase form so `scope.repo: "Cortex"`
+    // and `scope.repo: "cortex"` resolve to the same rows. The
+    // original-case directory name is kept as `repo_label` for
+    // diagnostics + the dashboard's display column.
+    let repo_label = runner_cfg.repo_id.clone();
+    let repo_id = canonical_repo(&runner_cfg.repo_id);
     let stream = if runner_cfg.stream.is_empty() {
         BOOTSTRAP_STREAM.to_string()
     } else {
@@ -100,6 +161,7 @@ pub async fn run_repo(
     // of a small repo.
     let mut publishes_attempted: u64 = 0;
     let mut publishes_failed: u64 = 0;
+    let mut files_suppressed: u64 = 0;
     const PUBLISH_FAILURE_RATIO_LIMIT: f64 = 0.05;
     const PUBLISH_FAILURE_FLOOR: u64 = 20;
     let abort_on_failure = |attempted: u64, failed: u64| -> bool {
@@ -140,6 +202,33 @@ pub async fn run_repo(
                         continue;
                     }
                 };
+                // phase10c — file-level dedup. The audit caught the
+                // walker re-emitting every file under fresh ULIDs on
+                // every run (26 decisions for 2 ADRs on disk). We
+                // hash the raw body bytes (deterministic across
+                // runs because the file contents are the input to
+                // every downstream emit + redact pass) and consult
+                // the `bootstrap_seen` ledger. Identical hash → skip
+                // publication and only refresh `last_run_id` so the
+                // ledger reflects the most recent walk.
+                let body_hash = sha256_of_body(&body);
+                if let Some(store) = dedup.as_ref() {
+                    if let Some(prev) = lookup_seen(store, &repo_id, rel_path) {
+                        if prev.content_hash == body_hash {
+                            files_suppressed += 1;
+                            // Refresh the ledger so observers can
+                            // tell which files were re-walked vs.
+                            // truly stale.
+                            upsert_seen(store, &repo_id, rel_path, &body_hash, Some(&session_id));
+                            // Suppressed paths still extend the
+                            // checkpoint cursor so a resume points
+                            // past them on the next run.
+                            let p = checkpoint.repo_mut(&repo_id);
+                            p.last_file = Some(rel_path.clone());
+                            continue;
+                        }
+                    }
+                }
                 // `emit_for_file_multi` returns a Vec — most file
                 // classes still produce a single event, but spec docs
                 // (`.rulebook/specs/**/*.md`) fan out into one
@@ -177,6 +266,16 @@ pub async fn run_repo(
                     p.events_emitted += events.len() as u64;
                     p.files_walked += 1;
                     p.last_file = Some(rel_path.clone());
+                    // phase10c — record the (repo, path,
+                    // content_hash) tuple so the next run can
+                    // suppress duplicate publications for this
+                    // file. Best-effort: a ledger write failure is
+                    // logged but does NOT abort the run (the
+                    // dedup is opportunistic; the publish already
+                    // succeeded).
+                    if let Some(store) = dedup.as_ref() {
+                        upsert_seen(store, &repo_id, rel_path, &body_hash, Some(&session_id));
+                    }
                 }
             }
         }
@@ -252,14 +351,17 @@ pub async fn run_repo(
         files_dropped,
         commits_walked,
         duration_secs,
+        files_suppressed,
         completed: true,
     };
 
     tracing::info!(
         repo = %report.repo_id,
+        repo_label = %repo_label,
         events = report.events_published,
         files_dropped = report.files_dropped,
         commits_walked = report.commits_walked,
+        files_suppressed = report.files_suppressed,
         duration_s = report.duration_secs,
         outcome = "ok",
         "bootstrap repo complete"
@@ -327,6 +429,168 @@ where
         }
     }
     out
+}
+
+/// phase10c — pre-flight summary surfaced when the dedup ledger
+/// is empty AND the live lane already carries far more rows than
+/// the disk has files. Indicates that a previous (pre-phase10c)
+/// run accumulated duplicates the user can clean up with
+/// `cortex-ops bootstrap dedup`. Counts are caller-supplied so
+/// this helper stays pure and trivially testable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateLanePreflight {
+    /// `true` when at least one class crossed the 2× threshold.
+    pub likely_duplicates: bool,
+    /// Per-class `(disk_count, lane_count)` pairs that exceeded
+    /// the threshold. Empty when `likely_duplicates = false`.
+    pub flagged: Vec<DuplicateClassFinding>,
+}
+
+/// One `(class, disk_count, lane_count)` tuple flagged by the
+/// pre-flight check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DuplicateClassFinding {
+    /// Symbolic class label (`decision` / `law` / `analysis`).
+    pub class: &'static str,
+    /// Number of files of this class on disk.
+    pub disk_count: u64,
+    /// Number of rows of this class in the live lane.
+    pub lane_count: u64,
+}
+
+/// phase10c — pure pre-flight check. Returns
+/// `likely_duplicates = true` when the dedup ledger is empty AND
+/// at least one of the (decision / law / analysis) lane row
+/// counts is > 2× the matching disk file count. The runner /
+/// bootstrap bin pass the inputs via their already-on-hand
+/// walkers + lane probes.
+///
+/// `ledger_empty` is the result of
+/// [`MetadataStore::bootstrap_seen_count`] == 0; `disk` carries
+/// the walker's per-class counts; `lane` carries the dashboard /
+/// query lane's per-class counts. Pure — no side effects, no
+/// I/O.
+pub fn preflight_likely_duplicates(
+    ledger_empty: bool,
+    disk: &PerClassCounts,
+    lane: &PerClassCounts,
+) -> DuplicateLanePreflight {
+    if !ledger_empty {
+        return DuplicateLanePreflight {
+            likely_duplicates: false,
+            flagged: Vec::new(),
+        };
+    }
+    let mut flagged = Vec::new();
+    for (class, disk_count, lane_count) in [
+        ("decision", disk.decision, lane.decision),
+        ("law", disk.law, lane.law),
+        ("analysis", disk.analysis, lane.analysis),
+    ] {
+        // Threshold: lane > 2 * disk AND disk > 0 (a 0-disk repo
+        // is a misconfiguration, not a duplicate explosion). Use
+        // `>` strictly so exactly-2× does not trip.
+        if disk_count > 0 && lane_count > 2 * disk_count {
+            flagged.push(DuplicateClassFinding {
+                class,
+                disk_count,
+                lane_count,
+            });
+        }
+    }
+    DuplicateLanePreflight {
+        likely_duplicates: !flagged.is_empty(),
+        flagged,
+    }
+}
+
+/// phase10d — canonical lowercase form for `repo` identifiers.
+/// Every Cortex surface (walker emit, lane projection, scope
+/// filter, dashboard wire shape) agrees on `to_ascii_lowercase`
+/// so case mismatches between the bootstrap walker (which
+/// historically used the on-disk directory casing — `Cortex`,
+/// `Vectorizer`) and the orchestrator (which lowercased on
+/// scope-resolve) stop dropping legitimate scoped queries on the
+/// floor.
+pub fn canonical_repo(repo: &str) -> String {
+    repo.to_ascii_lowercase()
+}
+
+/// Per-class file / row counts used by
+/// [`preflight_likely_duplicates`]. Defaults to all zeros so test
+/// fixtures can populate one field at a time.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PerClassCounts {
+    /// `:Decision` / `decision.imported` rows.
+    pub decision: u64,
+    /// `:Law` / `law.imported` rows.
+    pub law: u64,
+    /// `:Analysis` / `analysis.imported` rows.
+    pub analysis: u64,
+}
+
+/// phase10c — `sha256:<hex>` over the raw file body. The walker
+/// uses this as the dedup key. The body is the input to the
+/// emitter's redaction + canonical-hash pipeline, so two runs that
+/// see identical on-disk bytes produce identical downstream
+/// `content_hash`es and identical ledger lookups.
+fn sha256_of_body(body: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(body.as_bytes());
+    let digest = h.finalize();
+    let mut out = String::with_capacity(7 + digest.len() * 2);
+    out.push_str("sha256:");
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
+}
+
+/// phase10c — read the dedup ledger for `(repo, path)`. Logs and
+/// returns `None` on any error so the runner falls back to the
+/// publish path rather than aborting.
+fn lookup_seen(
+    store: &DedupStore,
+    repo: &str,
+    path: &str,
+) -> Option<cortex_storage::BootstrapSeenRow> {
+    let guard = match store.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            tracing::warn!(repo, path, "bootstrap_seen lookup: lock poisoned");
+            return None;
+        }
+    };
+    match guard.bootstrap_seen_lookup(repo, path) {
+        Ok(row) => row,
+        Err(e) => {
+            tracing::warn!(repo, path, error = %e, "bootstrap_seen lookup failed");
+            None
+        }
+    }
+}
+
+/// phase10c — upsert `(repo, path, content_hash)` into the dedup
+/// ledger with `last_run_id = run_id` and `last_emitted_at = now`.
+/// Best-effort: errors are logged but do not propagate.
+fn upsert_seen(
+    store: &DedupStore,
+    repo: &str,
+    path: &str,
+    content_hash: &str,
+    run_id: Option<&str>,
+) {
+    let guard = match store.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            tracing::warn!(repo, path, "bootstrap_seen upsert: lock poisoned");
+            return;
+        }
+    };
+    if let Err(e) = guard.bootstrap_seen_upsert(repo, path, content_hash, run_id, Utc::now()) {
+        tracing::warn!(repo, path, error = %e, "bootstrap_seen upsert failed");
+    }
 }
 
 /// Count walked files per `FileClass`. Pure helper used by tests.

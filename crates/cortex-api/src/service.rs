@@ -169,11 +169,41 @@ fn canonicalise_scope(req_scope: &Scope) -> Scope {
         .as_deref()
         .filter(|s| !s.is_empty())
         .map(cortex_storage::names::slug_for_repo);
+    // phase10h §1.2 — every input dimension normalises before
+    // it lands in `scope_resolved`: empty / whitespace strings
+    // drop out, topics dedupe, RFC-3339 `since` round-trips
+    // verbatim (the lane filters parse it on demand).
+    let files: Vec<String> = req_scope
+        .files
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let topics: Vec<String> = {
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut out: Vec<String> = Vec::new();
+        for t in &req_scope.topics {
+            let normalised = t.trim().to_ascii_lowercase();
+            if normalised.is_empty() {
+                continue;
+            }
+            if seen.insert(normalised.clone()) {
+                out.push(normalised);
+            }
+        }
+        out
+    };
+    let since = req_scope
+        .since
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
     Scope {
         repo,
-        files: req_scope.files.clone(),
-        topics: req_scope.topics.clone(),
-        since: req_scope.since.clone(),
+        files,
+        topics,
+        since,
     }
 }
 

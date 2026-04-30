@@ -37,6 +37,14 @@ pub enum FileClass {
     /// under `docs/analysis/**/*.md` by convention; the explicit
     /// `[cortex.analyses].promote_patterns` opts a path in.
     Analysis,
+    /// phase10e — pattern / anti-pattern entry imported from
+    /// `.rulebook/knowledge/**/*.md` (Rulebook MCP
+    /// `rulebook_knowledge_add`).
+    Knowledge,
+    /// phase10e — implementation insight imported from
+    /// `.rulebook/learnings/**/*.md` (Rulebook MCP
+    /// `rulebook_learn_capture`).
+    Learning,
     /// Anything else worth indexing as opaque text.
     Other,
 }
@@ -249,6 +257,8 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
             || matches_any(&cfg.memories.import_files, &rel_path)
             || matches_str_globs(RULEBOOK_DECISION_GLOBS, &rel_path)
             || matches_str_globs(RULEBOOK_LAW_GLOBS, &rel_path)
+            || matches_str_globs(RULEBOOK_KNOWLEDGE_GLOBS, &rel_path)
+            || matches_str_globs(RULEBOOK_LEARNING_GLOBS, &rel_path)
             || matches_str_globs(RULEBOOK_MEMORY_GLOBS, &rel_path);
         if !promoted {
             continue;
@@ -317,18 +327,30 @@ pub const RULEBOOK_LAW_GLOBS: &[&str] = &[
     ".rulebook/specs/**/*.md",
 ];
 
-/// Canonical glob list for non-decision, non-law `.rulebook`
-/// artifacts: knowledge (patterns + anti-patterns), learnings,
-/// handoff snapshots, and the loose top-level memory files
-/// (PLANS.md / STATE.md / CLAUDE.md imports). All of these route
-/// to `FileClass::Memory` — the emitter records them with title
-/// + body + repo, which is enough for the keyword lane to surface
-/// them per-project. A future `Kind::Knowledge` / `Kind::Learning`
-/// discriminator can split them further without changing this
-/// discovery contract.
-pub const RULEBOOK_MEMORY_GLOBS: &[&str] = &[
+/// phase10e — knowledge globs route to `FileClass::Knowledge`
+/// (separate kind, separate Vectorizer collection
+/// `cortex.knowledge.fp32`, separate Meili index
+/// `cortex_knowledge`). Pre-phase10e these were lumped under
+/// `RULEBOOK_MEMORY_GLOBS` so they piled into the catch-all
+/// memory bucket; the orchestrator could not surface them
+/// distinctly on `pre_change_context` / `decision_lookup`.
+pub const RULEBOOK_KNOWLEDGE_GLOBS: &[&str] = &[
     ".rulebook/knowledge/**/*.md",
+];
+
+/// phase10e — learnings globs route to `FileClass::Learning`
+/// (`cortex.learning.fp32` + `cortex_learnings`). Same rationale
+/// as [`RULEBOOK_KNOWLEDGE_GLOBS`].
+pub const RULEBOOK_LEARNING_GLOBS: &[&str] = &[
     ".rulebook/learnings/**/*.md",
+];
+
+/// Canonical glob list for `.rulebook` memory-shaped artifacts:
+/// handoff snapshots and the loose top-level memory files
+/// (PLANS.md / STATE.md / CLAUDE.md imports). Knowledge +
+/// learnings used to ride here pre-phase10e — they now have
+/// their own globs above and dedicated kinds.
+pub const RULEBOOK_MEMORY_GLOBS: &[&str] = &[
     // Handoff snapshots — `_pending.md` rotates as the active
     // hand-off, archived ones live alongside. The dashboard surfaces
     // these per-project so a user resuming a session can pull the
@@ -371,6 +393,16 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
     // included `.rulebook/specs/**` in the memory list.
     if matches_str_globs(RULEBOOK_LAW_GLOBS, rel_path) {
         return FileClass::Law;
+    }
+    // phase10e — knowledge / learnings get their own classes
+    // before the memory fallback so the canonical
+    // `.rulebook/knowledge/**` and `.rulebook/learnings/**`
+    // hierarchies route to the dedicated downstream collections.
+    if matches_str_globs(RULEBOOK_KNOWLEDGE_GLOBS, rel_path) {
+        return FileClass::Knowledge;
+    }
+    if matches_str_globs(RULEBOOK_LEARNING_GLOBS, rel_path) {
+        return FileClass::Learning;
     }
     if matches_str_globs(RULEBOOK_MEMORY_GLOBS, rel_path) {
         return FileClass::Memory;
@@ -538,21 +570,22 @@ mod tests {
             FileClass::Decision
         );
 
-        // Knowledge — patterns and anti-patterns both land in Memory
-        // (the keyword lane indexes them with title + body + repo).
+        // phase10e — knowledge + learnings now route to dedicated
+        // FileClass variants (and downstream kinds) so the
+        // orchestrator can fan out to them on
+        // `pre_change_context` / `decision_lookup` without
+        // diluting the catch-all memory bucket.
         assert_eq!(
             classify_path(".rulebook/knowledge/patterns/foo.md", &cfg),
-            FileClass::Memory
+            FileClass::Knowledge
         );
         assert_eq!(
             classify_path(".rulebook/knowledge/anti-patterns/bar.md", &cfg),
-            FileClass::Memory
+            FileClass::Knowledge
         );
-
-        // Learnings.
         assert_eq!(
             classify_path(".rulebook/learnings/2026-04-27-baz.md", &cfg),
-            FileClass::Memory
+            FileClass::Learning
         );
 
         // Specs route to Law so the emitter's spec-splitter fans

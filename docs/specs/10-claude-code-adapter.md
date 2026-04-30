@@ -96,6 +96,19 @@ do not produce a published event:
 
 All published envelopes set `tool = "claude-code"`, `schema_version = "1"`, `stream = "live"`, `model = env CLAUDE_MODEL` when present, and a `context` block with `platform`, `cwd`, `repo` (best-effort resolution from `cwd`), and an `extras.claude_code` sub-object carrying the adapter-side correlation IDs (`turn_id`, `tool_call_id`, `tool_use_id`, `orphan`) so the indexing layer can reconstruct turn / tool-call lineage without polluting the canonical envelope.
 
+#### Session metadata persistence (phase10i)
+
+`MetadataStore::upsert_session` preserves the existing
+`sessions.tool` value when a subsequent upsert passes an empty
+string — the pre-phase10i upsert wrote `tool=excluded.tool`
+unconditionally, so lifecycle hooks that didn't capture the
+tool name (`Stop` / `Notification`) would NULL out the
+session-start value and the dashboard's session list ended up
+with 574 `tool: null` rows. The adapter is unchanged on this
+path: it always stamps `tool = "claude-code"`. The
+backfill CLI (`cortex-ops sessions backfill-tool`) migrates
+the rows the pre-phase10i daemon NULL-ed out.
+
 ### Adapter config (`~/.cortex/adapter.toml`)
 
 ```toml

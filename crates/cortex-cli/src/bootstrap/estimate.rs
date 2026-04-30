@@ -91,6 +91,10 @@ pub fn estimate_repo(repo_root: &Path, repo_id: &str, cfg: &CortexSection) -> Es
                         analysis_count += 1;
                         doc_bytes += *size_bytes;
                     }
+                    // phase10e — knowledge / learnings count
+                    // alongside memory for the estimate (small,
+                    // markdown-shaped, single-event-per-file).
+                    FileClass::Knowledge | FileClass::Learning => memory_count += 1,
                     FileClass::Other => other_count += 1,
                 }
             }

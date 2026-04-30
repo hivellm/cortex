@@ -25,6 +25,7 @@ fn snip(rank: usize, path: &str) -> Snippet {
         symbol: None,
         content_hash: None,
         text: format!("snippet {path}"),
+        body_truncated: false,
         score: 1.0 / rank as f64,
         why: None,
     }

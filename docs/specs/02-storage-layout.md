@@ -222,6 +222,21 @@ CREATE TABLE api_keys (key_hash TEXT PRIMARY KEY, name, scopes, created_at, last
 CREATE TABLE bootstrap_jobs_daily (day TEXT, repo_path TEXT, runs, total_files, total_chunks, PRIMARY KEY (day, repo_path));
 CREATE TABLE sessions_monthly    (year_month TEXT, tool TEXT, repo TEXT, count, total_event_count, PRIMARY KEY (year_month, tool, repo));
 CREATE TABLE classifier_spend_monthly (year_month TEXT PRIMARY KEY, calls, tokens_in, tokens_out, est_usd_cents);
+
+-- Phase10c — bootstrap dedup ledger. The walker keys every file
+-- on `(repo, path)` and stamps the redacted-body content hash; a
+-- subsequent run that sees the same hash skips publication and
+-- only refreshes `last_run_id`. Closes the audit-detected
+-- duplicate explosion (26 decisions for 2 ADRs on disk).
+CREATE TABLE bootstrap_seen (
+    repo            TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    last_run_id     TEXT,
+    last_emitted_at TEXT NOT NULL,
+    PRIMARY KEY (repo, path)
+);
+CREATE INDEX bootstrap_seen_hash ON bootstrap_seen (repo, content_hash);
 ```
 
 Read-side helpers (`cortex_storage::union_read_*`) transparently
@@ -284,6 +299,78 @@ Same sweep also applies retention rules from spec 01 (PII tiers): `pii_risk=high
 - Parquet archive: source of truth — losing it loses replay capability but not query capability.
 
 A `cortex backup` CLI bundles all five into one timestamped directory.
+
+### Knowledge + Learnings corpus (phase10e)
+
+The 2026-04-29 audit found 60 high-signal entries on disk that
+no Cortex lane indexed:
+
+- `.rulebook/knowledge/**/*.md` — patterns + anti-patterns the
+  Rulebook MCP captures via `rulebook_knowledge_add`.
+- `.rulebook/learnings/**/*.md` — implementation insights from
+  `rulebook_learn_capture`.
+
+Pre-phase10e they were lumped under the catch-all `Memory`
+discovery class. Phase10e gives each its own kind, collection,
+and Meili index so the orchestrator can fan out to them
+distinctly on `pre_change_context` / `decision_lookup` queries.
+
+| Surface             | Knowledge                       | Learning                       |
+|---------------------|---------------------------------|--------------------------------|
+| Envelope kind       | `knowledge.imported`            | `learning.imported`            |
+| `Kind` enum         | `Kind::Knowledge`               | `Kind::Learning`               |
+| Payload struct      | `KnowledgePayload`              | `LearningPayload`              |
+| Vectorizer          | `cortex.knowledge.fp32` (hot)   | `cortex.learning.fp32` (hot)   |
+| Meili index         | `cortex_knowledge`              | `cortex_learnings`             |
+| Per-repo family     | `knowledge`                     | `learnings`                    |
+| Walker class        | `FileClass::Knowledge`          | `FileClass::Learning`          |
+| Walker glob         | `RULEBOOK_KNOWLEDGE_GLOBS`      | `RULEBOOK_LEARNING_GLOBS`      |
+
+Both collections are single-tier (`fp32` only) — the corpus is
+small + dense; demoting to PQ would lose precision the agent
+needs when re-reading the entry verbatim. Knowledge entries
+discriminate `pattern` vs `anti-pattern` via `payload.category`,
+derived from the path (`.rulebook/knowledge/anti-patterns/...`
+wins). Learning entries optionally carry `payload.related_task`
+for graph-side connections to the work that produced them.
+
+### Naming canonicalization (phase10d)
+
+`repo` is **canonical lowercase** across every Cortex surface
+(walker emit, lane projection, scope filter, dashboard wire
+shape, metadata SQLite). The 2026-04-29 audit caught the casing
+diverging:
+
+- `/v1/status.indexed_repos` returned lowercase (`["cortex",
+  "vectorizer", "nexus", …]`).
+- `/v1/dashboard/overview.recent_repos` returned capitalized
+  (`[{"repo": "Cortex"}, …]`).
+- `scope.repo: "Cortex"` queries silently dropped because the
+  orchestrator lowercased the scope before checking against the
+  capitalized lane snapshot.
+
+The fix collapses every surface onto `to_ascii_lowercase`:
+
+- The bootstrap walker
+  ([`crates/cortex-cli/src/bootstrap/runner.rs`](../../crates/cortex-cli/src/bootstrap/runner.rs))
+  passes `runner_cfg.repo_id` through `canonical_repo` before
+  stamping `source.repo` on every emitted envelope.
+- The Claude Code adapter's `repo_from_cwd`
+  ([`crates/cortex-adapter-claude-code/src/events.rs`](../../crates/cortex-adapter-claude-code/src/events.rs))
+  lowercases the cwd basename so IPC envelopes agree with
+  bootstrap envelopes.
+- The Meili / Vectorizer lane projections
+  ([`meili_lane.rs`](../../crates/cortex-api/src/meili_lane.rs),
+  [`vectorizer_lane.rs`](../../crates/cortex-api/src/vectorizer_lane.rs))
+  lowercase `LaneHit.repo` and stash the original-case label
+  in `extras.repo_label` for the dashboard's display column.
+- The metadata SQLite tables (`sessions.repo`,
+  `bootstrap_jobs.repo_path`, `bootstrap_seen.repo`) carry the
+  canonical form going forward; the one-shot
+  `cortex-ops repo-canonicalize` CLI migrates pre-phase10d
+  rows. Live-backend payloads (Vectorizer / Meili / Nexus
+  documents) retain their original casing in `extras.repo_label`
+  but the lane projections normalise on the read path.
 
 ## Acceptance criteria
 

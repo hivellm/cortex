@@ -395,6 +395,105 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase10i — session-tool backfill. Walks the metadata
+    /// `sessions` table looking for rows whose `tool` is NULL or
+    /// empty (the audit caught 574 sessions in this state) and
+    /// stamps a default tool string. The pre-phase10i upsert
+    /// overwrote existing values when a hook passed an empty
+    /// tool; the new upsert preserves the existing value but the
+    /// rows that already lost their tool need this one-shot
+    /// migration.
+    SessionsBackfillTool {
+        /// Tool string to stamp on every NULL row. Defaults to
+        /// `claude-code` because that's the only adapter the
+        /// pre-phase10i daemons ran.
+        #[arg(long, default_value = "claude-code")]
+        tool: String,
+        /// Read-only — list candidate rows without mutating
+        /// SQLite. Default mode.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply the stamp. The mode is exclusive with
+        /// `--dry-run`.
+        #[arg(long)]
+        apply: bool,
+        /// Maximum rows to scan / stamp per invocation.
+        #[arg(long, default_value_t = 10_000)]
+        limit: usize,
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` then
+        /// `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase10d — repo-casing canonicalizer. Migrates the metadata
+    /// SQLite tables (`sessions.repo`, `bootstrap_jobs.repo_path`)
+    /// from mixed-case to canonical lowercase so downstream
+    /// queries that scope to `repo: "Cortex"` and
+    /// `repo: "cortex"` resolve to the same rows. Live-backend
+    /// rewrites (Vectorizer payload `repo`, Meili documents,
+    /// Nexus properties) are reserved for the follow-up;
+    /// today's CLI normalises the SQLite metadata only and
+    /// reports the per-store rewrite candidate set.
+    RepoCanonicalize {
+        /// Restrict the migration to a single repo identifier
+        /// (matches the pre-migration value, case-sensitive).
+        #[arg(long)]
+        repo: Option<String>,
+        /// Read-only — print the rewrite plan without mutating
+        /// SQLite. Default mode.
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply the SQLite rewrite. Live-backend rewrites are
+        /// listed but skipped with a documentation pointer.
+        #[arg(long)]
+        apply: bool,
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` then
+        /// `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase10c — bootstrap dedup ledger inspector. Walks the
+    /// `bootstrap_seen` table looking for duplicate-by-content
+    /// groups within a repo and prints a summary so operators can
+    /// decide whether to clean up the live lane.
+    ///
+    /// `--dry-run` (default) is read-only. `--apply` is reserved
+    /// for the future live-backend cleanup path; today it returns
+    /// an actionable error pointing at the dry-run output so
+    /// operators can re-walk affected files manually under the
+    /// new walker.
+    BootstrapDedup {
+        /// Restrict the scan to a single repo identifier (matches
+        /// `bootstrap_seen.repo`). Omit to scan every repo in the
+        /// ledger.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Report duplicate groups without mutating any backend.
+        #[arg(long)]
+        dry_run: bool,
+        /// Reserved for the live-backend cleanup path. Today this
+        /// flag exits with a documentation pointer; the dry-run
+        /// output is still produced so operators see the candidate
+        /// set.
+        #[arg(long)]
+        apply: bool,
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` then
+        /// `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase9b — granularity selector for `cortex-ops rollup`.
@@ -651,7 +750,455 @@ fn main() -> ExitCode {
             min_overlap_jaccard,
             json,
         ),
+        Command::BootstrapDedup {
+            repo,
+            dry_run,
+            apply,
+            metadata_db,
+            json,
+        } => bootstrap_dedup(repo, dry_run, apply, metadata_db, json),
+        Command::RepoCanonicalize {
+            repo,
+            dry_run,
+            apply,
+            metadata_db,
+            json,
+        } => repo_canonicalize(repo, dry_run, apply, metadata_db, json),
+        Command::SessionsBackfillTool {
+            tool,
+            dry_run,
+            apply,
+            limit,
+            metadata_db,
+            json,
+        } => sessions_backfill_tool(tool, dry_run, apply, limit, metadata_db, json),
     }
+}
+
+/// Phase10i — `cortex-ops sessions backfill-tool` dispatcher.
+/// Walks the metadata `sessions` table for rows whose `tool` is
+/// NULL or empty and stamps `--tool` on each. `--dry-run` lists
+/// candidate ids without mutating; `--apply` runs the update.
+fn sessions_backfill_tool(
+    tool: String,
+    dry_run: bool,
+    apply: bool,
+    limit: usize,
+    metadata_db: Option<String>,
+    json: bool,
+) -> ExitCode {
+    if !dry_run && !apply {
+        eprintln!("sessions backfill-tool: pass either --dry-run or --apply");
+        return ExitCode::from(2);
+    }
+    if tool.trim().is_empty() {
+        eprintln!("sessions backfill-tool: --tool must not be empty");
+        return ExitCode::from(2);
+    }
+    let db_path = match resolve_metadata_db(metadata_db) {
+        Some(p) => p,
+        None => {
+            eprintln!("sessions backfill-tool: cannot resolve metadata DB path");
+            return ExitCode::from(2);
+        }
+    };
+    let store = match cortex_storage::MetadataStore::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("sessions backfill-tool: open {}: {e}", db_path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let candidates = match store.sessions_missing_tool(limit) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("sessions backfill-tool: scan: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let candidate_count = candidates.len() as u64;
+    let mut stamped: u64 = 0;
+    if apply {
+        for (sid, _started) in &candidates {
+            match store.set_session_tool(sid, &tool) {
+                Ok(touched) => stamped += touched,
+                Err(e) => {
+                    eprintln!("sessions backfill-tool: stamp {sid}: {e}");
+                    return ExitCode::from(1);
+                }
+            }
+        }
+    }
+    if json {
+        let payload = serde_json::json!({
+            "mode": if apply { "apply" } else { "dry-run" },
+            "tool": tool,
+            "candidates": candidate_count,
+            "stamped": stamped,
+            "limit": limit,
+            "preview": candidates
+                .iter()
+                .take(10)
+                .map(|(sid, started)| serde_json::json!({
+                    "session_id": sid,
+                    "started_at": started,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        println!("{payload}");
+    } else {
+        println!(
+            "sessions backfill-tool ({} mode):",
+            if apply { "apply" } else { "dry-run" }
+        );
+        println!("  tool to stamp:           {tool}");
+        println!("  candidate rows:          {candidate_count}");
+        println!("  rows stamped:            {stamped}");
+        println!("  limit (per invocation):  {limit}");
+        let preview = candidates.iter().take(5);
+        for (sid, started) in preview {
+            println!("    {sid}  ({started})");
+        }
+        if candidate_count as usize > 5 {
+            println!("    ... ({} more)", candidate_count.saturating_sub(5));
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Phase10d — `cortex-ops repo-canonicalize` dispatcher.
+/// Lowercases mixed-case `repo` columns in the metadata SQLite so
+/// the orchestrator's scope filter and the dashboard's wire
+/// shape agree on a single canonical form. Live-backend
+/// rewrites (Vectorizer, Meili, Nexus) are listed in the report
+/// but skipped — those backends carry the repo as a payload
+/// field rather than a filterable column, so a separate
+/// migration tool will handle them.
+fn repo_canonicalize(
+    repo: Option<String>,
+    dry_run: bool,
+    apply: bool,
+    metadata_db: Option<String>,
+    json: bool,
+) -> ExitCode {
+    if !dry_run && !apply {
+        eprintln!("repo-canonicalize: pass either --dry-run or --apply");
+        return ExitCode::from(2);
+    }
+    let db_path = match resolve_metadata_db(metadata_db) {
+        Some(p) => p,
+        None => {
+            eprintln!("repo-canonicalize: cannot resolve metadata DB path");
+            return ExitCode::from(2);
+        }
+    };
+    let store = match cortex_storage::MetadataStore::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("repo-canonicalize: open {}: {e}", db_path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let conn = store.conn();
+    let target_filter = repo.clone();
+
+    // Count rewrite candidates (rows whose `repo` differs from its
+    // lowercase form) per table.
+    let sessions_candidates = match count_canonicalize_candidates(
+        conn,
+        "sessions",
+        "repo",
+        target_filter.as_deref(),
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("repo-canonicalize: count sessions: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let bootstrap_candidates = match count_canonicalize_candidates(
+        conn,
+        "bootstrap_jobs",
+        "repo_path",
+        target_filter.as_deref(),
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("repo-canonicalize: count bootstrap_jobs: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let bootstrap_seen_candidates = match count_canonicalize_candidates(
+        conn,
+        "bootstrap_seen",
+        "repo",
+        target_filter.as_deref(),
+    ) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("repo-canonicalize: count bootstrap_seen: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let mut sessions_rewrites = 0u64;
+    let mut bootstrap_rewrites = 0u64;
+    let mut bootstrap_seen_rewrites = 0u64;
+    if apply {
+        sessions_rewrites = match apply_canonicalize(
+            conn,
+            "sessions",
+            "repo",
+            target_filter.as_deref(),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("repo-canonicalize: rewrite sessions: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        bootstrap_rewrites = match apply_canonicalize(
+            conn,
+            "bootstrap_jobs",
+            "repo_path",
+            target_filter.as_deref(),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("repo-canonicalize: rewrite bootstrap_jobs: {e}");
+                return ExitCode::from(1);
+            }
+        };
+        bootstrap_seen_rewrites = match apply_canonicalize(
+            conn,
+            "bootstrap_seen",
+            "repo",
+            target_filter.as_deref(),
+        ) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("repo-canonicalize: rewrite bootstrap_seen: {e}");
+                return ExitCode::from(1);
+            }
+        };
+    }
+    if json {
+        let payload = serde_json::json!({
+            "mode": if apply { "apply" } else { "dry-run" },
+            "sessions": { "candidates": sessions_candidates, "rewritten": sessions_rewrites },
+            "bootstrap_jobs": { "candidates": bootstrap_candidates, "rewritten": bootstrap_rewrites },
+            "bootstrap_seen": { "candidates": bootstrap_seen_candidates, "rewritten": bootstrap_seen_rewrites },
+            "live_backends_pending": ["vectorizer", "meili", "nexus"],
+        });
+        println!("{}", payload);
+    } else {
+        println!(
+            "repo-canonicalize ({} mode):",
+            if apply { "apply" } else { "dry-run" }
+        );
+        println!(
+            "  sessions.repo:           candidates {sessions_candidates}, rewritten {sessions_rewrites}"
+        );
+        println!(
+            "  bootstrap_jobs.repo_path: candidates {bootstrap_candidates}, rewritten {bootstrap_rewrites}"
+        );
+        println!(
+            "  bootstrap_seen.repo:     candidates {bootstrap_seen_candidates}, rewritten {bootstrap_seen_rewrites}"
+        );
+        println!(
+            "  live backends (vectorizer / meili / nexus): \
+             carry `repo` in payload bodies; not handled by this tool"
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+/// Count rows where `<column>` differs from `lower(<column>)`.
+/// Optional `target` restricts to the original-case value (so a
+/// caller can pre-flight a single repo migration).
+fn count_canonicalize_candidates(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    target: Option<&str>,
+) -> rusqlite::Result<u64> {
+    let sql = match target {
+        Some(_) => format!(
+            "SELECT COUNT(*) FROM {table} \
+             WHERE {column} = ?1 AND {column} != lower({column})"
+        ),
+        None => format!(
+            "SELECT COUNT(*) FROM {table} \
+             WHERE {column} != lower({column})"
+        ),
+    };
+    let count: i64 = match target {
+        Some(t) => conn.query_row(&sql, rusqlite::params![t], |r| r.get(0))?,
+        None => conn.query_row(&sql, [], |r| r.get(0))?,
+    };
+    Ok(count.max(0) as u64)
+}
+
+/// Apply the lowercase rewrite. Returns the row count touched.
+fn apply_canonicalize(
+    conn: &rusqlite::Connection,
+    table: &str,
+    column: &str,
+    target: Option<&str>,
+) -> rusqlite::Result<u64> {
+    let sql = match target {
+        Some(_) => format!(
+            "UPDATE {table} SET {column} = lower({column}) \
+             WHERE {column} = ?1 AND {column} != lower({column})"
+        ),
+        None => format!(
+            "UPDATE {table} SET {column} = lower({column}) \
+             WHERE {column} != lower({column})"
+        ),
+    };
+    let touched = match target {
+        Some(t) => conn.execute(&sql, rusqlite::params![t])?,
+        None => conn.execute(&sql, [])?,
+    };
+    Ok(touched as u64)
+}
+
+/// Phase10c — `cortex-ops bootstrap-dedup` dispatcher. Walks the
+/// `bootstrap_seen` ledger looking for `(repo, content_hash)`
+/// groups whose distinct paths > 1 (the same redacted body
+/// emitted under different file paths) and prints a summary so
+/// operators can decide whether to clean up the live lane. The
+/// `--apply` flag is reserved for the future live-backend cleanup
+/// path; today it returns an actionable error pointing at the
+/// dry-run output.
+fn bootstrap_dedup(
+    repo: Option<String>,
+    dry_run: bool,
+    apply: bool,
+    metadata_db: Option<String>,
+    json: bool,
+) -> ExitCode {
+    if !dry_run && !apply {
+        eprintln!("bootstrap-dedup: pass either --dry-run (read-only) or --apply (reserved)");
+        return ExitCode::from(2);
+    }
+    if apply && !dry_run {
+        // Honest about the current scope. The dry-run output is
+        // the actionable surface today.
+        eprintln!(
+            "bootstrap-dedup --apply: not yet wired to the live Vectorizer/Meili/Nexus \
+             backends. Re-run with --dry-run to inspect the duplicate groups."
+        );
+        return ExitCode::from(3);
+    }
+    let db_path = match resolve_metadata_db(metadata_db) {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "bootstrap-dedup: cannot resolve metadata DB path \
+                 (set --metadata-db, $CORTEX_METADATA_DB, or $HOME)"
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let store = match cortex_storage::MetadataStore::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("bootstrap-dedup: open {}: {e}", db_path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let total_rows = match store.bootstrap_seen_count(repo.as_deref()) {
+        Ok(n) => n,
+        Err(e) => {
+            eprintln!("bootstrap-dedup: count: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let target_repos: Vec<String> = match repo.clone() {
+        Some(r) => vec![r],
+        None => match list_distinct_dedup_repos(&store) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("bootstrap-dedup: list repos: {e}");
+                return ExitCode::from(1);
+            }
+        },
+    };
+    let mut groups: Vec<cortex_storage::BootstrapSeenDuplicate> = Vec::new();
+    for r in &target_repos {
+        match store.bootstrap_seen_duplicates_by_hash(r) {
+            Ok(g) => groups.extend(g),
+            Err(e) => {
+                eprintln!("bootstrap-dedup: scan {r}: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    if json {
+        let payload = serde_json::json!({
+            "ledger_rows": total_rows,
+            "scanned_repos": target_repos.len(),
+            "duplicate_groups": groups.len(),
+            "groups": groups
+                .iter()
+                .map(|g| serde_json::json!({
+                    "content_hash": g.content_hash,
+                    "paths": g.paths,
+                    "count": g.count,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        println!("{}", payload);
+    } else {
+        println!(
+            "bootstrap-dedup ({} mode):",
+            if apply { "apply" } else { "dry-run" }
+        );
+        println!("  ledger rows scanned: {total_rows}");
+        println!("  repos: {}", target_repos.len());
+        println!("  duplicate-by-content groups: {}", groups.len());
+        for g in &groups {
+            println!(
+                "    {hash}  ({n} paths)",
+                hash = g.content_hash,
+                n = g.count,
+            );
+            for p in &g.paths {
+                println!("      - {p}");
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+fn list_distinct_dedup_repos(
+    store: &cortex_storage::MetadataStore,
+) -> Result<Vec<String>, cortex_storage::MetadataError> {
+    let mut stmt = store
+        .conn()
+        .prepare("SELECT DISTINCT repo FROM bootstrap_seen ORDER BY repo")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+fn resolve_metadata_db(arg: Option<String>) -> Option<std::path::PathBuf> {
+    if let Some(p) = arg {
+        return Some(std::path::PathBuf::from(p));
+    }
+    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+        if !p.is_empty() {
+            return Some(std::path::PathBuf::from(p));
+        }
+    }
+    if let Some(home) = home_dir() {
+        return Some(home.join(".cortex").join("metadata.sqlite"));
+    }
+    None
 }
 
 /// Wire the phase4d doctor: scan the archive, probe Meili, render
@@ -2914,6 +3461,43 @@ fn doctor(
             }
         }
     }
+
+    // phase10g — mounted-route smoke check. The audit caught the
+    // GUI's Health tab returning empty bodies on every
+    // `/v1/health/*` call against the live daemon because a
+    // future refactor could drop the merge() that mounts them.
+    // Doctor probes the five canonical routes against
+    // `CORTEX_API_URL` so a missed registration shows up as a
+    // doctor red BEFORE the operator opens the GUI.
+    if let Some(api) = std::env::var("CORTEX_API_URL").ok().filter(|s| !s.is_empty()) {
+        for path in [
+            "/v1/health",
+            "/v1/health/freshness",
+            "/v1/health/divergence",
+            "/v1/health/versions",
+            "/v1/health/config",
+        ] {
+            let url = format!("{}{}", api.trim_end_matches('/'), path);
+            let ok = std::process::Command::new("curl")
+                .args(["-fsS", "--max-time", "3", "-o", "/dev/null", &url])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            let label = format!("api{path}");
+            if ok {
+                println!("ok     {label:<28} {url}");
+            } else {
+                println!("fail   {label:<28} {url}");
+                any_failure = true;
+            }
+        }
+    } else {
+        println!(
+            "skip   {label:<28} (set CORTEX_API_URL to probe the daemon's /v1/health/* routes)",
+            label = "api/v1/health/*"
+        );
+    }
+
     if any_failure {
         ExitCode::FAILURE
     } else {

@@ -256,13 +256,102 @@ impl VectorLane for VectorizerLane {
             }
         };
 
-        let hits = resp
+        let hits: Vec<LaneHit> = resp
             .results
             .into_iter()
             .map(|r| project(r, req))
+            .filter(|h| scope_matches(&req.scope, h))
             .collect();
         Ok(hits)
     }
+}
+
+/// phase10h — post-projection scope filter for the Vectorizer
+/// lane. The Vectorizer SDK's `search_vectors` does not expose a
+/// server-side filter parameter, so the lane filters
+/// client-side after deserialising metadata into `LaneHit`. Each
+/// scope dimension applies independently (AND); empty
+/// dimensions are no-ops.
+///
+/// The filter is intentionally permissive: a hit whose metadata
+/// is missing the field the scope dimension references stays in
+/// the result set rather than being dropped silently. Operators
+/// hitting that case see "scope quietly didn't apply" rather
+/// than "scope dropped every hit", which is the right default
+/// for fail-open retrieval semantics.
+fn scope_matches(scope: &crate::types::Scope, hit: &crate::lanes::LaneHit) -> bool {
+    if let Some(since) = scope.since.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(since_ms) = rfc3339_to_ms(since) {
+            // Drop hits with a known-too-old timestamp. Hits with
+            // `ts == 0` (timestamp absent in metadata) round-trip
+            // through — see the permissive note above.
+            if hit.ts > 0 && hit.ts < since_ms {
+                return false;
+            }
+        }
+    }
+    if !scope.files.is_empty() {
+        let path = hit.path.as_deref().unwrap_or("");
+        if !path.is_empty() {
+            let any_match = scope
+                .files
+                .iter()
+                .filter(|p| !p.is_empty())
+                .any(|prefix| path.starts_with(prefix));
+            if !any_match {
+                return false;
+            }
+        }
+    }
+    if !scope.topics.is_empty() {
+        // Topics may live under `topics` (array) or `topic`
+        // (single value) on the upstream metadata. Round-trip
+        // both through `LaneHit.extras` per the spec-11 lane
+        // projection contract.
+        let allow: std::collections::HashSet<&str> = scope
+            .topics
+            .iter()
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let mut matched = false;
+        if let Some(arr) = hit.extras.get("topics").and_then(|v| v.as_array()) {
+            for t in arr {
+                if let Some(s) = t.as_str() {
+                    if allow.contains(s) {
+                        matched = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if !matched {
+            if let Some(t) = hit.extras.get("topic").and_then(|v| v.as_str()) {
+                if allow.contains(t) {
+                    matched = true;
+                }
+            }
+        }
+        // Drop only when the metadata exposes a topic field AND
+        // none of the values match. Hits without topic metadata
+        // round-trip (fail-open).
+        let topics_present = hit.extras.contains_key("topics") || hit.extras.contains_key("topic");
+        if topics_present && !matched {
+            return false;
+        }
+    }
+    true
+}
+
+/// phase10h — RFC-3339 timestamp → epoch ms. The orchestrator's
+/// scope.since is documented as ISO-8601 / RFC-3339; chrono
+/// parses both. Returns `None` on a malformed input so the
+/// caller treats the filter as a no-op rather than dropping
+/// every hit.
+fn rfc3339_to_ms(since: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(since)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
 }
 
 /// Project one Vectorizer search result into a `LaneHit`. Stamps
@@ -300,7 +389,6 @@ fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> Lane
         "collection".to_string(),
         serde_json::Value::String(req.collection.clone()),
     );
-
     // Phase6b — spec-11 lane projection contract. The Vectorizer
     // bootstrap pipeline (≥3.0.3) places the contract keys directly
     // under `metadata`, but earlier embedder builds nested them
@@ -320,18 +408,47 @@ fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> Lane
         }
     }
 
-    let text = r
+    let mut text = r
         .content
         .filter(|s| !s.is_empty())
         .or_else(|| get_str("summary"))
         .or_else(|| get_str("title"))
         .or_else(|| get_str("body"))
         .unwrap_or_default();
+    // phase10b §1 — stop projecting `path` as `text` when the
+    // upstream metadata only carries the path. The audit logged
+    // `text='crates/cortex-api/src/types.rs'` snippets that the
+    // bundle renderer formatted as `path:artifact — \n   path` —
+    // an `ls`-grade result. When `text` matches the path verbatim
+    // we drop it and stamp `body_truncated = true` so the renderer
+    // collapses to a header-only line.
+    let path_str = get_str("path").unwrap_or_default();
+    let body_truncated = !path_str.is_empty() && text == path_str;
+    if body_truncated {
+        text.clear();
+        extras.insert(
+            "body_truncated".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
 
+    // phase10d — canonical lowercase `repo`. See the matching
+    // comment in `crate::meili_lane::project` for the full
+    // rationale; the read-path keeps both lanes aligned.
+    let raw_repo = get_str("repo");
+    let canonical_repo = raw_repo.as_deref().map(str::to_ascii_lowercase);
+    if let Some(label) = raw_repo.as_deref() {
+        if canonical_repo.as_deref() != Some(label) && !label.is_empty() {
+            extras.insert(
+                "repo_label".to_string(),
+                serde_json::Value::String(label.to_string()),
+            );
+        }
+    }
     LaneHit {
         doc_id: format!("vec|{}|{}", req.collection, r.id),
         text,
-        repo: get_str("repo"),
+        repo: canonical_repo,
         path: get_str("path"),
         symbol: get_str("kind"),
         content_hash: get_str("content_hash"),
@@ -377,7 +494,13 @@ mod tests {
         let hit = project(r, &req("embedder"));
         assert_eq!(hit.doc_id, "vec|cortex-cortex-code|vec-1");
         assert_eq!(hit.text, "semantic body");
-        assert_eq!(hit.repo.as_deref(), Some("Cortex"));
+        // phase10d — canonical lowercase on the lane hit, original
+        // case preserved in `extras.repo_label`.
+        assert_eq!(hit.repo.as_deref(), Some("cortex"));
+        assert_eq!(
+            hit.extras.get("repo_label").and_then(|v| v.as_str()),
+            Some("Cortex")
+        );
         assert_eq!(hit.symbol.as_deref(), Some("turn"));
         assert!((hit.score - 0.91).abs() < 1e-6);
         assert_eq!(hit.ts, 1714200000000);
@@ -440,5 +563,82 @@ mod tests {
         assert!(!super::looks_like_auth_failure(
             "tcp connect timeout after 10s"
         ));
+    }
+
+    // ---- phase10h — Vectorizer post-projection scope filter ----
+
+    fn scope() -> crate::types::Scope {
+        crate::types::Scope::default()
+    }
+
+    fn hit_with(ts: i64, path: Option<&str>, topics: Option<Vec<&str>>) -> crate::lanes::LaneHit {
+        let mut extras = std::collections::BTreeMap::new();
+        if let Some(t) = topics {
+            extras.insert(
+                "topics".to_string(),
+                serde_json::Value::Array(
+                    t.into_iter()
+                        .map(|s| serde_json::Value::String(s.to_string()))
+                        .collect(),
+                ),
+            );
+        }
+        crate::lanes::LaneHit {
+            doc_id: "vec|test|1".into(),
+            text: "body".into(),
+            repo: Some("cortex".into()),
+            path: path.map(String::from),
+            symbol: None,
+            content_hash: None,
+            score: 0.5,
+            ts,
+            severity: None,
+            extras,
+        }
+    }
+
+    #[test]
+    fn scope_filter_drops_hits_older_than_since() {
+        let mut s = scope();
+        s.since = Some("2026-04-01T00:00:00Z".to_string());
+        // April 1 2026 = 1 775 692 800 000 ms.
+        let recent = hit_with(1_780_000_000_000, None, None);
+        let old = hit_with(1_700_000_000_000, None, None);
+        assert!(super::scope_matches(&s, &recent));
+        assert!(!super::scope_matches(&s, &old));
+    }
+
+    #[test]
+    fn scope_filter_keeps_ts_zero_hits_when_since_set() {
+        // Fail-open: a hit whose metadata didn't carry a timestamp
+        // (`ts == 0`) round-trips. Better to surface a possibly
+        // out-of-window row than to drop everything silently.
+        let mut s = scope();
+        s.since = Some("2026-04-01T00:00:00Z".to_string());
+        let no_ts = hit_with(0, None, None);
+        assert!(super::scope_matches(&s, &no_ts));
+    }
+
+    #[test]
+    fn scope_filter_prefix_matches_files() {
+        let mut s = scope();
+        s.files = vec!["crates/cortex-api/src/".to_string()];
+        let inside = hit_with(0, Some("crates/cortex-api/src/strategies.rs"), None);
+        let outside = hit_with(0, Some("crates/cortex-graph/src/lib.rs"), None);
+        assert!(super::scope_matches(&s, &inside));
+        assert!(!super::scope_matches(&s, &outside));
+    }
+
+    #[test]
+    fn scope_filter_topics_or_match_required_when_metadata_present() {
+        let mut s = scope();
+        s.topics = vec!["law".to_string(), "governance".to_string()];
+        let in_topic = hit_with(0, None, Some(vec!["law"]));
+        let off_topic = hit_with(0, None, Some(vec!["code"]));
+        let no_topics_meta = hit_with(0, None, None);
+        assert!(super::scope_matches(&s, &in_topic));
+        assert!(!super::scope_matches(&s, &off_topic));
+        // No topic metadata → fail-open round-trip.
+        assert!(super::scope_matches(&s, &no_topics_meta));
     }
 }

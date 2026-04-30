@@ -63,9 +63,35 @@ GET  /v1/dashboard/tasks/summary           # aggregate counters
 GET  /v1/dashboard/tasks/{id}              # full proposal + sectioned checklist
 GET  /v1/retention/sweeps?limit=N&since=   # phase9i — recent retention_sweeps rows + per-stage breakdown
 GET  /v1/retention/state                   # phase9i — archive bytes by age bucket + cas totals + scheduled next-runs
+GET  /healthz                              # legacy aggregate liveness; kept as a passthrough
+GET  /v1/health                            # phase8a aggregate liveness + per-subsystem state
+GET  /v1/health/freshness                  # phase8b per-(stage, repo) gap-seconds histogram
+GET  /v1/health/divergence                 # phase8b cross-store divergence rows
+GET  /v1/health/versions                   # phase8c per-binary git_sha + drift table
+GET  /v1/health/config                     # phase8d config-audit envelope
+GET  /v1/health/stream                     # SSE — health snapshots
+GET  /metrics                              # Prometheus-text counters (phase8b)
 ```
 
 All JSON; SSE uses `text/event-stream`.
+
+#### Health view route inventory (phase10g)
+
+The five `/v1/health/*` routes mount on the dashboard-aware
+router (`build_router_with(service, Some(dashboard))`) — they
+share the same `loader_metrics` Arc the dashboard uses, so the
+freshness aggregator reads the in-process counters without a
+self-fan-out. The legacy `/healthz` keeps working as an
+aggregate liveness passthrough; pre-phase10g operators using
+that endpoint do not need to change anything.
+
+Regression guard:
+[`crates/cortex-api/tests/health_freshness.rs::every_v1_health_route_is_mounted_on_router_with_dashboard`](../../crates/cortex-api/tests/health_freshness.rs)
+hits all five routes in one test so a future refactor that
+drops the `merge()` call surfaces in CI before the operator
+sees blank health bodies. Operator-side, `cortex-ops doctor`
+adds an `api/v1/health/*` probe against `CORTEX_API_URL` —
+missing routes show as `fail` in the doctor output.
 
 ### Phase3 — `TimelineEvent` extensions
 
@@ -117,6 +143,30 @@ The 12 `/v1/dashboard/*` endpoints share a single `MemoryKeywordLane` populated 
 - Seeds under `cortex-meili-{decisions,governance,misc,turns}` aliases so the lane keeps clean snapshots per family — flat-chains with the archive loader's `cortex-code` seed without double-counting.
 - Refreshes every `CORTEX_MEILI_REFRESH_SECS` (default `60`).
 - Skipped silently when `CORTEX_FULLTEXT_MEILI_URL` is unset so cold-stack dev still works with just the archive loader.
+
+#### Cross-link: canonical `repo` casing (phase10d)
+
+Every dashboard handler that surfaces `repo` returns it in
+**canonical lowercase** (`"cortex"`, not `"Cortex"`). The
+original-case label is preserved in `LaneHit.extras.repo_label`
+when it differs from the canonical form, so a future GUI release
+can render `Cortex` for the user without the wire shape losing
+the canonical contract. Spec 02
+[§Naming canonicalization](./02-storage-layout.md#naming-canonicalization-phase10d)
+is the source of truth.
+
+#### Cross-link: `/v1/query` lane composition (phase10a)
+
+`meili_loader.rs` seeds the dashboard's per-family
+`cortex-meili-{decisions,governance,misc,turns}` lane indexes
+from per-repo `cortex-{slug}-{family}` Meili uids. The same
+upstream documents are also queried directly by the orchestrator
+via the **global** indexes (`cortex_decisions`, `cortex_turns`,
+`cortex_laws`) for the `decision_lookup` / `similar_problems` /
+`law_check` query intents — see
+[spec 11 §Lane composition per intent](./11-query-api.md#lane-composition-per-intent-phase10a).
+The dashboard's rendering layer is untouched; only the
+orchestrator's strategies layer changed.
 
 ### Per-handler routing through the lane
 
@@ -257,9 +307,30 @@ Vectorizer dashboard scaffold provides: TanStack Router, TanStack Query, Tailwin
 ### Memory browser
 
 - Faceted list: **repo / model / kind / topics / severity / time**.
-- Backed by `/v1/dashboard/memory?facets=...`, which calls `cortex-api`'s query endpoint (spec 11) with `intent=free_search` and server-side RRF.
+- Backed by `/v1/dashboard/memory`, which calls `cortex-api`'s query endpoint (spec 11) with `intent=free_search` and server-side RRF.
 - Sortable by relevance or recency.
 - Row click → detail pane (right-side drawer) with linked graph neighbors, related Decisions, full payload (redacted).
+
+#### Kind filter (phase10f)
+
+The handler accepts `?kind=<canonical>` (repeated to OR
+multiple values) and `?facets=<canonical>` as a synonym so the
+pre-phase10f GUI URL contract keeps working. Canonical set:
+`turn`, `tool_call`, `agent_call`, `memory`, `decision`,
+`analysis`, `law_violation`, `knowledge`, `learning`. Any other
+value surfaces as `400 unknown_kind` with body
+`{"error":"unknown_kind","received":"<value>","canonical":[...]}`
+so callers see typos at the API boundary instead of silently
+getting an empty list.
+
+The filter applies BEFORE pagination — `?limit=2&kind=decision`
+returns up to two decision rows, NOT two mixed-kind rows from
+which only matching decisions are then sliced. The pre-phase10f
+handler clamped first then filtered, so a small limit dropped
+the requested rows entirely (the audit caught the GUI's Memory
+tab showing only `tool_call`/`turn` even though the overview
+reported 287 memories + 26 decisions + 33 analyses + 121
+violations sitting in the same lane).
 
 ### Decision register
 

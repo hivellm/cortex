@@ -26,14 +26,19 @@ pub use config::{
 };
 pub use emitter::{
     emit_artifact_code, emit_artifact_doc, emit_decision_imported, emit_for_file,
-    emit_for_file_multi, emit_law_imported, emit_memory_imported, emit_spec_laws_imported,
-    emit_turn_historical, BootstrapEvent, BOOTSTRAP_STREAM,
+    emit_for_file_multi, emit_knowledge_imported, emit_law_imported, emit_learning_imported,
+    emit_memory_imported, emit_spec_laws_imported, emit_turn_historical, BootstrapEvent,
+    BOOTSTRAP_STREAM,
 };
 pub use estimate::{estimate_repo, format_estimate, Estimate};
 pub use git::{current_head_sha, parse_log, walk_commits, CommitRecord, GitWalkError};
 pub use metrics::Metrics;
 pub use publisher::{LiveSynapPublisher, MemoryPublisher, Publisher, SynapHandle};
-pub use runner::{count_classes, run_repo, run_repos_parallel, RepoRunReport, RunnerConfig};
+pub use runner::{
+    canonical_repo, count_classes, preflight_likely_duplicates, run_repo, run_repo_with_dedup,
+    run_repos_parallel, DedupStore, DuplicateClassFinding, DuplicateLanePreflight, PerClassCounts,
+    RepoRunReport, RunnerConfig,
+};
 pub use walker::{classify_path, matches_any, walk_repo, FileClass, WalkEntry, MAX_FILE_BYTES};
 pub use workspace::{
     load_workspace, preflight as preflight_workspace, WorkspaceConfig, WorkspaceError,

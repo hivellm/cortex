@@ -146,11 +146,22 @@ impl KeywordLane for MeiliKeywordLane {
         // positional `1/(60+rank)` artefact today's MemoryKeywordLane
         // produces. `limit` is the orchestrator's per-field cap
         // (already validated in upstream code).
-        let body = serde_json::json!({
+        //
+        // phase10a / phase10h — multi-clause Meili filter. Caps
+        // are per-index because Meili rejects filter clauses that
+        // reference a non-filterable attribute with a 4xx
+        // (`Attribute X is not filterable`). The filter expression
+        // ANDs every present scope dimension.
+        let mut body = serde_json::json!({
             "q": req.query,
             "limit": req.limit,
             "showRankingScore": true,
         });
+        if let Some(filter) = build_meili_filter(&req.scope, &req.index) {
+            if let Some(map) = body.as_object_mut() {
+                map.insert("filter".to_string(), serde_json::Value::String(filter));
+            }
+        }
 
         let mut http_req = self.http.post(&url).json(&body);
         if let Some(key) = &self.api_key {
@@ -199,6 +210,181 @@ pub(crate) fn project_doc(
 ) -> Result<LaneHit, serde_json::Error> {
     let doc: MeiliDoc = serde_json::from_value(json)?;
     Ok(project(doc, req))
+}
+
+/// phase10h — capability matrix for one Meili index. Filter
+/// clauses reference these attributes only when the index
+/// supports them; Meili rejects unfilterable attributes with a
+/// 4xx, so silently dropping unsupported clauses is the right
+/// default.
+#[derive(Debug, Clone, Copy, Default)]
+struct IndexFilterCaps {
+    /// `repo` is a filterable attribute on this index.
+    repo: bool,
+    /// Field name carrying the event timestamp (`ts` for per-repo
+    /// legacy indexes, `occurred_at` for global indexes). `None`
+    /// means the index does not expose a filterable timestamp.
+    since_field: Option<&'static str>,
+    /// Field name carrying the topic vocabulary (always
+    /// `topics`). `None` when the index has no topic facet.
+    topics_field: Option<&'static str>,
+    /// `path` is a filterable attribute (per-repo legacy
+    /// indexes). Global indexes don't expose path.
+    path: bool,
+}
+
+/// phase10h — resolve per-index filter capabilities. Per-repo
+/// legacy indexes (`cortex-{slug}-{family}`) inherit the worker's
+/// `settings.v1.json` filterable attributes (kind, repo, path,
+/// topics, severity, pii_risk, ts, language, ext.*). Global
+/// indexes carry their own per-schema settings — see
+/// `crates/cortex-storage/schemas/meili/*.settings.v1.json`.
+fn caps_for(index: &str) -> IndexFilterCaps {
+    use cortex_storage::names::{
+        INDEX_ANALYSES, INDEX_DECISIONS, INDEX_KNOWLEDGE, INDEX_LAWS, INDEX_LEARNINGS,
+        INDEX_MEMORIES, INDEX_TURNS,
+    };
+    if index.starts_with("cortex-") && !index.starts_with("cortex_") {
+        // Per-repo legacy `cortex-{slug}-{family}` index. Worker
+        // settings (`crates/cortex-workers/settings/settings.v1.json`)
+        // declares: kind, repo, path, topics, severity, pii_risk,
+        // ts, language, ext.*.
+        return IndexFilterCaps {
+            repo: true,
+            since_field: Some("ts"),
+            topics_field: Some("topics"),
+            path: true,
+        };
+    }
+    match index {
+        i if i == INDEX_TURNS => IndexFilterCaps {
+            repo: true,
+            since_field: Some("occurred_at"),
+            topics_field: Some("topics"),
+            path: false,
+        },
+        i if i == INDEX_DECISIONS => IndexFilterCaps {
+            repo: true,
+            since_field: Some("occurred_at"),
+            topics_field: Some("topics"),
+            path: false,
+        },
+        i if i == INDEX_ANALYSES => IndexFilterCaps {
+            repo: true,
+            since_field: Some("occurred_at"),
+            topics_field: Some("topics"),
+            path: false,
+        },
+        i if i == INDEX_LAWS => IndexFilterCaps {
+            // Laws are cross-repo + carry no topics / occurred_at
+            // facet (severity / applies_to only).
+            repo: false,
+            since_field: None,
+            topics_field: None,
+            path: false,
+        },
+        i if i == INDEX_MEMORIES => IndexFilterCaps {
+            repo: false,
+            since_field: Some("occurred_at"),
+            topics_field: None,
+            path: false,
+        },
+        i if i == INDEX_KNOWLEDGE => IndexFilterCaps {
+            repo: true,
+            since_field: Some("occurred_at"),
+            topics_field: None,
+            path: false,
+        },
+        i if i == INDEX_LEARNINGS => IndexFilterCaps {
+            repo: true,
+            since_field: Some("occurred_at"),
+            topics_field: None,
+            path: false,
+        },
+        _ => IndexFilterCaps::default(),
+    }
+}
+
+/// phase10h — build the Meili filter expression for one search
+/// call. Returns `None` when the resolved scope adds no clauses
+/// (every dimension is empty or unsupported by the target
+/// index). Each present clause ANDs into the final expression
+/// using Meili's filter grammar.
+///
+/// Quoting strategy: every literal is single-quoted with `'`
+/// escaped as `\'`. Slugs / paths / RFC-3339 timestamps + topic
+/// labels are conservative ASCII identifiers in practice, so the
+/// extra escape is belt-and-suspenders rather than a hot path.
+fn build_meili_filter(scope: &crate::types::Scope, index: &str) -> Option<String> {
+    let caps = caps_for(index);
+    let mut clauses: Vec<String> = Vec::new();
+
+    if caps.repo {
+        if let Some(repo) = scope.repo.as_deref().filter(|s| !s.is_empty()) {
+            let slug = cortex_storage::names::slug_for_repo(repo);
+            clauses.push(format!("repo = {}", quote_meili(&slug)));
+        }
+    }
+    if let Some(field) = caps.since_field {
+        if let Some(since) = scope.since.as_deref().filter(|s| !s.is_empty()) {
+            clauses.push(format!("{field} >= {}", quote_meili(since)));
+        }
+    }
+    if let Some(field) = caps.topics_field {
+        if !scope.topics.is_empty() {
+            let list = scope
+                .topics
+                .iter()
+                .filter(|t| !t.is_empty())
+                .map(|t| quote_meili(t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !list.is_empty() {
+                clauses.push(format!("{field} IN [{list}]"));
+            }
+        }
+    }
+    if caps.path && !scope.files.is_empty() {
+        // OR every file prefix — Meili supports `field STARTS
+        // WITH x OR field STARTS WITH y`. Wrap in parens so the
+        // expression composes safely with the outer AND.
+        let prefixes = scope
+            .files
+            .iter()
+            .filter(|p| !p.is_empty())
+            .map(|p| format!("path STARTS WITH {}", quote_meili(p)))
+            .collect::<Vec<_>>();
+        if !prefixes.is_empty() {
+            clauses.push(format!("({})", prefixes.join(" OR ")));
+        }
+    }
+
+    if clauses.is_empty() {
+        None
+    } else {
+        Some(clauses.join(" AND "))
+    }
+}
+
+/// phase10h — single-quote a literal for Meili's filter
+/// expression grammar. Inner single quotes are escaped as `\'`.
+fn quote_meili(value: &str) -> String {
+    let escaped = value.replace('\'', "\\'");
+    format!("'{escaped}'")
+}
+
+/// phase10a — UTF-8-safe byte excerpt. Truncates at a char boundary
+/// at or below `max_bytes` so we never cleave a multi-byte code
+/// point. Used by the decision-rationale projection (§1.2).
+fn take_excerpt(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut cut = max_bytes;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s[..cut].to_string()
 }
 
 /// Phase6g — bytes threshold above which a projected body emits a
@@ -267,11 +453,34 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     // for the per-kind table. Each fallback is a smaller-but-still-
     // honest projection — never an empty string when the doc has
     // any text content.
+    //
+    // phase10b §1 — when a slot in the chain holds the same string
+    // as `doc.path`, treat it as empty. The audit logged
+    // `text='crates/cortex-api/src/types.rs'` snippets that the
+    // bundle renderer formatted as `path:artifact — \n   path` —
+    // an `ls`-grade result the agent can't act on. Title for
+    // artifact docs is exactly the path (see `derive_title` in
+    // `cortex-workers::fulltext::builders.rs`), so this filter
+    // skips the title slot when the chain reached it from the
+    // path; non-path-equal titles still surface unchanged.
+    let path_str = doc.path.as_deref().unwrap_or("");
     let chain = projection_chain(doc.kind.as_deref(), &doc.summary, &doc.title, &doc.body);
     let text = chain
         .iter()
-        .find_map(|slot| slot.as_ref().filter(|s| !s.is_empty()).cloned())
+        .find_map(|slot| {
+            slot.as_ref()
+                .filter(|s| !s.is_empty())
+                .filter(|s| path_str.is_empty() || s.as_str() != path_str)
+                .cloned()
+        })
         .unwrap_or_default();
+    // phase10b §1 — flag the projector as having no body to
+    // project. Set when the kind-aware chain produced no text
+    // distinct from the path; the orchestrator's
+    // `snippet_from_hit` pulls this from `extras` and stamps
+    // `Snippet.body_truncated` so the bundle renderer downgrades
+    // to header-only formatting instead of repeating the path.
+    let body_truncated = text.is_empty();
     if text.len() > PROJECTED_BODY_DEBUG_BYTES {
         tracing::debug!(
             doc_id = %doc_id,
@@ -293,6 +502,12 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
         "source".to_string(),
         serde_json::Value::String("keyword".to_string()),
     );
+    if body_truncated {
+        extras.insert(
+            "body_truncated".to_string(),
+            serde_json::Value::Bool(true),
+        );
+    }
 
     // Phase6b — spec-11 lane projection contract.
     //
@@ -348,10 +563,50 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
         );
     }
 
+    // phase10a §1.2 — stamp the decision's title and rationale
+    // excerpt into extras so the orchestrator's `derive_decisions`
+    // overlay can surface the rationale body (not just the title /
+    // curated summary) on `decision_lookup` responses. Cap the
+    // excerpt at the first 1 KiB of the body to keep the wire
+    // payload tight; the snippet section still carries the full
+    // body when the caller asked for `IncludeField::Snippets`.
+    if doc.kind.as_deref() == Some("decision") {
+        if let Some(title) = doc.title.as_deref().filter(|s| !s.is_empty()) {
+            extras
+                .entry("decision_title".to_string())
+                .or_insert_with(|| serde_json::Value::String(title.to_string()));
+        }
+        if let Some(body) = doc.body.as_deref().filter(|s| !s.is_empty()) {
+            let excerpt = take_excerpt(body, 1024);
+            extras
+                .entry("rationale_excerpt".to_string())
+                .or_insert_with(|| serde_json::Value::String(excerpt));
+        }
+    }
+
+    // phase10d — `repo` is canonical lowercase across every
+    // Cortex surface. Lane projection always lowercases so a
+    // pre-phase10d corpus indexed under capitalized repos
+    // (`Cortex`, `Vectorizer`) still aligns with the
+    // lowercase-only filter the orchestrator applies. The
+    // original-case label is preserved in `extras.repo_label`
+    // for the dashboard's display column.
+    let canonical = doc
+        .repo
+        .as_deref()
+        .map(str::to_ascii_lowercase);
+    if let Some(label) = doc.repo.as_deref() {
+        if canonical.as_deref() != Some(label) && !label.is_empty() {
+            extras.insert(
+                "repo_label".to_string(),
+                serde_json::Value::String(label.to_string()),
+            );
+        }
+    }
     LaneHit {
         doc_id,
         text,
-        repo: doc.repo,
+        repo: canonical,
         path: doc.path,
         symbol: doc.kind,
         content_hash: doc.content_hash,
@@ -396,7 +651,14 @@ mod tests {
         let hit = project(doc, &req("embedder"));
         assert_eq!(hit.doc_id, "meili|cortex-cortex-code|evt-1");
         assert_eq!(hit.text, "Add embedder lane (curated)");
-        assert_eq!(hit.repo.as_deref(), Some("Cortex"));
+        // phase10d — `repo` is canonical lowercase on the lane
+        // hit; the original `Cortex` casing is preserved in
+        // `extras.repo_label` for the dashboard's display column.
+        assert_eq!(hit.repo.as_deref(), Some("cortex"));
+        assert_eq!(
+            hit.extras.get("repo_label").and_then(|v| v.as_str()),
+            Some("Cortex")
+        );
         assert_eq!(hit.symbol.as_deref(), Some("turn"));
         assert!((hit.score - 0.83).abs() < 1e-6);
         assert_eq!(hit.ts, 1714200000000);
@@ -527,10 +789,22 @@ mod tests {
     }
 
     #[test]
-    fn artifact_kind_falls_through_to_title_when_body_and_summary_empty() {
+    fn artifact_kind_emits_empty_text_when_title_equals_path_and_no_body() {
+        // phase10b §1 — `derive_title` sets `title = path` for
+        // artifact events without a richer heading. Surfacing the
+        // path as `text` produced the audit-flagged
+        // `path:artifact — \n   path` rendering. The new contract
+        // returns empty text + `body_truncated = true` so the
+        // bundle renderer collapses to a header-only line and the
+        // path stays in `Snippet.path` (not in `text`).
         let doc = doc_with("artifact", Some("README.md"), None, None);
         let hit = project(doc, &req("x"));
-        assert_eq!(hit.text, "README.md");
+        assert_eq!(hit.text, "");
+        assert_eq!(
+            hit.extras.get("body_truncated").and_then(|v| v.as_bool()),
+            Some(true),
+            "body_truncated extras must flag the no-content case"
+        );
     }
 
     #[test]
@@ -562,13 +836,36 @@ mod tests {
     }
 
     #[test]
-    fn analysis_kind_falls_through_to_title_when_summary_empty() {
+    fn analysis_kind_falls_through_to_body_when_title_equals_path() {
+        // phase10b §1 — `doc_with` sets `path = title`, so the
+        // path-equal-title slot is skipped and the analysis chain
+        // (`summary > title > body`) reaches `body`. Surfacing the
+        // body keeps the snippet useful instead of echoing the
+        // file path back to the agent.
         let doc = doc_with(
             "analysis",
             Some("Relevance audit 2026-04"),
             Some("body verbatim"),
             None,
         );
+        let hit = project(doc, &req("x"));
+        assert_eq!(hit.text, "body verbatim");
+    }
+
+    #[test]
+    fn analysis_kind_keeps_title_when_distinct_from_path() {
+        // When title and path diverge (the worker stamped a real
+        // heading), the title slot is still preferred — the
+        // path-equal filter only fires on the
+        // path-as-title artifact case.
+        let doc = MeiliDoc {
+            event_id: Some("evt-x".into()),
+            kind: Some("analysis".into()),
+            path: Some("docs/audit.md".into()),
+            title: Some("Relevance audit 2026-04".into()),
+            body: Some("body verbatim".into()),
+            ..MeiliDoc::default()
+        };
         let hit = project(doc, &req("x"));
         assert_eq!(hit.text, "Relevance audit 2026-04");
     }
@@ -598,9 +895,16 @@ mod tests {
         let hit2 = project(doc_no_summary, &req("x"));
         assert_eq!(hit2.text, "body verbatim");
 
+        // phase10b §1 — when the only non-empty slot in the chain
+        // is the title and `title == path`, return empty text +
+        // body_truncated rather than echoing the path back.
         let doc_only_title = doc_with("turn", Some("title"), None, None);
         let hit3 = project(doc_only_title, &req("x"));
-        assert_eq!(hit3.text, "title");
+        assert_eq!(hit3.text, "");
+        assert_eq!(
+            hit3.extras.get("body_truncated").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[test]
@@ -619,11 +923,15 @@ mod tests {
 
     #[test]
     fn missing_kind_uses_default_chain() {
+        // phase10b §1 — `doc_with` sets `path == title`, so the
+        // path-equal filter pushes the chain past the title slot
+        // and lands on `body`. The default chain is still
+        // `summary > title > body`; the filter just elides
+        // path-shaped titles.
         let mut doc = doc_with("widget", Some("title"), Some("body"), None);
         doc.kind = None;
         let hit = project(doc, &req("x"));
-        // Default chain matches today's behaviour for kind-less docs.
-        assert_eq!(hit.text, "title");
+        assert_eq!(hit.text, "body");
     }
 
     #[test]
@@ -638,5 +946,132 @@ mod tests {
         };
         let hit = project(doc, &req("x"));
         assert_eq!(hit.text, "");
+    }
+
+    // ---- Phase10b — body capture regression set ----
+
+    #[test]
+    fn artifact_with_real_body_keeps_body_text_and_clears_truncated_flag() {
+        // phase10b §4.1 — known-good envelope: an artifact doc
+        // carrying a real source body must round-trip with that
+        // body in `text` (not the path), and `body_truncated`
+        // must NOT be set. This is the regression for the audit
+        // finding "snippet text equals path".
+        let doc = doc_with(
+            "artifact",
+            Some("crates/cortex-api/src/strategies.rs"),
+            Some("pub fn build_plan(req: &QueryRequest) -> Plan { ... }"),
+            None,
+        );
+        let hit = project(doc, &req("build_plan"));
+        assert_eq!(
+            hit.text,
+            "pub fn build_plan(req: &QueryRequest) -> Plan { ... }"
+        );
+        assert_ne!(
+            hit.text.as_str(),
+            "crates/cortex-api/src/strategies.rs",
+            "snippet.text MUST NOT carry the path verbatim — that was the audit-flagged regression"
+        );
+        assert_eq!(
+            hit.extras.get("body_truncated").and_then(|v| v.as_bool()),
+            None,
+            "body_truncated must be absent when body is non-empty"
+        );
+    }
+
+    // ---- phase10h — Meili scope-filter builder ----
+
+    fn scope() -> crate::types::Scope {
+        crate::types::Scope::default()
+    }
+
+    #[test]
+    fn build_meili_filter_emits_since_clause_on_index_with_occurred_at() {
+        let mut s = scope();
+        s.since = Some("2026-04-01T00:00:00Z".to_string());
+        let filter = build_meili_filter(&s, "cortex_decisions").expect("clause expected");
+        assert!(
+            filter.contains("occurred_at >= '2026-04-01T00:00:00Z'"),
+            "decisions index uses occurred_at; got `{filter}`"
+        );
+    }
+
+    #[test]
+    fn build_meili_filter_uses_ts_field_for_per_repo_legacy_index() {
+        // Per-repo legacy `cortex-{slug}-{family}` indexes
+        // inherit the worker's settings.v1.json which uses `ts`
+        // not `occurred_at` for the timestamp facet.
+        let mut s = scope();
+        s.since = Some("2026-04-01T00:00:00Z".to_string());
+        let filter = build_meili_filter(&s, "cortex-cortex-code").expect("clause expected");
+        assert!(
+            filter.contains("ts >= '2026-04-01T00:00:00Z'"),
+            "per-repo index uses ts; got `{filter}`"
+        );
+    }
+
+    #[test]
+    fn build_meili_filter_ors_topic_list_into_in_clause() {
+        let mut s = scope();
+        s.topics = vec!["law".to_string(), "governance".to_string()];
+        let filter = build_meili_filter(&s, "cortex_turns").expect("clause expected");
+        assert!(
+            filter.contains("topics IN ['law', 'governance']"),
+            "topics list must compose into a single IN clause; got `{filter}`"
+        );
+    }
+
+    #[test]
+    fn build_meili_filter_path_starts_with_or_chain_for_files() {
+        let mut s = scope();
+        s.files = vec![
+            "crates/cortex-api/src/".to_string(),
+            "docs/specs/".to_string(),
+        ];
+        let filter = build_meili_filter(&s, "cortex-cortex-code").expect("clause expected");
+        assert!(
+            filter.contains("path STARTS WITH 'crates/cortex-api/src/'"),
+            "first prefix; got `{filter}`"
+        );
+        assert!(
+            filter.contains("path STARTS WITH 'docs/specs/'"),
+            "second prefix; got `{filter}`"
+        );
+        // Multi-prefix path filter must wrap in parens so the
+        // outer AND with other clauses composes correctly.
+        assert!(
+            filter.contains(" OR "),
+            "multi-prefix file filter ORs — got `{filter}`"
+        );
+    }
+
+    #[test]
+    fn build_meili_filter_skips_topics_on_index_without_facet() {
+        // `cortex_laws` doesn't carry `topics` as a filterable
+        // attribute — emitting the clause would 4xx on Meili.
+        let mut s = scope();
+        s.topics = vec!["law".to_string()];
+        s.since = Some("2026-04-01T00:00:00Z".to_string());
+        let filter = build_meili_filter(&s, "cortex_laws");
+        // No filterable timestamp + no topics + no repo on
+        // cortex_laws → no clauses at all.
+        assert!(
+            filter.is_none(),
+            "laws index has no filterable scope facets; expected None, got {filter:?}"
+        );
+    }
+
+    #[test]
+    fn build_meili_filter_combines_repo_since_topics_with_and() {
+        let mut s = scope();
+        s.repo = Some("Cortex".into());
+        s.since = Some("2026-04-01T00:00:00Z".to_string());
+        s.topics = vec!["law".to_string()];
+        let filter = build_meili_filter(&s, "cortex_turns").expect("clause expected");
+        // Order is repo, since, topics. AND-joined.
+        assert!(filter.starts_with("repo = 'cortex' AND "), "got `{filter}`");
+        assert!(filter.contains("occurred_at >= '2026-04-01T00:00:00Z'"));
+        assert!(filter.contains("topics IN ['law']"));
     }
 }

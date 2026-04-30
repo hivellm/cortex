@@ -79,15 +79,59 @@ pub fn derive(
     }
     files.truncate(MAX_PROMPT_FILES);
 
+    // phase10h §4.1 — derive topics from the file extensions the
+    // walker already produced. The classifier stamps the same
+    // canonical topic vocabulary on every event, so a topic
+    // inference here scopes the orchestrator's lane filter to
+    // the corpus the user is most likely asking about. Recent
+    // files first (the user is editing them right now), then
+    // prompt-mentioned paths.
+    let mut topics: Vec<String> = Vec::new();
+    for rf in recent_files {
+        if rf.age_seconds >= RECENT_FILE_MAX_AGE_SECS {
+            continue;
+        }
+        if let Some(topic) = topic_for_path(&rf.path.to_string_lossy()) {
+            push_unique(&mut topics, topic.to_string());
+        }
+    }
+    for path in &files {
+        if let Some(topic) = topic_for_path(path) {
+            push_unique(&mut topics, topic.to_string());
+        }
+    }
+
     DerivedScope {
         scope: Scope {
             repo,
             files,
-            topics: Vec::new(),
+            topics,
             since: None,
         },
         repo_resolved,
     }
+}
+
+/// phase10h — file-extension → canonical topic mapping. The
+/// classifier vocabulary in
+/// [`crates/cortex-classifier/src/statics.rs`](../../cortex-classifier/src/statics.rs)
+/// is the source of truth; this map mirrors the most common
+/// subset so the pre-thinking bundle's topic filter matches
+/// real indexed events. Returns `None` for unknown / extensionless
+/// paths so the caller treats topic inference as best-effort.
+pub fn topic_for_path(path: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())?;
+    Some(match ext.as_str() {
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "cc" | "cpp"
+        | "h" | "hpp" | "rb" | "kt" | "swift" | "scala" | "cs" | "php" | "sh" | "bash"
+        | "zsh" | "fish" | "ps1" | "sql" | "proto" => "code",
+        "md" | "mdx" | "rst" | "adoc" | "asciidoc" | "txt" | "tex" | "org" => "docs",
+        "toml" | "yaml" | "yml" | "json" | "ini" | "cfg" | "conf" => "config",
+        _ => return None,
+    })
 }
 
 /// Resolve the nearest `.git/` ancestor to a repo identifier. Reads
@@ -292,5 +336,43 @@ mod tests {
         assert_eq!(scope.scope.files.len(), 2);
         assert!(scope.scope.files.iter().any(|f| f == "src/lib.rs"));
         assert!(scope.scope.files.iter().any(|f| f == "src/main.rs"));
+    }
+
+    // ---- phase10h — file-extension topic inference ----
+
+    #[test]
+    fn topic_for_path_maps_canonical_extensions() {
+        assert_eq!(topic_for_path("src/lib.rs"), Some("code"));
+        assert_eq!(topic_for_path("docs/specs/11-query-api.md"), Some("docs"));
+        assert_eq!(topic_for_path("Cargo.toml"), Some("config"));
+        assert_eq!(topic_for_path("data.json"), Some("config"));
+        // Unknown / extensionless paths return None — caller
+        // treats topic inference as best-effort.
+        assert_eq!(topic_for_path("README"), None);
+        assert_eq!(topic_for_path(""), None);
+        assert_eq!(topic_for_path("artifact.unknown_ext"), None);
+    }
+
+    #[test]
+    fn derive_stamps_topics_from_recent_files_and_prompt_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path().join("R");
+        std::fs::create_dir_all(repo_root.join(".git")).unwrap();
+        let recent = vec![RecentFile {
+            path: repo_root.join("src/lib.rs"),
+            status: FileStatus::Modified,
+            age_seconds: 60,
+        }];
+        let scope = derive("look at docs/specs/11-query-api.md", &repo_root, &recent);
+        assert!(
+            scope.scope.topics.contains(&"code".to_string()),
+            "recent .rs file must add `code`; got {:?}",
+            scope.scope.topics
+        );
+        assert!(
+            scope.scope.topics.contains(&"docs".to_string()),
+            "prompt-mentioned .md must add `docs`; got {:?}",
+            scope.scope.topics
+        );
     }
 }

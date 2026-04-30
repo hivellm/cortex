@@ -39,7 +39,7 @@ Content-Type: application/json
 {
   "intent": "pre_change_context",         // required
   "scope": {
-    "repo": "Vectorizer",                  // optional
+    "repo": "vectorizer",                  // optional, canonical lowercase (phase10d)
     "files": ["src/index/hnsw/*"],         // optional
     "topics": ["hnsw", "retrieval"],       // optional
     "since": "2025-01-01"                  // optional ISO8601
@@ -51,6 +51,54 @@ Content-Type: application/json
   "budget_ms": 500                         // total timeout; default 500
 }
 ```
+
+`scope.repo` is **canonical lowercase**. Mixed-case input (`"Cortex"`,
+`"Vectorizer"`) is accepted for backwards-compat — the orchestrator
+calls `to_ascii_lowercase` before forwarding to the lane filter so
+`scope.repo: "Cortex"` and `scope.repo: "cortex"` resolve to the
+same rows. See
+[spec 02 §Naming canonicalization](./02-storage-layout.md#naming-canonicalization-phase10d)
+for the cross-surface contract.
+
+#### Scope filter contract (phase10h)
+
+Pre-phase10h only `scope.repo` actually filtered; `scope.since`,
+`scope.topics`, and `scope.files` were accepted by the
+deserialiser but silently dropped at fan-out. Phase10h wires
+every dimension end-to-end:
+
+- **Meili keyword lane** — `meili_lane.rs::build_meili_filter`
+  composes a per-index AND-joined expression. Capabilities are
+  per-schema (`crates/cortex-storage/schemas/meili/*.settings.v1.json`):
+  - Per-repo legacy `cortex-{slug}-{family}` indexes use `ts`
+    for `since`, plus `repo` / `path` / `topics`.
+  - Global `cortex_turns` / `cortex_decisions` /
+    `cortex_analyses` use `occurred_at` for `since`, plus
+    `repo` / `topics`.
+  - `cortex_laws` carries no scope facets — clauses for that
+    index are skipped silently rather than triggering Meili's
+    "attribute not filterable" 4xx.
+  - `cortex_knowledge` / `cortex_learnings` use `occurred_at`
+    + `repo`.
+- **Vectorizer lane** — the SDK's `search_vectors` does not
+  expose a server-side filter parameter, so the lane filters
+  client-side after metadata projection
+  (`vectorizer_lane.rs::scope_matches`). The post-projection
+  filter is **fail-open**: hits whose metadata lacks the
+  field a scope dimension references round-trip rather than
+  being dropped silently.
+- **Nexus graph lane** — graph hits don't carry per-row
+  timestamp / topic / path metadata in the projected
+  `LaneHit`; scope filtering against the structural graph is
+  deferred to a follow-up phase. Document scope dimensions
+  still flow into `scope_resolved` so the audit envelope
+  records what the caller asked for.
+- **Audit envelope** —
+  `cortex.events.query_audit.scope_resolved` carries the
+  full canonicalised scope: lowercased `repo`, deduplicated
+  + lowercased `topics`, trimmed `since` (RFC-3339), and
+  trimmed non-empty `files`. `service.rs::canonicalise_scope`
+  is the source of truth.
 
 ### Response schema
 
@@ -124,10 +172,36 @@ Identical schema, exposed as an MCP tool (`cortex.query`) so agent hosts can cal
 | `pre_change_context`   | ✅     | ✅      | `Artifact -[:TOUCHED]-> ToolCall -[:HAS_TOOL_CALL]-> Turn -[:LINKED_TO]-> Decision`, 1–2 hops | decisions + active laws in scope |
 | `decision_lookup`      | ✅     | ✅      | Decision → supersession chain                        | —                                |
 | `similar_problems`     | ✅     | —       | Turn → Analysis → Decision                            | —                                |
-| `law_check`            | —      | ✅      | `Law -[:OF]-> LawViolation -[:OBSERVED_IN]-> Turn` (last 30d) | active laws                      |
+| `law_check`            | —      | ✅      | `Law -[:OF]-> LawViolation -[:OBSERVED_IN]-> Turn` (last 30d) | active laws + violations         |
 | `free_search`          | ✅     | ✅      | none                                                 | —                                |
+| `explain`              | ✅     | ✅      | none (until phase4c lands `edge_artifact_definitions`) | —                                |
 
-Strategies live in `cortex-api/src/orchestrator/strategies.rs`, one `fn` per intent, return an execution plan the orchestrator runs.
+Strategies live in `cortex-api/src/strategies.rs`, one `fn` per intent, return an execution plan the orchestrator runs.
+
+#### Lane composition per intent (phase10a)
+
+The 2026-04-29 relevance audit caught three intents fanning out to
+per-repo collections / indexes that frequently carried no data,
+producing 0% recall on `law_check` and `similar_problems` and 50%
+on `decision_lookup` (matched only when the prompt happened to hit
+a decision title). Phase10a routes those intents to the **global**
+stores defined in `crates/cortex-storage/src/names.rs`:
+
+| Intent             | Vector collection                                          | Keyword index               | Graph template                     |
+|--------------------|------------------------------------------------------------|-----------------------------|------------------------------------|
+| `pre_change_context` | `cortex-{slug}-code` + `cortex-{slug}-docs` (per-repo)   | `cortex-{slug}-{code,docs,decisions}` | `edge_artifact_touched_neighbours` |
+| `decision_lookup`  | `cortex.decision.fp32` (global)                            | `cortex_decisions` (global) | `decision_supersedes_chain`        |
+| `similar_problems` | `cortex.turn.fp32` + `cortex.turn.pq` (global)             | `cortex_turns` (global)     | `turn_analysis_decision_chain`     |
+| `law_check`        | —                                                          | `cortex_laws` (global)      | `law_violations_last_30d`          |
+| `free_search`      | `cortex-{slug}-code` (per-repo)                            | `cortex-{slug}-code`        | —                                  |
+| `explain`          | `cortex-{slug}-code` + `cortex-{slug}-docs` (per-repo)     | `cortex-{slug}-{code,docs}` | —                                  |
+
+For the global indexes that carry `repo` as a filterable attribute
+(`cortex_turns`, `cortex_decisions`), the keyword lane translates
+`scope.repo` into a `repo = '<slug>'` Meili filter so a repo-scoped
+query does not bleed across other repos sharing the same global
+index. `cortex_laws` does NOT carry `repo` — laws are cross-repo by
+design and `law_check` strips `scope.repo` before fan-out.
 
 ### Execution plan
 
@@ -204,6 +278,37 @@ memory) keep `summary > title > body`; turn-shaped kinds use
 so the operator-visible context (file path, repo) is preserved
 even when `text` switches to body content. Closes
 [F-009](../analysis/relevance/01-findings.md).
+
+#### phase10b — body capture + path/text separation
+
+The 2026-04-29 audit caught snippets where `text` carried the
+*path* and `symbol` carried the *kind label* (`artifact`, `turn`,
+…), producing pre-thinking bundle rows like
+`Cortex/.../types.rs:artifact — \n   crates/cortex-api/src/types.rs`
+— an `ls`-grade result the agent could not act on. Phase10b
+hardens both fields:
+
+- **Snippet.text** never echoes the path back. When every slot in
+  the projection chain holds the same string as `Snippet.path`
+  (typical for body-less artifact docs whose `derive_title` set
+  `title = path`), the lane returns empty `text` instead of
+  surfacing the path as content.
+- **Snippet.body_truncated** (new, additive boolean field) is
+  stamped to `true` when the lane could not project a body
+  distinct from the path. The pre-thinking renderer reads this
+  to render the header alone with a `(body not indexed inline)`
+  cue instead of an empty body block.
+- **Snippet.symbol** never carries event-kind labels. The
+  orchestrator's `snippet_from_hit` filters
+  `artifact / turn / tool_call / agent_call / decision /
+   analysis / memory / law_violation` out of `LaneHit.symbol`
+  before it reaches the wire; decisions surface their
+  `decision_title` extras (phase10a) as the symbol so bundle
+  headers carry the real ADR title instead of the literal string
+  `decision`.
+
+Wire-shape change: `body_truncated: bool` defaults to `false` and
+skip-serialises, so existing consumers keep working unchanged.
 
 ### Lane projection contract (phase6b)
 

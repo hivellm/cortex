@@ -543,10 +543,16 @@ fn read_tool_use_id(payload: &Value) -> String {
 }
 
 fn repo_from_cwd(cwd: &str) -> Option<String> {
+    // phase10d — `repo` is canonical lowercase across every Cortex
+    // surface (walker emit, lane projection, scope filter,
+    // dashboard wire shape). Lowercasing the cwd basename here
+    // keeps adapter-emitted envelopes aligned with bootstrap
+    // envelopes so a `scope.repo = "Cortex"` query and a
+    // `scope.repo = "cortex"` query hit the same rows.
     std::path::Path::new(cwd)
         .file_name()
         .and_then(|s| s.to_str())
-        .map(|s| s.to_string())
+        .map(|s| s.to_ascii_lowercase())
 }
 
 /// Spec-04 envelope `context.platform` enum: `win32` / `darwin` / `linux`.

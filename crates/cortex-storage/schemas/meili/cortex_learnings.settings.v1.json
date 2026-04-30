@@ -1,0 +1,15 @@
+{
+  "searchableAttributes": ["title", "body", "tags"],
+  "filterableAttributes": ["repo", "tags", "related_task", "occurred_at"],
+  "sortableAttributes": ["occurred_at"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness", "occurred_at:desc"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "learning": ["insight", "lesson"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

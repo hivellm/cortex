@@ -170,6 +170,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 - **`cortex-ingestion`** — accept spec-04 `{events:[...]}` batch shape.
 - **`cortex-mcp-server`** — rename tools to identifier-safe names + camelCase schema fields (spec-18 compliance).
 - **GUI** — drawer covers full width on narrow viewports + lock horizontal scroll.
+- **`cortex-api` health routes (phase10g)** — `/v1/health`, `/v1/health/freshness`, `/v1/health/divergence`, `/v1/health/versions`, `/v1/health/config` mount on the dashboard-aware router; the audit caught the GUI's Health tab returning empty bodies because the running daemon predated the registration. Operators rolling forward from a pre-phase10g cortex-api MUST relaunch the binary; the `/v1/health/*` routes do not back-port to a process that is already serving requests.
+  - Regression guard: [`every_v1_health_route_is_mounted_on_router_with_dashboard`](crates/cortex-api/tests/health_freshness.rs) + `cortex-ops doctor` probes the same URLs against `CORTEX_API_URL` so a missed registration in a future refactor surfaces in CI before it reaches a deploy.
 
 ### Pending (🟡 specs in progress)
 - **Spec 13** — Laws DSL + detector contract.

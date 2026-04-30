@@ -76,6 +76,17 @@ pub enum Kind {
     LawViolation,
     /// Stand-alone artifact.
     Artifact,
+    /// phase10e — pattern / anti-pattern entry imported from
+    /// `.rulebook/knowledge/**`. The Rulebook MCP server captures
+    /// these via `rulebook_knowledge_add`; before phase10e they
+    /// sat on disk and never reached any retrieval surface.
+    Knowledge,
+    /// phase10e — implementation insight imported from
+    /// `.rulebook/learnings/**` (Rulebook MCP
+    /// `rulebook_learn_capture`). Same rationale as
+    /// [`Kind::Knowledge`] — high-signal corpus that was
+    /// previously invisible to the agent.
+    Learning,
 }
 
 impl Kind {
@@ -90,6 +101,8 @@ impl Kind {
             Kind::Analysis => "analysis",
             Kind::LawViolation => "law_violation",
             Kind::Artifact => "artifact",
+            Kind::Knowledge => "knowledge",
+            Kind::Learning => "learning",
         }
     }
 }
@@ -239,6 +252,53 @@ pub struct AgentCall {
     pub duration_ms: Option<u64>,
     /// `success` | `error` | `cancelled` | `timeout`.
     pub outcome: String,
+}
+
+/// phase10e — payload for [`Kind::Knowledge`]. Mirrors the
+/// Rulebook MCP `rulebook_knowledge_add` shape: `pattern` /
+/// `anti-pattern` discriminated by `category`, with the Markdown
+/// body verbatim. Required fields mirror what `rulebook_knowledge_add`
+/// always emits; optional fields are skipped when absent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct KnowledgePayload {
+    /// Knowledge entry id (slug or ULID).
+    pub knowledge_id: String,
+    /// Title — usually the H1 of the source file.
+    pub title: String,
+    /// `pattern` | `anti-pattern`.
+    pub category: String,
+    /// Markdown body verbatim from `.rulebook/knowledge/<file>.md`.
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Repo-relative source path, when discovery walked a file.
+    pub source_path: Option<String>,
+    /// Free-form tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// phase10e — payload for [`Kind::Learning`]. Mirrors the
+/// Rulebook MCP `rulebook_learn_capture` shape: a single
+/// implementation insight, optionally linked to a related task
+/// id so the graph layer can connect the learning to the work
+/// that produced it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LearningPayload {
+    /// Learning entry id (slug or ULID).
+    pub learning_id: String,
+    /// Brief title.
+    pub title: String,
+    /// Markdown body verbatim.
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Related task id (`phase10c_bootstrap_dedup`, ...).
+    pub related_task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Repo-relative source path, when discovery walked a file.
+    pub source_path: Option<String>,
+    /// Free-form tags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// Payload for [`Kind::Memory`].

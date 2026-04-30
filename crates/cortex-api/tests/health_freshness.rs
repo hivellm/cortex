@@ -207,3 +207,50 @@ async fn metrics_endpoint_renders_loader_metrics_in_prom_text() {
     assert!(txt.contains("cortex_archive_loader_last_refresh_ts_ms"));
     assert!(txt.contains("cortex_meili_loader_last_refresh_ts_ms"));
 }
+
+#[tokio::test]
+async fn every_v1_health_route_is_mounted_on_router_with_dashboard() {
+    // phase10g §3.1 — the audit caught the GUI's Health tab
+    // returning empty bodies on every `/v1/health/*` call against
+    // the live daemon. The handlers were implemented but a
+    // future refactor could drop the merge() that mounts them on
+    // the dashboard router. This test pins every route so the
+    // regression surfaces locally instead of on a deployed
+    // operator's screen.
+    for path in [
+        "/v1/health",
+        "/v1/health/freshness",
+        "/v1/health/divergence",
+        "/v1/health/versions",
+        "/v1/health/config",
+    ] {
+        let router = build_test_router();
+        let (status, body) = get_json(router, path).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path} must answer 200 — was the route dropped from build_router_with?"
+        );
+        // Every health route returns either an object or a
+        // JSON array (the freshness probe). A non-null body
+        // means the handler ran and serialised; the per-route
+        // tests above pin the richer shape contracts.
+        assert!(
+            body.is_object() || body.is_array(),
+            "{path} must answer with a JSON body, got {body:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn legacy_healthz_keeps_working_alongside_v1_health() {
+    // phase10g §1.3 — the legacy `/healthz` endpoint must keep
+    // answering even after the `/v1/health/*` family lands. Some
+    // operators (and the workers' default URL probe) still hit
+    // `/healthz`; dropping it would break their health-check
+    // configurations.
+    let router = build_test_router();
+    let (status, body) = get_json(router, "/healthz").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.is_object());
+}

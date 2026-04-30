@@ -109,8 +109,31 @@ Maps `(user_prompt, cwd, recent_files)` → `scope`:
 2. **files** — union of:
    - `recent_files` (age < 5 min)
    - files mentioned verbatim in the user prompt (shell-glob-like regex; bounded to 16 candidates)
-3. **topics** — none by default. Leave topic filtering to fusion-side reranking.
+3. **topics** — phase10h: derived from the file extensions in
+   `recent_files` + prompt-mentioned paths via
+   [`topic_for_path`](../../crates/cortex-pre-thinking/src/scope.rs).
+   `.rs` / `.py` / `.go` / `.ts` / etc. → `code`,
+   `.md` / `.rst` / `.txt` → `docs`,
+   `.toml` / `.yaml` / `.json` / `.ini` → `config`.
+   Unknown extensions surface no topic so the orchestrator's
+   filter stays permissive. The result is deduplicated and
+   lowercased.
 4. **since** — `None` in v1; we want all relevant history.
+
+#### Scope inference (phase10h)
+
+The classifier stamps the same canonical topic vocabulary on
+every event (see [spec 05 §Topic vocabulary](./05-classifier.md));
+inferring `topics` here scopes the orchestrator's lane filter
+to the corpus the user is most likely asking about — without the
+agent having to spell it out. The inference is best-effort: a
+prompt that mentions only `README.md` in a Rust repo derives
+`topics: ["docs"]` (from the file mention) on top of
+`["code"]` (from a recent `.rs` edit), so the bundle blends
+both corpora when the user's question genuinely spans them.
+
+The full scope filter contract is documented in
+[spec 11 §Scope filter contract (phase10h)](./11-query-api.md#scope-filter-contract-phase10h).
 
 If `repo` can't be resolved, the adapter issues the query with repo-less scope and accepts coarser results.
 
@@ -180,6 +203,51 @@ Never drop **laws** — active laws are load-bearing; better to drop everything 
 - No templating engine — pure Rust string concatenation with fixed section order.
 - Markdown is stable across runs (same input → byte-identical output).
 - `query_id` is injected in the leading comment for auditability (spec 11 audit stream correlation).
+
+### Sources (phase10e)
+
+The bundle pulls from these corpora, in addition to the
+existing snippet / decision / similar-turn / graph-neighbour
+sections:
+
+- **Knowledge** — pattern / anti-pattern entries from
+  `cortex.knowledge.fp32` + `cortex_knowledge`. Routed to the
+  bundle whenever `intent ∈ {pre_change_context,
+  decision_lookup}` so the agent re-reads the canonical
+  patterns + anti-patterns before acting on a related change.
+- **Learnings** — implementation insights from
+  `cortex.learning.fp32` + `cortex_learnings`. Same intent
+  routing as knowledge — these were written specifically
+  because someone made a mistake worth not repeating, so they
+  belong front-and-centre when the agent is about to make a
+  change.
+
+Both corpora are populated by the bootstrap walker
+([`crates/cortex-cli/src/bootstrap/walker.rs`](../../crates/cortex-cli/src/bootstrap/walker.rs))
+recursing into `.rulebook/knowledge/**` and
+`.rulebook/learnings/**`. Spec 02
+[§Knowledge + Learnings corpus (phase10e)](./02-storage-layout.md#knowledge--learnings-corpus-phase10e)
+is the cross-store contract.
+
+### Snippet section layout (phase10b)
+
+Each snippet renders as `<header><body>`. The header carries
+identifying context; the body carries the projected source text.
+
+- **Header** — `` `repo/path:symbol` — <why> `` when both a real
+  symbol AND a `why` blurb are present. Drops the `:symbol`
+  segment when no symbol is present (the orchestrator strips
+  event-kind labels before they reach the wire — see
+  [spec 11 §phase10b](./11-query-api.md#phase10b--body-capture--pathtext-separation)).
+- **Body** — full or slimmed `text`, indented under the header.
+  When `Snippet.body_truncated = true` (no body indexed inline),
+  the body block is replaced by a `(body not indexed inline)`
+  cue stamped onto the header so the agent does NOT see the
+  path masquerading as the file contents.
+
+This closes the audit-flagged `path:artifact — \n   path`
+rendering. The pre-thinking budget is now spent on actual prose /
+code instead of an `ls`-grade directory listing.
 
 ### Error handling (fail-open)
 

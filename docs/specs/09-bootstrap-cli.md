@@ -258,6 +258,66 @@ Every synthetic event passes through `cortex-core`'s redactor (spec 04) **before
 - Downstream writers (spec 06 embedder, spec 08 indexer) are keyed on `content_hash` — re-running bootstrap is a no-op at the storage layer.
 - The checkpoint file prevents **re-publishing** unchanged events to Synap, saving classifier cost.
 
+### Dedup ledger (phase10c)
+
+The 2026-04-29 audit caught the walker re-emitting every file
+under fresh ULIDs on every run (26 decisions for 2 ADRs on disk,
+37 laws for 12 rule files, etc.). The pre-phase10c walker keyed
+events on `(repo, path, run_id)` so each invocation produced new
+ULIDs for unchanged content; downstream writers' content-hash
+dedup absorbed the bytes but the lane still piled up rows.
+
+Phase10c adds a `(repo, path, content_hash)` ledger keyed on the
+**redacted body hash** (the input to the emitter's redact pipeline,
+deterministic across runs):
+
+- Walker computes `body_hash = sha256(body)` per accepted file.
+- Before publishing the file's events, the runner reads
+  `bootstrap_seen(repo, path)` from the metadata DB.
+- Match (`stored.content_hash == body_hash`): suppress every
+  event for that file and refresh `last_run_id` only. The
+  `RepoRunReport.files_suppressed` counter surfaces the
+  suppression rate.
+- Mismatch / absent: publish as usual, then upsert
+  `(repo, path, body_hash, run_id, now)` into the ledger.
+
+Wired through [`run_repo_with_dedup`](../../crates/cortex-cli/src/bootstrap/runner.rs);
+existing [`run_repo`](../../crates/cortex-cli/src/bootstrap/runner.rs) callers
+that don't pass a ledger continue to publish on every run.
+
+The metadata table — `bootstrap_seen(repo, path, content_hash,
+last_run_id, last_emitted_at)` — is documented in
+[spec 02 §Metadata store](./02-storage-layout.md#metadata-store-sqlite-default-postgres-optional).
+
+#### Pre-flight warning
+
+When the ledger is empty AND the live lane carries
+`> 2 × disk_count` rows for any of the
+`:Decision` / `:Law` / `:Analysis` classes, the runner surfaces a
+`DuplicateLanePreflight` finding. The bin caller (CLI / cron job)
+logs a warning telling the operator to run
+`cortex-ops bootstrap-dedup --dry-run --repo <name>` and
+investigate before re-walking. The check is pure (no I/O); the
+caller passes the disk + lane counts on hand.
+
+#### One-shot CLI: `cortex-ops bootstrap-dedup`
+
+```
+cortex-ops bootstrap-dedup [--repo NAME] [--dry-run] [--apply]
+                           [--metadata-db PATH] [--json]
+```
+
+- `--dry-run` (read-only) walks the `bootstrap_seen` ledger and
+  reports `(content_hash, paths[])` groups whose size ≥ 2 — the
+  same redacted body emitted under different file paths (a less
+  common but real corruption mode).
+- `--apply` is reserved for the future live-backend cleanup
+  path (Vectorizer / Meili / Nexus row deletion). Today it
+  exits with code `3` and a documentation pointer; the
+  dry-run output remains the actionable surface.
+- `--metadata-db` defaults to `$CORTEX_METADATA_DB` then
+  `<home>/.cortex/metadata.sqlite`.
+
 ### Workspace orchestration (phase4b)
 
 `cortex-bootstrap --workspace <ws.toml>` drives multiple repos in one invocation. The TOML file lists every repo by `id` + `path`:

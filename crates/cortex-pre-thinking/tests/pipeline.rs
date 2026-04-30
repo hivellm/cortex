@@ -70,6 +70,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
                 symbol: Some("hnsw_search".into()),
                 content_hash: None,
                 text: "pub fn hnsw_search() {}".into(),
+                body_truncated: false,
                 score: 0.9,
                 why: Some("vector match".into()),
             }],
@@ -77,6 +78,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
                 rank: 1,
                 id: "DEC-0042".into(),
                 title: "Adopt Meili".into(),
+                rationale_excerpt: None,
                 status: "accepted".into(),
                 ts: 1_715_000_000_000,
                 score: 0.7,
@@ -249,6 +251,7 @@ async fn overflow_response_clips_under_budget_keeping_laws() {
             symbol: Some(format!("fn_{i}")),
             content_hash: None,
             text: "x".repeat(8 * 1024),
+            body_truncated: false,
             score: 0.5,
             why: Some("why".into()),
         })
@@ -303,6 +306,7 @@ async fn truncation_step_metric_records_each_applied_step() {
             symbol: Some(format!("fn_{i}")),
             content_hash: None,
             text: "x".repeat(8 * 1024),
+            body_truncated: false,
             score: 0.5,
             why: Some("why".into()),
         })

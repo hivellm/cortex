@@ -13,8 +13,8 @@ use std::collections::BTreeMap;
 
 use cortex_classifier::{ClassifierOutput, PiiRisk, Severity};
 use cortex_core::events::{
-    AgentCall, AnalysisPayload, ArtifactPayload, DecisionPayload, Kind, LawViolationPayload,
-    MemoryPayload, ToolCall, Turn,
+    AgentCall, AnalysisPayload, ArtifactPayload, DecisionPayload, Kind, KnowledgePayload,
+    LawViolationPayload, LearningPayload, MemoryPayload, ToolCall, Turn,
 };
 use serde_json::{json, Value};
 
@@ -214,6 +214,21 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
+        // phase10e — knowledge / learnings carry the markdown body
+        // verbatim. The title goes through `derive_title` below;
+        // here we just hand back the body so Meili indexes it.
+        Kind::Knowledge => {
+            match serde_json::from_value::<KnowledgePayload>(event.redacted_payload.clone()) {
+                Ok(k) => (k.body, None),
+                Err(_) => (fallback_text(&event.redacted_payload), None),
+            }
+        }
+        Kind::Learning => {
+            match serde_json::from_value::<LearningPayload>(event.redacted_payload.clone()) {
+                Ok(l) => (l.body, None),
+                Err(_) => (fallback_text(&event.redacted_payload), None),
+            }
+        }
     }
 }
 
@@ -271,6 +286,12 @@ fn derive_title(event: &EnrichedEvent, raw: &str) -> String {
             .and_then(|a| a.path.or_else(|| a.url.clone()))
             .or_else(|| event.context_path.clone())
             .unwrap_or_else(|| event.event_id.clone()),
+        Kind::Knowledge => serde_json::from_value::<KnowledgePayload>(event.redacted_payload.clone())
+            .map(|k| k.title)
+            .unwrap_or_else(|_| event.event_id.clone()),
+        Kind::Learning => serde_json::from_value::<LearningPayload>(event.redacted_payload.clone())
+            .map(|l| l.title)
+            .unwrap_or_else(|_| event.event_id.clone()),
     };
     take_first_chars(&candidate, TITLE_MAX_CHARS)
 }
@@ -368,6 +389,32 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
                 );
             }
         }
+        Kind::Knowledge => {
+            if let Ok(k) = serde_json::from_value::<KnowledgePayload>(
+                event.redacted_payload.clone(),
+            ) {
+                doc.ext.insert(
+                    "knowledge".to_string(),
+                    json!({
+                        "knowledge_id": k.knowledge_id,
+                        "category": k.category,
+                    }),
+                );
+            }
+        }
+        Kind::Learning => {
+            if let Ok(l) = serde_json::from_value::<LearningPayload>(
+                event.redacted_payload.clone(),
+            ) {
+                let mut payload = json!({
+                    "learning_id": l.learning_id,
+                });
+                if let Some(t) = l.related_task {
+                    payload["related_task"] = Value::String(t);
+                }
+                doc.ext.insert("learning".to_string(), payload);
+            }
+        }
         Kind::Turn | Kind::Artifact => {
             // No extension fields beyond the shared core for these
             // kinds in v1 — `Turn`'s tokens belong on a separate
@@ -387,6 +434,8 @@ fn kind_label(kind: Kind) -> &'static str {
         Kind::Analysis => "analysis",
         Kind::LawViolation => "law_violation",
         Kind::Artifact => "artifact",
+        Kind::Knowledge => "knowledge",
+        Kind::Learning => "learning",
     }
 }
 

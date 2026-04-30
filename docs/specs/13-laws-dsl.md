@@ -285,6 +285,24 @@ Keeps detectors terse and DRY without requiring arbitrary imports (sandbox limit
 | Selector index miss (event w/ unknown kind) | Event skipped; counter `laws.unknown_kind`                         |
 | Sandbox escape attempt (OOM, infinite loop) | Worker killed; replacement spawned; violation evidence records the detector_id as failing |
 
+### Retrieval (phase10a)
+
+The `law_check` query intent fans out across the **global**
+`cortex_laws` Meilisearch index (law definitions) and the Nexus
+`law_violations_last_30d` template (`:LawViolation -[:VIOLATES]->
+:Law`, last 30 days). The keyword lane projects each row's
+`title`, `severity`, and `body_excerpt` into the snippet payload
+so the agent can quote the law back without a follow-up
+`free_search` round-trip; the graph lane carries the law id +
+violation id pair so the orchestrator's
+`derive_laws` overlay populates `laws_active` + `results.violations`.
+
+`cortex_laws` does NOT carry `repo` as a filterable attribute —
+laws are cross-repo by design. The `law_check` strategy strips
+`scope.repo` before fan-out so a repo-scoped query still surfaces
+every active law instead of returning empty (cf.
+[spec 11 §Lane composition per intent](./11-query-api.md#lane-composition-per-intent-phase10a)).
+
 ### Observability
 
 ```

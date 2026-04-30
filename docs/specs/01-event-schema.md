@@ -138,6 +138,34 @@ Eight `kind` values. Each has its own JSON Schema in `cortex-core/schemas/kinds/
 
 Other payloads (`agent_call`, `decision`, `analysis`, `law_violation`, `artifact`) are documented inline in the JSON Schema files; this spec freezes only the *shape policy*, not every field. Each kind's schema may evolve under §"Schema evolution" rules without bumping `schema_version`, as long as changes are additive.
 
+#### Required producer-side metadata (phase10i)
+
+The audit-detected gap was that producers stamped the canonical
+payload but skipped optional metadata fields, leaving 574
+sessions in the metadata DB with `tool IS NULL` and decisions
+with empty `occurred_at`. These fields **MUST** flow through
+when the producer can resolve them:
+
+- **Envelope `tool`** — Stamped by every adapter on every
+  envelope. The Claude Code adapter writes
+  `tool = "claude-code"`. Empty string is reserved for the
+  upstream rewriter pass; producers MUST NOT pass an empty
+  tool. Downstream `MetadataStore::upsert_session` preserves
+  the existing `sessions.tool` value when an empty string
+  arrives, instead of overwriting with NULL (the pre-phase10i
+  behaviour that produced the audit's 574 NULL rows).
+- **Decision payload** — `payload.author` (front-matter
+  `Author:` / `**Author**: …`), `payload.occurred_at`
+  (RFC-3339 from `Date: YYYY-MM-DD`), and
+  `payload.source_analysis` (first `docs/analysis/<slug>` from
+  `Related Tasks:` / `Related Analyses:`). Producers parse
+  the bolded markdown form (`**Status**: accepted`) alongside
+  the bare form (`Status: accepted`) so existing ADR
+  conventions round-trip without rewriting.
+- **Analysis payload** — same `author` + `occurred_at`
+  rules as decisions; the source path lives in
+  `payload.source_path`.
+
 ### Controlled vocabularies
 
 Two fields draw from controlled vocabularies, versioned alongside the schema:

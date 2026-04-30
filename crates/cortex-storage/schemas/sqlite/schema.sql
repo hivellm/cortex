@@ -174,3 +174,21 @@ CREATE TABLE IF NOT EXISTS classifier_spend_monthly (
     tokens_out     INTEGER NOT NULL DEFAULT 0,
     est_usd_cents  INTEGER NOT NULL DEFAULT 0
 );
+
+-- Phase10c — bootstrap dedup ledger. The walker keys on
+-- `(repo, path)` and stamps the redacted-body content hash; a
+-- subsequent run that sees the same hash skips publication and
+-- only refreshes `last_run_id`. The 2026-04-29 audit caught the
+-- pre-phase10c walker re-emitting every file under fresh ULIDs on
+-- every run (26 decisions for 2 ADRs on disk, 37 laws for 12 rule
+-- files, etc.); the ledger is the structural fix.
+CREATE TABLE IF NOT EXISTS bootstrap_seen (
+    repo            TEXT NOT NULL,
+    path            TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    last_run_id     TEXT,
+    last_emitted_at TEXT NOT NULL,
+    PRIMARY KEY (repo, path)
+);
+
+CREATE INDEX IF NOT EXISTS bootstrap_seen_hash ON bootstrap_seen (repo, content_hash);

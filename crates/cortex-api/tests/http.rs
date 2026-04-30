@@ -1029,8 +1029,11 @@ async fn decision_overlay_surfaces_decision_id_from_extras() {
         "decision_status".to_string(),
         Value::String("accepted".to_string()),
     );
+    // phase10a — `decision_lookup` now routes to the global
+    // `cortex_decisions` index (per `cortex-storage::names`), not
+    // the per-repo `cortex-{slug}-decisions` plan it used pre-audit.
     k.seed(
-        "cortex-cortex-decisions",
+        cortex_storage::names::INDEX_DECISIONS,
         vec![LaneHit {
             doc_id: "dec-1".into(),
             text: "Adopt CLAUDE_CONFIG_DIR for classifier subprocess isolation".into(),
@@ -1089,8 +1092,11 @@ async fn similar_turns_overlay_surfaces_turn_id_from_extras() {
         "summary".to_string(),
         Value::String("planned the phase6b lane projection contract".into()),
     );
+    // phase10a — `similar_problems` now fans out across the global
+    // `cortex.turn.fp32` hot tier (and `cortex.turn.pq` warm tier);
+    // seed the FP32 collection so the orchestrator picks the hit up.
     v.seed(
-        "cortex-cortex-turns",
+        cortex_storage::names::COLLECTION_TURN_FP32,
         vec![LaneHit {
             doc_id: "turn-1".into(),
             text: "Discussed lane projection contract for cortex-api".into(),

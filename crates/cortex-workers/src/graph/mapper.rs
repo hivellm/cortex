@@ -117,6 +117,18 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
         Kind::Analysis => emit_analysis(event, &mut patch),
         Kind::LawViolation => emit_law_violation(event, &mut patch),
         Kind::Artifact => emit_artifact(event, &mut patch),
+        // phase10e — knowledge / learnings ride alongside the
+        // memory mapping for now: a single typed node keyed by
+        // the event id, attached to the Session via the same
+        // `OWNS` edge memories use. Dedicated `:Knowledge` /
+        // `:Learning` labels surface in the canonical-label
+        // table below so the dashboard's graph view colour-codes
+        // them; richer relationship edges (`(:Knowledge)
+        // -[:RELATES_TO]->(:Decision)`) ride the
+        // classifier-entities path and require no per-kind
+        // mapping here.
+        Kind::Knowledge => emit_memory(event, &session_id, &mut patch),
+        Kind::Learning => emit_memory(event, &session_id, &mut patch),
     }
 
     // Sonnet-extracted entity/relation layer. Independent from the
@@ -280,6 +292,8 @@ fn anchor_label_for_kind(kind: Kind) -> &'static str {
         Kind::Analysis => "Analysis",
         Kind::LawViolation => "LawViolation",
         Kind::Artifact => "Artifact",
+        Kind::Knowledge => "Knowledge",
+        Kind::Learning => "Learning",
     }
 }
 

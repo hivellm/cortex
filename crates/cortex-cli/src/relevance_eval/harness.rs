@@ -415,6 +415,7 @@ mod tests {
             symbol: None,
             content_hash: hash.map(String::from),
             text: format!("snippet for {path}"),
+            body_truncated: false,
             score: 1.0 / rank as f64,
             why: None,
         }

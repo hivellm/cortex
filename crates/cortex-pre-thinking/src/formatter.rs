@@ -210,9 +210,16 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
 }
 
 fn render_snippet_header(s: &cortex_api::Snippet) -> String {
+    // phase10b §3.1 — header is `repo/path:symbol` when a real
+    // symbol is present (Tree-sitter for code, H1 for docs).
+    // `Snippet.symbol` no longer carries kind labels (the orchestrator
+    // strips `artifact` / `turn` / etc. in `snippet_from_hit`); when
+    // the upstream lacks a real symbol the header degrades to
+    // `repo/path` instead of producing the audit-flagged
+    // `Cortex/.../types.rs:artifact` rendering.
     let repo = s.repo.as_deref().unwrap_or("");
     let path = s.path.as_deref().unwrap_or("");
-    let symbol = s.symbol.as_deref();
+    let symbol = s.symbol.as_deref().filter(|sym| !sym.is_empty());
     let prefix = match (repo.is_empty(), path.is_empty(), symbol) {
         (false, false, Some(sym)) => format!("`{repo}/{path}:{sym}` — "),
         (false, false, None) => format!("`{repo}/{path}` — "),
@@ -220,15 +227,24 @@ fn render_snippet_header(s: &cortex_api::Snippet) -> String {
         (true, false, _) => format!("`{path}` — "),
         _ => String::new(),
     };
-    let why = s
+    // phase10b §3.1 — when the keyword lane could not project a
+    // body, surface that in the header so the agent does not
+    // assume the renderer accidentally truncated it.
+    let why_text = s
         .why
         .as_deref()
         .map(trim_one_line)
         .filter(|s| !s.is_empty());
-    if let Some(why) = why {
-        format!("{prefix}{why}")
+    let truncation_note = if s.body_truncated && s.text.is_empty() {
+        Some("(body not indexed inline)".to_string())
     } else {
-        prefix
+        None
+    };
+    match (why_text, truncation_note) {
+        (Some(why), Some(note)) => format!("{prefix}{why} — {note}"),
+        (Some(why), None) => format!("{prefix}{why}"),
+        (None, Some(note)) => format!("{prefix}{note}"),
+        (None, None) => prefix,
     }
 }
 
@@ -305,6 +321,7 @@ mod tests {
                     symbol: Some("hnsw_search".into()),
                     content_hash: None,
                     text: "pub fn hnsw_search() {}".into(),
+                    body_truncated: false,
                     score: 0.9,
                     why: Some("vector match to ef_search tuning".into()),
                 }],
@@ -312,6 +329,7 @@ mod tests {
                     rank: 1,
                     id: "DEC-0042".into(),
                     title: "Adopt Meilisearch".into(),
+                    rationale_excerpt: None,
                     status: "accepted".into(),
                     ts: 1_715_000_000_000,
                     score: 0.7,

@@ -110,6 +110,17 @@ impl MetadataStore {
     // ---------- session convenience helpers ----------
 
     /// Insert or update a session row.
+    ///
+    /// phase10i — when an upsert from a hook that didn't capture
+    /// the tool name lands (the IPC peer reported `""`), the
+    /// existing `tool` value is preserved instead of being
+    /// overwritten with NULL. The 2026-04-29 audit caught 574
+    /// sessions in the `tool IS NULL` state because the
+    /// pre-phase10i upsert wrote `tool=excluded.tool`
+    /// unconditionally, and `Stop` / lifecycle hooks frequently
+    /// passed an empty `tool` string. `model` / `repo` / `user`
+    /// already preserved their existing value via `COALESCE`;
+    /// `tool` now matches.
     pub fn upsert_session(
         &self,
         session_id: &str,
@@ -119,11 +130,17 @@ impl MetadataStore {
         user: Option<&str>,
         started_at: DateTime<Utc>,
     ) -> Result<(), MetadataError> {
+        // The schema declares `sessions.tool TEXT NOT NULL`, so
+        // first-time writes preserve the literal even when it's
+        // an empty string. The COALESCE / NULLIF dance fires
+        // on conflict only: a subsequent write that passes
+        // empty falls back to the existing value rather than
+        // overwriting it with `''`.
         self.conn.execute(
             "INSERT INTO sessions (session_id, tool, model, repo, user, started_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(session_id) DO UPDATE SET
-               tool=excluded.tool,
+               tool=COALESCE(NULLIF(excluded.tool, ''), sessions.tool),
                model=COALESCE(excluded.model, sessions.model),
                repo=COALESCE(excluded.repo, sessions.repo),
                user=COALESCE(excluded.user, sessions.user)",
@@ -137,6 +154,52 @@ impl MetadataStore {
             ],
         )?;
         Ok(())
+    }
+
+    /// phase10i — explicit setter for `sessions.tool`. Used by
+    /// the `cortex-ops sessions backfill-tool` migration to
+    /// stamp a tool on rows the pre-phase10i upsert NULL-ed out.
+    /// Returns the rowcount touched so the caller can build a
+    /// dry-run report. `tool` is canonicalised to its trimmed,
+    /// non-empty form; passing `""` is a no-op.
+    pub fn set_session_tool(
+        &self,
+        session_id: &str,
+        tool: &str,
+    ) -> Result<u64, MetadataError> {
+        let trimmed = tool.trim();
+        if trimmed.is_empty() {
+            return Ok(0);
+        }
+        let touched = self.conn.execute(
+            "UPDATE sessions SET tool = ?1 WHERE session_id = ?2",
+            params![trimmed, session_id],
+        )?;
+        Ok(touched as u64)
+    }
+
+    /// phase10i — list `(session_id, started_at)` for sessions
+    /// whose tool is currently NULL or empty. The backfill CLI
+    /// calls this once and then iterates to stamp each row.
+    pub fn sessions_missing_tool(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, started_at FROM sessions
+             WHERE tool IS NULL OR tool = ''
+             ORDER BY started_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(
+            params![i64::try_from(limit).unwrap_or(i64::MAX)],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     // ---------- phase9a retention sweep helpers ----------
@@ -539,6 +602,140 @@ impl MetadataStore {
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
+
+    // ---------- phase10c bootstrap-dedup helpers ----------
+
+    /// Phase10c — look up an existing `bootstrap_seen` row for
+    /// `(repo, path)`. Returns `None` when the file has never been
+    /// emitted, otherwise the previously-stored `(content_hash,
+    /// last_run_id)` tuple so the walker can branch on whether the
+    /// content changed since the last run.
+    pub fn bootstrap_seen_lookup(
+        &self,
+        repo: &str,
+        path: &str,
+    ) -> Result<Option<BootstrapSeenRow>, MetadataError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT content_hash, last_run_id, last_emitted_at FROM bootstrap_seen
+                 WHERE repo = ?1 AND path = ?2",
+                params![repo, path],
+                |r| {
+                    Ok(BootstrapSeenRow {
+                        content_hash: r.get(0)?,
+                        last_run_id: r.get::<_, Option<String>>(1)?,
+                        last_emitted_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Phase10c — upsert the dedup ledger for `(repo, path)`. The
+    /// caller passes the redacted-body content hash + the current
+    /// run id; on conflict the row is replaced. Idempotent.
+    pub fn bootstrap_seen_upsert(
+        &self,
+        repo: &str,
+        path: &str,
+        content_hash: &str,
+        run_id: Option<&str>,
+        emitted_at: DateTime<Utc>,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO bootstrap_seen (repo, path, content_hash, last_run_id, last_emitted_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repo, path) DO UPDATE SET
+               content_hash    = excluded.content_hash,
+               last_run_id     = excluded.last_run_id,
+               last_emitted_at = excluded.last_emitted_at",
+            params![repo, path, content_hash, run_id, emitted_at.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    /// Phase10c — count the ledger rows scoped to `repo` (or all
+    /// rows when `repo` is `None`). The walker's pre-flight warning
+    /// branches on this — when the ledger is empty AND the live
+    /// lane carries far more rows than the disk has files, a
+    /// `cortex-ops bootstrap dedup` run is the suggested remedy.
+    pub fn bootstrap_seen_count(
+        &self,
+        repo: Option<&str>,
+    ) -> Result<u64, MetadataError> {
+        let count: i64 = match repo {
+            Some(r) => self.conn.query_row(
+                "SELECT COUNT(*) FROM bootstrap_seen WHERE repo = ?1",
+                params![r],
+                |row| row.get(0),
+            )?,
+            None => self.conn.query_row(
+                "SELECT COUNT(*) FROM bootstrap_seen",
+                [],
+                |row| row.get(0),
+            )?,
+        };
+        Ok(count.max(0) as u64)
+    }
+
+    /// Phase10c — group `bootstrap_seen` rows by `content_hash`
+    /// within `repo` and return every group of size ≥ 2. Used by
+    /// the dedup CLI to surface files that historically emitted the
+    /// same redacted body under different paths (a less-common but
+    /// real corruption mode).
+    pub fn bootstrap_seen_duplicates_by_hash(
+        &self,
+        repo: &str,
+    ) -> Result<Vec<BootstrapSeenDuplicate>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT content_hash, GROUP_CONCAT(path, '\u{1f}'), COUNT(*) AS n
+             FROM bootstrap_seen
+             WHERE repo = ?1
+             GROUP BY content_hash
+             HAVING n >= 2
+             ORDER BY n DESC, content_hash ASC",
+        )?;
+        let rows = stmt.query_map(params![repo], |r| {
+            let hash: String = r.get(0)?;
+            let paths_blob: String = r.get(1)?;
+            let count: i64 = r.get(2)?;
+            Ok(BootstrapSeenDuplicate {
+                content_hash: hash,
+                paths: paths_blob
+                    .split('\u{1f}')
+                    .map(String::from)
+                    .collect(),
+                count: count.max(0) as u64,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+}
+
+/// Phase10c — assert the bootstrap dedup ledger exists on `conn`.
+/// The bundled `schema.sql` creates the table at every
+/// [`MetadataStore::open`]; this helper exists so callers that
+/// hold a borrowed connection can be explicit about the
+/// dependency. Idempotent (`CREATE TABLE IF NOT EXISTS`).
+pub fn apply_phase10c_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS bootstrap_seen (
+            repo            TEXT NOT NULL,
+            path            TEXT NOT NULL,
+            content_hash    TEXT NOT NULL,
+            last_run_id     TEXT,
+            last_emitted_at TEXT NOT NULL,
+            PRIMARY KEY (repo, path)
+        );
+        CREATE INDEX IF NOT EXISTS bootstrap_seen_hash ON bootstrap_seen (repo, content_hash);",
+    )?;
+    Ok(())
 }
 
 /// Phase9k — assert the cron scheduler registry exists on `conn`.
@@ -848,6 +1045,35 @@ pub fn hour_bucket_rfc3339(ts: DateTime<Utc>) -> String {
         .and_then(|t| t.with_nanosecond(0))
         .unwrap_or(ts);
     truncated.format("%Y-%m-%dT%H:00:00Z").to_string()
+}
+
+/// Phase10c — one row from `bootstrap_seen`. The walker reads
+/// this to decide whether a re-emit is needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapSeenRow {
+    /// `sha256:<hex>` over the redacted file body.
+    pub content_hash: String,
+    /// Last `run_id` (ULID) that emitted this row, when known.
+    pub last_run_id: Option<String>,
+    /// RFC-3339 timestamp of the last emit.
+    pub last_emitted_at: String,
+}
+
+/// Phase10c — one duplicate group surfaced by the dedup CLI:
+/// every `bootstrap_seen` row that shares a `content_hash` within
+/// the same repo. Group size ≥ 2 by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapSeenDuplicate {
+    /// Shared `sha256:<hex>` content hash.
+    pub content_hash: String,
+    /// Distinct paths whose redacted body hashed to the same
+    /// value. Sorted (SQLite `GROUP_CONCAT` returns them in row
+    /// order, which we then split on the unit-separator
+    /// delimiter).
+    pub paths: Vec<String>,
+    /// Number of paths in the group (always equal to
+    /// `paths.len()`).
+    pub count: u64,
 }
 
 /// Phase9a — one row from `retention_sweeps`.
@@ -1203,5 +1429,189 @@ mod tests {
         assert_eq!(pre_runs, post_runs);
         assert_eq!(pre_files, post_files);
         assert_eq!(pre_chunks, post_chunks);
+    }
+
+    // ---------- phase10c bootstrap dedup ----------
+
+    #[test]
+    fn bootstrap_seen_lookup_returns_none_for_unknown_path() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let row = store
+            .bootstrap_seen_lookup("Cortex", "src/lib.rs")
+            .unwrap();
+        assert!(row.is_none());
+    }
+
+    #[test]
+    fn bootstrap_seen_upsert_then_lookup_round_trips_hash() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let when = now();
+        store
+            .bootstrap_seen_upsert(
+                "Cortex",
+                "src/lib.rs",
+                "sha256:abc",
+                Some("01RUN"),
+                when,
+            )
+            .unwrap();
+        let row = store
+            .bootstrap_seen_lookup("Cortex", "src/lib.rs")
+            .unwrap()
+            .expect("row present after upsert");
+        assert_eq!(row.content_hash, "sha256:abc");
+        assert_eq!(row.last_run_id.as_deref(), Some("01RUN"));
+    }
+
+    #[test]
+    fn bootstrap_seen_upsert_replaces_existing_row_for_same_path() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let when = now();
+        store
+            .bootstrap_seen_upsert("Cortex", "src/lib.rs", "sha256:v1", Some("01R1"), when)
+            .unwrap();
+        // Same (repo, path) with a different hash -> replace.
+        store
+            .bootstrap_seen_upsert(
+                "Cortex",
+                "src/lib.rs",
+                "sha256:v2",
+                Some("01R2"),
+                when + chrono::Duration::seconds(60),
+            )
+            .unwrap();
+        let row = store
+            .bootstrap_seen_lookup("Cortex", "src/lib.rs")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.content_hash, "sha256:v2");
+        assert_eq!(row.last_run_id.as_deref(), Some("01R2"));
+        // Count is still 1 — same primary key means upsert, not insert.
+        assert_eq!(store.bootstrap_seen_count(Some("Cortex")).unwrap(), 1);
+    }
+
+    #[test]
+    fn bootstrap_seen_count_scopes_to_repo_when_set() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let when = now();
+        store
+            .bootstrap_seen_upsert("A", "f1", "sha256:1", None, when)
+            .unwrap();
+        store
+            .bootstrap_seen_upsert("A", "f2", "sha256:2", None, when)
+            .unwrap();
+        store
+            .bootstrap_seen_upsert("B", "f1", "sha256:1", None, when)
+            .unwrap();
+        assert_eq!(store.bootstrap_seen_count(Some("A")).unwrap(), 2);
+        assert_eq!(store.bootstrap_seen_count(Some("B")).unwrap(), 1);
+        assert_eq!(store.bootstrap_seen_count(None).unwrap(), 3);
+    }
+
+    #[test]
+    fn bootstrap_seen_duplicates_by_hash_groups_paths() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let when = now();
+        // Two paths sharing the same hash → one duplicate group.
+        store
+            .bootstrap_seen_upsert("R", "a.md", "sha256:dup", None, when)
+            .unwrap();
+        store
+            .bootstrap_seen_upsert("R", "b.md", "sha256:dup", None, when)
+            .unwrap();
+        // Distinct hash → not in the dup output.
+        store
+            .bootstrap_seen_upsert("R", "c.md", "sha256:unique", None, when)
+            .unwrap();
+        let dups = store.bootstrap_seen_duplicates_by_hash("R").unwrap();
+        assert_eq!(dups.len(), 1);
+        assert_eq!(dups[0].content_hash, "sha256:dup");
+        assert_eq!(dups[0].count, 2);
+        assert!(dups[0].paths.contains(&"a.md".to_string()));
+        assert!(dups[0].paths.contains(&"b.md".to_string()));
+    }
+
+    // ---------- phase10i — session tool preservation ----------
+
+    fn read_session_tool(store: &MetadataStore, session_id: &str) -> Option<String> {
+        store
+            .conn
+            .query_row(
+                "SELECT tool FROM sessions WHERE session_id = ?1",
+                params![session_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .unwrap()
+            .flatten()
+    }
+
+    #[test]
+    fn upsert_session_preserves_tool_when_subsequent_write_passes_empty() {
+        // phase10i — the audit caught 574 sessions with `tool IS
+        // NULL` because the pre-phase10i upsert wrote
+        // `tool=excluded.tool` unconditionally; lifecycle hooks
+        // that didn't capture the tool name (Stop / Notification)
+        // overwrote the session-start value with ''. The new
+        // upsert's `COALESCE(NULLIF(excluded.tool, ''), sessions.tool)`
+        // preserves the original.
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .upsert_session("01SESSA", "claude-code", None, None, None, now())
+            .unwrap();
+        assert_eq!(read_session_tool(&store, "01SESSA").as_deref(), Some("claude-code"));
+        // Subsequent upsert with empty tool — must NOT overwrite.
+        store
+            .upsert_session("01SESSA", "", Some("sonnet"), None, None, now())
+            .unwrap();
+        assert_eq!(
+            read_session_tool(&store, "01SESSA").as_deref(),
+            Some("claude-code"),
+            "empty tool on conflict must preserve the existing value"
+        );
+    }
+
+    #[test]
+    fn upsert_session_inserts_empty_tool_when_first_write_passes_empty() {
+        // First write with empty tool: schema declares
+        // `tool TEXT NOT NULL` so the literal `''` is stored
+        // (NULL would violate the constraint). The backfill
+        // CLI later stamps it via `set_session_tool`; the
+        // `sessions_missing_tool` query catches both `''` and
+        // `NULL`.
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .upsert_session("01SESSB", "", None, None, None, now())
+            .unwrap();
+        assert_eq!(read_session_tool(&store, "01SESSB").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn set_session_tool_stamps_value_and_returns_rowcount() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .upsert_session("01SESSC", "", None, None, None, now())
+            .unwrap();
+        let touched = store.set_session_tool("01SESSC", "claude-code").unwrap();
+        assert_eq!(touched, 1);
+        assert_eq!(read_session_tool(&store, "01SESSC").as_deref(), Some("claude-code"));
+        // Empty tool is a no-op.
+        let touched_empty = store.set_session_tool("01SESSC", "").unwrap();
+        assert_eq!(touched_empty, 0);
+    }
+
+    #[test]
+    fn sessions_missing_tool_lists_only_null_or_empty_rows() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .upsert_session("01SESSD", "claude-code", None, None, None, now())
+            .unwrap();
+        store
+            .upsert_session("01SESSE", "", None, None, None, now())
+            .unwrap();
+        let pending = store.sessions_missing_tool(10).unwrap();
+        let ids: Vec<String> = pending.iter().map(|(id, _)| id.clone()).collect();
+        assert!(!ids.contains(&"01SESSD".to_string()));
+        assert!(ids.contains(&"01SESSE".to_string()));
     }
 }

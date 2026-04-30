@@ -85,6 +85,7 @@ mod tests {
                     symbol: None,
                     content_hash: None,
                     text: "AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE0000".to_string(),
+                    body_truncated: false,
                     score: 0.0,
                     why: None,
                 }],

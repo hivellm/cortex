@@ -114,7 +114,22 @@ pub struct ChunkMetadata {
 | `decision`              | `decisions`              | Small N, very high weight; favors recall > latency          |
 | `turn.*`                | `turns`                  | High write throughput; favors insert rate                   |
 | `law` / `law_violation` | `governance`             | Small, long-lived; per-deployment                            |
+| `knowledge` (phase10e)  | `knowledge`              | Single-tier; small + dense; reference material              |
+| `learning` (phase10e)   | `learnings`              | Single-tier; high signal; preserved at full precision       |
 | everything else         | `misc`                   | Catch-all                                                   |
+
+#### Single-tier kinds (phase10e)
+
+`knowledge` + `learning` are deliberately **single-tier** (no PQ
+warm tier). The corpus is tiny (~60 entries / repo for the
+canonical Hive workspace), dense (every entry was hand-curated),
+and high-signal (each was written specifically because someone
+made a mistake worth not repeating). Demoting to a PQ tier would
+lose precision the agent needs when re-reading the entry
+verbatim — the cost of keeping every vector in `fp32` is
+trivial compared to the retrieval-quality hit. See
+[spec 02 §Knowledge + Learnings corpus (phase10e)](./02-storage-layout.md#knowledge--learnings-corpus-phase10e)
+for the cross-store contract.
 
 The full collection name is `{prefix}-{repo_slug}-{family}` (default prefix `cortex`). Per-project isolation is mandatory: every event carries a `context.repo` from the upstream emitter, the routing layer slugifies it through `cortex_storage::names::slug_for_repo`, and each repo writes into its own collection — `cortex-cortex-docs`, `cortex-tml-code`, `cortex-vectorizer-turns`, etc. Events with no `context.repo` route to the `unknown` slug so the produced name is always well-formed; downstream queries can scope to a single repo (or fan out across slugs in a future revision).
 

@@ -261,6 +261,12 @@ fn symbol_to_kind(symbol: Option<&str>) -> &'static str {
         Some("decision") => "decision",
         Some("analysis") => "analysis",
         Some("law_violation") => "law_violation",
+        // phase10e — knowledge / learnings now have their own
+        // dedicated kinds; without these branches they collapsed
+        // into the catch-all "turn" bucket and the dashboard's
+        // Memory tab never surfaced them distinctly.
+        Some("knowledge") => "knowledge",
+        Some("learning") => "learning",
         // `memory` is the canonical kind the meili_loader stamps on
         // hits projected from `.rulebook/{handoff,specs,knowledge,
         // learnings}/**` — without this branch they collapsed into
@@ -268,6 +274,56 @@ fn symbol_to_kind(symbol: Option<&str>) -> &'static str {
         Some("memory") => "memory",
         Some("turn") | None => "turn",
         Some(_) => "turn",
+    }
+}
+
+/// phase10f — canonical set the dashboard accepts on
+/// `/v1/dashboard/memory?kind=...` (plus `?facets=...` alias).
+/// Mirrors [`symbol_to_kind`]'s output domain. Any other value
+/// surfaces as a structured `400 unknown_kind` so callers see
+/// the bug at the API boundary instead of silently getting an
+/// empty result set.
+const CANONICAL_KINDS: &[&str] = &[
+    "turn",
+    "tool_call",
+    "agent_call",
+    "memory",
+    "decision",
+    "analysis",
+    "law_violation",
+    "knowledge",
+    "learning",
+];
+
+/// Resolve the user-supplied `?kind=` and `?facets=` lists into
+/// the canonical filter set. Returns `Err((unknown_value))` when
+/// any value is outside [`CANONICAL_KINDS`] so the handler can
+/// emit the structured 400 directly. An empty selection (no
+/// `kind` AND no `facets`) returns `Ok(None)` — the caller
+/// treats `None` as "all kinds".
+fn resolve_kind_filter(
+    kinds: &[String],
+    facets: &[String],
+) -> Result<Option<std::collections::HashSet<String>>, String> {
+    let merged: Vec<&String> = kinds.iter().chain(facets.iter()).collect();
+    if merged.iter().all(|k| k.is_empty()) {
+        return Ok(None);
+    }
+    let mut allowed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for raw in merged {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !CANONICAL_KINDS.contains(&trimmed) {
+            return Err(trimmed.to_string());
+        }
+        allowed.insert(trimmed.to_string());
+    }
+    if allowed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(allowed))
     }
 }
 
@@ -608,9 +664,17 @@ pub struct MemoryQuery {
     /// the listed repos.
     #[serde(default)]
     pub repo: Vec<String>,
-    /// Restrict to one canonical kind.
+    /// phase10f — restrict to one or more canonical kinds. Repeat
+    /// the param (`?kind=decision&kind=analysis`) to OR multiple
+    /// kinds. Empty list means "all kinds".
     #[serde(default)]
-    pub kind: Option<String>,
+    pub kind: Vec<String>,
+    /// phase10f — alias for [`Self::kind`]. The pre-phase10f
+    /// dashboard contract documented `?facets=` but the handler
+    /// never read it; treating it as a synonym keeps existing
+    /// callers working while the GUI migrates to `?kind=`.
+    #[serde(default)]
+    pub facets: Vec<String>,
 }
 
 /// One memory row — shape matches the prototype's `MOCK.memories`.
@@ -640,6 +704,24 @@ async fn memory(
     let limit = params.limit.unwrap_or(50).clamp(1, 500);
     let q = params.q.unwrap_or_default();
 
+    // phase10f — resolve the kind filter UP-FRONT so an unknown
+    // value short-circuits to a structured 400 before we touch
+    // the lane snapshot. The audit caught the pre-phase10f
+    // handler ignoring the param silently and surfacing
+    // `tool_call`/`turn` regardless of what the caller asked
+    // for.
+    let kind_allow = match resolve_kind_filter(&params.kind, &params.facets) {
+        Ok(allow) => allow,
+        Err(received) => {
+            let body = serde_json::json!({
+                "error": "unknown_kind",
+                "received": received,
+                "canonical": CANONICAL_KINDS,
+            });
+            return (StatusCode::BAD_REQUEST, Json(body)).into_response();
+        }
+    };
+
     let mut hits = collect_lane_hits(&state.lane);
     if let Some(sid) = params.session_id.as_deref().filter(|s| !s.is_empty()) {
         hits.retain(|h| session_id_of(h) == Some(sid));
@@ -649,8 +731,12 @@ async fn memory(
             params.repo.iter().map(String::as_str).collect();
         hits.retain(|h| h.repo.as_deref().map(|r| allow.contains(r)).unwrap_or(false));
     }
-    if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
-        hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
+    // phase10f §1.2 — apply the kind filter BEFORE pagination so
+    // `limit=80` returns 80 rows of the requested kinds, not 80
+    // mixed-kind rows from which the requested kinds are then
+    // sliced down to a handful.
+    if let Some(allow) = kind_allow.as_ref() {
+        hits.retain(|h| allow.contains(symbol_to_kind(h.symbol.as_deref())));
     }
     if !q.trim().is_empty() {
         let needle = q.to_ascii_lowercase();
@@ -3622,7 +3708,8 @@ mod tests {
                 limit: None,
                 session_id: None,
                 repo: Vec::new(),
-                kind: None,
+                kind: Vec::new(),
+                facets: Vec::new(),
             }),
         )
         .await;
@@ -3648,7 +3735,8 @@ mod tests {
                 limit: None,
                 session_id: None,
                 repo: Vec::new(),
-                kind: None,
+                kind: Vec::new(),
+                facets: Vec::new(),
             }),
         )
         .await;
@@ -3874,6 +3962,274 @@ mod tests {
         assert_eq!(parsed[0]["session_id"], "01SESSIONB0000000000000002");
     }
 
+    fn decision_hit(text: &str, repo: &str, ts: i64) -> LaneHit {
+        LaneHit {
+            doc_id: format!("archive|dec-{ts}"),
+            text: text.to_string(),
+            repo: Some(repo.to_string()),
+            path: None,
+            symbol: Some("decision".to_string()),
+            content_hash: None,
+            score: 1.0,
+            ts,
+            severity: None,
+            extras: BTreeMap::new(),
+        }
+    }
+
+    fn analysis_hit(text: &str, repo: &str, ts: i64) -> LaneHit {
+        LaneHit {
+            doc_id: format!("archive|an-{ts}"),
+            text: text.to_string(),
+            repo: Some(repo.to_string()),
+            path: None,
+            symbol: Some("analysis".to_string()),
+            content_hash: None,
+            score: 1.0,
+            ts,
+            severity: None,
+            extras: BTreeMap::new(),
+        }
+    }
+
+    fn knowledge_hit(text: &str, repo: &str, ts: i64) -> LaneHit {
+        LaneHit {
+            doc_id: format!("archive|k-{ts}"),
+            text: text.to_string(),
+            repo: Some(repo.to_string()),
+            path: None,
+            symbol: Some("knowledge".to_string()),
+            content_hash: None,
+            score: 1.0,
+            ts,
+            severity: None,
+            extras: BTreeMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn memory_kind_filter_returns_only_decisions_when_decision_requested() {
+        // phase10f §3.1 — `?kind=decision` MUST return ONLY
+        // `kind = decision` rows. The pre-phase10f handler
+        // accepted `?kind=` but the GUI's `?facets=` alias
+        // never reached the lane, so callers got the most
+        // recent rows regardless of the filter.
+        let lane = lane_with(vec![
+            turn_hit("note", "Cortex", 100),
+            tool_call_hit("Edit", "x", "Cortex", 200),
+            decision_hit("DEC-0042", "Cortex", 150),
+            analysis_hit("audit-a", "Cortex", 175),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: None,
+                session_id: None,
+                repo: Vec::new(),
+                kind: vec!["decision".to_string()],
+                facets: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["kind"], "decision");
+        // The decision-shaped excerpt carries the body text the
+        // fixture stamped (`DEC-0042`); `title_from_hit`
+        // surfaces the symbol label for non-turn hits.
+        assert_eq!(parsed[0]["excerpt"], "DEC-0042");
+    }
+
+    #[tokio::test]
+    async fn memory_kind_filter_ors_multiple_kinds() {
+        // phase10f §1.1 — repeated `?kind=...` ORs the values.
+        let lane = lane_with(vec![
+            turn_hit("note", "Cortex", 100),
+            decision_hit("DEC-0042", "Cortex", 150),
+            analysis_hit("audit-a", "Cortex", 175),
+            knowledge_hit("Pattern: RRF", "Cortex", 180),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: None,
+                session_id: None,
+                repo: Vec::new(),
+                kind: vec!["decision".to_string(), "analysis".to_string()],
+                facets: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 2);
+        let kinds: std::collections::HashSet<String> = parsed
+            .iter()
+            .map(|p| p["kind"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(kinds.contains("decision"));
+        assert!(kinds.contains("analysis"));
+        assert!(!kinds.contains("turn"));
+        assert!(!kinds.contains("knowledge"));
+    }
+
+    #[tokio::test]
+    async fn memory_facets_param_is_alias_for_kind() {
+        // phase10f §1.1 — `?facets=knowledge` must work as the
+        // alias for `?kind=knowledge` (the GUI's existing query
+        // shape).
+        let lane = lane_with(vec![
+            turn_hit("note", "Cortex", 100),
+            knowledge_hit("Pattern: RRF", "Cortex", 200),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: None,
+                session_id: None,
+                repo: Vec::new(),
+                kind: Vec::new(),
+                facets: vec!["knowledge".to_string()],
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["kind"], "knowledge");
+    }
+
+    #[tokio::test]
+    async fn memory_unknown_kind_returns_structured_400() {
+        // phase10f §1.3 — caller-error visibility. An unknown
+        // kind value MUST surface as 400 with the structured
+        // body so callers see the typo at the API boundary
+        // instead of silently getting an empty result set.
+        let lane = lane_with(vec![turn_hit("note", "Cortex", 100)]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: None,
+                session_id: None,
+                repo: Vec::new(),
+                kind: vec!["foo".to_string()],
+                facets: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "unknown_kind");
+        assert_eq!(parsed["received"], "foo");
+        let canonical = parsed["canonical"].as_array().unwrap();
+        assert!(canonical.iter().any(|v| v == "decision"));
+        assert!(canonical.iter().any(|v| v == "knowledge"));
+    }
+
+    #[tokio::test]
+    async fn memory_kind_filter_applies_before_pagination() {
+        // phase10f §1.2 — `limit=2` AND `kind=decision` returns
+        // up to 2 decision rows, NOT 2 mixed rows from which
+        // only matching decisions remain. The pre-phase10f
+        // handler clamped first then filtered, so a small limit
+        // dropped the requested rows entirely.
+        let lane = lane_with(vec![
+            turn_hit("note 1", "Cortex", 1000),
+            turn_hit("note 2", "Cortex", 990),
+            turn_hit("note 3", "Cortex", 980),
+            decision_hit("DEC-A", "Cortex", 200),
+            decision_hit("DEC-B", "Cortex", 150),
+        ]);
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
+                std::path::PathBuf::from("__tests_no_rulebook__"),
+            )),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
+        let resp = memory(
+            State(state),
+            Query(MemoryQuery {
+                q: None,
+                limit: Some(2),
+                session_id: None,
+                repo: Vec::new(),
+                kind: vec!["decision".to_string()],
+                facets: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Vec<Value> = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed.len(), 2);
+        for row in &parsed {
+            assert_eq!(row["kind"], "decision");
+        }
+    }
+
     #[tokio::test]
     async fn memory_filter_by_repo_and_kind_combine() {
         let lane = lane_with(vec![
@@ -3889,7 +4245,8 @@ mod tests {
                 limit: None,
                 session_id: None,
                 repo: vec!["Cortex".to_string()],
-                kind: Some("turn".to_string()),
+                kind: vec!["turn".to_string()],
+                facets: Vec::new(),
             }),
         )
         .await;

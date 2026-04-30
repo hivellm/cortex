@@ -20,6 +20,10 @@ const SETTINGS_DECISIONS: &str = include_str!("../schemas/meili/cortex_decisions
 const SETTINGS_ANALYSES: &str = include_str!("../schemas/meili/cortex_analyses.settings.v1.json");
 const SETTINGS_MEMORIES: &str = include_str!("../schemas/meili/cortex_memories.settings.v1.json");
 const SETTINGS_LAWS: &str = include_str!("../schemas/meili/cortex_laws.settings.v1.json");
+const SETTINGS_KNOWLEDGE: &str =
+    include_str!("../schemas/meili/cortex_knowledge.settings.v1.json");
+const SETTINGS_LEARNINGS: &str =
+    include_str!("../schemas/meili/cortex_learnings.settings.v1.json");
 
 /// Every Meilisearch index Cortex expects to exist.
 pub const INDEXES: &[IndexDescriptor] = &[
@@ -62,6 +66,19 @@ pub const INDEXES: &[IndexDescriptor] = &[
         name: crate::names::INDEX_LAWS,
         primary_key: "law_id",
         settings_json: SETTINGS_LAWS,
+    },
+    // phase10e — knowledge + learnings each get their own
+    // dedicated index so the orchestrator can fan out to them
+    // without diluting the catch-all `cortex_memories` index.
+    IndexDescriptor {
+        name: crate::names::INDEX_KNOWLEDGE,
+        primary_key: "knowledge_id",
+        settings_json: SETTINGS_KNOWLEDGE,
+    },
+    IndexDescriptor {
+        name: crate::names::INDEX_LEARNINGS,
+        primary_key: "learning_id",
+        settings_json: SETTINGS_LEARNINGS,
     },
 ];
 

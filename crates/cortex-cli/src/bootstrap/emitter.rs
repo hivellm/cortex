@@ -165,6 +165,12 @@ pub fn emit_turn_historical(
 }
 
 /// Build the `decision.imported` event for one ADR / OpenSpec body.
+///
+/// phase10i — the front-matter parser extracts `author`, `Date`
+/// (→ RFC-3339 `occurred_at`), and `Related Tasks` / `Related
+/// Analyses` (→ `source_analysis`) so the dashboard can sort
+/// decisions by date, surface the author, and trace each ADR
+/// back to the analysis that produced it.
 pub fn emit_decision_imported(
     repo_id: &str,
     session_id: &str,
@@ -175,12 +181,23 @@ pub fn emit_decision_imported(
 ) -> BootstrapEvent {
     let parsed = parse_decision_markdown(body, rel_path);
     let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
-    let payload = json!({
+    let mut payload = json!({
         "title": parsed.title,
         "status": parsed.status,
         "supersedes": parsed.supersedes,
         "body": body,
     });
+    if let Some(map) = payload.as_object_mut() {
+        if let Some(author) = parsed.author {
+            map.insert("author".into(), Value::String(author));
+        }
+        if let Some(occurred_at) = parsed.occurred_at {
+            map.insert("occurred_at".into(), Value::String(occurred_at));
+        }
+        if let Some(source_analysis) = parsed.source_analysis {
+            map.insert("source_analysis".into(), Value::String(source_analysis));
+        }
+    }
     finalise("decision.imported", session_id, source, payload, stream)
 }
 
@@ -356,14 +373,59 @@ pub fn emit_analysis_imported(
 ) -> BootstrapEvent {
     let title = derive_doc_title(body, rel_path);
     let status = derive_status(body).unwrap_or_else(|| "draft".to_string());
+    // phase10i — pull `Author:` + `Date:` from the analysis
+    // README's front-matter so downstream surfaces can attribute
+    // + sort by date.
+    let author = derive_author(body);
+    let occurred_at = derive_occurred_at(body);
     let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
-    let payload = json!({
+    let mut payload = json!({
         "title": title,
         "status": status,
         "body": body,
         "source_path": rel_path,
     });
+    if let Some(map) = payload.as_object_mut() {
+        if let Some(author) = author {
+            map.insert("author".into(), Value::String(author));
+        }
+        if let Some(occurred_at) = occurred_at {
+            map.insert("occurred_at".into(), Value::String(occurred_at));
+        }
+    }
     finalise("analysis.imported", session_id, source, payload, stream)
+}
+
+/// phase10i — extract the `Author:` value from a front-matter
+/// block. Mirrors [`derive_status`] in scanning rules but
+/// returns the entire trimmed value rather than the first token.
+fn derive_author(body: &str) -> Option<String> {
+    for line in body.lines().take(40) {
+        let unbolded = unbold_label(line.trim());
+        let trimmed: &str = &unbolded;
+        if let Some(rest) = strip_prefix_ci(trimmed, "author:") {
+            let v = rest.trim();
+            if !v.is_empty() && !v.eq_ignore_ascii_case("unknown") {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// phase10i — extract the `Date:` value, normalising via
+/// [`front_matter_date_to_rfc3339`] so the wire shape carries an
+/// RFC-3339 timestamp regardless of whether the source used a
+/// bare date or a full ISO-8601 string.
+fn derive_occurred_at(body: &str) -> Option<String> {
+    for line in body.lines().take(40) {
+        let unbolded = unbold_label(line.trim());
+        let trimmed: &str = &unbolded;
+        if let Some(rest) = strip_prefix_ci(trimmed, "date:") {
+            return front_matter_date_to_rfc3339(rest.trim());
+        }
+    }
+    None
 }
 
 /// Extract a `Status:` line value from the body, case-insensitive,
@@ -399,6 +461,74 @@ fn derive_status(body: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// phase10e — build the `knowledge.imported` event for one
+/// `.rulebook/knowledge/**/*.md` entry. Discriminates `pattern`
+/// vs `anti-pattern` from the path: nested directories like
+/// `.rulebook/knowledge/anti-patterns/...` win over the parent
+/// glob, the rest defaults to `pattern`. The synthetic
+/// `knowledge_id` is `<repo>:<rel_path-stem>` so the
+/// graph-mapper's natural-key writes survive a re-walk
+/// idempotently.
+pub fn emit_knowledge_imported(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    rel_path: &str,
+    body: &str,
+    stream: &str,
+) -> BootstrapEvent {
+    let title = derive_doc_title(body, rel_path);
+    let category = if rel_path.contains("/anti-pattern") || rel_path.contains("/anti_pattern") {
+        "anti-pattern"
+    } else {
+        "pattern"
+    };
+    let knowledge_id = synth_id(repo_id, rel_path);
+    let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
+    let payload = json!({
+        "knowledge_id": knowledge_id,
+        "title": title,
+        "category": category,
+        "body": body,
+        "source_path": rel_path,
+    });
+    finalise("knowledge.imported", session_id, source, payload, stream)
+}
+
+/// phase10e — build the `learning.imported` event for one
+/// `.rulebook/learnings/**/*.md` entry. The synthetic
+/// `learning_id` mirrors [`emit_knowledge_imported`].
+pub fn emit_learning_imported(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    rel_path: &str,
+    body: &str,
+    stream: &str,
+) -> BootstrapEvent {
+    let title = derive_doc_title(body, rel_path);
+    let learning_id = synth_id(repo_id, rel_path);
+    let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
+    let payload = json!({
+        "learning_id": learning_id,
+        "title": title,
+        "body": body,
+        "source_path": rel_path,
+    });
+    finalise("learning.imported", session_id, source, payload, stream)
+}
+
+/// phase10e — synthesise a stable id from `(repo, rel_path)`. The
+/// path's filename stem is the human-readable anchor; prefixing
+/// the repo keeps cross-repo collisions out of Nexus.
+fn synth_id(repo_id: &str, rel_path: &str) -> String {
+    let stem = std::path::Path::new(rel_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(rel_path);
+    format!("{repo_id}:{stem}")
 }
 
 /// Build the `memory.imported` event for one memory file.
@@ -477,14 +607,35 @@ struct DecisionParsed {
     title: String,
     status: String,
     supersedes: Option<String>,
+    /// phase10i — author from the `Author:` / `**Author**:`
+    /// front-matter line. `None` when the ADR does not list one.
+    author: Option<String>,
+    /// phase10i — RFC-3339 timestamp parsed from the `Date:` /
+    /// `**Date**:` front-matter. `None` when missing or unparseable.
+    occurred_at: Option<String>,
+    /// phase10i — `docs/analysis/<slug>` path scraped from the
+    /// `Related Tasks:` / `Related Analyses:` front-matter. The
+    /// graph mapper uses this to attach the decision to the
+    /// analysis that produced it.
+    source_analysis: Option<String>,
 }
 
 fn parse_decision_markdown(body: &str, rel_path: &str) -> DecisionParsed {
     let mut title: Option<String> = None;
     let mut status: Option<String> = None;
     let mut supersedes: Option<String> = None;
+    let mut author: Option<String> = None;
+    let mut occurred_at: Option<String> = None;
+    let mut source_analysis: Option<String> = None;
     for line in body.lines() {
-        let trimmed = line.trim();
+        // phase10i — handle the bolded-label markdown convention
+        // (`**Status**: accepted`) alongside the bare
+        // (`Status: accepted`) form. `unbold_label` collapses
+        // `**LABEL**: value` to `LABEL: value` so the
+        // case-insensitive prefix scanner matches both shapes
+        // uniformly.
+        let unbolded = unbold_label(line.trim());
+        let trimmed: &str = &unbolded;
         if title.is_none() {
             if let Some(rest) = trimmed.strip_prefix("# ") {
                 title = Some(rest.trim().to_string());
@@ -504,12 +655,104 @@ fn parse_decision_markdown(body: &str, rel_path: &str) -> DecisionParsed {
                 }
             }
         }
+        if let Some(rest) = strip_prefix_ci(trimmed, "author:") {
+            if author.is_none() {
+                let v = rest.trim();
+                if !v.is_empty() && !v.eq_ignore_ascii_case("unknown") {
+                    author = Some(v.to_string());
+                }
+            }
+        }
+        if let Some(rest) = strip_prefix_ci(trimmed, "date:") {
+            if occurred_at.is_none() {
+                occurred_at = front_matter_date_to_rfc3339(rest.trim());
+            }
+        }
+        // `Related Tasks` / `Related Analyses` may list multiple
+        // entries; capture the first `docs/analysis/...` mention
+        // so the graph mapper can attach the decision to its
+        // source.
+        if source_analysis.is_none() {
+            for label in ["related tasks:", "related analyses:", "source analysis:"] {
+                if let Some(rest) = strip_prefix_ci(trimmed, label) {
+                    if let Some(slug) = extract_analysis_slug(rest) {
+                        source_analysis = Some(slug);
+                    }
+                }
+            }
+        }
     }
     DecisionParsed {
         title: title.unwrap_or_else(|| filename_stem(rel_path)),
         status: status.unwrap_or_else(|| "proposed".to_string()),
         supersedes,
+        author,
+        occurred_at,
+        source_analysis,
     }
+}
+
+/// phase10i — collapse a leading `**LABEL**` wrapper into bare
+/// `LABEL` so `**Status**: accepted` and `Status: accepted`
+/// flow through the same `strip_prefix_ci` scanner. Returns the
+/// input unchanged when no matching `**…**` opener-closer pair
+/// sits before the first `:` (defensive: `bold *italic*: not a
+/// label` rounds through verbatim).
+fn unbold_label(line: &str) -> std::borrow::Cow<'_, str> {
+    let Some(after_open) = line.strip_prefix("**") else {
+        return std::borrow::Cow::Borrowed(line);
+    };
+    let close = match after_open.find("**") {
+        Some(i) => i,
+        None => return std::borrow::Cow::Borrowed(line),
+    };
+    // Reject lines whose `:` lands inside / before the opener-
+    // closer pair (the `**` wrapper isn't around the label).
+    if let Some(colon) = after_open.find(':') {
+        if colon < close {
+            return std::borrow::Cow::Borrowed(line);
+        }
+    }
+    let label = &after_open[..close];
+    let tail = &after_open[close + 2..];
+    std::borrow::Cow::Owned(format!("{label}{tail}"))
+}
+
+/// phase10i — parse a front-matter `Date:` value into an RFC-3339
+/// timestamp. Accepts `YYYY-MM-DD` (most common ADR shape) and
+/// passes already-RFC-3339 inputs through unchanged. Returns
+/// `None` for unparseable values so the caller treats the field
+/// as absent rather than stamping garbage.
+fn front_matter_date_to_rfc3339(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    // Already RFC-3339 / ISO-8601 with time + zone.
+    if chrono::DateTime::parse_from_rfc3339(raw).is_ok() {
+        return Some(raw.to_string());
+    }
+    // YYYY-MM-DD → midnight UTC of that day.
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        return Some(format!("{}T00:00:00Z", date.format("%Y-%m-%d")));
+    }
+    None
+}
+
+/// phase10i — pull the first `docs/analysis/<slug>` path from a
+/// `Related Tasks` / `Related Analyses` front-matter line. The
+/// scanner accepts comma-separated and whitespace-separated
+/// lists alike. Returns `None` when nothing matches.
+fn extract_analysis_slug(line: &str) -> Option<String> {
+    for token in line.split(|c: char| c == ',' || c.is_whitespace()) {
+        let token = token.trim_matches(|c: char| {
+            c == '`' || c == '"' || c == '\'' || c == '(' || c == ')'
+        });
+        if token.starts_with("docs/analysis/") {
+            return Some(token.to_string());
+        }
+    }
+    None
 }
 
 /// Case-insensitive prefix strip that returns the remainder of the
@@ -673,6 +916,15 @@ pub fn emit_for_file_multi(
         FileClass::Analysis => vec![emit_analysis_imported(
             repo_id, session_id, git_ref, rel_path, body, stream,
         )],
+        // phase10e — dedicated kinds; emitted per-file with the
+        // rel_path-derived synthetic id so re-walks remain
+        // idempotent.
+        FileClass::Knowledge => vec![emit_knowledge_imported(
+            repo_id, session_id, git_ref, rel_path, body, stream,
+        )],
+        FileClass::Learning => vec![emit_learning_imported(
+            repo_id, session_id, git_ref, rel_path, body, stream,
+        )],
         FileClass::Other => Vec::new(),
     }
 }
@@ -787,6 +1039,87 @@ mod tests {
         assert_eq!(evt.redacted_payload["title"], "Adopt Meilisearch");
         assert_eq!(evt.redacted_payload["status"], "accepted");
         assert_eq!(evt.redacted_payload["supersedes"], "ADR-0001");
+    }
+
+    #[test]
+    fn decision_imported_phase10i_metadata_fields_round_trip() {
+        // phase10i §2.2 — `Date:` (YYYY-MM-DD) lands as RFC-3339
+        // `occurred_at`; `Author:` round-trips verbatim;
+        // `Related Tasks:` mention of `docs/analysis/<slug>` lands
+        // as `source_analysis`.
+        let body = "# Adopt RRF fusion\n\
+                    \n\
+                    **Status**: accepted\n\
+                    **Date**: 2026-04-22\n\
+                    **Author**: Andre Ferreira\n\
+                    **Related Tasks**: docs/analysis/relevance, phase10a_query_lane_wiring\n\
+                    \n\
+                    Body of the ADR.\n";
+        let evt = emit_decision_imported(
+            "cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            ".rulebook/decisions/0042-adopt-rrf-fusion.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(evt.redacted_payload["occurred_at"], "2026-04-22T00:00:00Z");
+        assert_eq!(evt.redacted_payload["author"], "Andre Ferreira");
+        assert_eq!(
+            evt.redacted_payload["source_analysis"],
+            "docs/analysis/relevance"
+        );
+        assert_eq!(evt.redacted_payload["status"], "accepted");
+    }
+
+    #[test]
+    fn decision_imported_skips_unknown_author_and_invalid_date() {
+        // phase10i — `Author: Unknown` + a malformed `Date:` must
+        // NOT stamp garbage on the wire. The fields stay absent so
+        // the dashboard's date sort + author column degrade
+        // gracefully instead of showing nonsense.
+        let body = "# Skeleton\n\
+                    \n\
+                    Status: proposed\n\
+                    Date: tomorrow\n\
+                    Author: Unknown\n";
+        let evt = emit_decision_imported(
+            "cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            ".rulebook/decisions/0099-skel.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert!(
+            evt.redacted_payload.get("occurred_at").is_none(),
+            "malformed Date must not leak onto the wire"
+        );
+        assert!(
+            evt.redacted_payload.get("author").is_none(),
+            "Author = `Unknown` must not stamp"
+        );
+    }
+
+    #[test]
+    fn analysis_imported_phase10i_stamps_author_and_occurred_at() {
+        let body = "# Relevance audit\n\
+                    \n\
+                    Status: complete\n\
+                    Date: 2026-04-29\n\
+                    Author: Andre Ferreira\n\
+                    \n\
+                    Findings...\n";
+        let evt = emit_analysis_imported(
+            "cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            "docs/analysis/relevance/01-findings.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        assert_eq!(evt.redacted_payload["occurred_at"], "2026-04-29T00:00:00Z");
+        assert_eq!(evt.redacted_payload["author"], "Andre Ferreira");
     }
 
     #[test]

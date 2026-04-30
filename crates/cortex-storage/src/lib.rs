@@ -29,9 +29,10 @@ pub use archive::{archive_filename, archive_partition, ArchiveLayout, ArchiveRot
 pub use cas::{CasBlob, CasContentType, CasError, CasStore};
 pub use collections::{CollectionSchema, CollectionTier, COLLECTIONS};
 pub use metadata::{
-    apply_phase9g_schema, apply_phase9k_schema, hour_bucket_rfc3339,
+    apply_phase10c_schema, apply_phase9g_schema, apply_phase9k_schema, hour_bucket_rfc3339,
     union_read_bootstrap_jobs, union_read_classifier_spend, union_read_sessions,
-    BootstrapDailyRow, ClassifierSpend, ClassifierSpendMonthlyRow, CronJob, HourlySpendRow,
-    MetadataError, MetadataStore, SessionsMonthlyRow,
+    BootstrapDailyRow, BootstrapSeenDuplicate, BootstrapSeenRow, ClassifierSpend,
+    ClassifierSpendMonthlyRow, CronJob, HourlySpendRow, MetadataError, MetadataStore,
+    SessionsMonthlyRow,
 };
 pub use names::*;

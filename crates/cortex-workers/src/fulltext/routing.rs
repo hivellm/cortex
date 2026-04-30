@@ -54,6 +54,12 @@ pub fn family_for(kind: Kind) -> &'static str {
         Kind::Analysis => "analyses",
         Kind::Artifact => "misc",
         Kind::Memory => "misc",
+        // phase10e — dedicated families so the orchestrator can
+        // fan out to them on `pre_change_context` /
+        // `decision_lookup` without diluting the catch-all `misc`
+        // bucket.
+        Kind::Knowledge => "knowledge",
+        Kind::Learning => "learnings",
     }
 }
 

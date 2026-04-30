@@ -139,6 +139,26 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         encoding: "fp32",
         hnsw: HnswParams { m: 48, ef_search: 256 },
     },
+    // phase10e — Rulebook MCP captures (`rulebook_knowledge_add` /
+    // `rulebook_learn_capture`). Single hot tier; the corpus is
+    // small + dense, demoting to PQ would lose precision the
+    // agent needs when re-reading the entry verbatim.
+    CollectionSchema {
+        name: crate::names::COLLECTION_KNOWLEDGE_FP32,
+        description: "Pattern / anti-pattern entries (Rulebook knowledge)",
+        tier: CollectionTier::Hot,
+        dim: EMBED_DIM,
+        encoding: "fp32",
+        hnsw: HnswParams { m: 32, ef_search: 128 },
+    },
+    CollectionSchema {
+        name: crate::names::COLLECTION_LEARNING_FP32,
+        description: "Implementation learnings (Rulebook learnings)",
+        tier: CollectionTier::Hot,
+        dim: EMBED_DIM,
+        encoding: "fp32",
+        hnsw: HnswParams { m: 32, ef_search: 128 },
+    },
     CollectionSchema {
         name: crate::names::COLLECTION_COLD_BINARY,
         description: "Binary-quantized fallback (any kind, >365 days)",

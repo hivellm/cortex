@@ -147,6 +147,17 @@ pub struct Snippet {
     pub content_hash: Option<String>,
     /// Snippet text (already redacted by upstream, re-redacted by api).
     pub text: String,
+    /// phase10b §2.2 — `true` when the keyword lane could not
+    /// project a body for this hit (the upstream document was
+    /// indexed without inline body — typical for large / binary
+    /// artifacts). The bundle renderer uses this to render the
+    /// header alone (no body block) and stamp an ellipsis cue, so
+    /// agents do NOT see the path masquerading as the file
+    /// contents. Defaults to `false` and skip-serialises so the
+    /// wire shape stays backwards-compatible for existing
+    /// consumers.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub body_truncated: bool,
     /// Fused score.
     pub score: f64,
     /// Why-this-result blurb.
@@ -163,6 +174,14 @@ pub struct DecisionRef {
     pub id: String,
     /// Title.
     pub title: String,
+    /// phase10a §1.2 — first 1 KiB of the rationale body, when the
+    /// upstream document carries one. Lets `decision_lookup`
+    /// callers quote the ADR body without re-hydrating the full
+    /// snippet payload. Optional + skip-serialising so the wire
+    /// shape remains backwards-compatible for callers that only
+    /// rendered title / status before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale_excerpt: Option<String>,
     /// Status (`proposed` / `accepted` / `superseded` / `deprecated`).
     pub status: String,
     /// Decision timestamp in ms epoch.

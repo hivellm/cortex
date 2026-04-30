@@ -8,6 +8,11 @@
 
 use serde_json::json;
 
+use cortex_storage::names::{
+    COLLECTION_DECISION_FP32, COLLECTION_TURN_FP32, COLLECTION_TURN_PQ, INDEX_DECISIONS,
+    INDEX_LAWS, INDEX_TURNS,
+};
+
 use crate::lanes::{GraphRequest, KeywordRequest, VectorRequest};
 use crate::types::{IncludeField, Intent, QueryRequest};
 
@@ -140,15 +145,24 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
     }
 }
 
+/// phase10a — `decision_lookup` fans out across the global decision
+/// stores. The 2026-04-29 audit caught the previous per-repo
+/// `cortex-{slug}-decisions` plan returning empty bodies because the
+/// rationale text lives in the global `cortex_decisions` Meili index
+/// + `cortex.decision.fp32` Vectorizer collection (per
+/// `cortex-storage::names`). Fusing `Vectorizer + Meili + Nexus`
+/// against those globals — same RRF blend `pre_change_context` uses
+/// — closes the 50% recall floor on `decision_lookup` queries whose
+/// answer lives in the ADR body, not the title.
 fn decision_lookup(req: &QueryRequest) -> Plan {
     let vectors = vec![VectorRequest {
-        collection: repo_scoped(req, "decisions"),
+        collection: COLLECTION_DECISION_FP32.to_string(),
         query: req.query.clone(),
         k: req.k,
         scope: req.scope.clone(),
     }];
     let keywords = vec![KeywordRequest {
-        index: repo_scoped(req, "decisions"),
+        index: INDEX_DECISIONS.to_string(),
         query: req.query.clone(),
         limit: req.limit,
         scope: req.scope.clone(),
@@ -168,11 +182,34 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
     }
 }
 
+/// phase10a — `similar_problems` queries the global turn corpus.
+/// The audit caught the previous plan only fanning out to the
+/// vector lane (and against a per-repo collection that's frequently
+/// empty); both the FP32 hot tier and the PQ warm tier are now
+/// queried, and the keyword lane gets `cortex_turns` so callers
+/// looking for past turns by literal phrase (a tool name, an error
+/// string) match. `scope.repo` round-trips through the lane so a
+/// repo-scoped query does not bleed across other sessions stored in
+/// the same global index.
 fn similar_problems(req: &QueryRequest) -> Plan {
-    let vectors = vec![VectorRequest {
-        collection: repo_scoped(req, "turns"),
+    let vectors = vec![
+        VectorRequest {
+            collection: COLLECTION_TURN_FP32.to_string(),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
+        VectorRequest {
+            collection: COLLECTION_TURN_PQ.to_string(),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
+    ];
+    let keywords = vec![KeywordRequest {
+        index: INDEX_TURNS.to_string(),
         query: req.query.clone(),
-        k: req.k,
+        limit: req.limit,
         scope: req.scope.clone(),
     }];
     let graphs = vec![GraphRequest {
@@ -183,23 +220,44 @@ fn similar_problems(req: &QueryRequest) -> Plan {
     }];
     Plan {
         vectors,
-        keywords: Vec::new(),
+        keywords,
         graphs,
         overlays: overlays_from_include(&req.include, &[Overlay::SimilarTurns]),
+        // Vector-heavy: literal phrase + KNN both contribute, but
+        // semantic similarity is the load-bearing signal for
+        // "similar past problems".
         split_pct: BudgetSplit {
-            vector: 60,
-            keyword: 0,
-            graph: 40,
+            vector: 50,
+            keyword: 25,
+            graph: 25,
         },
     }
 }
 
+/// phase10a — `law_check` queries the global laws index plus the
+/// `:Law`/`:LawViolation` graph. The audit caught the previous plan
+/// targeting `cortex-{slug}-governance` (the law-violation per-repo
+/// index) which carries violation rows but not the law definitions
+/// themselves. The dashboard reports 37 active laws + 121 recent
+/// violations; switching the keyword lane to the global `cortex_laws`
+/// index surfaces both the law title AND the body excerpt the agent
+/// needs to quote back, while the existing
+/// `law_violations_last_30d` graph template remains the source for
+/// recent-violation overlays.
 fn law_check(req: &QueryRequest) -> Plan {
+    // Laws are cross-repo by design and the `cortex_laws` Meili
+    // index does NOT carry `repo` as a filterable attribute (see
+    // `crates/cortex-storage/schemas/meili/cortex_laws.settings.v1.json`),
+    // so strip `scope.repo` before forwarding to the keyword lane —
+    // otherwise Meili rejects the search with a 4xx and the lane
+    // returns zero hits.
+    let mut law_scope = req.scope.clone();
+    law_scope.repo = None;
     let keywords = vec![KeywordRequest {
-        index: repo_scoped(req, "governance"),
+        index: INDEX_LAWS.to_string(),
         query: req.query.clone(),
         limit: req.limit,
-        scope: req.scope.clone(),
+        scope: law_scope,
     }];
     let graphs = vec![GraphRequest {
         template: "law_violations_last_30d".into(),
@@ -361,11 +419,92 @@ mod tests {
         assert!(!plan.graphs.is_empty());
     }
 
+    // ---- Phase10a — lane composition for the three audit-detected gaps ----
+
     #[test]
-    fn similar_problems_skips_keyword_lane() {
+    fn decision_lookup_targets_global_decision_stores() {
+        // phase10a §1.1 — the audit caught `decision_lookup` returning
+        // empty because the per-repo `cortex-{slug}-decisions` plan
+        // only matched on title. The fix routes to the global
+        // `cortex.decision.fp32` collection + `cortex_decisions`
+        // index (per `cortex-storage::names`) where the rationale
+        // body is searchable.
+        let plan = build_plan(&req(Intent::DecisionLookup));
+        assert_eq!(plan.vectors.len(), 1);
+        assert_eq!(plan.vectors[0].collection, COLLECTION_DECISION_FP32);
+        assert_eq!(plan.keywords.len(), 1);
+        assert_eq!(plan.keywords[0].index, INDEX_DECISIONS);
+        assert_eq!(plan.graphs.len(), 1);
+        assert_eq!(plan.graphs[0].template, "decision_supersedes_chain");
+        // §1.3 — same RRF blend `pre_change_context` uses.
+        assert_eq!(plan.split_pct.vector, 40);
+        assert_eq!(plan.split_pct.keyword, 40);
+        assert_eq!(plan.split_pct.graph, 20);
+    }
+
+    #[test]
+    fn law_check_targets_global_laws_index() {
+        // phase10a §2.1 — the audit caught `law_check` returning
+        // empty because the per-repo `cortex-{slug}-governance`
+        // index only carries violation rows, not law definitions.
+        let plan = build_plan(&req(Intent::LawCheck));
+        assert_eq!(plan.keywords.len(), 1);
+        assert_eq!(plan.keywords[0].index, INDEX_LAWS);
+        assert_eq!(plan.graphs.len(), 1);
+        assert_eq!(plan.graphs[0].template, "law_violations_last_30d");
+    }
+
+    #[test]
+    fn similar_problems_fans_out_across_turn_tiers_and_keyword() {
+        // phase10a §3.1 — the audit caught `similar_problems`
+        // empty because it only queried the per-repo turn
+        // collection. The fix fans out across both global tiers
+        // (`cortex.turn.fp32` hot + `cortex.turn.pq` warm) and adds
+        // the keyword lane against `cortex_turns` so literal-phrase
+        // matches surface alongside semantic neighbours.
         let plan = build_plan(&req(Intent::SimilarProblems));
-        assert!(plan.keywords.is_empty(), "similar_problems must not run keyword");
-        assert!(!plan.vectors.is_empty());
+        let collections: Vec<_> = plan
+            .vectors
+            .iter()
+            .map(|v| v.collection.as_str())
+            .collect();
+        assert!(
+            collections.contains(&COLLECTION_TURN_FP32),
+            "fp32 hot tier must be queried: {collections:?}"
+        );
+        assert!(
+            collections.contains(&COLLECTION_TURN_PQ),
+            "pq warm tier must be queried: {collections:?}"
+        );
+        assert_eq!(plan.keywords.len(), 1);
+        assert_eq!(plan.keywords[0].index, INDEX_TURNS);
+    }
+
+    #[test]
+    fn similar_problems_round_trips_scope_repo_to_keyword_lane() {
+        // §3.3 — a repo-scoped query must NOT bleed across other
+        // sessions stored under different repos in the same global
+        // turn index. The strategies layer round-trips `scope.repo`
+        // verbatim onto every lane request; the live keyword lane
+        // translates that into a Meili filter.
+        let mut r = req(Intent::SimilarProblems);
+        r.scope = crate::types::Scope {
+            repo: Some("Cortex".into()),
+            ..Default::default()
+        };
+        let plan = build_plan(&r);
+        assert!(
+            plan.vectors
+                .iter()
+                .all(|v| v.scope.repo.as_deref() == Some("Cortex")),
+            "every vector request must carry the request's scope.repo"
+        );
+        assert!(
+            plan.keywords
+                .iter()
+                .all(|k| k.scope.repo.as_deref() == Some("Cortex")),
+            "every keyword request must carry the request's scope.repo"
+        );
     }
 
     #[test]

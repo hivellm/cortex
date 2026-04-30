@@ -187,6 +187,8 @@ fn kind_from_str(s: &str) -> Option<cortex_core::events::Kind> {
         "analysis" => Kind::Analysis,
         "law_violation" => Kind::LawViolation,
         "artifact" => Kind::Artifact,
+        "knowledge" => Kind::Knowledge,
+        "learning" => Kind::Learning,
         _ => return None,
     })
 }

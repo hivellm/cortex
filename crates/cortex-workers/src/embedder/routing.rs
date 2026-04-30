@@ -30,6 +30,13 @@ fn family_for(kind: &Kind) -> &'static str {
         // single index instead of fishing them out of the catch-all
         // misc bucket.
         Kind::Analysis => "analyses",
+        // phase10e — knowledge / learnings are high-signal
+        // curated corpora (Rulebook MCP captures); each lives in
+        // its own per-repo family so the orchestrator can fan
+        // out to them deterministically without diluting the
+        // catch-all `misc` bucket.
+        Kind::Knowledge => "knowledge",
+        Kind::Learning => "learnings",
         // Catch-all for kinds not explicitly called out in the spec table.
         Kind::AgentCall | Kind::Memory => "misc",
     }

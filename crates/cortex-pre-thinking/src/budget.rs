@@ -169,6 +169,7 @@ mod tests {
                 symbol: Some(format!("fn_{i}")),
                 content_hash: None,
                 text: "x".repeat(8 * 1024),
+                body_truncated: false,
                 score: 0.5,
                 why: Some("why".into()),
             })
@@ -178,6 +179,7 @@ mod tests {
                 rank: i + 1,
                 id: format!("DEC-{i:04}"),
                 title: "T".repeat(800),
+                rationale_excerpt: None,
                 status: "accepted".into(),
                 ts: 1_700_000_000_000,
                 score: 0.5,

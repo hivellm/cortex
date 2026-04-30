@@ -428,16 +428,57 @@ where
     tokio::join!(a, b, c)
 }
 
+/// Kind labels the meili / vectorizer lanes stamp into
+/// `LaneHit.symbol` for back-compat with overlay derivations. They
+/// must NOT reach the wire `Snippet.symbol` field — spec 11 says
+/// that field carries the Tree-sitter symbol (for code) or H1 (for
+/// docs), not the event kind. The pre-thinking renderer formats
+/// `path:symbol`, and surfacing `path:artifact` / `path:turn`
+/// produced the audit-flagged `Cortex/.../types.rs:artifact`
+/// rendering. Filter the kind labels here so callers see the real
+/// symbol or `None`.
+const SYMBOL_KIND_LABELS: &[&str] = &[
+    "artifact",
+    "turn",
+    "tool_call",
+    "agent_call",
+    "decision",
+    "analysis",
+    "memory",
+    "law_violation",
+];
+
 fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
+    // phase10b §2.1 — strip kind labels from the wire `symbol`
+    // field. Decisions get the curated `decision_title` extras
+    // (phase10a) when available; everything else degrades to
+    // `None` and the bundle renderer falls back to `repo/path`.
+    let symbol = hit
+        .extras
+        .get("decision_title")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .or_else(|| {
+            hit.symbol
+                .as_deref()
+                .filter(|s| !SYMBOL_KIND_LABELS.contains(s))
+                .map(String::from)
+        });
+    let body_truncated = hit
+        .extras
+        .get("body_truncated")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     Snippet {
         rank,
         source: lane_label(hit),
         collection: hit.extras.get("collection").and_then(|v| v.as_str()).map(String::from),
         repo: hit.repo.clone(),
         path: hit.path.clone(),
-        symbol: hit.symbol.clone(),
+        symbol,
         content_hash: hit.content_hash.clone(),
         text: hit.text.clone(),
+        body_truncated,
         score: hit.score,
         why: hit.extras.get("why").and_then(|v| v.as_str()).map(String::from),
     }
@@ -456,10 +497,30 @@ fn derive_decisions(fused: &[LaneHit], limit: usize) -> Vec<DecisionRef> {
         .iter()
         .filter_map(|h| {
             let id = h.extras.get("decision_id").and_then(|v| v.as_str())?;
+            // phase10a §1.2 — prefer the lane's stamped
+            // `decision_title` over the kind label that
+            // `LaneHit.symbol` carries today (the meili projection
+            // sets `symbol = doc.kind`, so without this fallback
+            // every decision overlay rendered as the literal string
+            // `"decision"`).
+            let title = h
+                .extras
+                .get("decision_title")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .or_else(|| h.symbol.clone().filter(|s| s != "decision"))
+                .unwrap_or_else(|| h.text.clone());
+            let rationale_excerpt = h
+                .extras
+                .get("rationale_excerpt")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(String::from);
             Some(DecisionRef {
                 rank: 0,
                 id: id.to_string(),
-                title: h.symbol.clone().unwrap_or_else(|| h.text.clone()),
+                title,
+                rationale_excerpt,
                 status: h
                     .extras
                     .get("decision_status")
@@ -583,4 +644,84 @@ pub fn extras_with_source(label: &str) -> crate::types::Props {
     let mut m = crate::types::Props::new();
     m.insert("source".to_string(), json!(label));
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lanes::LaneHit;
+
+    fn hit_with(symbol: Option<&str>, text: &str) -> LaneHit {
+        LaneHit {
+            doc_id: "h1".into(),
+            text: text.into(),
+            repo: Some("Cortex".into()),
+            path: Some("crates/cortex-api/src/types.rs".into()),
+            symbol: symbol.map(String::from),
+            content_hash: None,
+            score: 0.5,
+            ts: 0,
+            severity: None,
+            extras: crate::types::Props::new(),
+        }
+    }
+
+    #[test]
+    fn snippet_strips_kind_labels_from_symbol_field() {
+        // phase10b §2.1 — every kind label the meili / vectorizer
+        // lane stamps into `LaneHit.symbol` for back-compat MUST
+        // be filtered before reaching `Snippet.symbol`. The audit
+        // logged `Cortex/.../types.rs:artifact` headers because
+        // the formatter rendered `path:symbol` literally — this
+        // test pins the kind-label filter so a future regression
+        // surfaces immediately.
+        for kind in SYMBOL_KIND_LABELS {
+            let hit = hit_with(Some(kind), "real body content");
+            let snippet = snippet_from_hit(1, &hit);
+            assert_eq!(
+                snippet.symbol, None,
+                "kind label `{kind}` must not reach Snippet.symbol"
+            );
+        }
+    }
+
+    #[test]
+    fn snippet_keeps_real_symbols_distinct_from_kind_labels() {
+        let hit = hit_with(Some("hnsw_search"), "pub fn hnsw_search() { ... }");
+        let snippet = snippet_from_hit(1, &hit);
+        assert_eq!(snippet.symbol.as_deref(), Some("hnsw_search"));
+        assert_eq!(snippet.text, "pub fn hnsw_search() { ... }");
+        assert!(!snippet.body_truncated);
+    }
+
+    #[test]
+    fn snippet_propagates_body_truncated_extras_flag() {
+        // phase10b §2.2 — when the lane stamped
+        // `extras.body_truncated = true`, the wire `Snippet`
+        // carries the same flag so the bundle renderer can
+        // collapse to a header-only line.
+        let mut hit = hit_with(None, "");
+        hit.extras
+            .insert("body_truncated".to_string(), json!(true));
+        let snippet = snippet_from_hit(1, &hit);
+        assert!(snippet.body_truncated);
+        assert!(snippet.text.is_empty());
+    }
+
+    #[test]
+    fn snippet_pulls_decision_title_extras_when_present() {
+        // phase10a stamped `decision_title` for decisions; the
+        // snippet projector prefers it over the kind-stripped
+        // symbol so the bundle header carries the real ADR title.
+        let mut hit = hit_with(Some("decision"), "Adopt RRF fusion (rationale)");
+        hit.extras.insert(
+            "decision_title".to_string(),
+            json!("DEC-0042 Adopt RRF fusion"),
+        );
+        let snippet = snippet_from_hit(1, &hit);
+        assert_eq!(
+            snippet.symbol.as_deref(),
+            Some("DEC-0042 Adopt RRF fusion")
+        );
+    }
 }
