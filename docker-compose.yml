@@ -70,6 +70,169 @@ services:
       start_period: 20s
     restart: unless-stopped
 
+  # ---------------------------------------------------------------
+  # Cortex services (phase10k+ — full stack containerised so a
+  # `docker compose up -d` brings the system up cleanly without
+  # leaning on host-installed binaries.) Build target picks the
+  # right binary out of the shared builder layer in `Dockerfile`.
+  # ---------------------------------------------------------------
+
+  # cortex-ingestion ─ POST /v1/events durable archive + bus pub.
+  cortex-ingestion:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-ingestion
+    image: cortex/ingestion:dev
+    container_name: cortex-ingestion
+    depends_on:
+      synap: { condition: service_healthy }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_INGESTION_PORT:-17010}:17010"
+    environment:
+      CORTEX_INGESTION_BIND: 0.0.0.0:17010
+      CORTEX_SYNAP_URL: http://synap:15500
+      CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
+    volumes:
+      - cortex-archive:/var/lib/cortex/archive
+    restart: unless-stopped
+
+  # cortex-classifier-worker ─ Haiku CLI fan-out for kind refinement.
+  cortex-classifier-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-classifier-worker
+    image: cortex/classifier-worker:dev
+    container_name: cortex-classifier-worker
+    depends_on:
+      synap: { condition: service_healthy }
+      cortex-ingestion: { condition: service_started }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_CLASSIFIER_PORT:-17021}:17021"
+    environment:
+      CORTEX_CLASSIFIER_BIND: 0.0.0.0:17021
+      CORTEX_CLASSIFIER_SYNAP_URL: http://synap:15500
+    restart: unless-stopped
+
+  # cortex-embedder-worker ─ chunks + Vectorizer upserts.
+  cortex-embedder-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-embedder-worker
+    image: cortex/embedder-worker:dev
+    container_name: cortex-embedder-worker
+    depends_on:
+      synap: { condition: service_healthy }
+      vectorizer: { condition: service_started }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_EMBEDDER_PORT:-17022}:17022"
+    environment:
+      CORTEX_EMBEDDER_BIND: 0.0.0.0:17022
+      CORTEX_EMBEDDER_SYNAP_URL: http://synap:15500
+      CORTEX_EMBEDDER_VECTORIZER_URL: http://vectorizer:15002
+    restart: unless-stopped
+
+  # cortex-fulltext-worker ─ Meili indexer.
+  cortex-fulltext-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-fulltext-worker
+    image: cortex/fulltext-worker:dev
+    container_name: cortex-fulltext-worker
+    depends_on:
+      synap: { condition: service_healthy }
+      meilisearch: { condition: service_healthy }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_FULLTEXT_PORT:-17023}:17023"
+    environment:
+      CORTEX_FULLTEXT_BIND: 0.0.0.0:17023
+      CORTEX_FULLTEXT_SYNAP_URL: http://synap:15500
+      CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+    restart: unless-stopped
+
+  # cortex-graph-worker ─ Nexus Cypher writer.
+  cortex-graph-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-graph-worker
+    image: cortex/graph-worker:dev
+    container_name: cortex-graph-worker
+    depends_on:
+      synap: { condition: service_healthy }
+      nexus: { condition: service_healthy }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_GRAPH_PORT:-17024}:17024"
+    environment:
+      CORTEX_GRAPH_BIND: 0.0.0.0:17024
+      CORTEX_GRAPH_SYNAP_URL: http://synap:15500
+      CORTEX_GRAPH_NEXUS_URL: http://nexus:15474
+      CORTEX_GRAPH_CYPHER_DIR: /opt/cortex/cypher
+    restart: unless-stopped
+
+  # cortex-api ─ POST /v1/query + dashboard JSON + retention scheduler.
+  cortex-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-api
+    image: cortex/api:dev
+    container_name: cortex-api
+    command: ["--bind", "0.0.0.0:17000"]
+    depends_on:
+      synap: { condition: service_healthy }
+      nexus: { condition: service_healthy }
+      meilisearch: { condition: service_healthy }
+      vectorizer: { condition: service_started }
+      cortex-ingestion: { condition: service_started }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_API_PORT:-17000}:17000"
+    environment:
+      CORTEX_HOME: /var/lib/cortex
+      CORTEX_FULLTEXT_MEILI_API_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+      CORTEX_INGESTION_URL: http://cortex-ingestion:17010
+      CORTEX_SYNAP_URL: http://synap:15500
+      CORTEX_NEXUS_URL: http://nexus:15474
+      CORTEX_VECTORIZER_URL: http://vectorizer:15002
+      CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+      CORTEX_ADAPTER_ADMIN_URL: http://cortex-adapter:17011/healthz
+      CORTEX_CLASSIFIER_WORKER_URL: http://cortex-classifier-worker:17021/healthz
+      CORTEX_EMBEDDER_WORKER_URL: http://cortex-embedder-worker:17022/healthz
+      CORTEX_FULLTEXT_WORKER_URL: http://cortex-fulltext-worker:17023/healthz
+      CORTEX_GRAPH_WORKER_URL: http://cortex-graph-worker:17024/healthz
+    volumes:
+      - cortex-home:/var/lib/cortex
+    restart: unless-stopped
+
+  # cortex-adapter-claude ─ Claude Code adapter daemon.
+  cortex-adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cortex-adapter
+    image: cortex/adapter:dev
+    container_name: cortex-adapter
+    depends_on:
+      cortex-ingestion: { condition: service_started }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_ADAPTER_PORT:-17011}:17011"
+    environment:
+      CORTEX_ADAPTER_BIND: 0.0.0.0:17011
+      CORTEX_INGESTION_URL: http://cortex-ingestion:17010
+    restart: unless-stopped
+
 networks:
   cortex-net:
     name: cortex-net
@@ -80,3 +243,5 @@ volumes:
   nexus-data:
   synap-data:
   meili-data:
+  cortex-archive:
+  cortex-home:

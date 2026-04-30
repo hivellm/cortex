@@ -683,9 +683,18 @@ pub fn live_listening_ports() -> Vec<ListeningPort> {
                 continue;
             }
             let local = parts[1];
-            // Loopback only — public 0.0.0.0 binds aren't what we
-            // ingest in the cortex stack.
-            if !(local.starts_with("127.0.0.1:") || local.starts_with("[::1]:")) {
+            // Loopback OR catch-all binds — Docker port forwards
+            // (`0.0.0.0:17001->...`) AND IPv6 unspecified
+            // (`[::]:...`) are reachable from 127.0.0.1, so the audit
+            // must count them as live. Phase10k+ fix: pre-2026-04-30
+            // the filter only accepted `127.0.0.1:` and `[::1]:`,
+            // which made every dockerised backend (vectorizer, nexus,
+            // synap, meili) look like a config-drift CRITICAL.
+            if !(local.starts_with("127.0.0.1:")
+                || local.starts_with("[::1]:")
+                || local.starts_with("0.0.0.0:")
+                || local.starts_with("[::]:"))
+            {
                 continue;
             }
             let port_str = local.rsplit(':').next().unwrap_or("");
@@ -721,12 +730,18 @@ pub fn live_listening_ports() -> Vec<ListeningPort> {
             if !is_listen {
                 continue;
             }
-            // Find the local-address column — it's the one with `:` and
-            // not the foreign 0.0.0.0:* / [::]:*.
+            // Find the local-address column — it's the one with `:`
+            // matching either loopback (`127.0.0.1:`/`[::1]:`) or a
+            // catch-all bind (`0.0.0.0:`/`[::]:`). Docker forwards
+            // ports as `0.0.0.0:HOST->CONTAINER`, so loopback-only
+            // filtering false-positives every dockerised backend.
             let local = match parts
                 .iter()
                 .find(|p| {
-                    (p.starts_with("127.0.0.1:") || p.starts_with("[::1]:"))
+                    (p.starts_with("127.0.0.1:")
+                        || p.starts_with("[::1]:")
+                        || p.starts_with("0.0.0.0:")
+                        || p.starts_with("[::]:"))
                         && p.contains(':')
                 })
                 .copied()
