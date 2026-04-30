@@ -10,7 +10,13 @@ pub mod doctor;
 pub mod log_rotate;
 pub mod memory_consolidate;
 pub mod probe;
-pub mod scheduler;
+
+/// Phase10k — the cron scheduler module moved into `cortex-retention`
+/// so `cortex-api` can spawn the always-on tick loop without taking
+/// a dependency on this crate (`cortex-cli` already depends on
+/// `cortex-api`). The path here is a re-export so existing callers
+/// keep working with a one-line import update.
+pub use cortex_retention::scheduler;
 
 pub use log_rotate::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
 

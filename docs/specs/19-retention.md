@@ -731,6 +731,16 @@ seeding is idempotent.
 
 ### Scheduler loop
 
+**Phase10k — daemon ownership.** The tick loop runs inside
+`cortex-api` as a `tokio::spawn` task next to the silent-drop
+watcher. On boot the daemon calls
+`cortex_retention::scheduler::seed_defaults` once (idempotent — an
+operator who disabled a row keeps the setting across restarts) and
+then ticks every 30 s. The opt-out env var
+`CORTEX_RETENTION_DAEMON=disabled` keeps the daemon idle so an
+operator can drive sweeps externally (CI, rolling upgrades). See
+`crates/cortex-api/src/retention_daemon.rs` for the wire-up.
+
 The scheduler ticks at most every 30 s. Each tick:
 
 1. Calls `select_due_cron_jobs(now)` — `enabled=1 AND
@@ -780,7 +790,9 @@ surfaces these warnings without further work.
 
 ### Test surface (scheduler, phase9k)
 
-11 unit tests in `crates/cortex-cli/src/ops/scheduler.rs`:
+11 unit tests in `crates/cortex-retention/src/scheduler.rs`
+(moved from `cortex-cli` in phase10k so `cortex-api` can spawn the
+tick loop without taking a circular dependency on the CLI crate):
 
 - `parse_schedule_accepts_five_six_and_seven_field_forms`
 - `next_after_advances_for_daily_schedule`

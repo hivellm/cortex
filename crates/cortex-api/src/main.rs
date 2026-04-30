@@ -427,6 +427,23 @@ async fn main() -> Result<()> {
         tracing::info!("silent-drop watcher disabled by config");
     }
 
+    // Phase10k — always-on retention scheduler. Spawns a 30-s tick
+    // loop that calls into `cortex-retention::scheduler::tick` so
+    // the eight default sweeps (FP32→PQ→Binary tier transitions,
+    // meili-prune, CAS vacuum, metadata reap, PII enforce, turn
+    // digest, memory consolidate) actually fire on schedule. The
+    // daemon opens its own metadata connection so the dashboard
+    // mutex (`std::sync::Mutex`) and the daemon mutex
+    // (`tokio::sync::Mutex`) don't fight over the same handle —
+    // SQLite WAL handles the on-disk concurrency. Skipped when the
+    // metadata file isn't reachable (same precondition as the
+    // dashboard ribbon) or when the operator opted out via
+    // `CORTEX_RETENTION_DAEMON=disabled`.
+    cortex_api::retention_daemon::spawn(
+        metadata_path.clone(),
+        cortex_api::retention_daemon::SpawnOptions::default(),
+    );
+
     // Phase8f — opt-in synthetic canary runner. When
     // `CORTEX_CANARY_ENABLED=1`, fire a fake hook frame through the
     // real IPC pipe every `interval_secs` (default 300) and assert

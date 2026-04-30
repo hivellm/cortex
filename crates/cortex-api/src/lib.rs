@@ -39,6 +39,7 @@ pub mod query_rewrite;
 pub mod vectorizer_lane;
 pub mod rate_limit;
 pub mod redaction;
+pub mod retention_daemon;
 pub mod service;
 pub mod strategies;
 pub mod tasks_loader;

@@ -26,6 +26,7 @@ tracing = { workspace = true }
 ulid = { workspace = true }
 zstd = { workspace = true }
 rusqlite = { workspace = true }
+cron = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
