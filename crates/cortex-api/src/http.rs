@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -73,6 +73,8 @@ pub fn build_router_with(
     let mut router = Router::new()
         .route("/v1/query", post(handle_query))
         .route("/v1/status", get(handle_status))
+        .route("/v1/audit/{query_id}", get(handle_audit))
+        .route("/v1/ingest", post(crate::ingest_proxy::handle_ingest))
         .route("/healthz", get(handle_healthz))
         .route("/v1/health", get(handle_v1_health))
         .with_state(state);
@@ -287,6 +289,44 @@ async fn handle_health_config(_state: State<crate::health::HealthState>) -> Resp
         .await
         .unwrap_or_default();
     (StatusCode::OK, Json(audit)).into_response()
+}
+
+/// Phase10j — `GET /v1/audit/{query_id}` returns the recorded audit
+/// envelope for the named query. Backed by the in-memory ring buffer
+/// the service writes alongside the synap publisher; a 404 means
+/// either the query never ran on this daemon (process was restarted
+/// or the request hit a different replica) or the envelope has aged
+/// out of the ring buffer.
+///
+/// Response shape: the canonical envelope produced by
+/// [`crate::audit::build_envelope_with_rewrite_context`] enriched
+/// with a `lanes` array derived from `debug.lanes` so the agent can
+/// pinpoint which retrieval lane returned zero hits without having
+/// to walk the original query response.
+async fn handle_audit(
+    State(state): State<ApiState>,
+    Path(query_id): Path<String>,
+) -> Response {
+    let q = query_id.trim();
+    if q.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorBody {
+                reason: "query_id_required".into(),
+            }),
+        )
+            .into_response();
+    }
+    match state.service.audit_store.get(q) {
+        Some(envelope) => (StatusCode::OK, Json(envelope)).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(ErrorBody {
+                reason: "audit_envelope_not_found".into(),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn handle_status(State(state): State<ApiState>) -> Response {

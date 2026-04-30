@@ -11,6 +11,7 @@ use crate::acl::{AclDecision, AclStore};
 use crate::audit::{
     build_envelope_with_rewrite_context, AuditPublisher, MemoryAuditPublisher,
 };
+use crate::audit_store::AuditStore;
 use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
@@ -238,6 +239,12 @@ pub struct QueryService {
     pub rate_limiter: Arc<RateLimiter>,
     /// Audit publisher.
     pub audit: Arc<dyn AuditPublisher>,
+    /// Phase10j — in-memory ring buffer indexed by `query_id` so
+    /// `GET /v1/audit/{query_id}` can answer synchronously without
+    /// waiting for synap to round-trip the envelope back. Recorded
+    /// in lockstep with [`Self::audit`]; both sinks see the same
+    /// envelope.
+    pub audit_store: Arc<AuditStore>,
     /// Snapshot of indexed-repo slugs the daemon currently sees. Read
     /// from the same `MemoryKeywordLane` the dashboard uses to derive
     /// `repos_indexed`, so the answer in `/v1/status.indexed_repos`
@@ -258,6 +265,7 @@ impl QueryService {
             acl: Arc::new(AclStore::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
             audit: Arc::new(MemoryAuditPublisher::new()),
+            audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
         }
     }
@@ -389,17 +397,21 @@ impl QueryService {
                 .rewrite(&req.query, req.intent)
                 .await
                 .unwrap_or_else(|_| RewrittenQuery::passthrough(&req.query));
-            self.audit
-                .publish(build_envelope_with_rewrite_context(
-                    caller,
-                    hit.intent.as_str(),
-                    &hit,
-                    resolution.as_str(),
-                    &self.orchestrator.fusion,
-                    intent_trigger.as_deref(),
-                    &rewritten,
-                ))
-                .await;
+            let envelope = build_envelope_with_rewrite_context(
+                caller,
+                hit.intent.as_str(),
+                &hit,
+                resolution.as_str(),
+                &self.orchestrator.fusion,
+                intent_trigger.as_deref(),
+                &rewritten,
+            );
+            // Phase10j — dual sink: in-memory store backs the
+            // synchronous `/v1/audit/{query_id}` lookup; the
+            // publisher continues to fan the envelope out to synap
+            // for the dashboard / streaming consumers.
+            self.audit_store.record(&envelope);
+            self.audit.publish(envelope).await;
             return ServiceOutcome::Ok(Box::new(hit));
         }
 
@@ -430,17 +442,18 @@ impl QueryService {
             response.notice = Self::build_scope_unset_notice(&response.scope_resolved);
         }
         self.cache.put(&key, response.clone()).await;
-        self.audit
-            .publish(build_envelope_with_rewrite_context(
-                caller,
-                req.intent.label(),
-                &response,
-                resolution.as_str(),
-                &self.orchestrator.fusion,
-                intent_trigger.as_deref(),
-                &rewritten,
-            ))
-            .await;
+        let envelope = build_envelope_with_rewrite_context(
+            caller,
+            req.intent.label(),
+            &response,
+            resolution.as_str(),
+            &self.orchestrator.fusion,
+            intent_trigger.as_deref(),
+            &rewritten,
+        );
+        // Phase10j — dual sink (see hit-path comment above).
+        self.audit_store.record(&envelope);
+        self.audit.publish(envelope).await;
         ServiceOutcome::Ok(Box::new(response))
     }
 
@@ -668,12 +681,49 @@ mod tests {
             acl: Arc::new(AclStore::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
             audit: audit.clone(),
+            audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
         };
         let _ = svc.handle("dash", req("x")).await;
         let snap = audit.snapshot();
         assert_eq!(snap.len(), 1);
         assert_eq!(snap[0]["caller"], "dash");
+    }
+
+    #[tokio::test]
+    async fn audit_store_records_envelopes_alongside_publisher() {
+        // Phase10j — the in-memory store backs `/v1/audit/{query_id}`
+        // synchronously. Both sinks must see every envelope so the
+        // dual lookup paths (synap-driven dashboard and
+        // synchronous MCP audit tool) stay consistent.
+        let orchestrator = build_orchestrator();
+        let audit = Arc::new(MemoryAuditPublisher::new());
+        let store = Arc::new(AuditStore::new());
+        let svc = QueryService {
+            orchestrator,
+            cache: Arc::new(InMemoryCache::new()),
+            acl: Arc::new(AclStore::new()),
+            rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
+            audit: audit.clone(),
+            audit_store: store.clone(),
+            indexed_repos: None,
+        };
+        let mut r = req("hello-world");
+        r.scope.repo = Some("Vectorizer".into());
+        let outcome = svc.handle("dash", r).await;
+        let resp = match outcome {
+            ServiceOutcome::Ok(b) => b,
+            other => panic!("expected Ok, got {other:?}"),
+        };
+        let stored = store
+            .get(&resp.query_id)
+            .expect("audit store should retain envelope by query_id");
+        assert_eq!(stored["caller"], "dash");
+        assert_eq!(stored["query_id"], resp.query_id);
+        // Publisher saw the same envelope.
+        let snap = audit.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0]["query_id"], resp.query_id);
     }
 
     #[tokio::test]
@@ -790,6 +840,7 @@ mod tests {
                 rps_burst: 2,
             })),
             audit: Arc::new(MemoryAuditPublisher::new()),
+            audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
         };
         // Use distinct queries so the cache doesn't short-circuit

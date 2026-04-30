@@ -331,3 +331,201 @@ async fn tools_call_query_injects_x_cortex_cwd_header() {
     let parsed: Value = serde_json::from_str(text).unwrap();
     assert_eq!(parsed["query_id"], "q_cwd_1");
 }
+
+// ---------------------------------------------------------------------
+// Phase10j — cortex_audit / cortex_capture_memory / cortex_session_replay
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn tools_call_audit_returns_envelope_when_query_id_known() {
+    let mock = MockServer::start().await;
+    let canned = json!({
+        "kind": "query_audit",
+        "caller": "claude-code-plugin",
+        "query_id": "01KQDX",
+        "intent": "free_search",
+        "scope_resolution": "explicit",
+        "counts": { "snippets": 0, "decisions": 0 },
+        "latency_ms": 12,
+        "cache": "miss"
+    });
+    Mock::given(method("GET"))
+        .and(path("/v1/audit/01KQDX"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(canned))
+        .mount(&mock)
+        .await;
+
+    let server = Server::new(ToolContext::new(mock.uri()));
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 51,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_audit",
+            "arguments": { "query_id": "01KQDX" }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["result"]["isError"], false);
+    let parsed: Value =
+        serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed["query_id"], "01KQDX");
+    assert_eq!(parsed["intent"], "free_search");
+}
+
+#[tokio::test]
+async fn tools_call_audit_surfaces_404_as_soft_error() {
+    let mock = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/v1/audit/missing"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({ "reason": "audit_envelope_not_found" })),
+        )
+        .mount(&mock)
+        .await;
+
+    let server = Server::new(ToolContext::new(mock.uri()));
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 53,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_audit",
+            "arguments": { "query_id": "missing" }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["result"]["isError"], true);
+    let parsed: Value =
+        serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed["reason"], "audit_envelope_not_found");
+}
+
+#[tokio::test]
+async fn tools_call_capture_memory_round_trips_through_v1_ingest() {
+    let mock = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/ingest"))
+        .respond_with(
+            ResponseTemplate::new(202).set_body_json(json!({
+                "event_id": "evt_test_1",
+                "content_hash": "deadbeef",
+                "indexed_at": "2026-04-30T12:00:00Z"
+            })),
+        )
+        .mount(&mock)
+        .await;
+
+    let server = Server::new(ToolContext::new(mock.uri()));
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 61,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_capture_memory",
+            "arguments": {
+                "kind": "memory",
+                "body": "Phase9k uses per-name semaphore",
+                "repo": "cortex"
+            }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["result"]["isError"], false);
+    let parsed: Value =
+        serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed["event_id"], "evt_test_1");
+    assert_eq!(parsed["content_hash"], "deadbeef");
+}
+
+#[tokio::test]
+async fn tools_call_capture_memory_rejects_oversize_body_locally() {
+    // No mock server — the tool must short-circuit before any HTTP call.
+    let server = Server::new(ToolContext::new("http://127.0.0.1:1"));
+    let big = "x".repeat(8 * 1024 + 1);
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 63,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_capture_memory",
+            "arguments": {
+                "kind": "memory",
+                "body": big,
+                "repo": "cortex"
+            }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["result"]["isError"], true);
+    let parsed: Value =
+        serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed["reason"], "body_too_large");
+}
+
+#[tokio::test]
+async fn tools_call_session_replay_returns_capped_turns() {
+    let mock = MockServer::start().await;
+    let canned = json!({
+        "session_id": "01QDKXMY4TG7",
+        "repos": ["cortex"],
+        "turns": [
+            { "turn_id": "t1", "user_message": "u1", "assistant_message": "a1", "started_at_ms": 100, "completed_at_ms": 110 },
+            { "turn_id": "t2", "user_message": "u2", "assistant_message": "a2", "started_at_ms": 200, "completed_at_ms": 210 },
+            { "turn_id": "t3", "user_message": "u3", "assistant_message": "a3", "started_at_ms": 300, "completed_at_ms": 310 }
+        ]
+    });
+    Mock::given(method("GET"))
+        .and(path("/v1/dashboard/conversations/01QDKXMY4TG7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(canned))
+        .mount(&mock)
+        .await;
+
+    let server = Server::new(ToolContext::new(mock.uri()));
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 71,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_session_replay",
+            "arguments": {
+                "session_id": "01QDKXMY4TG7",
+                "max_turns": 2
+            }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["result"]["isError"], false);
+    let parsed: Value =
+        serde_json::from_str(resp["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed["session_id"], "01QDKXMY4TG7");
+    assert_eq!(parsed["total_turns"], 3);
+    // 2 dashboard turns × 2 rows each (user + assistant) = 4 returned rows.
+    assert_eq!(parsed["returned_turns"], 4);
+    let turns = parsed["turns"].as_array().unwrap();
+    assert_eq!(turns[0]["role"], "user");
+    assert_eq!(turns[0]["summary"], "u1");
+    assert_eq!(turns[1]["role"], "assistant");
+    assert_eq!(turns[1]["summary"], "a1");
+}

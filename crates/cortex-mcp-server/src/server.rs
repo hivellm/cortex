@@ -243,17 +243,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_three_descriptors() {
+    async fn tools_list_returns_six_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
         let v: Value = serde_json::from_slice(&raw).unwrap();
         let arr = v["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.len(), 6, "phase10j adds audit/capture/replay");
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"cortex_query"));
-        assert!(names.contains(&"cortex_pre_thinking"));
-        assert!(names.contains(&"cortex_status"));
+        for expected in [
+            "cortex_query",
+            "cortex_pre_thinking",
+            "cortex_status",
+            "cortex_audit",
+            "cortex_capture_memory",
+            "cortex_session_replay",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "tools/list must advertise {expected}; got {names:?}"
+            );
+        }
     }
 
     #[tokio::test]

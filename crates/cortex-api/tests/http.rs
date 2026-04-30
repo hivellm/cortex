@@ -8,9 +8,9 @@ use std::time::Duration;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use cortex_api::{
-    build_router, AclStore, CALLER_HEADER, InMemoryCache, LaneHit, MemoryAuditPublisher,
-    MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryRequest,
-    QueryResponse, QueryService, RateConfig, RateLimiter,
+    build_router, AclStore, AuditStore, CALLER_HEADER, InMemoryCache, LaneHit,
+    MemoryAuditPublisher, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator,
+    QueryRequest, QueryResponse, QueryService, RateConfig, RateLimiter,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -41,6 +41,7 @@ fn build_test_service_with_indexed_repos(
         acl: Arc::new(AclStore::new()),
         rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
         audit: audit.clone(),
+        audit_store: Arc::new(AuditStore::new()),
         indexed_repos: lane.into(),
     };
     (Arc::new(svc), v, k, g, audit)
@@ -209,6 +210,7 @@ async fn rate_limited_caller_gets_429_with_retry_after_header() {
             rps_burst: 1,
         })),
         audit: Arc::new(MemoryAuditPublisher::new()),
+        audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
     };
     let svc = Arc::new(svc);
@@ -275,6 +277,7 @@ async fn lane_failure_does_not_block_other_lanes() {
         acl: Arc::new(AclStore::new()),
         rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
         audit: Arc::new(MemoryAuditPublisher::new()),
+        audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
     });
     let app = build_router(svc);
@@ -309,6 +312,7 @@ async fn budget_exceeded_truncates_response() {
         acl: Arc::new(AclStore::new()),
         rate_limiter: Arc::new(RateLimiter::new(RateConfig::default_for_spec_11())),
         audit: Arc::new(MemoryAuditPublisher::new()),
+        audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
     });
     let app = build_router(svc);
@@ -1140,4 +1144,198 @@ async fn similar_turns_overlay_surfaces_turn_id_from_extras() {
         turns[0]["summary"],
         "planned the phase6b lane projection contract"
     );
+}
+
+// ---------------------------------------------------------------------
+// Phase10j — /v1/audit/{query_id}
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn audit_endpoint_returns_envelope_after_a_query() {
+    let (svc, v, _, _, _) = build_test_service();
+    v.seed(
+        "cortex-vectorizer-code",
+        vec![cortex_api::LaneHit {
+            doc_id: "doc-audit".into(),
+            text: "audit fixture".into(),
+            repo: Some("Vectorizer".into()),
+            path: Some("src/audit.rs".into()),
+            symbol: None,
+            content_hash: None,
+            score: 0.9,
+            ts: 1,
+            severity: None,
+            extras: Default::default(),
+        }],
+    );
+    let app = build_router(svc);
+    // Drive one query through the router so the audit store records
+    // an envelope.
+    let req = pre_change_request("audit-flow", Some("vectorizer"));
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/query")
+                .header("content-type", "application/json")
+                .header(CALLER_HEADER, "audit-test")
+                .body(body_for(&req))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let query_body = read_json(resp).await;
+    let qid = query_body["query_id"].as_str().expect("query_id present");
+
+    // GET /v1/audit/{query_id} should now return the envelope.
+    let audit_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/audit/{qid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(audit_resp.status(), StatusCode::OK);
+    let env = read_json(audit_resp).await;
+    assert_eq!(env["query_id"], qid);
+    assert_eq!(env["caller"], "audit-test");
+    assert_eq!(env["intent"], "pre_change_context");
+}
+
+#[tokio::test]
+async fn audit_endpoint_returns_404_for_unknown_query_id() {
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/audit/unknown-id-here")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = read_json(resp).await;
+    assert_eq!(body["reason"], "audit_envelope_not_found");
+}
+
+// ---------------------------------------------------------------------
+// Phase10j — /v1/ingest input validation
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn ingest_endpoint_rejects_oversized_body_with_413() {
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let big_body = "x".repeat(8 * 1024 + 1);
+    let payload = json!({
+        "kind": "memory",
+        "body": big_body,
+        "repo": "cortex",
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let body = read_json(resp).await;
+    assert_eq!(body["error"], "body_too_large");
+    assert_eq!(body["max_bytes"], 8192);
+}
+
+#[tokio::test]
+async fn ingest_endpoint_rejects_uppercase_repo() {
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let payload = json!({
+        "kind": "memory",
+        "body": "hi",
+        "repo": "Cortex",
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(resp).await;
+    assert_eq!(body["error"], "repo_not_lowercase");
+}
+
+#[tokio::test]
+async fn ingest_endpoint_rejects_unsupported_kind() {
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let payload = json!({
+        "kind": "decision",
+        "body": "hi",
+        "repo": "cortex",
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = read_json(resp).await;
+    assert_eq!(body["error"], "unsupported_kind");
+}
+
+#[tokio::test]
+async fn ingest_endpoint_returns_503_when_ingestion_unreachable() {
+    // Force the proxy to point at a dead port so the validation
+    // passes but the upstream POST fails. CORTEX_INGESTION_URL is
+    // process-global; the test sets it for the duration and unsets
+    // afterwards. Tests in this file run in the same process — keep
+    // the env var scope tight to avoid leaking into siblings.
+    std::env::set_var("CORTEX_INGESTION_URL", "http://127.0.0.1:1");
+    let (svc, _, _, _, _) = build_test_service();
+    let app = build_router(svc);
+    let payload = json!({
+        "kind": "memory",
+        "body": "hi",
+        "repo": "cortex",
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/ingest")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    std::env::remove_var("CORTEX_INGESTION_URL");
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = read_json(resp).await;
+    assert_eq!(body["error"], "ingestion_unreachable");
 }

@@ -249,6 +249,24 @@ This closes the audit-flagged `path:artifact — \n   path`
 rendering. The pre-thinking budget is now spent on actual prose /
 code instead of an `ls`-grade directory listing.
 
+### In-session capture (phase10j)
+
+The bundle is read-only by construction — it surfaces what
+`cortex-api` already indexed. When an agent wants the next
+pre-thinking call to see a fact learned mid-session, it MUST write
+the fact through the
+[`cortex_capture_memory` MCP tool](18-claude-code-plugin.md#cortex_capture_memory),
+which POSTs a canonical `kind=memory|knowledge|learning` envelope to
+`/v1/ingest` on `cortex-api`. The proxy validates body size (≤ 8 KiB),
+stamps `event_id`, and forwards to `cortex-ingestion`. The next
+pre-thinking call can then surface the captured envelope through the
+free-search lane just like any other indexed event.
+
+Without this surface the only path back into the live lane is
+`rulebook_memory_save`, which writes the on-disk Rulebook store and
+NOT the lane that pre-thinking reads — captured knowledge would stay
+invisible to the next bundle. The MCP capture tool is the bridge.
+
 ### Error handling (fail-open)
 
 | Failure                       | Response                                              |

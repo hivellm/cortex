@@ -361,6 +361,49 @@ Per-caller token bucket (`cortex-adapter-claude` / `dashboard` / `analysis` / ot
 - Response bodies pass through a final redaction pass (belt-and-suspenders: storage writers already redacted; the reader re-redacts using the same pattern catalog).
 - Audit: every request is logged to `cortex.events.query_audit` (own Synap stream) with `caller`, `query_id`, `intent`, `scope`, result counts, `latency_ms`.
 
+#### `GET /v1/audit/{query_id}` (phase10j)
+
+Synchronous read of the audit envelope for a previous request. Backed
+by an in-memory ring buffer (`audit_store`, default capacity 1024)
+that records every envelope alongside the synap publish. Used by the
+[`cortex_audit` MCP tool](18-claude-code-plugin.md#cortex_audit) so an
+agent can debug zero-hit retrievals without leaving the MCP transport.
+
+Response body — the canonical `query_audit` envelope:
+
+```json
+{
+  "kind": "query_audit",
+  "caller": "claude-code-plugin",
+  "query_id": "01KQDX...",
+  "intent": "free_search",
+  "scope": { "repo": "cortex" },
+  "scope_resolution": "explicit",
+  "counts": { "snippets": 0, "decisions": 0, "violations": 0,
+              "graph_neighbors": 0, "similar_turns": 0, "laws_active": 0 },
+  "latency_ms": 12,
+  "cache": "miss",
+  "fusion_alpha": 0.7,
+  "fusion_k": 60,
+  "intent_trigger": null,
+  "query_rewrite_strategy": "passthrough",
+  "vector_query": "...",
+  "keyword_query": "..."
+}
+```
+
+Failure modes:
+
+| Status | Reason                       | Cause                                                  |
+|--------|------------------------------|--------------------------------------------------------|
+| 400    | `query_id_required`          | Empty path segment                                     |
+| 404    | `audit_envelope_not_found`   | Daemon restarted, envelope aged out, or wrong replica |
+
+The store is per-process and FIFO-bounded — a 404 is not authoritative
+"this query never ran"; it is "this daemon does not currently have
+the envelope retained". Long-term retention lives on the synap stream
++ the dashboard's timeline.
+
 ### Failure modes
 
 | Failure                                    | Handling                                                             |

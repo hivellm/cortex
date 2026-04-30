@@ -24,6 +24,7 @@
 | 16 | [Dashboard — views and SSE wiring](16-dashboard.md)             |   🟡   | 11, 14            | §5.6                         |
 | 17 | [Additional adapters — Cursor, Codex, Gemini](17-additional-adapters.md) | 🟡 | 10           | §5.1                         |
 | 18 | [Claude Code plugin — MCP server + commands + skills](18-claude-code-plugin.md) | 🟢 | 10, 11, 12 | §5.1, §8         |
+| 20 | [MCP tool surface registry](20-mcp-tool-surface.md)             |   🟢   | 11, 12, 16, 18    | §5.1, §8                     |
 
 ## Spec format
 

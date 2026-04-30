@@ -164,13 +164,20 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    /// Build a registry with the three Cortex tools wired up.
+    /// Build a registry with the six Cortex tools wired up. The
+    /// retrieval/health trio (`cortex_query`, `cortex_pre_thinking`,
+    /// `cortex_status`) plus the phase10j audit/capture/replay trio
+    /// (`cortex_audit`, `cortex_capture_memory`,
+    /// `cortex_session_replay`).
     pub fn default_set() -> Self {
         Self {
             tools: vec![
                 Arc::new(QueryTool::new()),
                 Arc::new(PreThinkingTool::new()),
                 Arc::new(StatusTool::new()),
+                Arc::new(AuditTool::new()),
+                Arc::new(CaptureMemoryTool::new()),
+                Arc::new(SessionReplayTool::new()),
             ],
         }
     }
@@ -557,18 +564,519 @@ impl Tool for StatusTool {
     }
 }
 
+// ---------------------------------------------------------------------
+// cortex_audit (phase10j)
+// ---------------------------------------------------------------------
+
+/// Phase10j tool — wraps `GET <api_url>/v1/audit/{query_id}`. The
+/// agent calls this when it suspects a retrieval lane returned zero
+/// hits and wants to confirm which one. The HTTP endpoint serves the
+/// envelope from cortex-api's in-memory ring buffer; a 404 means the
+/// daemon was restarted, the envelope aged out, or the request hit a
+/// different replica.
+pub struct AuditTool;
+
+impl AuditTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for AuditTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct AuditArgs {
+    query_id: String,
+    #[serde(default)]
+    include_samples: bool,
+}
+
+#[async_trait]
+impl Tool for AuditTool {
+    fn name(&self) -> &'static str {
+        "cortex_audit"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_audit",
+            "description": "Return the audit envelope for a previous cortex_query / cortex_pre_thinking call. Useful when the agent wants to know which retrieval lane returned zero hits before tweaking the query.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query_id"],
+                "properties": {
+                    "query_id": {
+                        "type": "string",
+                        "description": "ULID echoed back on the QueryResponse / pre-thinking bundle."
+                    },
+                    "include_samples": {
+                        "type": "boolean",
+                        "description": "Reserved for future use — when true the envelope carries up to 3 sample hits per lane. Today it is a no-op; the in-memory store does not retain samples.",
+                        "default": false
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let parsed: AuditArgs = serde_json::from_value(args)
+            .map_err(|e| ToolError::invalid_input(format!("audit args: {e}")))?;
+        let qid = parsed.query_id.trim();
+        if qid.is_empty() {
+            return Err(ToolError::invalid_input("query_id must not be empty"));
+        }
+
+        let url = format!(
+            "{}/v1/audit/{}",
+            ctx.api_url.trim_end_matches('/'),
+            urlencode(qid),
+        );
+        let resp = match ctx
+            .http
+            .get(&url)
+            .header(cortex_api::CALLER_HEADER, CALLER)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(ToolResult::soft_error(
+                    reasons::API_UNREACHABLE,
+                    &format!("cortex-api unreachable at {url}: {e}"),
+                    json!({ "url": url }),
+                ));
+            }
+        };
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if status.is_success() {
+            let mut payload = body;
+            if !parsed.include_samples {
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.remove("samples");
+                }
+            }
+            return Ok(ToolResult::ok(payload));
+        }
+        let reason = body
+            .get("reason")
+            .and_then(Value::as_str)
+            .unwrap_or(reasons::API_HTTP_ERROR)
+            .to_string();
+        Ok(ToolResult::soft_error(
+            &reason,
+            &format!("cortex-api returned {status} for /v1/audit"),
+            json!({ "status": status.as_u16(), "body": body, "query_id": qid }),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------
+// cortex_capture_memory (phase10j)
+// ---------------------------------------------------------------------
+
+/// Phase10j tool — POSTs `<api_url>/v1/ingest` with a canonical
+/// `kind=memory|knowledge|learning` envelope so the live retrieval
+/// lane sees the body on the next pre-thinking call.
+pub struct CaptureMemoryTool;
+
+impl CaptureMemoryTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for CaptureMemoryTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CaptureArgs {
+    kind: String,
+    body: String,
+    repo: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    topic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    severity: Option<String>,
+}
+
+/// MCP-side ceiling for the body. Mirrors
+/// [`cortex_api::ingest_proxy::MAX_BODY_BYTES`] so the tool can reject
+/// oversized payloads before paying the network round-trip.
+const MAX_CAPTURE_BODY_BYTES: usize = 8 * 1024;
+
+#[async_trait]
+impl Tool for CaptureMemoryTool {
+    fn name(&self) -> &'static str {
+        "cortex_capture_memory"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_capture_memory",
+            "description": "Capture an in-session fact (memory / knowledge / learning) into the live Cortex retrieval lane via /v1/ingest. The captured body becomes queryable on the next cortex_query free-text search.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["kind", "body", "repo"],
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["memory", "knowledge", "learning"],
+                        "description": "Operator-curated kind. Use `memory` for ad-hoc session facts, `knowledge` for reusable patterns / anti-patterns, `learning` for implementation insights."
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Free-form body text. Capped at 8 KiB; oversize payloads are rejected with a structured error so the caller can retry with a shorter body."
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Repo slug (lowercase per phase10d). Required so the live freshness lane can attribute the envelope back to the correct project."
+                    },
+                    "topic": {
+                        "type": "string",
+                        "description": "Optional topic from the canonical taxonomy (e.g. `retrieval`, `auth`, `migration`)."
+                    },
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "notable"],
+                        "description": "Optional severity hint. Defaults to `info` server-side."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let parsed: CaptureArgs = serde_json::from_value(args)
+            .map_err(|e| ToolError::invalid_input(format!("capture args: {e}")))?;
+        if parsed.body.is_empty() {
+            return Err(ToolError::invalid_input("body must not be empty"));
+        }
+        if parsed.body.as_bytes().len() > MAX_CAPTURE_BODY_BYTES {
+            return Ok(ToolResult::soft_error(
+                "body_too_large",
+                "capture body exceeds the 8 KiB ceiling",
+                json!({
+                    "max_bytes": MAX_CAPTURE_BODY_BYTES,
+                    "received": parsed.body.as_bytes().len(),
+                }),
+            ));
+        }
+        let kind = parsed.kind.to_ascii_lowercase();
+        if !matches!(kind.as_str(), "memory" | "knowledge" | "learning") {
+            return Err(ToolError::invalid_input(format!(
+                "unsupported kind `{}` (expected memory / knowledge / learning)",
+                parsed.kind
+            )));
+        }
+        let repo = parsed.repo.trim();
+        if repo.is_empty() {
+            return Err(ToolError::invalid_input("repo must not be empty"));
+        }
+        if repo != repo.to_ascii_lowercase() {
+            return Err(ToolError::invalid_input(format!(
+                "repo `{}` must be lowercase per phase10d",
+                repo
+            )));
+        }
+
+        let url = format!("{}/v1/ingest", ctx.api_url.trim_end_matches('/'));
+        let body = serde_json::to_value(&parsed).unwrap_or(Value::Null);
+        let resp = match ctx
+            .http
+            .post(&url)
+            .header(cortex_api::CALLER_HEADER, CALLER)
+            .json(&body)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(ToolResult::soft_error(
+                    reasons::API_UNREACHABLE,
+                    &format!("cortex-api unreachable at {url}: {e}"),
+                    json!({ "url": url }),
+                ));
+            }
+        };
+        let status = resp.status();
+        let upstream_body: Value = resp.json().await.unwrap_or(Value::Null);
+        if status.is_success() {
+            return Ok(ToolResult::ok(upstream_body));
+        }
+        let reason = upstream_body
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or(reasons::API_HTTP_ERROR)
+            .to_string();
+        Ok(ToolResult::soft_error(
+            &reason,
+            &format!("cortex-api returned {status} for /v1/ingest"),
+            json!({ "status": status.as_u16(), "body": upstream_body }),
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------
+// cortex_session_replay (phase10j)
+// ---------------------------------------------------------------------
+
+/// Phase10j tool — wraps the dashboard conversation detail endpoint
+/// so the agent can pull an ordered transcript of an earlier session
+/// without leaving the MCP transport.
+pub struct SessionReplayTool;
+
+impl SessionReplayTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SessionReplayTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReplayArgs {
+    session_id: String,
+    #[serde(default)]
+    max_turns: Option<u32>,
+    #[serde(default)]
+    include_tool_calls: bool,
+}
+
+/// Default value the tool applies when `max_turns` is omitted.
+const DEFAULT_REPLAY_TURNS: u32 = 20;
+/// Hard cap so a misconfigured caller cannot burn the context budget.
+const MAX_REPLAY_TURNS: u32 = 200;
+
+#[async_trait]
+impl Tool for SessionReplayTool {
+    fn name(&self) -> &'static str {
+        "cortex_session_replay"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_session_replay",
+            "description": "Return the ordered turns for a previous Cortex session. Backed by /v1/dashboard/conversations/{session_id}; max_turns defaults to 20 and is capped at 200 so the bundle stays under context budget.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["session_id"],
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Canonical 26-char ULID echoed by /v1/dashboard/conversations."
+                    },
+                    "max_turns": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "default": 20
+                    },
+                    "include_tool_calls": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "When true, each turn carries a `tool_calls` array (best-effort — the dashboard endpoint exposes the user / assistant text only today)."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let parsed: ReplayArgs = serde_json::from_value(args)
+            .map_err(|e| ToolError::invalid_input(format!("replay args: {e}")))?;
+        let sid = parsed.session_id.trim();
+        if sid.is_empty() {
+            return Err(ToolError::invalid_input("session_id must not be empty"));
+        }
+        let max_turns = parsed
+            .max_turns
+            .unwrap_or(DEFAULT_REPLAY_TURNS)
+            .clamp(1, MAX_REPLAY_TURNS) as usize;
+
+        let url = format!(
+            "{}/v1/dashboard/conversations/{}",
+            ctx.api_url.trim_end_matches('/'),
+            urlencode(sid),
+        );
+        let resp = match ctx
+            .http
+            .get(&url)
+            .header(cortex_api::CALLER_HEADER, CALLER)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(ToolResult::soft_error(
+                    reasons::API_UNREACHABLE,
+                    &format!("cortex-api unreachable at {url}: {e}"),
+                    json!({ "url": url }),
+                ));
+            }
+        };
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Ok(ToolResult::soft_error(
+                reasons::API_HTTP_ERROR,
+                &format!("cortex-api returned {status} for /v1/dashboard/conversations"),
+                json!({ "status": status.as_u16(), "body": body }),
+            ));
+        }
+
+        let session_id = body
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(sid)
+            .to_string();
+        let turns_in: Vec<Value> = body
+            .get("turns")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let total_turns = turns_in.len();
+        let started_at_ms = turns_in
+            .first()
+            .and_then(|t| t.get("started_at_ms"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let ended_at_ms = turns_in
+            .last()
+            .and_then(|t| {
+                t.get("completed_at_ms")
+                    .and_then(Value::as_i64)
+                    .or_else(|| t.get("started_at_ms").and_then(Value::as_i64))
+            })
+            .unwrap_or(0);
+
+        // Cap turns and reshape into the spec-20 envelope.
+        let turns: Vec<Value> = turns_in
+            .into_iter()
+            .take(max_turns)
+            .flat_map(|raw| reshape_turn(raw, parsed.include_tool_calls))
+            .collect();
+
+        let payload = json!({
+            "session_id": session_id,
+            "started_at_ms": started_at_ms,
+            "ended_at_ms": ended_at_ms,
+            "total_turns": total_turns,
+            "returned_turns": turns.len(),
+            "turns": turns,
+        });
+        Ok(ToolResult::ok(payload))
+    }
+}
+
+/// Convert one dashboard turn into two flat rows (user + assistant)
+/// so the replay payload stays self-describing for the agent. The
+/// dashboard pairs the two halves into one struct; the replay
+/// surface flattens them back out so each row carries a `role` the
+/// agent can switch on without inferring it from field presence.
+fn reshape_turn(raw: Value, include_tool_calls: bool) -> Vec<Value> {
+    let turn_id = raw
+        .get("turn_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let user_message = raw
+        .get("user_message")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let assistant_message = raw
+        .get("assistant_message")
+        .and_then(Value::as_str)
+        .map(String::from);
+    let started_at_ms = raw
+        .get("started_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let completed_at_ms = raw.get("completed_at_ms").and_then(Value::as_i64);
+
+    let mut rows = Vec::with_capacity(2);
+    if !user_message.is_empty() {
+        let mut row = json!({
+            "turn_id": turn_id,
+            "role": "user",
+            "occurred_at_ms": started_at_ms,
+            "summary": user_message,
+        });
+        if include_tool_calls {
+            row["tool_calls"] = Value::Array(Vec::new());
+        }
+        rows.push(row);
+    }
+    if let Some(a) = assistant_message {
+        let mut row = json!({
+            "turn_id": turn_id,
+            "role": "assistant",
+            "occurred_at_ms": completed_at_ms.unwrap_or(started_at_ms),
+            "summary": a,
+        });
+        if include_tool_calls {
+            row["tool_calls"] = Value::Array(Vec::new());
+        }
+        rows.push(row);
+    }
+    rows
+}
+
+/// Minimal path-segment encoder. The session_id / query_id values we
+/// pass through are ULIDs in practice, but the tool surface accepts
+/// arbitrary strings — encode the small set of characters that would
+/// otherwise break the URL parser.
+fn urlencode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for b in input.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_three_tools_with_unique_names() {
+    fn registry_returns_six_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
-        assert_eq!(reg.len(), 3);
+        assert_eq!(reg.len(), 6, "phase10j adds audit/capture/replay");
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
-        assert!(names.contains(&"cortex_query"));
-        assert!(names.contains(&"cortex_pre_thinking"));
-        assert!(names.contains(&"cortex_status"));
+        for expected in [
+            "cortex_query",
+            "cortex_pre_thinking",
+            "cortex_status",
+            "cortex_audit",
+            "cortex_capture_memory",
+            "cortex_session_replay",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "registry must include {expected}; got {names:?}"
+            );
+        }
         for n in &names {
             assert!(
                 !n.contains('.'),
@@ -609,6 +1117,177 @@ mod tests {
         assert_eq!(d["inputSchema"]["type"], "object");
         let props = d["inputSchema"]["properties"].as_object().unwrap();
         assert!(props.is_empty());
+    }
+
+    #[test]
+    fn audit_tool_descriptor_requires_query_id() {
+        let d = AuditTool::new().descriptor();
+        assert_eq!(d["name"], "cortex_audit");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        let req = d["inputSchema"]["required"].as_array().unwrap();
+        assert!(req.iter().any(|v| v == "query_id"));
+    }
+
+    #[test]
+    fn capture_memory_descriptor_lists_required_kind_body_repo() {
+        let d = CaptureMemoryTool::new().descriptor();
+        assert_eq!(d["name"], "cortex_capture_memory");
+        let req: Vec<&str> = d["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(req.contains(&"kind"));
+        assert!(req.contains(&"body"));
+        assert!(req.contains(&"repo"));
+        let kinds = d["inputSchema"]["properties"]["kind"]["enum"]
+            .as_array()
+            .unwrap();
+        for k in ["memory", "knowledge", "learning"] {
+            assert!(
+                kinds.iter().any(|v| v == k),
+                "kind enum must include {k}; got {kinds:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_replay_descriptor_caps_max_turns() {
+        let d = SessionReplayTool::new().descriptor();
+        assert_eq!(d["name"], "cortex_session_replay");
+        let mt = &d["inputSchema"]["properties"]["max_turns"];
+        assert_eq!(mt["minimum"], 1);
+        assert_eq!(mt["maximum"], 200);
+        assert_eq!(mt["default"], 20);
+    }
+
+    #[tokio::test]
+    async fn capture_memory_rejects_oversized_body_without_network_call() {
+        let tool = CaptureMemoryTool::new();
+        // No HTTP listener — unreachable api_url is fine because we
+        // expect short-circuit before any send().
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let big = "x".repeat(MAX_CAPTURE_BODY_BYTES + 1);
+        let res = tool
+            .call(
+                &ctx,
+                json!({
+                    "kind": "memory",
+                    "body": big,
+                    "repo": "cortex",
+                }),
+            )
+            .await
+            .expect("oversize is a soft error, not an invalid_input error");
+        assert!(res.is_error);
+        let txt = res.content[0]["text"].as_str().unwrap();
+        assert!(
+            txt.contains("body_too_large"),
+            "structured reason should be `body_too_large`; got {txt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_memory_rejects_uppercase_repo() {
+        let tool = CaptureMemoryTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = tool
+            .call(
+                &ctx,
+                json!({
+                    "kind": "memory",
+                    "body": "x",
+                    "repo": "Cortex",
+                }),
+            )
+            .await
+            .expect_err("uppercase repo must be invalid_input");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn capture_memory_rejects_unsupported_kind() {
+        let tool = CaptureMemoryTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = tool
+            .call(
+                &ctx,
+                json!({
+                    "kind": "decision",
+                    "body": "x",
+                    "repo": "cortex",
+                }),
+            )
+            .await
+            .expect_err("decision is not in the curated set");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn audit_tool_rejects_empty_query_id() {
+        let tool = AuditTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = tool
+            .call(&ctx, json!({ "query_id": "  " }))
+            .await
+            .expect_err("blank query_id must be invalid_input");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn session_replay_rejects_empty_session_id() {
+        let tool = SessionReplayTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = tool
+            .call(&ctx, json!({ "session_id": "" }))
+            .await
+            .expect_err("blank session_id must be invalid_input");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[test]
+    fn urlencode_round_trips_safe_chars_and_escapes_unsafe_ones() {
+        assert_eq!(urlencode("abc-123_~."), "abc-123_~.");
+        assert_eq!(urlencode("a/b"), "a%2Fb");
+        assert_eq!(urlencode("a b"), "a%20b");
+    }
+
+    #[test]
+    fn reshape_turn_emits_two_rows_when_both_messages_present() {
+        let raw = json!({
+            "turn_id": "t1",
+            "user_message": "hi",
+            "assistant_message": "hello",
+            "started_at_ms": 100,
+            "completed_at_ms": 200,
+        });
+        let rows = reshape_turn(raw, false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["role"], "user");
+        assert_eq!(rows[0]["occurred_at_ms"], 100);
+        assert_eq!(rows[1]["role"], "assistant");
+        assert_eq!(rows[1]["occurred_at_ms"], 200);
+    }
+
+    #[test]
+    fn reshape_turn_skips_empty_user_message() {
+        // Stop envelopes with empty user_message must NOT inject a
+        // blank user row — the agent renders it as a confusing
+        // empty bubble.
+        let raw = json!({
+            "turn_id": "t2",
+            "user_message": "",
+            "assistant_message": "hello",
+            "started_at_ms": 100,
+            "completed_at_ms": 200,
+        });
+        let rows = reshape_turn(raw, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["role"], "assistant");
     }
 
     #[test]

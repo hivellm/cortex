@@ -15,6 +15,7 @@ pub mod acl;
 pub mod analyzer;
 pub mod archive_loader;
 pub mod audit;
+pub mod audit_store;
 pub mod cache;
 pub mod dashboard;
 pub mod dashboard_series;
@@ -23,6 +24,7 @@ pub mod config_audit;
 pub mod fusion;
 pub mod health;
 pub mod http;
+pub mod ingest_proxy;
 pub mod lanes;
 pub mod loader_metrics;
 pub mod silent_drop;
@@ -57,6 +59,7 @@ pub use tasks_loader::{
     TaskSummary,
 };
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
+pub use audit_store::{AuditStore, DEFAULT_STORE_CAPACITY as AUDIT_STORE_CAPACITY};
 pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
 pub use fusion::{rrf_fuse, FusionConfig, DEFAULT_RRF_ALPHA, RRF_K};
 pub use http::{build_router, build_router_with, CALLER_HEADER};
