@@ -34,10 +34,10 @@ const STATUS_CHIPS: TaskStatus[] = ["pending", "in-progress", "completed", "arch
 type FilterState = {
   status: Set<TaskStatus>;
   phase: Set<string>;
-  /// Phase5b multi-project — narrow to a single project at a time
-  /// (multiple selections also supported, but the typical UX is
-  /// "show me <repo>" then drill into the phases).
-  repo: Set<string>;
+  /// Phase5b multi-project — single-select project (operator
+  /// preference: chips became a wall, dropdown is cleaner). `null`
+  /// means "all projects".
+  repo: string | null;
   showArchived: boolean;
   query: string;
 };
@@ -45,7 +45,7 @@ type FilterState = {
 const DEFAULT_FILTERS: FilterState = {
   status: new Set<TaskStatus>(),
   phase: new Set<string>(),
-  repo: new Set<string>(),
+  repo: null,
   showArchived: false,
   query: "",
 };
@@ -53,7 +53,11 @@ const DEFAULT_FILTERS: FilterState = {
 type StoredFilters = {
   status: TaskStatus[];
   phase: string[];
-  repo: string[];
+  /// Stored as a string | null. Older versions of this view stored
+  /// `repo` as `string[]`; treat the array as "first non-empty slot
+  /// wins" so a user's previous multi-select selection migrates
+  /// cleanly to the single-select model.
+  repo: string | string[] | null;
   showArchived: boolean;
   query: string;
 };
@@ -64,6 +68,12 @@ function loadStoredFilters(): FilterState {
     const raw = window.localStorage.getItem(FILTER_STORAGE_KEY);
     if (!raw) return DEFAULT_FILTERS;
     const parsed = JSON.parse(raw) as Partial<StoredFilters>;
+    let repo: string | null = null;
+    if (typeof parsed.repo === "string" && parsed.repo.length > 0) {
+      repo = parsed.repo;
+    } else if (Array.isArray(parsed.repo) && parsed.repo.length > 0) {
+      repo = parsed.repo[0];
+    }
     return {
       status: new Set<TaskStatus>(
         (parsed.status ?? []).filter((s): s is TaskStatus =>
@@ -71,7 +81,7 @@ function loadStoredFilters(): FilterState {
         ),
       ),
       phase: new Set<string>(parsed.phase ?? []),
-      repo: new Set<string>(parsed.repo ?? []),
+      repo,
       showArchived: parsed.showArchived ?? false,
       query: parsed.query ?? "",
     };
@@ -85,7 +95,7 @@ function persistFilters(state: FilterState): void {
   const stored: StoredFilters = {
     status: Array.from(state.status),
     phase: Array.from(state.phase),
-    repo: Array.from(state.repo),
+    repo: state.repo,
     showArchived: state.showArchived,
     query: state.query,
   };
@@ -139,14 +149,13 @@ export function TasksView() {
 
   // Phase chips derive from the rows that match the active project
   // filter (so cortex's phases don't mix with synap's wall of phases
-  // and vice versa). When no project chip is active the chips
-  // collapse — that wall served no real purpose for cross-project
-  // browsing.
+  // and vice versa). When no project is selected the chips collapse
+  // — that wall served no real purpose for cross-project browsing.
   const phaseOptions = useMemo(() => {
-    if (filters.repo.size === 0) return [];
+    if (!filters.repo) return [];
     const set = new Set<string>();
     for (const r of allRows) {
-      if (!r.repo || !filters.repo.has(r.repo)) continue;
+      if (!r.repo || r.repo !== filters.repo) continue;
       if (r.phase) set.add(r.phase);
     }
     return Array.from(set).sort((a, b) => phaseSortKey(a).localeCompare(phaseSortKey(b)));
@@ -157,8 +166,8 @@ export function TasksView() {
       if (!filters.showArchived && r.status === "archived") return false;
       if (filters.status.size > 0 && !filters.status.has(r.status)) return false;
       if (filters.phase.size > 0 && !filters.phase.has(r.phase)) return false;
-      if (filters.repo.size > 0) {
-        if (!r.repo || !filters.repo.has(r.repo)) return false;
+      if (filters.repo !== null) {
+        if (r.repo !== filters.repo) return false;
       }
       if (filters.query.trim().length > 0) {
         const q = filters.query.toLowerCase();
@@ -233,17 +242,15 @@ export function TasksView() {
     });
   };
 
-  const toggleRepo = (r: string) => {
-    setFilters((prev) => {
-      const next = new Set(prev.repo);
-      if (next.has(r)) next.delete(r);
-      else next.add(r);
-      // Phase chips are scoped to the active project, so a project
-      // change leaves stale chips selected. Clear the phase filter
-      // here so the user never has invisible filters narrowing the
-      // list to zero rows.
-      return { ...prev, repo: next, phase: new Set<string>() };
-    });
+  const setRepo = (next: string | null) => {
+    setFilters((prev) => ({
+      ...prev,
+      repo: next,
+      // Phase chips are scoped to the active project — clearing the
+      // phase filter on every project change keeps stale selections
+      // from silently narrowing the list to zero rows.
+      phase: new Set<string>(),
+    }));
   };
 
   const togglePhaseCollapse = (p: string) => {
@@ -305,22 +312,45 @@ export function TasksView() {
         />
       </div>
 
-      <div className="filter-bar" style={{ gap: 12, flexWrap: "wrap" }}>
+      <div
+        className="filter-bar"
+        style={{
+          gap: 12,
+          flexWrap: "wrap",
+          // Keep the filter bar visible while scrolling the long
+          // task list. Top offset clears the page header; the bg
+          // override prevents text from bleeding through.
+          position: "sticky",
+          top: 0,
+          zIndex: 5,
+          background: "var(--bg-1)",
+          paddingTop: 8,
+          paddingBottom: 8,
+          borderBottom: "1px solid var(--border)",
+        }}
+      >
         {repoOptions.length > 0 ? (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <span style={{ color: "var(--fg-3)", fontSize: 11, alignSelf: "center" }}>
-              Project
-            </span>
-            {repoOptions.map((r) => (
-              <button
-                key={r}
-                className={`btn btn--sm ${filters.repo.has(r) ? "" : "btn--ghost"}`}
-                onClick={() => toggleRepo(r)}
-                title={`Filter to ${r} tasks`}
-              >
-                {r}
-              </button>
-            ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: "var(--fg-3)", fontSize: 11 }}>Project</span>
+            <select
+              value={filters.repo ?? ""}
+              onChange={(e) => setRepo(e.target.value === "" ? null : e.target.value)}
+              className="btn btn--ghost"
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 12,
+                padding: "5px 10px",
+                minWidth: 160,
+              }}
+              title="Filter to a single project"
+            >
+              <option value="">All projects ({repoOptions.length})</option>
+              {repoOptions.map((r) => (
+                <option key={r} value={r}>
+                  {r}
+                </option>
+              ))}
+            </select>
           </div>
         ) : null}
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
