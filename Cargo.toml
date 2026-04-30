@@ -53,7 +53,7 @@ ignore = "0.4"
 
 synap-sdk = "0.11"
 vectorizer-sdk = "3.0.3"
-nexus-graph-sdk = "1.15"
+nexus-graph-sdk = "2.0"
 
 # Pin rustls-webpki >= 0.103.13 to close RUSTSEC-2026-0104 (panic in CRL parsing).
 # Reaches us via vectorizer-sdk -> reqwest 0.13 -> rustls-platform-verifier.

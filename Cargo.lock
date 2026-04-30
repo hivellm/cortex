@@ -1900,9 +1900,9 @@ dependencies = [
 
 [[package]]
 name = "nexus-graph-sdk"
-version = "1.15.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71fb75c8e95e5f565ca6033ebd642e01f3c6df393ec2aa3a20a43f1ba5bd0f0b"
+checksum = "9265ad723ea974006fed7b2fd4dee4a8026527e335c36d57e5445857d4fd71d6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1920,9 +1920,9 @@ dependencies = [
 
 [[package]]
 name = "nexus-protocol"
-version = "1.14.0"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3774d84c0e6b49489e68169928dadd701c7f67fe1ae4d66bd9f2ad45ab5dcdc6"
+checksum = "334fa2da067995bf871a88a62055a5e6bc9e9a6d907092ec823761347dfd46bb"
 dependencies = [
  "anyhow",
  "hyper",
