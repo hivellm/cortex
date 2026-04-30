@@ -681,6 +681,105 @@ Read-side awareness test in `crates/cortex-storage/src/metadata.rs`:
 
 - `union_read_returns_identical_totals_before_and_after_rollup`
 
+## CI canary (phase9j)
+
+The retention pipeline is dangerous: it deletes data, rewrites
+archives, and (in production) calls Sonnet at the user's expense.
+Phase9j adds a deterministic regression-detection canary that
+runs on every PR touching the retention surface plus a nightly
+schedule.
+
+### Harness
+
+[`crates/cortex-retention/tests/canary.rs`](../../crates/cortex-retention/tests/canary.rs)
+hosts two integration tests:
+
+- `synthetic_corpus_distribution_matches_spec` — asserts the
+  corpus mix (600 turns / 250 tool_calls / 50 decisions / 50
+  analyses / 50 memory) and PII distribution (60 % null / 25 %
+  low / 10 % medium / 5 % high) are exact.
+- `retention_canary_full_pipeline` — drives every retention
+  stage end-to-end, asserts the post-state, and re-runs the full
+  pipeline to verify idempotence.
+
+The corpus generator lives next to the test at
+[`tests/support/synth_corpus.rs`](../../crates/cortex-retention/tests/support/synth_corpus.rs)
+and is pure-Rust (no I/O, no RNG) so a CI re-run produces
+byte-identical envelopes.
+
+### Stages exercised
+
+The harness drives every retention library entrypoint with
+`--time-travel = now` (anchored at `2026-04-29T18:00:00Z` so
+boundaries fire deterministically):
+
+1. `run_sweep` — tier transitions FP32 → PQ at 30 d, PQ → Binary at 365 d.
+2. `quarantine_pre_existing` + `enumerate_compactable` +
+   `compact_partition` + `apply_three_year_drop` — archive rollup.
+3. `run_enforcement` — PII high-30d / medium-90d / null-safety-90d.
+4. `run_turn_digest` — bounded by `max_usd_cents_per_run = 5`.
+5. `run_meili_prune` — body blanking + summary cap.
+6. `metadata_reap::run` — bootstrap_jobs / sessions / classifier_spend rollups.
+7. `cas_vacuum::run` — orphan blob reclamation (`--force` so the
+   seeded 100-orphan cohort drops in one pass).
+
+### Storage assertions
+
+- FP32 collections contain zero records older than 30 d.
+- PQ collections contain zero records older than 365 d.
+- Cold binary contains every record that started >365 d old plus
+  every record demoted from PQ during the sweep.
+- Archive: `_quarantine/` contains the planted `.corrupted`
+  artifact; no `.tmp` orphans; no `.corrupted` files outside
+  `_quarantine/`.
+- Meili: zero docs older than 90 d remain unpruned (re-enumerating
+  after `commit_updates` returns an empty set).
+- SQLite: zero `bootstrap_jobs` success rows older than 30 d;
+  `bootstrap_jobs_daily` populated.
+- CAS: every seeded orphan is gone after the vacuum.
+- PII: every high-cohort target has a rewrite stamped
+  `pii_high_30d` with `body=None`; every medium-cohort target
+  has a rewrite stamped `pii_medium_90d` with the synthesized
+  summary.
+
+### Bounded LLM cost
+
+The canary caps the per-run LLM budget at 5 ¢ via
+`DigestPlan::max_usd_cents_per_run = 5`. The reference merger
+charges 0 ¢ per call (deterministic in-process), so the cap is
+honoured even if a regression accidentally widens the bucket
+set.
+
+### Idempotence
+
+After the first pass the canary:
+
+- snapshots every redacted event_id and rebuilds PII targets with
+  `redacted: Some(_)` so the matcher's idempotence guard fires;
+- pre-populates the digest backend's `existing` map from
+  `persisted()` so `lookup_existing` short-circuits;
+- calls `MemoryMeiliBackend::commit_updates` so the
+  `already_pruned` flag is sticky.
+
+It then drives every stage a second time and asserts:
+
+- zero records demoted,
+- zero docs pruned,
+- zero blobs vacuumed,
+- zero new digests produced,
+- zero classifier cents spent,
+- zero metadata rows collapsed,
+- zero PII rewrites applied.
+
+### CI workflow
+
+[`.github/workflows/retention-canary.yml`](../../.github/workflows/retention-canary.yml)
+runs the canary on every PR touching `crates/cortex-retention/`,
+`crates/cortex-storage/`, `crates/cortex-classifier/`, or
+`crates/cortex-workers/`, plus a nightly cron at 04:00 UTC. A
+failing canary fails the workflow and uploads the cargo-test log
+as an artifact.
+
 ## Observability (phase9i)
 
 Every sweeper stamps one `retention_sweeps` row per invocation and

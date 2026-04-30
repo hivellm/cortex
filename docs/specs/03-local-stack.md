@@ -229,6 +229,26 @@ Cortex is up at http://127.0.0.1:17000  →  http://127.0.0.1:17000/dashboard
 
 *(none — defaults locked)*
 
+## CI
+
+The local stack participates in three workflows under
+`.github/workflows/`:
+
+- [`relevance.yaml`](../../.github/workflows/relevance.yaml) —
+  boots the full docker-compose stack and replays the labelled
+  query set with a 2pp recall@10 / MRR regression gate.
+- [`health-smoke.yml`](../../.github/workflows/health-smoke.yml) —
+  smoke-tests the operator-side wrappers (`cortex-up`, `cortex-doctor`,
+  `cortex-down`) against a fresh checkout.
+- [`retention-canary.yml`](../../.github/workflows/retention-canary.yml) —
+  phase9j; runs the in-process retention canary
+  (`cargo test -p cortex-retention --test canary`) on every PR
+  touching the retention surface plus a nightly schedule. The
+  canary uses in-memory backends rather than booting docker so the
+  job stays under 15 minutes; the docker-compose-driven end-to-end
+  variant lands when phase9k's cron scheduler integrates the
+  retention jobs against the live stack.
+
 ## References
 
 - Spec 02 — Storage layout (what gets created on first run).

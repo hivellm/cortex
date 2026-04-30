@@ -1,0 +1,74 @@
+name: Retention canary
+
+# phase9j — closes the regression-detection loop on the Phase 9
+# retention pipeline. Drives a deterministic 1k-event synthetic
+# corpus through every retention sweep and asserts the post-state
+# across Vectorizer / Nexus / Meili / SQLite / CAS / Parquet
+# archive. The harness lives at
+# `crates/cortex-retention/tests/canary.rs` and runs against
+# in-memory backends so the workflow stays fast (seconds, not
+# minutes), hermetic (no network), and reproducible.
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - "crates/cortex-retention/**"
+      - "crates/cortex-storage/**"
+      - "crates/cortex-classifier/**"
+      - "crates/cortex-workers/**"
+      - ".github/workflows/retention-canary.yml"
+  schedule:
+    # Nightly canary at 04:00 UTC so a regression that doesn't
+    # touch the listed paths still surfaces within 24 h.
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  retention-canary:
+    name: Retention canary (cargo test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build canary binary
+        run: |
+          cargo test -p cortex-retention --test canary --no-run
+
+      - name: Run canary
+        env:
+          RUST_LOG: info,cortex_retention=info
+        run: |
+          cargo test -p cortex-retention --test canary -- --nocapture
+
+      # When the canary fails we want the SQLite + archive tempdirs
+      # the test produced. Cargo wipes them on test exit, so the
+      # workflow's "upload on failure" hook only catches the JSON
+      # report stdout — captured via `--nocapture` above.
+      - name: Capture cargo test log
+        if: failure()
+        run: |
+          mkdir -p artifacts
+          cargo test -p cortex-retention --test canary -- --nocapture \
+            > artifacts/canary.log 2>&1 || true
+
+      - name: Upload artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retention-canary-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: warn
