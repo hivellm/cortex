@@ -131,19 +131,26 @@ export function TasksView() {
 
   const allRows = list?.tasks ?? [];
 
-  // Phase chips reflect every phase the loader returned, even when a
-  // filter narrows the visible list to zero rows in that phase.
-  const phaseOptions = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of list?.by_phase ?? []) set.add(p.phase);
-    return Array.from(set).sort();
-  }, [list?.by_phase]);
-
   const repoOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of allRows) if (r.repo) set.add(r.repo);
     return Array.from(set).sort();
   }, [allRows]);
+
+  // Phase chips derive from the rows that match the active project
+  // filter (so cortex's phases don't mix with synap's wall of phases
+  // and vice versa). When no project chip is active the chips
+  // collapse — that wall served no real purpose for cross-project
+  // browsing.
+  const phaseOptions = useMemo(() => {
+    if (filters.repo.size === 0) return [];
+    const set = new Set<string>();
+    for (const r of allRows) {
+      if (!r.repo || !filters.repo.has(r.repo)) continue;
+      if (r.phase) set.add(r.phase);
+    }
+    return Array.from(set).sort((a, b) => phaseSortKey(a).localeCompare(phaseSortKey(b)));
+  }, [allRows, filters.repo]);
 
   const filtered = useMemo(() => {
     return allRows.filter((r) => {
@@ -231,7 +238,11 @@ export function TasksView() {
       const next = new Set(prev.repo);
       if (next.has(r)) next.delete(r);
       else next.add(r);
-      return { ...prev, repo: next };
+      // Phase chips are scoped to the active project, so a project
+      // change leaves stale chips selected. Clear the phase filter
+      // here so the user never has invisible filters narrowing the
+      // list to zero rows.
+      return { ...prev, repo: next, phase: new Set<string>() };
     });
   };
 
@@ -324,18 +335,23 @@ export function TasksView() {
             </button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {phaseOptions.map((p) => (
-            <button
-              key={p}
-              className={`btn btn--sm ${filters.phase.has(p) ? "" : "btn--ghost"}`}
-              onClick={() => togglePhase(p)}
-              title={`Filter to ${p}`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
+        {phaseOptions.length > 0 ? (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <span style={{ color: "var(--fg-3)", fontSize: 11, alignSelf: "center" }}>
+              Phase
+            </span>
+            {phaseOptions.map((p) => (
+              <button
+                key={p}
+                className={`btn btn--sm ${filters.phase.has(p) ? "" : "btn--ghost"}`}
+                onClick={() => togglePhase(p)}
+                title={`Filter to ${p}`}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
           <input
             type="text"
@@ -783,6 +799,15 @@ function ChecklistView({ sections }: { sections: TaskChecklistSection[] }) {
       })}
     </div>
   );
+}
+
+/// Build a sort key for `phaseN<letter>` that orders numeric prefix
+/// correctly (`phase2 < phase10`). Falls back to the raw string when
+/// the input doesn't match the canonical pattern.
+function phaseSortKey(phase: string): string {
+  const m = /^phase(\d+)([a-z]*)$/.exec(phase);
+  if (!m) return phase;
+  return `phase${m[1].padStart(4, "0")}${m[2]}`;
 }
 
 function fmtRelative(iso: string): string {
