@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
-import { ApiError, postQuery, type QueryRequestBody } from "../lib/api";
+import { api, ApiError, postQuery, type QueryRequestBody } from "../lib/api";
 import { useFilters } from "../lib/filters";
 
 /// Top-bar search. Replaces the dedicated `Search` view: the input
@@ -39,14 +39,40 @@ const HINT = "Search across repos…";
 export function HeaderSearch() {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
+  const [repoOverride, setRepoOverride] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { filters } = useFilters();
 
-  const activeRepo: string | undefined =
+  // Pull the indexed-repo list so the search can auto-pick the most
+  // active scope when the user hasn't selected one in the sidebar.
+  // Without this auto-pick the relevance lane returns 422
+  // `scope_repo_required` and the user has to bounce through the
+  // sidebar before every query — which the operator (correctly)
+  // called "uma merda".
+  const overviewQ = useQuery({
+    queryKey: ["overview", "header-search"],
+    queryFn: () => api.overview(),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
+  });
+  const repoOptions = useMemo(
+    () =>
+      (overviewQ.data?.recent_repos ?? [])
+        .slice()
+        .sort((a, b) => b.count - a.count)
+        .map((r) => r.repo),
+    [overviewQ.data?.recent_repos],
+  );
+
+  const sidebarRepo: string | undefined =
     Array.isArray(filters.repo) && filters.repo.length === 1
       ? filters.repo[0]
       : undefined;
+  // Resolution order: explicit user override (chip click) → sidebar
+  // single-select → most-active repo from `/v1/dashboard/overview`.
+  const activeRepo: string | undefined =
+    repoOverride ?? sidebarRepo ?? repoOptions[0];
 
   const mutation = useMutation<QueryResponseShape, ApiError, string>({
     mutationFn: async (q: string) => {
@@ -116,6 +142,11 @@ export function HeaderSearch() {
     ["place" + "holder"]: HINT,
   };
 
+  // Tiny inline repo selector — clicking the chip opens a small
+  // dropdown of available scopes. Keeps the user one click away from
+  // changing search scope without leaving the page.
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
+
   return (
     <div className="header__search" ref={containerRef}>
       <form onSubmit={onSubmit}>
@@ -129,9 +160,99 @@ export function HeaderSearch() {
             if (mutation.isSuccess || mutation.isError) setOpen(true);
           }}
           disabled={mutation.isPending}
+          style={{ paddingRight: 110 }}
         />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setRepoMenuOpen((v) => !v);
+          }}
+          title="Search scope"
+          style={{
+            position: "absolute",
+            right: 38,
+            top: "50%",
+            transform: "translateY(-50%)",
+            height: 22,
+            padding: "0 8px",
+            background: "var(--bg-3)",
+            border: "1px solid var(--border)",
+            borderRadius: 999,
+            color: "var(--fg-1)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 10.5,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}
+        >
+          {activeRepo ?? "no repo"}
+          <span style={{ opacity: 0.5, fontSize: 9 }}>▾</span>
+        </button>
         <kbd>⌘K</kbd>
       </form>
+
+      {repoMenuOpen ? (
+        <div
+          role="listbox"
+          aria-label="Search scope"
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            right: 0,
+            minWidth: 180,
+            maxHeight: 320,
+            overflowY: "auto",
+            background: "var(--bg-1)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            boxShadow: "0 12px 32px rgba(0, 0, 0, 0.35)",
+            zIndex: 13,
+            padding: 4,
+          }}
+        >
+          {repoOptions.length === 0 ? (
+            <div style={{ padding: 8, color: "var(--fg-2)", fontSize: 11 }}>
+              no repos indexed yet
+            </div>
+          ) : (
+            repoOptions.map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => {
+                  setRepoOverride(r);
+                  setRepoMenuOpen(false);
+                  inputRef.current?.focus();
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "6px 10px",
+                  background:
+                    r === activeRepo ? "var(--bg-3)" : "transparent",
+                  border: "none",
+                  color: "var(--fg-0)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11.5,
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                {r}
+                {r === sidebarRepo ? (
+                  <span style={{ marginLeft: 6, color: "var(--fg-3)", fontSize: 10 }}>
+                    (sidebar)
+                  </span>
+                ) : null}
+              </button>
+            ))
+          )}
+        </div>
+      ) : null}
 
       {showDropdown ? (
         <div
@@ -159,8 +280,8 @@ export function HeaderSearch() {
 
           {isScopeRequired ? (
             <div style={{ padding: 12, fontSize: 12 }}>
-              <strong>Scope required.</strong> Pick exactly one repo in the
-              sidebar so the relevance lane can route to a real collection.
+              <strong>Scope required.</strong> Pick a repo from the chip on
+              the right of the search box and try again.
             </div>
           ) : null}
 

@@ -231,24 +231,19 @@ services:
       - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
     restart: unless-stopped
 
-  # cortex-adapter-claude ─ Claude Code adapter daemon.
-  cortex-adapter:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: cortex-adapter
-    image: cortex/adapter:dev
-    container_name: cortex-adapter
-    depends_on:
-      cortex-ingestion: { condition: service_started }
-    networks: [cortex-net]
-    ports:
-      - "${CORTEX_ADAPTER_PORT:-17011}:17011"
-    environment:
-      CORTEX_ADAPTER_BIND: 0.0.0.0:17011
-      CORTEX_INGESTION_URL: http://cortex-ingestion:17010
-    restart: unless-stopped
-
+# NOTE: `cortex-adapter-claude` deliberately runs OUTSIDE this
+# compose file. It listens on a unix socket (`~/.cortex/adapter-claude.sock`
+# on Linux/macOS) or named pipe (`\\.\pipe\cortex-adapter-claude` on
+# Windows) that the Claude Code hooks talk to — those endpoints are
+# host-local and cannot be bridged into a Linux container on a
+# Windows host. Run it as a per-user process on the host:
+#
+#     cargo install --path crates/cortex-adapter-claude-code --bin cortex-adapter-claude
+#     cortex-adapter-claude            # uses ~/.cortex/adapter.toml
+#
+# The adapter then POSTs to the dockerised cortex-ingestion via the
+# host-port forward (default http://127.0.0.1:17010). cortex-api's
+# /v1/health aggregator picks it up via CORTEX_ADAPTER_ADMIN_URL.
 networks:
   cortex-net:
     name: cortex-net
