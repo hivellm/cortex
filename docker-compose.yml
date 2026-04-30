@@ -95,7 +95,13 @@ services:
       CORTEX_SYNAP_URL: http://synap:15500
       CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
     volumes:
-      - cortex-archive:/var/lib/cortex/archive
+      # Bind-mount the host's `~/.cortex` directory so the
+      # archive + metadata DB are shared with the host's CLI tools
+      # and survive container recreation. ${CORTEX_HOME_HOST}
+      # defaults to `${USERPROFILE}/.cortex` on Windows or
+      # `${HOME}/.cortex` on Unix; override via .env when the host
+      # uses a non-default location.
+      - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
     restart: unless-stopped
 
   # cortex-classifier-worker ─ Haiku CLI fan-out for kind refinement.
@@ -199,6 +205,12 @@ services:
       - "${CORTEX_API_PORT:-17000}:17000"
     environment:
       CORTEX_HOME: /var/lib/cortex
+      # archive_loader walks parquet here on boot + every 30 s and
+      # stamps `extras.session_id` on every LaneHit so the dashboard
+      # Conversations / Sessions panels can group by session. Without
+      # this, sessions resolve to 0 even though the meili lane has
+      # data — meili-loader doesn't carry session_id on its docs.
+      CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
       CORTEX_FULLTEXT_MEILI_API_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
       CORTEX_INGESTION_URL: http://cortex-ingestion:17010
       CORTEX_SYNAP_URL: http://synap:15500
@@ -212,7 +224,11 @@ services:
       CORTEX_FULLTEXT_WORKER_URL: http://cortex-fulltext-worker:17023/healthz
       CORTEX_GRAPH_WORKER_URL: http://cortex-graph-worker:17024/healthz
     volumes:
-      - cortex-home:/var/lib/cortex
+      # Same host bind-mount as cortex-ingestion — the daemon reads
+      # the archive at boot to seed the keyword lane (drives the
+      # dashboard counters) and writes its sqlite + cron-jobs DB
+      # back to the same place so the host CLI sees them.
+      - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
     restart: unless-stopped
 
   # cortex-adapter-claude ─ Claude Code adapter daemon.
@@ -243,5 +259,7 @@ volumes:
   nexus-data:
   synap-data:
   meili-data:
-  cortex-archive:
-  cortex-home:
+  # cortex-archive + cortex-home replaced by host bind-mounts on
+  # cortex-ingestion + cortex-api (see service definitions). Volumes
+  # left in the file would shadow the bind-mount and reintroduce the
+  # empty-archive regression.
