@@ -232,10 +232,30 @@ async fn handle_v1_health(State(state): State<ApiState>) -> Response {
         ),
     ];
     for (name, key, default) in candidates {
-        let url = std::env::var(key)
+        // The env vars share their names with the base-URL contract
+        // used by ingest_proxy / pre_thinking, so when the operator
+        // overrides them with a bare base URL (e.g.
+        // `http://cortex-ingestion:17010`), the aggregator must
+        // append the healthz path itself. We do that by extracting
+        // the suffix from the default URL — that keeps both
+        // contracts aligned without requiring a parallel env var.
+        let raw = std::env::var(key)
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| (*default).to_string());
+        let suffix = default
+            .splitn(4, '/')
+            .nth(3)
+            .map(|s| format!("/{s}"))
+            .unwrap_or_default();
+        let url = if raw.contains("/healthz") || raw.contains("/health") {
+            // Operator (or default) supplied the full path already.
+            raw
+        } else if !suffix.is_empty() {
+            format!("{}{}", raw.trim_end_matches('/'), suffix)
+        } else {
+            raw
+        };
         targets.push(ProbeTarget {
             name,
             url,
