@@ -8,7 +8,6 @@ import { useFilters } from "../lib/filters";
 
 export type ViewId =
   | "timeline"
-  | "search"
   | "conversations"
   | "memory"
   | "retention"
@@ -35,7 +34,6 @@ type CountKey =
 
 const NAV: NavItem[] = [
   { id: "timeline", label: "Live timeline", icon: "timeline" },
-  { id: "search", label: "Search", icon: "memory" },
   { id: "conversations", label: "Conversations", icon: "memory", countSource: "conversations" },
   { id: "memory", label: "Memory", icon: "memory", countSource: "events" },
   { id: "retention", label: "Retention", icon: "archive" },

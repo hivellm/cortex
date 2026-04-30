@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
 import { bridge } from "../lib/bridge";
+import { HeaderSearch } from "./HeaderSearch";
 
 type HeaderProps = {
   collapsed: boolean;
@@ -57,6 +58,7 @@ export function Header({
           <span className="brand-version mono">v{version}</span>
         </span>
       </div>
+      <HeaderSearch />
       <div className="header__right">
         <button
           type="button"
