@@ -211,46 +211,76 @@ a { color: inherit; text-decoration: none; }
 
 .header__search {
   flex: 1;
-  max-width: 560px;
-  margin-left: 8px;
+  max-width: 480px;
+  margin: 0 12px;
   position: relative;
 }
-.header__search input {
-  width: 100%;
-  height: 30px;
-  padding: 0 10px 0 32px;
+.header__search form {
+  display: flex;
+  align-items: center;
+  height: 28px;
   background: var(--bg-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
+  padding: 0 4px 0 10px;
+  gap: 6px;
+  transition: border-color 120ms, background 120ms;
+}
+.header__search form:focus-within {
+  border-color: var(--border-strong);
+  background: var(--bg-3);
+}
+.header__search form > svg {
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+.header__search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
   color: var(--fg-0);
-  font-size: 12.5px;
+  font-size: 12px;
   outline: none;
-  transition: border-color 120ms;
 }
 .header__search input::placeholder { color: var(--fg-3); }
-.header__search input:focus { border-color: var(--accent-dim); }
-.header__search .icon {
-  position: absolute;
-  left: 9px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--fg-3);
-  pointer-events: none;
+.header__search .scope-chip {
+  height: 20px;
+  padding: 0 7px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  transition: background 120ms, border-color 120ms;
+}
+.header__search .scope-chip:hover {
+  background: var(--bg-3);
+  border-color: var(--border-strong);
 }
 .header__search kbd {
-  position: absolute;
-  right: 8px;
-  top: 50%;
-  transform: translateY(-50%);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--fg-3);
-  background: var(--bg-3);
+  background: var(--bg-1);
   border: 1px solid var(--border);
   border-radius: 3px;
-  padding: 1px 5px;
+  padding: 0 4px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
   pointer-events: none;
+  flex-shrink: 0;
 }
+.header__search form:focus-within kbd { display: none; }
 
 .header__right {
   display: flex;

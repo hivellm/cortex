@@ -150,7 +150,7 @@ export function HeaderSearch() {
   return (
     <div className="header__search" ref={containerRef}>
       <form onSubmit={onSubmit}>
-        <Icon name="memory" size={13} />
+        <Icon name="search" size={13} />
         <input
           {...inputAttrs}
           ref={inputRef}
@@ -160,36 +160,18 @@ export function HeaderSearch() {
             if (mutation.isSuccess || mutation.isError) setOpen(true);
           }}
           disabled={mutation.isPending}
-          style={{ paddingRight: 110 }}
         />
         <button
           type="button"
+          className="scope-chip"
           onClick={(e) => {
             e.stopPropagation();
             setRepoMenuOpen((v) => !v);
           }}
           title="Search scope"
-          style={{
-            position: "absolute",
-            right: 38,
-            top: "50%",
-            transform: "translateY(-50%)",
-            height: 22,
-            padding: "0 8px",
-            background: "var(--bg-3)",
-            border: "1px solid var(--border)",
-            borderRadius: 999,
-            color: "var(--fg-1)",
-            fontFamily: "var(--font-mono)",
-            fontSize: 10.5,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-          }}
         >
           {activeRepo ?? "no repo"}
-          <span style={{ opacity: 0.5, fontSize: 9 }}>▾</span>
+          <span style={{ opacity: 0.5, fontSize: 8.5 }}>▾</span>
         </button>
         <kbd>⌘K</kbd>
       </form>
