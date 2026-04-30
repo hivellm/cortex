@@ -39,7 +39,9 @@ fn build_test_router() -> Router {
         lane,
         nexus: None,
         analyzer: Arc::new(cortex_api::analyzer::Analyzer::from_env()),
-        tasks: Arc::new(TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))),
+        tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![TaskLoader::new(
+            std::path::PathBuf::from("__tests_no_rulebook__"),
+        )])),
         metadata: None,
         loader_metrics: Arc::new(LoaderMetrics::new()),
     };

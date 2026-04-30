@@ -212,6 +212,14 @@ services:
       # data — meili-loader doesn't carry session_id on its docs.
       CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
       CORTEX_FULLTEXT_MEILI_API_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+      # phase5b multi-project — tasks loader scans every listed
+      # `.rulebook/` and stamps the project slug (parent dir name,
+      # lowercased) on each row so the dashboard can group by repo.
+      # The bind-mount below puts the host's workspace parent at
+      # /workspaces inside the container, so each sibling project's
+      # `.rulebook/` is reachable. Override `CORTEX_WORKSPACES_HOST`
+      # to point at a different parent dir on non-default layouts.
+      CORTEX_RULEBOOK_ROOTS: /workspaces/Cortex/.rulebook,/workspaces/Nexus/.rulebook,/workspaces/Synap/.rulebook,/workspaces/Vectorizer/.rulebook,/workspaces/Rulebook/.rulebook,/workspaces/Tml/.rulebook,/workspaces/HiveGPU/.rulebook,/workspaces/TmlDocs/.rulebook
       CORTEX_INGESTION_URL: http://cortex-ingestion:17010
       CORTEX_SYNAP_URL: http://synap:15500
       CORTEX_NEXUS_URL: http://nexus:15474
@@ -229,6 +237,12 @@ services:
       # dashboard counters) and writes its sqlite + cron-jobs DB
       # back to the same place so the host CLI sees them.
       - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
+      # phase5b multi-project — bind-mount the host's workspace
+      # parent so every sibling project's `.rulebook/` is visible.
+      # Defaults to `..` (the directory that contains this Cortex
+      # checkout); override with CORTEX_WORKSPACES_HOST in `.env` to
+      # point at any other layout.
+      - ${CORTEX_WORKSPACES_HOST:-..}:/workspaces:ro
     restart: unless-stopped
 
 # NOTE: `cortex-adapter-claude` deliberately runs OUTSIDE this

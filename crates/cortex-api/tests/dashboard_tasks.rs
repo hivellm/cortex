@@ -58,7 +58,9 @@ fn build_router(root: &std::path::Path) -> axum::Router {
         lane: Arc::new(MemoryKeywordLane::new()),
         nexus: None,
         analyzer: Arc::new(cortex_api::analyzer::Analyzer::from_env()),
-        tasks: Arc::new(TaskLoader::new(root).with_ttl(Duration::from_millis(0))),
+        tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![
+            TaskLoader::new(root).with_ttl(Duration::from_millis(0)),
+        ])),
         metadata: None,
         loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
     };

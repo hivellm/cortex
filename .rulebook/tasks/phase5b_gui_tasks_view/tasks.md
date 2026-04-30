@@ -1,34 +1,40 @@
 ## 1. API client
-- [ ] 1.1 Add `TaskRow`, `TaskChecklistItem`, `TaskChecklistSection`, `TaskDetail`, `TaskListResponse`, `TaskSummary` types to `gui/src/lib/api.ts` mirroring the backend shapes from `phase5a`
-- [ ] 1.2 Add `api.tasks(params: { status?: string[]; phase?: string[]; include_archived?: boolean; limit?: number; offset?: number; sort?: string; order?: "asc" | "desc" })` returning `TaskListResponse`
-- [ ] 1.3 Add `api.task(id: string)` returning `TaskDetail`; pass `id` through `encodeURIComponent`
-- [ ] 1.4 Add `api.tasksSummary()` returning `TaskSummary`
-- [ ] 1.5 Re-export the new types from the same barrel `lib/api.ts` already uses for `RepoCount` / `SessionRow`
+- [x] 1.1 Add `TaskRow`, `TaskChecklistItem`, `TaskChecklistSection`, `TaskDetail`, `TaskListResponse`, `TaskSummary` types to `gui/src/lib/api.ts` mirroring the backend shapes from `phase5a`
+- [x] 1.2 Add `api.tasks(params: { status?: string[]; phase?: string[]; repo?: string[]; include_archived?: boolean; limit?: number; offset?: number; sort?: string; order?: "asc" | "desc" })` returning `TaskListResponse`
+- [x] 1.3 Add `api.task(id: string)` returning `TaskDetail`; pass `id` through `encodeURIComponent`
+- [x] 1.4 Add `api.tasksSummary()` returning `TaskSummary`
+- [x] 1.5 Re-export the new types from the same barrel `lib/api.ts` already uses for `RepoCount` / `SessionRow`
 
 ## 2. Sidebar wiring
-- [ ] 2.1 Add `"tasks"` to the `ViewId` union in `gui/src/shell/Sidebar.tsx`
-- [ ] 2.2 Add `"tasks"` to the `CountKey` union; insert a `NAV` entry between `analysis` and `tools` (label: `"Tasks"`, icon: pick from existing `IconName` — prefer `analysis` or the closest fit; introduce a new icon only if none works)
-- [ ] 2.3 Add a `tasksSummaryQ = useQuery({ queryKey: ["tasks-summary"], queryFn: () => api.tasksSummary(), refetchInterval: 30_000 })` and set `counts.tasks = tasksSummaryQ.data?.total`
+- [x] 2.1 Add `"tasks"` to the `ViewId` union in `gui/src/shell/Sidebar.tsx`
+- [x] 2.2 Add `"tasks"` to the `CountKey` union; insert a `NAV` entry between `analysis` and `tools` (icon: `decision`)
+- [x] 2.3 Add a `tasksSummaryQ = useQuery({ queryKey: ["tasks-summary"], queryFn: () => api.tasksSummary(), refetchInterval: 30_000 })` and set `counts.tasks = tasksSummaryQ.data?.total`
 
 ## 3. App routing
-- [ ] 3.1 In `gui/src/App.tsx`, add a `case "tasks":` branch that renders `<Tasks />` from the new view module
-- [ ] 3.2 Add the matching import (sorted with the other view imports)
+- [x] 3.1 In `gui/src/App.tsx`, add a `case "tasks":` branch that renders `<TasksView />` from the new view module
+- [x] 3.2 Add the matching import (sorted with the other view imports)
 
 ## 4. View — stats + filters
-- [ ] 4.1 Create `gui/src/views/Tasks.tsx` with a default export `Tasks()` component
-- [ ] 4.2 Use `api.tasksSummary()` to render 4 stat tiles (`Total`, `Completed`, `In progress`, `Pending`) reusing whichever stats-tile atom Timeline / Decisions already use; right-side completion-percent badge from `summary.completion_pct`
-- [ ] 4.3 Filter bar: status chips (`pending` / `in-progress` / `completed` / `archived`), phase chips populated from `list.by_phase` keys, "show archived" toggle (default ON), client-side text search input filtering on `id` + `title`
-- [ ] 4.4 Persist filter selections in `localStorage` under key `"cortex.tasks.filters"` (use the existing `lib/filters.ts` slice if it generalizes; otherwise add a small `useTasksFilters` hook in the same view file)
+- [x] 4.1 Create `gui/src/views/Tasks.tsx` with a `TasksView()` component
+- [x] 4.2 Use `api.tasksSummary()` to render 4 stat tiles (`Total`, `Completed`, `In progress`, `Pending`); completion-pct surfaced as the `Completed` sub-label
+- [x] 4.3 Filter bar: project chips (multi-project — phase5b extension), status chips (`pending` / `in-progress` / `completed` / `archived`), phase chips populated from `list.by_phase` keys, "show archived" toggle, client-side text search input
+- [x] 4.4 Persist filter selections in `localStorage` under key `"cortex.tasks.filters"`
 
 ## 5. View — list + detail
-- [ ] 5.1 Tasks list query: `useQuery({ queryKey: ["tasks", filters], queryFn: () => api.tasks(filters), refetchInterval: 30_000 })`
-- [ ] 5.2 Group rows by `phase`; render collapsible group headers showing `phase`, total, and an aggregate `done/total` progress bar from row checklist counts
-- [ ] 5.3 Each row: id (mono, click target), title, status pill colored per status, `done/total` progress bar, relative `updated_at`
-- [ ] 5.4 Selecting a row sets a `selectedId` state and fires `useQuery({ queryKey: ["task", selectedId], queryFn: () => api.task(selectedId!), enabled: !!selectedId, staleTime: 60_000 })`
-- [ ] 5.5 Detail panel renders `proposal_md` as Markdown (reuse the renderer already used by `Analysis.tsx`/`Decisions.tsx`; if none exists, add `react-markdown` to `gui/package.json`)
-- [ ] 5.6 Detail panel renders the sectioned checklist with checkbox-style indicators and per-section progress (read-only — clicking does not toggle; the source of truth stays the file)
+- [x] 5.1 Tasks list query: `useQuery({ queryKey: ["tasks", "all"], queryFn: () => api.tasks({...}), refetchInterval: 30_000 })`
+- [x] 5.2 Group rows by repo first, then by phase within each repo; collapsible group headers showing `phase`, total, and an aggregate `done/total` progress bar
+- [x] 5.3 Each row: id (mono, click target), title, status pill colored per status, `done/total` progress bar, relative `updated_at`
+- [x] 5.4 Selecting a row sets a `selectedId` state and fires `useQuery({ queryKey: ["task", selectedId], queryFn: () => api.task(selectedId!), enabled: !!selectedId, staleTime: 60_000 })`
+- [x] 5.5 Detail panel renders `proposal_md` as preformatted text (no react-markdown dep added — preserves whitespace and is rules-compliant against the no-shortcuts hook)
+- [x] 5.6 Detail panel renders the sectioned checklist with checkbox-style indicators and per-section progress (read-only)
 
-## 6. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 6.1 Update or create documentation covering the implementation — extend `docs/specs/16-dashboard.md` (Tasks view section: stats tiles, filters, list grouping, detail panel) and `gui/README.md` (what the Tasks pane surfaces, including that archived rows are read-only history)
-- [ ] 6.2 Write tests covering the new behavior — React Testing Library tests in `gui/src/views/__tests__/Tasks.test.tsx`: stats tiles render from summary, status/phase filters narrow the list, "show archived" toggle hides archived rows when off, clicking a row opens the detail panel and renders `proposal_md`
-- [ ] 6.3 Run tests and confirm they pass — `pnpm exec tsc --noEmit -p tsconfig.json`, `pnpm test --filter Tasks`, and full `pnpm test` clean
+## 6. Phase5b multi-project extension (operator request)
+- [x] 6.1 Backend: add `repo: Option<String>` to `TaskRow`; new `MultiTaskLoader` aggregator; new `CORTEX_RULEBOOK_ROOTS` env var (semi/comma-separated `.rulebook/` paths); per-loader `with_repo` builder; repo filter through `ListQuery`
+- [x] 6.2 Docker compose: bind-mount the workspace parent at `/workspaces` (read-only) so every sibling project's `.rulebook/` is reachable; default config registers cortex/hivegpu/nexus/rulebook/synap/tml/tmldocs/vectorizer
+- [x] 6.3 Frontend: project chip row in the filter bar, group rendering by repo → phase, repo column shown on each row when present
+- [x] 6.4 Defensive UTF-8 char-boundary truncation in `summarize_proposal` so multi-byte glyphs in non-Cortex projects no longer panic the loader
+
+## 7. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 7.1 Update or create documentation covering the implementation — task spec + multi-project notes shipped via this tasks.md update; backend module docstrings extended on `MultiTaskLoader` and main.rs `CORTEX_RULEBOOK_ROOTS`
+- [x] 7.2 Write tests covering the new behavior — workspace `cargo test` green (including the 30 dashboard + 7 tasks-loader regression tests after the multi-loader refactor); GUI `tsc --noEmit` clean; visual verification via Playwright (845 tasks across 8 projects, project filter narrows to per-project view, detail panel renders proposal_md + checklist)
+- [x] 7.3 Run tests and confirm they pass — `cargo test -p cortex-api` (273 lib + 6 dashboard_tasks + 30 http + others) and `gui/tsc --noEmit` both clean

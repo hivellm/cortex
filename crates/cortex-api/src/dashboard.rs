@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::lanes::MemoryKeywordLane;
-use crate::tasks_loader::{ListQuery, SortField, SortOrder, TaskLoader};
+use crate::tasks_loader::{ListQuery, MultiTaskLoader, SortField, SortOrder};
 use crate::types::{IncludeField, Intent, QueryRequest, Scope};
 
 /// Shared state for dashboard routes — the seeded keyword lane plus
@@ -51,7 +51,7 @@ pub struct DashboardState {
     /// endpoints. When the workspace root is unreachable the loader
     /// transparently yields empty results — cold-stack dev keeps
     /// booting.
-    pub tasks: Arc<TaskLoader>,
+    pub tasks: Arc<MultiTaskLoader>,
     /// SQLite metadata store. When `Some`, the overview handler
     /// reads `classifier_spend_hourly` to feed the dashboard's
     /// `series.classifier_cost_usd_today` ribbon. `None` keeps the
@@ -3120,6 +3120,10 @@ pub struct TasksListQuery {
     /// phase key, e.g. `phase2g`).
     #[serde(default)]
     pub phase: Vec<String>,
+    /// Multi-value repo (project) filter — phase5b multi-project.
+    /// Matches `TaskRow.repo` (lowercase project slug).
+    #[serde(default)]
+    pub repo: Vec<String>,
     /// Drop archived rows when set to `false`. Defaults to `true`.
     #[serde(default)]
     pub include_archived: Option<bool>,
@@ -3152,6 +3156,7 @@ fn list_query_from(params: TasksListQuery) -> ListQuery {
     ListQuery {
         status: params.status,
         phase: params.phase,
+        repo: params.repo,
         include_archived: params.include_archived.unwrap_or(true),
         limit: params.limit.unwrap_or(200),
         offset: params.offset.unwrap_or(0),
@@ -3565,7 +3570,7 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3643,7 +3648,7 @@ mod tests {
         let mut c = tool_call_hit("Edit", "third", "Cortex", 300);
         c.content_hash = Some("sha256:aaa".into());
         let lane = lane_with(vec![a, b, c]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3672,7 +3677,7 @@ mod tests {
             turn_hit("middle prompt", "Cortex", 200),
             turn_hit("newest prompt", "Cortex", 300),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3700,7 +3705,7 @@ mod tests {
             turn_hit("HNSW recall floor benchmark", "Vectorizer", 100),
             turn_hit("unrelated thoughts", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3727,7 +3732,7 @@ mod tests {
             turn_hit("a", "Cortex", 100),
             turn_hit("b", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3755,7 +3760,7 @@ mod tests {
                 .map(|i| turn_hit(&format!("p{i}"), "X", i))
                 .collect(),
         );
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3825,9 +3830,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -3918,7 +3925,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
             turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -3941,7 +3948,7 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
             turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -4024,9 +4031,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4068,9 +4077,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4115,9 +4126,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4153,9 +4166,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4201,9 +4216,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4237,7 +4254,7 @@ mod tests {
             tool_call_hit("Edit", "x", "Cortex", 200),
             turn_hit("note V", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -4269,9 +4286,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4332,9 +4351,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4366,9 +4387,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4395,9 +4418,11 @@ mod tests {
             lane,
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4429,9 +4454,11 @@ mod tests {
             lane: lane_with(Vec::new()),
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: Some(std::sync::Arc::new(std::sync::Mutex::new(metadata))),
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         }
@@ -4544,9 +4571,11 @@ mod tests {
             lane: lane_with(Vec::new()),
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
@@ -4613,9 +4642,11 @@ mod tests {
             lane: lane_with(Vec::new()),
             nexus: None,
             analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
-            tasks: std::sync::Arc::new(crate::tasks_loader::TaskLoader::new(
-                std::path::PathBuf::from("__tests_no_rulebook__"),
-            )),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };

@@ -69,6 +69,11 @@ pub struct TaskRow {
     /// First non-heading paragraph of `proposal.md`, trimmed to ~280
     /// chars. Empty when the proposal has no body.
     pub summary: String,
+    /// Phase5b multi-project: project slug the task came from
+    /// (lowercase, derived from the `.rulebook/` parent directory
+    /// name). `None` when only a single workspace is configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 /// Checklist progress counters derived from `tasks.md`.
@@ -204,6 +209,9 @@ pub struct ListQuery {
     pub status: Vec<String>,
     /// Restrict to these phases (any-of, exact match). Empty = all.
     pub phase: Vec<String>,
+    /// Restrict to these project slugs (any-of). Empty = all.
+    /// Phase5b multi-project filter — matches `TaskRow::repo`.
+    pub repo: Vec<String>,
     /// When `false`, archived rows are dropped before paging.
     pub include_archived: bool,
     /// Max rows returned. Capped at 500 by the loader.
@@ -225,6 +233,7 @@ impl ListQuery {
         Self {
             status: Vec::new(),
             phase: Vec::new(),
+            repo: Vec::new(),
             include_archived: true,
             limit: 200,
             offset: 0,
@@ -242,6 +251,11 @@ pub struct TaskLoader {
     /// TTL between forced re-scans of the directory tree. Per-task
     /// invalidation still happens whenever a file mtime advances.
     ttl: Duration,
+    /// Phase5b — repo slug stamped on every TaskRow this loader
+    /// produces. Used by the multi-project aggregator to keep rows
+    /// distinguishable when the dashboard merges multiple
+    /// `.rulebook/` trees into one list.
+    repo: Option<String>,
     /// Cached rows + the `Instant` of the last full scan.
     cache: RwLock<Cached>,
 }
@@ -284,6 +298,7 @@ impl TaskLoader {
         Self {
             root: root.into(),
             ttl: DEFAULT_TTL,
+            repo: None,
             cache: RwLock::new(Cached::default()),
         }
     }
@@ -292,6 +307,21 @@ impl TaskLoader {
     pub fn with_ttl(mut self, ttl: Duration) -> Self {
         self.ttl = ttl;
         self
+    }
+
+    /// Stamp every TaskRow this loader produces with the given repo
+    /// slug (lowercase). Phase5b: enables one cortex-api instance to
+    /// surface tasks from multiple sibling projects without losing
+    /// the project boundary.
+    pub fn with_repo(mut self, repo: impl Into<String>) -> Self {
+        self.repo = Some(repo.into());
+        self
+    }
+
+    /// Returns the repo slug stamped on every row from this loader,
+    /// when configured.
+    pub fn repo(&self) -> Option<&str> {
+        self.repo.as_deref()
     }
 
     /// `.rulebook/` directory the loader walks.
@@ -320,12 +350,14 @@ impl TaskLoader {
     fn full_scan(&self) {
         let mut rows: Vec<CachedRow> = Vec::new();
         for entry in scan_dir(&self.root.join("tasks")) {
-            if let Some(row) = parse_task_dir(&entry, false) {
+            if let Some(mut row) = parse_task_dir(&entry, false) {
+                row.row.repo = self.repo.clone();
                 rows.push(row);
             }
         }
         for entry in scan_dir(&self.root.join("archive")) {
-            if let Some(row) = parse_task_dir(&entry, true) {
+            if let Some(mut row) = parse_task_dir(&entry, true) {
+                row.row.repo = self.repo.clone();
                 rows.push(row);
             }
         }
@@ -431,6 +463,14 @@ impl TaskLoader {
                         .map(|p| query.phase.iter().any(|q| q == p))
                         .unwrap_or(false)
             })
+            .filter(|r| {
+                query.repo.is_empty()
+                    || r.row
+                        .repo
+                        .as_ref()
+                        .map(|p| query.repo.iter().any(|q| q == p))
+                        .unwrap_or(false)
+            })
             .map(|r| r.row)
             .collect();
 
@@ -476,6 +516,137 @@ impl TaskLoader {
             specs,
             also_archived,
         })
+    }
+}
+
+/// Phase5b — fan-out wrapper that aggregates multiple per-project
+/// [`TaskLoader`]s. The dashboard handlers depend on this when the
+/// operator points cortex-api at a workspace tree containing
+/// several `.rulebook/` directories (one per project) so the
+/// resulting list / summary span every captured project.
+///
+/// Single-project deployments stay backward-compatible: a
+/// [`MultiTaskLoader`] with one inner loader behaves exactly like
+/// the underlying [`TaskLoader`].
+pub struct MultiTaskLoader {
+    loaders: Vec<TaskLoader>,
+}
+
+impl MultiTaskLoader {
+    /// Build the aggregator from a non-empty list of per-project
+    /// loaders.
+    pub fn new(loaders: Vec<TaskLoader>) -> Self {
+        Self { loaders }
+    }
+
+    /// Number of underlying loaders.
+    pub fn len(&self) -> usize {
+        self.loaders.len()
+    }
+
+    /// `true` when no loaders are configured.
+    pub fn is_empty(&self) -> bool {
+        self.loaders.is_empty()
+    }
+
+    /// Sorted list of repo slugs the aggregator carries. Empty when
+    /// all configured loaders are repo-less.
+    pub fn repos(&self) -> Vec<String> {
+        let mut set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for l in &self.loaders {
+            if let Some(r) = l.repo() {
+                set.insert(r.to_string());
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    /// Aggregate `summary` across every configured loader.
+    pub fn summary(&self) -> TaskSummary {
+        let mut acc = TaskSummary::default();
+        for l in &self.loaders {
+            let s = l.summary();
+            acc.total += s.total;
+            acc.completed += s.completed;
+            acc.in_progress += s.in_progress;
+            acc.pending += s.pending;
+            acc.archived += s.archived;
+        }
+        if acc.total == 0 {
+            acc.completion_pct = 0.0;
+        } else {
+            let num = (acc.completed + acc.archived) as f32 * 100.0;
+            acc.completion_pct = (num / acc.total as f32 * 10.0).round() / 10.0;
+        }
+        acc
+    }
+
+    /// Aggregate `list` across every configured loader. Sorting +
+    /// pagination happen on the merged set so cross-project order
+    /// matches single-project behaviour.
+    pub fn list(&self, query: &ListQuery) -> TaskListResponse {
+        // Re-issue each child query with no limit / offset so the
+        // outer pagination operates on the merged-and-sorted set.
+        // `summary` and `by_phase` aggregations stay correct because
+        // we collect them independently from the unbounded merge.
+        let inner_query = ListQuery {
+            limit: 500,
+            offset: 0,
+            ..query.clone()
+        };
+        let mut tasks: Vec<TaskRow> = Vec::new();
+        let mut by_phase_map: BTreeMap<String, PhaseBreakdown> = BTreeMap::new();
+        let mut by_status: BTreeMap<String, u32> = BTreeMap::new();
+        for l in &self.loaders {
+            let resp = l.list(&inner_query);
+            tasks.extend(resp.tasks);
+            for p in resp.by_phase {
+                let entry =
+                    by_phase_map
+                        .entry(p.phase.clone())
+                        .or_insert_with(|| PhaseBreakdown {
+                            phase: p.phase.clone(),
+                            phase_num: p.phase_num,
+                            phase_letter: p.phase_letter.clone(),
+                            total: 0,
+                            done: 0,
+                            in_progress: 0,
+                            pending: 0,
+                        });
+                entry.total += p.total;
+                entry.done += p.done;
+                entry.in_progress += p.in_progress;
+                entry.pending += p.pending;
+            }
+            for (k, v) in resp.by_status {
+                *by_status.entry(k).or_insert(0) += v;
+            }
+        }
+        sort_rows(&mut tasks, query.sort, query.order);
+        let total = tasks.len() as u32;
+        let limit = query.limit.min(500);
+        let limit = if limit == 0 { 200 } else { limit };
+        let offset = query.offset.min(tasks.len());
+        let end = offset.saturating_add(limit).min(tasks.len());
+        let page: Vec<TaskRow> = tasks[offset..end].to_vec();
+        TaskListResponse {
+            tasks: page,
+            total,
+            by_phase: by_phase_map.into_values().collect(),
+            by_status,
+        }
+    }
+
+    /// Detail lookup — first loader to find the id wins. With well-
+    /// scoped per-project loaders this is unambiguous because task
+    /// ids are namespaced under their `.rulebook/` directory.
+    pub fn detail(&self, id: &str) -> Option<TaskDetail> {
+        for l in &self.loaders {
+            if let Some(d) = l.detail(id) {
+                return Some(d);
+            }
+        }
+        None
     }
 }
 
@@ -590,6 +761,7 @@ fn parse_task_dir(dir: &Path, archived: bool) -> Option<CachedRow> {
         archived_at,
         progress,
         summary,
+        repo: None,
     };
     Some(CachedRow {
         dir: dir.to_path_buf(),
@@ -708,7 +880,16 @@ pub fn extract_summary(md: &str) -> String {
         }
     }
     if buf.len() > 280 {
-        buf.truncate(280);
+        // Walk back to the nearest UTF-8 char boundary so multi-byte
+        // chars (em-dashes, em-spaces, accented letters) don't trip
+        // `truncate`'s assert. This is the phase5b regression that
+        // crashed the daemon when scanning Synap / Vectorizer
+        // proposals carrying non-ASCII glyphs.
+        let mut idx = 280;
+        while idx > 0 && !buf.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        buf.truncate(idx);
         buf.push('…');
     }
     buf

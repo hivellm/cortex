@@ -321,23 +321,78 @@ async fn main() -> Result<()> {
         }
     };
     let analyzer = StdArc::new(cortex_api::analyzer::Analyzer::from_env());
-    // Rulebook task loader. `CORTEX_RULEBOOK_ROOT` points at the
-    // `.rulebook/` directory whose `tasks/` + `archive/` subtrees the
-    // dashboard surfaces under `/v1/dashboard/tasks*`. Falls back to
-    // `<cwd>/.rulebook` so a `cargo run` from the repo root just works;
-    // when the path is unreachable the loader yields empty results.
-    let rulebook_root: PathBuf = std::env::var("CORTEX_RULEBOOK_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::current_dir()
-                .map(|p| p.join(".rulebook"))
-                .unwrap_or_else(|_| PathBuf::from(".rulebook"))
-        });
-    tracing::info!(
-        rulebook_root = %rulebook_root.display(),
-        "tasks loader: rooted at .rulebook/"
-    );
-    let tasks = StdArc::new(cortex_api::TaskLoader::new(rulebook_root));
+    // Rulebook task loader. Two configuration paths:
+    //
+    // - **Single project** (legacy): `CORTEX_RULEBOOK_ROOT=/path/.rulebook`
+    //   — same behaviour as before phase5b. The repo slug stamped on
+    //   each row is `None`; the dashboard renders one anonymous list.
+    // - **Multi project** (phase5b): `CORTEX_RULEBOOK_ROOTS=/path/A,/path/B,...`
+    //   semicolon- or comma-separated `.rulebook/` directories. The
+    //   repo slug is auto-derived from each directory's parent name
+    //   (lowercased), so `/work/Cortex/.rulebook` becomes `cortex`.
+    //   Both env vars may coexist; `_ROOTS` wins when present.
+    //
+    // Falls back to `<cwd>/.rulebook` so `cargo run` from the repo
+    // root just works on a single-project deployment.
+    let task_loaders: Vec<cortex_api::TaskLoader> =
+        if let Ok(roots) = std::env::var("CORTEX_RULEBOOK_ROOTS") {
+            let mut out = Vec::new();
+            for raw in roots.split(|c: char| c == ',' || c == ';') {
+                let p = PathBuf::from(raw.trim());
+                if p.as_os_str().is_empty() {
+                    continue;
+                }
+                let slug = p
+                    .parent()
+                    .and_then(|parent| parent.file_name())
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_ascii_lowercase());
+                tracing::info!(
+                    rulebook_root = %p.display(),
+                    repo_slug = ?slug,
+                    "tasks loader: registered project"
+                );
+                let mut loader = cortex_api::TaskLoader::new(p);
+                if let Some(s) = slug {
+                    loader = loader.with_repo(s);
+                }
+                out.push(loader);
+            }
+            if out.is_empty() {
+                tracing::warn!(
+                    "CORTEX_RULEBOOK_ROOTS was set but parsed empty; falling back to single-root resolution"
+                );
+            }
+            out
+        } else {
+            Vec::new()
+        };
+    let task_loaders = if task_loaders.is_empty() {
+        let rulebook_root: PathBuf = std::env::var("CORTEX_RULEBOOK_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::current_dir()
+                    .map(|p| p.join(".rulebook"))
+                    .unwrap_or_else(|_| PathBuf::from(".rulebook"))
+            });
+        tracing::info!(
+            rulebook_root = %rulebook_root.display(),
+            "tasks loader: rooted at .rulebook/ (single project)"
+        );
+        let slug = rulebook_root
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        let mut loader = cortex_api::TaskLoader::new(rulebook_root);
+        if let Some(s) = slug {
+            loader = loader.with_repo(s);
+        }
+        vec![loader]
+    } else {
+        task_loaders
+    };
+    let tasks = StdArc::new(cortex_api::MultiTaskLoader::new(task_loaders));
 
     // SQLite metadata store powering `series.classifier_cost_usd_today`.
     // Opened best-effort — when the file is unreachable (first boot

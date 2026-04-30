@@ -497,6 +497,118 @@ export const api = {
     return getJson<RetentionSweepRow[]>(`/v1/retention/sweeps?${params.toString()}`);
   },
   retentionState: () => getJson<RetentionStateBody>("/v1/retention/state"),
+
+  // phase5b — Tasks view fetchers. Mirror the backend contracts
+  // shipped by phase5a's /v1/dashboard/tasks* endpoints.
+  tasks: (params?: TaskListParams) => {
+    const qs = new URLSearchParams();
+    if (params?.status?.length) {
+      for (const s of params.status) qs.append("status", s);
+    }
+    if (params?.phase?.length) {
+      for (const p of params.phase) qs.append("phase", p);
+    }
+    if (params?.repo?.length) {
+      for (const r of params.repo) qs.append("repo", r);
+    }
+    if (params?.include_archived !== undefined) {
+      qs.set("include_archived", String(params.include_archived));
+    }
+    if (params?.limit !== undefined) qs.set("limit", String(params.limit));
+    if (params?.offset !== undefined) qs.set("offset", String(params.offset));
+    if (params?.sort) qs.set("sort", params.sort);
+    if (params?.order) qs.set("order", params.order);
+    const tail = qs.toString();
+    return getJson<TaskListResponse>(
+      `/v1/dashboard/tasks${tail ? `?${tail}` : ""}`,
+    );
+  },
+  task: (id: string) =>
+    getJson<TaskDetail>(`/v1/dashboard/tasks/${encodeURIComponent(id)}`),
+  tasksSummary: () => getJson<TaskSummary>("/v1/dashboard/tasks/summary"),
+};
+
+// phase5b — Tasks view types (mirror cortex-api's tasks_loader).
+export type TaskStatus =
+  | "pending"
+  | "in-progress"
+  | "completed"
+  | "blocked"
+  | "archived";
+
+export type TaskProgress = {
+  done: number;
+  total: number;
+};
+
+export type TaskRow = {
+  id: string;
+  title: string;
+  phase: string;
+  phase_num: number;
+  phase_letter: string;
+  status: TaskStatus;
+  created_at: string;
+  updated_at: string;
+  archived_at?: string | null;
+  progress: TaskProgress;
+  summary: string;
+  /// Phase5b multi-project — project slug the task came from
+  /// (lowercase, derived from the `.rulebook/` parent directory).
+  repo?: string | null;
+};
+
+export type PhaseBreakdown = {
+  phase: string;
+  phase_num: number;
+  phase_letter: string;
+  total: number;
+  done: number;
+  in_progress: number;
+  pending: number;
+};
+
+export type TaskListResponse = {
+  tasks: TaskRow[];
+  total: number;
+  by_phase: PhaseBreakdown[];
+  by_status: Record<string, number>;
+};
+
+export type TaskChecklistItem = {
+  text: string;
+  done: boolean;
+};
+
+export type TaskChecklistSection = {
+  section: string;
+  items: TaskChecklistItem[];
+};
+
+export type TaskDetail = TaskRow & {
+  proposal_md: string;
+  checklist: TaskChecklistSection[];
+};
+
+export type TaskSummary = {
+  total: number;
+  completed: number;
+  in_progress: number;
+  pending: number;
+  archived: number;
+  completion_pct: number;
+};
+
+export type TaskListParams = {
+  status?: string[];
+  phase?: string[];
+  /// Phase5b multi-project — restrict to these repo slugs.
+  repo?: string[];
+  include_archived?: boolean;
+  limit?: number;
+  offset?: number;
+  sort?: string;
+  order?: "asc" | "desc";
 };
 
 // Phase9i — retention dashboard types. Mirror-images of the Rust

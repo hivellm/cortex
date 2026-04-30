@@ -55,9 +55,9 @@ pub use vectorizer_lane::VectorizerLane;
 pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
 pub use dashboard::{build_dashboard_router, DashboardState};
 pub use tasks_loader::{
-    CachedRowSnapshot, ListQuery, PhaseBreakdown, ProgressCounts, SortField, SortOrder, SpecFile,
-    TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse, TaskLoader, TaskRow,
-    TaskSummary,
+    CachedRowSnapshot, ListQuery, MultiTaskLoader, PhaseBreakdown, ProgressCounts, SortField,
+    SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,
+    TaskLoader, TaskRow, TaskSummary,
 };
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
 pub use audit_store::{AuditStore, DEFAULT_STORE_CAPACITY as AUDIT_STORE_CAPACITY};

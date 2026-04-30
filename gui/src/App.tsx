@@ -9,6 +9,7 @@ import { RetentionView } from "./views/Retention";
 import { DecisionsView } from "./views/Decisions";
 import { LawsView } from "./views/Laws";
 import { AnalysisView } from "./views/Analysis";
+import { TasksView } from "./views/Tasks";
 import { ToolsView } from "./views/Tools";
 import { GraphView } from "./views/Graph";
 import { ConversationsView } from "./views/Conversations";
@@ -81,6 +82,8 @@ function AppShell() {
         return <LawsView />;
       case "analysis":
         return <AnalysisView />;
+      case "tasks":
+        return <TasksView />;
       case "tools":
         return <ToolsView />;
       case "graph":

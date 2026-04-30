@@ -16,6 +16,7 @@ export type ViewId =
   | "classifications"
   | "laws"
   | "analysis"
+  | "tasks"
   | "tools"
   | "graph"
   | "health";
@@ -30,7 +31,8 @@ type CountKey =
   | "sessions"
   | "conversations"
   | "handoffs"
-  | "classifications";
+  | "classifications"
+  | "tasks";
 
 const NAV: NavItem[] = [
   { id: "timeline", label: "Live timeline", icon: "timeline" },
@@ -42,6 +44,7 @@ const NAV: NavItem[] = [
   { id: "classifications", label: "Classifications", icon: "analysis", countSource: "classifications" },
   { id: "laws", label: "Laws", icon: "law", countSource: "laws" },
   { id: "analysis", label: "Analysis", icon: "analysis", countSource: "analyses" },
+  { id: "tasks", label: "Tasks", icon: "decision", countSource: "tasks" },
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
   { id: "health", label: "Health", icon: "tools" },
@@ -109,6 +112,11 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     queryFn: () => api.classifications({ limit: 1 }),
     refetchInterval: 30_000,
   });
+  const tasksSummaryQ = useQuery({
+    queryKey: ["tasks-summary"],
+    queryFn: () => api.tasksSummary(),
+    refetchInterval: 30_000,
+  });
 
   const counts: Record<CountKey, number | undefined> = {
     events: overview?.events_total,
@@ -120,6 +128,7 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
     conversations: conversationsQ.data?.length,
     handoffs: handoffsQ.data?.length,
     classifications: classificationsQ.data?.stats.total,
+    tasks: tasksSummaryQ.data?.total,
   };
 
   const onSessionClick = (sid: string) => {
