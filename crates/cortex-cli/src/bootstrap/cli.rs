@@ -27,6 +27,15 @@ pub struct CliArgs {
     #[arg(long, value_name = "NAME[,NAME]", value_delimiter = ',')]
     pub skip: Vec<String>,
 
+    /// Phase11e §5 — limit the replay to envelope kinds matching
+    /// these family tokens. Comma-separated; recognised tokens are
+    /// the spec-08 family suffixes (`decisions`, `turns`, `memory`,
+    /// `analyses`, `laws`, `knowledge`, `learnings`, `code`,
+    /// `docs`, `artifacts`). Unset / empty replays every kind
+    /// (the legacy default).
+    #[arg(long, value_name = "KIND[,KIND]", value_delimiter = ',')]
+    pub kinds: Vec<String>,
+
     /// Only re-index changes since this git ref (incremental mode).
     #[arg(long, value_name = "GIT-REF")]
     pub since: Option<String>,

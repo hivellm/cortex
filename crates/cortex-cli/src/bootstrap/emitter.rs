@@ -53,6 +53,45 @@ pub struct BootstrapEvent {
     pub redactions: u32,
 }
 
+/// Phase11e §5 — match a `BootstrapEvent.kind` (e.g.
+/// `"decision.imported"` / `"artifact.code"` / `"turn.historical"`)
+/// against a user-facing family token (e.g. `"decisions"` /
+/// `"code"` / `"turns"`).
+///
+/// Returns `true` when the token matches the kind. The token is
+/// case-insensitive and matches plurals / family suffixes per
+/// spec 08 §Routing matrix.
+pub fn kind_token_matches(token: &str, kind: &str) -> bool {
+    let t = token.trim().to_ascii_lowercase();
+    let k = kind.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "decisions" | "decision" => k.starts_with("decision."),
+        "turns" | "turn" => k.starts_with("turn."),
+        "laws" | "law" | "governance" => k.starts_with("law."),
+        "analyses" | "analysis" => k.starts_with("analysis."),
+        "memory" | "memories" => k.starts_with("memory."),
+        "knowledge" => k.starts_with("knowledge."),
+        "learnings" | "learning" => k.starts_with("learning."),
+        "code" => k == "artifact.code",
+        "docs" | "doc" => k == "artifact.doc",
+        "artifacts" | "artifact" => k.starts_with("artifact."),
+        _ => false,
+    }
+}
+
+/// Phase11e §5 — apply a CSV-style kind filter (already split into
+/// tokens) to one event's kind label. An empty filter list passes
+/// every kind through; a non-empty list keeps only events whose
+/// kind matches at least one token via [`kind_token_matches`].
+pub fn kind_passes_filter(filter_tokens: &[String], kind: &str) -> bool {
+    if filter_tokens.is_empty() {
+        return true;
+    }
+    filter_tokens
+        .iter()
+        .any(|t| kind_token_matches(t, kind))
+}
+
 /// Build a single envelope from a set of inputs already prepared by
 /// the caller. Centralises the redact + canonical-hash pipeline so
 /// every kind reaches the wire identically.
@@ -972,6 +1011,51 @@ mod tests {
             size_bytes: size,
             class,
         }
+    }
+
+    // Phase11e §5 — kind filter helpers.
+    #[test]
+    fn kind_token_matches_resolves_every_documented_token() {
+        // Family tokens map to the canonical bootstrap kind labels.
+        assert!(kind_token_matches("decisions", "decision.imported"));
+        assert!(kind_token_matches("decision", "decision.imported"));
+        assert!(kind_token_matches("turns", "turn.historical"));
+        assert!(kind_token_matches("laws", "law.imported"));
+        assert!(kind_token_matches("governance", "law.imported"));
+        assert!(kind_token_matches("analyses", "analysis.imported"));
+        assert!(kind_token_matches("memory", "memory.imported"));
+        assert!(kind_token_matches("knowledge", "knowledge.imported"));
+        assert!(kind_token_matches("learnings", "learning.imported"));
+        assert!(kind_token_matches("code", "artifact.code"));
+        assert!(kind_token_matches("docs", "artifact.doc"));
+        assert!(kind_token_matches("artifacts", "artifact.code"));
+        assert!(kind_token_matches("artifacts", "artifact.doc"));
+        // Negative — unknown / mismatched tokens.
+        assert!(!kind_token_matches("decisions", "turn.historical"));
+        assert!(!kind_token_matches("code", "artifact.doc"));
+        assert!(!kind_token_matches("nonsense", "decision.imported"));
+    }
+
+    #[test]
+    fn kind_token_matches_is_case_insensitive() {
+        assert!(kind_token_matches("DECISIONS", "DECISION.IMPORTED"));
+        assert!(kind_token_matches("Turns", "Turn.Historical"));
+    }
+
+    #[test]
+    fn kind_passes_filter_lets_every_kind_through_when_filter_empty() {
+        let no_filter: Vec<String> = vec![];
+        assert!(kind_passes_filter(&no_filter, "decision.imported"));
+        assert!(kind_passes_filter(&no_filter, "anything.really"));
+    }
+
+    #[test]
+    fn kind_passes_filter_keeps_only_listed_tokens_when_filter_set() {
+        let filter = vec!["decisions".to_string(), "turns".to_string()];
+        assert!(kind_passes_filter(&filter, "decision.imported"));
+        assert!(kind_passes_filter(&filter, "turn.historical"));
+        assert!(!kind_passes_filter(&filter, "artifact.code"));
+        assert!(!kind_passes_filter(&filter, "memory.imported"));
     }
 
     #[test]

@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 use super::checkpoint::Checkpoint;
 use super::config::CortexSection;
 use super::emitter::{
-    emit_for_file_multi, emit_turn_historical, BootstrapEvent, BOOTSTRAP_STREAM,
+    emit_for_file_multi, emit_turn_historical, kind_passes_filter, BootstrapEvent,
+    BOOTSTRAP_STREAM,
 };
 use super::git::walk_commits;
 use super::metrics::Metrics;
@@ -67,6 +68,15 @@ pub struct RunnerConfig {
     /// `--dry-run` — when `true` the runner walks + emits but never
     /// publishes (used by `--estimate` callers as well).
     pub dry_run: bool,
+    /// Phase11e §5 — when non-empty, only publish events whose
+    /// `kind` matches at least one of the listed family tokens
+    /// (`decisions`, `turns`, `memory`, `analyses`, `laws`,
+    /// `knowledge`, `learnings`, `code`, `docs`, `artifacts`). An
+    /// empty Vec replays every kind (the legacy default). The
+    /// filter applies after `emit_for_file_multi` and after the
+    /// per-commit `emit_turn_historical` so the walker still does
+    /// its full pass — only publication is gated.
+    pub kind_filter: Vec<String>,
 }
 
 /// Drive one repo through the bootstrap pipeline.
@@ -235,8 +245,16 @@ pub async fn run_repo_with_dedup(
                 // `law.imported` per `## ` section. The publish loop
                 // handles N events per walked file so the
                 // per-section laws all reach Synap.
-                let events =
+                let mut events =
                     emit_for_file_multi(&repo_id, &session_id, None, entry, &body, &stream);
+                // Phase11e §5 — apply the user-supplied kind filter
+                // BEFORE the publish loop so the walker still does
+                // its full pass (the dedup ledger needs the full
+                // file walk to maintain `bootstrap_seen` accurately)
+                // but only the requested kinds reach the wire.
+                if !runner_cfg.kind_filter.is_empty() {
+                    events.retain(|evt| kind_passes_filter(&runner_cfg.kind_filter, &evt.kind));
+                }
                 if events.is_empty() {
                     continue;
                 }
@@ -302,6 +320,13 @@ pub async fn run_repo_with_dedup(
                     commits_walked += 1;
                     metrics.incr_commits_walked(&repo_id);
                     let evt = emit_turn_historical(&repo_id, &session_id, c, &stream);
+                    // Phase11e §5 — apply the same kind filter to
+                    // the per-commit `turn.historical` events.
+                    if !runner_cfg.kind_filter.is_empty()
+                        && !kind_passes_filter(&runner_cfg.kind_filter, &evt.kind)
+                    {
+                        continue;
+                    }
                     metrics.incr_redactions(u64::from(evt.redactions));
                     publishes_attempted += 1;
                     if let Err(e) = publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run)

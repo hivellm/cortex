@@ -142,6 +142,8 @@ async fn main() -> Result<()> {
             stream: args.stream.clone(),
             since: args.since.clone(),
             dry_run: args.is_dry_run(),
+            // Phase11e §5 — propagate `--kinds` from CliArgs.
+            kind_filter: args.kinds.clone(),
         };
         let last_file = checkpoint
             .repos

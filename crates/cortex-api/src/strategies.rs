@@ -154,19 +154,44 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
 /// against those globals — same RRF blend `pre_change_context` uses
 /// — closes the 50% recall floor on `decision_lookup` queries whose
 /// answer lives in the ADR body, not the title.
+///
+/// phase11e §5.3 — also fan out to the canonical per-repo
+/// `cortex-{slug}-decisions` collection / index that the
+/// writer-side spec 06 / 08 actually populates today. The legacy
+/// globals stay so historical bootstraps keep their content
+/// reachable, but the per-repo names are what every NEW envelope
+/// from the embedder + fulltext-worker lands on. Both lanes
+/// gracefully fall back to empty hits when one of the names is
+/// absent (404 on per-repo or legacy alike).
 fn decision_lookup(req: &QueryRequest) -> Plan {
-    let vectors = vec![VectorRequest {
-        collection: COLLECTION_DECISION_FP32.to_string(),
-        query: req.query.clone(),
-        k: req.k,
-        scope: req.scope.clone(),
-    }];
-    let keywords = vec![KeywordRequest {
-        index: INDEX_DECISIONS.to_string(),
-        query: req.query.clone(),
-        limit: req.limit,
-        scope: req.scope.clone(),
-    }];
+    let vectors = vec![
+        VectorRequest {
+            collection: COLLECTION_DECISION_FP32.to_string(),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
+        VectorRequest {
+            collection: repo_scoped(req, "decisions"),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
+    ];
+    let keywords = vec![
+        KeywordRequest {
+            index: INDEX_DECISIONS.to_string(),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+        KeywordRequest {
+            index: repo_scoped(req, "decisions"),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+    ];
     let graphs = vec![GraphRequest {
         template: "decision_supersedes_chain".into(),
         params: json!({ "query": req.query }),
@@ -205,13 +230,31 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             k: req.k,
             scope: req.scope.clone(),
         },
+        // phase11e §5.3 — per-repo `cortex-{slug}-turns` is the
+        // canonical write target of the embedder. Fan out so a
+        // fresh stack with no legacy global tier still answers
+        // similar_problems queries.
+        VectorRequest {
+            collection: repo_scoped(req, "turns"),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
     ];
-    let keywords = vec![KeywordRequest {
-        index: INDEX_TURNS.to_string(),
-        query: req.query.clone(),
-        limit: req.limit,
-        scope: req.scope.clone(),
-    }];
+    let keywords = vec![
+        KeywordRequest {
+            index: INDEX_TURNS.to_string(),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+        KeywordRequest {
+            index: repo_scoped(req, "turns"),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+    ];
     let graphs = vec![GraphRequest {
         template: "turn_analysis_decision_chain".into(),
         params: json!({ "query": req.query }),
@@ -429,11 +472,26 @@ mod tests {
         // `cortex.decision.fp32` collection + `cortex_decisions`
         // index (per `cortex-storage::names`) where the rationale
         // body is searchable.
+        // phase11e §5.3 — plan now fans out to both the legacy
+        // global tiers AND the per-repo `cortex-{slug}-decisions`
+        // names that the writer side actually populates today.
         let plan = build_plan(&req(Intent::DecisionLookup));
-        assert_eq!(plan.vectors.len(), 1);
-        assert_eq!(plan.vectors[0].collection, COLLECTION_DECISION_FP32);
-        assert_eq!(plan.keywords.len(), 1);
-        assert_eq!(plan.keywords[0].index, INDEX_DECISIONS);
+        let collections: Vec<_> = plan
+            .vectors
+            .iter()
+            .map(|v| v.collection.as_str())
+            .collect();
+        assert!(
+            collections.contains(&COLLECTION_DECISION_FP32),
+            "legacy fp32 tier must still be queried: {collections:?}"
+        );
+        assert!(
+            collections.iter().any(|c| c.ends_with("-decisions")),
+            "per-repo `cortex-<slug>-decisions` must also be queried: {collections:?}"
+        );
+        let indexes: Vec<_> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(indexes.contains(&INDEX_DECISIONS));
+        assert!(indexes.iter().any(|i| i.ends_with("-decisions")));
         assert_eq!(plan.graphs.len(), 1);
         assert_eq!(plan.graphs[0].template, "decision_supersedes_chain");
         // §1.3 — same RRF blend `pre_change_context` uses.
@@ -476,8 +534,15 @@ mod tests {
             collections.contains(&COLLECTION_TURN_PQ),
             "pq warm tier must be queried: {collections:?}"
         );
-        assert_eq!(plan.keywords.len(), 1);
-        assert_eq!(plan.keywords[0].index, INDEX_TURNS);
+        // phase11e §5.3 — per-repo `cortex-{slug}-turns` is the
+        // canonical writer destination today and must also fan out.
+        assert!(
+            collections.iter().any(|c| c.ends_with("-turns")),
+            "per-repo `cortex-<slug>-turns` must be queried: {collections:?}"
+        );
+        let indexes: Vec<_> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(indexes.contains(&INDEX_TURNS));
+        assert!(indexes.iter().any(|i| i.ends_with("-turns")));
     }
 
     #[test]

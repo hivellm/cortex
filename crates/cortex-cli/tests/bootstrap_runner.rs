@@ -98,6 +98,7 @@ async fn end_to_end_emits_one_event_per_recognised_kind() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     let report = run_repo(
         repo.path(),
@@ -140,6 +141,7 @@ async fn idempotent_replay_reuses_checkpoint_resume() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     run_repo(
         repo.path(),
@@ -198,6 +200,7 @@ async fn redaction_strips_synthetic_secret_from_env() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     run_repo(
         repo.path(),
@@ -241,6 +244,7 @@ async fn dry_run_publishes_nothing_to_the_publisher() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: true,
+        kind_filter: Vec::new(),
     };
     let report = run_repo(
         repo.path(),
@@ -279,6 +283,7 @@ async fn parallel_runner_executes_all_repos_with_no_event_loss() {
             stream: "cortex.events.bootstrap".into(),
             since: None,
             dry_run: false,
+            kind_filter: Vec::new(),
         };
         futures.push(async move {
             let mut checkpoint = Checkpoint::new("now".into());
@@ -322,6 +327,7 @@ async fn checkpoint_persists_atomically_to_disk() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     run_repo(
         repo.path(),
@@ -378,6 +384,7 @@ async fn since_filter_passes_through_to_git_walker() {
         stream: "cortex.events.bootstrap".into(),
         since: Some("HEAD~200".into()),
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     let report = run_repo(
         repo.path(),
@@ -436,6 +443,7 @@ async fn walker_emits_knowledge_and_learning_envelopes_from_rulebook() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     run_repo(
         repo.path(),
@@ -514,6 +522,7 @@ async fn walker_emits_repo_in_canonical_lowercase() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
     run_repo(
         repo.path(),
@@ -555,6 +564,7 @@ async fn rerun_with_no_changes_publishes_zero_new_events() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
 
     // First run — publishes everything, ledger fills up.
@@ -634,6 +644,7 @@ async fn rerun_after_editing_one_file_publishes_only_that_file() {
         stream: "cortex.events.bootstrap".into(),
         since: None,
         dry_run: false,
+        kind_filter: Vec::new(),
     };
 
     // Run #1.
