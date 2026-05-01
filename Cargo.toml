@@ -14,6 +14,7 @@ members = [
     "crates/cortex-health",
     "crates/cortex-build",
     "crates/cortex-retention",
+    "crates/cortex-claude-archive",
 ]
 
 [workspace.package]

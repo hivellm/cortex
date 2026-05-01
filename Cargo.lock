@@ -598,6 +598,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cortex-claude-archive"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "cortex-core",
+ "cortex-storage",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ulid",
+]
+
+[[package]]
 name = "cortex-cli"
 version = "0.1.0"
 dependencies = [
