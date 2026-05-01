@@ -5,7 +5,7 @@
 // surface for desktop integrations (open-external-url, etc.) that
 // the renderer can't do on its own.
 
-import { app, BrowserWindow, Menu, shell } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, shell } from "electron";
 import * as path from "node:path";
 
 const isDev = process.env.CORTEX_GUI_DEV === "1";
@@ -25,6 +25,12 @@ async function createWindow(): Promise<void> {
     backgroundColor: "#0d1117",
     show: false,
     autoHideMenuBar: true,
+    // Mirror Vectorizer's custom-titlebar setup: drop the OS
+    // chrome entirely so the renderer can paint its own header
+    // (drag region + min/max/close buttons) and stay visually
+    // consistent across HiveLLM tools.
+    frame: false,
+    titleBarStyle: "hidden",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -78,6 +84,30 @@ async function loadWithRetry(
   }
   console.error("electron: failed to load", url, "after", attempts, "attempts:", lastErr);
 }
+
+// Window-control IPC. The renderer paints its own min / max / close
+// buttons (no native frame) and asks the main process to drive the
+// underlying BrowserWindow via these channels. Same wire shape
+// Vectorizer uses so the bridge type stays portable across tools.
+ipcMain.on("window-minimize", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  win?.minimize();
+});
+
+ipcMain.on("window-maximize", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return;
+  if (win.isMaximized()) {
+    win.unmaximize();
+  } else {
+    win.maximize();
+  }
+});
+
+ipcMain.on("window-close", (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  win?.close();
+});
 
 app.whenReady().then(async () => {
   await createWindow();

@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
-import { bridge } from "../lib/bridge";
+import { bridge, isElectron } from "../lib/bridge";
 import { HeaderSearch } from "./HeaderSearch";
 
 type HeaderProps = {
@@ -47,8 +47,8 @@ export function Header({
       : "offline";
 
   return (
-    <header className="header">
-      <div className="header__brand">
+    <header className="header drag-region">
+      <div className="header__brand no-drag">
         <button className="icon-btn" onClick={onToggleSidebar} title="Toggle sidebar" aria-label="Toggle sidebar">
           <Icon name="menu" size={15} />
         </button>
@@ -59,7 +59,7 @@ export function Header({
         </span>
       </div>
       <HeaderSearch />
-      <div className="header__right">
+      <div className="header__right no-drag">
         <button
           type="button"
           className={`status-pill health-topbar-pill is-${
@@ -99,6 +99,37 @@ export function Header({
         >
           <Icon name="settings" size={15} />
         </button>
+        {isElectron ? (
+          <div className="window-controls" aria-label="Window controls">
+            <button
+              type="button"
+              className="window-btn"
+              onClick={() => window.cortex?.windowMinimize?.()}
+              title="Minimize"
+              aria-label="Minimize window"
+            >
+              <span className="window-btn__glyph">─</span>
+            </button>
+            <button
+              type="button"
+              className="window-btn"
+              onClick={() => window.cortex?.windowMaximize?.()}
+              title="Maximize"
+              aria-label="Maximize window"
+            >
+              <span className="window-btn__glyph">▢</span>
+            </button>
+            <button
+              type="button"
+              className="window-btn window-btn--close"
+              onClick={() => window.cortex?.windowClose?.()}
+              title="Close"
+              aria-label="Close window"
+            >
+              <span className="window-btn__glyph">✕</span>
+            </button>
+          </div>
+        ) : null}
       </div>
       {collapsed ? null : null}
     </header>

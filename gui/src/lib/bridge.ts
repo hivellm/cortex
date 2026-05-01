@@ -11,6 +11,12 @@ export type CortexBridge = {
   buildId: string;
   /** True when launched with `CORTEX_GUI_DEV=1`. */
   isDev: boolean;
+  /** Minimize the host BrowserWindow (custom titlebar). */
+  windowMinimize?: () => void;
+  /** Toggle maximize/unmaximize (custom titlebar). */
+  windowMaximize?: () => void;
+  /** Close the host BrowserWindow (custom titlebar). */
+  windowClose?: () => void;
 };
 
 declare global {
@@ -23,3 +29,11 @@ export const bridge: CortexBridge = (typeof window !== "undefined" && window.cor
   buildId: "dev",
   isDev: false,
 };
+
+/// `true` when the renderer is running inside Electron (the preload
+/// bridge wired the window-control channels). The browser preview
+/// at `127.0.0.1:5173` renders the same app without these, so the
+/// custom titlebar buttons stay hidden there.
+export const isElectron: boolean =
+  typeof window !== "undefined" &&
+  typeof window.cortex?.windowMinimize === "function";
