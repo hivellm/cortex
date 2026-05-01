@@ -63,6 +63,7 @@ fn response(snippets: Vec<Snippet>) -> QueryResponse {
         },
         debug: DebugInfo::default(),
         notice: None,
+        clipped: None,
     }
 }
 

@@ -373,6 +373,7 @@ mod tests {
                 notes: Vec::new(),
             },
             notice: None,
+            clipped: None,
         }
     }
 

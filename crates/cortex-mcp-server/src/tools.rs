@@ -38,10 +38,22 @@ pub mod reasons {
     pub const INVALID_INPUT: &str = "invalid_input";
     /// Pre-thinking pipeline returned an empty bundle (fail-open).
     pub const EMPTY_BUNDLE: &str = "empty_bundle";
+    /// Phase11c — the parsed response would have exceeded the MCP
+    /// transport's hard cap. Adapter returns this instead of letting
+    /// the transport reject the call (which dumps to a side-file).
+    pub const BUDGET_EXCEEDED: &str = "budget_exceeded";
 }
 
 /// Caller name advertised on the `x-cortex-caller` header.
 pub const CALLER: &str = "claude-code-plugin";
+
+/// Phase11c — hard cap the MCP transport enforces for a single
+/// tool result before it dumps the payload to a side-file. Sized
+/// generously above `cortex-api`'s default `budget_bytes` so a
+/// daemon clipped to 32 KiB still fits with margin for the JSON-RPC
+/// envelope and audit headers added downstream. Bumped together
+/// with the upstream transport cap if it ever changes.
+pub const MCP_RESPONSE_HARD_CAP: usize = 48 * 1024;
 
 /// Shared dependencies passed to every tool invocation.
 #[derive(Clone)]
@@ -290,7 +302,40 @@ impl Tool for QueryTool {
             let parsed: QueryResponse = serde_json::from_slice(&body_bytes).map_err(|e| {
                 ToolError::invalid_input(format!("upstream response not valid: {e}"))
             })?;
+            // Phase11c — even after the daemon-side clipper, the
+            // serialised payload could exceed the MCP transport's
+            // hard cap (the runtime today rejects ~30k chars). Count
+            // the wire bytes and, on overflow, return a structured
+            // `budget_exceeded` soft-error carrying enough context
+            // for the caller to retry with a smaller `budget_bytes`
+            // — instead of letting the transport drop the call to
+            // a side-file the caller has to re-read by hand.
             let payload = serde_json::to_value(&parsed).unwrap_or(Value::Null);
+            let payload_bytes = serde_json::to_vec(&payload)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if payload_bytes > MCP_RESPONSE_HARD_CAP {
+                let total_hits = parsed.results.snippets.len()
+                    + parsed.results.decisions.len()
+                    + parsed.results.violations.len()
+                    + parsed.results.similar_turns.len()
+                    + parsed.results.graph_neighbors.len();
+                let suggested = MCP_RESPONSE_HARD_CAP.saturating_mul(2) / 3;
+                return Ok(ToolResult::soft_error(
+                    reasons::BUDGET_EXCEEDED,
+                    &format!(
+                        "cortex_query response is {payload_bytes} bytes — \
+                         exceeds the MCP transport cap of {MCP_RESPONSE_HARD_CAP} bytes. \
+                         Retry with a smaller `budget_bytes` (suggested: {suggested})."
+                    ),
+                    json!({
+                        "total_hits": total_hits,
+                        "payload_bytes": payload_bytes,
+                        "transport_cap_bytes": MCP_RESPONSE_HARD_CAP,
+                        "suggested_budget_bytes": suggested,
+                    }),
+                ));
+            }
             return Ok(ToolResult::ok(payload));
         }
 

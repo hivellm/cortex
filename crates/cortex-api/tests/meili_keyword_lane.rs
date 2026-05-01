@@ -149,6 +149,7 @@ async fn distinct_queries_through_orchestrator_return_distinct_snippets() {
         k: 50,
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
+        budget_bytes: None,
     };
     let req_beta = QueryRequest {
         intent: Intent::FreeSearch,
@@ -158,6 +159,7 @@ async fn distinct_queries_through_orchestrator_return_distinct_snippets() {
         k: 50,
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
+        budget_bytes: None,
     };
 
     let (resp_alpha, _) = orch.run(&req_alpha).await;
@@ -216,6 +218,7 @@ async fn fail_open_when_meili_unreachable_through_orchestrator() {
         k: 50,
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
+        budget_bytes: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(

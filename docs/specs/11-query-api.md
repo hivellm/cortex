@@ -48,9 +48,19 @@ Content-Type: application/json
   "limit": 20,                             // default 20, max 100 (per field below)
   "k": 50,                                 // KNN top-k (vector lane); default 50, max 200
   "include": ["snippets", "decisions", "violations", "graph_neighbors", "similar_turns"],
-  "budget_ms": 500                         // total timeout; default 500
+  "budget_ms": 500,                        // total timeout; default 500
+  "budget_bytes": 32768                    // phase11c — serialised JSON cap; default 32 KiB
 }
 ```
+
+`budget_bytes` (phase11c) bounds the size of the serialised
+[`QueryResponse`](#response-shape) so the wire payload stays under the
+MCP transport's per-tool-result cap. The daemon-side clipper trims
+snippet text to ≤ 1 KiB each, then pops tail entries from
+`graph_neighbors` → `similar_turns` → `violations` → `decisions` →
+`snippets` until the byte budget fits. Removed counts are surfaced on
+`response.clipped` so callers can branch on "more available" without a
+follow-up query.
 
 `scope.repo` is **canonical lowercase**. Mixed-case input (`"Cortex"`,
 `"Vectorizer"`) is accepted for backwards-compat — the orchestrator
@@ -153,6 +163,18 @@ every dimension end-to-end:
     "code": "repo_not_indexed",
     "message": "scope.repo `<slug>` is not present in the cortex-api indexed-repo snapshot",
     "hint": "run `cortex-bootstrap --repo <path>` to seed the daemon for this repo, then retry."
+  },
+  // Phase11c — populated when the byte-budget clipper trimmed the
+  // response. Absent when nothing was removed.
+  "clipped": {
+    "removed_snippets": 12,
+    "removed_decisions": 0,
+    "removed_violations": 0,
+    "removed_similar_turns": 0,
+    "removed_graph_neighbors": 0,
+    "snippets_text_clipped": 5,
+    "final_bytes": 31872,
+    "budget_bytes": 32768
   }
 }
 ```

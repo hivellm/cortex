@@ -442,6 +442,7 @@ mod tests {
                 IncludeField::SimilarTurns,
             ],
             budget_ms: 500,
+            budget_bytes: None,
         }
     }
 

@@ -102,6 +102,12 @@ pub struct QueryRequest {
     /// Total budget the orchestrator must stay under.
     #[serde(default = "default_budget_ms")]
     pub budget_ms: u64,
+    /// Phase11c — byte-cap for the serialised response. Caller-side
+    /// override of the default `32 KiB` cap. Optional so existing
+    /// callers continue to get the default; explicit `Some(N)`
+    /// tightens or loosens the clipper's budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_bytes: Option<usize>,
 }
 
 fn default_limit() -> usize {
@@ -356,6 +362,48 @@ pub struct QueryResponse {
     /// Optional structural diagnostic — see [`Notice`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<Notice>,
+    /// Phase11c — populated when the byte-budget clipper trimmed the
+    /// response. Lets callers see what was dropped + the final size,
+    /// and lets MCP adapters detect "more results available" without
+    /// re-running the query.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipped: Option<ClipReport>,
+}
+
+/// Phase11c — per-call byte-budget clip summary attached to
+/// [`QueryResponse`] when the clipper actually removed something.
+/// Emitted in addition to `Notice` so a structured caller can branch
+/// on `removed_*` counts instead of parsing a free-form message.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ClipReport {
+    /// Snippets removed from the tail.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed_snippets: usize,
+    /// Decisions removed from the tail.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed_decisions: usize,
+    /// Violations removed from the tail.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed_violations: usize,
+    /// Similar-turn entries removed from the tail.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed_similar_turns: usize,
+    /// Graph-neighbor entries removed from the tail.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed_graph_neighbors: usize,
+    /// Snippets whose `text` field was clipped to the per-snippet cap
+    /// (does NOT count snippets removed entirely above).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub snippets_text_clipped: usize,
+    /// Final serialised JSON size after clipping (bytes).
+    pub final_bytes: usize,
+    /// Budget the clipper targeted (bytes). Echoes
+    /// `QueryRequest::budget_bytes` (or its default).
+    pub budget_bytes: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// Result groups bag carried under `results`.
@@ -394,6 +442,7 @@ pub fn empty_response(req: &QueryRequest) -> QueryResponse {
         },
         debug: DebugInfo::default(),
         notice: None,
+        clipped: None,
     }
 }
 

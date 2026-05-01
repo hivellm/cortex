@@ -137,6 +137,7 @@ impl SnippetFetcher for HttpFetcher {
             k: 50,
             include: query.include.clone().unwrap_or_else(default_include),
             budget_ms: self.budget_ms,
+            budget_bytes: None,
         };
         let url = format!("{}/v1/query", self.base.trim_end_matches('/'));
         let resp = self
@@ -450,6 +451,7 @@ mod tests {
             },
             debug: DebugInfo::default(),
             notice: None,
+            clipped: None,
         }
     }
 

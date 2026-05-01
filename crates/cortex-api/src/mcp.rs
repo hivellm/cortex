@@ -103,6 +103,13 @@ fn input_schema() -> Value {
                 },
             },
             "budget_ms": { "type": "integer", "minimum": 1, "default": 500 },
+            "budget_bytes": {
+                "type": "integer",
+                "minimum": 1024,
+                "maximum": 262144,
+                "default": 32768,
+                "description": "Max serialised JSON bytes for the response. Phase11c — keeps the bundle under the MCP transport's per-tool-result cap. Caller can tighten / loosen; omit for the 32 KiB default.",
+            },
         },
     })
 }
@@ -161,6 +168,36 @@ mod tests {
             .unwrap()
             .contains(&Value::String("pre_change_context".into())));
         assert_eq!(input["required"], json!(["intent", "query"]));
+    }
+
+    #[test]
+    fn input_schema_exposes_budget_bytes_for_phase11c() {
+        // Phase11c spec scenario "MCP schema exposes budget_bytes".
+        let d = tool_descriptor();
+        let props = d["inputSchema"]["properties"]
+            .as_object()
+            .expect("properties is an object");
+        let bb = props
+            .get("budget_bytes")
+            .expect("budget_bytes must be advertised");
+        assert_eq!(bb["type"], "integer");
+        assert_eq!(bb["default"], 32768);
+    }
+
+    #[test]
+    fn budget_bytes_round_trips_through_query_request_serde() {
+        // Phase11c spec scenario "MCP forwards budget_bytes verbatim"
+        // — the request body POSTed to /v1/query carries the same
+        // value the MCP caller supplied, no truncation, no rename.
+        let raw = json!({
+            "intent": "free_search",
+            "query": "x",
+            "budget_bytes": 8192,
+        });
+        let req: QueryRequest = serde_json::from_value(raw).expect("schema-compatible");
+        assert_eq!(req.budget_bytes, Some(8192));
+        let back = serde_json::to_value(&req).expect("serialisable");
+        assert_eq!(back["budget_bytes"], 8192);
     }
 
     #[test]

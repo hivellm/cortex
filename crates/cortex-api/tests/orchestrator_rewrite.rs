@@ -64,6 +64,7 @@ fn req(prompt: &str) -> QueryRequest {
             IncludeField::SimilarTurns,
         ],
         budget_ms: 500,
+        budget_bytes: None,
     }
 }
 

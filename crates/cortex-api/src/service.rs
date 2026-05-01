@@ -464,6 +464,17 @@ impl QueryService {
         if response.notice.is_none() {
             response.notice = Self::build_scope_unset_notice(&response.scope_resolved);
         }
+        // Phase11c — apply the byte-budget clipper before caching so
+        // every cache hit also respects the cap. The default keeps
+        // the wire payload under the MCP transport's hard limit;
+        // callers tighten or loosen via `QueryRequest::budget_bytes`.
+        let budget_bytes = req
+            .budget_bytes
+            .unwrap_or(crate::budget::DEFAULT_BUDGET_BYTES);
+        let report = crate::budget::clip_response_to_budget(&mut response, budget_bytes);
+        if crate::budget::report_is_meaningful(&report) {
+            response.clipped = Some(report);
+        }
         self.cache.put(&key, response.clone()).await;
         let envelope = build_envelope_with_rewrite_context(
             caller,
@@ -539,6 +550,7 @@ mod tests {
             k: 50,
             include: vec![IncludeField::Snippets],
             budget_ms: 500,
+            budget_bytes: None,
         }
     }
 
@@ -825,6 +837,74 @@ mod tests {
                     "no notice expected when scope.repo matches the snapshot, got {:?}",
                     resp.notice
                 );
+            }
+            other => panic!("expected Ok, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn free_search_response_clipped_to_caller_budget_bytes() {
+        // Phase11c — free_search is the intent that historically blew
+        // past the MCP transport cap. The service-level clipper runs
+        // before audit + cache, so a tiny `budget_bytes` on the
+        // request must produce a serialised response inside the cap
+        // and stamp `clipped` describing the trim.
+        use crate::lanes::LaneHit;
+
+        let v = Arc::new(MemoryVectorLane::new());
+        let k = Arc::new(MemoryKeywordLane::new());
+        let g = Arc::new(MemoryGraphLane::new());
+        // Seed enough fat hits that the unclipped response easily
+        // overshoots a 4 KiB budget.
+        let big_text = "x".repeat(800);
+        let mut hits = Vec::new();
+        for i in 0..30 {
+            hits.push(LaneHit {
+                doc_id: format!("doc-{i}"),
+                text: big_text.clone(),
+                repo: Some("Cortex".into()),
+                path: Some(format!("src/file_{i}.rs")),
+                symbol: None,
+                content_hash: None,
+                score: 1.0 - (i as f64 * 0.01),
+                ts: 0,
+                severity: None,
+                extras: Default::default(),
+            });
+        }
+        v.seed("cortex-cortex-code", hits);
+        let svc = QueryService::with_memory_defaults(Orchestrator::new(v, k, g));
+
+        let r = QueryRequest {
+            intent: Intent::FreeSearch,
+            scope: Scope {
+                repo: Some("Cortex".into()),
+                ..Scope::default()
+            },
+            query: "anything".into(),
+            limit: 30,
+            k: 30,
+            include: vec![IncludeField::Snippets],
+            budget_ms: 500,
+            budget_bytes: Some(4096),
+        };
+        match svc.handle("dash", r).await {
+            ServiceOutcome::Ok(resp) => {
+                let serialised = serde_json::to_vec(&*resp).expect("serialisable");
+                assert!(
+                    serialised.len() <= 4096,
+                    "clipped response must fit caller budget: got {} bytes for cap 4096",
+                    serialised.len()
+                );
+                let report = resp
+                    .clipped
+                    .as_ref()
+                    .expect("clipper must stamp report when it removes anything");
+                assert!(
+                    report.removed_snippets > 0 || report.snippets_text_clipped > 0,
+                    "clipper should record what was trimmed: {report:?}"
+                );
+                assert_eq!(report.budget_bytes, 4096);
             }
             other => panic!("expected Ok, got {other:?}"),
         }

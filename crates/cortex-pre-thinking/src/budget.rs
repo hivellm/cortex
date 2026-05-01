@@ -231,6 +231,7 @@ mod tests {
                 notes: Vec::new(),
             },
             notice: None,
+            clipped: None,
         }
     }
 
@@ -305,6 +306,7 @@ mod tests {
             budget: Default::default(),
             debug: Default::default(),
             notice: None,
+            clipped: None,
         };
         let clipped = clip_to_budget("free_search", &resp, 32 * 1024);
         assert!(clipped.bundle.is_empty());

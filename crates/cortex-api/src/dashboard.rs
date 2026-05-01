@@ -831,6 +831,7 @@ pub(crate) fn dashboard_memory_query(q: &str, limit: usize) -> QueryRequest {
         k: limit.max(1) * 2,
         include: vec![IncludeField::Snippets],
         budget_ms: 200,
+        budget_bytes: None,
     }
 }
 

@@ -131,6 +131,12 @@ pub async fn run<Q: QueryFn>(
             cortex_api::IncludeField::SimilarTurns,
         ],
         budget_ms: input.budget.time_ms.max(1) as u64,
+        // Pre-thinking does its own downstream byte clipping via
+        // `cortex_pre_thinking::budget::clip_to_budget`, so we let
+        // the API-side clipper run with its default cap (32 KiB) —
+        // the pre-thinking trim ladder runs after this and tightens
+        // further if `bundle_bytes` is smaller.
+        budget_bytes: None,
     };
 
     let total_budget = Duration::from_millis(input.budget.time_ms.max(1) as u64);

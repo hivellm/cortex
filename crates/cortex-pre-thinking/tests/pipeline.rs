@@ -116,6 +116,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
             notes: Vec::new(),
         },
         notice: None,
+        clipped: None,
     }
 }
 

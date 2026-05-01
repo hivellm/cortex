@@ -16,6 +16,7 @@ pub mod analyzer;
 pub mod archive_loader;
 pub mod audit;
 pub mod audit_store;
+pub mod budget;
 pub mod cache;
 pub mod dashboard;
 pub mod dashboard_series;

@@ -529,3 +529,86 @@ async fn tools_call_session_replay_returns_capped_turns() {
     assert_eq!(turns[1]["role"], "assistant");
     assert_eq!(turns[1]["summary"], "a1");
 }
+
+#[tokio::test]
+async fn tools_call_query_returns_budget_exceeded_when_response_is_too_large() {
+    // Phase11c §4 — when the upstream daemon-side clipper somehow
+    // returns more than the MCP transport can carry (cap = 48 KiB
+    // today), the MCP adapter MUST return a structured
+    // `budget_exceeded` soft-error instead of letting the runtime
+    // dump the result to a side-file. The test wires a wiremock
+    // upstream that returns a deliberately oversized payload and
+    // checks the soft-error envelope.
+    let mock = MockServer::start().await;
+
+    // Build a payload guaranteed to exceed the 48 KiB MCP cap by
+    // including a single very large snippet text (the daemon-side
+    // clipper would normally trim this, but the mock here simulates
+    // a daemon that didn't).
+    let big_text = "x".repeat(80 * 1024);
+    let canned = json!({
+        "intent": "free_search",
+        "query_id": "q_oversized",
+        "scope_resolved": {},
+        "results": {
+            "snippets": [
+                {
+                    "rank": 1,
+                    "source": "vector",
+                    "path": "huge.rs",
+                    "text": big_text,
+                    "score": 0.9
+                }
+            ],
+            "decisions": [],
+            "violations": [],
+            "graph_neighbors": [],
+            "similar_turns": []
+        },
+        "laws_active": [],
+        "budget": { "used_ms": 5, "cap_ms": 200, "cache": "miss" },
+        "debug": { "lanes": {} }
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/v1/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(canned))
+        .mount(&mock)
+        .await;
+
+    let server = Server::new(ToolContext::new(mock.uri()));
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": 99,
+        "method": "tools/call",
+        "params": {
+            "name": "cortex_query",
+            "arguments": {
+                "intent": "free_search",
+                "query": "anything",
+                "scope": {},
+                "limit": 5,
+                "k": 20,
+                "include": ["snippets"],
+                "budget_ms": 200
+            }
+        }
+    });
+    let raw = server
+        .handle_frame(frame.to_string().as_bytes())
+        .await
+        .expect("response bytes");
+    let resp: Value = serde_json::from_slice(&raw).unwrap();
+    assert_eq!(resp["id"], 99);
+    assert_eq!(
+        resp["result"]["isError"], true,
+        "oversized payload must surface as a structured soft-error"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["reason"], "budget_exceeded");
+    let details = &parsed["details"];
+    assert!(details["payload_bytes"].as_u64().unwrap() > 48 * 1024);
+    assert!(details["suggested_budget_bytes"].as_u64().unwrap() < 48 * 1024);
+    assert!(details["total_hits"].as_u64().unwrap() >= 1);
+}

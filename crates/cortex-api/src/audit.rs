@@ -212,6 +212,7 @@ mod tests {
             k: 50,
             include: vec![IncludeField::Snippets],
             budget_ms: 500,
+            budget_bytes: None,
         };
         let resp = empty_response(&req);
         let env = build_envelope("dash", "pre_change_context", &resp);

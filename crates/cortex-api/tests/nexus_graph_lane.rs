@@ -102,6 +102,7 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
         k: 50,
         include: vec![IncludeField::Snippets, IncludeField::GraphNeighbors],
         budget_ms: 1000,
+        budget_bytes: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert_eq!(resp.results.graph_neighbors.len(), 1);
@@ -181,6 +182,7 @@ async fn fail_open_when_nexus_unreachable_through_orchestrator() {
         k: 50,
         include: vec![IncludeField::Snippets, IncludeField::GraphNeighbors],
         budget_ms: 1000,
+        budget_bytes: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.graph_neighbors.is_empty());

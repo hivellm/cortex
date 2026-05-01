@@ -155,6 +155,7 @@ mod tests {
             k: 50,
             include: vec![IncludeField::Snippets],
             budget_ms: 500,
+            budget_bytes: None,
         }
     }
 
