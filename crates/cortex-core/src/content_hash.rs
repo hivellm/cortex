@@ -59,4 +59,3 @@ pub fn content_hash(payload: &Value) -> Result<ContentHash, CanonicalJsonError> 
     }
     Ok(ContentHash(out))
 }
-

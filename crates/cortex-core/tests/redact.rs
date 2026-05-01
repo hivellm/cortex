@@ -7,7 +7,10 @@ use serde_json::json;
 fn redacts_aws_access_key_in_string() {
     let mut v = json!({ "input": { "command": "export AWS_KEY=AKIAIOSFODNN7EXAMPLE" } });
     let report = redact(&mut v);
-    assert!(v["input"]["command"].as_str().unwrap().contains("[REDACTED:"));
+    assert!(v["input"]["command"]
+        .as_str()
+        .unwrap()
+        .contains("[REDACTED:"));
     assert!(!report.tokens.is_empty());
 }
 
@@ -30,7 +33,8 @@ fn redacts_anthropic_key() {
 
 #[test]
 fn redacts_private_key_block() {
-    let pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAAS==\n-----END PRIVATE KEY-----";
+    let pem =
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAAS==\n-----END PRIVATE KEY-----";
     let mut v = json!(pem);
     let report = redact(&mut v);
     assert!(!report.tokens.is_empty());

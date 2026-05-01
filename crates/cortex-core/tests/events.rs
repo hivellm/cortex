@@ -5,8 +5,14 @@ use serde_json::json;
 
 #[test]
 fn kind_serializes_snake_case() {
-    assert_eq!(serde_json::to_string(&Kind::ToolCall).unwrap(), "\"tool_call\"");
-    assert_eq!(serde_json::to_string(&Kind::LawViolation).unwrap(), "\"law_violation\"");
+    assert_eq!(
+        serde_json::to_string(&Kind::ToolCall).unwrap(),
+        "\"tool_call\""
+    );
+    assert_eq!(
+        serde_json::to_string(&Kind::LawViolation).unwrap(),
+        "\"law_violation\""
+    );
 }
 
 #[test]

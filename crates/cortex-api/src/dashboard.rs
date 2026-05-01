@@ -1416,11 +1416,40 @@ pub struct AnalysisRow {
     pub source_path: Option<String>,
 }
 
-async fn analyses(State(state): State<DashboardState>) -> Response {
+/// Query params for `/v1/dashboard/analyses`. Mirrors
+/// [`DecisionsQuery`] so the GUI's Analysis library tab can filter by
+/// project (single `?repo=` or multi `?repos=`). Empty → all repos.
+#[derive(Debug, Default, Deserialize)]
+pub struct AnalysesQuery {
+    /// Single-repo filter — `?repo=Nexus`.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Multi-repo filter — `?repos=Cortex&repos=Nexus`.
+    #[serde(default)]
+    pub repos: Vec<String>,
+}
+
+async fn analyses(
+    State(state): State<DashboardState>,
+    Query(params): Query<AnalysesQuery>,
+) -> Response {
     let hits = collect_lane_hits(&state.lane);
+    let mut allow: std::collections::HashSet<String> = params.repos.into_iter().collect();
+    if let Some(r) = params.repo.filter(|s| !s.is_empty()) {
+        allow.insert(r);
+    }
     let rows: Vec<AnalysisRow> = hits
         .into_iter()
         .filter(|h| h.symbol.as_deref() == Some("analysis"))
+        .filter(|h| {
+            if allow.is_empty() {
+                return true;
+            }
+            h.repo
+                .as_deref()
+                .map(|r| allow.contains(r))
+                .unwrap_or(false)
+        })
         .map(|h| {
             // Prefer the parsed extras the meili_loader stamped over
             // best-effort string-munging on `h.text`. The first non-

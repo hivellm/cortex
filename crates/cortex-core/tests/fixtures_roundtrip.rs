@@ -17,10 +17,9 @@ fn fixtures_dir(sub: &str) -> PathBuf {
 }
 
 fn read_json(path: &PathBuf) -> Value {
-    let raw = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    serde_json::from_str(&raw)
-        .unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
+    let raw =
+        fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("cannot parse {}: {e}", path.display()))
 }
 
 fn read_dir_sorted(sub: &str) -> Vec<PathBuf> {
@@ -41,15 +40,14 @@ fn all_valid_fixtures_validate() {
         let value = read_json(&path);
         let result = validate_event(&value);
         if let Err(errors) = &result {
-            panic!(
-                "fixture {} failed validation: {:?}",
-                path.display(),
-                errors
-            );
+            panic!("fixture {} failed validation: {:?}", path.display(), errors);
         }
         seen += 1;
     }
-    assert!(seen >= 10, "expected at least 10 valid fixtures, got {seen}");
+    assert!(
+        seen >= 10,
+        "expected at least 10 valid fixtures, got {seen}"
+    );
 }
 
 #[test]
@@ -80,11 +78,18 @@ fn invalid_fixtures_fail_validation() {
         let value = read_json(&path);
         match validate_event(&value) {
             Ok(()) => panic!("invalid fixture {} unexpectedly validated", path.display()),
-            Err(errors) => assert!(!errors.is_empty(), "no errors reported for {}", path.display()),
+            Err(errors) => assert!(
+                !errors.is_empty(),
+                "no errors reported for {}",
+                path.display()
+            ),
         }
         seen += 1;
     }
-    assert!(seen >= 3, "expected at least 3 invalid fixtures, got {seen}");
+    assert!(
+        seen >= 3,
+        "expected at least 3 invalid fixtures, got {seen}"
+    );
 }
 
 #[test]
@@ -93,7 +98,11 @@ fn every_kind_has_a_fixture() {
     let mut seen: HashSet<String> = HashSet::new();
     for path in read_dir_sorted("events") {
         let value = read_json(&path);
-        let kind = value.get("kind").and_then(|k| k.as_str()).unwrap().to_string();
+        let kind = value
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap()
+            .to_string();
         seen.insert(kind);
     }
     for kind in [

@@ -24,4 +24,4 @@ pub use events::{
 };
 pub use ids::{event_id, session_id, EventId, SessionId, Ulid};
 pub use redact::{redact, Pattern, RedactReport, PATTERN_CATALOG_V1};
-pub use validate::{validate_event, validate_envelope, ValidationError, Validator};
+pub use validate::{validate_envelope, validate_event, ValidationError, Validator};

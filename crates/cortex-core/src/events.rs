@@ -87,6 +87,12 @@ pub enum Kind {
     /// [`Kind::Knowledge`] — high-signal corpus that was
     /// previously invisible to the agent.
     Learning,
+    /// phase11j — distilled, evergreen summary of one or more
+    /// raw events (Session / Topic / DecisionTrace grain). Carries
+    /// `source_event_ids` so the agent can verify any takeaway by
+    /// fetching the underlying turns. Drives the spec-12
+    /// "Consolidated context" section in the pre-thinking bundle.
+    Consolidation,
 }
 
 impl Kind {
@@ -103,6 +109,7 @@ impl Kind {
             Kind::Artifact => "artifact",
             Kind::Knowledge => "knowledge",
             Kind::Learning => "learning",
+            Kind::Consolidation => "consolidation",
         }
     }
 }
@@ -301,6 +308,144 @@ pub struct LearningPayload {
     pub tags: Vec<String>,
 }
 
+/// Phase11j §1 — grain discriminator for [`ConsolidationPayload`].
+/// Drives the producer mode: Session = one envelope per
+/// `session_id`; Topic = one envelope per HDBSCAN cluster of
+/// session vectors; DecisionTrace = one envelope per
+/// `Kind::Decision` parent chain. The renderer reads the grain
+/// to format the line shape in the spec-12 `Consolidated context`
+/// section.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsolidationGrain {
+    /// One session's worth of turns + tool calls.
+    Session,
+    /// HDBSCAN cluster of related sessions on a topic.
+    Topic,
+    /// `Kind::Decision` + ancestor chain up to N hops.
+    DecisionTrace,
+}
+
+/// Phase11j §1 — depth signal carried alongside the model the
+/// summariser used. Shallow = Haiku (cheap, default); Deep =
+/// Opus (auto-promoted for DecisionTrace + high-impact sessions).
+/// Drives the fidelity-IT threshold (≥ 90 % shallow / ≥ 98 %
+/// deep — see §6.2).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ConsolidationDepth {
+    /// Haiku-class summariser (default).
+    Shallow,
+    /// Opus-class summariser (auto-promoted; see §2.7).
+    Deep,
+}
+
+/// Phase11j §1 — the scope a consolidation covers. The variant
+/// the producer chooses MUST match the `grain` field on the
+/// containing payload (validated in §1.5).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
+pub enum ConsolidationScope {
+    /// `grain = Session`: the originating session id.
+    SessionId(String),
+    /// `grain = Topic`: the canonical topic label the cluster
+    /// converged on (typically a noun phrase).
+    Topic(String),
+    /// `grain = DecisionTrace`: the originating decision id.
+    DecisionId(String),
+}
+
+/// Phase11j §1 — temporal span the consolidation covers. `start`
+/// + `end` are epoch ms; `duration_ms` is materialised so the
+/// dashboard can sort without re-deriving.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct TimeSpan {
+    /// Earliest envelope `occurred_at` covered (epoch ms).
+    pub start_ms: i64,
+    /// Latest envelope `occurred_at` covered (epoch ms).
+    pub end_ms: i64,
+    /// `end_ms - start_ms`, materialised. Always `>= 0` because
+    /// the validator enforces `start_ms <= end_ms`.
+    pub duration_ms: i64,
+}
+
+/// Phase11j §1 — payload for [`Kind::Consolidation`].
+///
+/// Curated, evergreen summary of one or more raw events. Carries
+/// `source_event_ids` so the agent can verify any `takeaway[i]`
+/// by fetching the underlying turn. The renderer surfaces these
+/// in the spec-12 `Consolidated context` section ahead of raw
+/// `Past sessions` so the agent reads the takeaway first and the
+/// raw fragments only when it needs the receipts.
+///
+/// Field-level invariants enforced by the §1.5 validator:
+/// - `title.len() <= 80` chars
+/// - `200 <= summary_markdown.len() <= 2000` bytes
+/// - `scope` discriminator matches `grain`
+/// - `source_event_count >= source_event_ids.len()` (count holds
+///   the *full* count even when the ids vector is clipped)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConsolidationPayload {
+    /// Stable id (ULID). Independent of the `event_id` on the
+    /// envelope — the latter changes every re-emit; this one
+    /// stays constant across re-runs of the same producer.
+    pub consolidation_id: String,
+    /// Discriminator selecting the producer mode.
+    pub grain: ConsolidationGrain,
+    /// Scope the consolidation covers. Variant must match
+    /// `grain` (validated).
+    pub scope: ConsolidationScope,
+    /// Short title (≤ 80 chars).
+    pub title: String,
+    /// Markdown body (200-2 000 bytes).
+    pub summary_markdown: String,
+    /// One bullet per "lesson learned". Drives the
+    /// fidelity IT — every entry must trace to ≥ 1
+    /// `source_event_ids` entry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub takeaways: Vec<String>,
+    /// ULIDs of the raw envelopes this consolidation distilled.
+    /// Clipped to a sane inline cap (see `source_event_count`)
+    /// when the source set is huge.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_event_ids: Vec<String>,
+    /// Total source-event count. Equal to
+    /// `source_event_ids.len()` until the producer clips the
+    /// inline list; after that this stays at the original count
+    /// so the dashboard can surface "120 sources, 64 inlined".
+    pub source_event_count: u32,
+    /// Identifier of the model the summariser used (e.g.
+    /// `claude-haiku-4-5`, `claude-opus-4-7`).
+    pub model: String,
+    /// Shallow / Deep — drives the fidelity threshold.
+    pub depth: ConsolidationDepth,
+    /// Outcome counts from the source set (`success` / `error` /
+    /// `partial` / `blocked_by_law` / …). Empty when the producer
+    /// could not infer outcomes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outcome_distribution: BTreeMap<String, u32>,
+    /// Time the consolidated source set spans.
+    pub temporal_span: TimeSpan,
+    /// Repos referenced by the source set (sorted, deduped).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// Free-form tags (mirrors knowledge / learning shape).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+}
+
+/// Inline cap on `ConsolidationPayload.source_event_ids`. Callers
+/// clipping past this value should leave `source_event_count`
+/// at the unclipped total so the dashboard preserves the gap.
+pub const CONSOLIDATION_SOURCE_IDS_INLINE_CAP: usize = 256;
+
+/// Title cap (chars) — see §1.5 validator.
+pub const CONSOLIDATION_TITLE_MAX_CHARS: usize = 80;
+/// Summary lower bound (bytes) — see §1.5 validator.
+pub const CONSOLIDATION_SUMMARY_MIN_BYTES: usize = 200;
+/// Summary upper bound (bytes) — see §1.5 validator.
+pub const CONSOLIDATION_SUMMARY_MAX_BYTES: usize = 2_000;
+
 /// Payload for [`Kind::Memory`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryPayload {
@@ -454,3 +599,82 @@ pub struct ArtifactPayload {
     pub metadata: BTreeMap<String, Value>,
 }
 
+#[cfg(test)]
+mod consolidation_tests {
+    use super::*;
+
+    fn sample_payload() -> ConsolidationPayload {
+        ConsolidationPayload {
+            consolidation_id: "01JCONS01".into(),
+            grain: ConsolidationGrain::Session,
+            scope: ConsolidationScope::SessionId("sess-A".into()),
+            title: "tune ef_search for HNSW recall".into(),
+            summary_markdown: "x".repeat(500),
+            takeaways: vec!["raise ef_search to 128".into()],
+            source_event_ids: vec!["01EVT01".into(), "01EVT02".into()],
+            source_event_count: 2,
+            model: "claude-haiku-4-5".into(),
+            depth: ConsolidationDepth::Shallow,
+            outcome_distribution: BTreeMap::from([("success".into(), 2u32)]),
+            temporal_span: TimeSpan {
+                start_ms: 1_700_000_000_000,
+                end_ms: 1_700_000_060_000,
+                duration_ms: 60_000,
+            },
+            repos: vec!["cortex".into()],
+            tags: vec!["hnsw".into()],
+        }
+    }
+
+    #[test]
+    fn consolidation_payload_round_trips_through_serde() {
+        let original = sample_payload();
+        let raw = serde_json::to_string(&original).expect("serialise");
+        let decoded: ConsolidationPayload = serde_json::from_str(&raw).expect("deserialise");
+        assert_eq!(original, decoded);
+        // Spot-check the serialised wire shape so a future field
+        // rename surfaces as a test failure rather than a silent
+        // schema drift.
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["grain"], "session");
+        assert_eq!(v["scope"]["kind"], "session_id");
+        assert_eq!(v["scope"]["value"], "sess-A");
+        assert_eq!(v["depth"], "shallow");
+        assert_eq!(v["source_event_count"], 2);
+    }
+
+    #[test]
+    fn consolidation_kind_maps_to_consolidation_schema_stem() {
+        assert_eq!(Kind::Consolidation.schema_stem(), "consolidation");
+    }
+
+    #[test]
+    fn consolidation_grain_serialises_to_snake_case_discriminator() {
+        let session = serde_json::to_value(ConsolidationGrain::Session).unwrap();
+        let topic = serde_json::to_value(ConsolidationGrain::Topic).unwrap();
+        let trace = serde_json::to_value(ConsolidationGrain::DecisionTrace).unwrap();
+        assert_eq!(session, Value::String("session".into()));
+        assert_eq!(topic, Value::String("topic".into()));
+        assert_eq!(trace, Value::String("decision_trace".into()));
+    }
+
+    #[test]
+    fn source_event_count_holds_the_full_count_when_ids_are_clipped() {
+        // Producer clips source_event_ids past the inline cap but
+        // leaves source_event_count at the unclipped total. The
+        // dashboard depends on this gap to render "N sources, M
+        // inlined"; the validator (§1.5) only rejects when the
+        // count is BELOW the inlined ids vec.
+        let mut p = sample_payload();
+        let unclipped_total = 1_024_u32;
+        p.source_event_ids
+            .resize(CONSOLIDATION_SOURCE_IDS_INLINE_CAP, "01EVT".into());
+        p.source_event_count = unclipped_total;
+        assert!(p.source_event_count >= p.source_event_ids.len() as u32);
+        assert_eq!(
+            p.source_event_ids.len(),
+            CONSOLIDATION_SOURCE_IDS_INLINE_CAP
+        );
+        assert_eq!(p.source_event_count, unclipped_total);
+    }
+}

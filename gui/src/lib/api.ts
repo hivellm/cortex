@@ -529,7 +529,14 @@ export const api = {
   },
   laws: () => getJson<LawRow[]>("/v1/dashboard/laws"),
   violations: () => getJson<ViolationRow[]>("/v1/dashboard/violations"),
-  analyses: () => getJson<AnalysisRow[]>("/v1/dashboard/analyses"),
+  analyses: (repo?: string) => {
+    const params = new URLSearchParams();
+    if (repo) params.set("repo", repo);
+    const q = params.toString();
+    return getJson<AnalysisRow[]>(
+      `/v1/dashboard/analyses${q ? `?${q}` : ""}`,
+    );
+  },
   toolsStats: () => getJson<ToolsStatsBody>("/v1/dashboard/tools/stats"),
   trust: () => getJson<TrustMatrix>("/v1/dashboard/trust"),
   decisionDetail: (id: string) =>

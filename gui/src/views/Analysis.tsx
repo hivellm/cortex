@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Tag } from "../atoms/Tag";
@@ -5,13 +6,30 @@ import { api } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
 
 export function AnalysisView() {
+  const [repoFilter, setRepoFilter] = useState<string>("");
   const connKey = useConnKey();
-  const { data, isLoading, error } = useQuery({
-    queryKey: [connKey, "analyses"],
+
+  // Unfiltered fetch keeps the dropdown options stable as the
+  // filtered view narrows. Same pattern as Decisions.
+  const { data: allRows } = useQuery({
+    queryKey: [connKey, "analyses", "all"],
     queryFn: () => api.analyses(),
+    refetchInterval: 30_000,
+  });
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: [connKey, "analyses", repoFilter || "all"],
+    queryFn: () => api.analyses(repoFilter || undefined),
     refetchInterval: 15_000,
   });
   const rows = data ?? [];
+  const repoOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of allRows ?? []) {
+      if (a.repo) set.add(a.repo);
+    }
+    return Array.from(set).sort();
+  }, [allRows]);
   const concluded = rows.filter((a) => a.status === "concluded").length;
   const promoted = rows.filter((a) => !!a.decision_id).length;
   const totalRounds = rows.reduce((s, a) => s + (a.rounds ?? 0), 0);
@@ -42,6 +60,29 @@ export function AnalysisView() {
         <div>
           <h1 className="view__title">Analysis library</h1>
           <p className="view__subtitle">{subtitleSummary}</p>
+        </div>
+        <div className="view__actions">
+          <select
+            value={repoFilter}
+            onChange={(e) => setRepoFilter(e.target.value)}
+            className="btn btn--ghost"
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              padding: "5px 10px",
+            }}
+            title="Filter analyses by project"
+          >
+            <option value="">All projects ({allRows?.length ?? 0})</option>
+            {repoOptions.map((r) => {
+              const c = (allRows ?? []).filter((a) => a.repo === r).length;
+              return (
+                <option key={r} value={r}>
+                  {r} ({c})
+                </option>
+              );
+            })}
+          </select>
         </div>
       </div>
 

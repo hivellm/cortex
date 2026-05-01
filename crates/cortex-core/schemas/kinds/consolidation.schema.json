@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Consolidation payload (phase11j §1)",
+  "description": "Curated, evergreen summary of one or more raw events. Carries source_event_ids so the agent can verify any takeaway by fetching the underlying turn.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "consolidation_id",
+    "grain",
+    "scope",
+    "title",
+    "summary_markdown",
+    "source_event_count",
+    "model",
+    "depth",
+    "temporal_span"
+  ],
+  "properties": {
+    "consolidation_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable id (ULID). Independent of envelope event_id."
+    },
+    "grain": {
+      "enum": ["session", "topic", "decision_trace"],
+      "description": "Producer mode discriminator."
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "enum": ["session_id", "topic", "decision_id"] },
+        "value": { "type": "string", "minLength": 1 }
+      },
+      "description": "Discriminator must match `grain` (validated in Rust — JSON Schema cannot express the cross-field rule cleanly)."
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "summary_markdown": {
+      "type": "string",
+      "minLength": 200,
+      "maxLength": 2000
+    },
+    "takeaways": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": []
+    },
+    "source_event_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": []
+    },
+    "source_event_count": { "type": "integer", "minimum": 0 },
+    "model": { "type": "string", "minLength": 1 },
+    "depth": { "enum": ["shallow", "deep"] },
+    "outcome_distribution": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 },
+      "default": {}
+    },
+    "temporal_span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start_ms", "end_ms", "duration_ms"],
+      "properties": {
+        "start_ms": { "type": "integer", "minimum": 0 },
+        "end_ms": { "type": "integer", "minimum": 0 },
+        "duration_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "repos": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": []
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "default": []
+    }
+  }
+}

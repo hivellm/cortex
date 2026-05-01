@@ -40,7 +40,9 @@ fn unknown_kind_fails() {
     let mut v = fresh_envelope();
     v["kind"] = json!("nonsense_kind");
     let errors = validate_event(&v).unwrap_err();
-    assert!(errors.iter().any(|e| matches!(e, ValidationError::Schema { .. })));
+    assert!(errors
+        .iter()
+        .any(|e| matches!(e, ValidationError::Schema { .. })));
 }
 
 #[test]

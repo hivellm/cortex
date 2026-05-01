@@ -76,4 +76,3 @@ fn write_value<W: Write>(w: &mut W, value: &Value) -> Result<(), CanonicalJsonEr
     }
     Ok(())
 }
-

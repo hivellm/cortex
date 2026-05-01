@@ -77,6 +77,23 @@ impl LiveSynapPublisher {
         self.max_retry = n;
         self
     }
+
+    /// Idempotently provision the destination room before any publish.
+    ///
+    /// `synap-sdk` 0.12 ships `get_or_create_room`, so calling this on
+    /// startup is safe whether the room is fresh or already populated.
+    /// Avoids the failure mode where the publisher's per-event
+    /// `create_room` retry only fires on `"not found"` text and misses
+    /// connection-level transients (empty reply / 5xx during a Synap
+    /// restart).
+    pub async fn prime_room(&self, room: &str) -> Result<()> {
+        self.handle
+            .streams()
+            .get_or_create_room(room, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("synap get_or_create_room({room}): {e}"))?;
+        Ok(())
+    }
 }
 
 #[async_trait]

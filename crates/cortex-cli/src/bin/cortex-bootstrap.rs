@@ -111,7 +111,11 @@ async fn main() -> Result<()> {
             SynapHandle::new(&endpoint)
                 .with_context(|| format!("synap connect {endpoint}"))?,
         );
-        Arc::new(LiveSynapPublisher::new(handle))
+        let pub_ = LiveSynapPublisher::new(handle);
+        pub_.prime_room(&args.stream)
+            .await
+            .with_context(|| format!("provision synap room {}", args.stream))?;
+        Arc::new(pub_)
     };
 
     let mut summaries: Vec<RunSummary> = Vec::with_capacity(targets.len());

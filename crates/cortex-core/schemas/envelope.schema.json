@@ -74,7 +74,10 @@
         "decision",
         "analysis",
         "law_violation",
-        "artifact"
+        "artifact",
+        "knowledge",
+        "learning",
+        "consolidation"
       ]
     },
     "context": {

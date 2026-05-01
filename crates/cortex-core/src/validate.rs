@@ -41,10 +41,10 @@ const DECISION_SCHEMA: &str = include_str!("../schemas/kinds/decision.schema.jso
 const ANALYSIS_SCHEMA: &str = include_str!("../schemas/kinds/analysis.schema.json");
 const LAW_VIOLATION_SCHEMA: &str = include_str!("../schemas/kinds/law_violation.schema.json");
 const ARTIFACT_SCHEMA: &str = include_str!("../schemas/kinds/artifact.schema.json");
+const CONSOLIDATION_SCHEMA: &str = include_str!("../schemas/kinds/consolidation.schema.json");
 
-static VALIDATOR: Lazy<Validator> = Lazy::new(|| {
-    Validator::new().expect("embedded schemas must always compile")
-});
+static VALIDATOR: Lazy<Validator> =
+    Lazy::new(|| Validator::new().expect("embedded schemas must always compile"));
 
 /// Compiled schema set used to validate envelopes + per-kind payloads.
 pub struct Validator {
@@ -65,7 +65,10 @@ impl Validator {
         let envelope_value: Value = serde_json::from_str(ENVELOPE_SCHEMA)
             .map_err(|e| format!("envelope schema parse: {e}"))?;
         let registry = jsonschema::Registry::new()
-            .add(context_uri, jsonschema::Resource::from_contents(context_value))
+            .add(
+                context_uri,
+                jsonschema::Resource::from_contents(context_value),
+            )
             .map_err(|e| format!("context resource: {e}"))?
             .prepare()
             .map_err(|e| format!("context registry: {e}"))?;
@@ -84,6 +87,7 @@ impl Validator {
             ("analysis", compile(ANALYSIS_SCHEMA)?),
             ("law_violation", compile(LAW_VIOLATION_SCHEMA)?),
             ("artifact", compile(ARTIFACT_SCHEMA)?),
+            ("consolidation", compile(CONSOLIDATION_SCHEMA)?),
         ]
         .into_iter()
         .collect();
@@ -179,3 +183,254 @@ pub fn schema_stem_for(kind: Kind) -> &'static str {
     kind.schema_stem()
 }
 
+/// Phase11j §1.5 — cross-field rule the JSON Schema cannot
+/// express cleanly: the `scope` variant must match the `grain`
+/// discriminator. Returns `Ok(())` on a match,
+/// `Err(ValidationError::Schema { … })` when the pair is
+/// inconsistent. Callers should run this *after* the per-kind
+/// JSON Schema check; it operates on a typed
+/// [`crate::events::ConsolidationPayload`] so the field-level
+/// invariants the schema already enforced (lengths, integer
+/// ranges) are guaranteed by the time we get here.
+pub fn validate_consolidation_payload(
+    payload: &crate::events::ConsolidationPayload,
+) -> Result<(), ValidationError> {
+    use crate::events::{ConsolidationGrain, ConsolidationScope};
+    let pair_ok = matches!(
+        (payload.grain, &payload.scope),
+        (
+            ConsolidationGrain::Session,
+            ConsolidationScope::SessionId(_)
+        ) | (ConsolidationGrain::Topic, ConsolidationScope::Topic(_))
+            | (
+                ConsolidationGrain::DecisionTrace,
+                ConsolidationScope::DecisionId(_),
+            )
+    );
+    if !pair_ok {
+        return Err(ValidationError::Schema {
+            path: "/payload/scope".into(),
+            message: format!("scope variant does not match grain {:?}", payload.grain),
+        });
+    }
+    if payload.source_event_count < payload.source_event_ids.len() as u32 {
+        return Err(ValidationError::Schema {
+            path: "/payload/source_event_count".into(),
+            message: format!(
+                "source_event_count ({}) below source_event_ids.len() ({})",
+                payload.source_event_count,
+                payload.source_event_ids.len()
+            ),
+        });
+    }
+    if payload.temporal_span.end_ms < payload.temporal_span.start_ms {
+        return Err(ValidationError::Schema {
+            path: "/payload/temporal_span".into(),
+            message: format!(
+                "end_ms ({}) before start_ms ({})",
+                payload.temporal_span.end_ms, payload.temporal_span.start_ms
+            ),
+        });
+    }
+    let materialised = payload.temporal_span.end_ms - payload.temporal_span.start_ms;
+    if payload.temporal_span.duration_ms != materialised {
+        return Err(ValidationError::Schema {
+            path: "/payload/temporal_span/duration_ms".into(),
+            message: format!(
+                "duration_ms ({}) does not equal end_ms - start_ms ({})",
+                payload.temporal_span.duration_ms, materialised
+            ),
+        });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod consolidation_validate_tests {
+    use super::*;
+    use crate::events::{
+        ConsolidationDepth, ConsolidationGrain, ConsolidationPayload, ConsolidationScope, TimeSpan,
+    };
+    use std::collections::BTreeMap;
+
+    fn ok_payload() -> ConsolidationPayload {
+        ConsolidationPayload {
+            consolidation_id: "01CON".into(),
+            grain: ConsolidationGrain::Topic,
+            scope: ConsolidationScope::Topic("hnsw".into()),
+            title: "topic: hnsw recall".into(),
+            summary_markdown: "x".repeat(400),
+            takeaways: vec![],
+            source_event_ids: vec!["01EVT".into()],
+            source_event_count: 1,
+            model: "claude-haiku-4-5".into(),
+            depth: ConsolidationDepth::Shallow,
+            outcome_distribution: BTreeMap::new(),
+            temporal_span: TimeSpan {
+                start_ms: 100,
+                end_ms: 200,
+                duration_ms: 100,
+            },
+            repos: vec![],
+            tags: vec![],
+        }
+    }
+
+    #[test]
+    fn rust_validator_accepts_matching_grain_and_scope() {
+        let p = ok_payload();
+        validate_consolidation_payload(&p).expect("matched grain+scope");
+    }
+
+    #[test]
+    fn rust_validator_rejects_mismatched_grain_and_scope() {
+        let mut p = ok_payload();
+        p.grain = ConsolidationGrain::Session;
+        let err = validate_consolidation_payload(&p).expect_err("mismatch");
+        match err {
+            ValidationError::Schema { path, message } => {
+                assert_eq!(path, "/payload/scope");
+                assert!(message.contains("grain"));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rust_validator_rejects_count_below_inline_ids_len() {
+        let mut p = ok_payload();
+        p.source_event_ids = vec!["a".into(), "b".into(), "c".into()];
+        p.source_event_count = 2;
+        let err = validate_consolidation_payload(&p).expect_err("count<len");
+        match err {
+            ValidationError::Schema { path, .. } => {
+                assert_eq!(path, "/payload/source_event_count");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rust_validator_rejects_inverted_temporal_span() {
+        let mut p = ok_payload();
+        p.temporal_span = TimeSpan {
+            start_ms: 200,
+            end_ms: 100,
+            duration_ms: -100,
+        };
+        let err = validate_consolidation_payload(&p).expect_err("inverted span");
+        match err {
+            ValidationError::Schema { path, .. } => {
+                assert_eq!(path, "/payload/temporal_span");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rust_validator_rejects_inconsistent_duration_ms() {
+        let mut p = ok_payload();
+        p.temporal_span.duration_ms = 999;
+        let err = validate_consolidation_payload(&p).expect_err("duration drift");
+        match err {
+            ValidationError::Schema { path, .. } => {
+                assert_eq!(path, "/payload/temporal_span/duration_ms");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn json_schema_accepts_minimal_consolidation_payload() {
+        // The schema-side path: build a synthetic envelope and run
+        // it through `validate_event`. The fixture below pins the
+        // shape so a schema regression breaks this test.
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000000",
+            "schema_version": "1",
+            "occurred_at": "2026-04-20T17:47:59.616Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "consolidation",
+            "session_id": "01HXSESS00000000000000000A",
+            "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "context": { "platform": "linux" },
+            "payload": {
+                "consolidation_id": "01CON",
+                "grain": "session",
+                "scope": { "kind": "session_id", "value": "sess-A" },
+                "title": "ok",
+                "summary_markdown": "x".repeat(200),
+                "source_event_count": 0,
+                "model": "claude-haiku-4-5",
+                "depth": "shallow",
+                "temporal_span": { "start_ms": 0, "end_ms": 0, "duration_ms": 0 }
+            }
+        });
+        validate_event(&envelope).expect("minimal payload validates");
+    }
+
+    #[test]
+    fn json_schema_rejects_summary_below_two_hundred_bytes() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000000",
+            "schema_version": "1",
+            "occurred_at": "2026-04-20T17:47:59.616Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "consolidation",
+            "session_id": "01HXSESS00000000000000000A",
+            "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "context": { "platform": "linux" },
+            "payload": {
+                "consolidation_id": "01CON",
+                "grain": "session",
+                "scope": { "kind": "session_id", "value": "sess-A" },
+                "title": "ok",
+                "summary_markdown": "too short",
+                "source_event_count": 0,
+                "model": "m",
+                "depth": "shallow",
+                "temporal_span": { "start_ms": 0, "end_ms": 0, "duration_ms": 0 }
+            }
+        });
+        let err = validate_event(&envelope).expect_err("summary too short");
+        assert!(
+            err.iter().any(|e| matches!(e, ValidationError::Schema { path, .. } if path.contains("summary_markdown"))),
+            "expected summary_markdown error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn json_schema_rejects_unknown_grain() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000000",
+            "schema_version": "1",
+            "occurred_at": "2026-04-20T17:47:59.616Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "consolidation",
+            "session_id": "01HXSESS00000000000000000A",
+            "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "context": { "platform": "linux" },
+            "payload": {
+                "consolidation_id": "01CON",
+                "grain": "future-grain",
+                "scope": { "kind": "session_id", "value": "sess-A" },
+                "title": "ok",
+                "summary_markdown": "x".repeat(200),
+                "source_event_count": 0,
+                "model": "m",
+                "depth": "shallow",
+                "temporal_span": { "start_ms": 0, "end_ms": 0, "duration_ms": 0 }
+            }
+        });
+        let err = validate_event(&envelope).expect_err("unknown grain");
+        assert!(
+            err.iter().any(
+                |e| matches!(e, ValidationError::Schema { path, .. } if path.contains("grain"))
+            ),
+            "expected grain error, got {err:?}"
+        );
+    }
+}

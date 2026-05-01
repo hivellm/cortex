@@ -147,4 +147,3 @@ fn redact_inner(value: &mut Value, path: &str, patterns: &[Pattern], report: &mu
         _ => {}
     }
 }
-

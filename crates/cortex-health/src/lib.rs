@@ -160,7 +160,14 @@ pub const DEFAULT_ADAPTER_ADMIN_PORT: u16 = 17011;
 /// Threshold above which a freshness-driven subsystem is marked
 /// `Degraded`. Any timestamp older than this and the subsystem is
 /// reporting stale signals (last publish, last refresh, last batch).
-pub const DEFAULT_FRESHNESS_DEGRADED_SECS: u64 = 60;
+///
+/// 600 s (10 min) is the operator-friendly idle window: a worker
+/// that just drained the bootstrap stream sits idle until the next
+/// burst arrives, and reporting `Degraded` after 60 s painted the
+/// dashboard red on every refresh after a successful drain. 10 min
+/// is long enough to span typical idle gaps without masking a
+/// genuinely stuck worker.
+pub const DEFAULT_FRESHNESS_DEGRADED_SECS: u64 = 600;
 
 #[cfg(test)]
 mod tests {

@@ -202,6 +202,13 @@ pub fn build_router_with_auth(
         router = router.merge(health_router);
         router = router.merge(metrics_router);
     }
+    // Phase3 §7.1 — apply CORS to the FULL router so `/v1/health`,
+    // `/v1/health/coverage`, `/v1/query`, `/v1/status`, `/v1/audit/*`
+    // (registered on the base router above) also carry
+    // Access-Control-Allow-Origin. Without this, the GUI in the Vite
+    // dev server (5173) hits `net::ERR_FAILED` on every health poll
+    // even though the dashboard sub-router already had CORS.
+    router = router.layer(crate::auth::dashboard_cors_layer());
     router
 }
 
