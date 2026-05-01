@@ -226,7 +226,12 @@ services:
       CORTEX_VECTORIZER_URL: http://vectorizer:15002
       CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
-      CORTEX_ADAPTER_ADMIN_URL: http://cortex-adapter:17011/healthz
+      # cortex-adapter-claude lives on the HOST (Windows named pipe
+      # cannot bridge into a Linux container). `host.docker.internal`
+      # is Docker Desktop's reserved DNS name for the host's IP, so
+      # the aggregator inside cortex-api reaches the host-side
+      # adapter without hard-coding LAN addresses.
+      CORTEX_ADAPTER_ADMIN_URL: http://host.docker.internal:17011/healthz
       CORTEX_CLASSIFIER_WORKER_URL: http://cortex-classifier-worker:17021/healthz
       CORTEX_EMBEDDER_WORKER_URL: http://cortex-embedder-worker:17022/healthz
       CORTEX_FULLTEXT_WORKER_URL: http://cortex-fulltext-worker:17023/healthz
