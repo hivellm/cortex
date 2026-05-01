@@ -236,6 +236,12 @@ services:
       # reaches the SDK after expiry. 0 / unset keeps the existing
       # reactive-on-401 path as the only refresh trigger.
       CORTEX_VECTORIZER_JWT_WARMUP_SECS: ${CORTEX_VECTORIZER_JWT_WARMUP_SECS:-0}
+      # phase11e §3 — when 1, every cortex_query response carries a
+      # `debug.notes[]` entry per missing collection / index instead
+      # of silently swallowing the 404 into an empty hit set. Default
+      # 0 keeps the response shape backwards-compatible; flip on for
+      # diagnostic sessions or operators tracking ingestion gaps.
+      CORTEX_QUERY_REPORT_MISSING_COLLECTIONS: ${CORTEX_QUERY_REPORT_MISSING_COLLECTIONS:-0}
       CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
       # cortex-adapter-claude lives on the HOST (Windows named pipe

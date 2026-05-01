@@ -12,12 +12,14 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::fusion::{rrf_fuse, FusionConfig};
-use crate::lanes::{GraphLane, KeywordLane, LaneHit, VectorLane};
+use crate::lanes::{
+    is_collection_missing_marker, GraphLane, KeywordLane, LaneHit, VectorLane,
+};
 use crate::query_rewrite::{PassthroughRewriter, QueryRewriter, RewrittenQuery};
 use crate::strategies::{build_plan, Overlay, Plan};
 use crate::types::{
-    empty_response, BudgetReport, DecisionRef, GraphNeighbor, IncludeField, Intent, LawRef,
-    QueryRequest, QueryResponse, SimilarTurn, Snippet, ViolationRef,
+    empty_response, BudgetReport, DebugNote, DecisionRef, GraphNeighbor, IncludeField, Intent,
+    LawRef, QueryRequest, QueryResponse, SimilarTurn, Snippet, ViolationRef,
 };
 
 /// Orchestrator handles — fan-out clients passed in via `Arc` so the
@@ -149,7 +151,7 @@ impl Orchestrator {
             total_budget,
             futures_join_three(vector_fut, keyword_fut, graph_fut),
         );
-        let (vector_result, keyword_result, graph_result, truncated) = match total_fut.await {
+        let (mut vector_result, mut keyword_result, mut graph_result, truncated) = match total_fut.await {
             Ok((v, k, g)) => (v, k, g, false),
             Err(_) => {
                 // Total budget elapsed — record what we have and
@@ -206,6 +208,28 @@ impl Orchestrator {
         if lane_budget_hit {
             response.debug.truncated = true;
         }
+
+        // Phase11e §3 — split the synthetic missing-collection
+        // markers out of each lane's hit set BEFORE fusion (so RRF
+        // never sees them) and translate them into structured
+        // `DebugInfo.notes` entries. The lanes only emit these
+        // when `CORTEX_QUERY_REPORT_MISSING_COLLECTIONS=1`; when
+        // unset, every hit list passes through unchanged.
+        partition_collection_missing(
+            &mut vector_result.hits,
+            "vector",
+            &mut response.debug.notes,
+        );
+        partition_collection_missing(
+            &mut keyword_result.hits,
+            "keyword",
+            &mut response.debug.notes,
+        );
+        partition_collection_missing(
+            &mut graph_result.hits,
+            "graph",
+            &mut response.debug.notes,
+        );
 
         // Debug-only invariant — every keyword-lane hit must carry
         // `extras["source"] = "keyword"`. The 2026-04-27 audit caught
@@ -324,6 +348,40 @@ struct LaneOutcome {
     hits: Vec<LaneHit>,
     elapsed_ms: Option<u64>,
     error: Option<String>,
+}
+
+/// Phase11e §3 — strip every synthetic missing-collection marker
+/// out of `hits` and append a `DebugNote` per marker to `notes`.
+/// Must run BEFORE fusion so the synthetic doc_ids never reach
+/// the renderer / overlays. Idempotent and safe on lanes that
+/// emit no markers (the env switch is off — the common path).
+fn partition_collection_missing(
+    hits: &mut Vec<LaneHit>,
+    lane: &'static str,
+    notes: &mut Vec<DebugNote>,
+) {
+    let mut kept: Vec<LaneHit> = Vec::with_capacity(hits.len());
+    for hit in std::mem::take(hits) {
+        if is_collection_missing_marker(&hit) {
+            let collection = hit
+                .extras
+                .get("__collection_missing")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let display = collection.as_deref().unwrap_or("(unknown)");
+            notes.push(DebugNote {
+                lane: lane.to_string(),
+                kind: "collection_missing".to_string(),
+                collection: collection.clone(),
+                message: format!(
+                    "{lane} lane: collection / index {display} is not present on the live backend"
+                ),
+            });
+        } else {
+            kept.push(hit);
+        }
+    }
+    *hits = kept;
 }
 
 async fn run_vector_lane(
@@ -664,6 +722,59 @@ mod tests {
             severity: None,
             extras: crate::types::Props::new(),
         }
+    }
+
+    // Phase11e §3 — synthetic missing-collection markers must
+    // never reach RRF / the renderer. The orchestrator splits
+    // them into `debug.notes` BEFORE fusion. These tests pin
+    // the partitioning to the lane label and the structured
+    // shape every consumer (dashboard, MCP) reads.
+    #[test]
+    fn partition_collection_missing_strips_marker_and_emits_note() {
+        let real = hit_with(None, "real chunk body");
+        let marker = crate::lanes::collection_missing_marker("cortex-cortex-decisions");
+        let mut hits = vec![real.clone(), marker];
+        let mut notes: Vec<DebugNote> = Vec::new();
+        super::partition_collection_missing(&mut hits, "vector", &mut notes);
+        assert_eq!(hits.len(), 1, "synthetic marker must be stripped");
+        assert_eq!(hits[0].doc_id, real.doc_id);
+        assert_eq!(notes.len(), 1, "exactly one DebugNote per missing collection");
+        let note = &notes[0];
+        assert_eq!(note.lane, "vector");
+        assert_eq!(note.kind, "collection_missing");
+        assert_eq!(note.collection.as_deref(), Some("cortex-cortex-decisions"));
+        assert!(note.message.contains("cortex-cortex-decisions"));
+    }
+
+    #[test]
+    fn partition_collection_missing_is_idempotent_when_no_marker_present() {
+        let real_a = hit_with(None, "alpha");
+        let real_b = hit_with(None, "beta");
+        let mut hits = vec![real_a.clone(), real_b.clone()];
+        let mut notes: Vec<DebugNote> = Vec::new();
+        super::partition_collection_missing(&mut hits, "keyword", &mut notes);
+        assert_eq!(hits.len(), 2, "real hits round-trip unchanged");
+        assert!(notes.is_empty(), "no markers ⇒ no notes appended");
+    }
+
+    #[test]
+    fn partition_collection_missing_handles_multiple_markers_per_lane() {
+        let real = hit_with(None, "real");
+        let marker_a = crate::lanes::collection_missing_marker("cortex-cortex-turns");
+        let marker_b = crate::lanes::collection_missing_marker("cortex-rulebook-decisions");
+        let mut hits = vec![marker_a, real.clone(), marker_b];
+        let mut notes: Vec<DebugNote> = Vec::new();
+        super::partition_collection_missing(&mut hits, "vector", &mut notes);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].lane, "vector");
+        assert_eq!(notes[1].lane, "vector");
+        let collections: Vec<_> = notes
+            .iter()
+            .filter_map(|n| n.collection.clone())
+            .collect();
+        assert!(collections.contains(&"cortex-cortex-turns".to_string()));
+        assert!(collections.contains(&"cortex-rulebook-decisions".to_string()));
     }
 
     #[test]

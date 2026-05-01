@@ -25,7 +25,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::lanes::{KeywordLane, KeywordRequest, LaneError, LaneHit};
+use crate::lanes::{
+    collection_missing_marker, collection_missing_report_enabled, KeywordLane, KeywordRequest,
+    LaneError, LaneHit,
+};
 
 /// Concrete `KeywordLane` backed by a live Meilisearch instance.
 #[derive(Debug, Clone)]
@@ -178,7 +181,16 @@ impl KeywordLane for MeiliKeywordLane {
             // empty-index case (the spec-08 worker materialises
             // indexes lazily on first upsert). Return zero hits
             // rather than failing the whole orchestrator turn.
+            //
+            // Phase11e §3 — when the env switch is on, emit a
+            // synthetic marker so the orchestrator can surface
+            // the missing index in `debug.notes`. Default (env
+            // unset) keeps fail-open so the response shape is
+            // backwards-compatible.
             if status == reqwest::StatusCode::NOT_FOUND {
+                if collection_missing_report_enabled() {
+                    return Ok(vec![collection_missing_marker(req.index.clone())]);
+                }
                 return Ok(Vec::new());
             }
             let detail = resp.text().await.unwrap_or_default();

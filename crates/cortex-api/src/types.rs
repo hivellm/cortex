@@ -284,6 +284,32 @@ pub struct DebugInfo {
     /// the total budget elapsed.
     #[serde(default, skip_serializing_if = "is_false")]
     pub truncated: bool,
+    /// Phase11e §3 — structured per-lane diagnostic notes the
+    /// orchestrator collected during fan-out. Distinct from
+    /// `errors` because notes are NOT failures: a missing
+    /// collection still lets the lane return an empty hit set
+    /// fail-open. Surfaced only when
+    /// `CORTEX_QUERY_REPORT_MISSING_COLLECTIONS=1` (default 0
+    /// keeps the response shape backwards-compatible).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<DebugNote>,
+}
+
+/// Phase11e §3 — one structured diagnostic entry on `DebugInfo.notes`.
+/// Today only `collection_missing` is emitted; the shape leaves
+/// room for richer kinds (e.g. `cache_skipped`, `acl_denied`)
+/// without a wire change.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DebugNote {
+    /// Lane that emitted the note (`vector` / `keyword` / `graph`).
+    pub lane: String,
+    /// Note kind. Stable string label so dashboards can group by it.
+    pub kind: String,
+    /// Collection / index name the note refers to (when applicable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
+    /// Human-readable message.
+    pub message: String,
 }
 
 fn is_false(b: &bool) -> bool {

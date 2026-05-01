@@ -52,6 +52,67 @@ pub const LANE_EXTRAS_KEYS: &[&str] = &[
     "severity",
 ];
 
+/// Phase11e §3 — sentinel `doc_id` prefix for synthetic
+/// `LaneHit`s lanes emit to flag a missing collection / index.
+/// The orchestrator strips these before fusion and translates
+/// them into `DebugInfo.notes` entries (gated on
+/// `CORTEX_QUERY_REPORT_MISSING_COLLECTIONS=1`). The prefix is
+/// long + double-underscored on both ends so it cannot collide
+/// with a real chunk id in practice.
+pub const COLLECTION_MISSING_DOC_ID_PREFIX: &str = "__cortex_collection_missing__:";
+
+/// Phase11e §3 — env switch that turns the synthetic-marker
+/// emission ON. When unset (the default), lanes still swallow
+/// 404s into `Ok(empty)` so the response shape is unchanged
+/// for every existing caller.
+pub const COLLECTION_MISSING_REPORT_ENV: &str = "CORTEX_QUERY_REPORT_MISSING_COLLECTIONS";
+
+/// Phase11e §3 — read [`COLLECTION_MISSING_REPORT_ENV`] and return
+/// `true` when it is `1` / `true` / `yes` (case-insensitive).
+/// Centralised so every lane reads the same parsing rules.
+pub fn collection_missing_report_enabled() -> bool {
+    matches!(
+        std::env::var(COLLECTION_MISSING_REPORT_ENV)
+            .ok()
+            .as_deref()
+            .map(|s| s.trim().to_ascii_lowercase()),
+        Some(ref v) if v == "1" || v == "true" || v == "yes"
+    )
+}
+
+/// Phase11e §3 — build a synthetic `LaneHit` carrying the
+/// missing-collection marker. Lanes emit this in place of an
+/// empty `Ok(vec![])` when the env switch is on; the
+/// orchestrator strips it before fusion and forwards a
+/// [`crate::types::DebugNote`] to the caller.
+pub fn collection_missing_marker(collection: impl Into<String>) -> LaneHit {
+    let name = collection.into();
+    let doc_id = format!("{COLLECTION_MISSING_DOC_ID_PREFIX}{name}");
+    let mut extras = Props::new();
+    extras.insert(
+        "__collection_missing".to_string(),
+        serde_json::Value::String(name.clone()),
+    );
+    LaneHit {
+        doc_id,
+        text: String::new(),
+        repo: None,
+        path: None,
+        symbol: None,
+        content_hash: None,
+        score: 0.0,
+        ts: 0,
+        severity: None,
+        extras,
+    }
+}
+
+/// True when `hit` is a synthetic missing-collection marker
+/// produced by [`collection_missing_marker`].
+pub fn is_collection_missing_marker(hit: &LaneHit) -> bool {
+    hit.doc_id.starts_with(COLLECTION_MISSING_DOC_ID_PREFIX)
+}
+
 /// One hit returned by any lane. The orchestrator coerces lane
 /// outputs into this shape before fusion.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -10,9 +10,9 @@
 - [x] 2.3 `cortex-ops doctor-coverage` CLI wrapper exits with severity 0/1/2 mapping to `complete / partial / empty` — landed in [crates/cortex-cli/src/bin/cortex-ops.rs](crates/cortex-cli/src/bin/cortex-ops.rs); plain-text + `--json` modes; verified live against the docker stack (exit `1` on warn, `0` on ok, `2` on critical/unreachable)
 
 ## 3. Per-intent diagnostic when a collection is missing
-- [ ] 3.1 In the vector lane (and keyword lane), when `not found` / `404` is observed, capture the collection name in a synthetic empty `LaneHit` with `extras["collection_missing"] = true`
-- [ ] 3.2 Behind `CORTEX_QUERY_REPORT_MISSING_COLLECTIONS=1` (default 0), the orchestrator forwards those notes into `debug.notes[]` on the response
-- [ ] 3.3 Default behaviour stays fail-open (no change to the JSON surface when the env is unset)
+- [x] 3.1 In the vector lane (and keyword lane), when `not found` / `404` is observed, capture the collection name in a synthetic empty `LaneHit` with `extras["__collection_missing"] = <name>` and `doc_id` prefixed by `__cortex_collection_missing__:` — landed in [crates/cortex-api/src/lanes.rs](crates/cortex-api/src/lanes.rs) (`collection_missing_marker`), wired into [vectorizer_lane.rs](crates/cortex-api/src/vectorizer_lane.rs) and [meili_lane.rs](crates/cortex-api/src/meili_lane.rs)
+- [x] 3.2 Behind `CORTEX_QUERY_REPORT_MISSING_COLLECTIONS=1` (default 0), the orchestrator forwards those notes into `debug.notes[]` on the response — landed in [crates/cortex-api/src/orchestrator.rs](crates/cortex-api/src/orchestrator.rs) (`partition_collection_missing`); new `DebugInfo.notes: Vec<DebugNote>` field with `lane / kind / collection / message` shape; verified live via `decision_lookup` on docker stack returning `notes: [{lane: vector, collection: "cortex.decision.fp32", ...}, {lane: keyword, collection: "cortex_decisions", ...}]`
+- [x] 3.3 Default behaviour stays fail-open (no change to the JSON surface when the env is unset) — `Vec::is_empty` empty-serializing on the new `notes` field; lanes return `Ok(empty)` on 404 unless the env is set
 
 ## 4. Writer routing audit (embedder + fulltext)
 - [ ] 4.1 Read `crates/cortex-embedder/`'s per-event dispatch and confirm `Decision` / `Turn` / `Memory` / `Analysis` / `LawViolation` envelopes are fanned out to `cortex-{slug}-{kind}` collections

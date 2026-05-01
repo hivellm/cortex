@@ -38,7 +38,10 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use vectorizer_sdk::{ClientConfig, VectorizerClient};
 
-use crate::lanes::{LaneError, LaneHit, VectorLane, VectorRequest};
+use crate::lanes::{
+    collection_missing_marker, collection_missing_report_enabled, LaneError, LaneHit,
+    VectorLane, VectorRequest,
+};
 
 /// phase11d — wire shape of one entry in `POST /collections/{c}/search/text`'s
 /// `results` array on the live Vectorizer image. `serde(default)` on
@@ -448,7 +451,18 @@ impl VectorLane for VectorizerLane {
         // the direct `reqwest` lane.
         let hits = match self.direct_search(req).await {
             DirectSearchOutcome::Ok(hits) => hits,
-            DirectSearchOutcome::NotFound => return Ok(Vec::new()),
+            DirectSearchOutcome::NotFound => {
+                // Phase11e §3 — when the env switch is on, emit a
+                // synthetic `LaneHit` so the orchestrator can
+                // surface the missing collection in `debug.notes`.
+                // Default (env unset) keeps the existing fail-open
+                // empty-vec behaviour so the response shape is
+                // backwards-compatible.
+                if collection_missing_report_enabled() {
+                    return Ok(vec![collection_missing_marker(req.collection.clone())]);
+                }
+                return Ok(Vec::new());
+            }
             DirectSearchOutcome::Transport(msg) => {
                 return Err(LaneError::Transport(msg));
             }
@@ -479,7 +493,12 @@ impl VectorLane for VectorizerLane {
                 );
                 match self.direct_search(req).await {
                     DirectSearchOutcome::Ok(hits) => hits,
-                    DirectSearchOutcome::NotFound => return Ok(Vec::new()),
+                    DirectSearchOutcome::NotFound => {
+                        if collection_missing_report_enabled() {
+                            return Ok(vec![collection_missing_marker(req.collection.clone())]);
+                        }
+                        return Ok(Vec::new());
+                    }
                     DirectSearchOutcome::Auth401(msg2)
                     | DirectSearchOutcome::Transport(msg2) => {
                         return Err(LaneError::Transport(format!(
