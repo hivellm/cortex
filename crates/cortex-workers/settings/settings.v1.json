@@ -1,5 +1,5 @@
 {
-  "version": "v2",
+  "version": "v3",
   "searchableAttributes": [
     "title",
     "body",
@@ -19,7 +19,11 @@
     "ts",
     "language",
     "ext.decision.status",
-    "ext.law_violation.law_id"
+    "ext.law_violation.law_id",
+    "model",
+    "tool",
+    "session_id",
+    "outcome"
   ],
   "sortableAttributes": ["ts"],
   "displayedAttributes": ["*"],

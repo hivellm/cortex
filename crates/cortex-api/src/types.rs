@@ -96,6 +96,44 @@ pub struct Scope {
     /// the ones that get the multiplier applied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cross_repo_boost: Option<f32>,
+    /// Phase11i §3.3 — author / model allow-list. When non-empty,
+    /// the keyword + vector lanes filter to envelopes whose
+    /// `model` field matches one of these values. Empty list
+    /// (the default) means "no model filter". Pair with
+    /// `settings.v1.json` filterableAttributes that ships
+    /// `model` as a top-level filterable field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models: Vec<String>,
+    /// Phase11i §3.3 — originating-tool allow-list (`claude-code`,
+    /// `openai-codex`, etc.). Same semantics as `models`. The
+    /// classifier worker stamps a `tool:<name>` topic; this
+    /// filter additionally lets callers narrow on the typed
+    /// envelope field rather than the topic string.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    /// Phase11i §3.4 — caller's current session id. When set,
+    /// the orchestrator boosts hits sharing this session so
+    /// burst context surfaces tightly. Pairs with
+    /// `Scope.session_cohort` for related-session promotion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// Phase11i §3.4 — additional session ids whose hits should
+    /// receive the cohort boost (lighter than `session_id`'s
+    /// active-session boost).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub session_cohort: Vec<String>,
+    /// Phase11i §3.5 — outcome allow-list. When non-empty, only
+    /// hits whose `outcome` field matches one of these values
+    /// are admitted. Common values: `success`, `error`,
+    /// `partial`, `blocked_by_law`. Empty list = no filter.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outcomes: Vec<String>,
+    /// Phase11i §3.5 — outcome deny-list. Hits whose `outcome`
+    /// matches any of these are filtered out. Useful for
+    /// "exclude error/partial" patterns without enumerating
+    /// every accepted outcome.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_outcomes: Vec<String>,
 }
 
 /// Request body for `POST /v1/query`.

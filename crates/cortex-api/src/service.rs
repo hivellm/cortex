@@ -198,6 +198,26 @@ fn canonicalise_scope(req_scope: &Scope) -> Scope {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from);
+    // Phase11i §3.3-§3.5 — round-trip the new scope filters
+    // verbatim. Empty vectors compare equal to "no filter"; an
+    // explicit value passes through canonicalisation untouched.
+    // Each value is trimmed but otherwise preserved so
+    // case-sensitive matches against Meili's filter grammar
+    // stay byte-stable.
+    let dedup_trim = |v: &[String]| -> Vec<String> {
+        let mut out = Vec::with_capacity(v.len());
+        let mut seen = std::collections::BTreeSet::new();
+        for s in v {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen.insert(trimmed.to_string()) {
+                out.push(trimmed.to_string());
+            }
+        }
+        out
+    };
     Scope {
         repo,
         files,
@@ -212,6 +232,17 @@ fn canonicalise_scope(req_scope: &Scope) -> Scope {
         // for the same reason. The orchestrator picks
         // DEFAULT_CROSS_REPO_BOOST when None.
         cross_repo_boost: req_scope.cross_repo_boost,
+        models: dedup_trim(&req_scope.models),
+        tools: dedup_trim(&req_scope.tools),
+        session_id: req_scope
+            .session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from),
+        session_cohort: dedup_trim(&req_scope.session_cohort),
+        outcomes: dedup_trim(&req_scope.outcomes),
+        exclude_outcomes: dedup_trim(&req_scope.exclude_outcomes),
     }
 }
 
