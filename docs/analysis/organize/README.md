@@ -33,6 +33,7 @@ memory the agent reads on every turn.
 | [03-coverage-gaps.md](./03-coverage-gaps.md) | What Cortex captures today vs. what it was designed to capture; per-family doc counts; backend health |
 | [04-relevance-axes.md](./04-relevance-axes.md) | Five-axis framework (recency, scope, author, session, outcome) with the schema fields, lane changes, and RRF tweaks needed for each |
 | [05-implementation-plan.md](./05-implementation-plan.md) | Six-phase build plan: `cortex-claude-archive` crate, family additions, watcher, query-API filters, RRF tuning, pre-thinking wiring |
+| [06-consolidation-tier.md](./06-consolidation-tier.md) | Curated memory tier: `Kind::Consolidation`, three grains (session / topic / decision-trace), pruning schedule, fidelity gate (`phase11j`) |
 | [findings.json](./findings.json) | Machine-readable summary (counts, paths, axes) for the task generator and CI fixtures |
 
 ## TL;DR
