@@ -1,0 +1,97 @@
+# Auto-generated repo config for cortex-bootstrap workspace runs.
+[cortex]
+id = "Rulebook"
+
+[cortex.exclude]
+paths = [
+    "target/",
+    "node_modules/",
+    "dist/",
+    "build/",
+    "out/",
+    ".next/",
+    ".nuxt/",
+    ".turbo/",
+    ".cache/",
+    "coverage/",
+    "tmp/",
+    ".cargo/",
+    ".git/",
+    ".cortex/",
+    ".venv/",
+    "venv/",
+    "__pycache__/",
+]
+extensions = [
+    "lock",
+    "log",
+    "pack",
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "ico",
+    "svg",
+    "pdf",
+    "exe",
+    "dll",
+    "so",
+    "dylib",
+    "wasm",
+    "zip",
+    "gz",
+    "tgz",
+    "zst",
+    "tar",
+    "7z",
+    "rar",
+    "mp4",
+    "mp3",
+    "wav",
+    "mov",
+    "ttf",
+    "otf",
+    "woff",
+    "woff2",
+]
+
+[cortex.chunking]
+code_strategy = "auto"
+doc_strategy = "section"
+
+[cortex.git]
+include_commits = true
+include_prs = false
+
+[cortex.decisions]
+promote_patterns = [
+    ".rulebook/decisions/*.md",
+    ".rulebook/decisions/**/*.md",
+    "docs/decisions/*.md",
+    "docs/decisions/**/*.md",
+    "ADR-*.md",
+]
+
+[cortex.laws]
+promote_patterns = [
+    ".rulebook/laws/*.yaml",
+    ".rulebook/laws/*.yml",
+    ".claude/rules/*.md",
+]
+
+[cortex.analyses]
+promote_patterns = [
+    "docs/analysis/*.md",
+    "docs/analysis/**/*.md",
+    "docs/analyses/*.md",
+    "docs/analyses/**/*.md",
+]
+
+[cortex.memories]
+import_files = [
+    "CLAUDE.md",
+    "AGENTS.md",
+    "AGENTS.override.md",
+    ".rulebook/memory/**/*.md",
+    ".rulebook/PLANS.md",
+]

@@ -37,23 +37,30 @@ async fn main() -> Result<()> {
     // listing of repos; positional args still work (and merge with
     // the workspace, deduped on path). `--only` / `--skip` filter
     // the resulting list by repo id.
-    let mut targets: Vec<(PathBuf, String)> = Vec::new();
+    let mut targets: Vec<(PathBuf, String, Option<PathBuf>)> = Vec::new();
     if let Some(ws_path) = args.workspace.as_deref() {
         let ws = load_workspace(ws_path)
             .with_context(|| format!("load workspace `{}`", ws_path.display()))?;
         preflight_workspace(&ws).context("workspace preflight")?;
         for repo in &ws.repos {
-            targets.push((repo.path.clone(), repo.id.clone()));
+            let cfg_override = repo.config.as_ref().map(|p| {
+                if p.is_absolute() {
+                    p.clone()
+                } else {
+                    repo.path.join(p)
+                }
+            });
+            targets.push((repo.path.clone(), repo.id.clone(), cfg_override));
         }
     }
     for root in &args.repo_roots {
         let id = resolve_repo_id(root)?;
-        if targets.iter().any(|(p, _)| p == root) {
+        if targets.iter().any(|(p, _, _)| p == root) {
             continue;
         }
-        targets.push((root.clone(), id));
+        targets.push((root.clone(), id, None));
     }
-    targets.retain(|(_, id)| {
+    targets.retain(|(_, id, _)| {
         if !args.only.is_empty() && !args.only.iter().any(|n| n == id) {
             return false;
         }
@@ -77,10 +84,15 @@ async fn main() -> Result<()> {
     let shutdown = install_ctrlc_handler();
 
     if args.estimate {
-        for (root, id) in &targets {
-            let repo_cfg = load_for_repo(root)
-                .with_context(|| format!("load cortex.toml for {id}"))?
-                .cortex;
+        for (root, id, cfg_override) in &targets {
+            let repo_cfg = match cfg_override {
+                Some(p) => load_config(p)
+                    .with_context(|| format!("load workspace cortex.toml for {id}"))?
+                    .cortex,
+                None => load_for_repo(root)
+                    .with_context(|| format!("load cortex.toml for {id}"))?
+                    .cortex,
+            };
             let est = estimate_repo(root, id, &repo_cfg);
             print!("{}", format_estimate(&est));
         }
@@ -103,13 +115,17 @@ async fn main() -> Result<()> {
     };
 
     let mut summaries: Vec<RunSummary> = Vec::with_capacity(targets.len());
-    for (root, id) in &targets {
+    for (root, id, cfg_override) in &targets {
         if shutdown.load(Ordering::Relaxed) {
             tracing::info!("shutdown requested before repo {id}; exiting");
             break;
         }
-        let cfg = load_for_repo(root)
-            .with_context(|| format!("load cortex.toml for {id}"))?;
+        let cfg = match cfg_override {
+            Some(p) => load_config(p)
+                .with_context(|| format!("load workspace cortex.toml for {id}"))?,
+            None => load_for_repo(root)
+                .with_context(|| format!("load cortex.toml for {id}"))?,
+        };
         let repo_cfg = cfg.cortex;
         let resolved_id = repo_cfg.id.clone().unwrap_or_else(|| id.clone());
 

@@ -1,0 +1,88 @@
+# Generated workspace for cortex-bootstrap.
+# HIVE_ROOT = E:/HiveLLM
+# Non-Cortex repos point at per-repo configs under Cortex/configs/repos/
+# (those repos do not check in cortex.toml).
+
+[[repo]]
+id = "Cortex"
+path = "E:/HiveLLM/Cortex"
+
+[[repo]]
+id = "Vectorizer"
+path = "E:/HiveLLM/Vectorizer"
+config = "E:/HiveLLM/Cortex/configs/repos/Vectorizer.cortex.toml"
+
+[[repo]]
+id = "VectorizerSync"
+path = "E:/HiveLLM/VectorizerSync"
+config = "E:/HiveLLM/Cortex/configs/repos/VectorizerSync.cortex.toml"
+
+[[repo]]
+id = "Nexus"
+path = "E:/HiveLLM/Nexus"
+config = "E:/HiveLLM/Cortex/configs/repos/Nexus.cortex.toml"
+
+[[repo]]
+id = "Synap"
+path = "E:/HiveLLM/Synap"
+config = "E:/HiveLLM/Cortex/configs/repos/Synap.cortex.toml"
+
+[[repo]]
+id = "Lexum"
+path = "E:/HiveLLM/Lexum"
+config = "E:/HiveLLM/Cortex/configs/repos/Lexum.cortex.toml"
+
+[[repo]]
+id = "Expert"
+path = "E:/HiveLLM/Expert"
+config = "E:/HiveLLM/Cortex/configs/repos/Expert.cortex.toml"
+
+[[repo]]
+id = "Rulebook"
+path = "E:/HiveLLM/Rulebook"
+config = "E:/HiveLLM/Cortex/configs/repos/Rulebook.cortex.toml"
+
+[[repo]]
+id = "HivehubCloud"
+path = "E:/HiveLLM/HivehubCloud"
+config = "E:/HiveLLM/Cortex/configs/repos/HivehubCloud.cortex.toml"
+
+[[repo]]
+id = "HiveGPU"
+path = "E:/HiveLLM/HiveGPU"
+config = "E:/HiveLLM/Cortex/configs/repos/HiveGPU.cortex.toml"
+
+[[repo]]
+id = "CompressionPrompt"
+path = "E:/HiveLLM/CompressionPrompt"
+config = "E:/HiveLLM/Cortex/configs/repos/CompressionPrompt.cortex.toml"
+
+[[repo]]
+id = "Tml"
+path = "E:/HiveLLM/Tml"
+config = "E:/HiveLLM/Cortex/configs/repos/Tml.cortex.toml"
+
+[[repo]]
+id = "TmlDocs"
+path = "E:/HiveLLM/TmlDocs"
+config = "E:/HiveLLM/Cortex/configs/repos/TmlDocs.cortex.toml"
+
+[[repo]]
+id = "TmlTextmate"
+path = "E:/HiveLLM/TmlTextmate"
+config = "E:/HiveLLM/Cortex/configs/repos/TmlTextmate.cortex.toml"
+
+[[repo]]
+id = "Transmutation"
+path = "E:/HiveLLM/Transmutation"
+config = "E:/HiveLLM/Cortex/configs/repos/Transmutation.cortex.toml"
+
+[[repo]]
+id = "TransmutationLite"
+path = "E:/HiveLLM/TransmutationLite"
+config = "E:/HiveLLM/Cortex/configs/repos/TransmutationLite.cortex.toml"
+
+[[repo]]
+id = "Umicp"
+path = "E:/HiveLLM/Umicp"
+config = "E:/HiveLLM/Cortex/configs/repos/Umicp.cortex.toml"
