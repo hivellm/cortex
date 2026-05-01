@@ -113,6 +113,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
             lanes: LaneTimings::default(),
             errors: Default::default(),
             truncated: false,
+            notes: Vec::new(),
         },
         notice: None,
     }

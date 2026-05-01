@@ -228,6 +228,7 @@ mod tests {
                 lanes: LaneTimings::default(),
                 errors: Default::default(),
                 truncated: false,
+                notes: Vec::new(),
             },
             notice: None,
         }

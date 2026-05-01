@@ -31,6 +31,6 @@
 - [x] 6.3 Documented in [docs/operations/coverage-audit.md](docs/operations/coverage-audit.md)
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 7.1 Update or create documentation covering the implementation
-- [ ] 7.2 Write tests covering the new behavior
-- [ ] 7.3 Run tests and confirm they pass
+- [x] 7.1 Update or create documentation covering the implementation — [docs/operations/coverage-audit.md](docs/operations/coverage-audit.md) covers the audit pipeline, the `/v1/health/coverage` endpoint, the `cortex_status.coverage` summary, and the writer-routing verification narrative; inline rustdoc on every new module / function (`coverage.rs`, `partition_collection_missing`, `kind_token_matches`, etc.).
+- [x] 7.2 Write tests covering the new behavior — 9 unit tests for `coverage::*`, 3 unit tests for `partition_collection_missing` (orchestrator §3), 4 unit tests for `kind_token_matches` / `kind_passes_filter` (bootstrap §5), 2 GUI vitest guards for the Health view's CoverageSection (§2.2), updated 4 lane_contract regression tests + existing strategies tests for the per-repo fan-out (§5.3). Existing fixtures (`pipeline.rs`, `budget.rs`, `formatter.rs`) updated for the new `DebugInfo.notes` field (§3).
+- [x] 7.3 Run tests and confirm they pass — `cargo test --workspace` reports 0 failures across every crate (cortex-api 286+, cortex-cli 152+18+4+3+1+3, cortex-workers, cortex-pre-thinking, etc.); GUI `vitest run src/views/Health.test.tsx` reports 7/7. End-to-end validated against the live docker stack: boot WARN logs, `/v1/health/coverage` JSON, `cortex_status.coverage` summary, `cortex-ops doctor-coverage` exit codes, `decision_lookup` returning real ADR hits.
