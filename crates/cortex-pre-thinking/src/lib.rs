@@ -20,9 +20,7 @@ pub mod pipeline;
 pub mod scope;
 
 pub use budget::{clip_to_budget, ClippedBundle, TrimStep};
-pub use formatter::{
-    clip_utf8, format_bundle, section_caps, FormatOptions, SnippetTrim,
-};
+pub use formatter::{clip_utf8, format_bundle, section_caps, FormatOptions, SnippetTrim};
 pub use intent_select::{select as select_intent, select_with, Rule, DEFAULT_RULES};
 pub use metrics::Metrics;
 pub use pipeline::{

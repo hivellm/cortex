@@ -179,10 +179,7 @@ pub async fn run<Q: QueryFn>(
     }
     metrics.observe_section_count("laws", response.laws_active.len() as u32);
     metrics.observe_section_count("decisions", response.results.decisions.len() as u32);
-    metrics.observe_section_count(
-        "similar_turns",
-        response.results.similar_turns.len() as u32,
-    );
+    metrics.observe_section_count("similar_turns", response.results.similar_turns.len() as u32);
     metrics.observe_section_count("snippets", response.results.snippets.len() as u32);
     metrics.observe_section_count(
         "graph_neighbors",

@@ -283,6 +283,34 @@ pub struct GraphNeighbor {
     pub hops: u8,
 }
 
+/// Phase11i §4.1 — one past-session entry surfaced under
+/// `results.past_sessions`. Sourced from the Claude-archive
+/// indexer and ranked by centroid similarity to the current
+/// query (top-3 by default). The spec-12 renderer formats one
+/// line per session: `id, date, first user prompt (clipped 80
+/// chars), turn count` so the agent can recognise prior sessions
+/// that touched the same problem space without reading every
+/// turn back.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PastSession {
+    /// Session ULID (matches the `session_id` carried on every
+    /// envelope emitted by `cortex-claude-archive`).
+    pub session_id: String,
+    /// Session start timestamp — typically the earliest turn's
+    /// `ts`. Epoch ms; renderers convert to `YYYY-MM-DD`.
+    pub ts: i64,
+    /// First user prompt of the session. Renderers clip to 80
+    /// chars on a UTF-8 boundary; this field carries the raw
+    /// prompt so callers wanting the full text can read it.
+    pub first_prompt: String,
+    /// Number of turns observed in the session.
+    pub turn_count: u32,
+    /// Centroid similarity score that placed this session in
+    /// the top-N. Identical semantics to
+    /// [`SimilarTurn::score`].
+    pub score: f64,
+}
+
 /// One similar-turn entry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SimilarTurn {
@@ -480,6 +508,14 @@ pub struct ResultsBag {
     /// Similar-turn KNN.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub similar_turns: Vec<SimilarTurn>,
+    /// Phase11i §4.1 — past-session overlay surfaced by the
+    /// pre-thinking renderer ("Past sessions" section). Top-3 by
+    /// centroid similarity to the current query when the
+    /// upstream classifier + claude-archive indexer have populated
+    /// the field; empty otherwise so the section gracefully
+    /// degrades on cold caches.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub past_sessions: Vec<PastSession>,
 }
 
 /// Convenience helper to build an empty response stamped with a fresh

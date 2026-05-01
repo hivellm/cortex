@@ -13,8 +13,8 @@
 
 use std::fmt::Write;
 
-use cortex_api::QueryResponse;
 use chrono::{TimeZone, Utc};
+use cortex_api::QueryResponse;
 
 /// Per-section caps used by the budget clipper. Spec 12 §Budget-aware
 /// section caps.
@@ -30,6 +30,14 @@ pub mod section_caps {
     /// Max graph-neighbour entries (off by default — emitted only
     /// when the budget can absorb them).
     pub const GRAPH_NEIGHBORS: usize = 0;
+    /// Phase11i §4.1 — max past-session entries. Spec calls for
+    /// "top-3 by centroid similarity"; the renderer takes the
+    /// first N entries the orchestrator surfaces (already ranked).
+    pub const PAST_SESSIONS: usize = 3;
+    /// Phase11i §4.1 — max bytes for the clipped first-prompt
+    /// preview. Spec calls for an 80-char clip; we cap at the byte
+    /// equivalent of 80 ASCII chars to keep the section compact.
+    pub const PAST_SESSION_PROMPT_BYTES: usize = 80;
     /// Max bytes per snippet text.
     pub const SNIPPET_BYTES: usize = 1024;
     /// Max bytes per decision body.
@@ -56,6 +64,11 @@ pub struct FormatOptions {
     pub decisions_cap: usize,
     /// Maximum number of similar turns to render.
     pub similar_turns_cap: usize,
+    /// Maximum number of past sessions to render (phase11i §4.1).
+    pub past_sessions_cap: usize,
+    /// Per-prompt byte cap for the past-sessions section
+    /// (phase11i §4.1).
+    pub past_session_prompt_byte_cap: usize,
     /// Maximum number of snippets to render.
     pub snippets_cap: usize,
     /// Maximum number of graph neighbours to render.
@@ -74,6 +87,8 @@ impl Default for FormatOptions {
             laws_cap: section_caps::LAWS,
             decisions_cap: section_caps::DECISIONS,
             similar_turns_cap: section_caps::SIMILAR_TURNS,
+            past_sessions_cap: section_caps::PAST_SESSIONS,
+            past_session_prompt_byte_cap: section_caps::PAST_SESSION_PROMPT_BYTES,
             snippets_cap: section_caps::SNIPPETS,
             graph_cap: section_caps::GRAPH_NEIGHBORS,
             snippet_trim: SnippetTrim::Full,
@@ -88,13 +103,23 @@ impl Default for FormatOptions {
 pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOptions) -> String {
     let laws_count = response.laws_active.len().min(opts.laws_cap);
     let decisions_count = response.results.decisions.len().min(opts.decisions_cap);
-    let turns_count = response.results.similar_turns.len().min(opts.similar_turns_cap);
+    let turns_count = response
+        .results
+        .similar_turns
+        .len()
+        .min(opts.similar_turns_cap);
+    let past_sessions_count = response
+        .results
+        .past_sessions
+        .len()
+        .min(opts.past_sessions_cap);
     let snippets_count = response.results.snippets.len().min(opts.snippets_cap);
     let graph_count = response.results.graph_neighbors.len().min(opts.graph_cap);
 
     if laws_count == 0
         && decisions_count == 0
         && turns_count == 0
+        && past_sessions_count == 0
         && snippets_count == 0
         && graph_count == 0
     {
@@ -161,7 +186,13 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
 
     if turns_count > 0 {
         out.push_str("## Similar past turns\n");
-        for (i, t) in response.results.similar_turns.iter().take(turns_count).enumerate() {
+        for (i, t) in response
+            .results
+            .similar_turns
+            .iter()
+            .take(turns_count)
+            .enumerate()
+        {
             let date = format_ts_date(t.ts);
             writeln!(
                 out,
@@ -176,9 +207,53 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
         out.push('\n');
     }
 
+    // Phase11i §4.1 — "Past sessions": one line per session,
+    // ordered by upstream centroid similarity. Format pins
+    // `id · date · "first user prompt (≤ 80 chars)" · turn_count`
+    // so the agent can recognise prior sessions touching the same
+    // problem space without reading every turn back.
+    if past_sessions_count > 0 {
+        writeln!(out, "## Past sessions ({past_sessions_count})").ok();
+        for (i, s) in response
+            .results
+            .past_sessions
+            .iter()
+            .take(past_sessions_count)
+            .enumerate()
+        {
+            let date = format_ts_date(s.ts);
+            let prompt = clip_utf8(
+                &trim_one_line(&s.first_prompt),
+                opts.past_session_prompt_byte_cap,
+            );
+            writeln!(
+                out,
+                "{}. {id} — {date_field} · \"{prompt}\" · {turns} turn{plural}",
+                i + 1,
+                id = s.session_id,
+                date_field = if date.is_empty() {
+                    "—".to_string()
+                } else {
+                    date
+                },
+                prompt = prompt,
+                turns = s.turn_count,
+                plural = if s.turn_count == 1 { "" } else { "s" },
+            )
+            .ok();
+        }
+        out.push('\n');
+    }
+
     if snippets_count > 0 {
         writeln!(out, "## Relevant snippets ({snippets_count})").ok();
-        for (i, s) in response.results.snippets.iter().take(snippets_count).enumerate() {
+        for (i, s) in response
+            .results
+            .snippets
+            .iter()
+            .take(snippets_count)
+            .enumerate()
+        {
             let header = render_snippet_header(s);
             let body = match opts.snippet_trim {
                 SnippetTrim::SlimWhyPlusThree => render_snippet_slim(s, opts.snippet_byte_cap),
@@ -299,8 +374,8 @@ pub fn clip_utf8(s: &str, n: usize) -> String {
 mod tests {
     use super::*;
     use cortex_api::{
-        BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, LaneTimings, LawRef, QueryResponse,
-        ResultsBag, Scope, SimilarTurn, Snippet, ViolationRef,
+        BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, LaneTimings, LawRef, PastSession,
+        QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet, ViolationRef,
     };
 
     fn populated_response() -> QueryResponse {
@@ -355,6 +430,7 @@ mod tests {
                     summary: "refactored hnsw_search".into(),
                     score: 0.6,
                 }],
+                past_sessions: Vec::new(),
             },
             laws_active: vec![LawRef {
                 id: "LAW-012".into(),
@@ -403,8 +479,11 @@ mod tests {
 
     #[test]
     fn graph_section_omitted_when_cap_zero() {
-        let bundle =
-            format_bundle("pre_change_context", &populated_response(), &FormatOptions::default());
+        let bundle = format_bundle(
+            "pre_change_context",
+            &populated_response(),
+            &FormatOptions::default(),
+        );
         assert!(!bundle.contains("Graph neighbours"));
     }
 
@@ -432,6 +511,130 @@ mod tests {
         let raw = "ééé"; // 6 bytes
         assert_eq!(clip_utf8(raw, 5), "éé");
         assert_eq!(clip_utf8(raw, 100), "ééé");
+    }
+
+    fn past_session(id: &str, ts: i64, prompt: &str, turn_count: u32, score: f64) -> PastSession {
+        PastSession {
+            session_id: id.into(),
+            ts,
+            first_prompt: prompt.into(),
+            turn_count,
+            score,
+        }
+    }
+
+    #[test]
+    fn past_sessions_section_renders_one_line_per_session() {
+        let mut resp = populated_response();
+        resp.results.past_sessions = vec![
+            past_session(
+                "sess-A",
+                1_715_000_000_000,
+                "How do I tune ef_search for HNSW recall?",
+                12,
+                0.92,
+            ),
+            past_session(
+                "sess-B",
+                1_715_086_400_000,
+                "wire meili filter grammar",
+                5,
+                0.81,
+            ),
+            past_session(
+                "sess-C",
+                1_715_172_800_000,
+                "audit envelope shape regression",
+                1,
+                0.74,
+            ),
+        ];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("## Past sessions (3)"));
+        assert!(bundle.contains(
+            "1. sess-A — 2024-05-06 · \"How do I tune ef_search for HNSW recall?\" · 12 turns"
+        ));
+        assert!(bundle.contains("2. sess-B — "));
+        assert!(bundle.contains("3. sess-C — "));
+        assert!(bundle.contains("· 1 turn\n"));
+        assert!(bundle.contains("· 5 turns\n"));
+    }
+
+    #[test]
+    fn past_sessions_clip_first_prompt_to_eighty_bytes() {
+        let mut resp = populated_response();
+        let long = "x".repeat(160);
+        resp.results.past_sessions = vec![past_session("sess-X", 1_715_000_000_000, &long, 3, 0.5)];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        // Prompt segment lives between the first `"` and the
+        // closing `"` on the session line. The clipped body must
+        // be exactly 80 ASCII bytes long.
+        let after = bundle
+            .find("sess-X — ")
+            .expect("session line present in bundle");
+        let line: &str = bundle[after..]
+            .lines()
+            .next()
+            .expect("session line terminates with newline");
+        let q1 = line.find('"').unwrap();
+        let q2 = line[q1 + 1..].find('"').unwrap() + q1 + 1;
+        let clipped = &line[q1 + 1..q2];
+        assert_eq!(clipped.len(), 80, "first prompt must clip to 80 bytes");
+        assert!(clipped.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn past_sessions_renders_after_similar_turns_before_snippets() {
+        let mut resp = populated_response();
+        resp.results.past_sessions = vec![past_session(
+            "sess-A",
+            1_715_000_000_000,
+            "first prompt",
+            2,
+            0.6,
+        )];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        let turns = bundle.find("Similar past turns").unwrap();
+        let past = bundle.find("Past sessions").unwrap();
+        let snippets = bundle.find("Relevant snippets").unwrap();
+        assert!(turns < past);
+        assert!(past < snippets);
+    }
+
+    #[test]
+    fn past_sessions_cap_caps_section_size() {
+        let mut resp = populated_response();
+        resp.results.past_sessions = (0..10)
+            .map(|i| past_session(&format!("sess-{i}"), 1_715_000_000_000, "prompt", 1, 0.5))
+            .collect();
+        let opts = FormatOptions {
+            past_sessions_cap: 2,
+            ..Default::default()
+        };
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(bundle.contains("## Past sessions (2)"));
+        assert!(bundle.contains("sess-0"));
+        assert!(bundle.contains("sess-1"));
+        assert!(!bundle.contains("sess-2"));
+    }
+
+    #[test]
+    fn past_sessions_section_omitted_when_empty() {
+        let resp = populated_response();
+        // Default populated_response leaves past_sessions empty.
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(!bundle.contains("Past sessions"));
+    }
+
+    #[test]
+    fn past_sessions_handles_unset_ts_gracefully() {
+        let mut resp = populated_response();
+        resp.results.past_sessions = vec![past_session("sess-Z", 0, "no timestamp", 1, 0.4)];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        // The em-dash fills the date column when the upstream
+        // couldn't supply a timestamp, keeping the line shape
+        // consistent across rows.
+        assert!(bundle.contains("sess-Z — — · \"no timestamp\" · 1 turn"));
     }
 
     #[test]

@@ -213,6 +213,7 @@ mod tests {
                 violations: vec![],
                 graph_neighbors: neighbours,
                 similar_turns: turns,
+                past_sessions: Vec::new(),
             },
             laws_active: vec![LawRef {
                 id: "LAW-007".into(),
@@ -253,12 +254,14 @@ mod tests {
     fn eighty_kb_payload_clips_to_under_32_kb() {
         let mut resp = fat_response();
         // Make graph render — bundle starts above the cap.
-        resp.results.graph_neighbors.extend((0..20).map(|i| GraphNeighbor {
-            from: format!("X{i}"),
-            relation: "TOUCHED".into(),
-            to: format!("Y{i}"),
-            hops: 1,
-        }));
+        resp.results
+            .graph_neighbors
+            .extend((0..20).map(|i| GraphNeighbor {
+                from: format!("X{i}"),
+                relation: "TOUCHED".into(),
+                to: format!("Y{i}"),
+                hops: 1,
+            }));
         let clipped = clip_to_budget("pre_change_context", &resp, 32 * 1024);
         assert!(clipped.bytes <= 32 * 1024, "got {} bytes", clipped.bytes);
         // The clipper must keep the laws section intact.
@@ -269,20 +272,32 @@ mod tests {
     fn step_order_is_documented_drop_graph_first() {
         let mut resp = fat_response();
         // Graph rendering off by default; force-cap to enable.
-        resp.results.graph_neighbors.extend((0..40).map(|i| GraphNeighbor {
-            from: format!("X{i}"),
-            relation: "TOUCHED".into(),
-            to: format!("Y{i}"),
-            hops: 1,
-        }));
+        resp.results
+            .graph_neighbors
+            .extend((0..40).map(|i| GraphNeighbor {
+                from: format!("X{i}"),
+                relation: "TOUCHED".into(),
+                to: format!("Y{i}"),
+                hops: 1,
+            }));
         // Tight budget so we walk the ladder.
         let clipped = clip_to_budget("pre_change_context", &resp, 4 * 1024);
-        assert!(clipped.steps.first().copied().unwrap_or(TrimStep::DropSnippets) != TrimStep::DropSnippets);
+        assert!(
+            clipped
+                .steps
+                .first()
+                .copied()
+                .unwrap_or(TrimStep::DropSnippets)
+                != TrimStep::DropSnippets
+        );
         // The first applied step must be DropGraph (which is a
         // no-op in v1 since graph_cap defaults to 0); for that
         // case the next applied step is SlimSnippets.
         let first = clipped.steps[0];
-        assert!(matches!(first, TrimStep::DropGraph | TrimStep::SlimSnippets));
+        assert!(matches!(
+            first,
+            TrimStep::DropGraph | TrimStep::SlimSnippets
+        ));
     }
 
     #[test]

@@ -43,7 +43,7 @@ pub struct RecentFile {
 }
 
 /// Outcome of the scope-derivation pass.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DerivedScope {
     /// `cortex_api::Scope` ready to attach to a `QueryRequest`.
     pub scope: Scope,
@@ -54,11 +54,7 @@ pub struct DerivedScope {
 
 /// Derive the scope from the inputs. Pure function — no I/O beyond
 /// reading `cortex.toml` if it exists.
-pub fn derive(
-    user_prompt: &str,
-    cwd: &Path,
-    recent_files: &[RecentFile],
-) -> DerivedScope {
+pub fn derive(user_prompt: &str, cwd: &Path, recent_files: &[RecentFile]) -> DerivedScope {
     let repo = repo_from_cwd(cwd);
     let repo_resolved = repo.is_some();
 
@@ -107,6 +103,7 @@ pub fn derive(
             files,
             topics,
             since: None,
+            ..Scope::default()
         },
         repo_resolved,
     }
@@ -125,9 +122,9 @@ pub fn topic_for_path(path: &str) -> Option<&'static str> {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())?;
     Some(match ext.as_str() {
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "cc" | "cpp"
-        | "h" | "hpp" | "rb" | "kt" | "swift" | "scala" | "cs" | "php" | "sh" | "bash"
-        | "zsh" | "fish" | "ps1" | "sql" | "proto" => "code",
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "cc" | "cpp" | "h"
+        | "hpp" | "rb" | "kt" | "swift" | "scala" | "cs" | "php" | "sh" | "bash" | "zsh"
+        | "fish" | "ps1" | "sql" | "proto" => "code",
         "md" | "mdx" | "rst" | "adoc" | "asciidoc" | "txt" | "tex" | "org" => "docs",
         "toml" | "yaml" | "yml" | "json" | "ini" | "cfg" | "conf" => "config",
         _ => return None,
@@ -227,7 +224,9 @@ pub fn extract_prompt_files(prompt: &str) -> Vec<String> {
         // Drop pure version-number-shaped matches like `1.2.3` and
         // `v1.0` so prompts that mention semver don't pollute the
         // file list.
-        if s.chars().all(|c| c.is_ascii_digit() || c == '.' || c == 'v' || c == 'V') {
+        if s.chars()
+            .all(|c| c.is_ascii_digit() || c == '.' || c == 'v' || c == 'V')
+        {
             continue;
         }
         push_unique(&mut out, s.replace('\\', "/"));
@@ -251,8 +250,7 @@ mod tests {
 
     #[test]
     fn extract_prompt_files_finds_path_like_tokens() {
-        let prompt =
-            "refactor src/index/hnsw/mod.rs to take ef per call. See docs/perf/hnsw.md.";
+        let prompt = "refactor src/index/hnsw/mod.rs to take ef per call. See docs/perf/hnsw.md.";
         let files = extract_prompt_files(prompt);
         assert!(files.contains(&"src/index/hnsw/mod.rs".to_string()));
         assert!(files.contains(&"docs/perf/hnsw.md".to_string()));

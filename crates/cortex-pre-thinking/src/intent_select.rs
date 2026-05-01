@@ -328,12 +328,18 @@ mod tests {
 
     #[test]
     fn what_is_routes_to_explain() {
-        assert_eq!(select("what is the lane projection contract?"), Intent::Explain);
+        assert_eq!(
+            select("what is the lane projection contract?"),
+            Intent::Explain
+        );
     }
 
     #[test]
     fn whats_contraction_routes_to_explain() {
-        assert_eq!(select("what's `LaneHit::normalized_score`?"), Intent::Explain);
+        assert_eq!(
+            select("what's `LaneHit::normalized_score`?"),
+            Intent::Explain
+        );
     }
 
     #[test]
@@ -361,10 +367,7 @@ mod tests {
 
     #[test]
     fn find_usages_routes_to_explain() {
-        assert_eq!(
-            select("find usages of `derive_decisions`"),
-            Intent::Explain
-        );
+        assert_eq!(select("find usages of `derive_decisions`"), Intent::Explain);
     }
 
     #[test]

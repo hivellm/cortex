@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cortex_api::{
-    BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, Intent, LaneTimings, LawRef,
-    QueryRequest, QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet,
+    BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, Intent, LaneTimings, LawRef, QueryRequest,
+    QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet,
 };
 use cortex_pre_thinking::{
     pipeline::run, FileStatus, Metrics, PreThinkingBudget, PreThinkingInput, QueryFn, RecentFile,
@@ -98,6 +98,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
                 summary: "tweak ef".into(),
                 score: 0.6,
             }],
+            past_sessions: Vec::new(),
         },
         laws_active: vec![LawRef {
             id: "LAW-007".into(),
@@ -175,12 +176,7 @@ async fn empty_response_returns_empty_bundle_and_increments_counter() {
     let canned = Arc::new(CannedQuery::new(empty));
     let metrics = Arc::new(Metrics::new());
     let cwd = std::env::temp_dir();
-    let out = run(
-        &input_for("anything", &cwd),
-        canned,
-        metrics.clone(),
-    )
-    .await;
+    let out = run(&input_for("anything", &cwd), canned, metrics.clone()).await;
     assert!(out.bundle.is_empty());
     assert_eq!(
         metrics
@@ -230,12 +226,7 @@ async fn deterministic_byte_for_byte_output_across_runs() {
         metrics.clone(),
     )
     .await;
-    let b = run(
-        &input_for("refactor hnsw_search", &cwd),
-        canned,
-        metrics,
-    )
-    .await;
+    let b = run(&input_for("refactor hnsw_search", &cwd), canned, metrics).await;
     assert_eq!(a.bundle, b.bundle);
 }
 
