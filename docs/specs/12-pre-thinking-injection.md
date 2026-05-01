@@ -60,13 +60,18 @@ A deterministic Markdown block. Example:
 - **LAW-007** (critical) — Never pass `--no-verify` to `git commit` without explicit authorization.
 
 ## Recent decisions you should know about
-- **DEC-0042 (accepted, 2026-03-05)** — Raise HNSW ef_search default to 128.
+- ✓ **DEC-0042 (accepted, 2026-03-05)** — Raise HNSW ef_search default to 128.
   Rationale: recall@10 held above 0.92 up to 2M vectors in benchmarks.
-- **DEC-0031 (superseded-by DEC-0042)** — Keep ef_search=64 for low-latency profile.
+- ✗ **DEC-0031 (superseded, 2025-09-21)** — Keep ef_search=64 for low-latency profile.
 
 ## Similar past turns
-1. 2026-02-11 — Claude Sonnet refactored `hnsw_search` to accept `ef` per-call.
-2. 2025-12-03 — Gemini benchmarked ef_search=128 and concluded it was safe up to 2M.
+1. ✓ 2026-02-11 — Claude Sonnet refactored `hnsw_search` to accept `ef` per-call.
+2. ⚠ 2025-12-03 — Gemini benchmarked ef_search=128 and concluded it was safe up to 2M.
+
+## Past sessions (3)
+1. 01HXSESS01 — 2026-02-11 · "tune ef_search for 2M-vector benchmark" · 18 turns
+2. 01HXSESS02 — 2025-12-03 · "wire HNSW recall guard into CI" · 9 turns
+3. 01HXSESS03 — 2025-11-04 · "make hnsw_search take ef per call" · 4 turns
 
 ## Relevant snippets (3)
 1. `Vectorizer/src/index/hnsw/mod.rs:hnsw_search` — current implementation with configurable `ef`.
@@ -76,7 +81,27 @@ A deterministic Markdown block. Example:
 <!-- end cortex -->
 ```
 
-Sections are always in the same order: **laws → decisions → similar turns → snippets → (optional) graph neighbors**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+Sections are always in the same order: **laws → decisions → similar turns → past sessions → snippets → (optional) graph neighbors**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+
+#### Outcome glyphs (phase11i §4.2)
+
+Every turn line and decision line carries a single outcome glyph between the row marker and the body so readers can scan the section for green / red flags without parsing each line:
+
+- `✓` — positive outcome. Turns: classifier `outcome = "success"`. Decisions: `status = "accepted"`.
+- `✗` — negative outcome. Turns: `outcome ∈ {"error", "failed", "failure"}`. Decisions: `status ∈ {"superseded", "deprecated", "rejected"}`.
+- `⚠` — neutral / unknown. Turns: any other outcome (`partial`, `blocked_by_law`, missing tag). Decisions: `proposed`, `draft`, or any unrecognised status.
+
+The neutral glyph is the renderer's default, so a missing-outcome regression upstream still produces a row with exactly one glyph rather than a column-shape skew.
+
+#### Past sessions (phase11i §4.1)
+
+A new section surfaces the top sessions whose centroid embedding is most similar to the current query. Each row is one line:
+
+```text
+N. <session_id> — <YYYY-MM-DD> · "<first user prompt clipped to 80 bytes>" · <turn_count> turn(s)
+```
+
+Caps: top **3** sessions by centroid similarity, each prompt clipped to **80 bytes** on a UTF-8 boundary. The section is omitted entirely when the upstream surfaces no past sessions, so cold caches degrade silently. The section sits between **Similar past turns** and **Relevant snippets** to keep the order: laws → decisions → similar turns → past sessions → snippets → graph.
 
 ## Design
 
