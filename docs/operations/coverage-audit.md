@@ -1,6 +1,6 @@
 # Coverage audit — Vectorizer + Meilisearch inventory diff
 
-> **Phase:** phase11e (in progress) · **Owner:** Core team · **Status:** 🟡 Partial (sections 1 + 2.1 + 6 of 7)
+> **Phase:** phase11e (in progress) · **Owner:** Core team · **Status:** 🟡 Partial (sections 1 + 2 + 3 + 4 + 6 of 7; §5 backfill pending)
 
 The cortex-api daemon audits the live Vectorizer + Meilisearch
 collection / index inventories against the routing matrix's expected
@@ -121,13 +121,71 @@ the `details_endpoint` link to the on-demand handler.
 The audit is **observability**: it makes the gap visible. It does
 not:
 
-- Create the missing collections (Layer B, item 4.4 — settings JSON
-  for new collections).
-- Backfill envelopes into them (Layer B + Layer 5 backfill).
-- Reconcile the `cortex_status.indexed_repos` reporting per backend
-  (Section 6 of phase11e).
+- Backfill envelopes into the missing collections (§5 of phase11e —
+  cortex-bootstrap `--kinds` reindex pass; pending).
 
-Those land in subsequent phase11e commits.
+The structural pieces (per-kind dispatch in the writer side and
+shared settings schema) were already in place before phase11e
+started — see the "Writer routing verification" section below.
+
+## Writer routing verification (phase11e §4)
+
+§4 was an **audit** of whether the writer pipeline ROUTES per-kind
+envelopes correctly. The audit confirms every Kind variant has a
+defined target — the gap is upstream (no envelopes of those kinds
+flowing through), NOT in the writer's routing table.
+
+### Embedder (Vectorizer write path)
+
+[`crates/cortex-workers/src/embedder/routing.rs`](../../crates/cortex-workers/src/embedder/routing.rs)
+defines `family_for(Kind)`:
+
+| Kind          | Collection family |
+|---------------|-------------------|
+| `ToolCall`    | `code`            |
+| `Artifact`    | `docs` (event-level) — chunk routing splits Code/Doc per `ChunkSource` |
+| `Decision`    | `decisions`       |
+| `Turn`        | `turns`           |
+| `LawViolation`| `governance`      |
+| `Analysis`    | `analyses`        |
+| `Knowledge`   | `knowledge`       |
+| `Learning`    | `learnings`       |
+| `AgentCall` / `Memory` | `misc` (catch-all) |
+
+Final collection name: `{prefix}-{slug}-{family}` per
+`cortex_storage::names::repo_scoped_name`. The embedder passes every
+event through `collection_for_chunk` and creates the target
+collection lazily on first upsert via
+`LiveVectorizerClient::ensure_collection`. **No code change needed
+for §4.** The Vectorizer hosts only `cortex-cortex-{code,docs,misc,governance}`
+because no Decision / Turn / Memory / Analysis / Knowledge / Learning
+envelopes have reached the embedder consumer — that's §5's territory.
+
+### Fulltext (Meili write path)
+
+[`crates/cortex-workers/src/fulltext/routing.rs`](../../crates/cortex-workers/src/fulltext/routing.rs)
+mirrors the same family table via `family_for(Kind)`, plus
+`family_for_event` which uses `(path, topics)` to split Artifact
+into `code` / `docs` / `misc`. Index name follows
+`cortex-{slug}-{family}` exactly. Settings come from a single shared
+[`settings.v1.json`](../../crates/cortex-workers/settings/settings.v1.json)
+applied lazily by `MeiliFulltextIndexer::ensure_settings` on first
+encounter per index — same schema across every per-kind index, so
+§4.4 ("settings JSON for new collections") is satisfied by reuse
+rather than duplication. **No code change needed for §4.**
+
+### Why the audit still shows missing names after §4 confirmed
+
+The writer routing is complete; the gap is upstream of the writer
+consumers. Concretely:
+
+- The Vectorizer hosts 4 collections (all `cortex-cortex-*`).
+- Meili hosts 29 indexes spread across multiple repos.
+- The asymmetry is a function of which kinds the
+  classifier-worker → ingestion → bootstrap pipeline has fanned
+  out to each consumer subscription. §5 (cortex-bootstrap
+  `--kinds` flag) replays the archive into the missing
+  destinations.
 
 ## Why two backends are reported separately
 
