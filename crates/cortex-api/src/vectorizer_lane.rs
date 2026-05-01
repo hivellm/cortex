@@ -102,6 +102,14 @@ impl VectorizerLane {
     /// Probe `/health` so the caller can decide whether to swap in
     /// the lane or fall back to `MemoryVectorLane`. Returns `Ok(())`
     /// only when the SDK's `health_check` succeeds.
+    ///
+    /// `/health` is unauthenticated on the live Vectorizer image, so a
+    /// successful probe says **only** "the server is reachable" — it
+    /// does NOT say "the credentials we cached are accepted". Use
+    /// [`probe_authenticated`] at boot to catch a misconfigured-creds
+    /// stack before the first real `search_vectors` call.
+    ///
+    /// [`probe_authenticated`]: Self::probe_authenticated
     pub async fn probe(&self) -> Result<(), String> {
         let client = self.client.read().await.clone();
         client
@@ -109,6 +117,86 @@ impl VectorizerLane {
             .await
             .map(|_| ())
             .map_err(|e| format!("probe {}: {e}", self.base_url))
+    }
+
+    /// Test-only constructor combining a hand-crafted initial JWT
+    /// with cached login credentials. Lets the integration tests
+    /// drive the refresh-and-retry path against a `wiremock`
+    /// Vectorizer double — the public `with_login` would consume
+    /// one `/auth/login` call up front and leave the test unable to
+    /// distinguish the boot-time login from the post-401 refresh.
+    #[doc(hidden)]
+    pub fn with_initial_jwt_for_test(
+        base_url: impl Into<String>,
+        initial_jwt: &str,
+        username: &str,
+        password: &str,
+    ) -> Self {
+        let base_url = base_url.into();
+        let client = build_client(&base_url, Some(initial_jwt.to_string()))
+            .expect("test client build must succeed");
+        Self {
+            client: Arc::new(tokio::sync::RwLock::new(Arc::new(client))),
+            base_url,
+            creds: Some(LoginCreds {
+                username: username.to_string(),
+                password: password.to_string(),
+            }),
+        }
+    }
+
+    /// Phase11a — run one cheap **authenticated** round-trip
+    /// (`list_collections`) so the caller can prove the cached JWT /
+    /// API key is actually accepted before declaring the lane live.
+    ///
+    /// `/health` (used by [`probe`]) does not require auth on the
+    /// live Vectorizer image, so `probe()` returning `Ok` only proves
+    /// the server is reachable. Without this stronger probe, a
+    /// daemon booted with no credentials (or wrong credentials) wires
+    /// the live lane successfully and only surfaces the failure on
+    /// the first real `/v1/query` call as `errors.vector = "...HTTP 401..."`.
+    ///
+    /// On the first 401 with cached credentials, this method runs one
+    /// transparent [`refresh_token`] + retry — same recovery shape as
+    /// the per-call refresh in [`Self::search`]. A persistent 401
+    /// (or any non-401 transport failure) propagates so the boot path
+    /// can fall back to `MemoryVectorLane` and log loudly.
+    ///
+    /// [`probe`]: Self::probe
+    /// [`refresh_token`]: Self::refresh_token
+    pub async fn probe_authenticated(&self) -> Result<(), String> {
+        let client = self.client.read().await.clone();
+        let attempt = client.list_collections().await;
+        match attempt {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                let msg = format!("probe_authenticated {}: {e}", self.base_url);
+                if !looks_like_auth_failure(&msg) {
+                    return Err(msg);
+                }
+                // 401 — try one refresh + retry, mirroring the
+                // per-call recovery in `search`.
+                if self.creds.is_none() {
+                    return Err(format!(
+                        "{msg}; no cached credentials to mint a fresh JWT — set \
+                         CORTEX_VECTORIZER_USER + _PASSWORD (or _EMBEDDER_VECTORIZER_*)"
+                    ));
+                }
+                if let Err(reason) = self.refresh_token().await {
+                    return Err(format!("{msg}; auth refresh failed: {reason}"));
+                }
+                tracing::info!(
+                    base_url = %self.base_url,
+                    "vector lane: refreshed JWT after probe_authenticated 401, retrying"
+                );
+                let client2 = self.client.read().await.clone();
+                client2
+                    .list_collections()
+                    .await
+                    .map(|_| ())
+                    .map_err(|e2| format!("{msg}; refresh-retry failed: {e2}"))
+            }
+        }
     }
 
     /// Force a JWT refresh — exposed for tests and for the daemon's

@@ -224,6 +224,18 @@ services:
       CORTEX_SYNAP_URL: http://synap:15500
       CORTEX_NEXUS_URL: http://nexus:15474
       CORTEX_VECTORIZER_URL: http://vectorizer:15002
+      # phase11a — credentials for the vector lane's authenticated probe
+      # and reactive 401 → /auth/login refresh path. Without these,
+      # every search_vectors call against a JWT-required Vectorizer
+      # returns 401 with no recovery (the lane lands on the no-creds
+      # branch in vectorizer_lane.rs:247).
+      CORTEX_VECTORIZER_USER: ${CORTEX_VECTORIZER_USER:-${CORTEX_EMBEDDER_VECTORIZER_USER:-admin}}
+      CORTEX_VECTORIZER_PASSWORD: ${CORTEX_VECTORIZER_PASSWORD:-${CORTEX_EMBEDDER_VECTORIZER_PASSWORD:-cortex-dev-admin}}
+      # phase11a — optional: when set to a positive integer, cortex-api
+      # spawns a periodic refresh_token() loop so the cached JWT never
+      # reaches the SDK after expiry. 0 / unset keeps the existing
+      # reactive-on-401 path as the only refresh trigger.
+      CORTEX_VECTORIZER_JWT_WARMUP_SECS: ${CORTEX_VECTORIZER_JWT_WARMUP_SECS:-0}
       CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
       # cortex-adapter-claude lives on the HOST (Windows named pipe

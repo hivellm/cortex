@@ -81,6 +81,25 @@ async fn main() -> Result<()> {
         let password = std::env::var("CORTEX_VECTORIZER_PASSWORD")
             .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
             .ok();
+        let has_login_creds = username.is_some() && password.is_some();
+        let creds_configured = api_key.is_some() || has_login_creds;
+        // Phase11a — when the URL is reachable but no credentials are
+        // present, the SDK's unauthenticated `/health` probe succeeds
+        // and the live lane wires up successfully, but every real
+        // `search_vectors` call returns 401 with no recovery path.
+        // Surface this loudly at boot so operators don't have to
+        // reverse-engineer it from `debug.errors.vector` later.
+        if !creds_configured {
+            tracing::warn!(
+                vectorizer_url = %vectorizer_url,
+                checked_env = "CORTEX_VECTORIZER_API_KEY, VECTORIZER_API_KEY, \
+                               CORTEX_VECTORIZER_USER + _PASSWORD, \
+                               CORTEX_EMBEDDER_VECTORIZER_USER + _PASSWORD",
+                "vector lane: URL set but no credentials configured — every \
+                 authenticated search_vectors call will return 401. \
+                 See docs/operations/vectorizer-auth.md."
+            );
+        }
         let lane_result = if api_key.is_some() {
             VectorizerLane::new(&vectorizer_url, api_key)
         } else if let (Some(u), Some(p)) = (username.as_deref(), password.as_deref()) {
@@ -94,23 +113,94 @@ async fn main() -> Result<()> {
             VectorizerLane::new(&vectorizer_url, None)
         };
         match lane_result {
-            Ok(live) => match live.probe().await {
-                Ok(()) => {
-                    tracing::info!(
-                        vectorizer_url = %vectorizer_url,
-                        "live vector lane: VectorizerLane wired"
-                    );
-                    StdArc::new(live)
+            Ok(live) => {
+                // Phase11a — when credentials are configured, run an
+                // authenticated probe (`list_collections`) so we
+                // catch a misconfigured-creds stack at boot instead
+                // of on the first `/v1/query` call. Anonymous boots
+                // fall back to the unauthenticated `/health` probe
+                // since `list_collections` would 401 every time and
+                // mask the (intended) anonymous behaviour.
+                let probe_result = if creds_configured {
+                    live.probe_authenticated().await
+                } else {
+                    live.probe().await
+                };
+                match probe_result {
+                    Ok(()) => {
+                        tracing::info!(
+                            vectorizer_url = %vectorizer_url,
+                            authenticated = creds_configured,
+                            "live vector lane: VectorizerLane wired"
+                        );
+                        // Phase11a — optional periodic JWT warmup.
+                        // Reactive refresh on 401 already exists in
+                        // `vectorizer_lane.rs::search`; this loop
+                        // keeps the cached JWT fresh proactively for
+                        // deployments where 401-then-retry pairs add
+                        // measurable tail latency. Disabled by
+                        // default (0 / unset).
+                        if has_login_creds {
+                            let warmup_secs =
+                                std::env::var("CORTEX_VECTORIZER_JWT_WARMUP_SECS")
+                                    .ok()
+                                    .and_then(|s| s.trim().parse::<u64>().ok())
+                                    .unwrap_or(0);
+                            if warmup_secs > 0 {
+                                let lane = live.clone();
+                                let url_for_log = vectorizer_url.clone();
+                                tokio::spawn(async move {
+                                    let mut ticker = tokio::time::interval(
+                                        Duration::from_secs(warmup_secs),
+                                    );
+                                    // Skip the immediate first tick;
+                                    // we just minted a JWT.
+                                    ticker.tick().await;
+                                    loop {
+                                        ticker.tick().await;
+                                        match lane.refresh_token().await {
+                                            Ok(()) => tracing::debug!(
+                                                vectorizer_url = %url_for_log,
+                                                interval_secs = warmup_secs,
+                                                "vector lane: JWT warmup refresh ok"
+                                            ),
+                                            Err(reason) => tracing::warn!(
+                                                vectorizer_url = %url_for_log,
+                                                reason = %reason,
+                                                "vector lane: JWT warmup refresh failed"
+                                            ),
+                                        }
+                                    }
+                                });
+                                tracing::info!(
+                                    vectorizer_url = %vectorizer_url,
+                                    interval_secs = warmup_secs,
+                                    "vector lane: JWT warmup loop spawned"
+                                );
+                            }
+                        }
+                        StdArc::new(live)
+                    }
+                    Err(reason) => {
+                        if creds_configured {
+                            tracing::error!(
+                                vectorizer_url = %vectorizer_url,
+                                reason = %reason,
+                                "live vector lane authenticated probe failed; \
+                                 falling back to MemoryVectorLane. \
+                                 Check CORTEX_VECTORIZER_USER / _PASSWORD."
+                            );
+                        } else {
+                            tracing::warn!(
+                                vectorizer_url = %vectorizer_url,
+                                reason = %reason,
+                                "live vector lane probe failed; falling back to MemoryVectorLane"
+                            );
+                        }
+                        vector_memory.clone()
+                    }
                 }
-                Err(reason) => {
-                    tracing::warn!(
-                        vectorizer_url = %vectorizer_url,
-                        reason = %reason,
-                        "live vector lane probe failed; falling back to MemoryVectorLane"
-                    );
-                    vector_memory.clone()
-                }
-            },
+            }
             Err(reason) => {
                 tracing::warn!(
                     vectorizer_url = %vectorizer_url,

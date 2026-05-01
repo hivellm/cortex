@@ -156,7 +156,7 @@ export function TasksView() {
     const set = new Set<string>();
     for (const r of allRows) {
       if (!r.repo || r.repo !== filters.repo) continue;
-      if (r.phase) set.add(r.phase);
+      if (r.phase) set.add(phaseGroupKey(r.phase));
     }
     return Array.from(set).sort((a, b) => phaseSortKey(a).localeCompare(phaseSortKey(b)));
   }, [allRows, filters.repo]);
@@ -165,7 +165,7 @@ export function TasksView() {
     return allRows.filter((r) => {
       if (!filters.showArchived && r.status === "archived") return false;
       if (filters.status.size > 0 && !filters.status.has(r.status)) return false;
-      if (filters.phase.size > 0 && !filters.phase.has(r.phase)) return false;
+      if (filters.phase.size > 0 && !filters.phase.has(phaseGroupKey(r.phase))) return false;
       if (filters.repo !== null) {
         if (r.repo !== filters.repo) return false;
       }
@@ -183,13 +183,18 @@ export function TasksView() {
   // Single-project deployments fall through cleanly because every
   // row carries the same `repo` (or `null` → groups under "—").
   const groupedByRepo = useMemo(() => {
+    // Bucket by `phaseN` (group key) so phase11a/phase11b/phase11c
+    // collapse under a single phase11 header. Within each bucket
+    // rows are sorted by their full `phaseN<letter>` id so the
+    // sub-task ordering stays deterministic.
     const repos = new Map<string, Map<string, TaskRow[]>>();
     for (const r of filtered) {
       const repoKey = r.repo ?? "—";
       const phaseMap = repos.get(repoKey) ?? new Map<string, TaskRow[]>();
-      const bucket = phaseMap.get(r.phase) ?? [];
+      const groupKey = phaseGroupKey(r.phase);
+      const bucket = phaseMap.get(groupKey) ?? [];
       bucket.push(r);
-      phaseMap.set(r.phase, bucket);
+      phaseMap.set(groupKey, bucket);
       repos.set(repoKey, phaseMap);
     }
     const out: Array<{
@@ -201,9 +206,14 @@ export function TasksView() {
     for (const [repo, phaseMap] of Array.from(repos.entries()).sort(
       ([a], [b]) => a.localeCompare(b),
     )) {
-      const phases = Array.from(phaseMap.entries()).sort(([a], [b]) =>
-        a.localeCompare(b),
-      );
+      const phases = Array.from(phaseMap.entries())
+        .map(([groupKey, rows]) => {
+          const sorted = rows.slice().sort((a, b) =>
+            phaseSortKey(a.phase).localeCompare(phaseSortKey(b.phase)),
+          );
+          return [groupKey, sorted] as [string, TaskRow[]];
+        })
+        .sort(([a], [b]) => phaseSortKey(a).localeCompare(phaseSortKey(b)));
       let total = 0;
       let done = 0;
       for (const [, rows] of phases) {
@@ -467,7 +477,35 @@ export function TasksView() {
                   </div>
                 </header>
                 {phases.map(([phase, rows]) => {
-                  const breakdown = list?.by_phase.find((p) => p.phase === phase);
+                  // `phase` here is the group key (e.g. `phase11`).
+                  // Aggregate every per-sub-phase breakdown that
+                  // collapses into this group so the header counts
+                  // (in-progress / pending) reflect the whole bucket.
+                  const breakdown = (() => {
+                    const matches = (list?.by_phase ?? []).filter(
+                      (p) => phaseGroupKey(p.phase) === phase,
+                    );
+                    if (matches.length === 0) return undefined;
+                    const numMatch = /^phase(\d+)$/.exec(phase);
+                    return matches.reduce<PhaseBreakdown>(
+                      (acc, p) => ({
+                        ...acc,
+                        total: acc.total + p.total,
+                        done: acc.done + p.done,
+                        in_progress: acc.in_progress + p.in_progress,
+                        pending: acc.pending + p.pending,
+                      }),
+                      {
+                        phase,
+                        phase_num: numMatch ? Number(numMatch[1]) : 0,
+                        phase_letter: "",
+                        total: 0,
+                        done: 0,
+                        in_progress: 0,
+                        pending: 0,
+                      },
+                    );
+                  })();
                   const phaseKey = `${repo}/${phase}`;
                   const isCollapsed = collapsedPhases.has(phaseKey);
                   const aggDone = rows.reduce((acc, r) => acc + r.progress.done, 0);
@@ -561,13 +599,26 @@ function TaskRowItem({
         cursor: "pointer",
       }}
     >
-      <span className="mono" style={{ fontSize: 11.5, color: "var(--fg-1)" }}>
+      <span
+        className="mono"
+        title={row.id}
+        style={{
+          fontSize: 11.5,
+          color: "var(--fg-1)",
+          minWidth: 0,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
         {row.id}
       </span>
       <span
+        title={row.title}
         style={{
           fontSize: 12,
           color: "var(--fg-0)",
+          minWidth: 0,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -838,6 +889,16 @@ function phaseSortKey(phase: string): string {
   const m = /^phase(\d+)([a-z]*)$/.exec(phase);
   if (!m) return phase;
   return `phase${m[1].padStart(4, "0")}${m[2]}`;
+}
+
+/// Collapse `phaseN<letter>` to `phaseN` so the GUI buckets every
+/// sub-task of the same phase (e.g. `phase11a` / `phase11b` /
+/// `phase11c`) under a single header. Falls back to the raw string
+/// when the input doesn't match the canonical pattern.
+function phaseGroupKey(phase: string): string {
+  const m = /^phase(\d+)[a-z]*$/.exec(phase);
+  if (!m) return phase;
+  return `phase${m[1]}`;
 }
 
 function fmtRelative(iso: string): string {
