@@ -74,9 +74,7 @@ impl CanaryOutcome {
             CanaryOutcome::Timeout {
                 marker_id,
                 deadline_ms,
-            } => format!(
-                "canary marker {marker_id} not seen in archive within {deadline_ms}ms"
-            ),
+            } => format!("canary marker {marker_id} not seen in archive within {deadline_ms}ms"),
             CanaryOutcome::Transport { stage, reason } => {
                 format!("canary transport failure at {stage}: {reason}")
             }
@@ -119,7 +117,9 @@ impl Default for CanaryConfig {
             interval_secs: 300,
             deadline_secs: 10,
             hooks: vec!["PostToolUse".to_string()],
-            history_path: PathBuf::from(home).join(".cortex").join("canary-history.jsonl"),
+            history_path: PathBuf::from(home)
+                .join(".cortex")
+                .join("canary-history.jsonl"),
             ipc_path: None,
             api_url: std::env::var("CORTEX_API_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:17000".to_string()),
@@ -261,7 +261,11 @@ pub async fn run_canary_once(cfg: &CanaryConfig, hook: &str) -> CanaryOutcome {
     // tool name visible in the row text — same surface dashboards
     // render. Other hooks land under `turn`.
     let deadline = Duration::from_millis(cfg.deadline_secs.saturating_mul(1_000));
-    let target_kind = if hook == "PostToolUse" { "tool_call" } else { "turn" };
+    let target_kind = if hook == "PostToolUse" {
+        "tool_call"
+    } else {
+        "turn"
+    };
     match poll_archive_for_marker(&cfg.api_url, target_kind, &marker, deadline).await {
         Ok(()) => {
             let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(0);
@@ -328,13 +332,12 @@ async fn send_frame_via_ipc(ipc_path: Option<&str>, bytes: &[u8]) -> Result<(), 
     #[cfg(windows)]
     {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let pipe = ipc_path.unwrap_or(r"\\.\pipe\cortex-adapter-claude").to_string();
-        let mut client = tokio::time::timeout(
-            Duration::from_secs(3),
-            async {
-                tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe)
-            },
-        )
+        let pipe = ipc_path
+            .unwrap_or(r"\\.\pipe\cortex-adapter-claude")
+            .to_string();
+        let mut client = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe)
+        })
         .await
         .map_err(|_| "named-pipe connect timeout".to_string())?
         .map_err(|e| format!("named-pipe open: {e}"))?;
@@ -449,7 +452,10 @@ async fn emit_failure_alert(cfg: &CanaryConfig, hook: &str, outcome: &CanaryOutc
         "content_hash": format!("sha256:canary:{hook}"),
     });
     let body = serde_json::json!({ "events": [envelope] });
-    let url = format!("{}/v1/events/batch", cfg.ingestion_url.trim_end_matches('/'));
+    let url = format!(
+        "{}/v1/events/batch",
+        cfg.ingestion_url.trim_end_matches('/')
+    );
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -545,11 +551,9 @@ mod tests {
 
     #[test]
     fn outcome_describe_includes_relevant_fields() {
-        assert!(
-            CanaryOutcome::Success { latency_ms: 42 }
-                .describe()
-                .contains("42ms")
-        );
+        assert!(CanaryOutcome::Success { latency_ms: 42 }
+            .describe()
+            .contains("42ms"));
         let t = CanaryOutcome::Timeout {
             marker_id: "abc".into(),
             deadline_ms: 5_000,

@@ -7,11 +7,11 @@
 
 use std::sync::Arc;
 
+use cortex_api::types::{IncludeField, Intent, Scope};
 use cortex_api::{
     GraphLane, GraphRequest, KeywordLane, LaneError, LaneHit, MemoryGraphLane, MemoryKeywordLane,
     MemoryVectorLane, Orchestrator, QueryRequest,
 };
-use cortex_api::types::{IncludeField, Intent, Scope};
 
 fn graph_request(template: &str, query: &str) -> GraphRequest {
     GraphRequest {
@@ -144,8 +144,7 @@ async fn unknown_template_is_rejected_at_lane_boundary() {
     match err {
         LaneError::Rejected(msg) => {
             assert!(
-                msg.contains("unknown graph template")
-                    && msg.contains("whitelist:"),
+                msg.contains("unknown graph template") && msg.contains("whitelist:"),
                 "rejection message names the offending template + lists the whitelist: {msg}"
             );
         }

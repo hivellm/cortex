@@ -477,11 +477,7 @@ mod tests {
         // global tiers AND the per-repo `cortex-{slug}-decisions`
         // names that the writer side actually populates today.
         let plan = build_plan(&req(Intent::DecisionLookup));
-        let collections: Vec<_> = plan
-            .vectors
-            .iter()
-            .map(|v| v.collection.as_str())
-            .collect();
+        let collections: Vec<_> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
         assert!(
             collections.contains(&COLLECTION_DECISION_FP32),
             "legacy fp32 tier must still be queried: {collections:?}"
@@ -522,11 +518,7 @@ mod tests {
         // the keyword lane against `cortex_turns` so literal-phrase
         // matches surface alongside semantic neighbours.
         let plan = build_plan(&req(Intent::SimilarProblems));
-        let collections: Vec<_> = plan
-            .vectors
-            .iter()
-            .map(|v| v.collection.as_str())
-            .collect();
+        let collections: Vec<_> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
         assert!(
             collections.contains(&COLLECTION_TURN_FP32),
             "fp32 hot tier must be queried: {collections:?}"

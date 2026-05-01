@@ -8,9 +8,7 @@ use std::sync::Arc;
 use axum::http::HeaderMap;
 
 use crate::acl::{AclDecision, AclStore};
-use crate::audit::{
-    build_envelope_with_rewrite_context, AuditPublisher, MemoryAuditPublisher,
-};
+use crate::audit::{build_envelope_with_rewrite_context, AuditPublisher, MemoryAuditPublisher};
 use crate::audit_store::AuditStore;
 use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
@@ -260,7 +258,8 @@ pub struct QueryService {
     /// the daemon was started without coverage wiring (unit tests,
     /// cold dev stack); `Some(None)` when the audit ran but every
     /// backend was unconfigured.
-    pub coverage_snapshot: Option<Arc<tokio::sync::RwLock<Option<crate::coverage::CoverageResponse>>>>,
+    pub coverage_snapshot:
+        Option<Arc<tokio::sync::RwLock<Option<crate::coverage::CoverageResponse>>>>,
 }
 
 impl QueryService {
@@ -514,9 +513,7 @@ pub struct ErrorBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lanes::{
-        LaneHit, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane,
-    };
+    use crate::lanes::{LaneHit, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane};
     use crate::types::{IncludeField, Intent, Scope};
 
     fn build_orchestrator() -> Orchestrator {
@@ -785,8 +782,7 @@ mod tests {
                 extras: Default::default(),
             }],
         );
-        let svc = QueryService::with_memory_defaults(build_orchestrator())
-            .with_indexed_repos(lane);
+        let svc = QueryService::with_memory_defaults(build_orchestrator()).with_indexed_repos(lane);
         let mut r = req("anything");
         r.scope.repo = Some("UnknownRepo".into());
         match svc.handle("dash", r).await {
@@ -826,8 +822,7 @@ mod tests {
                 extras: Default::default(),
             }],
         );
-        let svc = QueryService::with_memory_defaults(build_orchestrator())
-            .with_indexed_repos(lane);
+        let svc = QueryService::with_memory_defaults(build_orchestrator()).with_indexed_repos(lane);
         let mut r = req("anything");
         r.scope.repo = Some("Cortex".into());
         match svc.handle("dash", r).await {
@@ -918,8 +913,7 @@ mod tests {
         // `scope_unset` notice (instead of a silent empty success)
         // so MCP / dashboard callers can render an actionable hint.
         let lane = Arc::new(MemoryKeywordLane::new());
-        let svc = QueryService::with_memory_defaults(build_orchestrator())
-            .with_indexed_repos(lane);
+        let svc = QueryService::with_memory_defaults(build_orchestrator()).with_indexed_repos(lane);
         match svc.handle("dash", req("anything")).await {
             ServiceOutcome::Ok(resp) => {
                 let n = resp.notice.expect("expected scope_unset notice");

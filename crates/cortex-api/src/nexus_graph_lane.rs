@@ -170,10 +170,7 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
     // honest for the snippet column / fused result set even though
     // the keyword/vector lanes' `lane_label()` fallback never
     // selects it (graph hits don't usually flow into snippets).
-    extras.insert(
-        "source".to_string(),
-        Value::String("graph".to_string()),
-    );
+    extras.insert("source".to_string(), Value::String("graph".to_string()));
     extras.insert("edge_from".to_string(), Value::String(edge_from.clone()));
     extras.insert("edge_to".to_string(), Value::String(edge_to.clone()));
     extras.insert("edge_type".to_string(), Value::String(edge_type.clone()));
@@ -240,7 +237,10 @@ mod tests {
             "Adopt RRF fusion"
         ]);
         let hit = project_row(&row, "decision_supersedes_chain").unwrap();
-        assert_eq!(hit.doc_id, "graph|decision_supersedes_chain|DEC-0042|DEC-0001");
+        assert_eq!(
+            hit.doc_id,
+            "graph|decision_supersedes_chain|DEC-0042|DEC-0001"
+        );
         assert_eq!(hit.text, "Adopt RRF fusion");
         assert_eq!(hit.symbol.as_deref(), Some("SUPERSEDES"));
         assert_eq!(
@@ -255,10 +255,7 @@ mod tests {
             hit.extras.get("edge_type").and_then(|v| v.as_str()),
             Some("SUPERSEDES")
         );
-        assert_eq!(
-            hit.extras.get("hops").and_then(|v| v.as_u64()),
-            Some(1)
-        );
+        assert_eq!(hit.extras.get("hops").and_then(|v| v.as_u64()), Some(1));
         assert_eq!(
             hit.extras.get("source").and_then(|v| v.as_str()),
             Some("graph")

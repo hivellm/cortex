@@ -175,7 +175,10 @@ impl HeadSha {
     /// unavailable or the command failed.
     pub fn resolve_now() -> Option<Self> {
         use std::process::Command;
-        let out = Command::new("git").args(["rev-parse", "HEAD"]).output().ok()?;
+        let out = Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .ok()?;
         if !out.status.success() {
             return None;
         }
@@ -236,10 +239,7 @@ pub(crate) async fn gather_subsystem_extras() -> BTreeMap<String, SubsystemStatu
             .ok()
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| (*default).to_string());
-        targets.push(ProbeTarget {
-            name,
-            url,
-        });
+        targets.push(ProbeTarget { name, url });
     }
     let client = match build_client(&AggregatorConfig::default()) {
         Ok(c) => c,
@@ -372,11 +372,7 @@ pub async fn versions_handler(State(state): State<HealthState>) -> Response {
     (StatusCode::OK, Json(report)).into_response()
 }
 
-fn version_row_from_json(
-    name: &str,
-    raw: &Value,
-    head_sha: &str,
-) -> Option<RunningBinaryVersion> {
+fn version_row_from_json(name: &str, raw: &Value, head_sha: &str) -> Option<RunningBinaryVersion> {
     let obj = raw.as_object()?;
     let git_sha = obj
         .get("git_sha")
@@ -393,7 +389,10 @@ fn version_row_from_json(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    let git_dirty = obj.get("git_dirty").and_then(|v| v.as_bool()).unwrap_or(false);
+    let git_dirty = obj
+        .get("git_dirty")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let profile = obj
         .get("profile")
         .and_then(|v| v.as_str())
@@ -433,11 +432,7 @@ fn behind_by_commits(running_sha: &str, head_sha: &str) -> (Option<u64>, Option<
         );
     }
     let out = match Command::new("git")
-        .args([
-            "rev-list",
-            &format!("{running_sha}..HEAD"),
-            "--count",
-        ])
+        .args(["rev-list", &format!("{running_sha}..HEAD"), "--count"])
         .output()
     {
         Ok(o) => o,
@@ -449,10 +444,7 @@ fn behind_by_commits(running_sha: &str, head_sha: &str) -> (Option<u64>, Option<
         }
     };
     if !out.status.success() {
-        return (
-            None,
-            Some("running sha unreachable from HEAD".to_string()),
-        );
+        return (None, Some("running sha unreachable from HEAD".to_string()));
     }
     let trimmed = String::from_utf8_lossy(&out.stdout).trim().to_string();
     match trimmed.parse::<u64>() {
@@ -494,7 +486,11 @@ pub async fn freshness_handler(State(state): State<HealthState>) -> Response {
             adapter.extras.get("last_publish_ok_ts_ms_by_kind"),
         );
         // Aggregate (any-kind) publish-ok timestamp from phase8a.
-        if let Some(ms) = adapter.extras.get("last_publish_ok_ts_ms").and_then(|v| v.as_u64()) {
+        if let Some(ms) = adapter
+            .extras
+            .get("last_publish_ok_ts_ms")
+            .and_then(|v| v.as_u64())
+        {
             rows.push(freshness_row("adapter.last_publish_ok", ms, now_ms));
         }
     }
@@ -507,16 +503,28 @@ pub async fn freshness_handler(State(state): State<HealthState>) -> Response {
             "ingestion.last_archive_write",
             ingest.extras.get("last_archive_write_ts_ms"),
         );
-        if let Some(ms) = ingest.extras.get("last_batch_accepted_ts_ms").and_then(|v| v.as_u64()) {
+        if let Some(ms) = ingest
+            .extras
+            .get("last_batch_accepted_ts_ms")
+            .and_then(|v| v.as_u64())
+        {
             rows.push(freshness_row("ingestion.last_batch_accepted", ms, now_ms));
         }
     }
 
     // ---- cortex-api loader stages (read directly from in-process LoaderMetrics) -----
     let arch_ts = state.loader_metrics.archive_last_refresh_ts_ms();
-    rows.push(freshness_row("api.archive_loader.last_refresh", arch_ts, now_ms));
+    rows.push(freshness_row(
+        "api.archive_loader.last_refresh",
+        arch_ts,
+        now_ms,
+    ));
     let meili_ts = state.loader_metrics.meili_last_refresh_ts_ms();
-    rows.push(freshness_row("api.meili_loader.last_refresh", meili_ts, now_ms));
+    rows.push(freshness_row(
+        "api.meili_loader.last_refresh",
+        meili_ts,
+        now_ms,
+    ));
 
     // ---- workers — use last_job_ts_ms exposed in extras --------------------
     for worker in [
@@ -599,7 +607,9 @@ pub async fn divergence_handler(State(state): State<HealthState>) -> Response {
 
 /// Pull the canonical divergence pairs from the gathered extras.
 /// Returns `(pair_key, upstream_total, downstream_total)` rows.
-pub(crate) fn build_divergence_pairs(by_name: &BTreeMap<String, SubsystemStatus>) -> Vec<(String, u64, u64)> {
+pub(crate) fn build_divergence_pairs(
+    by_name: &BTreeMap<String, SubsystemStatus>,
+) -> Vec<(String, u64, u64)> {
     let mut out: Vec<(String, u64, u64)> = Vec::new();
 
     let adapter = by_name.get("cortex-adapter");
@@ -637,9 +647,7 @@ pub(crate) fn build_divergence_pairs(by_name: &BTreeMap<String, SubsystemStatus>
             let up = pub_ok_by_kind.get(k).copied().unwrap_or(0);
             let down = archived_by_kind.get(k).copied().unwrap_or(0);
             out.push((
-                format!(
-                    "adapter.publish_ok.{k} -> ingestion.archived.{k}"
-                ),
+                format!("adapter.publish_ok.{k} -> ingestion.archived.{k}"),
                 up,
                 down,
             ));
@@ -801,7 +809,11 @@ async fn build_snapshot(state: &HealthState) -> HealthSnapshot {
             "adapter.last_publish_ok",
             adapter.extras.get("last_publish_ok_ts_ms_by_kind"),
         );
-        if let Some(ms) = adapter.extras.get("last_publish_ok_ts_ms").and_then(|v| v.as_u64()) {
+        if let Some(ms) = adapter
+            .extras
+            .get("last_publish_ok_ts_ms")
+            .and_then(|v| v.as_u64())
+        {
             freshness.push(freshness_row("adapter.last_publish_ok", ms, now_ms));
         }
     }
@@ -812,14 +824,26 @@ async fn build_snapshot(state: &HealthState) -> HealthSnapshot {
             "ingestion.last_archive_write",
             ingest.extras.get("last_archive_write_ts_ms"),
         );
-        if let Some(ms) = ingest.extras.get("last_batch_accepted_ts_ms").and_then(|v| v.as_u64()) {
+        if let Some(ms) = ingest
+            .extras
+            .get("last_batch_accepted_ts_ms")
+            .and_then(|v| v.as_u64())
+        {
             freshness.push(freshness_row("ingestion.last_batch_accepted", ms, now_ms));
         }
     }
     let arch_ts = state.loader_metrics.archive_last_refresh_ts_ms();
-    freshness.push(freshness_row("api.archive_loader.last_refresh", arch_ts, now_ms));
+    freshness.push(freshness_row(
+        "api.archive_loader.last_refresh",
+        arch_ts,
+        now_ms,
+    ));
     let meili_ts = state.loader_metrics.meili_last_refresh_ts_ms();
-    freshness.push(freshness_row("api.meili_loader.last_refresh", meili_ts, now_ms));
+    freshness.push(freshness_row(
+        "api.meili_loader.last_refresh",
+        meili_ts,
+        now_ms,
+    ));
     for worker in [
         "cortex-classifier-worker",
         "cortex-embedder-worker",
@@ -989,10 +1013,7 @@ mod tests {
         push_per_label_ts(&mut rows, now_ms, "adapter.last_frame", Some(&raw));
         assert_eq!(rows.len(), 2);
         let by_key: BTreeMap<_, _> = rows.iter().map(|r| (r.key.as_str(), r)).collect();
-        assert_eq!(
-            by_key["adapter.last_frame.PostToolUse"].gap_seconds,
-            500
-        );
+        assert_eq!(by_key["adapter.last_frame.PostToolUse"].gap_seconds, 500);
         // Zero ts → -1 gap, Warn severity.
         assert_eq!(
             by_key["adapter.last_frame.UserPromptSubmit"].gap_seconds,
@@ -1081,12 +1102,9 @@ mod tests {
             "profile": "release",
             "crate_version": "0.1.0"
         });
-        let row = version_row_from_json(
-            "cortex-x",
-            &raw,
-            "abc1234567890abc1234567890abc1234567890a",
-        )
-        .unwrap();
+        let row =
+            version_row_from_json("cortex-x", &raw, "abc1234567890abc1234567890abc1234567890a")
+                .unwrap();
         assert!(row.matches_head);
         assert_eq!(row.git_sha_short, "abc1234");
         assert!(!row.git_dirty);

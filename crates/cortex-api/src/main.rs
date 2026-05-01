@@ -19,8 +19,8 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc as StdArc;
 
 use cortex_api::{
-    GraphLane, KeywordLane, LoaderMetrics, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane,
-    MeiliKeywordLane, NexusGraphLane, Orchestrator, QueryService, VectorLane, VectorizerLane,
+    GraphLane, KeywordLane, LoaderMetrics, MeiliKeywordLane, MemoryGraphLane, MemoryKeywordLane,
+    MemoryVectorLane, NexusGraphLane, Orchestrator, QueryService, VectorLane, VectorizerLane,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -117,9 +117,7 @@ fn run_admin_op(op: AdminOp) -> Result<()> {
             println!("Persist it now; the daemon stores only the Argon2id hash.");
         }
         AdminOp::ListApiKeys => {
-            let rows = store
-                .list()
-                .map_err(|e| anyhow::anyhow!("list: {e}"))?;
+            let rows = store.list().map_err(|e| anyhow::anyhow!("list: {e}"))?;
             if rows.is_empty() {
                 println!("(no keys issued)");
                 return Ok(());
@@ -191,8 +189,7 @@ async fn main() -> Result<()> {
     // failures log WARN with the URL + reason so misconfigurations
     // are spotted at boot.
     let vector: StdArc<dyn VectorLane> = if let Ok(vectorizer_url) =
-        std::env::var("CORTEX_VECTORIZER_URL")
-            .or_else(|_| std::env::var("VECTORIZER_URL"))
+        std::env::var("CORTEX_VECTORIZER_URL").or_else(|_| std::env::var("VECTORIZER_URL"))
     {
         // Auth selection mirrors the embedder-worker boot flow:
         // - explicit JWT / api-key wins (`*_API_KEY` env)
@@ -268,18 +265,16 @@ async fn main() -> Result<()> {
                         // measurable tail latency. Disabled by
                         // default (0 / unset).
                         if has_login_creds {
-                            let warmup_secs =
-                                std::env::var("CORTEX_VECTORIZER_JWT_WARMUP_SECS")
-                                    .ok()
-                                    .and_then(|s| s.trim().parse::<u64>().ok())
-                                    .unwrap_or(0);
+                            let warmup_secs = std::env::var("CORTEX_VECTORIZER_JWT_WARMUP_SECS")
+                                .ok()
+                                .and_then(|s| s.trim().parse::<u64>().ok())
+                                .unwrap_or(0);
                             if warmup_secs > 0 {
                                 let lane = live.clone();
                                 let url_for_log = vectorizer_url.clone();
                                 tokio::spawn(async move {
-                                    let mut ticker = tokio::time::interval(
-                                        Duration::from_secs(warmup_secs),
-                                    );
+                                    let mut ticker =
+                                        tokio::time::interval(Duration::from_secs(warmup_secs));
                                     // Skip the immediate first tick;
                                     // we just minted a JWT.
                                     ticker.tick().await;
@@ -338,9 +333,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        tracing::info!(
-            "CORTEX_VECTORIZER_URL unset; vector lane stays on MemoryVectorLane"
-        );
+        tracing::info!("CORTEX_VECTORIZER_URL unset; vector lane stays on MemoryVectorLane");
         vector_memory.clone()
     };
 
@@ -388,9 +381,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        tracing::info!(
-            "CORTEX_FULLTEXT_MEILI_URL unset; keyword lane stays on MemoryKeywordLane"
-        );
+        tracing::info!("CORTEX_FULLTEXT_MEILI_URL unset; keyword lane stays on MemoryKeywordLane");
         keyword_memory.clone()
     };
 
@@ -512,7 +503,9 @@ async fn main() -> Result<()> {
                         total = report.total_seeded(),
                         "meili loader: refreshed"
                     ),
-                    Err(e) => tracing::warn!(meili_url = %url, error = %e, "meili loader: refresh failed"),
+                    Err(e) => {
+                        tracing::warn!(meili_url = %url, error = %e, "meili loader: refresh failed")
+                    }
                 }
             }
         });
@@ -551,39 +544,40 @@ async fn main() -> Result<()> {
     //
     // Falls back to `<cwd>/.rulebook` so `cargo run` from the repo
     // root just works on a single-project deployment.
-    let task_loaders: Vec<cortex_api::TaskLoader> =
-        if let Ok(roots) = std::env::var("CORTEX_RULEBOOK_ROOTS") {
-            let mut out = Vec::new();
-            for raw in roots.split(|c: char| c == ',' || c == ';') {
-                let p = PathBuf::from(raw.trim());
-                if p.as_os_str().is_empty() {
-                    continue;
-                }
-                let slug = p
-                    .parent()
-                    .and_then(|parent| parent.file_name())
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_ascii_lowercase());
-                tracing::info!(
-                    rulebook_root = %p.display(),
-                    repo_slug = ?slug,
-                    "tasks loader: registered project"
-                );
-                let mut loader = cortex_api::TaskLoader::new(p);
-                if let Some(s) = slug {
-                    loader = loader.with_repo(s);
-                }
-                out.push(loader);
+    let task_loaders: Vec<cortex_api::TaskLoader> = if let Ok(roots) =
+        std::env::var("CORTEX_RULEBOOK_ROOTS")
+    {
+        let mut out = Vec::new();
+        for raw in roots.split(|c: char| c == ',' || c == ';') {
+            let p = PathBuf::from(raw.trim());
+            if p.as_os_str().is_empty() {
+                continue;
             }
-            if out.is_empty() {
-                tracing::warn!(
+            let slug = p
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_ascii_lowercase());
+            tracing::info!(
+                rulebook_root = %p.display(),
+                repo_slug = ?slug,
+                "tasks loader: registered project"
+            );
+            let mut loader = cortex_api::TaskLoader::new(p);
+            if let Some(s) = slug {
+                loader = loader.with_repo(s);
+            }
+            out.push(loader);
+        }
+        if out.is_empty() {
+            tracing::warn!(
                     "CORTEX_RULEBOOK_ROOTS was set but parsed empty; falling back to single-root resolution"
                 );
-            }
-            out
-        } else {
-            Vec::new()
-        };
+        }
+        out
+    } else {
+        Vec::new()
+    };
     let task_loaders = if task_loaders.is_empty() {
         let rulebook_root: PathBuf = std::env::var("CORTEX_RULEBOOK_ROOT")
             .map(PathBuf::from)
@@ -657,8 +651,9 @@ async fn main() -> Result<()> {
     // boot-time audit (which writes the result here) and `/v1/status`
     // (which reads it). Empty until the audit completes; subsequent
     // refreshes overwrite atomically.
-    let coverage_snapshot: Arc<tokio::sync::RwLock<Option<cortex_api::coverage::CoverageResponse>>> =
-        Arc::new(tokio::sync::RwLock::new(None));
+    let coverage_snapshot: Arc<
+        tokio::sync::RwLock<Option<cortex_api::coverage::CoverageResponse>>,
+    > = Arc::new(tokio::sync::RwLock::new(None));
     // Wire the `keyword_memory` snapshot into the service so
     // `/v1/status.indexed_repos` and `notice.repo_not_indexed` (issue
     // hivellm/cortex#1) read from the same source the dashboard does.
@@ -679,10 +674,8 @@ async fn main() -> Result<()> {
         let interval = std::time::Duration::from_secs(silent_drop_cfg.poll_interval_secs.max(5));
         let watcher_aggregator =
             std::sync::Arc::new(cortex_api::health::HealthAggregatorState::new());
-        let mut watcher = cortex_api::silent_drop::SilentDropWatcher::new(
-            silent_drop_cfg,
-            watcher_aggregator,
-        );
+        let mut watcher =
+            cortex_api::silent_drop::SilentDropWatcher::new(silent_drop_cfg, watcher_aggregator);
         watcher.hydrate_from_disk();
         tokio::spawn(async move {
             let client = reqwest::Client::builder()
@@ -797,11 +790,7 @@ async fn main() -> Result<()> {
 
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
-    let app = cortex_api::build_router_with_auth(
-        service,
-        Some(dashboard_state),
-        api_keys_store,
-    );
+    let app = cortex_api::build_router_with_auth(service, Some(dashboard_state), api_keys_store);
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -925,12 +914,9 @@ async fn audit_coverage_at_boot(
 /// Mirrors the boot-time auth precedence in the vector-lane wiring
 /// (api_key wins, otherwise user+password → /auth/login). Returns
 /// `None` when no credentials are configured (anonymous dev stack).
-async fn resolve_vectorizer_bearer(
-    http: &reqwest::Client,
-    base_url: &str,
-) -> Option<String> {
-    if let Ok(key) = std::env::var("CORTEX_VECTORIZER_API_KEY")
-        .or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+async fn resolve_vectorizer_bearer(http: &reqwest::Client, base_url: &str) -> Option<String> {
+    if let Ok(key) =
+        std::env::var("CORTEX_VECTORIZER_API_KEY").or_else(|_| std::env::var("VECTORIZER_API_KEY"))
     {
         if !key.is_empty() {
             return Some(key);
@@ -1102,9 +1088,7 @@ fn resolve_fusion_config_from_env() -> cortex_api::fusion::FusionConfig {
 ///
 /// Unknown values log a `WARN` and fall back to `noun_phrase`.
 fn resolve_query_rewriter_from_env() -> Arc<dyn cortex_api::query_rewrite::QueryRewriter> {
-    use cortex_api::query_rewrite::{
-        NounPhraseRewriter, PassthroughRewriter, SonnetRewriter,
-    };
+    use cortex_api::query_rewrite::{NounPhraseRewriter, PassthroughRewriter, SonnetRewriter};
     let raw = std::env::var("CORTEX_QUERY_REWRITER")
         .ok()
         .map(|s| s.trim().to_lowercase())

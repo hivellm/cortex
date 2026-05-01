@@ -168,8 +168,8 @@ fn serialised_len(resp: &QueryResponse) -> usize {
 mod tests {
     use super::*;
     use crate::types::{
-        DecisionRef, GraphNeighbor, Intent, QueryRequest, ResultsBag, Scope,
-        SimilarTurn, Snippet, ViolationRef,
+        DecisionRef, GraphNeighbor, Intent, QueryRequest, ResultsBag, Scope, SimilarTurn, Snippet,
+        ViolationRef,
     };
 
     fn snippet(rank: usize, text: &str) -> Snippet {
@@ -323,5 +323,13 @@ mod tests {
     // Suppress unused-import warnings for items only referenced via
     // the `..QueryResponse::default()` spread above.
     #[allow(dead_code)]
-    fn _types_in_scope(_q: QueryRequest, _i: Intent, _s: Scope, _r: ResultsBag, _v: ViolationRef, _t: SimilarTurn) {}
+    fn _types_in_scope(
+        _q: QueryRequest,
+        _i: Intent,
+        _s: Scope,
+        _r: ResultsBag,
+        _v: ViolationRef,
+        _t: SimilarTurn,
+    ) {
+    }
 }

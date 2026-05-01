@@ -6,11 +6,11 @@
 
 use std::sync::Arc;
 
+use cortex_api::types::{IncludeField, Intent, Scope};
 use cortex_api::{
     KeywordLane, KeywordRequest, MeiliKeywordLane, MemoryGraphLane, MemoryKeywordLane,
     MemoryVectorLane, Orchestrator, QueryRequest,
 };
-use cortex_api::types::{IncludeField, Intent, Scope};
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -52,7 +52,10 @@ async fn live_lane_passes_query_string_through_to_meili() {
         .await;
 
     let lane = MeiliKeywordLane::new(server.uri(), None).unwrap();
-    let hits = lane.search(&keyword_request("embedder lane")).await.unwrap();
+    let hits = lane
+        .search(&keyword_request("embedder lane"))
+        .await
+        .unwrap();
     assert_eq!(hits.len(), 1, "mock only matches when q is forwarded");
     assert_eq!(hits[0].text, "embedder lane wired");
     assert_eq!(
@@ -202,9 +205,7 @@ async fn fail_open_when_meili_unreachable_through_orchestrator() {
     // Spec scenario "Meili down → fail-open": a request to a dead
     // server still returns a populated response — empty results,
     // `debug.errors["keyword"]` populated, no panic.
-    let dead_lane = Arc::new(
-        MeiliKeywordLane::new("http://127.0.0.1:1", None).unwrap(),
-    );
+    let dead_lane = Arc::new(MeiliKeywordLane::new("http://127.0.0.1:1", None).unwrap());
     let _unused: Arc<MemoryKeywordLane> = Arc::new(MemoryKeywordLane::new());
     let vector = Arc::new(MemoryVectorLane::new());
     let graph = Arc::new(MemoryGraphLane::new());

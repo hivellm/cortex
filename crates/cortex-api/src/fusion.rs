@@ -262,10 +262,7 @@ mod tests {
         // pre-phase6c behaviour set `CORTEX_RRF_ALPHA=1.0`. The
         // fused score for each hit MUST match the positional-only
         // baseline within float epsilon.
-        let lane_a = vec![
-            hit_with_score("X", 0.91),
-            hit_with_score("Y", 0.42),
-        ];
+        let lane_a = vec![hit_with_score("X", 0.91), hit_with_score("Y", 0.42)];
         let lane_b = vec![hit_with_score("Y", 0.50)];
         let blended = rrf_fuse(
             vec![lane_a.clone(), lane_b.clone()],
@@ -296,10 +293,7 @@ mod tests {
             hit_with_score("STRONG_RANK2", 0.95),
         ];
         let lane_b = vec![hit_with_score("STRONG_RANK2", 0.90)];
-        let fused = rrf_fuse(
-            vec![lane_a, lane_b],
-            &FusionConfig { alpha: 0.0, k: 60 },
-        );
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 0.0, k: 60 });
         assert_eq!(
             fused[0].doc_id, "STRONG_RANK2",
             "alpha=0.0 must rank by native score sum"

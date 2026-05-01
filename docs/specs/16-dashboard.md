@@ -381,10 +381,75 @@ violations sitting in the same lane).
 
 ### Auth
 
-- Single API key stored in `localStorage` (`cortex.api_key`).
-- API key is sent as `Authorization: Bearer <key>`.
-- First-time visit → modal asking for the key; `cortex-api` creates one at install (`cortex admin issue-api-key --scope dashboard`).
-- OIDC hook (`onTokenAcquired`) stubbed for the future.
+> **Status:** 🟢 Implemented — phase3_gui_multi_connection ([proposal](../../.rulebook/tasks/phase3_gui_multi_connection/proposal.md))
+
+Auth is **opt-in per deployment**. Localhost dev keeps zero
+authentication so a fresh `docker compose up` works without
+keys; remote deployments (cortex-api behind a reverse proxy,
+multi-user host) flip the gate via `CORTEX_DASHBOARD_AUTH=1`
+and mint keys with the daemon's admin CLI.
+
+**Where the auth lives.** Inside the renderer's `Connection`
+record, not as a login screen on the dashboard. Each connection
+the user adds carries its own `auth: { kind: "none" | "bearer"
+| "basic", … }`; the active connection's auth field drives the
+`Authorization` header on every fetch. Switching connections
+swaps the auth instantly without a re-login.
+
+**Server-side surface (`cortex-api`).**
+
+- `CORTEX_DASHBOARD_AUTH=1` flips the
+  [`require_api_key`](../../crates/cortex-api/src/auth.rs)
+  middleware on. Off (default) → middleware short-circuits
+  with zero per-request cost; on → every `/v1/dashboard/*`
+  request must carry a valid bearer.
+- `/v1/status`, `/healthz`, `/v1/query`, `/metrics` stay
+  anonymous regardless so liveness probes from operators /
+  load balancers / the renderer's own polling layer do not
+  need a key.
+- Keys persist in `~/.cortex/api_keys.sqlite` (override path
+  via `CORTEX_API_KEYS_DB`) as Argon2id digests; cleartext is
+  printed exactly once at issue time.
+- Constant-time compare via `subtle::ConstantTimeEq` (inside
+  `argon2::verify_password`). The middleware verify path runs
+  on a `spawn_blocking` task because Argon2id is CPU-bound.
+- 401 body: `{"reason":"missing_or_invalid_api_key"}` —
+  matches the existing `/v1/query` error envelope shape.
+
+**Admin CLI (server-side).**
+
+```sh
+# Mint a key. Cleartext printed once; only the hash persists.
+cortex-api admin issue-api-key --scope dashboard --label local-gui
+# List keys (id / scope / label / timestamps; hashes never printed).
+cortex-api admin list-api-keys
+# Soft-revoke a key. The middleware blocks the next request that uses it.
+cortex-api admin revoke-api-key <id>
+```
+
+**Renderer flow.**
+
+1. First-time launch seeds a built-in `local` connection
+   (`http://127.0.0.1:17000`, `auth.kind=none`); the dashboard
+   loads against it without prompting.
+2. User adds a remote connection via the manage view
+   (`/connections`). Auth selector picks `bearer` or `basic`.
+3. When any fetcher returns 401 from a non-localhost
+   connection, [`ApiKeyPromptHost`](../../gui/src/shell/ApiKeyPrompt.tsx)
+   pops a modal pasting-only ESC-locked dialog. Submit writes
+   the token onto the active Connection and the next fetch
+   reconnects.
+4. SSE escape hatch: `EventSource` cannot carry custom
+   headers, so the renderer appends `?api_key=<token>` when
+   the active connection has a bearer token. The middleware
+   accepts the query-param identically to the header.
+
+**CORS.** When the renderer talks from a non-Electron browser
+the daemon's CORS layer
+([`dashboard_cors_layer`](../../crates/cortex-api/src/auth.rs))
+defaults permissive for localhost (Vite dev server,
+`http://127.0.0.1:*`, `file://`). Remote deployments override
+via `CORTEX_API_ALLOWED_ORIGINS=https://cortex.example.com`.
 
 ### Accessibility
 
@@ -403,7 +468,8 @@ violations sitting in the same lane).
 | Failure                            | UX                                                                   |
 |------------------------------------|----------------------------------------------------------------------|
 | SSE drops                          | Exponential reconnect (1, 2, 5, 10, 30 s); stale-indicator in header |
-| API 401                            | Redirect to API-key modal                                            |
+| API 401 (remote connection)        | `ApiKeyPrompt` modal locked open until a key is pasted (ESC + backdrop ignored) |
+| API 401 (localhost connection)     | Toast — auth gate misconfigured locally; modal does not pop          |
 | API 429                            | Inline rate-limit banner + auto-retry                                |
 | Slow query (>1 s)                  | Skeletons; cancellation on route change                              |
 | Cypher write attempt in Graph view  | Backend 403; toast with "read-only"                                  |

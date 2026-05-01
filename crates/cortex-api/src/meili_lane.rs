@@ -63,10 +63,7 @@ impl MeiliKeywordLane {
         if let Some(key) = &self.api_key {
             req = req.bearer_auth(key);
         }
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| format!("probe {url}: {e}"))?;
+        let resp = req.send().await.map_err(|e| format!("probe {url}: {e}"))?;
         if !resp.status().is_success() {
             return Err(format!("probe {url}: status {}", resp.status()));
         }
@@ -522,10 +519,7 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
         serde_json::Value::String("keyword".to_string()),
     );
     if body_truncated {
-        extras.insert(
-            "body_truncated".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        extras.insert("body_truncated".to_string(), serde_json::Value::Bool(true));
     }
 
     // Phase6b — spec-11 lane projection contract.
@@ -550,14 +544,8 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
         let from_meta = doc.meta.as_ref().and_then(|m| m.get(*key)).cloned();
         let from_top = doc.extras_raw.get(*key).cloned();
         let from_typed: Option<serde_json::Value> = match *key {
-            "summary" => doc
-                .summary
-                .clone()
-                .map(serde_json::Value::String),
-            "severity" => doc
-                .severity
-                .clone()
-                .map(serde_json::Value::String),
+            "summary" => doc.summary.clone().map(serde_json::Value::String),
+            "severity" => doc.severity.clone().map(serde_json::Value::String),
             _ => None,
         };
         let val = from_meta.or(from_top).or(from_typed);
@@ -573,9 +561,7 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     // (`spec-08` requires every decision row to carry the id);
     // dropping it here would leave the decisions overlay
     // permanently empty for that row.
-    if doc.kind.as_deref() == Some("decision")
-        && !extras.contains_key("decision_id")
-    {
+    if doc.kind.as_deref() == Some("decision") && !extras.contains_key("decision_id") {
         tracing::debug!(
             doc_id = %doc_id,
             "decision row without decision_id — worker projection gap"
@@ -610,10 +596,7 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
     // lowercase-only filter the orchestrator applies. The
     // original-case label is preserved in `extras.repo_label`
     // for the dashboard's display column.
-    let canonical = doc
-        .repo
-        .as_deref()
-        .map(str::to_ascii_lowercase);
+    let canonical = doc.repo.as_deref().map(str::to_ascii_lowercase);
     if let Some(label) = doc.repo.as_deref() {
         if canonical.as_deref() != Some(label) && !label.is_empty() {
             extras.insert(
@@ -1143,9 +1126,17 @@ mod tests {
             vec!["a/b/c.rs".into()],
             vec!["a/".into(), "b/".into(), "c/d/e.rs".into()],
             vec!["very/deep/nested/path/with/many/segments/".into()],
-            vec!["with-dash/".into(), "with_underscore/".into(), "with.dot/".into()],
+            vec![
+                "with-dash/".into(),
+                "with_underscore/".into(),
+                "with.dot/".into(),
+            ],
         ];
-        let repo_shapes = vec![None, Some("Cortex".to_string()), Some("VectorIzer".to_string())];
+        let repo_shapes = vec![
+            None,
+            Some("Cortex".to_string()),
+            Some("VectorIzer".to_string()),
+        ];
         let topic_shapes = vec![
             vec![],
             vec!["code".into()],

@@ -247,9 +247,7 @@ pub async fn fetch_meili_index_uids(
         .get("results")
         .and_then(|v| v.as_array())
         .ok_or_else(|| {
-            format!(
-                "meili GET /indexes {base_url}: unexpected shape (no `results` array)"
-            )
+            format!("meili GET /indexes {base_url}: unexpected shape (no `results` array)")
         })?;
     let mut out = BTreeSet::new();
     for entry in arr {
@@ -392,17 +390,11 @@ pub async fn run_coverage_audit(
     let mut overall = CoverageSeverity::Ok;
 
     if let Some(url) = vectorizer_url {
-        let (live, err) = match fetch_vectorizer_collection_names(
-            http,
-            url,
-            vectorizer_bearer,
-            timeout,
-        )
-        .await
-        {
-            Ok(set) => (set, None),
-            Err(reason) => (BTreeSet::new(), Some(reason)),
-        };
+        let (live, err) =
+            match fetch_vectorizer_collection_names(http, url, vectorizer_bearer, timeout).await {
+                Ok(set) => (set, None),
+                Err(reason) => (BTreeSet::new(), Some(reason)),
+            };
         let d = diff(expected.clone(), live);
         let sev = d.severity();
         if sev > overall {
@@ -567,7 +559,10 @@ mod tests {
             super::parse_canonical_name("legacy-cortex-foo"),
             (None, None),
         );
-        assert_eq!(super::parse_canonical_name("cortex-cortex-bogus"), (None, None));
+        assert_eq!(
+            super::parse_canonical_name("cortex-cortex-bogus"),
+            (None, None)
+        );
     }
 
     #[test]

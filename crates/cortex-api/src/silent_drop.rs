@@ -340,9 +340,7 @@ pub fn build_alert_envelope(row: &DivergenceRow, severity: AlertSeverity) -> ser
 /// and the HTTP endpoint always agree on `delta_growth` per pair.
 /// Side-effect: updates the shared `HealthAggregatorState.history`
 /// with each pair's latest sample.
-async fn compute_divergence_rows(
-    aggregator: Arc<HealthAggregatorState>,
-) -> Vec<DivergenceRow> {
+async fn compute_divergence_rows(aggregator: Arc<HealthAggregatorState>) -> Vec<DivergenceRow> {
     use std::time::Duration;
     let by_name = crate::health::gather_subsystem_extras().await;
     let now = Instant::now();
@@ -395,7 +393,11 @@ async fn compute_divergence_rows(
 /// lane. The lane fields mirror what the meili_loader emits for
 /// `law_violation` envelopes so the dashboard's existing renderer
 /// surfaces the alert without special-casing.
-pub fn alert_lane_hit(row: &DivergenceRow, severity: AlertSeverity, ts_ms: i64) -> crate::lanes::LaneHit {
+pub fn alert_lane_hit(
+    row: &DivergenceRow,
+    severity: AlertSeverity,
+    ts_ms: i64,
+) -> crate::lanes::LaneHit {
     let mut extras: std::collections::BTreeMap<String, serde_json::Value> = Default::default();
     extras.insert(
         "source".into(),
@@ -405,18 +407,9 @@ pub fn alert_lane_hit(row: &DivergenceRow, severity: AlertSeverity, ts_ms: i64) 
         "law_id".into(),
         serde_json::Value::String(format!("silent-drop:{}", row.pair)),
     );
-    extras.insert(
-        "delta_growth".into(),
-        serde_json::json!(row.delta_growth),
-    );
-    extras.insert(
-        "upstream".into(),
-        serde_json::json!(row.upstream),
-    );
-    extras.insert(
-        "downstream".into(),
-        serde_json::json!(row.downstream),
-    );
+    extras.insert("delta_growth".into(), serde_json::json!(row.delta_growth));
+    extras.insert("upstream".into(), serde_json::json!(row.upstream));
+    extras.insert("downstream".into(), serde_json::json!(row.downstream));
     let severity_str = match severity {
         AlertSeverity::Ok => "ok",
         AlertSeverity::Warn => "warn",
@@ -479,11 +472,7 @@ pub async fn post_envelope_to_ingestion(
 }
 
 /// Best-effort POST of the alert envelope to a configured webhook.
-pub async fn post_to_webhook(
-    client: &reqwest::Client,
-    url: &str,
-    envelope: &serde_json::Value,
-) {
+pub async fn post_to_webhook(client: &reqwest::Client, url: &str, envelope: &serde_json::Value) {
     if let Err(e) = client.post(url).json(envelope).send().await {
         tracing::warn!(error = %e, url, "silent-drop: webhook POST failed");
     }
@@ -492,7 +481,10 @@ pub async fn post_to_webhook(
 /// Append a one-line alert summary to `.rulebook/handoff/_pending.md`.
 /// Best-effort: any error is logged and ignored.
 pub fn append_handoff(workspace: &std::path::Path, row: &DivergenceRow, severity: AlertSeverity) {
-    let path = workspace.join(".rulebook").join("handoff").join("_pending.md");
+    let path = workspace
+        .join(".rulebook")
+        .join("handoff")
+        .join("_pending.md");
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -546,11 +538,7 @@ impl SilentDropWatcher {
         let mut emitted: Vec<(DivergenceRow, AlertSeverity)> = Vec::new();
         for row in rows {
             let cfg = pair_config(&self.cfg, &row.pair);
-            let prev = self
-                .states
-                .get(&row.pair)
-                .cloned()
-                .unwrap_or_default();
+            let prev = self.states.get(&row.pair).cloned().unwrap_or_default();
             let (next, transition) = transition(&prev, row.delta_growth, &cfg);
             self.states.insert(row.pair.clone(), next.clone());
             save_pair_state(&self.cfg.state_dir, &row.pair, &next);
@@ -595,8 +583,8 @@ impl SilentDropWatcher {
                 post_to_webhook(client, &url, &envelope).await;
             }
             if self.cfg.write_to_handoff && severity == AlertSeverity::Critical {
-                let workspace = std::env::current_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                let workspace =
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
                 append_handoff(&workspace, &row, severity);
             }
         }
@@ -789,17 +777,24 @@ mod tests {
             severity: crate::health::Severity::Critical,
         };
         let env = build_alert_envelope(&row, AlertSeverity::Critical);
-        assert_eq!(env.get("kind").and_then(|v| v.as_str()), Some("law_violation"));
-        let payload = env.get("payload").unwrap();
-        assert!(
-            payload
-                .get("law_id")
-                .and_then(|v| v.as_str())
-                .unwrap()
-                .starts_with("silent-drop:")
+        assert_eq!(
+            env.get("kind").and_then(|v| v.as_str()),
+            Some("law_violation")
         );
-        assert_eq!(payload.get("upstream_count").and_then(|v| v.as_u64()), Some(100));
-        assert_eq!(payload.get("downstream_count").and_then(|v| v.as_u64()), Some(20));
+        let payload = env.get("payload").unwrap();
+        assert!(payload
+            .get("law_id")
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .starts_with("silent-drop:"));
+        assert_eq!(
+            payload.get("upstream_count").and_then(|v| v.as_u64()),
+            Some(100)
+        );
+        assert_eq!(
+            payload.get("downstream_count").and_then(|v| v.as_u64()),
+            Some(20)
+        );
     }
 
     #[test]

@@ -99,7 +99,9 @@ mod tests {
         };
         let n = redact_response(&mut resp);
         assert!(n >= 1);
-        assert!(!resp.results.snippets[0].text.contains("AKIAIOSFODNN7EXAMPLE0000"));
+        assert!(!resp.results.snippets[0]
+            .text
+            .contains("AKIAIOSFODNN7EXAMPLE0000"));
     }
 
     #[test]

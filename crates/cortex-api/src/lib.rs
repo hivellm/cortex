@@ -15,57 +15,48 @@ pub mod acl;
 pub mod analyzer;
 pub mod archive_loader;
 pub mod audit;
-pub mod auth;
-pub mod storage;
 pub mod audit_store;
+pub mod auth;
 pub mod budget;
 pub mod cache;
-pub mod dashboard;
-pub mod dashboard_series;
 pub mod canary;
 pub mod config_audit;
 pub mod coverage;
+pub mod dashboard;
+pub mod dashboard_series;
 pub mod fusion;
 pub mod health;
 pub mod http;
 pub mod ingest_proxy;
-pub mod lanes;
-pub mod loader_metrics;
-pub mod silent_drop;
 #[cfg(test)]
 mod lane_contract;
+pub mod lanes;
+pub mod loader_metrics;
 pub mod mcp;
 pub mod meili_lane;
 pub mod meili_loader;
 pub mod nexus_graph_lane;
 pub mod orchestrator;
 pub mod query_rewrite;
-pub mod vectorizer_lane;
 pub mod rate_limit;
 pub mod redaction;
 pub mod retention_daemon;
 pub mod service;
+pub mod silent_drop;
+pub mod storage;
 pub mod strategies;
 pub mod tasks_loader;
 pub mod types;
+pub mod vectorizer_lane;
 
 pub use acl::{AclDecision, AclStore};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
 };
-pub use meili_lane::MeiliKeywordLane;
-pub use nexus_graph_lane::NexusGraphLane;
-pub use vectorizer_lane::VectorizerLane;
-pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
-pub use dashboard::{build_dashboard_router, DashboardState};
-pub use tasks_loader::{
-    CachedRowSnapshot, ListQuery, MultiTaskLoader, PhaseBreakdown, ProgressCounts, SortField,
-    SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,
-    TaskLoader, TaskRow, TaskSummary,
-};
 pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUERY_AUDIT};
 pub use audit_store::{AuditStore, DEFAULT_STORE_CAPACITY as AUDIT_STORE_CAPACITY};
 pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
+pub use dashboard::{build_dashboard_router, DashboardState};
 pub use fusion::{rrf_fuse, FusionConfig, DEFAULT_RRF_ALPHA, RRF_K};
 pub use http::{build_router, build_router_with, build_router_with_auth, CALLER_HEADER};
 pub use lanes::{
@@ -73,6 +64,15 @@ pub use lanes::{
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
 pub use loader_metrics::LoaderMetrics;
+pub use meili_lane::MeiliKeywordLane;
+pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
+pub use nexus_graph_lane::NexusGraphLane;
+pub use tasks_loader::{
+    CachedRowSnapshot, ListQuery, MultiTaskLoader, PhaseBreakdown, ProgressCounts, SortField,
+    SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,
+    TaskLoader, TaskRow, TaskSummary,
+};
+pub use vectorizer_lane::VectorizerLane;
 
 /// Phase8c — capture cortex-api's own compile-time version block.
 /// Wraps the [`cortex_build::version_info!`] macro so the `health`

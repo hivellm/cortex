@@ -106,8 +106,7 @@ pub fn load_into_keyword_lane_with_metrics(
         // every refresh, so the counter is "envelopes ever seen by
         // the loader" rather than "currently in the lane" — which
         // keeps it monotonic.
-        let mut by_kind: std::collections::BTreeMap<&str, u64> =
-            std::collections::BTreeMap::new();
+        let mut by_kind: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
         for hit in &hits {
             let kind = hit
                 .symbol
@@ -167,8 +166,8 @@ fn visit_dir(dir: &Path, report: &mut LoadReport, hits: &mut Vec<LaneHit>) {
             //     operator rotates the file. Promote to WARN so the
             //     incident surfaces immediately.
             let err_str = e.to_string();
-            let truly_corrupt = err_str.contains("Data corruption")
-                || err_str.contains("Unknown frame");
+            let truly_corrupt =
+                err_str.contains("Data corruption") || err_str.contains("Unknown frame");
             if truly_corrupt {
                 report.corrupted_files.push(path.clone());
                 tracing::warn!(
@@ -205,8 +204,8 @@ fn read_one_file(
     hits: &mut Vec<LaneHit>,
 ) -> Result<(), LoadError> {
     let file = File::open(path)?;
-    let decoder = zstd::stream::read::Decoder::new(file)
-        .map_err(|e| LoadError::Zstd(e.to_string()))?;
+    let decoder =
+        zstd::stream::read::Decoder::new(file).map_err(|e| LoadError::Zstd(e.to_string()))?;
     let reader = BufReader::new(decoder);
     for line in reader.lines() {
         let line = line?;
@@ -285,7 +284,10 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
                 "[agent:{}] {}",
                 ac.agent_type,
                 if ac.description.is_empty() {
-                    ac.prompt.as_deref().unwrap_or("(no description)").to_string()
+                    ac.prompt
+                        .as_deref()
+                        .unwrap_or("(no description)")
+                        .to_string()
                 } else {
                     ac.description.clone()
                 }
@@ -325,10 +327,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
                 "turn_id".to_string(),
                 serde_json::Value::String(tid.to_string()),
             );
-            extras.insert(
-                "claude_code".to_string(),
-                serde_json::Value::Object(cc_obj),
-            );
+            extras.insert("claude_code".to_string(), serde_json::Value::Object(cc_obj));
         }
     }
     // Surface the turn payload halves so the conversation detail
@@ -507,7 +506,9 @@ mod tests {
     #[test]
     fn skips_corrupt_files_without_panicking() {
         let dir = tempfile::tempdir().unwrap();
-        let bad = dir.path().join("events/year=2026/month=04/day=26/hour=00/raw-00000.parquet");
+        let bad = dir
+            .path()
+            .join("events/year=2026/month=04/day=26/hour=00/raw-00000.parquet");
         std::fs::create_dir_all(bad.parent().unwrap()).unwrap();
         std::fs::write(&bad, b"not zstd").unwrap();
         let (report, hits) = load_lane_hits(dir.path());
@@ -548,8 +549,7 @@ mod tests {
 
         // Second hour rolls over with two more envelopes; the loader
         // walks both directories and replaces the lane contents.
-        let dir2 =
-            dir.path().join("events/year=2026/month=04/day=26/hour=20");
+        let dir2 = dir.path().join("events/year=2026/month=04/day=26/hour=20");
         std::fs::create_dir_all(&dir2).unwrap();
         let path2 = dir2.join("raw-00000.parquet");
         let file2 = File::create(&path2).unwrap();
@@ -592,7 +592,9 @@ mod tests {
     #[test]
     fn drops_lines_that_dont_deserialize_as_envelope() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events/year=2026/month=04/day=26/hour=19/raw-00000.parquet");
+        let path = dir
+            .path()
+            .join("events/year=2026/month=04/day=26/hour=19/raw-00000.parquet");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let file = File::create(&path).unwrap();
         let mut enc = zstd::stream::write::Encoder::new(file, 3).unwrap();

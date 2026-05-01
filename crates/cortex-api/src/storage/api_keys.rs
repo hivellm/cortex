@@ -136,11 +136,7 @@ impl ApiKeyStore {
     pub fn issue(&self, scope: &str, label: &str) -> Result<IssuedKey, ApiKeyError> {
         let mut raw = [0u8; KEY_RAW_BYTES];
         OsRng.fill_bytes(&mut raw);
-        let cleartext = format!(
-            "{}{}",
-            KEY_PREFIX,
-            BASE32_NOPAD.encode(&raw).to_lowercase(),
-        );
+        let cleartext = format!("{}{}", KEY_PREFIX, BASE32_NOPAD.encode(&raw).to_lowercase(),);
         let salt = SaltString::generate(&mut OsRng);
         let argon = Argon2::default();
         let hash = argon
@@ -232,12 +228,14 @@ impl ApiKeyStore {
             return Err(ApiKeyError::NotFound);
         }
         let conn = self.conn.lock().expect("api_keys mutex poisoned");
-        let mut stmt = conn.prepare(
-            "SELECT id, hash, revoked_at FROM api_keys",
-        )?;
+        let mut stmt = conn.prepare("SELECT id, hash, revoked_at FROM api_keys")?;
         let rows: Vec<(String, String, Option<i64>)> = stmt
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<i64>>(2)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
@@ -303,8 +301,14 @@ mod tests {
     fn verify_fails_for_unknown_key() {
         let store = ApiKeyStore::open_in_memory().unwrap();
         store.issue("dashboard", "x").unwrap();
-        let bogus = format!("{}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", KEY_PREFIX);
-        assert!(matches!(store.verify(&bogus).unwrap_err(), ApiKeyError::NotFound));
+        let bogus = format!(
+            "{}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            KEY_PREFIX
+        );
+        assert!(matches!(
+            store.verify(&bogus).unwrap_err(),
+            ApiKeyError::NotFound
+        ));
     }
 
     #[test]

@@ -6,11 +6,11 @@
 
 use std::sync::Arc;
 
+use cortex_api::types::{IncludeField, Intent, Scope};
 use cortex_api::{
     KeywordLane, KeywordRequest, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane,
     Orchestrator, QueryRequest, VectorLane, VectorRequest, VectorizerLane,
 };
-use cortex_api::types::{IncludeField, Intent, Scope};
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -138,9 +138,9 @@ async fn live_lane_returns_empty_when_collection_missing() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/collections/cortex-cortex-code/search/text"))
-        .respond_with(ResponseTemplate::new(404).set_body_string(
-            "{\"error\":\"collection not found\"}",
-        ))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_string("{\"error\":\"collection not found\"}"),
+        )
         .mount(&server)
         .await;
 
@@ -250,9 +250,7 @@ async fn fail_open_when_vectorizer_unreachable_through_orchestrator() {
     // Spec scenario "Vectorizer down → fail-open": a request to a
     // dead endpoint still returns a populated response — empty
     // results, `debug.errors["vector"]` populated, no panic.
-    let dead_lane = Arc::new(
-        VectorizerLane::new("http://127.0.0.1:1", None).unwrap(),
-    );
+    let dead_lane = Arc::new(VectorizerLane::new("http://127.0.0.1:1", None).unwrap());
     let keyword: Arc<dyn KeywordLane> = Arc::new(MemoryKeywordLane::new());
     let graph = Arc::new(MemoryGraphLane::new());
     let orch = Orchestrator::new(dead_lane, keyword, graph);
@@ -413,12 +411,8 @@ async fn probe_authenticated_refreshes_jwt_on_401_and_retries() {
     // /auth/login mock to still be untouched when probe_authenticated
     // runs. Building via `new(api_key=initial_jwt)` and patching the
     // creds in is the cleanest way to set both up.
-    let lane = VectorizerLane::with_initial_jwt_for_test(
-        server.uri(),
-        &initial_jwt,
-        "admin",
-        "secret",
-    );
+    let lane =
+        VectorizerLane::with_initial_jwt_for_test(server.uri(), &initial_jwt, "admin", "secret");
     lane.probe_authenticated()
         .await
         .expect("refresh-and-retry path returns Ok when retry succeeds");

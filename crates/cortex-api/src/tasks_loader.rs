@@ -601,18 +601,17 @@ impl MultiTaskLoader {
             let resp = l.list(&inner_query);
             tasks.extend(resp.tasks);
             for p in resp.by_phase {
-                let entry =
-                    by_phase_map
-                        .entry(p.phase.clone())
-                        .or_insert_with(|| PhaseBreakdown {
-                            phase: p.phase.clone(),
-                            phase_num: p.phase_num,
-                            phase_letter: p.phase_letter.clone(),
-                            total: 0,
-                            done: 0,
-                            in_progress: 0,
-                            pending: 0,
-                        });
+                let entry = by_phase_map
+                    .entry(p.phase.clone())
+                    .or_insert_with(|| PhaseBreakdown {
+                        phase: p.phase.clone(),
+                        phase_num: p.phase_num,
+                        phase_letter: p.phase_letter.clone(),
+                        total: 0,
+                        done: 0,
+                        in_progress: 0,
+                        pending: 0,
+                    });
                 entry.total += p.total;
                 entry.done += p.done;
                 entry.in_progress += p.in_progress;
@@ -810,7 +809,10 @@ pub fn parse_phase(id: &str) -> (Option<String>, Option<u32>, Option<String>) {
     static_regex(|re| {
         let caps = re.captures(id)?;
         let num: u32 = caps.get(1)?.as_str().parse().ok()?;
-        let letter = caps.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let letter = caps
+            .get(2)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
         let canonical = if letter.is_empty() {
             format!("phase{num}")
         } else {
@@ -1065,8 +1067,14 @@ fn sort_rows(rows: &mut [TaskRow], field: SortField, order: Option<SortOrder>) {
 }
 
 fn ts_cmp(a: &Option<String>, b: &Option<String>) -> std::cmp::Ordering {
-    let pa = a.as_deref().and_then(parse_iso).unwrap_or(DateTime::<Utc>::MIN_UTC);
-    let pb = b.as_deref().and_then(parse_iso).unwrap_or(DateTime::<Utc>::MIN_UTC);
+    let pa = a
+        .as_deref()
+        .and_then(parse_iso)
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
+    let pb = b
+        .as_deref()
+        .and_then(parse_iso)
+        .unwrap_or(DateTime::<Utc>::MIN_UTC);
     pa.cmp(&pb)
 }
 
@@ -1117,7 +1125,8 @@ mod tests {
         assert_eq!(num, Some(2));
         assert_eq!(letter.as_deref(), Some("g"));
 
-        let (key, num, letter) = parse_phase("phase4a_fulltext_fanout_parity_and_stale_meili_cleanup");
+        let (key, num, letter) =
+            parse_phase("phase4a_fulltext_fanout_parity_and_stale_meili_cleanup");
         assert_eq!(key.as_deref(), Some("phase4a"));
         assert_eq!(num, Some(4));
         assert_eq!(letter.as_deref(), Some("a"));
@@ -1133,7 +1142,8 @@ mod tests {
 
     #[test]
     fn count_progress_tallies_done_and_pending() {
-        let md = "## 1. Foo\n- [x] one\n- [X] two\n- [ ] three\nirrelevant\n## 2. Bar\n- [ ] four\n";
+        let md =
+            "## 1. Foo\n- [x] one\n- [X] two\n- [ ] three\nirrelevant\n## 2. Bar\n- [ ] four\n";
         let p = count_progress(md);
         assert_eq!(p.done, 2);
         assert_eq!(p.total, 4);
@@ -1287,7 +1297,11 @@ mod tests {
         fs::create_dir_all(&active).unwrap();
         fs::create_dir_all(&archived).unwrap();
         for d in [&active, &archived] {
-            fs::write(d.join("proposal.md"), "# Proposal: phase1_demo\n\n## Why\n\nDemo.\n").unwrap();
+            fs::write(
+                d.join("proposal.md"),
+                "# Proposal: phase1_demo\n\n## Why\n\nDemo.\n",
+            )
+            .unwrap();
             fs::write(d.join("tasks.md"), "## 1. Foo\n- [x] only\n").unwrap();
             fs::write(
                 d.join(".metadata.json"),

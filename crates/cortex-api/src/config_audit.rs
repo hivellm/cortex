@@ -110,7 +110,11 @@ impl ConfigAudit {
     }
     /// Sort + dedupe — call once at the end of [`run_audit`].
     fn finalize(&mut self) {
-        self.findings.sort_by(|a, b| b.severity.cmp(&a.severity).then_with(|| a.source.cmp(&b.source)));
+        self.findings.sort_by(|a, b| {
+            b.severity
+                .cmp(&a.severity)
+                .then_with(|| a.source.cmp(&b.source))
+        });
     }
 }
 
@@ -205,7 +209,11 @@ pub fn run_audit_with(paths: &AuditPaths, opts: AuditOptions) -> ConfigAudit {
             audit.surfaces_read += 1;
             audit.push(Finding::ok(
                 ".env",
-                format!("loaded {} entries from {}", m.len(), paths.env_file.display()),
+                format!(
+                    "loaded {} entries from {}",
+                    m.len(),
+                    paths.env_file.display()
+                ),
             ));
             m
         }
@@ -251,10 +259,7 @@ pub fn run_audit_with(paths: &AuditPaths, opts: AuditOptions) -> ConfigAudit {
             Some(m)
         }
         Err(ReadError::NotFound { path }) => {
-            audit.push(Finding::warn(
-                ".mcp.json",
-                format!("not found: {path}"),
-            ));
+            audit.push(Finding::warn(".mcp.json", format!("not found: {path}")));
             None
         }
         Err(ReadError::Parse { path, reason }) => {
@@ -552,7 +557,10 @@ pub fn read_adapter_toml(path: &Path) -> Result<AdapterConfigSnapshot, ReadError
             reason: "missing adapter.api_endpoint".into(),
         })?
         .to_string();
-    Ok(AdapterConfigSnapshot { endpoint, api_endpoint })
+    Ok(AdapterConfigSnapshot {
+        endpoint,
+        api_endpoint,
+    })
 }
 
 /// Read `mcpServers.cortex.env.CORTEX_API_URL` from
@@ -609,12 +617,13 @@ pub fn read_hooks_json(path: &Path) -> Result<Vec<String>, ReadError> {
         path: path.display().to_string(),
         reason: e.to_string(),
     })?;
-    let hooks = value.get("hooks").and_then(|v| v.as_object()).ok_or_else(|| {
-        ReadError::Parse {
+    let hooks = value
+        .get("hooks")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| ReadError::Parse {
             path: path.display().to_string(),
             reason: "missing top-level `hooks` object".into(),
-        }
-    })?;
+        })?;
     Ok(hooks.keys().cloned().collect())
 }
 
@@ -712,9 +721,7 @@ pub fn live_listening_ports() -> Vec<ListeningPort> {
         let stdout = match out {
             Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
             _ => match Command::new("netstat").args(["-tln"]).output() {
-                Ok(o) if o.status.success() => {
-                    String::from_utf8_lossy(&o.stdout).to_string()
-                }
+                Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
                 _ => return Vec::new(),
             },
         };
@@ -995,7 +1002,9 @@ api_endpoint = "http://127.0.0.1:17000"
             .map(|f| f.message.as_str())
             .collect();
         assert!(
-            critical_msgs.iter().any(|m| m.contains("15010") && m.contains("17010")),
+            critical_msgs
+                .iter()
+                .any(|m| m.contains("15010") && m.contains("17010")),
             "expected a critical message naming both ports, got: {critical_msgs:?}"
         );
     }
@@ -1046,10 +1055,7 @@ api_endpoint = "http://127.0.0.1:17000"
     #[test]
     fn unreachable_urls_flags_only_unmatched_loopback_ports() {
         let mut env: BTreeMap<String, String> = BTreeMap::new();
-        env.insert(
-            "CORTEX_API_URL".into(),
-            "http://127.0.0.1:17000".into(),
-        );
+        env.insert("CORTEX_API_URL".into(), "http://127.0.0.1:17000".into());
         env.insert(
             "CORTEX_INGESTION_URL".into(),
             "http://127.0.0.1:17010".into(),
@@ -1080,10 +1086,7 @@ api_endpoint = "http://127.0.0.1:17000"
         // path is covered by the run_audit_with(opts={...}) test
         // above.
         let mut env: BTreeMap<String, String> = BTreeMap::new();
-        env.insert(
-            "CORTEX_API_URL".into(),
-            "http://127.0.0.1:65535".into(),
-        );
+        env.insert("CORTEX_API_URL".into(), "http://127.0.0.1:65535".into());
         let stale = unreachable_urls(&env, &[]);
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].2, 65535);

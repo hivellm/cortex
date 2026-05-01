@@ -136,8 +136,8 @@ pub async fn invoke(
     caller: &str,
     input: Value,
 ) -> Result<QueryResponse, McpError> {
-    let req: QueryRequest = serde_json::from_value(input)
-        .map_err(|e| McpError::Invalid(e.to_string()))?;
+    let req: QueryRequest =
+        serde_json::from_value(input).map_err(|e| McpError::Invalid(e.to_string()))?;
     match service.handle(caller, req).await {
         ServiceOutcome::Ok(resp) => Ok(*resp),
         ServiceOutcome::EmptyQuery => Err(McpError::EmptyQuery),
@@ -208,7 +208,14 @@ mod tests {
             "snake_case output_schema must not be emitted"
         );
         let props = d["outputSchema"]["properties"].as_object().unwrap();
-        for k in ["intent", "query_id", "scope_resolved", "results", "budget", "debug"] {
+        for k in [
+            "intent",
+            "query_id",
+            "scope_resolved",
+            "results",
+            "budget",
+            "debug",
+        ] {
             assert!(props.contains_key(k), "missing {k}");
         }
     }

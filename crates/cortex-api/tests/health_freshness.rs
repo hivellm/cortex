@@ -32,9 +32,8 @@ fn build_test_router() -> Router {
     let vector = Arc::new(MemoryVectorLane::new());
     let graph = Arc::new(MemoryGraphLane::new());
     let orchestrator = Orchestrator::new(vector, lane.clone(), graph);
-    let service = Arc::new(
-        QueryService::with_memory_defaults(orchestrator).with_indexed_repos(lane.clone()),
-    );
+    let service =
+        Arc::new(QueryService::with_memory_defaults(orchestrator).with_indexed_repos(lane.clone()));
     let dashboard = DashboardState {
         lane,
         nexus: None,
@@ -198,7 +197,12 @@ async fn metrics_endpoint_renders_loader_metrics_in_prom_text() {
     // workers' /metrics.
     let router = build_test_router();
     let resp = router
-        .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .expect("oneshot");
     assert_eq!(resp.status(), StatusCode::OK);

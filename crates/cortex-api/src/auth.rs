@@ -1,6 +1,11 @@
 #![allow(missing_docs)]
 //! `require_api_key` Axum middleware — phase3 §7.3.
 //!
+//! This module ALSO owns the dashboard CORS layer (phase3 §7.1)
+//! since both layers wrap the same sub-router and read the same
+//! `CORTEX_API_*` env vars. Keeping them next to each other makes
+//! it obvious to a future reader which env var feeds which layer.
+//!
 //! When the operator sets `CORTEX_DASHBOARD_AUTH=1`, the dashboard
 //! sub-router (every `/v1/dashboard/*` endpoint) is wrapped with
 //! this layer. Each request must carry either:
@@ -24,12 +29,13 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     extract::State,
-    http::{Request, StatusCode},
+    http::{header, HeaderName, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     Json, Router,
 };
 use serde::Serialize;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::storage::api_keys::{ApiKeyError, ApiKeyStore};
 
@@ -37,6 +43,13 @@ use crate::storage::api_keys::{ApiKeyError, ApiKeyStore};
 /// other than `"1"` / `"true"` (case-insensitive) is treated as
 /// off so localhost dev with the var unset keeps working.
 pub const ENV_DASHBOARD_AUTH: &str = "CORTEX_DASHBOARD_AUTH";
+
+/// Phase3 §7.1 — comma-separated allow-list of origins permitted
+/// to call the dashboard from a non-Electron browser. Unset →
+/// permissive default (Vite dev server + file://-loaded
+/// production builds + 127.0.0.1 on any port). Set explicitly on
+/// remote deployments.
+pub const ENV_ALLOWED_ORIGINS: &str = "CORTEX_API_ALLOWED_ORIGINS";
 
 /// 401 body returned when the middleware rejects a request.
 /// Mirrors the existing `/v1/query` error envelope shape so the
@@ -68,10 +81,75 @@ pub fn wrap_dashboard_router(router: Router, store: Arc<ApiKeyStore>) -> Router 
         return router;
     }
     let layer_state = AuthState { store };
-    router.layer(middleware::from_fn_with_state(
-        layer_state,
-        require_api_key,
-    ))
+    router.layer(middleware::from_fn_with_state(layer_state, require_api_key))
+}
+
+/// Phase3 §7.1 — build the dashboard CORS layer. Reads
+/// `CORTEX_API_ALLOWED_ORIGINS` (comma-separated). When unset,
+/// returns a permissive layer that accepts the Vite dev server
+/// (`http://localhost:5173`), every loopback port
+/// (`http://127.0.0.1:*`), and the `file://` origin Electron
+/// builds load from.
+///
+/// `Authorization` is always included in the allowed-headers set
+/// so the renderer can pass bearer tokens after a connection
+/// switch lands on a remote backend.
+pub fn dashboard_cors_layer() -> CorsLayer {
+    let origins = std::env::var(ENV_ALLOWED_ORIGINS).unwrap_or_default();
+    let origins = origins.trim();
+    let allow = if origins.is_empty() {
+        AllowOrigin::predicate(|origin: &HeaderValue, _| {
+            let s = match origin.to_str() {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            // Vite dev server, any 127.0.0.1 port, file:// production
+            // shell, electron's `app://` scheme.
+            if s == "http://localhost:5173" {
+                return true;
+            }
+            if s == "null" {
+                // file:// loads send `Origin: null` per RFC 6454
+                return true;
+            }
+            if let Some(rest) = s.strip_prefix("http://127.0.0.1") {
+                return rest.is_empty() || rest.starts_with(':');
+            }
+            if let Some(rest) = s.strip_prefix("http://localhost") {
+                return rest.is_empty() || rest.starts_with(':');
+            }
+            if s.starts_with("app://") {
+                return true;
+            }
+            false
+        })
+    } else {
+        let list: Vec<HeaderValue> = origins
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| HeaderValue::from_str(s).ok())
+            .collect();
+        AllowOrigin::list(list)
+    };
+    CorsLayer::new()
+        .allow_origin(allow)
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            HeaderName::from_static("x-cortex-repo"),
+            HeaderName::from_static("x-cortex-cwd"),
+            HeaderName::from_static("x-cortex-caller"),
+        ])
+        .max_age(std::time::Duration::from_secs(600))
 }
 
 /// State threaded into the middleware. Only the store handle for

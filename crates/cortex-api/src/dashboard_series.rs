@@ -111,11 +111,7 @@ pub fn bucket_p95_duration_per_minute(
         } else {
             off as usize
         };
-        if let Some(d) = h
-            .extras
-            .get("duration_ms")
-            .and_then(|v| v.as_u64())
-        {
+        if let Some(d) = h.extras.get("duration_ms").and_then(|v| v.as_u64()) {
             samples[idx].push(d);
         }
     }
@@ -390,7 +386,10 @@ mod tests {
             .unwrap();
 
         let (series, is_stub) = read_classifier_cost_24h(&store, now);
-        assert!(!is_stub, "ribbon must flip to live data once the worker writes");
+        assert!(
+            !is_stub,
+            "ribbon must flip to live data once the worker writes"
+        );
         assert_eq!(series.len(), CLASSIFIER_COST_BUCKETS);
         assert!((series[0] - 0.05).abs() < f64::EPSILON);
         assert!((series[12] - 2.00).abs() < f64::EPSILON);

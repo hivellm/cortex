@@ -99,8 +99,8 @@ fn meili_projects_every_contract_key_from_top_level() {
     for (k, v) in full_contract_values() {
         doc[k] = v;
     }
-    let hit: LaneHit = project_doc(doc, &keyword_req("cortex-cortex-decisions"))
-        .expect("fixture deserialises");
+    let hit: LaneHit =
+        project_doc(doc, &keyword_req("cortex-cortex-decisions")).expect("fixture deserialises");
     for (k, v) in full_contract_values() {
         assert_eq!(
             hit.extras.get(k),
@@ -132,8 +132,8 @@ fn meili_prefers_meta_over_top_level_when_both_are_set() {
             "decision_id": "DEC-CANONICAL",
         },
     });
-    let hit: LaneHit = project_doc(doc, &keyword_req("cortex-cortex-decisions"))
-        .expect("fixture deserialises");
+    let hit: LaneHit =
+        project_doc(doc, &keyword_req("cortex-cortex-decisions")).expect("fixture deserialises");
     assert_eq!(
         hit.extras.get("decision_id").and_then(|v| v.as_str()),
         Some("DEC-CANONICAL")
@@ -150,8 +150,8 @@ fn meili_missing_contract_keys_round_trip_as_absent() {
         "title": "no decision here",
         "body": "irrelevant snippet",
     });
-    let hit: LaneHit = project_doc(doc, &keyword_req("cortex-cortex-code"))
-        .expect("fixture deserialises");
+    let hit: LaneHit =
+        project_doc(doc, &keyword_req("cortex-cortex-code")).expect("fixture deserialises");
     for k in LANE_EXTRAS_KEYS {
         assert!(
             !hit.extras.contains_key(*k),

@@ -8,9 +8,9 @@ use std::time::Duration;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use cortex_api::{
-    build_router, AclStore, AuditStore, CALLER_HEADER, InMemoryCache, LaneHit,
-    MemoryAuditPublisher, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator,
-    QueryRequest, QueryResponse, QueryService, RateConfig, RateLimiter,
+    build_router, AclStore, AuditStore, InMemoryCache, LaneHit, MemoryAuditPublisher,
+    MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryRequest,
+    QueryResponse, QueryService, RateConfig, RateLimiter, CALLER_HEADER,
 };
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -455,7 +455,9 @@ async fn law_check_returns_only_violations_field() {
     };
     g.seed("law_violations_last_30d", vec![violation_hit.clone()]);
     k.seed("cortex-vectorizer-governance", vec![violation_hit]);
-    let svc = Arc::new(QueryService::with_memory_defaults(Orchestrator::new(v, k, g)));
+    let svc = Arc::new(QueryService::with_memory_defaults(Orchestrator::new(
+        v, k, g,
+    )));
     let app = build_router(svc);
     let req: QueryRequest = serde_json::from_value(json!({
         "intent": "law_check",
@@ -861,10 +863,7 @@ async fn explain_intent_returns_snippets_with_no_overlay_noise() {
     // from the lane projection contract, so this is a real test
     // — without the strip, decisions[] would be non-empty.
     let mut decision_extras = std::collections::BTreeMap::new();
-    decision_extras.insert(
-        "source".to_string(),
-        Value::String("vector".to_string()),
-    );
+    decision_extras.insert("source".to_string(), Value::String("vector".to_string()));
     decision_extras.insert(
         "decision_id".to_string(),
         Value::String("DEC-EXPLAIN-LEAK".to_string()),
@@ -889,10 +888,7 @@ async fn explain_intent_returns_snippets_with_no_overlay_noise() {
         }],
     );
     let mut keyword_extras = std::collections::BTreeMap::new();
-    keyword_extras.insert(
-        "source".to_string(),
-        Value::String("keyword".to_string()),
-    );
+    keyword_extras.insert("source".to_string(), Value::String("keyword".to_string()));
     k.seed(
         "cortex-cortex-docs",
         vec![LaneHit {
@@ -936,19 +932,27 @@ async fn explain_intent_returns_snippets_with_no_overlay_noise() {
     // The Explain plan strips overlays even when the caller's
     // `include` array asks for them — phase6d §What Changes.
     assert!(
-        body["results"]["decisions"].as_array().map_or(true, |a| a.is_empty()),
+        body["results"]["decisions"]
+            .as_array()
+            .map_or(true, |a| a.is_empty()),
         "Explain must produce empty decisions overlay even with a `decision_id` in extras"
     );
     assert!(
-        body["results"]["violations"].as_array().map_or(true, |a| a.is_empty()),
+        body["results"]["violations"]
+            .as_array()
+            .map_or(true, |a| a.is_empty()),
         "Explain must produce empty violations overlay"
     );
     assert!(
-        body["results"]["similar_turns"].as_array().map_or(true, |a| a.is_empty()),
+        body["results"]["similar_turns"]
+            .as_array()
+            .map_or(true, |a| a.is_empty()),
         "Explain must produce empty similar_turns overlay"
     );
     assert!(
-        body["results"]["graph_neighbors"].as_array().map_or(true, |a| a.is_empty()),
+        body["results"]["graph_neighbors"]
+            .as_array()
+            .map_or(true, |a| a.is_empty()),
         "Explain runs no graph leg until phase4c lands edge_artifact_definitions"
     );
 }
@@ -1025,10 +1029,7 @@ fn similar_problems_request(query: &str, repo: Option<&str>) -> QueryRequest {
 async fn decision_overlay_surfaces_decision_id_from_extras() {
     let (svc, _, k, _, _) = build_test_service();
     let mut extras = std::collections::BTreeMap::new();
-    extras.insert(
-        "source".to_string(),
-        Value::String("keyword".to_string()),
-    );
+    extras.insert("source".to_string(), Value::String("keyword".to_string()));
     extras.insert(
         "decision_id".to_string(),
         Value::String("DEC-0042".to_string()),

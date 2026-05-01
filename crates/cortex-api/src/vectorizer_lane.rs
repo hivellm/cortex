@@ -39,8 +39,8 @@ use serde::Deserialize;
 use vectorizer_sdk::{ClientConfig, VectorizerClient};
 
 use crate::lanes::{
-    collection_missing_marker, collection_missing_report_enabled, LaneError, LaneHit,
-    VectorLane, VectorRequest,
+    collection_missing_marker, collection_missing_report_enabled, LaneError, LaneHit, VectorLane,
+    VectorRequest,
 };
 
 /// phase11d — wire shape of one entry in `POST /collections/{c}/search/text`'s
@@ -409,9 +409,7 @@ impl VectorizerLane {
             // turn.
             return DirectSearchOutcome::NotFound;
         }
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || status == reqwest::StatusCode::FORBIDDEN
-        {
+        if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
             let body_text = resp.text().await.unwrap_or_default();
             return DirectSearchOutcome::Auth401(format!(
                 "{}: search_vectors({}): HTTP {} {}",
@@ -499,8 +497,7 @@ impl VectorLane for VectorizerLane {
                         }
                         return Ok(Vec::new());
                     }
-                    DirectSearchOutcome::Auth401(msg2)
-                    | DirectSearchOutcome::Transport(msg2) => {
+                    DirectSearchOutcome::Auth401(msg2) | DirectSearchOutcome::Transport(msg2) => {
                         return Err(LaneError::Transport(format!(
                             "{msg}; refresh-retry failed: {msg2}"
                         )));
@@ -630,10 +627,7 @@ pub(crate) fn project_search_result(r: WireSearchHit, req: &VectorRequest) -> La
 fn project(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
     let payload = &r.payload;
     let get_str = |key: &str| -> Option<String> {
-        payload
-            .get(key)
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        payload.get(key).and_then(|v| v.as_str()).map(String::from)
     };
     let get_i64 = |key: &str| -> Option<i64> {
         payload
@@ -682,11 +676,7 @@ fn project(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty())
                     .map(String::from)
-                    .or_else(|| {
-                        p.get("summary")
-                            .and_then(|v| v.as_str())
-                            .map(String::from)
-                    })
+                    .or_else(|| p.get("summary").and_then(|v| v.as_str()).map(String::from))
                     .or_else(|| p.get("title").and_then(|v| v.as_str()).map(String::from))
             })
         })
@@ -702,10 +692,7 @@ fn project(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
     let body_truncated = !path_str.is_empty() && text == path_str;
     if body_truncated {
         text.clear();
-        extras.insert(
-            "body_truncated".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        extras.insert("body_truncated".to_string(), serde_json::Value::Bool(true));
     }
 
     // phase10d — canonical lowercase `repo`. See the matching
@@ -828,7 +815,10 @@ mod tests {
         // `summary`, `title`) and every spec-11 contract key.
         let mut nested: JsonMap<String, serde_json::Value> = JsonMap::new();
         nested.insert("body".into(), serde_json::json!("nested body text"));
-        nested.insert("turn_id".into(), serde_json::json!("01HTURNNESTED0000000000000"));
+        nested.insert(
+            "turn_id".into(),
+            serde_json::json!("01HTURNNESTED0000000000000"),
+        );
         nested.insert("model".into(), serde_json::json!("claude-sonnet-4-6"));
         let mut payload: JsonMap<String, serde_json::Value> = JsonMap::new();
         payload.insert("repo".into(), serde_json::json!("Cortex"));
@@ -864,7 +854,9 @@ mod tests {
         ));
         assert!(super::looks_like_auth_failure("HTTP 403 Forbidden"));
         assert!(super::looks_like_auth_failure("token expired"));
-        assert!(super::looks_like_auth_failure("Invalid token: signature mismatch"));
+        assert!(super::looks_like_auth_failure(
+            "Invalid token: signature mismatch"
+        ));
         // Negative — anything else (404, 500, transport noise) keeps
         // the existing not-found / generic-transport paths.
         assert!(!super::looks_like_auth_failure("HTTP 404 Not Found"));

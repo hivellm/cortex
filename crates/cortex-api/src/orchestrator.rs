@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::fusion::{rrf_fuse, FusionConfig};
-use crate::lanes::{
-    is_collection_missing_marker, GraphLane, KeywordLane, LaneHit, VectorLane,
-};
+use crate::lanes::{is_collection_missing_marker, GraphLane, KeywordLane, LaneHit, VectorLane};
 use crate::query_rewrite::{PassthroughRewriter, QueryRewriter, RewrittenQuery};
 use crate::strategies::{build_plan, Overlay, Plan};
 use crate::types::{
@@ -131,12 +129,12 @@ impl Orchestrator {
         let total_budget = Duration::from_millis(req.budget_ms.max(1));
         let split = plan.split_pct;
 
-        let vector_budget =
-            Duration::from_millis(req.budget_ms * split.vector as u64 / 100).max(Duration::from_millis(1));
-        let keyword_budget =
-            Duration::from_millis(req.budget_ms * split.keyword as u64 / 100).max(Duration::from_millis(1));
-        let graph_budget =
-            Duration::from_millis(req.budget_ms * split.graph as u64 / 100).max(Duration::from_millis(1));
+        let vector_budget = Duration::from_millis(req.budget_ms * split.vector as u64 / 100)
+            .max(Duration::from_millis(1));
+        let keyword_budget = Duration::from_millis(req.budget_ms * split.keyword as u64 / 100)
+            .max(Duration::from_millis(1));
+        let graph_budget = Duration::from_millis(req.budget_ms * split.graph as u64 / 100)
+            .max(Duration::from_millis(1));
 
         let mut response = empty_response(req);
         response.budget.cap_ms = req.budget_ms;
@@ -151,23 +149,24 @@ impl Orchestrator {
             total_budget,
             futures_join_three(vector_fut, keyword_fut, graph_fut),
         );
-        let (mut vector_result, mut keyword_result, mut graph_result, truncated) = match total_fut.await {
-            Ok((v, k, g)) => (v, k, g, false),
-            Err(_) => {
-                // Total budget elapsed — record what we have and
-                // flip the truncated flag. With no per-lane partial
-                // accumulator we treat the truncated path as
-                // empty-everything; production will hold partials
-                // via a `select!` that captures lane completions
-                // mid-flight (Phase-2 retrieval-quality follow-up).
-                (
-                    LaneOutcome::default(),
-                    LaneOutcome::default(),
-                    LaneOutcome::default(),
-                    true,
-                )
-            }
-        };
+        let (mut vector_result, mut keyword_result, mut graph_result, truncated) =
+            match total_fut.await {
+                Ok((v, k, g)) => (v, k, g, false),
+                Err(_) => {
+                    // Total budget elapsed — record what we have and
+                    // flip the truncated flag. With no per-lane partial
+                    // accumulator we treat the truncated path as
+                    // empty-everything; production will hold partials
+                    // via a `select!` that captures lane completions
+                    // mid-flight (Phase-2 retrieval-quality follow-up).
+                    (
+                        LaneOutcome::default(),
+                        LaneOutcome::default(),
+                        LaneOutcome::default(),
+                        true,
+                    )
+                }
+            };
         response.debug.truncated = truncated;
 
         // ---- Record lane timings + errors ----
@@ -215,21 +214,13 @@ impl Orchestrator {
         // `DebugInfo.notes` entries. The lanes only emit these
         // when `CORTEX_QUERY_REPORT_MISSING_COLLECTIONS=1`; when
         // unset, every hit list passes through unchanged.
-        partition_collection_missing(
-            &mut vector_result.hits,
-            "vector",
-            &mut response.debug.notes,
-        );
+        partition_collection_missing(&mut vector_result.hits, "vector", &mut response.debug.notes);
         partition_collection_missing(
             &mut keyword_result.hits,
             "keyword",
             &mut response.debug.notes,
         );
-        partition_collection_missing(
-            &mut graph_result.hits,
-            "graph",
-            &mut response.debug.notes,
-        );
+        partition_collection_missing(&mut graph_result.hits, "graph", &mut response.debug.notes);
 
         // Debug-only invariant — every keyword-lane hit must carry
         // `extras["source"] = "keyword"`. The 2026-04-27 audit caught
@@ -292,12 +283,11 @@ impl Orchestrator {
         fused.truncate(req.limit);
 
         if req.include.contains(&IncludeField::Snippets) {
-            response.results.snippets =
-                fused
-                    .iter()
-                    .enumerate()
-                    .map(|(idx, hit)| snippet_from_hit(idx + 1, hit))
-                    .collect();
+            response.results.snippets = fused
+                .iter()
+                .enumerate()
+                .map(|(idx, hit)| snippet_from_hit(idx + 1, hit))
+                .collect();
         }
 
         // ---- Overlays ----
@@ -307,14 +297,16 @@ impl Orchestrator {
                     response.results.decisions = derive_decisions(&fused, req.limit);
                 }
                 Overlay::LawsAndViolations => {
-                    let (active, violations) = derive_laws(&keyword_result.hits, &graph_result.hits, req.limit);
+                    let (active, violations) =
+                        derive_laws(&keyword_result.hits, &graph_result.hits, req.limit);
                     response.laws_active = active;
                     if req.include.contains(&IncludeField::Violations) {
                         response.results.violations = violations;
                     }
                 }
                 Overlay::GraphNeighbors => {
-                    response.results.graph_neighbors = derive_graph_neighbors(&graph_result.hits, req.limit);
+                    response.results.graph_neighbors =
+                        derive_graph_neighbors(&graph_result.hits, req.limit);
                 }
                 Overlay::SimilarTurns => {
                     response.results.similar_turns = derive_similar_turns(&fused, req.limit);
@@ -384,11 +376,7 @@ fn partition_collection_missing(
     *hits = kept;
 }
 
-async fn run_vector_lane(
-    lane: Arc<dyn VectorLane>,
-    plan: &Plan,
-    budget: Duration,
-) -> LaneOutcome {
+async fn run_vector_lane(lane: Arc<dyn VectorLane>, plan: &Plan, budget: Duration) -> LaneOutcome {
     if plan.vectors.is_empty() {
         return LaneOutcome::default();
     }
@@ -446,11 +434,7 @@ async fn run_keyword_lane(
     }
 }
 
-async fn run_graph_lane(
-    lane: Arc<dyn GraphLane>,
-    plan: &Plan,
-    budget: Duration,
-) -> LaneOutcome {
+async fn run_graph_lane(lane: Arc<dyn GraphLane>, plan: &Plan, budget: Duration) -> LaneOutcome {
     if plan.graphs.is_empty() {
         return LaneOutcome::default();
     }
@@ -530,7 +514,11 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
     Snippet {
         rank,
         source: lane_label(hit),
-        collection: hit.extras.get("collection").and_then(|v| v.as_str()).map(String::from),
+        collection: hit
+            .extras
+            .get("collection")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         repo: hit.repo.clone(),
         path: hit.path.clone(),
         symbol,
@@ -538,7 +526,11 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
         text: hit.text.clone(),
         body_truncated,
         score: hit.score,
-        why: hit.extras.get("why").and_then(|v| v.as_str()).map(String::from),
+        why: hit
+            .extras
+            .get("why")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     }
 }
 
@@ -652,11 +644,7 @@ fn derive_graph_neighbors(graph_hits: &[LaneHit], limit: usize) -> Vec<GraphNeig
                 .get("edge_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("RELATED");
-            let hops = h
-                .extras
-                .get("hops")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(1) as u8;
+            let hops = h.extras.get("hops").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
             Some(GraphNeighbor {
                 from: from.to_string(),
                 relation: relation.to_string(),
@@ -738,7 +726,11 @@ mod tests {
         super::partition_collection_missing(&mut hits, "vector", &mut notes);
         assert_eq!(hits.len(), 1, "synthetic marker must be stripped");
         assert_eq!(hits[0].doc_id, real.doc_id);
-        assert_eq!(notes.len(), 1, "exactly one DebugNote per missing collection");
+        assert_eq!(
+            notes.len(),
+            1,
+            "exactly one DebugNote per missing collection"
+        );
         let note = &notes[0];
         assert_eq!(note.lane, "vector");
         assert_eq!(note.kind, "collection_missing");
@@ -769,10 +761,7 @@ mod tests {
         assert_eq!(notes.len(), 2);
         assert_eq!(notes[0].lane, "vector");
         assert_eq!(notes[1].lane, "vector");
-        let collections: Vec<_> = notes
-            .iter()
-            .filter_map(|n| n.collection.clone())
-            .collect();
+        let collections: Vec<_> = notes.iter().filter_map(|n| n.collection.clone()).collect();
         assert!(collections.contains(&"cortex-cortex-turns".to_string()));
         assert!(collections.contains(&"cortex-rulebook-decisions".to_string()));
     }
@@ -812,8 +801,7 @@ mod tests {
         // carries the same flag so the bundle renderer can
         // collapse to a header-only line.
         let mut hit = hit_with(None, "");
-        hit.extras
-            .insert("body_truncated".to_string(), json!(true));
+        hit.extras.insert("body_truncated".to_string(), json!(true));
         let snippet = snippet_from_hit(1, &hit);
         assert!(snippet.body_truncated);
         assert!(snippet.text.is_empty());
@@ -830,9 +818,6 @@ mod tests {
             json!("DEC-0042 Adopt RRF fusion"),
         );
         let snippet = snippet_from_hit(1, &hit);
-        assert_eq!(
-            snippet.symbol.as_deref(),
-            Some("DEC-0042 Adopt RRF fusion")
-        );
+        assert_eq!(snippet.symbol.as_deref(), Some("DEC-0042 Adopt RRF fusion"));
     }
 }

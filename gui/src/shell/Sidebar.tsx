@@ -50,7 +50,11 @@ const NAV: NavItem[] = [
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
   { id: "health", label: "Health", icon: "tools" },
-  { id: "connections", label: "Connections", icon: "settings" },
+  // Phase3 §5 — `connections` is intentionally NOT a sidebar
+  // entry. The manage view opens only from the header
+  // ConnectionSwitcher dropdown's "Manage…" item. ViewId stays
+  // declared above + handled in App.tsx so the navigation
+  // callback still resolves.
 ];
 
 type SidebarProps = {

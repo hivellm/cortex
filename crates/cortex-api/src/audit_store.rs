@@ -90,10 +90,7 @@ impl AuditStore {
 
     /// Number of envelopes currently retained.
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .map(|g| g.entries.len())
-            .unwrap_or(0)
+        self.inner.lock().map(|g| g.entries.len()).unwrap_or(0)
     }
 
     /// `true` when no envelope is retained.
@@ -122,7 +119,9 @@ mod tests {
             "intent": "free_search",
         });
         store.record(&env);
-        let got = store.get("01KQDX").expect("envelope retrievable by query_id");
+        let got = store
+            .get("01KQDX")
+            .expect("envelope retrievable by query_id");
         assert_eq!(got["intent"], "free_search");
     }
 

@@ -150,8 +150,7 @@ async fn rewriter_failure_falls_back_to_passthrough() {
     let v = Arc::new(RecordingVectorLane::default());
     let k = Arc::new(RecordingKeywordLane::default());
     let g = Arc::new(MemoryGraphLane::default());
-    let orch = Orchestrator::new(v.clone(), k.clone(), g)
-        .with_rewriter(Arc::new(FailingRewriter));
+    let orch = Orchestrator::new(v.clone(), k.clone(), g).with_rewriter(Arc::new(FailingRewriter));
 
     let prompt = "anything at all";
     let (_resp, rewritten) = orch.run(&req(prompt)).await;
@@ -185,8 +184,8 @@ async fn graph_request_params_carry_rewritten_query() {
     }
 
     let g = Arc::new(RecordingGraphLane::default());
-    let orch = Orchestrator::new(v, k, g.clone())
-        .with_rewriter(Arc::new(NounPhraseRewriter::new()));
+    let orch =
+        Orchestrator::new(v, k, g.clone()).with_rewriter(Arc::new(NounPhraseRewriter::new()));
 
     let prompt = "how does meili route enriched events into per-repo indexes";
     let (_resp, rewritten) = orch.run(&req(prompt)).await;

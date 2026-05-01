@@ -284,11 +284,7 @@ async fn search_index(
     api_key: Option<&str>,
     uid: &str,
 ) -> Result<Vec<Value>, MeiliLoadError> {
-    let url = format!(
-        "{}/indexes/{}/search",
-        base_url.trim_end_matches('/'),
-        uid
-    );
+    let url = format!("{}/indexes/{}/search", base_url.trim_end_matches('/'), uid);
     let body = serde_json::json!({ "q": "", "limit": MEILI_PAGE_LIMIT });
     let mut req = client.post(url).json(&body);
     if let Some(key) = api_key {
@@ -395,10 +391,7 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
     // Classifications view aggregate topics + severity + pii_risk
     // across the corpus without re-fetching from Meili.
     if !topics.is_empty() {
-        let arr: Vec<Value> = topics
-            .iter()
-            .map(|t| Value::String(t.clone()))
-            .collect();
+        let arr: Vec<Value> = topics.iter().map(|t| Value::String(t.clone())).collect();
         extras.insert("topics".to_string(), Value::Array(arr));
     }
     if let Some(pii) = pii_risk.as_deref() {
@@ -653,7 +646,10 @@ mod tests {
     #[test]
     fn family_of_recognises_per_project_uids() {
         assert_eq!(family_of("cortex-cortex-decisions"), Some("decisions"));
-        assert_eq!(family_of("cortex-vectorizer-governance"), Some("governance"));
+        assert_eq!(
+            family_of("cortex-vectorizer-governance"),
+            Some("governance")
+        );
         assert_eq!(family_of("cortex-rulebook-misc"), Some("misc"));
         assert_eq!(family_of("cortex-cortex-turns"), Some("turns"));
         assert_eq!(family_of("cortex-cortex-analyses"), Some("analyses"));

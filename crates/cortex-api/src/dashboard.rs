@@ -11,13 +11,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path, State};
-use axum_extra::extract::Query;
-use chrono::{Datelike, Timelike};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
+use axum_extra::extract::Query;
+use chrono::{Datelike, Timelike};
 use futures::stream::Stream;
 use nexus_sdk::{NexusClient, Value as NexusValue};
 use serde::{Deserialize, Serialize};
@@ -86,7 +86,10 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/trust", get(trust))
         .route("/v1/dashboard/decisions/{id}", get(decision_detail))
         .route("/v1/dashboard/conversations", get(conversations_list))
-        .route("/v1/dashboard/conversations/{session_id}", get(conversation_detail))
+        .route(
+            "/v1/dashboard/conversations/{session_id}",
+            get(conversation_detail),
+        )
         .route(
             "/v1/dashboard/conversations/{session_id}/summary",
             get(conversation_summary),
@@ -426,7 +429,12 @@ async fn timeline_recent(
     if !params.repo.is_empty() {
         let allow: std::collections::HashSet<&str> =
             params.repo.iter().map(String::as_str).collect();
-        hits.retain(|h| h.repo.as_deref().map(|r| allow.contains(r)).unwrap_or(false));
+        hits.retain(|h| {
+            h.repo
+                .as_deref()
+                .map(|r| allow.contains(r))
+                .unwrap_or(false)
+        });
     }
     if let Some(kind) = params.kind.as_deref().filter(|k| !k.is_empty()) {
         hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
@@ -469,12 +477,8 @@ async fn timeline_stream(
         .map(|s| s.to_string());
 
     let lane = state.lane.clone();
-    let session_filter = params
-        .session_id
-        .clone()
-        .filter(|s| !s.is_empty());
-    let repo_filter: std::collections::HashSet<String> =
-        params.repo.iter().cloned().collect();
+    let session_filter = params.session_id.clone().filter(|s| !s.is_empty());
+    let repo_filter: std::collections::HashSet<String> = params.repo.iter().cloned().collect();
     let kind_filter = params.kind.clone().filter(|s| !s.is_empty());
     let content_hash_filter = params.content_hash.clone().filter(|s| !s.is_empty());
 
@@ -557,7 +561,12 @@ fn filtered_hits(
         hits.retain(|h| session_id_of(h) == Some(sid));
     }
     if !repo_filter.is_empty() {
-        hits.retain(|h| h.repo.as_deref().map(|r| repo_filter.contains(r)).unwrap_or(false));
+        hits.retain(|h| {
+            h.repo
+                .as_deref()
+                .map(|r| repo_filter.contains(r))
+                .unwrap_or(false)
+        });
     }
     if let Some(kind) = kind_filter {
         hits.retain(|h| symbol_to_kind(h.symbol.as_deref()) == kind);
@@ -729,7 +738,12 @@ async fn memory(
     if !params.repo.is_empty() {
         let allow: std::collections::HashSet<&str> =
             params.repo.iter().map(String::as_str).collect();
-        hits.retain(|h| h.repo.as_deref().map(|r| allow.contains(r)).unwrap_or(false));
+        hits.retain(|h| {
+            h.repo
+                .as_deref()
+                .map(|r| allow.contains(r))
+                .unwrap_or(false)
+        });
     }
     // phase10f §1.2 — apply the kind filter BEFORE pagination so
     // `limit=80` returns 80 rows of the requested kinds, not 80
@@ -804,8 +818,7 @@ fn collect_lane_hits(lane: &MemoryKeywordLane) -> Vec<crate::lanes::LaneHit> {
     // existing per-alias query semantics while collapsing the
     // duplicates the dashboard never wanted.
     let mut out: Vec<crate::lanes::LaneHit> = Vec::new();
-    let mut seen: std::collections::HashSet<String> =
-        std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for hits in g.values() {
         for h in hits {
             if seen.insert(h.doc_id.clone()) {
@@ -928,7 +941,10 @@ fn build_decision_rows(hits: &[crate::lanes::LaneHit]) -> Vec<DecisionRow> {
     // before walking pointers.
     let mut rows: Vec<DecisionRow> = Vec::new();
     let mut bodies: HashMap<String, String> = HashMap::new();
-    for h in hits.iter().filter(|h| h.symbol.as_deref() == Some("decision")) {
+    for h in hits
+        .iter()
+        .filter(|h| h.symbol.as_deref() == Some("decision"))
+    {
         let id = h
             .doc_id
             .strip_prefix("archive|")
@@ -1041,10 +1057,7 @@ fn build_decision_rows(hits: &[crate::lanes::LaneHit]) -> Vec<DecisionRow> {
             }
             nodes.push(DecisionChainNode {
                 id: prev.clone(),
-                title: clip(
-                    title_index.get(&prev).map(String::as_str).unwrap_or(""),
-                    80,
-                ),
+                title: clip(title_index.get(&prev).map(String::as_str).unwrap_or(""), 80),
                 state: "old",
             });
             cursor = prev;
@@ -1170,10 +1183,7 @@ async fn decisions(
     (StatusCode::OK, Json(rows)).into_response()
 }
 
-async fn decision_detail(
-    State(state): State<DashboardState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn decision_detail(State(state): State<DashboardState>, Path(id): Path<String>) -> Response {
     let hits = collect_lane_hits(&state.lane);
     let rows = build_decision_rows(&hits);
     let row = match rows.into_iter().find(|r| r.id == id) {
@@ -1253,9 +1263,11 @@ async fn laws(State(state): State<DashboardState>) -> Response {
     // richer stream instead of fanning out from the violations
     // bucket.
     let hits = collect_lane_hits(&state.lane);
-    let mut by_id: std::collections::BTreeMap<String, LawRow> =
-        std::collections::BTreeMap::new();
-    for h in hits.iter().filter(|h| h.symbol.as_deref() == Some("law_violation")) {
+    let mut by_id: std::collections::BTreeMap<String, LawRow> = std::collections::BTreeMap::new();
+    for h in hits
+        .iter()
+        .filter(|h| h.symbol.as_deref() == Some("law_violation"))
+    {
         let law_id = match h.extras.get("law_id").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
@@ -1267,26 +1279,21 @@ async fn laws(State(state): State<DashboardState>) -> Response {
             .filter(|s| !s.is_empty())
             .unwrap_or(&law_id)
             .to_string();
-        let severity = h
-            .severity
-            .clone()
-            .unwrap_or_else(|| "info".to_string());
+        let severity = h.severity.clone().unwrap_or_else(|| "info".to_string());
         let blocked = severity == "critical";
         let scope = h.path.clone().unwrap_or_else(|| "all".to_string());
-        let row = by_id
-            .entry(law_id.clone())
-            .or_insert_with(|| LawRow {
-                id: law_id,
-                title,
-                severity,
-                blocked,
-                scope,
-                applies: 0,
-                violations_7d: 0,
-                rate: 0.0,
-                detector: String::new(),
-                remediation: String::new(),
-            });
+        let row = by_id.entry(law_id.clone()).or_insert_with(|| LawRow {
+            id: law_id,
+            title,
+            severity,
+            blocked,
+            scope,
+            applies: 0,
+            violations_7d: 0,
+            rate: 0.0,
+            detector: String::new(),
+            remediation: String::new(),
+        });
         row.violations_7d = row.violations_7d.saturating_add(1);
         row.applies = row.applies.saturating_add(1);
     }
@@ -1524,8 +1531,7 @@ pub struct HeatmapBlock {
 
 async fn tools_stats(State(state): State<DashboardState>) -> Response {
     let hits = collect_lane_hits(&state.lane);
-    let mut by_tool: std::collections::BTreeMap<String, u64> =
-        std::collections::BTreeMap::new();
+    let mut by_tool: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
     for h in &hits {
         if let Some(s) = h.symbol.as_deref() {
             if let Some(tool) = s.strip_prefix("tool_call:") {
@@ -1884,9 +1890,10 @@ async fn conversations_list(State(state): State<DashboardState>) -> Response {
     // creating one session row per classified event.
     let mut by_session: std::collections::BTreeMap<String, Vec<crate::lanes::LaneHit>> =
         std::collections::BTreeMap::new();
-    for h in hits.into_iter().filter(|h| {
-        symbol_to_kind(h.symbol.as_deref()) == "turn" && !is_internal_cortex_turn(h)
-    }) {
+    for h in hits
+        .into_iter()
+        .filter(|h| symbol_to_kind(h.symbol.as_deref()) == "turn" && !is_internal_cortex_turn(h))
+    {
         if let Some(sid) = session_id_of(&h) {
             by_session.entry(sid.to_string()).or_default().push(h);
         }
@@ -2062,7 +2069,11 @@ async fn conversation_summary(
     State(state): State<DashboardState>,
     Path(session_id): Path<String>,
 ) -> Response {
-    match state.analyzer.summarize_session(&state.lane, &session_id).await {
+    match state
+        .analyzer
+        .summarize_session(&state.lane, &session_id)
+        .await
+    {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
         Err(reason) => {
             // 503 with a structured body — the GUI shows a graceful
@@ -2282,10 +2293,7 @@ async fn classifications(
                     .extras
                     .get("topics")
                     .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .any(|x| x.as_str() == Some(t))
-                    })
+                    .map(|a| a.iter().any(|x| x.as_str() == Some(t)))
                     .unwrap_or(false);
                 if !topics {
                     return false;
@@ -2309,11 +2317,7 @@ async fn classifications(
         if let Some(s) = h.severity.as_deref() {
             *sev_counts.entry(s.to_string()).or_insert(0) += 1;
         }
-        if let Some(p) = h
-            .extras
-            .get("pii_risk")
-            .and_then(|v| v.as_str())
-        {
+        if let Some(p) = h.extras.get("pii_risk").and_then(|v| v.as_str()) {
             *pii_counts.entry(p.to_string()).or_insert(0) += 1;
         }
         if let Some(r) = h.repo.as_deref() {
@@ -2427,10 +2431,7 @@ pub struct GraphQuery {
     pub limit: Option<usize>,
 }
 
-async fn graph(
-    State(state): State<DashboardState>,
-    Query(params): Query<GraphQuery>,
-) -> Response {
+async fn graph(State(state): State<DashboardState>, Query(params): Query<GraphQuery>) -> Response {
     // The cap is intentionally generous: the explorer's "show me the
     // whole panorama" mode needs to walk every Repo / Session / Turn /
     // ToolCall / Artifact at once. Sigma WebGL renders 30k+ nodes at
@@ -2504,10 +2505,8 @@ async fn query_nexus_graph(
     let mut seen_edges: std::collections::HashSet<String> = std::collections::HashSet::new();
     // Build a HashSet for O(1) membership; the loop below short-
     // circuits the whole-Cypher round-trip when the filter rejects.
-    let repo_set: std::collections::HashSet<&str> = repo_filter
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let repo_set: std::collections::HashSet<&str> =
+        repo_filter.iter().map(String::as_str).collect();
 
     // Edge-first sampling. The previous node-first strategy pulled
     // each label independently (10 Sessions, 18 Turns, 18 Memories…)
@@ -2530,23 +2529,125 @@ async fn query_nexus_graph(
     // of ULIDs — `name` lets the explorer show "fixes" / "docs:
     // move..." instead of "01KQ8534N93Y1MA28...".
     let edge_specs: &[(&str, &str, &str, &str, &str, &str, &str, &str, &str)] = &[
-        ("Session", "id", "name", "session", "HAS_TURN", "Turn", "id", "name", "turn"),
-        ("Session", "id", "name", "session", "REMEMBERS", "Memory", "id", "name", "memory"),
-        ("Turn", "id", "name", "turn", "HAS_TOOL_CALL", "ToolCall", "id", "name", "tool_call"),
+        (
+            "Session", "id", "name", "session", "HAS_TURN", "Turn", "id", "name", "turn",
+        ),
+        (
+            "Session",
+            "id",
+            "name",
+            "session",
+            "REMEMBERS",
+            "Memory",
+            "id",
+            "name",
+            "memory",
+        ),
+        (
+            "Turn",
+            "id",
+            "name",
+            "turn",
+            "HAS_TOOL_CALL",
+            "ToolCall",
+            "id",
+            "name",
+            "tool_call",
+        ),
         // Session→ToolCall is the mapper's fallback anchor for tool_call
         // events without a `parent_event_id` (bootstrap envelopes ship
         // without one — see `cortex-graph/src/mapper.rs::emit_tool_call`).
         // Without this row the dashboard misses every backfilled
         // HAS_TOOL_CALL because the canonical `(:Turn)-[:HAS_TOOL_CALL]->`
         // pattern matches zero on bootstrap data.
-        ("Session", "id", "name", "session", "HAS_TOOL_CALL", "ToolCall", "id", "name", "tool_call"),
-        ("Turn", "id", "name", "turn", "HAS_AGENT_CALL", "AgentCall", "id", "name", "agent_call"),
-        ("Session", "id", "name", "session", "HAS_AGENT_CALL", "AgentCall", "id", "name", "agent_call"),
-        ("ToolCall", "id", "name", "tool_call", "TOUCHED", "Artifact", "natural_key", "name", "artifact"),
-        ("Artifact", "natural_key", "name", "artifact", "IN_REPO", "Repo", "name", "name", "repo"),
-        ("LawViolation", "id", "name", "violation", "OBSERVED_IN", "Turn", "id", "name", "turn"),
-        ("LawViolation", "id", "name", "violation", "OF", "Law", "id", "name", "law"),
-        ("Decision", "id", "name", "decision", "SUPERSEDES", "Decision", "id", "name", "decision"),
+        (
+            "Session",
+            "id",
+            "name",
+            "session",
+            "HAS_TOOL_CALL",
+            "ToolCall",
+            "id",
+            "name",
+            "tool_call",
+        ),
+        (
+            "Turn",
+            "id",
+            "name",
+            "turn",
+            "HAS_AGENT_CALL",
+            "AgentCall",
+            "id",
+            "name",
+            "agent_call",
+        ),
+        (
+            "Session",
+            "id",
+            "name",
+            "session",
+            "HAS_AGENT_CALL",
+            "AgentCall",
+            "id",
+            "name",
+            "agent_call",
+        ),
+        (
+            "ToolCall",
+            "id",
+            "name",
+            "tool_call",
+            "TOUCHED",
+            "Artifact",
+            "natural_key",
+            "name",
+            "artifact",
+        ),
+        (
+            "Artifact",
+            "natural_key",
+            "name",
+            "artifact",
+            "IN_REPO",
+            "Repo",
+            "name",
+            "name",
+            "repo",
+        ),
+        (
+            "LawViolation",
+            "id",
+            "name",
+            "violation",
+            "OBSERVED_IN",
+            "Turn",
+            "id",
+            "name",
+            "turn",
+        ),
+        (
+            "LawViolation",
+            "id",
+            "name",
+            "violation",
+            "OF",
+            "Law",
+            "id",
+            "name",
+            "law",
+        ),
+        (
+            "Decision",
+            "id",
+            "name",
+            "decision",
+            "SUPERSEDES",
+            "Decision",
+            "id",
+            "name",
+            "decision",
+        ),
     ];
 
     // Per-relation budget. Each MATCH gets the full node-count cap so
@@ -2744,24 +2845,19 @@ async fn query_nexus_graph(
                 // Other kinds pass through — Decisions / Laws /
                 // Memories cross repo boundaries and dropping them
                 // would gut the cross-project knowledge spine.
-                if !repo_set.is_empty()
-                    && *gui_kind == "repo"
-                    && !repo_set.contains(id.as_str())
-                {
+                if !repo_set.is_empty() && *gui_kind == "repo" && !repo_set.contains(id.as_str()) {
                     continue;
                 }
                 let label = cell_str(cells.get(1))
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| id.clone());
-                nodes_by_id
-                    .entry(id.clone())
-                    .or_insert_with(|| GraphNode {
-                        id,
-                        label: clip(&label, 64),
-                        x: 0,
-                        y: 0,
-                        kind: (*gui_kind).to_string(),
-                    });
+                nodes_by_id.entry(id.clone()).or_insert_with(|| GraphNode {
+                    id,
+                    label: clip(&label, 64),
+                    x: 0,
+                    y: 0,
+                    kind: (*gui_kind).to_string(),
+                });
                 if nodes_by_id.len() >= limit {
                     break;
                 }
@@ -2906,11 +3002,7 @@ fn label_to_kind(label: &str) -> String {
 }
 
 /// Pick a human-readable label for a node based on the kind + props.
-fn node_label(
-    kind: &str,
-    props: &serde_json::Map<String, Value>,
-    fallback_id: &str,
-) -> String {
+fn node_label(kind: &str, props: &serde_json::Map<String, Value>, fallback_id: &str) -> String {
     let pick = |keys: &[&str]| {
         keys.iter()
             .find_map(|k| props.get(*k).and_then(|v| v.as_str()))
@@ -2946,10 +3038,7 @@ fn node_label(
 
 /// Original lane-only graph synthesis — used as the fallback when no
 /// Nexus client is configured or the live query fails.
-fn synthesize_graph_from_lane(
-    lane: &MemoryKeywordLane,
-    limit: usize,
-) -> GraphPayload {
+fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPayload {
     let hits = collect_lane_hits(lane);
 
     let mut nodes: Vec<GraphNode> = Vec::new();
@@ -3253,7 +3342,9 @@ async fn retention_sweeps(
                 tracing::warn!(error=%e, "retention/sweeps: list_recent_sweeps failed");
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "list_recent_sweeps", "detail": e.to_string()})),
+                    Json(
+                        serde_json::json!({"error": "list_recent_sweeps", "detail": e.to_string()}),
+                    ),
                 )
                     .into_response();
             }
@@ -3262,7 +3353,11 @@ async fn retention_sweeps(
 
     let body: Vec<RetentionSweepBody> = rows
         .into_iter()
-        .filter(|r| since_filter.as_deref().map_or(true, |s| r.started_at.as_str() >= s))
+        .filter(|r| {
+            since_filter
+                .as_deref()
+                .map_or(true, |s| r.started_at.as_str() >= s)
+        })
         .map(|r| {
             let stages = r
                 .tier_transitions_json
@@ -3352,12 +3447,14 @@ struct RetentionStateBody {
 /// `GET /v1/retention/state` — compact "current state" envelope the
 /// Retention tab's header cards consume.
 async fn retention_state(State(_state): State<DashboardState>) -> Response {
-    let archive_root = std::env::var("CORTEX_ARCHIVE_ROOT").ok().unwrap_or_else(|| {
-        home_path().map_or_else(
-            || ".cortex/archive".to_string(),
-            |h| h.join(".cortex/archive").display().to_string(),
-        )
-    });
+    let archive_root = std::env::var("CORTEX_ARCHIVE_ROOT")
+        .ok()
+        .unwrap_or_else(|| {
+            home_path().map_or_else(
+                || ".cortex/archive".to_string(),
+                |h| h.join(".cortex/archive").display().to_string(),
+            )
+        });
     let archive_bytes = scan_archive_age_buckets(std::path::Path::new(&archive_root));
 
     let cas_path = std::env::var("CORTEX_CAS_DB").ok().unwrap_or_else(|| {
@@ -3441,14 +3538,8 @@ fn scan_archive_age_buckets(root: &std::path::Path) -> ArchiveBuckets {
                 continue;
             }
             let size = metadata.len();
-            let modified = metadata
-                .modified()
-                .unwrap_or(std::time::UNIX_EPOCH);
-            let age_days = now
-                .duration_since(modified)
-                .unwrap_or_default()
-                .as_secs()
-                / 86_400;
+            let modified = metadata.modified().unwrap_or(std::time::UNIX_EPOCH);
+            let age_days = now.duration_since(modified).unwrap_or_default().as_secs() / 86_400;
             out.total = out.total.saturating_add(size);
             if age_days <= 30 {
                 out.le_30d = out.le_30d.saturating_add(size);
@@ -3502,10 +3593,7 @@ fn home_path() -> Option<std::path::PathBuf> {
 /// `GET /v1/dashboard/tasks/{id}` — full proposal + sectioned
 /// checklist + listing of `specs/`. Returns `404` when the id is not
 /// found in either the active or archived tree.
-async fn tasks_detail(
-    State(state): State<DashboardState>,
-    Path(id): Path<String>,
-) -> Response {
+async fn tasks_detail(State(state): State<DashboardState>, Path(id): Path<String>) -> Response {
     match state.tasks.detail(&id) {
         Some(body) => (StatusCode::OK, Json(body)).into_response(),
         None => (
@@ -3571,7 +3659,18 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -3616,7 +3715,10 @@ mod tests {
         let mut hit = tool_call_hit("Edit", &large, "Cortex", 100);
         hit.content_hash = Some("sha256:full".to_string());
         let ev = build_timeline_event(&hit);
-        assert!(ev.preview_truncated, "preview_truncated must flip on overflow");
+        assert!(
+            ev.preview_truncated,
+            "preview_truncated must flip on overflow"
+        );
         let preview = ev.preview.expect("preview must be present");
         assert_eq!(
             preview.len(),
@@ -3649,7 +3751,18 @@ mod tests {
         let mut c = tool_call_hit("Edit", "third", "Cortex", 300);
         c.content_hash = Some("sha256:aaa".into());
         let lane = lane_with(vec![a, b, c]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3678,7 +3791,18 @@ mod tests {
             turn_hit("middle prompt", "Cortex", 200),
             turn_hit("newest prompt", "Cortex", 300),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3706,7 +3830,18 @@ mod tests {
             turn_hit("HNSW recall floor benchmark", "Vectorizer", 100),
             turn_hit("unrelated thoughts", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3733,7 +3868,18 @@ mod tests {
             turn_hit("a", "Cortex", 100),
             turn_hit("b", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -3761,7 +3907,18 @@ mod tests {
                 .map(|i| turn_hit(&format!("p{i}"), "X", i))
                 .collect(),
         );
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -3825,7 +3982,12 @@ mod tests {
         let lane = lane_with(vec![
             classifier_internal_turn_hit("01CLASSIFIER0000000000000A", 100),
             classifier_internal_turn_hit("01CLASSIFIER0000000000000B", 200),
-            turn_hit_in("01REALCHAT00000000000000001", "real user prompt", "Cortex", 300),
+            turn_hit_in(
+                "01REALCHAT00000000000000001",
+                "real user prompt",
+                "Cortex",
+                300,
+            ),
         ]);
         let state = DashboardState {
             lane,
@@ -3854,8 +4016,7 @@ mod tests {
         extras.insert(
             "user_message".to_string(),
             Value::String(
-                "You are an event classifier + graph extractor for the Cortex system."
-                    .to_string(),
+                "You are an event classifier + graph extractor for the Cortex system.".to_string(),
             ),
         );
         let hit_classifier = LaneHit {
@@ -3876,8 +4037,7 @@ mod tests {
         extras.insert(
             "user_message".to_string(),
             Value::String(
-                "You are analyzing one session of captured Claude Code activity."
-                    .to_string(),
+                "You are analyzing one session of captured Claude Code activity.".to_string(),
             ),
         );
         let hit_analyzer = LaneHit {
@@ -3923,10 +4083,31 @@ mod tests {
     async fn sessions_groups_by_session_id_and_sorts_by_recency() {
         let lane = lane_with(vec![
             turn_hit_in("01SESSIONA0000000000000001", "first ever", "Cortex", 100),
-            turn_hit_in("01SESSIONA0000000000000001", "still session A", "Cortex", 200),
-            turn_hit_in("01SESSIONB0000000000000002", "session B latest", "Vectorizer", 500),
+            turn_hit_in(
+                "01SESSIONA0000000000000001",
+                "still session A",
+                "Cortex",
+                200,
+            ),
+            turn_hit_in(
+                "01SESSIONB0000000000000002",
+                "session B latest",
+                "Vectorizer",
+                500,
+            ),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -3949,7 +4130,18 @@ mod tests {
             turn_hit_in("01SESSIONA0000000000000001", "alpha", "Cortex", 100),
             turn_hit_in("01SESSIONB0000000000000002", "beta", "Cortex", 200),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = timeline_recent(
             State(state),
             Query(TimelineQuery {
@@ -4255,7 +4447,18 @@ mod tests {
             tool_call_hit("Edit", "x", "Cortex", 200),
             turn_hit("note V", "Vectorizer", 150),
         ]);
-        let state = DashboardState { lane, nexus: None, analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()), tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from("__tests_no_rulebook__"))])), metadata: None, loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()) };
+        let state = DashboardState {
+            lane,
+            nexus: None,
+            analyzer: std::sync::Arc::new(crate::analyzer::Analyzer::from_env()),
+            tasks: std::sync::Arc::new(crate::tasks_loader::MultiTaskLoader::new(vec![
+                crate::tasks_loader::TaskLoader::new(std::path::PathBuf::from(
+                    "__tests_no_rulebook__",
+                )),
+            ])),
+            metadata: None,
+            loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+        };
         let resp = memory(
             State(state),
             Query(MemoryQuery {
@@ -4304,7 +4507,13 @@ mod tests {
         assert_eq!(series["events_per_min"].as_array().unwrap().len(), 20);
         assert_eq!(series["pre_thinking_p95_ms"].as_array().unwrap().len(), 20);
         assert_eq!(series["violations_7d_daily"].as_array().unwrap().len(), 7);
-        assert_eq!(series["classifier_cost_usd_today"].as_array().unwrap().len(), 24);
+        assert_eq!(
+            series["classifier_cost_usd_today"]
+                .as_array()
+                .unwrap()
+                .len(),
+            24
+        );
         assert_eq!(parsed["classifier_cost_unavailable_until_spec05"], true);
         // Tool-call hit landed in the window but seeded fixture has no
         // duration_ms on extras, so every P95 bucket is null.
@@ -4537,10 +4746,12 @@ mod tests {
         }
         // Newest first: cas vacuum landed last.
         assert_eq!(arr[0]["sweep_id"], "01CASVAC");
-        assert!(arr[0]["stages"]["cas_vacuum"]["blobs_dropped"]
-            .as_u64()
-            .unwrap()
-            >= 7);
+        assert!(
+            arr[0]["stages"]["cas_vacuum"]["blobs_dropped"]
+                .as_u64()
+                .unwrap()
+                >= 7
+        );
     }
 
     #[tokio::test]
@@ -4580,11 +4791,7 @@ mod tests {
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
         };
-        let resp = retention_sweeps(
-            State(state),
-            Query(RetentionSweepsQuery::default()),
-        )
-        .await;
+        let resp = retention_sweeps(State(state), Query(RetentionSweepsQuery::default())).await;
         let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
             .unwrap();
@@ -4609,7 +4816,10 @@ mod tests {
         assert!(buckets.available);
         assert!(buckets.le_30d > 0, "expected fresh bytes in le_30d");
         assert_eq!(buckets.gt_365d, 0);
-        assert_eq!(buckets.total, buckets.le_30d + buckets.between_30d_365d + buckets.gt_365d);
+        assert_eq!(
+            buckets.total,
+            buckets.le_30d + buckets.between_30d_365d + buckets.gt_365d
+        );
     }
 
     #[test]

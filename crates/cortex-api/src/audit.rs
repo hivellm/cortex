@@ -57,11 +57,7 @@ impl AuditPublisher for MemoryAuditPublisher {
 /// Older callers without phase6a's resolution-lane awareness fall
 /// through this entry; the envelope omits the `scope_resolution`
 /// field so the wire shape stays compatible with v1 consumers.
-pub fn build_envelope(
-    caller: &str,
-    intent: &str,
-    response: &QueryResponse,
-) -> Value {
+pub fn build_envelope(caller: &str, intent: &str, response: &QueryResponse) -> Value {
     json!({
         "kind": "query_audit",
         "caller": caller,
@@ -122,17 +118,13 @@ pub fn build_envelope_with_audit_context(
     fusion: &FusionConfig,
     intent_trigger: Option<&str>,
 ) -> Value {
-    let mut env =
-        build_envelope_with_scope_resolution(caller, intent, response, scope_resolution);
+    let mut env = build_envelope_with_scope_resolution(caller, intent, response, scope_resolution);
     if let Some(obj) = env.as_object_mut() {
         // `fusion_alpha` is serialised as the f32 value the
         // operator set (or the clamped default); JSON's number
         // type loses the f32-vs-f64 distinction so consumers
         // round-trip through f64 without surprise.
-        obj.insert(
-            "fusion_alpha".to_string(),
-            json!(fusion.alpha as f64),
-        );
+        obj.insert("fusion_alpha".to_string(), json!(fusion.alpha as f64));
         obj.insert("fusion_k".to_string(), json!(fusion.k));
         // Phase6d — explicit Null on fallback so the dashboard can
         // tell "no rule matched" apart from "this envelope was
@@ -192,7 +184,7 @@ pub fn build_envelope_with_rewrite_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{empty_response, Intent, QueryRequest, Scope, IncludeField};
+    use crate::types::{empty_response, IncludeField, Intent, QueryRequest, Scope};
 
     #[tokio::test]
     async fn memory_publisher_records_published_envelopes() {

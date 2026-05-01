@@ -87,11 +87,7 @@ pub trait QueryRewriter: Send + Sync {
     /// always return *some* [`RewrittenQuery`] for valid input —
     /// callers route a `Result::Err` straight to the user-facing
     /// failure path and never see a degraded mode otherwise.
-    async fn rewrite(
-        &self,
-        prompt: &str,
-        intent: Intent,
-    ) -> Result<RewrittenQuery, RewriteError>;
+    async fn rewrite(&self, prompt: &str, intent: Intent) -> Result<RewrittenQuery, RewriteError>;
 }
 
 // ============================================================================
@@ -107,11 +103,7 @@ pub struct PassthroughRewriter;
 
 #[async_trait]
 impl QueryRewriter for PassthroughRewriter {
-    async fn rewrite(
-        &self,
-        prompt: &str,
-        _intent: Intent,
-    ) -> Result<RewrittenQuery, RewriteError> {
+    async fn rewrite(&self, prompt: &str, _intent: Intent) -> Result<RewrittenQuery, RewriteError> {
         Ok(RewrittenQuery::passthrough(prompt))
     }
 }
@@ -134,19 +126,18 @@ const QUESTION_LEADERS: &[&str] = &[
 
 const STOP_WORDS: &[&str] = &[
     // Generic English noise.
-    "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "with", "from",
-    "this", "that", "these", "those", "it", "its", "as", "be", "by", "we", "you", "i",
-    "me", "my", "our", "us", "they", "them", "their", "if", "then", "than", "so", "but",
-    "not", "no", "yes", "ok", "okay", "just", "really", "very", "much", "more", "less",
-    "any", "some", "all", "each", "every", "such", "into", "out", "over", "under",
-    "about", "around", "near", "between", "without", "within", "via", "while", "after",
-    "before", "still", "even",
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "at", "for", "with", "from", "this",
+    "that", "these", "those", "it", "its", "as", "be", "by", "we", "you", "i", "me", "my", "our",
+    "us", "they", "them", "their", "if", "then", "than", "so", "but", "not", "no", "yes", "ok",
+    "okay", "just", "really", "very", "much", "more", "less", "any", "some", "all", "each",
+    "every", "such", "into", "out", "over", "under", "about", "around", "near", "between",
+    "without", "within", "via", "while", "after", "before", "still", "even",
     // Operator filler that shows up a lot in audit prompts.
     "please", "thanks", "thx", "btw", "kind", "of", "sort",
     // Auxiliaries the leading-word strip misses when they appear
     // mid-sentence.
-    "was", "were", "been", "being", "am", "have", "has", "had", "having", "let", "go",
-    "goes", "going", "make", "makes", "making", "did", "doing", "done",
+    "was", "were", "been", "being", "am", "have", "has", "had", "having", "let", "go", "goes",
+    "going", "make", "makes", "making", "did", "doing", "done",
 ];
 
 impl NounPhraseRewriter {
@@ -165,7 +156,24 @@ impl NounPhraseRewriter {
         //    `meili_loader`, `cortex-api`) survive intact.
         let lower = prompt.to_lowercase();
         let raw_tokens: Vec<&str> = lower
-            .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | '?' | '!' | '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}'))
+            .split(|c: char| {
+                c.is_whitespace()
+                    || matches!(
+                        c,
+                        ',' | ';'
+                            | ':'
+                            | '?'
+                            | '!'
+                            | '"'
+                            | '\''
+                            | '('
+                            | ')'
+                            | '['
+                            | ']'
+                            | '{'
+                            | '}'
+                    )
+            })
             .filter(|t| !t.is_empty())
             .collect();
 
@@ -220,7 +228,8 @@ fn looks_like_content_token(tok: &str) -> bool {
         return false;
     }
     let first = tok.chars().next().unwrap();
-    let has_compound_marker = tok.contains('_') || tok.contains('-') || tok.contains('.') || tok.contains('/');
+    let has_compound_marker =
+        tok.contains('_') || tok.contains('-') || tok.contains('.') || tok.contains('/');
     if first.is_ascii_digit() && !has_compound_marker {
         return false;
     }
@@ -234,11 +243,7 @@ fn looks_like_content_token(tok: &str) -> bool {
 
 #[async_trait]
 impl QueryRewriter for NounPhraseRewriter {
-    async fn rewrite(
-        &self,
-        prompt: &str,
-        _intent: Intent,
-    ) -> Result<RewrittenQuery, RewriteError> {
+    async fn rewrite(&self, prompt: &str, _intent: Intent) -> Result<RewrittenQuery, RewriteError> {
         let stripped = Self::rewrite_str(prompt);
         Ok(RewrittenQuery {
             vector_query: stripped.clone(),
@@ -366,11 +371,12 @@ impl SonnetRewriter {
             // capacity. Production-grade LRU is overkill for a
             // 4k-entry cap that exists purely to bound memory.
             if g.len() >= self.cfg.cache_capacity {
-                let cutoff = self.cfg.cache_capacity.saturating_sub(self.cfg.cache_capacity / 4);
-                let mut entries: Vec<(String, Instant)> = g
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.inserted))
-                    .collect();
+                let cutoff = self
+                    .cfg
+                    .cache_capacity
+                    .saturating_sub(self.cfg.cache_capacity / 4);
+                let mut entries: Vec<(String, Instant)> =
+                    g.iter().map(|(k, v)| (k.clone(), v.inserted)).collect();
                 entries.sort_by_key(|(_, t)| *t);
                 for (k, _) in entries.iter().take(g.len().saturating_sub(cutoff)) {
                     g.remove(k);
@@ -411,9 +417,9 @@ impl SonnetRewriter {
         prompt: &str,
         intent: Intent,
     ) -> Result<RewrittenQuery, RewriteError> {
+        use std::process::Stdio;
         use tokio::io::AsyncWriteExt;
         use tokio::process::Command;
-        use std::process::Stdio;
 
         let rendered = Self::render_cli_prompt(prompt, intent);
         let mut cmd = Command::new(&self.cfg.claude_bin);
@@ -429,9 +435,9 @@ impl SonnetRewriter {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| {
-            RewriteError::Upstream(format!("spawn {}: {e}", self.cfg.claude_bin))
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| RewriteError::Upstream(format!("spawn {}: {e}", self.cfg.claude_bin)))?;
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(rendered.as_bytes())
@@ -478,7 +484,10 @@ impl SonnetRewriter {
             })?;
         let cleaned = strip_code_fence(inner_raw);
         let inner: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
-            RewriteError::Upstream(format!("cli inner json: {e} — body: {}", clip(&cleaned, 240)))
+            RewriteError::Upstream(format!(
+                "cli inner json: {e} — body: {}",
+                clip(&cleaned, 240)
+            ))
         })?;
         let vec_q = inner
             .get("vector_query")
@@ -523,11 +532,7 @@ Rules:
 
 #[async_trait]
 impl QueryRewriter for SonnetRewriter {
-    async fn rewrite(
-        &self,
-        prompt: &str,
-        intent: Intent,
-    ) -> Result<RewrittenQuery, RewriteError> {
+    async fn rewrite(&self, prompt: &str, intent: Intent) -> Result<RewrittenQuery, RewriteError> {
         // Cache hit — return immediately.
         let key = Self::cache_key(prompt, intent);
         if let Some(hit) = self.cache_get(&key) {
@@ -640,9 +645,7 @@ mod tests {
 
     #[test]
     fn noun_phrase_keeps_snake_case_and_kebab_case() {
-        let out = NounPhraseRewriter::rewrite_str(
-            "how does meili_loader interact with cortex-api",
-        );
+        let out = NounPhraseRewriter::rewrite_str("how does meili_loader interact with cortex-api");
         assert!(out.contains("meili_loader"));
         assert!(out.contains("cortex-api"));
     }
@@ -727,10 +730,7 @@ mod tests {
 
     #[test]
     fn strip_code_fence_handles_json_wrapper() {
-        assert_eq!(
-            strip_code_fence("```json\n{\"a\":1}\n```"),
-            "{\"a\":1}"
-        );
+        assert_eq!(strip_code_fence("```json\n{\"a\":1}\n```"), "{\"a\":1}");
         assert_eq!(strip_code_fence("```\n{}\n```"), "{}");
         assert_eq!(strip_code_fence("plain"), "plain");
     }

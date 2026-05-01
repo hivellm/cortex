@@ -104,10 +104,7 @@ fn seed_with_fresh_connection(metadata_path: &Path) {
             let now = Utc::now();
             match seed_defaults(&store, now) {
                 Ok(0) => tracing::info!("retention daemon: cron registry already seeded"),
-                Ok(n) => tracing::info!(
-                    inserted = n,
-                    "retention daemon: seeded default cron jobs"
-                ),
+                Ok(n) => tracing::info!(inserted = n, "retention daemon: seeded default cron jobs"),
                 Err(err) => tracing::warn!(
                     error = %err,
                     "retention daemon: seed_defaults failed; tick loop will still run for any pre-existing rows"
@@ -151,11 +148,7 @@ fn spawn_loop(metadata_path: PathBuf, opts: SpawnOptions) -> tokio::task::JoinHa
 /// that makes it `Send + !Sync`. The loop here drops the
 /// connection BEFORE the await and re-opens it after, so no
 /// non-`Sync` reference ever crosses a yield point.
-async fn run_one_tick(
-    metadata_path: &Path,
-    scheduler: &Scheduler,
-    runner: &dyn Runner,
-) {
+async fn run_one_tick(metadata_path: &Path, scheduler: &Scheduler, runner: &dyn Runner) {
     let now = Utc::now();
     let due = match list_due(metadata_path, now) {
         Ok(rows) => rows,
@@ -300,8 +293,7 @@ mod tests {
         let opts = SpawnOptions {
             tick_interval: StdDuration::from_secs(3600),
         };
-        let handle =
-            spawn(path.clone(), opts).expect("spawn must produce a handle");
+        let handle = spawn(path.clone(), opts).expect("spawn must produce a handle");
         // Re-open to inspect the seeded rows.
         let store = MetadataStore::open(&path).expect("metadata reopens");
         let jobs = store.list_cron_jobs().expect("metadata store readable");

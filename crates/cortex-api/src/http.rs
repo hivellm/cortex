@@ -158,18 +158,9 @@ pub fn build_router_with_auth(
                 "/v1/health/divergence",
                 get(crate::health::divergence_handler),
             )
-            .route(
-                "/v1/health/versions",
-                get(crate::health::versions_handler),
-            )
-            .route(
-                "/v1/health/config",
-                get(handle_health_config),
-            )
-            .route(
-                "/v1/health/stream",
-                get(crate::health::stream_handler),
-            )
+            .route("/v1/health/versions", get(crate::health::versions_handler))
+            .route("/v1/health/config", get(handle_health_config))
+            .route("/v1/health/stream", get(crate::health::stream_handler))
             .with_state(health_state);
         // Phase8b — Prometheus-text `/metrics` endpoint exposing the
         // LoaderMetrics counters. The freshness aggregator already
@@ -178,20 +169,22 @@ pub fn build_router_with_auth(
         // (which already exposes one) so an external scraper picks
         // up every stage uniformly.
         let metrics_state = dash.loader_metrics.clone();
-        let metrics_router = Router::new()
-            .route(
-                "/metrics",
-                get({
-                    let m = metrics_state.clone();
-                    move || async move {
-                        (
-                            StatusCode::OK,
-                            [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-                            m.render_prom(),
-                        )
-                    }
-                }),
-            );
+        let metrics_router = Router::new().route(
+            "/metrics",
+            get({
+                let m = metrics_state.clone();
+                move || async move {
+                    (
+                        StatusCode::OK,
+                        [(
+                            axum::http::header::CONTENT_TYPE,
+                            "text/plain; version=0.0.4",
+                        )],
+                        m.render_prom(),
+                    )
+                }
+            }),
+        );
         let dashboard_router = crate::dashboard::build_dashboard_router(dash);
         let dashboard_router = if let Some(store) = api_key_store.clone() {
             // Phase3 §7.4 — only the dashboard sub-router is
@@ -201,6 +194,10 @@ pub fn build_router_with_auth(
         } else {
             dashboard_router
         };
+        // Phase3 §7.1 — apply the dashboard CORS layer. Permissive
+        // default for localhost dev; tight allow-list when
+        // CORTEX_API_ALLOWED_ORIGINS is set.
+        let dashboard_router = dashboard_router.layer(crate::auth::dashboard_cors_layer());
         router = router.merge(dashboard_router);
         router = router.merge(health_router);
         router = router.merge(metrics_router);
@@ -216,15 +213,11 @@ async fn handle_healthz(State(state): State<ApiState>) -> Response {
         ))
         .map(|t| t.to_rfc3339())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let mut status = SubsystemStatus::ok(
-        "cortex-api",
-        env!("CARGO_PKG_VERSION"),
-        started_at,
-    );
+    let mut status = SubsystemStatus::ok("cortex-api", env!("CARGO_PKG_VERSION"), started_at);
     // Phase8c — version block (git_sha + build_ts + git_dirty) so
     // the drift aggregator can flag stale running binaries.
-    let version_block = serde_json::to_value(cortex_build::version_info!())
-        .unwrap_or(serde_json::Value::Null);
+    let version_block =
+        serde_json::to_value(cortex_build::version_info!()).unwrap_or(serde_json::Value::Null);
     status.extras.insert("version".into(), version_block);
     let indexed_repos = state
         .service
@@ -241,16 +234,18 @@ async fn handle_healthz(State(state): State<ApiState>) -> Response {
                 .collect(),
         ),
     );
-    status
-        .extras
-        .insert("uptime_ms".into(), serde_json::json!(state.started_at.elapsed().as_millis() as u64));
+    status.extras.insert(
+        "uptime_ms".into(),
+        serde_json::json!(state.started_at.elapsed().as_millis() as u64),
+    );
     // Phase8a §2.2 — `degraded` when the keyword-lane snapshot is
     // unavailable. The lane is the canonical source for repo
     // coverage; without it the query path returns degraded results
     // but the daemon itself is still answering.
     if state.service.indexed_repos.is_none() {
         status.state = HealthState::Degraded;
-        status.last_error = Some("keyword-lane snapshot not wired (no indexed_repos source)".into());
+        status.last_error =
+            Some("keyword-lane snapshot not wired (no indexed_repos source)".into());
     }
     let http_status = match status.state {
         HealthState::Ok | HealthState::Degraded => StatusCode::OK,
@@ -324,10 +319,7 @@ async fn handle_v1_health(State(state): State<ApiState>) -> Response {
         } else {
             raw
         };
-        targets.push(ProbeTarget {
-            name,
-            url,
-        });
+        targets.push(ProbeTarget { name, url });
     }
 
     // Self-report — the aggregator is part of cortex-api, so we
@@ -338,9 +330,10 @@ async fn handle_v1_health(State(state): State<ApiState>) -> Response {
         env!("CARGO_PKG_VERSION"),
         chrono::Utc::now().to_rfc3339(),
     );
-    self_report
-        .extras
-        .insert("uptime_ms".into(), serde_json::json!(state.started_at.elapsed().as_millis() as u64));
+    self_report.extras.insert(
+        "uptime_ms".into(),
+        serde_json::json!(state.started_at.elapsed().as_millis() as u64),
+    );
 
     let client = match build_client(&AggregatorConfig::default()) {
         Ok(c) => c,
@@ -384,9 +377,8 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
-    let env_slugs = crate::coverage::slugs_from_env(
-        std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref(),
-    );
+    let env_slugs =
+        crate::coverage::slugs_from_env(std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref());
     slugs.extend(env_slugs);
     if slugs.is_empty() {
         slugs.insert("cortex".to_string());
@@ -440,8 +432,8 @@ async fn resolve_vectorizer_bearer_for_audit(
     http: &reqwest::Client,
     base_url: &str,
 ) -> Option<String> {
-    if let Ok(key) = std::env::var("CORTEX_VECTORIZER_API_KEY")
-        .or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+    if let Ok(key) =
+        std::env::var("CORTEX_VECTORIZER_API_KEY").or_else(|_| std::env::var("VECTORIZER_API_KEY"))
     {
         if !key.is_empty() {
             return Some(key);
@@ -498,10 +490,7 @@ async fn handle_health_config(_state: State<crate::health::HealthState>) -> Resp
 /// with a `lanes` array derived from `debug.lanes` so the agent can
 /// pinpoint which retrieval lane returned zero hits without having
 /// to walk the original query response.
-async fn handle_audit(
-    State(state): State<ApiState>,
-    Path(query_id): Path<String>,
-) -> Response {
+async fn handle_audit(State(state): State<ApiState>, Path(query_id): Path<String>) -> Response {
     let q = query_id.trim();
     if q.is_empty() {
         return (
@@ -556,9 +545,7 @@ async fn handle_status(State(state): State<ApiState>) -> Response {
 /// down to the compact per-backend summary embedded in `/v1/status`.
 /// Operators pull the full diff from `/v1/health/coverage` when they
 /// need the per-collection breakdown.
-fn summarize_coverage(
-    full: &crate::coverage::CoverageResponse,
-) -> CoverageBackendSummaries {
+fn summarize_coverage(full: &crate::coverage::CoverageResponse) -> CoverageBackendSummaries {
     let backends = full
         .backends
         .iter()
@@ -588,10 +575,12 @@ async fn handle_query(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("anonymous")
         .to_string();
-    match state.service.handle_with_headers(&caller, req, &headers).await {
-        ServiceOutcome::Ok(resp) => {
-            (StatusCode::OK, Json::<QueryResponse>(*resp)).into_response()
-        }
+    match state
+        .service
+        .handle_with_headers(&caller, req, &headers)
+        .await
+    {
+        ServiceOutcome::Ok(resp) => (StatusCode::OK, Json::<QueryResponse>(*resp)).into_response(),
         ServiceOutcome::EmptyQuery => (
             StatusCode::BAD_REQUEST,
             Json(ErrorBody {

@@ -181,10 +181,7 @@ impl Analyzer {
             .api_key
             .as_ref()
             .ok_or_else(|| "api_key unset — won't reach here".to_string())?;
-        let url = format!(
-            "{}/v1/messages",
-            self.cfg.api_base.trim_end_matches('/')
-        );
+        let url = format!("{}/v1/messages", self.cfg.api_base.trim_end_matches('/'));
         let body = serde_json::json!({
             "model": self.cfg.model,
             "max_tokens": 4096,
@@ -204,15 +201,9 @@ impl Analyzer {
             .await
             .map_err(|e| format!("post {url}: {e}"))?;
         let status = resp.status();
-        let raw = resp
-            .text()
-            .await
-            .map_err(|e| format!("read body: {e}"))?;
+        let raw = resp.text().await.map_err(|e| format!("read body: {e}"))?;
         if !status.is_success() {
-            return Err(format!(
-                "anthropic api {status}: {}",
-                clip(&raw, 240)
-            ));
+            return Err(format!("anthropic api {status}: {}", clip(&raw, 240)));
         }
         // The Messages API response shape:
         //   { "content": [{"type":"text","text":"..."}, ...], ... }
@@ -238,9 +229,8 @@ impl Analyzer {
             ));
         }
         let cleaned = strip_code_fence(&buf);
-        let summary: SessionSummary = serde_json::from_str(&cleaned).map_err(|e| {
-            format!("api inner json: {e} — body: {}", clip(&cleaned, 240))
-        })?;
+        let summary: SessionSummary = serde_json::from_str(&cleaned)
+            .map_err(|e| format!("api inner json: {e} — body: {}", clip(&cleaned, 240)))?;
         Ok(summary)
     }
 
@@ -302,9 +292,8 @@ impl Analyzer {
         // Strip any markdown code fences the model occasionally
         // wraps around JSON despite explicit instructions.
         let cleaned = strip_code_fence(inner);
-        let summary: SessionSummary = serde_json::from_str(&cleaned).map_err(|e| {
-            format!("cli inner json: {e} — body: {}", clip(&cleaned, 240))
-        })?;
+        let summary: SessionSummary = serde_json::from_str(&cleaned)
+            .map_err(|e| format!("cli inner json: {e} — body: {}", clip(&cleaned, 240)))?;
         Ok(summary)
     }
 }
@@ -415,10 +404,7 @@ mod tests {
 
     fn hit(ts: i64, sid: &str, repo: Option<&str>, text: &str) -> LaneHit {
         let mut extras = std::collections::BTreeMap::new();
-        extras.insert(
-            "session_id".to_string(),
-            Value::String(sid.to_string()),
-        );
+        extras.insert("session_id".to_string(), Value::String(sid.to_string()));
         LaneHit {
             doc_id: format!("test|{ts}"),
             text: text.to_string(),
@@ -476,7 +462,10 @@ mod tests {
             strip_code_fence("```\n{\"summary\":\"x\"}\n```"),
             "{\"summary\":\"x\"}"
         );
-        assert_eq!(strip_code_fence("{\"summary\":\"x\"}"), "{\"summary\":\"x\"}");
+        assert_eq!(
+            strip_code_fence("{\"summary\":\"x\"}"),
+            "{\"summary\":\"x\"}"
+        );
     }
 
     #[test]

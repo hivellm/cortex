@@ -9,9 +9,7 @@ use std::time::Duration;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use cortex_api::{
-    build_dashboard_router, DashboardState, MemoryKeywordLane, TaskLoader,
-};
+use cortex_api::{build_dashboard_router, DashboardState, MemoryKeywordLane, TaskLoader};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -58,9 +56,10 @@ fn build_router(root: &std::path::Path) -> axum::Router {
         lane: Arc::new(MemoryKeywordLane::new()),
         nexus: None,
         analyzer: Arc::new(cortex_api::analyzer::Analyzer::from_env()),
-        tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![
-            TaskLoader::new(root).with_ttl(Duration::from_millis(0)),
-        ])),
+        tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![TaskLoader::new(
+            root,
+        )
+        .with_ttl(Duration::from_millis(0))])),
         metadata: None,
         loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
     };
@@ -68,10 +67,7 @@ fn build_router(root: &std::path::Path) -> axum::Router {
 }
 
 async fn get_json(router: &axum::Router, uri: &str) -> (StatusCode, Value) {
-    let req = Request::builder()
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
+    let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
@@ -97,9 +93,13 @@ async fn tasks_list_returns_active_and_archived_with_breakdowns() {
         .iter()
         .map(|t| t["id"].as_str().unwrap().to_string())
         .collect();
-    assert!(ids.iter().any(|i| i == "phase2g_dashboard_enriched_metrics"));
+    assert!(ids
+        .iter()
+        .any(|i| i == "phase2g_dashboard_enriched_metrics"));
     assert!(ids.iter().any(|i| i == "phase4a_fulltext_fanout"));
-    assert!(ids.iter().any(|i| i == "phase2_keyword_lane_live_meilisearch"));
+    assert!(ids
+        .iter()
+        .any(|i| i == "phase2_keyword_lane_live_meilisearch"));
 
     let by_status = body["by_status"].as_object().unwrap();
     assert_eq!(by_status["in-progress"].as_u64().unwrap(), 1);
@@ -121,8 +121,7 @@ async fn tasks_list_filters_by_status_and_archived_flag() {
     let tmp = fixture_root();
     let router = build_router(tmp.path());
 
-    let (status, body) =
-        get_json(&router, "/v1/dashboard/tasks?include_archived=false").await;
+    let (status, body) = get_json(&router, "/v1/dashboard/tasks?include_archived=false").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["total"].as_u64().unwrap(), 2);
     let archived_ids: Vec<&str> = body["tasks"]
@@ -166,8 +165,11 @@ async fn tasks_detail_returns_proposal_and_sectioned_checklist() {
     let tmp = fixture_root();
     let router = build_router(tmp.path());
 
-    let (status, body) =
-        get_json(&router, "/v1/dashboard/tasks/phase2g_dashboard_enriched_metrics").await;
+    let (status, body) = get_json(
+        &router,
+        "/v1/dashboard/tasks/phase2g_dashboard_enriched_metrics",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["id"].as_str().unwrap(),
@@ -195,10 +197,8 @@ async fn tasks_detail_returns_404_for_unknown_id() {
         .unwrap();
     let resp = router.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    let body: Value = serde_json::from_slice(
-        &to_bytes(resp.into_body(), 1024 * 1024).await.unwrap(),
-    )
-    .unwrap();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), 1024 * 1024).await.unwrap()).unwrap();
     assert_eq!(body["error"].as_str().unwrap(), "task_not_found");
 }
 

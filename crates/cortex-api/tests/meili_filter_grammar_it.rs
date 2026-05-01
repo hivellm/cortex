@@ -28,9 +28,7 @@ async fn meili_accepts_path_prefixes_in_filter() {
         .expect("CORTEX_FULLTEXT_MEILI_URL must be set when CORTEX_MEILI_IT=1");
     let key = env::var("CORTEX_FULLTEXT_MEILI_KEY").ok();
 
-    let http = Client::builder()
-        .build()
-        .expect("reqwest client");
+    let http = Client::builder().build().expect("reqwest client");
     let auth = |req: reqwest::RequestBuilder| match key.as_deref() {
         Some(k) => req.bearer_auth(k),
         None => req,
@@ -41,12 +39,10 @@ async fn meili_accepts_path_prefixes_in_filter() {
         .send()
         .await;
 
-    auth(
-        http.post(format!("{base}/indexes")).json(&json!({
-            "uid": TEST_INDEX,
-            "primaryKey": "id",
-        })),
-    )
+    auth(http.post(format!("{base}/indexes")).json(&json!({
+        "uid": TEST_INDEX,
+        "primaryKey": "id",
+    })))
     .send()
     .await
     .expect("create index");

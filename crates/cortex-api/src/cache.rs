@@ -141,7 +141,7 @@ pub type CacheHandle = Arc<dyn Cache>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{empty_response, Intent, IncludeField, QueryRequest, Scope};
+    use crate::types::{empty_response, IncludeField, Intent, QueryRequest, Scope};
 
     fn req(intent: Intent, query: &str, repo: Option<&str>) -> QueryRequest {
         QueryRequest {

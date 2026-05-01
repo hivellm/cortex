@@ -71,12 +71,10 @@ impl RateLimiter {
             Err(_) => return RateDecision::Admit { remaining: 0 },
         };
         let now = Instant::now();
-        let bucket = g
-            .entry(caller.to_string())
-            .or_insert_with(|| Bucket {
-                tokens: self.cfg.rps_burst as f64,
-                last: now,
-            });
+        let bucket = g.entry(caller.to_string()).or_insert_with(|| Bucket {
+            tokens: self.cfg.rps_burst as f64,
+            last: now,
+        });
         let elapsed = now.duration_since(bucket.last).as_secs_f64();
         let refill = elapsed * self.cfg.rps_sustained as f64;
         bucket.tokens = (bucket.tokens + refill).min(self.cfg.rps_burst as f64);
