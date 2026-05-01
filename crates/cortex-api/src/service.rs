@@ -203,6 +203,11 @@ fn canonicalise_scope(req_scope: &Scope) -> Scope {
         files,
         topics,
         since,
+        // Phase11i §3.1 — recency_decay round-trips verbatim.
+        // Canonicalisation does not invent or strip a value;
+        // the orchestrator falls back to the per-intent default
+        // when this stays None.
+        recency_decay: req_scope.recency_decay,
     }
 }
 

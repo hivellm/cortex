@@ -33,6 +33,27 @@ pub const RRF_K: f64 = 60.0;
 /// override at boot via `CORTEX_RRF_ALPHA`.
 pub const DEFAULT_RRF_ALPHA: f32 = 0.7;
 
+/// Phase11i §3.1 — default recency-decay λ (per day) for the
+/// `pre_change_context` intent. `score *= exp(-λ · days_old)`
+/// where `days_old` is the age of the hit in days. λ=0 disables
+/// decay entirely (the legacy behaviour); λ=0.02 gives a ~50 %
+/// half-life around 35 days, which balances "bias toward recent
+/// work" against "yes we still want to surface a six-month-old
+/// ADR when it's the right answer".
+pub const DEFAULT_RECENCY_LAMBDA_PRE_CHANGE: f32 = 0.02;
+/// Recency λ for `decision_lookup`. Decisions are sticky — once
+/// an ADR is canonical it stays canonical. λ=0.005 (~140-day
+/// half-life) so the recency bonus is mild.
+pub const DEFAULT_RECENCY_LAMBDA_DECISION: f32 = 0.005;
+/// Recency λ for `law_check`. Laws are evergreen — the body of
+/// a LAW-CORTEX-* declaration does not get more or less true
+/// with time. λ=0 disables the bonus.
+pub const DEFAULT_RECENCY_LAMBDA_LAW: f32 = 0.0;
+
+/// Number of milliseconds in one calendar day. Used by the
+/// recency-decay path to convert `now_ms - hit.ts` into days.
+pub const MS_PER_DAY: f64 = 86_400_000.0;
+
 /// Tunable parameters for [`rrf_fuse`].
 ///
 /// Built once at orchestrator boot from the
@@ -48,6 +69,20 @@ pub struct FusionConfig {
     /// Larger `k` flattens the per-lane curve; smaller `k`
     /// emphasises rank-1 hits.
     pub k: u32,
+    /// Phase11i §3.1 — recency decay λ in units of `1 / day`.
+    /// Each hit's fused score is multiplied by
+    /// `exp(-recency_decay_lambda · days_old)` where `days_old`
+    /// is `(now_ms - hit.ts) / 86_400_000`. `0.0` disables the
+    /// decay entirely (the legacy behaviour); positive values
+    /// bias toward recent hits.
+    pub recency_decay_lambda: f32,
+    /// Phase11i §3.1 — current wall-clock anchor in epoch ms.
+    /// Lets tests pin a deterministic `now`; callers that want
+    /// real time pass `chrono::Utc::now().timestamp_millis()`.
+    /// `0` is a sentinel meaning "use the system clock at fuse
+    /// time" — the path computes `now_ms` lazily so tests can
+    /// still control it via the explicit field.
+    pub now_ms: i64,
 }
 
 impl Default for FusionConfig {
@@ -55,6 +90,8 @@ impl Default for FusionConfig {
         Self {
             alpha: DEFAULT_RRF_ALPHA,
             k: RRF_K as u32,
+            recency_decay_lambda: 0.0,
+            now_ms: 0,
         }
     }
 }
@@ -67,6 +104,37 @@ impl FusionConfig {
         Self {
             alpha: alpha.clamp(0.0, 1.0),
             k: k.max(1),
+            recency_decay_lambda: 0.0,
+            now_ms: 0,
+        }
+    }
+
+    /// Phase11i §3.1 — chain a recency-decay λ onto an existing
+    /// config. λ < 0 is clamped to 0 (no decay) so a malformed
+    /// override never inverts the multiplier into "older first".
+    pub fn with_recency_decay(mut self, lambda: f32) -> Self {
+        self.recency_decay_lambda = lambda.max(0.0);
+        self
+    }
+
+    /// Pin a deterministic `now_ms` anchor for tests + replay.
+    /// Defaults to `0` which the fuse path treats as "use the
+    /// system clock now".
+    pub fn with_now_ms(mut self, now_ms: i64) -> Self {
+        self.now_ms = now_ms;
+        self
+    }
+
+    /// Return the per-intent recency-λ default. Centralised here
+    /// so callers (the orchestrator + tests + future config-file
+    /// reload) all read from the same source.
+    pub fn default_recency_lambda_for_intent(intent: &str) -> f32 {
+        match intent {
+            "pre_change_context" | "free_search" | "explain" => DEFAULT_RECENCY_LAMBDA_PRE_CHANGE,
+            "similar_problems" => DEFAULT_RECENCY_LAMBDA_PRE_CHANGE,
+            "decision_lookup" => DEFAULT_RECENCY_LAMBDA_DECISION,
+            "law_check" => DEFAULT_RECENCY_LAMBDA_LAW,
+            _ => 0.0,
         }
     }
 }
@@ -75,6 +143,13 @@ impl FusionConfig {
 /// list must already be sorted in lane-native rank order (best
 /// first). Returns hits ordered by fused score with deterministic
 /// tie-breaks.
+///
+/// Phase11i §3.1 — when `cfg.recency_decay_lambda > 0`, every
+/// hit's accumulated fused score is multiplied by
+/// `exp(-λ · days_old)` before sorting. `days_old` is computed
+/// from `cfg.now_ms` (or system clock when `now_ms == 0`) minus
+/// `hit.ts`. Hits with `ts == 0` (no timestamp) skip the decay
+/// so a missing-timestamp regression cannot reorder the bundle.
 pub fn rrf_fuse(lanes: Vec<Vec<LaneHit>>, cfg: &FusionConfig) -> Vec<LaneHit> {
     let mut scores: BTreeMap<String, f64> = BTreeMap::new();
     let mut representative: BTreeMap<String, LaneHit> = BTreeMap::new();
@@ -92,6 +167,31 @@ pub fn rrf_fuse(lanes: Vec<Vec<LaneHit>>, cfg: &FusionConfig) -> Vec<LaneHit> {
                 .or_insert_with(|| hit.clone());
         }
     }
+
+    // Phase11i §3.1 — apply the recency-decay multiplier post-
+    // accumulation so it operates on the full per-doc score
+    // rather than on each lane's contribution. This keeps the
+    // sort stable and the decay analytic.
+    if cfg.recency_decay_lambda > 0.0 {
+        let now_ms = if cfg.now_ms != 0 {
+            cfg.now_ms
+        } else {
+            chrono::Utc::now().timestamp_millis()
+        };
+        let lambda = cfg.recency_decay_lambda as f64;
+        for (doc_id, score) in scores.iter_mut() {
+            if let Some(hit) = representative.get(doc_id) {
+                let ts = hit.ts;
+                if ts == 0 {
+                    continue;
+                }
+                let days_old = (now_ms - ts).max(0) as f64 / MS_PER_DAY;
+                let multiplier = (-lambda * days_old).exp();
+                *score *= multiplier;
+            }
+        }
+    }
+
     let mut out: Vec<(LaneHit, f64)> = representative
         .into_iter()
         .map(|(id, hit)| {
@@ -152,7 +252,7 @@ mod tests {
     /// Positional-only baseline used by the equivalence test below.
     /// Matches the pre-phase6c hard-coded behaviour byte-for-byte.
     fn positional_only(lanes: Vec<Vec<LaneHit>>) -> Vec<LaneHit> {
-        rrf_fuse(lanes, &FusionConfig { alpha: 1.0, k: 60 })
+        rrf_fuse(lanes, &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 })
     }
 
     #[test]
@@ -161,7 +261,7 @@ mod tests {
         // reciprocal sum is exact.
         let lane_a = vec![hit("X", 0, None), hit("Y", 0, None)];
         let lane_b = vec![hit("Y", 0, None), hit("X", 0, None)];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60 });
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 });
         assert_eq!(fused.len(), 2);
         // X: 1/(60+1) + 1/(60+2) = 1/61 + 1/62; Y: same. Tie broken
         // by doc_id ⇒ X first.
@@ -172,7 +272,7 @@ mod tests {
 
     #[test]
     fn ties_break_on_recency() {
-        let cfg = FusionConfig { alpha: 1.0, k: 60 };
+        let cfg = FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 };
         let lane_a = vec![hit("OLD", 100, None), hit("NEW", 200, None)];
         let lane_b = vec![hit("OLD", 100, None), hit("NEW", 200, None)];
         let fused = rrf_fuse(vec![lane_a, lane_b], &cfg);
@@ -188,7 +288,7 @@ mod tests {
     fn ties_break_on_severity_after_recency() {
         let lane_a = vec![hit("INFO", 100, Some("info"))];
         let lane_b = vec![hit("CRIT", 100, Some("critical"))];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60 });
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 });
         assert_eq!(fused[0].doc_id, "CRIT");
     }
 
@@ -266,7 +366,7 @@ mod tests {
         let lane_b = vec![hit_with_score("Y", 0.50)];
         let blended = rrf_fuse(
             vec![lane_a.clone(), lane_b.clone()],
-            &FusionConfig { alpha: 1.0, k: 60 },
+            &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 },
         );
         let baseline = positional_only(vec![lane_a, lane_b]);
         assert_eq!(blended.len(), baseline.len());
@@ -293,7 +393,7 @@ mod tests {
             hit_with_score("STRONG_RANK2", 0.95),
         ];
         let lane_b = vec![hit_with_score("STRONG_RANK2", 0.90)];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 0.0, k: 60 });
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 0.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 });
         assert_eq!(
             fused[0].doc_id, "STRONG_RANK2",
             "alpha=0.0 must rank by native score sum"
@@ -310,5 +410,134 @@ mod tests {
         let cfg = FusionConfig::new(-0.4, 60);
         assert_eq!(cfg.alpha, 0.0);
         assert_eq!(cfg.k, 60);
+    }
+
+    // ---------------- Phase11i §3.1 — recency decay ----------------
+
+    fn hit_with_ts(id: &str, ts: i64) -> LaneHit {
+        LaneHit {
+            score: 0.5,
+            ..hit(id, ts, None)
+        }
+    }
+
+    #[test]
+    fn lambda_zero_reproduces_pre_decay_behaviour() {
+        // The default config sets λ=0 so existing tests stay
+        // green. With OLD at rank 1 and NEW at rank 2 in both
+        // lanes, the legacy positional+native blend ranks OLD
+        // first regardless of ts (recency tie-break only fires
+        // on score ties; OLD's positional score is strictly
+        // larger).
+        let lane_a = vec![hit_with_ts("OLD", 1), hit_with_ts("NEW", 2)];
+        let lane_b = vec![hit_with_ts("OLD", 1), hit_with_ts("NEW", 2)];
+        let cfg = FusionConfig::default();
+        assert_eq!(cfg.recency_decay_lambda, 0.0);
+        let fused = rrf_fuse(vec![lane_a, lane_b], &cfg);
+        assert_eq!(fused[0].doc_id, "OLD");
+    }
+
+    #[test]
+    fn positive_lambda_demotes_older_hits_when_scores_match() {
+        // Two hits at the same lane rank; one is 0 days old, the
+        // other 30 days old. With λ=0.02, the 30-day-old hit's
+        // multiplier is exp(-0.6) ≈ 0.549, so the recent hit must
+        // outrank it.
+        let day_ms = MS_PER_DAY as i64;
+        let now_ms = 100 * day_ms;
+        let recent = hit_with_ts("RECENT", now_ms);
+        let old = hit_with_ts("OLD", now_ms - 30 * day_ms);
+        let cfg = FusionConfig {
+            alpha: 1.0, // pure positional so recency decay dominates
+            k: 60,
+            recency_decay_lambda: 0.02,
+            now_ms,
+        };
+        let fused = rrf_fuse(vec![vec![recent], vec![old]], &cfg);
+        assert_eq!(fused[0].doc_id, "RECENT");
+        assert!(fused[0].score > fused[1].score);
+        let ratio = fused[1].score / fused[0].score;
+        // λ stored as f32, cast to f64 inside rrf_fuse — the
+        // f32→f64 widening loses the bottom bits of 0.02, so the
+        // realised exponent is `-0.02_f32 * 30.0` rather than
+        // `-0.02_f64 * 30.0`. Tolerance covers the ~7e-9 drift.
+        let expected = (-(0.02_f32 as f64) * 30.0).exp();
+        assert!(
+            (ratio - expected).abs() < 1e-6,
+            "expected ratio≈{expected}, got {ratio}"
+        );
+    }
+
+    #[test]
+    fn ts_zero_hits_skip_recency_decay() {
+        // A hit with no timestamp must pass through with zero
+        // decay so a metadata regression doesn't accidentally
+        // bury it.
+        let day_ms = MS_PER_DAY as i64;
+        let now_ms = 50 * day_ms;
+        let untimed = hit_with_ts("UNTIMED", 0); // ts=0 sentinel
+        let dated = hit_with_ts("DATED", now_ms - 30 * day_ms);
+        let cfg = FusionConfig {
+            alpha: 1.0,
+            k: 60,
+            recency_decay_lambda: 0.02,
+            now_ms,
+        };
+        let fused = rrf_fuse(vec![vec![untimed], vec![dated]], &cfg);
+        // UNTIMED keeps its full score; DATED gets exp(-0.6) ≈ 0.549.
+        assert_eq!(fused[0].doc_id, "UNTIMED");
+    }
+
+    #[test]
+    fn negative_lambda_clamps_to_zero() {
+        // `with_recency_decay` clamps λ < 0 to 0 so a malformed
+        // operator override does not invert the multiplier.
+        let cfg = FusionConfig::default().with_recency_decay(-0.5);
+        assert_eq!(cfg.recency_decay_lambda, 0.0);
+    }
+
+    #[test]
+    fn intent_default_table_resolves_known_intents() {
+        assert_eq!(
+            FusionConfig::default_recency_lambda_for_intent("pre_change_context"),
+            DEFAULT_RECENCY_LAMBDA_PRE_CHANGE
+        );
+        assert_eq!(
+            FusionConfig::default_recency_lambda_for_intent("decision_lookup"),
+            DEFAULT_RECENCY_LAMBDA_DECISION
+        );
+        assert_eq!(
+            FusionConfig::default_recency_lambda_for_intent("law_check"),
+            DEFAULT_RECENCY_LAMBDA_LAW
+        );
+        // Unknown intents fall back to 0 (no decay) — the safe
+        // legacy behaviour.
+        assert_eq!(
+            FusionConfig::default_recency_lambda_for_intent("invented"),
+            0.0
+        );
+    }
+
+    #[test]
+    fn far_future_ts_does_not_panic_or_invert() {
+        // A hit whose ts is in the future (clock skew, replay)
+        // computes `days_old = max(0, …)` so the multiplier is 1.0;
+        // we never multiply by exp(+positive) and inflate the score.
+        let now_ms = 1_000_000_000;
+        let future = hit_with_ts("FUTURE", now_ms + 99_000_000_000);
+        let cfg = FusionConfig {
+            alpha: 1.0,
+            k: 60,
+            recency_decay_lambda: 0.05,
+            now_ms,
+        };
+        let fused = rrf_fuse(vec![vec![future]], &cfg);
+        // Score should equal positional (1/61) — no decay applied.
+        let positional = 1.0_f64 / 61.0;
+        assert!(
+            (fused[0].score - positional).abs() < 1e-9,
+            "future ts must not inflate score; got {}",
+            fused[0].score
+        );
     }
 }

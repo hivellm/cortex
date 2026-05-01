@@ -64,7 +64,7 @@ pub enum IncludeField {
 
 /// Canonicalised scope filter — populated from request and validated
 /// against ACLs.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Scope {
     /// Repo identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -78,6 +78,14 @@ pub struct Scope {
     /// ISO-8601 lower bound on `ts`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<String>,
+    /// Phase11i §3.1 — caller-supplied recency-decay λ in
+    /// `1 / day`. When `None`, the orchestrator falls back to
+    /// the per-intent default in
+    /// [`crate::fusion::FusionConfig::default_recency_lambda_for_intent`].
+    /// Set explicitly to `Some(0.0)` to opt out of decay for one
+    /// query without disabling the global default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recency_decay: Option<f32>,
 }
 
 /// Request body for `POST /v1/query`.
