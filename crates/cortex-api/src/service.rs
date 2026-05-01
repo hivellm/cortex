@@ -459,12 +459,13 @@ impl QueryService {
                 .rewrite(&req.query, req.intent)
                 .await
                 .unwrap_or_else(|_| RewrittenQuery::passthrough(&req.query));
+            let fusion_snapshot = self.orchestrator.current_fusion();
             let envelope = build_envelope_with_rewrite_context(
                 caller,
                 hit.intent.as_str(),
                 &hit,
                 resolution.as_str(),
-                &self.orchestrator.fusion,
+                &fusion_snapshot,
                 intent_trigger.as_deref(),
                 &rewritten,
             );
@@ -515,12 +516,13 @@ impl QueryService {
             response.clipped = Some(report);
         }
         self.cache.put(&key, response.clone()).await;
+        let fusion_snapshot = self.orchestrator.current_fusion();
         let envelope = build_envelope_with_rewrite_context(
             caller,
             req.intent.label(),
             &response,
             resolution.as_str(),
-            &self.orchestrator.fusion,
+            &fusion_snapshot,
             intent_trigger.as_deref(),
             &rewritten,
         );

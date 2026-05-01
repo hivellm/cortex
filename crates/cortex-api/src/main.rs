@@ -637,16 +637,28 @@ async fn main() -> Result<()> {
         loader_metrics: loader_metrics.clone(),
     };
 
-    let fusion = resolve_fusion_config_from_env();
+    // Phase11i §3.6 — load relevance.toml first so the env-derived
+    // RRF knobs layer on top of the file-supplied defaults. A
+    // missing / unreadable file logs INFO + falls back to compile-
+    // time defaults; a malformed file logs WARN and falls back the
+    // same way (so a typo never bricks the daemon).
+    let relevance_path = cortex_api::default_relevance_config_path();
+    let relevance = load_relevance_config(&relevance_path);
+    let fusion = resolve_fusion_config_from_env_with_base(relevance.base_fusion());
     tracing::info!(
         alpha = fusion.alpha,
         k = fusion.k,
-        "fusion config resolved (CORTEX_RRF_ALPHA / CORTEX_RRF_K)"
+        cross_repo_boost = fusion.cross_repo_boost,
+        same_session_boost = fusion.same_session_boost,
+        cohort_session_boost = fusion.cohort_session_boost,
+        config_path = %relevance_path.display(),
+        "fusion config resolved (relevance.toml + CORTEX_RRF_ALPHA / CORTEX_RRF_K)"
     );
     let rewriter = resolve_query_rewriter_from_env();
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
         .with_fusion(fusion)
         .with_rewriter(rewriter);
+    spawn_relevance_reload_task(orchestrator.clone(), relevance_path.clone());
     // Phase11e §6 — coverage snapshot handle, shared between the
     // boot-time audit (which writes the result here) and `/v1/status`
     // (which reads it). Empty until the audit completes; subsequent
@@ -1033,8 +1045,16 @@ fn init_tracing(verbose: bool) {
 /// constant. Out-of-range values log `WARN` and fall back to the
 /// default — `FusionConfig::new` clamps anyway, but logging at
 /// the boundary tells the operator the env var was visible.
-fn resolve_fusion_config_from_env() -> cortex_api::fusion::FusionConfig {
-    let default = cortex_api::fusion::FusionConfig::default();
+/// Phase11i §3.6 — env-derived RRF overrides layered on top of a
+/// `base` config (typically the `relevance.toml` snapshot). The
+/// boot path passes the file-derived defaults; SIGHUP reload
+/// re-reads the same file and re-applies the env overrides so an
+/// operator running with `CORTEX_RRF_ALPHA` set keeps that bias
+/// across reloads.
+fn resolve_fusion_config_from_env_with_base(
+    base: cortex_api::fusion::FusionConfig,
+) -> cortex_api::fusion::FusionConfig {
+    let default = base.clone();
     let alpha = match std::env::var("CORTEX_RRF_ALPHA") {
         Ok(raw) => match raw.trim().parse::<f32>() {
             Ok(v) if (0.0..=1.0).contains(&v) => v,
@@ -1071,7 +1091,91 @@ fn resolve_fusion_config_from_env() -> cortex_api::fusion::FusionConfig {
         },
         Err(_) => default.k,
     };
-    cortex_api::fusion::FusionConfig::new(alpha, k)
+    cortex_api::fusion::FusionConfig {
+        alpha: alpha.clamp(0.0, 1.0),
+        k: k.max(1),
+        ..default
+    }
+}
+
+/// Phase11i §3.6 — load `relevance.toml` honouring the
+/// `CORTEX_RELEVANCE_CONFIG` env var (or the in-tree default).
+/// Logs INFO when the file is absent (boot continues at compile-
+/// time defaults) and WARN when the file is malformed, so the
+/// operator sees the typo but the daemon still starts.
+fn load_relevance_config(path: &std::path::Path) -> cortex_api::RelevanceConfig {
+    match cortex_api::RelevanceConfig::load_from_path(path) {
+        Ok(cfg) => {
+            tracing::info!(
+                path = %path.display(),
+                "relevance config loaded"
+            );
+            cfg
+        }
+        Err(cortex_api::RelevanceConfigError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            tracing::info!(
+                path = %path.display(),
+                "relevance.toml not found — using compile-time defaults"
+            );
+            cortex_api::RelevanceConfig::default()
+        }
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "relevance config unreadable — using compile-time defaults"
+            );
+            cortex_api::RelevanceConfig::default()
+        }
+    }
+}
+
+/// Phase11i §3.6 — SIGHUP reload task. On Unix, every SIGHUP
+/// re-reads the configured `relevance.toml` and stamps the new
+/// snapshot into the orchestrator's `Arc<RwLock<FusionConfig>>`
+/// via [`Orchestrator::replace_fusion`]. On non-Unix platforms
+/// the task is a no-op + a one-shot WARN so the operator knows
+/// hot-reload is unavailable there. The env-derived overrides
+/// (`CORTEX_RRF_ALPHA` / `CORTEX_RRF_K`) are also re-read so
+/// operators can flip them via systemd `Environment=` overrides
+/// without a daemon restart.
+#[cfg(unix)]
+fn spawn_relevance_reload_task(orchestrator: Orchestrator, path: PathBuf) {
+    use tokio::signal::unix::{signal, SignalKind};
+    tokio::spawn(async move {
+        let mut hup = match signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::warn!(error = %err, "SIGHUP listener unavailable; relevance hot-reload disabled");
+                return;
+            }
+        };
+        tracing::info!(
+            path = %path.display(),
+            "SIGHUP relevance reload listener installed"
+        );
+        while hup.recv().await.is_some() {
+            let relevance = load_relevance_config(&path);
+            let fusion = resolve_fusion_config_from_env_with_base(relevance.base_fusion());
+            orchestrator.replace_fusion(fusion.clone());
+            tracing::info!(
+                alpha = fusion.alpha,
+                k = fusion.k,
+                cross_repo_boost = fusion.cross_repo_boost,
+                same_session_boost = fusion.same_session_boost,
+                cohort_session_boost = fusion.cohort_session_boost,
+                "relevance config reloaded (SIGHUP)"
+            );
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_relevance_reload_task(_orchestrator: Orchestrator, _path: PathBuf) {
+    tracing::warn!(
+        "SIGHUP relevance hot-reload only supported on Unix; current build will only honour boot-time relevance.toml"
+    );
 }
 
 /// Phase6f — pick the [`cortex_api::query_rewrite::QueryRewriter`]

@@ -40,6 +40,7 @@ pub mod orchestrator;
 pub mod query_rewrite;
 pub mod rate_limit;
 pub mod redaction;
+pub mod relevance_config;
 pub mod retention_daemon;
 pub mod service;
 pub mod silent_drop;
@@ -67,6 +68,9 @@ pub use loader_metrics::LoaderMetrics;
 pub use meili_lane::MeiliKeywordLane;
 pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
 pub use nexus_graph_lane::NexusGraphLane;
+pub use relevance_config::{
+    default_config_path as default_relevance_config_path, RelevanceConfig, RelevanceConfigError,
+};
 pub use tasks_loader::{
     CachedRowSnapshot, ListQuery, MultiTaskLoader, PhaseBreakdown, ProgressCounts, SortField,
     SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,

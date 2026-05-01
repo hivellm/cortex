@@ -187,11 +187,7 @@ impl FusionConfig {
     }
 
     /// Phase11i §3.5 — chain outcome allow / deny lists.
-    pub fn with_outcome_filter(
-        mut self,
-        allow: Vec<String>,
-        deny: Vec<String>,
-    ) -> Self {
+    pub fn with_outcome_filter(mut self, allow: Vec<String>, deny: Vec<String>) -> Self {
         self.outcomes_allow = allow;
         self.outcomes_deny = deny;
         self
@@ -386,10 +382,7 @@ pub fn rrf_fuse(lanes: Vec<Vec<LaneHit>>, cfg: &FusionConfig) -> Vec<LaneHit> {
     }
     for (doc_id, score) in scores.iter_mut() {
         if let Some(hit) = representative.get(doc_id) {
-            let outcome = hit
-                .extras
-                .get("outcome")
-                .and_then(|v| v.as_str());
+            let outcome = hit.extras.get("outcome").and_then(|v| v.as_str());
             let mult = FusionConfig::outcome_multiplier(outcome);
             if (mult - 1.0).abs() > f32::EPSILON {
                 *score *= mult as f64;
@@ -457,14 +450,23 @@ mod tests {
     /// Positional-only baseline used by the equivalence test below.
     /// Matches the pre-phase6c hard-coded behaviour byte-for-byte.
     fn positional_only(lanes: Vec<Vec<LaneHit>>) -> Vec<LaneHit> {
-        rrf_fuse(lanes, &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None,
-active_session_id: None,
-same_session_boost: DEFAULT_SAME_SESSION_BOOST,
-session_cohort: Vec::new(),
-cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
-outcomes_allow: Vec::new(),
-outcomes_deny: Vec::new(),
-})
+        rrf_fuse(
+            lanes,
+            &FusionConfig {
+                alpha: 1.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 0.0,
+                active_repo: None,
+                active_session_id: None,
+                same_session_boost: DEFAULT_SAME_SESSION_BOOST,
+                session_cohort: Vec::new(),
+                cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
+                outcomes_allow: Vec::new(),
+                outcomes_deny: Vec::new(),
+            },
+        )
     }
 
     #[test]
@@ -473,14 +475,23 @@ outcomes_deny: Vec::new(),
         // reciprocal sum is exact.
         let lane_a = vec![hit("X", 0, None), hit("Y", 0, None)];
         let lane_b = vec![hit("Y", 0, None), hit("X", 0, None)];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None,
-active_session_id: None,
-same_session_boost: DEFAULT_SAME_SESSION_BOOST,
-session_cohort: Vec::new(),
-cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
-outcomes_allow: Vec::new(),
-outcomes_deny: Vec::new(),
-});
+        let fused = rrf_fuse(
+            vec![lane_a, lane_b],
+            &FusionConfig {
+                alpha: 1.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 0.0,
+                active_repo: None,
+                active_session_id: None,
+                same_session_boost: DEFAULT_SAME_SESSION_BOOST,
+                session_cohort: Vec::new(),
+                cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
+                outcomes_allow: Vec::new(),
+                outcomes_deny: Vec::new(),
+            },
+        );
         assert_eq!(fused.len(), 2);
         // X: 1/(60+1) + 1/(60+2) = 1/61 + 1/62; Y: same. Tie broken
         // by doc_id ⇒ X first.
@@ -491,14 +502,20 @@ outcomes_deny: Vec::new(),
 
     #[test]
     fn ties_break_on_recency() {
-        let cfg = FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None,
-active_session_id: None,
-same_session_boost: DEFAULT_SAME_SESSION_BOOST,
-session_cohort: Vec::new(),
-cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
-outcomes_allow: Vec::new(),
-outcomes_deny: Vec::new(),
-};
+        let cfg = FusionConfig {
+            alpha: 1.0,
+            k: 60,
+            recency_decay_lambda: 0.0,
+            now_ms: 0,
+            cross_repo_boost: 0.0,
+            active_repo: None,
+            active_session_id: None,
+            same_session_boost: DEFAULT_SAME_SESSION_BOOST,
+            session_cohort: Vec::new(),
+            cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
+            outcomes_allow: Vec::new(),
+            outcomes_deny: Vec::new(),
+        };
         let lane_a = vec![hit("OLD", 100, None), hit("NEW", 200, None)];
         let lane_b = vec![hit("OLD", 100, None), hit("NEW", 200, None)];
         let fused = rrf_fuse(vec![lane_a, lane_b], &cfg);
@@ -514,14 +531,23 @@ outcomes_deny: Vec::new(),
     fn ties_break_on_severity_after_recency() {
         let lane_a = vec![hit("INFO", 100, Some("info"))];
         let lane_b = vec![hit("CRIT", 100, Some("critical"))];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None,
-active_session_id: None,
-same_session_boost: DEFAULT_SAME_SESSION_BOOST,
-session_cohort: Vec::new(),
-cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
-outcomes_allow: Vec::new(),
-outcomes_deny: Vec::new(),
-});
+        let fused = rrf_fuse(
+            vec![lane_a, lane_b],
+            &FusionConfig {
+                alpha: 1.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 0.0,
+                active_repo: None,
+                active_session_id: None,
+                same_session_boost: DEFAULT_SAME_SESSION_BOOST,
+                session_cohort: Vec::new(),
+                cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
+                outcomes_allow: Vec::new(),
+                outcomes_deny: Vec::new(),
+            },
+        );
         assert_eq!(fused[0].doc_id, "CRIT");
     }
 
@@ -599,14 +625,20 @@ outcomes_deny: Vec::new(),
         let lane_b = vec![hit_with_score("Y", 0.50)];
         let blended = rrf_fuse(
             vec![lane_a.clone(), lane_b.clone()],
-            &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None,
-active_session_id: None,
-same_session_boost: DEFAULT_SAME_SESSION_BOOST,
-session_cohort: Vec::new(),
-cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
-outcomes_allow: Vec::new(),
-outcomes_deny: Vec::new(),
-},
+            &FusionConfig {
+                alpha: 1.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 0.0,
+                active_repo: None,
+                active_session_id: None,
+                same_session_boost: DEFAULT_SAME_SESSION_BOOST,
+                session_cohort: Vec::new(),
+                cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
+                outcomes_allow: Vec::new(),
+                outcomes_deny: Vec::new(),
+            },
         );
         let baseline = positional_only(vec![lane_a, lane_b]);
         assert_eq!(blended.len(), baseline.len());
@@ -633,14 +665,23 @@ outcomes_deny: Vec::new(),
             hit_with_score("STRONG_RANK2", 0.95),
         ];
         let lane_b = vec![hit_with_score("STRONG_RANK2", 0.90)];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 0.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None,
-active_session_id: None,
-same_session_boost: DEFAULT_SAME_SESSION_BOOST,
-session_cohort: Vec::new(),
-cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
-outcomes_allow: Vec::new(),
-outcomes_deny: Vec::new(),
-});
+        let fused = rrf_fuse(
+            vec![lane_a, lane_b],
+            &FusionConfig {
+                alpha: 0.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 0.0,
+                active_repo: None,
+                active_session_id: None,
+                same_session_boost: DEFAULT_SAME_SESSION_BOOST,
+                session_cohort: Vec::new(),
+                cohort_session_boost: DEFAULT_COHORT_SESSION_BOOST,
+                outcomes_allow: Vec::new(),
+                outcomes_deny: Vec::new(),
+            },
+        );
         assert_eq!(
             fused[0].doc_id, "STRONG_RANK2",
             "alpha=0.0 must rank by native score sum"
@@ -796,8 +837,7 @@ outcomes_deny: Vec::new(),
             hit_with_repo("C1", "cortex", 0.5),
             hit_with_repo("V2", "vectorizer", 0.85),
         ];
-        let cfg = FusionConfig::default()
-            .with_cross_repo_boost(0.0, Some("cortex".to_string()));
+        let cfg = FusionConfig::default().with_cross_repo_boost(0.0, Some("cortex".to_string()));
         let fused = rrf_fuse(vec![lane], &cfg);
         // C1 must land first; the two vectorizer hits trail with score=0.
         assert_eq!(fused[0].doc_id, "C1");
@@ -893,8 +933,7 @@ outcomes_deny: Vec::new(),
         // upstream) must not cause every hit to be classified as
         // foreign. Builder filters it to None; the multiplier
         // path observes None and skips entirely.
-        let cfg = FusionConfig::default()
-            .with_cross_repo_boost(0.0, Some(String::new()));
+        let cfg = FusionConfig::default().with_cross_repo_boost(0.0, Some(String::new()));
         assert!(cfg.active_repo.is_none());
         let lane = vec![
             hit_with_repo("V1", "vectorizer", 0.9),
@@ -908,11 +947,9 @@ outcomes_deny: Vec::new(),
 
     #[test]
     fn cross_repo_boost_clamps_out_of_range_inputs() {
-        let cfg = FusionConfig::default()
-            .with_cross_repo_boost(2.5, Some("cortex".to_string()));
+        let cfg = FusionConfig::default().with_cross_repo_boost(2.5, Some("cortex".to_string()));
         assert_eq!(cfg.cross_repo_boost, 1.0);
-        let cfg = FusionConfig::default()
-            .with_cross_repo_boost(-0.4, Some("cortex".to_string()));
+        let cfg = FusionConfig::default().with_cross_repo_boost(-0.4, Some("cortex".to_string()));
         assert_eq!(cfg.cross_repo_boost, 0.0);
     }
 
@@ -960,10 +997,7 @@ outcomes_deny: Vec::new(),
         let cohort = hit_with_session("COHORT", "sess-B");
         let unrelated = hit_with_session("UNREL", "sess-C");
         let cfg = FusionConfig::default()
-            .with_session_cohesion(
-                Some("sess-A".to_string()),
-                vec!["sess-B".to_string()],
-            );
+            .with_session_cohesion(Some("sess-A".to_string()), vec!["sess-B".to_string()]);
         let fused = rrf_fuse(vec![vec![active], vec![cohort], vec![unrelated]], &cfg);
         // Order: ACTIVE (×2.0) > COHORT (×1.5) > UNREL (×1.0).
         assert_eq!(fused[0].doc_id, "ACTIVE");
@@ -976,11 +1010,11 @@ outcomes_deny: Vec::new(),
         // A hit without `extras["session_id"]` must not crash and
         // must not get the boost — multiplier=1.0.
         let baseline = hit_with_score("NOID", 0.5);
-        let cfg = FusionConfig::default()
-            .with_session_cohesion(Some("sess-A".to_string()), Vec::new());
+        let cfg =
+            FusionConfig::default().with_session_cohesion(Some("sess-A".to_string()), Vec::new());
         let fused = rrf_fuse(vec![vec![baseline]], &cfg);
-        let positional = cfg.alpha as f64 * (1.0 / (cfg.k as f64 + 1.0))
-            + (1.0 - cfg.alpha as f64) * 0.5;
+        let positional =
+            cfg.alpha as f64 * (1.0 / (cfg.k as f64 + 1.0)) + (1.0 - cfg.alpha as f64) * 0.5;
         assert!((fused[0].score - positional).abs() < 1e-9);
     }
 
@@ -1019,8 +1053,8 @@ outcomes_deny: Vec::new(),
     fn outcome_allow_filter_drops_non_matching_hits() {
         let pass = hit_with_outcome("PASS", "success");
         let fail = hit_with_outcome("FAIL", "error");
-        let cfg = FusionConfig::default()
-            .with_outcome_filter(vec!["success".to_string()], Vec::new());
+        let cfg =
+            FusionConfig::default().with_outcome_filter(vec!["success".to_string()], Vec::new());
         let fused = rrf_fuse(vec![vec![pass], vec![fail]], &cfg);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].doc_id, "PASS");
@@ -1071,8 +1105,8 @@ outcomes_deny: Vec::new(),
         // all are dropped (the gate stays honest).
         let tagged = hit_with_outcome("TAG", "success");
         let untagged = hit_with_score("NOTAG", 0.5);
-        let cfg = FusionConfig::default()
-            .with_outcome_filter(vec!["success".to_string()], Vec::new());
+        let cfg =
+            FusionConfig::default().with_outcome_filter(vec!["success".to_string()], Vec::new());
         let fused = rrf_fuse(vec![vec![tagged], vec![untagged]], &cfg);
         assert_eq!(fused.len(), 1);
         assert_eq!(fused[0].doc_id, "TAG");

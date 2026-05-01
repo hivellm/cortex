@@ -1,0 +1,55 @@
+# Cortex relevance tuning — phase11i §3.6.
+#
+# Default location: $REPO/crates/cortex-api/config/relevance.toml.
+# Overridable via the `CORTEX_RELEVANCE_CONFIG` env var (absolute or
+# relative to CWD). The file is read at boot and reapplied on SIGHUP
+# (Unix). On non-Unix platforms the daemon logs a one-shot WARN
+# documenting that hot-reload is unavailable and only the boot read
+# applies.
+#
+# Layering:
+# 1. `FusionConfig::default()` (compile-time defaults in fusion.rs).
+# 2. Values from this TOML file (when present).
+# 3. `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` env overrides — env wins.
+#
+# Removing a key falls back to the layer above; a missing file
+# leaves the daemon at compile-time defaults so misplacing the TOML
+# never silently zeroes the relevance signals.
+
+[fusion]
+# Blend weight in [0.0, 1.0]. 1.0 = pure positional RRF, 0.0 = pure
+# native lane score. Operators bias toward stability with 0.7.
+alpha = 0.7
+# RRF stabilisation constant. Larger k flattens per-lane curves.
+k = 60
+
+[cross_repo]
+# Foreign-repo multiplier in [0.0, 1.0]. 0.0 collapses cross-repo
+# hits to score=0 (legacy hard-filter behaviour); 1.0 lets them
+# compete on equal footing.
+boost = 0.0
+
+[session]
+# Multiplier applied to hits whose extras["session_id"] matches
+# the active session.
+same_session_boost = 2.0
+# Multiplier applied to hits in the cohort (sibling sessions).
+cohort_session_boost = 1.5
+
+[outcome]
+# Per-outcome multipliers applied AFTER allow / deny filters.
+success = 1.2
+error = 0.5
+blocked_by_law = 0.3
+
+[recency]
+# Per-intent λ (1/day). The fused score is multiplied by
+# exp(-λ · days_old). λ=0 disables decay entirely.
+pre_change_context = 0.02
+similar_problems = 0.02
+free_search = 0.02
+explain = 0.02
+# Decisions are sticky — keep the recency bonus mild.
+decision_lookup = 0.005
+# Laws are evergreen — recency must not influence ranking.
+law_check = 0.0

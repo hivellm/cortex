@@ -6,7 +6,7 @@
 //! overlays, and packages the response. Total budget enforcement
 //! flips `debug.truncated = true` when stragglers are dropped.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -35,8 +35,11 @@ pub struct Orchestrator {
     /// via `with_fusion(FusionConfig::new(env_alpha, env_k))` at
     /// boot so tests, in-tree fixtures, and the dashboard helper
     /// don't have to thread the config through their own
-    /// constructors.
-    pub fusion: FusionConfig,
+    /// constructors. Phase11i §3.6 wraps the value in
+    /// `Arc<RwLock<…>>` so the SIGHUP-driven reload path can swap
+    /// the active config in place; in-flight requests pick up the
+    /// new snapshot on their next `current_fusion()` read.
+    pub fusion: Arc<RwLock<FusionConfig>>,
     /// Phase6f — pre-fan-out query rewriter. Defaults to
     /// [`PassthroughRewriter`] so existing constructors and tests
     /// reproduce today's behaviour. The live binary swaps in
@@ -59,7 +62,7 @@ impl Orchestrator {
             vector,
             keyword,
             graph,
-            fusion: FusionConfig::default(),
+            fusion: Arc::new(RwLock::new(FusionConfig::default())),
             rewriter: Arc::new(PassthroughRewriter),
         }
     }
@@ -67,10 +70,28 @@ impl Orchestrator {
     /// Phase6c — replace the default fusion config with one parsed
     /// from `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` (or any test
     /// override). Builder method so existing
-    /// [`Orchestrator::new`] callers stay unchanged.
-    pub fn with_fusion(mut self, fusion: FusionConfig) -> Self {
-        self.fusion = fusion;
+    /// [`Orchestrator::new`] callers stay unchanged. Phase11i §3.6
+    /// stamps the new value into the live `RwLock` so any clones
+    /// created downstream observe the same snapshot.
+    pub fn with_fusion(self, fusion: FusionConfig) -> Self {
+        *self.fusion.write().expect("fusion lock poisoned") = fusion;
         self
+    }
+
+    /// Phase11i §3.6 — hot-replace the live fusion config (SIGHUP
+    /// reload path). Existing clones share the same `Arc<RwLock>`
+    /// so the new value is immediately visible to every in-flight
+    /// orchestrator handle.
+    pub fn replace_fusion(&self, fusion: FusionConfig) {
+        *self.fusion.write().expect("fusion lock poisoned") = fusion;
+    }
+
+    /// Phase11i §3.6 — clone the current fusion snapshot. Cheap
+    /// (single read lock) and used by every per-request fuse call
+    /// + the audit envelope builder so the stamped values reflect
+    /// whatever was loaded most recently.
+    pub fn current_fusion(&self) -> FusionConfig {
+        self.fusion.read().expect("fusion lock poisoned").clone()
     }
 
     /// Phase6f — install a query rewriter that fires once before
@@ -238,13 +259,14 @@ impl Orchestrator {
         );
 
         // ---- Fuse ----
+        let fusion_snapshot = self.current_fusion();
         let mut fused = rrf_fuse(
             vec![
                 vector_result.hits.clone(),
                 keyword_result.hits.clone(),
                 graph_result.hits.clone(),
             ],
-            &self.fusion,
+            &fusion_snapshot,
         );
         // Post-fusion dedupe + degenerate-hit filter. `rrf_fuse` only
         // dedupes by `doc_id`, so the same artifact lands twice when
