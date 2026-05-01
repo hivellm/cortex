@@ -82,6 +82,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # phase11e hotfix — host's git SHA / dirty flag forwarded
+      # so /healthz version block stamps real values instead of
+      # `sha=unknown`. Set on the host before `docker compose build`:
+      #   CORTEX_GIT_SHA=$(git rev-parse HEAD) \
+      #   CORTEX_GIT_DIRTY=$(git status --porcelain | head -c1 | grep -q . && echo true || echo false) \
+      #   docker compose build
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
       target: cortex-ingestion
     image: cortex/ingestion:dev
     container_name: cortex-ingestion
@@ -109,6 +118,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # phase11e hotfix — host's git SHA / dirty flag forwarded
+      # so /healthz version block stamps real values instead of
+      # `sha=unknown`. Set on the host before `docker compose build`:
+      #   CORTEX_GIT_SHA=$(git rev-parse HEAD) \
+      #   CORTEX_GIT_DIRTY=$(git status --porcelain | head -c1 | grep -q . && echo true || echo false) \
+      #   docker compose build
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
       target: cortex-classifier-worker
     image: cortex/classifier-worker:dev
     container_name: cortex-classifier-worker
@@ -128,6 +146,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # phase11e hotfix — host's git SHA / dirty flag forwarded
+      # so /healthz version block stamps real values instead of
+      # `sha=unknown`. Set on the host before `docker compose build`:
+      #   CORTEX_GIT_SHA=$(git rev-parse HEAD) \
+      #   CORTEX_GIT_DIRTY=$(git status --porcelain | head -c1 | grep -q . && echo true || echo false) \
+      #   docker compose build
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
       target: cortex-embedder-worker
     image: cortex/embedder-worker:dev
     container_name: cortex-embedder-worker
@@ -162,6 +189,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # phase11e hotfix — host's git SHA / dirty flag forwarded
+      # so /healthz version block stamps real values instead of
+      # `sha=unknown`. Set on the host before `docker compose build`:
+      #   CORTEX_GIT_SHA=$(git rev-parse HEAD) \
+      #   CORTEX_GIT_DIRTY=$(git status --porcelain | head -c1 | grep -q . && echo true || echo false) \
+      #   docker compose build
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
       target: cortex-fulltext-worker
     image: cortex/fulltext-worker:dev
     container_name: cortex-fulltext-worker
@@ -183,6 +219,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # phase11e hotfix — host's git SHA / dirty flag forwarded
+      # so /healthz version block stamps real values instead of
+      # `sha=unknown`. Set on the host before `docker compose build`:
+      #   CORTEX_GIT_SHA=$(git rev-parse HEAD) \
+      #   CORTEX_GIT_DIRTY=$(git status --porcelain | head -c1 | grep -q . && echo true || echo false) \
+      #   docker compose build
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
       target: cortex-graph-worker
     image: cortex/graph-worker:dev
     container_name: cortex-graph-worker
@@ -204,6 +249,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # phase11e hotfix — host's git SHA / dirty flag forwarded
+      # so /healthz version block stamps real values instead of
+      # `sha=unknown`. Set on the host before `docker compose build`:
+      #   CORTEX_GIT_SHA=$(git rev-parse HEAD) \
+      #   CORTEX_GIT_DIRTY=$(git status --porcelain | head -c1 | grep -q . && echo true || echo false) \
+      #   docker compose build
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
       target: cortex-api
     image: cortex/api:dev
     container_name: cortex-api

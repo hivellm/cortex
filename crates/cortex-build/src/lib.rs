@@ -87,15 +87,35 @@ impl VersionInfo {
 /// binary surfaces its own crate version, not cortex-build's. Use
 /// the [`version_info!`] macro to capture that automatically.
 pub fn from_compile_env(crate_version: &'static str) -> VersionInfo {
+    let full = option_env!("CORTEX_GIT_SHA").unwrap_or(VersionInfo::UNKNOWN_SHA);
+    // Phase11e hotfix — `option_env!("CORTEX_GIT_SHA_SHORT")` can
+    // come back `None` when the docker BuildKit cargo-cache-mount
+    // serves a partially-stale `cortex-api` compilation while the
+    // upstream `cortex-build` build script DID emit a fresh
+    // `CORTEX_GIT_SHA`. Derive the short SHA from the full one
+    // at runtime as a belt-and-braces fallback so the dashboard
+    // never shows `git_sha_short=unknown` while `git_sha` is real.
+    let short = match option_env!("CORTEX_GIT_SHA_SHORT") {
+        Some(s) if !s.is_empty() && s != "unknown" => s.to_string(),
+        _ if full.len() >= 7 && full != VersionInfo::UNKNOWN_SHA => full[..7].to_string(),
+        _ => "unknown".to_string(),
+    };
+    // Build profile derived from the running binary's compile flags
+    // when the env wasn't propagated through the build-script cache.
+    let profile = match option_env!("CORTEX_BUILD_PROFILE") {
+        Some(s) if !s.is_empty() && s != "unknown" => s,
+        _ if cfg!(debug_assertions) => "debug",
+        _ => "release",
+    };
     VersionInfo::new(
-        option_env!("CORTEX_GIT_SHA").unwrap_or(VersionInfo::UNKNOWN_SHA),
-        option_env!("CORTEX_GIT_SHA_SHORT").unwrap_or("unknown"),
+        full,
+        short,
         option_env!("CORTEX_BUILD_TS").unwrap_or("unknown"),
         matches!(
             option_env!("CORTEX_GIT_DIRTY").unwrap_or("false"),
             "1" | "true" | "TRUE"
         ),
-        option_env!("CORTEX_BUILD_PROFILE").unwrap_or("unknown"),
+        profile,
         crate_version,
     )
 }
@@ -137,20 +157,36 @@ pub fn emit_version_env() {
     // though the source files moved with it.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs/heads");
+    // Phase11e hotfix — also rerun when the docker build-arg
+    // overrides change so `--build-arg CORTEX_GIT_SHA=$(git rev-parse HEAD)`
+    // invalidates the cached build-script result.
+    println!("cargo:rerun-if-env-changed=CORTEX_GIT_SHA_OVERRIDE");
+    println!("cargo:rerun-if-env-changed=CORTEX_GIT_DIRTY_OVERRIDE");
 
     // CORTEX_GIT_SHA — full SHA of HEAD.
-    let git_sha = Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .output()
+    //
+    // Override path: `CORTEX_GIT_SHA_OVERRIDE` (forwarded by the
+    // docker `builder` stage from a `--build-arg`) wins when set
+    // and non-empty. Without the override, the docker build context
+    // lacks `.git/`, `git rev-parse` falls back to "unknown", and
+    // every `/healthz extras.version` reports `sha=unknown`.
+    let git_sha = std::env::var("CORTEX_GIT_SHA_OVERRIDE")
         .ok()
-        .and_then(|out| {
-            if out.status.success() {
-                Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-            } else {
-                None
-            }
+        .filter(|s| !s.trim().is_empty() && s != "unknown")
+        .or_else(|| {
+            Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .ok()
+                .and_then(|out| {
+                    if out.status.success() {
+                        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .filter(|s| !s.is_empty())
         })
-        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| VersionInfo::UNKNOWN_SHA.to_string());
     let git_sha_short = if git_sha.len() >= 7 {
         git_sha[..7].to_string()
@@ -161,11 +197,19 @@ pub fn emit_version_env() {
     println!("cargo:rustc-env=CORTEX_GIT_SHA_SHORT={git_sha_short}");
 
     // CORTEX_GIT_DIRTY — any output from `git status --porcelain` ⇒ dirty.
-    let git_dirty = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
+    // Override path mirrors `CORTEX_GIT_SHA`: `CORTEX_GIT_DIRTY_OVERRIDE`
+    // (`true` / `false`) wins when set.
+    let git_dirty = std::env::var("CORTEX_GIT_DIRTY_OVERRIDE")
         .ok()
-        .map(|out| out.status.success() && !out.stdout.is_empty())
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| matches!(s.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .or_else(|| {
+            Command::new("git")
+                .args(["status", "--porcelain"])
+                .output()
+                .ok()
+                .map(|out| out.status.success() && !out.stdout.is_empty())
+        })
         .unwrap_or(false);
     println!("cargo:rustc-env=CORTEX_GIT_DIRTY={git_dirty}");
 

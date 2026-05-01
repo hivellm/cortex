@@ -16,10 +16,20 @@
 # -----------------------------------------------------------------
 FROM dhi.io/debian-base:trixie-dev AS builder
 
+# Phase11e hotfix — git SHA / dirty flag forwarded from the host so
+# `cortex-build`'s `emit_version_env` stamps real values in the
+# `/healthz` version block. Without these, the build context lacks
+# `.git/` and every container reports `sha=unknown`. Defaults stay
+# `unknown` / `false` so a bare `docker build` still works.
+ARG CORTEX_GIT_SHA=unknown
+ARG CORTEX_GIT_DIRTY=false
+
 ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH \
-    RUST_VERSION=1.93.1
+    RUST_VERSION=1.93.1 \
+    CORTEX_GIT_SHA_OVERRIDE=$CORTEX_GIT_SHA \
+    CORTEX_GIT_DIRTY_OVERRIDE=$CORTEX_GIT_DIRTY
 
 # Native deps the workspace pulls in via build.rs / sys crates:
 # - pkg-config + libssl-dev → reqwest's TLS via native-tls (some
