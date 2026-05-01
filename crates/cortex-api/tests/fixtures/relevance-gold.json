@@ -1,0 +1,254 @@
+{
+  "version": 1,
+  "description": "Phase11i §4.4 — hand-curated relevance gold-set scoped at the cortex-api IT (rel-001 .. rel-030). 10 pre_change_context · 5 decision_lookup · 10 similar_problems · 3 law_check · 2 free_search. Each entry pairs a query/intent/scope with 1-3 acceptable hits — recall@10 counts the query as satisfied when ANY entry from `expected_doc_ids` appears in the top-10 fused snippets. The matcher is identical to cortex-cli's harness: composite ids, exact `repo`/`path`/`symbol`/`content_hash`/`collection`, OR substring of `path` / `symbol`. Curators should keep the substring shape (partial paths) so the fixture survives chunk-hash drift.",
+  "queries": [
+    {
+      "id": "rel-001",
+      "intent": "pre_change_context",
+      "query": "the meili fan-out worker offset",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-fulltext/src/routing.rs",
+        "crates/cortex-classifier-worker"
+      ],
+      "notes": "Operator audit prompt — worker leaves stale offsets in Synap."
+    },
+    {
+      "id": "rel-002",
+      "intent": "pre_change_context",
+      "query": "where is the rrf fusion blend implemented",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/fusion.rs"]
+    },
+    {
+      "id": "rel-003",
+      "intent": "pre_change_context",
+      "query": "intent table that picks pre_change_context vs explain",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-pre-thinking/src/intent_select.rs"]
+    },
+    {
+      "id": "rel-004",
+      "intent": "pre_change_context",
+      "query": "scope.repo defaulting to None in the query strategies",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/strategies.rs"]
+    },
+    {
+      "id": "rel-005",
+      "intent": "pre_change_context",
+      "query": "byte-budget clipper that walks the trim ladder",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-pre-thinking/src/budget.rs",
+        "crates/cortex-api/src/budget.rs"
+      ]
+    },
+    {
+      "id": "rel-006",
+      "intent": "pre_change_context",
+      "query": "session cohesion same-session and cohort boost in fusion",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/fusion.rs"]
+    },
+    {
+      "id": "rel-007",
+      "intent": "pre_change_context",
+      "query": "claude-archive jsonl reader tolerance to an incomplete final line",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-claude-archive/src/reader.rs"]
+    },
+    {
+      "id": "rel-008",
+      "intent": "pre_change_context",
+      "query": "envelope mapper pairs user with assistant by parentUuid",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-claude-archive/src/mapper.rs"]
+    },
+    {
+      "id": "rel-009",
+      "intent": "pre_change_context",
+      "query": "checkpoint atomic write five second cadence",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-claude-archive/src/checkpoint.rs"]
+    },
+    {
+      "id": "rel-010",
+      "intent": "pre_change_context",
+      "query": "outcome glyph rendered on every similar-turn line",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-pre-thinking/src/formatter.rs"]
+    },
+
+    {
+      "id": "rel-011",
+      "intent": "decision_lookup",
+      "query": "why did we pick meilisearch instead of lexum for the keyword lane",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        ".rulebook/decisions",
+        "crates/cortex-api/src/meili_lane.rs"
+      ]
+    },
+    {
+      "id": "rel-012",
+      "intent": "decision_lookup",
+      "query": "decision behind the recency-decay lambda for decision_lookup",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-api/src/fusion.rs",
+        "crates/cortex-api/config/relevance.toml"
+      ]
+    },
+    {
+      "id": "rel-013",
+      "intent": "decision_lookup",
+      "query": "why is rrf alpha defaulted to 0.7 instead of pure positional or pure native",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/fusion.rs"]
+    },
+    {
+      "id": "rel-014",
+      "intent": "decision_lookup",
+      "query": "what query rewriter strategy is the daemon shipping by default",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/query_rewrite.rs"]
+    },
+    {
+      "id": "rel-015",
+      "intent": "decision_lookup",
+      "query": "decision keeping the laws section out of the clipper trim ladder",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-pre-thinking/src/budget.rs"]
+    },
+
+    {
+      "id": "rel-016",
+      "intent": "similar_problems",
+      "query": "rrf positional vs native score blend tuning regression",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/fusion.rs"]
+    },
+    {
+      "id": "rel-017",
+      "intent": "similar_problems",
+      "query": "snippet body truncation propagation through orchestrator",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/orchestrator.rs"]
+    },
+    {
+      "id": "rel-018",
+      "intent": "similar_problems",
+      "query": "byte cap on first user prompt clipped to eighty bytes",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-pre-thinking/src/formatter.rs"]
+    },
+    {
+      "id": "rel-019",
+      "intent": "similar_problems",
+      "query": "fixing a race condition in the synap publisher offset path",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-classifier-worker",
+        "crates/cortex-workers/src/classifier/worker.rs"
+      ]
+    },
+    {
+      "id": "rel-020",
+      "intent": "similar_problems",
+      "query": "lane error propagation when the per-lane budget is exceeded",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/orchestrator.rs"]
+    },
+    {
+      "id": "rel-021",
+      "intent": "similar_problems",
+      "query": "SIGHUP triggered relevance configuration reload",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-api/src/main.rs",
+        "crates/cortex-api/src/relevance_config.rs"
+      ]
+    },
+    {
+      "id": "rel-022",
+      "intent": "similar_problems",
+      "query": "outcome allow filter and deny filter ordering",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/fusion.rs"]
+    },
+    {
+      "id": "rel-023",
+      "intent": "similar_problems",
+      "query": "cross-repo boost demoting foreign hits",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/fusion.rs"]
+    },
+    {
+      "id": "rel-024",
+      "intent": "similar_problems",
+      "query": "scope canonicalisation dedupes empty filter entries",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-api/src/service.rs"]
+    },
+    {
+      "id": "rel-025",
+      "intent": "similar_problems",
+      "query": "redaction patterns for AWS Anthropic OpenAI keys",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": ["crates/cortex-core/src/redact.rs"]
+    },
+
+    {
+      "id": "rel-026",
+      "intent": "law_check",
+      "query": "must the classifier worker preserve session_id on every envelope",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "docs/specs/05-classifier.md",
+        "crates/cortex-workers/src/classifier"
+      ]
+    },
+    {
+      "id": "rel-027",
+      "intent": "law_check",
+      "query": "law forbidding --no-verify on git commit",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "AGENTS.md",
+        ".rulebook/specs/QUALITY_ENFORCEMENT.md"
+      ]
+    },
+    {
+      "id": "rel-028",
+      "intent": "law_check",
+      "query": "law requiring cargo clippy -D warnings before commit",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        ".claude/rules/rust.md",
+        "AGENTS.md"
+      ]
+    },
+
+    {
+      "id": "rel-029",
+      "intent": "free_search",
+      "query": "how does cortex propagate audit envelopes to the dashboard",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-api/src/audit.rs",
+        "crates/cortex-api/src/dashboard.rs"
+      ]
+    },
+    {
+      "id": "rel-030",
+      "intent": "free_search",
+      "query": "what does the dashboard cost ribbon read from",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-storage",
+        "crates/cortex-api/src/dashboard.rs"
+      ]
+    }
+  ]
+}
