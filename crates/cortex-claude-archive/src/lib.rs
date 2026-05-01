@@ -33,10 +33,14 @@
 
 #![forbid(unsafe_code)]
 
+pub mod checkpoint;
 pub mod mapper;
 pub mod reader;
 pub mod types;
+pub mod walker;
 
+pub use checkpoint::{Checkpoint, CheckpointStore};
 pub use mapper::{map_session, MapStats};
 pub use reader::{read_records, ReadStats};
 pub use types::{ArchiveError, JsonlRecord, RecordKind};
+pub use walker::{walk, walk_filtered, WalkConfig, WalkEntry, WalkKind};
