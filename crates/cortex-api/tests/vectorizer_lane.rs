@@ -28,6 +28,8 @@ fn vec_request(query: &str) -> VectorRequest {
 async fn live_lane_passes_query_text_through_to_vectorizer_search() {
     // The lane must forward `req.query` verbatim. The mock matches
     // only when the request body carries `query: "embedder lane"`.
+    // phase11d — wire shape carries `payload`/`vector` (not the
+    // SDK's `content`/`metadata`); body lives under `payload.body`.
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/collections/cortex-cortex-code/search/text"))
@@ -36,12 +38,13 @@ async fn live_lane_passes_query_text_through_to_vectorizer_search() {
             "results": [{
                 "id": "vec-1",
                 "score": 0.91_f32,
-                "content": "embedder lane wired",
-                "metadata": {
+                "vector": [],
+                "payload": {
                     "repo": "Cortex",
                     "path": "src/lib.rs",
                     "kind": "turn",
                     "ts": 1714200000000_i64,
+                    "body": "embedder lane wired",
                 },
             }],
             "query_time_ms": 0.0_f64,
@@ -54,11 +57,76 @@ async fn live_lane_passes_query_text_through_to_vectorizer_search() {
     let hits = lane.search(&vec_request("embedder lane")).await.unwrap();
     assert_eq!(hits.len(), 1, "mock matches only when query is forwarded");
     assert_eq!(hits[0].text, "embedder lane wired");
+    assert_eq!(hits[0].path.as_deref(), Some("src/lib.rs"));
     assert!((hits[0].score - 0.91).abs() < 1e-5);
     assert_eq!(
         hits[0].extras.get("source").and_then(|v| v.as_str()),
         Some("vector"),
         "live lane stamps the source-attribution invariant",
+    );
+}
+
+#[tokio::test]
+async fn live_lane_drops_text_when_payload_omitted() {
+    // phase11d regression guard — when the upstream wire response
+    // skips `payload` entirely (the case that bit phase11a's e2e
+    // test), the lane must NOT silently project an empty hit; it
+    // produces a `LaneHit` with empty text/path so the bundle
+    // renderer collapses to a header-only line per phase10b §1.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/collections/cortex-cortex-code/search/text"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{
+                "id": "vec-empty",
+                "score": 0.5_f32,
+            }],
+            "query_time_ms": 0.0_f64,
+        })))
+        .mount(&server)
+        .await;
+
+    let lane = VectorizerLane::new(server.uri(), None).unwrap();
+    let hits = lane.search(&vec_request("anything")).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].text, "", "no body in payload → empty text");
+    assert!(hits[0].path.is_none());
+}
+
+#[tokio::test]
+async fn live_lane_rejects_legacy_sdk_shape_as_empty_hits() {
+    // phase11d — the regression: if the server (or the SDK) ever
+    // re-emits the legacy `{content, metadata}` shape, the new
+    // wire deserializer treats both as unknown fields, leaving
+    // `payload = {}`. The lane must return hits with empty
+    // text/path rather than half-projected `LaneHit`s. This pins
+    // the failure mode so a future upstream regression bubbles up
+    // immediately.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/collections/cortex-cortex-code/search/text"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [{
+                "id": "vec-legacy",
+                "score": 0.7_f32,
+                "content": "would have been the body",
+                "metadata": { "path": "src/x.rs" },
+            }],
+            "query_time_ms": 0.0_f64,
+        })))
+        .mount(&server)
+        .await;
+
+    let lane = VectorizerLane::new(server.uri(), None).unwrap();
+    let hits = lane.search(&vec_request("anything")).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(
+        hits[0].text, "",
+        "legacy shape's `content` must NOT be picked up by the new projection",
+    );
+    assert!(
+        hits[0].path.is_none(),
+        "legacy shape's `metadata.path` must NOT be picked up either",
     );
 }
 
@@ -98,8 +166,8 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
             "results": [{
                 "id": "vec-alpha",
                 "score": 0.8_f32,
-                "content": "alpha vector",
-                "metadata": {},
+                "vector": [],
+                "payload": { "body": "alpha vector" },
             }],
             "query_time_ms": 0.0_f64,
         })))
@@ -112,8 +180,8 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
             "results": [{
                 "id": "vec-beta",
                 "score": 0.7_f32,
-                "content": "beta vector",
-                "metadata": {},
+                "vector": [],
+                "payload": { "body": "beta vector" },
             }],
             "query_time_ms": 0.0_f64,
         })))

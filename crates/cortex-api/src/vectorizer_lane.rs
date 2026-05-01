@@ -10,20 +10,68 @@
 //! This module ships the production read-path: per-query semantic
 //! search against the same per-project Vectorizer collections the
 //! spec-06 embedder-worker upserts to. Translates the orchestrator's
-//! `VectorRequest { collection, query, k, scope }` into the Vectorizer
-//! SDK's `search_vectors(collection, query, limit, threshold)` and
-//! maps each `SearchResult` back into a `LaneHit`.
+//! `VectorRequest { collection, query, k, scope }` into a Vectorizer
+//! `POST /collections/{c}/search/text` call and maps each result back
+//! into a `LaneHit`.
 //!
-//! The lane uses the official `vectorizer-sdk` crate end-to-end —
-//! same dependency `cortex-embedder-worker` ships with — per the
-//! "use Hive SDKs, don't reimplement" memory rule.
+//! ## phase11d — direct HTTP for the read path
+//!
+//! The lane previously delegated `search_vectors` to `vectorizer-sdk`.
+//! The SDK's `SearchResult { content: Option<String>, metadata:
+//! Option<HashMap> }` does NOT match the live server's wire shape —
+//! the server responds with `{id, score, vector, payload}`, where
+//! `payload` carries every projection-relevant field (`path`, `kind`,
+//! `repo`, `body`, ...). `serde` tolerantly skipped `payload` and
+//! `vector`, leaving `SearchResult { content: None, metadata: None }`
+//! on every hit. The projection then read empty path/text and the
+//! orchestrator's bundle renderer dropped the hits silently.
+//!
+//! Fix: bypass the SDK's `search_vectors` and POST direct via
+//! `reqwest`, deserialising the real wire shape into [`WireSearchHit`].
+//! Auth (`probe_authenticated`, `refresh_token`, `health_check`,
+//! `/auth/login`) stays on the SDK — those endpoints' wire shapes
+//! already match.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::Deserialize;
 use vectorizer_sdk::{ClientConfig, VectorizerClient};
 
 use crate::lanes::{LaneError, LaneHit, VectorLane, VectorRequest};
+
+/// phase11d — wire shape of one entry in `POST /collections/{c}/search/text`'s
+/// `results` array on the live Vectorizer image. `serde(default)` on
+/// every field so a missing key never fails deserialisation; absent
+/// fields collapse to `None` / empty maps.
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct WireSearchHit {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub score: f32,
+    /// Server-side payload. Carries `path`, `kind`, `repo`, `body`,
+    /// `summary`, `title`, `severity`, `ts`, `topics`, every spec-11
+    /// projection-contract key, etc. Empty map when the upstream
+    /// response omitted the field.
+    #[serde(default)]
+    pub payload: serde_json::Map<String, serde_json::Value>,
+    /// Raw embedding. Deserialised but immediately dropped — the
+    /// projection doesn't use it. Kept here so the type round-trips
+    /// the full wire shape and the `vector` field doesn't get lost
+    /// to an unknown-field warning if we ever turn `deny_unknown_fields`
+    /// on.
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub vector: Option<Vec<f32>>,
+}
+
+/// phase11d — wire envelope for `POST /collections/{c}/search/text`.
+#[derive(Debug, Clone, Deserialize)]
+struct WireSearchResponse {
+    #[serde(default)]
+    results: Vec<WireSearchHit>,
+}
 
 /// Cached credentials so the lane can transparently re-mint a JWT
 /// when the upstream returns 401. Recorded on `with_login` only; the
@@ -42,9 +90,24 @@ struct LoginCreds {
 /// 401 Unauthorized on `search_vectors` triggers one transparent
 /// re-mint + retry; subsequent calls then carry the fresh JWT until
 /// it expires again.
+///
+/// phase11d — the search read-path is now a direct `reqwest` POST
+/// to `/collections/{c}/search/text` (the SDK's `search_vectors`
+/// silently dropped the server's `payload` field). Auth and probes
+/// stay on the SDK because their wire shapes already match.
 #[derive(Clone)]
 pub struct VectorizerLane {
     client: Arc<tokio::sync::RwLock<Arc<VectorizerClient>>>,
+    /// phase11d — direct HTTP transport for the read path. Distinct
+    /// from the SDK's internal transport so the search code-path
+    /// never sees the SDK's `SearchResult` deserializer.
+    http: reqwest::Client,
+    /// phase11d — current bearer token (JWT or static API key) for
+    /// the direct HTTP call. Mirrors whatever the SDK client was
+    /// last built with. `refresh_token()` updates both this and the
+    /// SDK client so the next search and the next SDK call carry
+    /// the fresh credential.
+    bearer: Arc<tokio::sync::RwLock<Option<String>>>,
     base_url: String,
     creds: Option<LoginCreds>,
 }
@@ -66,9 +129,12 @@ impl VectorizerLane {
     /// `cortex-embedder-worker` uses for write traffic.
     pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Result<Self, String> {
         let base_url = base_url.into();
-        let client = build_client(&base_url, api_key)?;
+        let client = build_client(&base_url, api_key.clone())?;
+        let http = build_http_client()?;
         Ok(Self {
             client: Arc::new(tokio::sync::RwLock::new(Arc::new(client))),
+            http,
+            bearer: Arc::new(tokio::sync::RwLock::new(api_key)),
             base_url,
             creds: None,
         })
@@ -88,9 +154,12 @@ impl VectorizerLane {
     ) -> Result<Self, String> {
         let base_url = base_url.into();
         let jwt = mint_jwt(&base_url, username, password).await?;
-        let client = build_client(&base_url, Some(jwt))?;
+        let client = build_client(&base_url, Some(jwt.clone()))?;
+        let http = build_http_client()?;
         Ok(Self {
             client: Arc::new(tokio::sync::RwLock::new(Arc::new(client))),
+            http,
+            bearer: Arc::new(tokio::sync::RwLock::new(Some(jwt))),
             base_url,
             creds: Some(LoginCreds {
                 username: username.to_string(),
@@ -135,8 +204,11 @@ impl VectorizerLane {
         let base_url = base_url.into();
         let client = build_client(&base_url, Some(initial_jwt.to_string()))
             .expect("test client build must succeed");
+        let http = build_http_client().expect("test reqwest builder must succeed");
         Self {
             client: Arc::new(tokio::sync::RwLock::new(Arc::new(client))),
+            http,
+            bearer: Arc::new(tokio::sync::RwLock::new(Some(initial_jwt.to_string()))),
             base_url,
             creds: Some(LoginCreds {
                 username: username.to_string(),
@@ -203,15 +275,26 @@ impl VectorizerLane {
     /// optional periodic warmup. Returns `Err` when no credentials
     /// were captured (the `new(api_key=...)` path) or the upstream
     /// `/auth/login` rejects them.
+    ///
+    /// Updates both the SDK client (used by `probe_authenticated`,
+    /// `health_check`, `list_collections`) AND the cached bearer
+    /// (used by the direct-HTTP read path in `VectorLane::search`)
+    /// so the next call on either path carries the fresh JWT.
     pub async fn refresh_token(&self) -> Result<(), String> {
         let creds = self
             .creds
             .as_ref()
             .ok_or_else(|| "refresh_token: lane has no cached credentials".to_string())?;
         let jwt = mint_jwt(&self.base_url, &creds.username, &creds.password).await?;
-        let new_client = build_client(&self.base_url, Some(jwt))?;
-        let mut w = self.client.write().await;
-        *w = Arc::new(new_client);
+        let new_client = build_client(&self.base_url, Some(jwt.clone()))?;
+        {
+            let mut w = self.client.write().await;
+            *w = Arc::new(new_client);
+        }
+        {
+            let mut b = self.bearer.write().await;
+            *b = Some(jwt);
+        }
         Ok(())
     }
 }
@@ -224,6 +307,27 @@ fn build_client(base_url: &str, api_key: Option<String>) -> Result<VectorizerCli
         ..Default::default()
     };
     VectorizerClient::new(cfg).map_err(|e| format!("vectorizer-sdk client: {e}"))
+}
+
+/// phase11d — build the `reqwest::Client` used by the direct read
+/// path. Same 10 s timeout the SDK wires its transport with so the
+/// fail-open behaviour matches.
+fn build_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("vectorizer reqwest builder: {e}"))
+}
+
+/// phase11d — outcome of one `direct_search` round-trip. The
+/// `Auth401` arm is the only branch that triggers the lane's
+/// refresh-and-retry; every other failure surfaces as `Transport`
+/// so the orchestrator can record it under `debug.errors.vector`.
+enum DirectSearchOutcome {
+    Ok(Vec<WireSearchHit>),
+    NotFound,
+    Auth401(String),
+    Transport(String),
 }
 
 async fn mint_jwt(base_url: &str, username: &str, password: &str) -> Result<String, String> {
@@ -259,38 +363,96 @@ fn looks_like_auth_failure(msg: &str) -> bool {
         || lower.contains("invalid token")
 }
 
+impl VectorizerLane {
+    /// phase11d — direct `POST /collections/{c}/search/text` against
+    /// the live Vectorizer image. Replaces `vectorizer-sdk`'s
+    /// `search_vectors` because the SDK's `SearchResult` deserializer
+    /// silently drops the server's `payload` and `vector` fields
+    /// (anti-pattern documented in the rulebook knowledge base —
+    /// same family as the embedder's write-path drift).
+    ///
+    /// Classifies the outcome into one of four [`DirectSearchOutcome`]
+    /// variants so the caller can drive the existing 401 → refresh →
+    /// retry flow without re-parsing the upstream error.
+    async fn direct_search(&self, req: &VectorRequest) -> DirectSearchOutcome {
+        let url = format!(
+            "{}/collections/{}/search/text",
+            self.base_url.trim_end_matches('/'),
+            req.collection,
+        );
+        let body = serde_json::json!({
+            "query": req.query,
+            "limit": req.k,
+        });
+        let mut http_req = self.http.post(&url).json(&body);
+        if let Some(token) = self.bearer.read().await.clone() {
+            http_req = http_req.bearer_auth(token);
+        }
+        let resp = match http_req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return DirectSearchOutcome::Transport(format!(
+                    "{}: search_vectors({}): {e}",
+                    self.base_url, req.collection
+                ));
+            }
+        };
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            // 404 on the per-project collection is the legitimate
+            // empty-index case (the spec-06 worker materialises
+            // collections lazily on first upsert). Fall through to
+            // empty hits rather than failing the whole orchestrator
+            // turn.
+            return DirectSearchOutcome::NotFound;
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+        {
+            let body_text = resp.text().await.unwrap_or_default();
+            return DirectSearchOutcome::Auth401(format!(
+                "{}: search_vectors({}): HTTP {} {}",
+                self.base_url,
+                req.collection,
+                status.as_u16(),
+                body_text.chars().take(200).collect::<String>(),
+            ));
+        }
+        if !status.is_success() {
+            let body_text = resp.text().await.unwrap_or_default();
+            return DirectSearchOutcome::Transport(format!(
+                "{}: search_vectors({}): HTTP {} {}",
+                self.base_url,
+                req.collection,
+                status.as_u16(),
+                body_text.chars().take(200).collect::<String>(),
+            ));
+        }
+        match resp.json::<WireSearchResponse>().await {
+            Ok(parsed) => DirectSearchOutcome::Ok(parsed.results),
+            Err(e) => DirectSearchOutcome::Transport(format!(
+                "{}: search_vectors({}): parse: {e}",
+                self.base_url, req.collection
+            )),
+        }
+    }
+}
+
 #[async_trait]
 impl VectorLane for VectorizerLane {
     async fn search(&self, req: &VectorRequest) -> Result<Vec<LaneHit>, LaneError> {
-        // The SDK's `search_vectors` is the right surface for our
-        // shape: collection-scoped text query, server-side embedding
-        // (so we don't have to keep an embedder client open in
-        // cortex-api), top-k cap. The richer surfaces (semantic /
-        // intelligent / hybrid) layer reranking + multi-query
-        // expansion that the orchestrator's RRF fusion already does
-        // — running them here would be redundant work plus a second
-        // ranking signal the fusion stage doesn't know about.
-        let client = self.client.read().await.clone();
-        let attempt = client
-            .search_vectors(&req.collection, &req.query, Some(req.k), None)
-            .await;
-
-        let resp = match attempt {
-            Ok(r) => r,
-            Err(e) => {
-                let msg =
-                    format!("{}: search_vectors({}): {e}", self.base_url, req.collection);
-                let lower = msg.to_ascii_lowercase();
-                // 404 on the per-project collection is the legitimate
-                // empty-index case (the spec-06 worker materialises
-                // collections lazily on first upsert). The SDK
-                // surfaces these as `VectorizerError::server` with
-                // a "not found" message — fall through to empty
-                // hits rather than failing the whole orchestrator
-                // turn.
-                if lower.contains("not found") || lower.contains("404") {
-                    return Ok(Vec::new());
-                }
+        // phase11d — the SDK's `search_vectors` is bypassed because
+        // its `SearchResult` deserializer silently drops the server's
+        // `payload` field (see module docs). Auth, probes, and
+        // refresh stay on the SDK; only the read path runs through
+        // the direct `reqwest` lane.
+        let hits = match self.direct_search(req).await {
+            DirectSearchOutcome::Ok(hits) => hits,
+            DirectSearchOutcome::NotFound => return Ok(Vec::new()),
+            DirectSearchOutcome::Transport(msg) => {
+                return Err(LaneError::Transport(msg));
+            }
+            DirectSearchOutcome::Auth401(msg) => {
                 // Issue hivellm/cortex#2 — the boot-time JWT expires
                 // after ~1 h and every subsequent search returns
                 // 401. Re-mint the token using the cached creds and
@@ -299,58 +461,41 @@ impl VectorLane for VectorizerLane {
                 // still surface the 401 so the orchestrator's
                 // `debug.errors.vector` lane carries an actionable
                 // signal.
-                if looks_like_auth_failure(&msg) {
-                    if self.creds.is_some() {
-                        match self.refresh_token().await {
-                            Ok(()) => {
-                                tracing::info!(
-                                    base_url = %self.base_url,
-                                    collection = %req.collection,
-                                    "vector lane: refreshed JWT after upstream 401, retrying"
-                                );
-                                let client2 = self.client.read().await.clone();
-                                match client2
-                                    .search_vectors(
-                                        &req.collection,
-                                        &req.query,
-                                        Some(req.k),
-                                        None,
-                                    )
-                                    .await
-                                {
-                                    Ok(r) => r,
-                                    Err(e2) => {
-                                        return Err(LaneError::Transport(format!(
-                                            "{msg}; refresh-retry failed: {e2}"
-                                        )));
-                                    }
-                                }
-                            }
-                            Err(reason) => {
-                                return Err(LaneError::Transport(format!(
-                                    "{msg}; auth refresh failed: {reason}"
-                                )));
-                            }
-                        }
-                    } else {
+                if self.creds.is_none() {
+                    return Err(LaneError::Transport(format!(
+                        "{msg}; no cached credentials to mint a fresh JWT — set \
+                         CORTEX_VECTORIZER_USER + _PASSWORD (or _EMBEDDER_VECTORIZER_*)"
+                    )));
+                }
+                if let Err(reason) = self.refresh_token().await {
+                    return Err(LaneError::Transport(format!(
+                        "{msg}; auth refresh failed: {reason}"
+                    )));
+                }
+                tracing::info!(
+                    base_url = %self.base_url,
+                    collection = %req.collection,
+                    "vector lane: refreshed JWT after upstream 401, retrying"
+                );
+                match self.direct_search(req).await {
+                    DirectSearchOutcome::Ok(hits) => hits,
+                    DirectSearchOutcome::NotFound => return Ok(Vec::new()),
+                    DirectSearchOutcome::Auth401(msg2)
+                    | DirectSearchOutcome::Transport(msg2) => {
                         return Err(LaneError::Transport(format!(
-                            "{msg}; no cached credentials to mint a fresh JWT — set \
-                             CORTEX_VECTORIZER_USER + _PASSWORD (or _EMBEDDER_VECTORIZER_*)"
+                            "{msg}; refresh-retry failed: {msg2}"
                         )));
                     }
-                } else {
-                    return Err(LaneError::Transport(msg));
                 }
             }
         };
 
-        let hits: Vec<LaneHit> = resp
-            .results
+        let projected: Vec<LaneHit> = hits
             .into_iter()
-            .map(|r| project(r, req))
+            .map(|h| project(h, req))
             .filter(|h| scope_matches(&req.scope, h))
             .collect();
-        Ok(hits)
+        Ok(projected)
     }
 }
 
@@ -447,23 +592,32 @@ fn rfc3339_to_ms(since: &str) -> Option<i64> {
 /// source-attribution invariant is met (the keyword-lane fix
 /// flipped the default; both lanes now stamp explicitly).
 /// Crate-internal test seam — drive [`project`] against a
-/// hand-rolled `SearchResult`. The regression guard in
+/// hand-rolled [`WireSearchHit`]. The regression guard in
 /// `crate::lane_contract` uses this to exercise the Vectorizer
-/// projection without the SDK transport path.
+/// projection without the HTTP transport.
 #[cfg(test)]
-pub(crate) fn project_search_result(
-    r: vectorizer_sdk::models::SearchResult,
-    req: &VectorRequest,
-) -> LaneHit {
+pub(crate) fn project_search_result(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
     project(r, req)
 }
 
-fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> LaneHit {
-    let metadata = r.metadata.unwrap_or_default();
-    let get_str =
-        |key: &str| -> Option<String> { metadata.get(key).and_then(|v| v.as_str()).map(String::from) };
+/// phase11d — project one [`WireSearchHit`] from `POST
+/// /collections/{c}/search/text` into a `LaneHit`.
+///
+/// The server places every projection-relevant field under `payload`
+/// (verified against `hivehub/vectorizer:3.0.0`). Older embedder
+/// builds nested those keys under `payload.payload.<key>`; that
+/// fallback stays in place so a mixed corpus during an indexer
+/// rollout still surfaces decisions / turns / law violations.
+fn project(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
+    let payload = &r.payload;
+    let get_str = |key: &str| -> Option<String> {
+        payload
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    };
     let get_i64 = |key: &str| -> Option<i64> {
-        metadata
+        payload
             .get(key)
             .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
     };
@@ -477,18 +631,18 @@ fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> Lane
         "collection".to_string(),
         serde_json::Value::String(req.collection.clone()),
     );
-    // Phase6b — spec-11 lane projection contract. The Vectorizer
-    // bootstrap pipeline (≥3.0.3) places the contract keys directly
-    // under `metadata`, but earlier embedder builds nested them
-    // under `metadata.payload.<key>`. Prefer the canonical
-    // top-level location, fall back to the legacy nesting, so a
-    // mixed corpus during a SDK rollout still surfaces decisions /
-    // turns / law violations correctly.
-    let payload_obj = metadata.get("payload").and_then(|v| v.as_object());
+    // Phase6b — spec-11 lane projection contract. Canonical bootstrap
+    // pipelines (≥3.0.3) place the contract keys directly under
+    // `payload`, but earlier embedder builds nested them under
+    // `payload.payload.<key>`. Prefer the canonical top-level
+    // location, fall back to the legacy nesting, so a mixed corpus
+    // during a worker rollout still surfaces decisions / turns / law
+    // violations correctly.
+    let nested_payload = payload.get("payload").and_then(|v| v.as_object());
     for key in crate::lanes::LANE_EXTRAS_KEYS {
-        let from_top = metadata.get(*key).cloned();
-        let from_payload = payload_obj.and_then(|p| p.get(*key).cloned());
-        let val = from_top.or(from_payload);
+        let from_top = payload.get(*key).cloned();
+        let from_nested = nested_payload.and_then(|p| p.get(*key).cloned());
+        let val = from_top.or(from_nested);
         if let Some(v) = val {
             if !v.is_null() {
                 extras.insert((*key).to_string(), v);
@@ -496,15 +650,30 @@ fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> Lane
         }
     }
 
-    let mut text = r
-        .content
+    let mut text = get_str("body")
         .filter(|s| !s.is_empty())
         .or_else(|| get_str("summary"))
         .or_else(|| get_str("title"))
-        .or_else(|| get_str("body"))
+        .or_else(|| {
+            // phase11d — when older embedder builds nested the
+            // text-bearing keys under `payload.payload`, walk the
+            // same fallback set there before giving up.
+            nested_payload.and_then(|p| {
+                p.get("body")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .or_else(|| {
+                        p.get("summary")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .or_else(|| p.get("title").and_then(|v| v.as_str()).map(String::from))
+            })
+        })
         .unwrap_or_default();
     // phase10b §1 — stop projecting `path` as `text` when the
-    // upstream metadata only carries the path. The audit logged
+    // upstream payload only carries the path. The audit logged
     // `text='crates/cortex-api/src/types.rs'` snippets that the
     // bundle renderer formatted as `path:artifact — \n   path` —
     // an `ls`-grade result. When `text` matches the path verbatim
@@ -551,8 +720,7 @@ fn project(r: vectorizer_sdk::models::SearchResult, req: &VectorRequest) -> Lane
 mod tests {
     use super::*;
     use crate::types::Scope;
-    use std::collections::HashMap;
-    use vectorizer_sdk::models::SearchResult;
+    use serde_json::Map as JsonMap;
 
     fn req(query: &str) -> VectorRequest {
         VectorRequest {
@@ -564,19 +732,20 @@ mod tests {
     }
 
     #[test]
-    fn projects_a_search_result_with_metadata_into_a_lane_hit() {
-        let mut metadata = HashMap::new();
-        metadata.insert("repo".to_string(), serde_json::json!("Cortex"));
-        metadata.insert("path".to_string(), serde_json::json!("src/lib.rs"));
-        metadata.insert("kind".to_string(), serde_json::json!("turn"));
-        metadata.insert("content_hash".to_string(), serde_json::json!("sha256:abc"));
-        metadata.insert("ts".to_string(), serde_json::json!(1714200000000_i64));
+    fn projects_a_wire_hit_with_payload_into_a_lane_hit() {
+        let mut payload: JsonMap<String, serde_json::Value> = JsonMap::new();
+        payload.insert("repo".into(), serde_json::json!("Cortex"));
+        payload.insert("path".into(), serde_json::json!("src/lib.rs"));
+        payload.insert("kind".into(), serde_json::json!("turn"));
+        payload.insert("content_hash".into(), serde_json::json!("sha256:abc"));
+        payload.insert("ts".into(), serde_json::json!(1714200000000_i64));
+        payload.insert("body".into(), serde_json::json!("semantic body"));
 
-        let r = SearchResult {
+        let r = WireSearchHit {
             id: "vec-1".into(),
             score: 0.91,
-            content: Some("semantic body".into()),
-            metadata: Some(metadata),
+            payload,
+            vector: None,
         };
 
         let hit = project(r, &req("embedder"));
@@ -603,16 +772,16 @@ mod tests {
     }
 
     #[test]
-    fn projects_falls_back_to_metadata_text_when_content_missing() {
-        let mut metadata = HashMap::new();
-        metadata.insert("summary".to_string(), serde_json::json!("curated summary"));
-        metadata.insert("body".to_string(), serde_json::json!("raw body"));
+    fn projects_falls_back_through_summary_title_chain() {
+        let mut payload: JsonMap<String, serde_json::Value> = JsonMap::new();
+        payload.insert("summary".into(), serde_json::json!("curated summary"));
+        payload.insert("title".into(), serde_json::json!("the title"));
 
-        let r = SearchResult {
+        let r = WireSearchHit {
             id: "vec-2".into(),
             score: 0.5,
-            content: None,
-            metadata: Some(metadata),
+            payload,
+            vector: None,
         };
         let hit = project(r, &req("x"));
         assert_eq!(hit.text, "curated summary");
@@ -620,16 +789,48 @@ mod tests {
 
     #[test]
     fn projects_emits_empty_text_only_when_no_text_anywhere() {
-        let r = SearchResult {
+        let r = WireSearchHit {
             id: "vec-3".into(),
             score: 0.0,
-            content: None,
-            metadata: None,
+            payload: JsonMap::new(),
+            vector: None,
         };
         let hit = project(r, &req("x"));
         assert_eq!(hit.text, "");
         assert_eq!(hit.score, 0.0);
         assert_eq!(hit.ts, 0);
+    }
+
+    #[test]
+    fn projects_legacy_nested_payload_for_text_and_contract_keys() {
+        // phase11d — older embedder builds nested every projection
+        // key under `payload.payload.<key>`. The fallback walks one
+        // level deeper for both the text-bearing keys (`body`,
+        // `summary`, `title`) and every spec-11 contract key.
+        let mut nested: JsonMap<String, serde_json::Value> = JsonMap::new();
+        nested.insert("body".into(), serde_json::json!("nested body text"));
+        nested.insert("turn_id".into(), serde_json::json!("01HTURNNESTED0000000000000"));
+        nested.insert("model".into(), serde_json::json!("claude-sonnet-4-6"));
+        let mut payload: JsonMap<String, serde_json::Value> = JsonMap::new();
+        payload.insert("repo".into(), serde_json::json!("Cortex"));
+        payload.insert("payload".into(), serde_json::Value::Object(nested));
+
+        let r = WireSearchHit {
+            id: "vec-legacy".into(),
+            score: 0.7,
+            payload,
+            vector: None,
+        };
+        let hit = project(r, &req("x"));
+        assert_eq!(hit.text, "nested body text");
+        assert_eq!(
+            hit.extras.get("turn_id").and_then(|v| v.as_str()),
+            Some("01HTURNNESTED0000000000000")
+        );
+        assert_eq!(
+            hit.extras.get("model").and_then(|v| v.as_str()),
+            Some("claude-sonnet-4-6")
+        );
     }
 
     #[test]

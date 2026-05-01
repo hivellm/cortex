@@ -19,15 +19,12 @@
 //! branch and a stray `Value::Null` would let bogus `DecisionRef`
 //! rows through.
 
-use std::collections::HashMap;
-
-use serde_json::{json, Value};
-use vectorizer_sdk::models::SearchResult;
+use serde_json::{json, Map as JsonMap, Value};
 
 use crate::lanes::{LaneHit, LANE_EXTRAS_KEYS};
 use crate::meili_lane::project_doc;
 use crate::types::Scope;
-use crate::vectorizer_lane::project_search_result;
+use crate::vectorizer_lane::{project_search_result, WireSearchHit};
 
 fn keyword_req(index: &str) -> crate::lanes::KeywordRequest {
     crate::lanes::KeywordRequest {
@@ -164,18 +161,19 @@ fn meili_missing_contract_keys_round_trip_as_absent() {
 }
 
 #[test]
-fn vectorizer_projects_every_contract_key_from_metadata_top_level() {
-    let mut metadata: HashMap<String, Value> = HashMap::new();
-    metadata.insert("repo".into(), json!("Cortex"));
-    metadata.insert("kind".into(), json!("turn"));
+fn vectorizer_projects_every_contract_key_from_payload_top_level() {
+    let mut payload: JsonMap<String, Value> = JsonMap::new();
+    payload.insert("repo".into(), json!("Cortex"));
+    payload.insert("kind".into(), json!("turn"));
+    payload.insert("body".into(), json!("fused snippet body"));
     for (k, v) in full_contract_values() {
-        metadata.insert(k.to_string(), v);
+        payload.insert(k.to_string(), v);
     }
-    let r = SearchResult {
+    let r = WireSearchHit {
         id: "vec-1".into(),
         score: 0.91,
-        content: Some("fused snippet body".into()),
-        metadata: Some(metadata),
+        payload,
+        vector: None,
     };
     let hit: LaneHit = project_search_result(r, &vector_req("cortex-cortex-turns"));
     for (k, v) in full_contract_values() {
@@ -192,23 +190,24 @@ fn vectorizer_projects_every_contract_key_from_metadata_top_level() {
 }
 
 #[test]
-fn vectorizer_falls_back_to_payload_nesting_when_metadata_lacks_the_key() {
-    // Pre-3.0.3 embedder-worker builds nested the contract keys
-    // under `metadata.payload`. A mixed corpus during the SDK
-    // bump must still surface decisions / turns / laws.
-    let mut payload: serde_json::Map<String, Value> = serde_json::Map::new();
-    payload.insert("turn_id".into(), json!("01HTURN_PAYLOAD_NESTED_0000"));
-    payload.insert("model".into(), json!("claude-haiku-4-5"));
-    let mut metadata: HashMap<String, Value> = HashMap::new();
-    metadata.insert("repo".into(), json!("Cortex"));
-    metadata.insert("kind".into(), json!("turn"));
-    metadata.insert("payload".into(), Value::Object(payload));
+fn vectorizer_falls_back_to_nested_payload_when_top_level_lacks_the_key() {
+    // phase11d — older embedder-worker builds nested the contract
+    // keys under `payload.payload.<key>`. A mixed corpus during a
+    // worker bump must still surface decisions / turns / laws.
+    let mut nested: JsonMap<String, Value> = JsonMap::new();
+    nested.insert("turn_id".into(), json!("01HTURN_PAYLOAD_NESTED_0000"));
+    nested.insert("model".into(), json!("claude-haiku-4-5"));
+    let mut payload: JsonMap<String, Value> = JsonMap::new();
+    payload.insert("repo".into(), json!("Cortex"));
+    payload.insert("kind".into(), json!("turn"));
+    payload.insert("body".into(), json!("legacy nested fixture"));
+    payload.insert("payload".into(), Value::Object(nested));
 
-    let r = SearchResult {
+    let r = WireSearchHit {
         id: "vec-1".into(),
         score: 0.55,
-        content: Some("legacy nested fixture".into()),
-        metadata: Some(metadata),
+        payload,
+        vector: None,
     };
     let hit: LaneHit = project_search_result(r, &vector_req("cortex-cortex-turns"));
     assert_eq!(
@@ -222,18 +221,19 @@ fn vectorizer_falls_back_to_payload_nesting_when_metadata_lacks_the_key() {
 }
 
 #[test]
-fn vectorizer_top_level_wins_over_payload_nesting_when_both_are_set() {
-    let mut payload: serde_json::Map<String, Value> = serde_json::Map::new();
-    payload.insert("turn_id".into(), json!("01HTURN_NESTED_LEGACY_00000"));
-    let mut metadata: HashMap<String, Value> = HashMap::new();
-    metadata.insert("turn_id".into(), json!("01HTURN_TOP_LEVEL_CURRENT_0"));
-    metadata.insert("payload".into(), Value::Object(payload));
+fn vectorizer_top_level_wins_over_nested_payload_when_both_are_set() {
+    let mut nested: JsonMap<String, Value> = JsonMap::new();
+    nested.insert("turn_id".into(), json!("01HTURN_NESTED_LEGACY_00000"));
+    let mut payload: JsonMap<String, Value> = JsonMap::new();
+    payload.insert("turn_id".into(), json!("01HTURN_TOP_LEVEL_CURRENT_0"));
+    payload.insert("body".into(), json!("dual-shape fixture"));
+    payload.insert("payload".into(), Value::Object(nested));
 
-    let r = SearchResult {
+    let r = WireSearchHit {
         id: "vec-1".into(),
         score: 0.55,
-        content: Some("dual-shape fixture".into()),
-        metadata: Some(metadata),
+        payload,
+        vector: None,
     };
     let hit: LaneHit = project_search_result(r, &vector_req("cortex-cortex-turns"));
     assert_eq!(
@@ -244,14 +244,15 @@ fn vectorizer_top_level_wins_over_payload_nesting_when_both_are_set() {
 
 #[test]
 fn vectorizer_missing_contract_keys_round_trip_as_absent() {
-    let mut metadata: HashMap<String, Value> = HashMap::new();
-    metadata.insert("repo".into(), json!("Cortex"));
-    metadata.insert("kind".into(), json!("code"));
-    let r = SearchResult {
+    let mut payload: JsonMap<String, Value> = JsonMap::new();
+    payload.insert("repo".into(), json!("Cortex"));
+    payload.insert("kind".into(), json!("code"));
+    payload.insert("body".into(), json!("no contract keys"));
+    let r = WireSearchHit {
         id: "vec-1".into(),
         score: 0.5,
-        content: Some("no contract keys".into()),
-        metadata: Some(metadata),
+        payload,
+        vector: None,
     };
     let hit: LaneHit = project_search_result(r, &vector_req("cortex-cortex-code"));
     for k in LANE_EXTRAS_KEYS {
