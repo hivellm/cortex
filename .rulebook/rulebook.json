@@ -1,24 +1,24 @@
 {
-  "version": "5.3.3",
-  "installedAt": "2026-04-17T23:10:27.539Z",
-  "updatedAt": "2026-04-17T23:10:27.541Z",
-  "projectId": "fd273bb4-8292-4701-a30f-b48873fbcda4",
+  "version": "5.5.0",
+  "installedAt": "2026-05-01T03:26:27.010Z",
+  "updatedAt": "2026-05-01T03:26:27.010Z",
+  "projectId": "Cortex",
   "mode": "full",
   "features": {
-    "watcher": true,
-    "agent": true,
+    "watcher": false,
+    "agent": false,
     "logging": true,
-    "telemetry": true,
+    "telemetry": false,
     "notifications": false,
     "dryRun": false,
     "gitHooks": false,
     "repl": false,
-    "templates": false,
-    "context": false,
-    "health": false,
+    "templates": true,
+    "context": true,
+    "health": true,
     "plugins": false,
-    "parallel": false,
-    "smartContinue": false
+    "parallel": true,
+    "smartContinue": true
   },
   "coverageThreshold": 95,
   "language": "en",
@@ -62,17 +62,6 @@
       "requireApprovalForStories": "all"
     }
   },
-  "agentsMode": "lean",
-  "monorepo": {
-    "detected": false,
-    "tool": null,
-    "packages": []
-  },
-  "languages": [],
-  "frameworks": [],
-  "modules": [],
-  "modular": true,
-  "rulebookDir": ".rulebook",
   "skills": {
     "enabled": [
       "core/agent-automation",
@@ -110,5 +99,6 @@
       "core/token-optimization",
       "core/workspace"
     ]
-  }
+  },
+  "agentsMode": "lean"
 }
