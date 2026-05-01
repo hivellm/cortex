@@ -10,7 +10,13 @@ description = "Walk Claude Code's ~/.claude/projects/*.jsonl conversation archiv
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "cortex-claude-archive"
+path = "src/bin/cortex-claude-archive.rs"
+
 [dependencies]
+clap = { workspace = true }
+indicatif = "0.17"
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 
@@ -21,6 +27,7 @@ chrono = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 ulid = { workspace = true }
 sha2 = { workspace = true }
 zstd = { workspace = true }
