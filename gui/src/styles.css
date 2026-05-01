@@ -1905,3 +1905,149 @@ a { color: inherit; text-decoration: none; }
 .retention-log { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; font-size: 12px; }
 .retention-log li { padding: 4px 8px; border-bottom: 1px solid var(--border); }
 .retention-log li:last-child { border-bottom: none; }
+
+/* ============================================================
+   Connection switcher (phase3 §5)
+   ============================================================ */
+.conn-switcher { position: relative; display: inline-flex; }
+.conn-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.conn-chip:hover { background: var(--bg-3); }
+.conn-chip.is-down { border-color: #f87171; }
+.conn-chip.is-unknown { border-color: var(--border); }
+.conn-chip__dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  display: inline-block; flex: none;
+}
+.conn-chip__label { font-weight: 500; }
+.conn-chip__health {
+  width: 6px; height: 6px; border-radius: 50%;
+  display: inline-block; flex: none;
+  background: #6b7280;
+}
+.conn-chip__health.is-ok { background: #22c55e; }
+.conn-chip__health.is-down { background: #f87171; }
+.conn-chip__health.is-unknown { background: #6b7280; }
+
+.conn-switcher__menu {
+  position: absolute; top: calc(100% + 6px); right: 0;
+  min-width: 280px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+  z-index: 50;
+  overflow: hidden;
+}
+.conn-switcher__item {
+  display: grid; grid-template-columns: 14px 1fr auto 14px;
+  gap: 8px; align-items: center;
+  width: 100%; padding: 8px 12px;
+  background: transparent; border: 0; text-align: left;
+  color: var(--fg); cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+.conn-switcher__item:hover { background: var(--bg-3); }
+.conn-switcher__item.is-active { background: var(--bg-3); }
+.conn-switcher__item-label { font-size: 13px; }
+.conn-switcher__item-url {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px; color: var(--fg-2);
+}
+.conn-switcher__manage {
+  width: 100%; padding: 8px 12px;
+  background: transparent; border: 0;
+  color: var(--fg-2); font-size: 12px; cursor: pointer;
+  text-align: left;
+}
+.conn-switcher__manage:hover { background: var(--bg-3); color: var(--fg); }
+
+/* ============================================================
+   Connections manage view (phase3 §6)
+   ============================================================ */
+.connections-view { padding: 16px; }
+.connections-view h2 { margin: 0 0 16px; font-size: 16px; }
+.connections-banner {
+  margin: 0 0 16px; padding: 8px 12px;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  border-radius: 6px;
+  font-size: 12px; color: #fbbf24;
+}
+.connections-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.connections-table th, .connections-table td {
+  padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left;
+}
+.connections-table th { color: var(--fg-2); font-weight: normal; text-transform: uppercase; font-size: 10px; }
+.connections-table .row-actions { display: flex; gap: 6px; }
+.connections-form {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px 12px;
+  max-width: 540px;
+}
+.connections-form label { color: var(--fg-2); font-size: 12px; align-self: center; }
+.connections-form input,
+.connections-form select {
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 8px;
+  color: var(--fg); font-size: 13px;
+}
+.connections-form .actions {
+  grid-column: 2; display: flex; gap: 8px; margin-top: 8px;
+}
+.connections-form button {
+  background: var(--accent, #3b82f6); color: white;
+  border: 0; border-radius: 4px;
+  padding: 6px 14px; font-size: 12px; cursor: pointer;
+}
+.connections-form button.secondary {
+  background: transparent; color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+/* ============================================================
+   ApiKeyPrompt modal (phase3 §6.7)
+   ============================================================ */
+.api-key-prompt-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.api-key-prompt {
+  background: var(--bg-1); border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+  width: min(480px, 90vw);
+  box-shadow: 0 24px 60px rgba(0,0,0,0.6);
+}
+.api-key-prompt h3 { margin: 0 0 8px; font-size: 14px; }
+.api-key-prompt p { margin: 0 0 12px; font-size: 12px; color: var(--fg-2); }
+.api-key-prompt code {
+  display: block; padding: 6px 8px; background: var(--bg-2);
+  border-radius: 4px; font-family: var(--mono, ui-monospace, monospace);
+  font-size: 11px; margin-bottom: 12px; word-break: break-all;
+}
+.api-key-prompt input {
+  width: 100%; padding: 8px;
+  background: var(--bg-2); border: 1px solid var(--border);
+  border-radius: 4px; color: var(--fg); font-family: var(--mono);
+  font-size: 12px;
+}
+.api-key-prompt .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.api-key-prompt button {
+  background: var(--accent, #3b82f6); color: white;
+  border: 0; border-radius: 4px; padding: 6px 14px; font-size: 12px;
+  cursor: pointer;
+}
+.api-key-prompt button.secondary {
+  background: transparent; border: 1px solid var(--border); color: var(--fg);
+}

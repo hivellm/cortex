@@ -7,6 +7,8 @@ import { WindowChrome } from "./shell/WindowChrome";
 import { TweaksProvider } from "./lib/useTweaks";
 import { ConnectionsProvider } from "./lib/connections";
 import { ApiResolverBinding } from "./lib/connections/registerApi";
+import { ApiKeyPromptHost } from "./shell/ApiKeyPrompt";
+import { ConnectionsView } from "./views/Connections";
 import { TimelineView } from "./views/Timeline";
 import { MemoryView } from "./views/Memory";
 import { RetentionView } from "./views/Retention";
@@ -90,6 +92,8 @@ function AppShell() {
         return <GraphView />;
       case "health":
         return <HealthView />;
+      case "connections":
+        return <ConnectionsView />;
       default:
         return null;
     }
@@ -103,10 +107,12 @@ function AppShell() {
           <Header
             onOpenTweaks={() => setTweaksOpen(true)}
             onJumpToHealth={() => setView("health")}
+            onJumpToConnections={() => setView("connections")}
           />
           <Sidebar view={view} setView={setView} />
           <main className="main">{renderView()}</main>
           <Tweaks open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
+          <ApiKeyPromptHost />
         </div>
       </div>
     </FiltersContext.Provider>

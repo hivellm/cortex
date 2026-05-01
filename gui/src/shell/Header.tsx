@@ -4,6 +4,7 @@ import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
 import { bridge } from "../lib/bridge";
 import { useConnKey } from "../lib/connections/useConnKey";
+import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { HeaderSearch } from "./HeaderSearch";
 
 type HeaderProps = {
@@ -11,11 +12,15 @@ type HeaderProps = {
   /// Phase8g — invoked when the topbar health pill is clicked so the
   /// shell can navigate to /health from any view.
   onJumpToHealth?: () => void;
+  /// Phase3 §5 — invoked when the user picks "Manage connections…"
+  /// from the active-connection switcher dropdown.
+  onJumpToConnections?: () => void;
 };
 
 export function Header({
   onOpenTweaks,
   onJumpToHealth,
+  onJumpToConnections,
 }: HeaderProps) {
   const connKey = useConnKey();
   const statusQ = useQuery({
@@ -55,6 +60,7 @@ export function Header({
       </div>
       <HeaderSearch />
       <div className="header__right">
+        <ConnectionSwitcher onManage={onJumpToConnections} />
         <button
           type="button"
           className={`status-pill health-topbar-pill is-${
