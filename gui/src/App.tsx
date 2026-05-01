@@ -5,6 +5,8 @@ import { Sidebar, type ViewId } from "./shell/Sidebar";
 import { Tweaks } from "./shell/Tweaks";
 import { WindowChrome } from "./shell/WindowChrome";
 import { TweaksProvider } from "./lib/useTweaks";
+import { ConnectionsProvider } from "./lib/connections";
+import { ApiResolverBinding } from "./lib/connections/registerApi";
 import { TimelineView } from "./views/Timeline";
 import { MemoryView } from "./views/Memory";
 import { RetentionView } from "./views/Retention";
@@ -23,9 +25,13 @@ import type { Filters } from "./lib/api";
 
 export function App() {
   return (
-    <TweaksProvider>
-      <AppShell />
-    </TweaksProvider>
+    <ConnectionsProvider>
+      <ApiResolverBinding>
+        <TweaksProvider>
+          <AppShell />
+        </TweaksProvider>
+      </ApiResolverBinding>
+    </ConnectionsProvider>
   );
 }
 

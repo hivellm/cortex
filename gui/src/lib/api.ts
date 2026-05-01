@@ -5,9 +5,31 @@
  * `crates/cortex-api/src/dashboard.rs`. Errors bubble as thrown
  * `ApiError` so TanStack Query can surface them through its
  * `error` channel.
+ *
+ * Phase3 §3 — the static `BASE_URL` was promoted to a module-level
+ * "active connection" register so every fetcher routes through the
+ * current `Connection` (selected via the multi-connection switcher).
+ * `ConnectionsProvider` registers itself on mount via
+ * `setActiveConnectionResolver`; tests can install their own fixed
+ * resolver. The default resolver preserves the legacy single-backend
+ * behaviour so call sites that import api.ts without a provider
+ * still hit `http://127.0.0.1:17000` over `auth=none`.
  */
 
-const BASE_URL = (() => {
+/** Compact view of a Connection — only the fields the fetcher layer
+ * needs. `auth` mirrors `gui/src/lib/connections/types.ts` shape but
+ * is duplicated here so api.ts stays free of a circular dep with
+ * the connections module. */
+export type ApiConnection = {
+  id: string;
+  baseUrl: string;
+  auth:
+    | { kind: "none" }
+    | { kind: "bearer"; token: string }
+    | { kind: "basic"; username: string; password: string };
+};
+
+function legacyDefaultBaseUrl(): string {
   // In dev the renderer hits Vite's `/v1/*` proxy → 127.0.0.1:17000.
   // In production (built Electron) we hit the daemon directly.
   // Port matches `.env` `CORTEX_API_PORT` so a single supervisor
@@ -16,7 +38,38 @@ const BASE_URL = (() => {
     return "http://127.0.0.1:17000";
   }
   return "";
-})();
+}
+
+let activeConnectionResolver: () => ApiConnection = () => ({
+  id: "local",
+  baseUrl: legacyDefaultBaseUrl(),
+  auth: { kind: "none" },
+});
+
+/** Phase3 §3 — `ConnectionsProvider` calls this with a getter that
+ * returns the current active connection. The store updates the
+ * underlying state on every reducer action; the resolver function
+ * stays the same (closes over the latest store value), so fetchers
+ * always see the freshest baseUrl + auth without re-binding. */
+export function setActiveConnectionResolver(
+  resolver: () => ApiConnection,
+): void {
+  activeConnectionResolver = resolver;
+}
+
+/** Read the current active connection. Used by the few callers that
+ * need both the base URL AND the connection id (React Query keys
+ * scope on the id). */
+export function getActiveConnection(): ApiConnection {
+  return activeConnectionResolver();
+}
+
+/** Read the current base URL. Pure side-effect-free — the legacy
+ * call sites that referenced `BASE_URL` as a const can swap to
+ * `getBaseUrl()` when they need an absolute URL (e.g. SSE). */
+export function getBaseUrl(): string {
+  return activeConnectionResolver().baseUrl;
+}
 
 export class ApiError extends Error {
   status: number;
@@ -27,10 +80,29 @@ export class ApiError extends Error {
   }
 }
 
+function authHeader(conn: ApiConnection): Record<string, string> {
+  if (conn.auth.kind === "bearer" && conn.auth.token) {
+    return { authorization: `Bearer ${conn.auth.token}` };
+  }
+  if (conn.auth.kind === "basic" && conn.auth.username) {
+    // basic is rarely used in cortex-api today but the wire shape is
+    // ready when the dashboard moves behind a reverse proxy that
+    // requires it.
+    const raw = `${conn.auth.username}:${conn.auth.password}`;
+    const encoded =
+      typeof btoa === "function" ? btoa(raw) : Buffer.from(raw).toString("base64");
+    return { authorization: `Basic ${encoded}` };
+  }
+  return {};
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const resp = await fetch(`${BASE_URL}${path}`, {
-    headers: { accept: "application/json" },
-  });
+  const conn = activeConnectionResolver();
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    ...authHeader(conn),
+  };
+  const resp = await fetch(`${conn.baseUrl}${path}`, { headers });
   if (!resp.ok) {
     throw new ApiError(resp.status, `${resp.status} ${resp.statusText}`);
   }
@@ -60,14 +132,16 @@ export async function postQuery<T = unknown>(
   body: QueryRequestBody,
   opts: { repo?: string } = {},
 ): Promise<T> {
+  const conn = activeConnectionResolver();
   const headers: Record<string, string> = {
     accept: "application/json",
     "content-type": "application/json",
+    ...authHeader(conn),
   };
   if (opts.repo && opts.repo.length > 0) {
     headers["x-cortex-repo"] = opts.repo;
   }
-  const resp = await fetch(`${BASE_URL}/v1/query`, {
+  const resp = await fetch(`${conn.baseUrl}/v1/query`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -774,6 +848,19 @@ export type HealthSnapshot = {
 };
 
 /// Phase8g — `/v1/health/stream` SSE URL the GUI's `useSSE` hook
-/// subscribes to. Same BASE_URL the polling clients use so dev /
+/// subscribes to. Same base URL the polling clients use so dev /
 /// prod swaps behave identically.
-export const HEALTH_STREAM_URL = `${BASE_URL}/v1/health/stream`;
+///
+/// Phase3 §3 — `EventSource` cannot carry custom headers, so when
+/// the active connection has a bearer token we tack it on as a
+/// `?api_key=…` query-param the daemon's `require_api_key`
+/// middleware honours (mirrors the contract phase3 §7 spec ships).
+/// Caller passes the URL straight to `new EventSource(...)`.
+export function healthStreamUrl(): string {
+  const conn = activeConnectionResolver();
+  if (conn.auth.kind === "bearer" && conn.auth.token) {
+    const sep = "?";
+    return `${conn.baseUrl}/v1/health/stream${sep}api_key=${encodeURIComponent(conn.auth.token)}`;
+  }
+  return `${conn.baseUrl}/v1/health/stream`;
+}
