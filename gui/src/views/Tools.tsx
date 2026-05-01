@@ -13,13 +13,15 @@ export function ToolsView() {
 
   const rows = data?.tools ?? [];
   const heatmap = data?.heatmap;
-  // The `share` field on each row already encodes calls/total. The
-  // bar reflects that share so the visual width and the trailing
-  // percentage label tell the same story; using calls/max here would
-  // peg the top tool at 100% even when its real share is, say, 44%
-  // — which is what the screenshot in the bug report showed.
+  // The `share` field on each row already encodes `calls / total`
+  // (a value in [0, 1]). The bar's width MUST be that share verbatim
+  // so visual width + trailing percentage label tell the same story:
+  // Bash 43.7 % → bar fills 43.7 % of the track, Read 19.8 % → bar
+  // fills 19.8 %, etc. A previous `(share / maxShare) * 100` formula
+  // pegged Bash at 100 % regardless of its true share — every bar
+  // ended up looking identical relative to the leader and the
+  // proportions were lost.
   const total = rows.reduce((s, r) => s + r.calls, 0);
-  const maxShare = rows.reduce((m, r) => Math.max(m, r.share), 0);
 
   return (
     <div className="view">
@@ -95,21 +97,54 @@ export function ToolsView() {
                 >
                   {(t.err_rate * 100).toFixed(1)}%
                 </span>
-                <span className="tool-bar">
-                  <span className="tool-bar__track">
+                {/* Bar built from raw inline styles only — every CSS
+                    class previously wired here was either invisible
+                    (track/fill colors flush against the card bg) or
+                    overridden, so the bars all looked identical. This
+                    block is the simplest possible progress bar:
+                    one fixed-height track div + one absolutely-sized
+                    fill div whose width literally equals the share %. */}
+                <span
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    width: "100%",
+                    minWidth: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      flex: 1,
+                      position: "relative",
+                      height: 8,
+                      background: "rgba(255, 255, 255, 0.07)",
+                      border: "1px solid rgba(255, 255, 255, 0.10)",
+                      borderRadius: 999,
+                      overflow: "hidden",
+                      minWidth: 80,
+                    }}
+                  >
                     <span
-                      className="tool-bar__fill"
                       style={{
-                        // Scale the bar by the row's share relative to
-                        // the largest share so the leader pins at 100%
-                        // and every other row is in honest proportion.
-                        width: `${maxShare > 0 ? (t.share / maxShare) * 100 : 0}%`,
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        bottom: 0,
+                        width: `${Math.max(0.5, t.share * 100)}%`,
+                        background: "var(--accent)",
+                        borderRadius: 999,
                       }}
                     />
                   </span>
                   <span
                     className="mono tabular"
-                    style={{ fontSize: 10.5, color: "var(--fg-3)", width: 48, textAlign: "right" }}
+                    style={{
+                      fontSize: 10.5,
+                      color: "var(--fg-2)",
+                      width: 48,
+                      textAlign: "right",
+                    }}
                   >
                     {(t.share * 100).toFixed(1)}%
                   </span>

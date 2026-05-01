@@ -681,8 +681,11 @@ a { color: inherit; text-decoration: none; }
 .stat__unit {
   font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 1;
   color: var(--fg-3);
   margin-left: 4px;
+  display: inline-block;
+  vertical-align: baseline;
 }
 .stat__delta {
   font-family: var(--font-mono);
@@ -1172,21 +1175,35 @@ a { color: inherit; text-decoration: none; }
   font-family: var(--font-mono);
   font-size: 10px;
 }
+/* phase11e (out-of-band hotfix) — `.tool-bar*` classes used to
+   power the Tool analytics share column, but operators reported
+   bars rendering at 100 % regardless of share. The Tools view now
+   builds the bar from raw inline styles (see `Tools.tsx`); these
+   classes are kept only as a safety net for any external caller
+   that still references them and use unambiguous colors. */
 .tool-bar {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 .tool-bar__track {
   flex: 1;
-  height: 5px;
-  background: var(--bg-3);
+  position: relative;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.10);
   border-radius: 999px;
   overflow: hidden;
+  min-width: 80px;
 }
 .tool-bar__fill {
-  height: 100%;
-  background: var(--accent-dim);
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  background: var(--accent);
   border-radius: 999px;
 }
 
