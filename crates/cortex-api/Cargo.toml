@@ -52,6 +52,16 @@ nexus-graph-sdk = { workspace = true }
 vectorizer-sdk = { workspace = true }
 zstd = { workspace = true }
 
+# Phase3 §7 — opt-in dashboard auth. SQLite api_keys table via
+# rusqlite (workspace), Argon2id at rest, constant-time compare,
+# 32-byte OsRng key generator with Crockford base32 encoding. Wire
+# format `cortex_dash_<base32>`; only the Argon2id hash persists.
+rusqlite = { workspace = true }
+argon2 = { version = "0.5" }
+rand = { version = "0.8" }
+subtle = { version = "2.6" }
+data-encoding = { version = "2.7" }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 wiremock = "0.6"

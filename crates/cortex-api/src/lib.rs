@@ -15,6 +15,8 @@ pub mod acl;
 pub mod analyzer;
 pub mod archive_loader;
 pub mod audit;
+pub mod auth;
+pub mod storage;
 pub mod audit_store;
 pub mod budget;
 pub mod cache;
