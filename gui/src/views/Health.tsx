@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import {
   api,
   type ConfigFinding,
+  type CoverageBackend,
+  type CoverageReport,
   type DivergenceRow,
   type DriftRow,
   type FreshnessRow,
@@ -46,16 +48,26 @@ export function HealthView() {
     queryFn: () => api.healthConfig(),
     refetchInterval: 60_000,
   });
+  // Phase11e §2.2 — collection / index inventory diff. 60 s
+  // refetch is plenty: collections only appear when the writer
+  // path runs the (rare) bootstrap or settings-version bump.
+  const coverageQ = useQuery({
+    queryKey: ["health", "coverage"],
+    queryFn: () => api.healthCoverage(),
+    refetchInterval: 60_000,
+  });
 
   const overview = overviewQ.data;
   const freshness = freshnessQ.data ?? [];
   const divergence = divergenceQ.data ?? [];
   const versions = versionsQ.data;
   const audit = configQ.data;
+  const coverage = coverageQ.data;
 
   return (
     <div className="view view--health">
       <OverallBanner overview={overview} />
+      <CoverageSection coverage={coverage} />
       <SubsystemsGrid subsystems={overview?.subsystems ?? []} />
       <FreshnessTable rows={freshness} />
       <DivergenceTable rows={divergence} />
@@ -266,6 +278,95 @@ function VersionDriftSection({
         </tbody>
       </table>
     </section>
+  );
+}
+
+/// Phase11e §2.2 — Coverage section. Renders the per-backend
+/// expected/present/missing counts the auditor produces, plus a
+/// collapsible row per backend listing the first ten missing
+/// collection / index names so the operator sees the most
+/// load-bearing gap at a glance without leaving the dashboard.
+function CoverageSection({ coverage }: { coverage?: CoverageReport }) {
+  if (!coverage) {
+    return (
+      <EmptySection
+        title="Coverage"
+        message="waiting for /v1/health/coverage…"
+      />
+    );
+  }
+  if (coverage.backends.length === 0) {
+    return (
+      <EmptySection
+        title="Coverage"
+        message="no Vectorizer / Meili URLs configured"
+      />
+    );
+  }
+  return (
+    <section className="health-section">
+      <h2>
+        Coverage
+        <span className={severityClass(coverage.overall_severity)} style={{ marginLeft: 8 }}>
+          {coverage.overall_severity}
+        </span>
+      </h2>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 8 }}>
+        {coverage.slugs.length} slug{coverage.slugs.length === 1 ? "" : "s"}
+        {" × "}
+        {coverage.families.length} families
+        {" = "}
+        {coverage.slugs.length * coverage.families.length} expected names per backend
+      </p>
+      <div className="health-grid">
+        {coverage.backends.map((b) => (
+          <CoverageCard key={b.backend} backend={b} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CoverageCard({ backend }: { backend: CoverageBackend }) {
+  const ratio =
+    backend.expected_count > 0
+      ? Math.round((backend.present_count / backend.expected_count) * 100)
+      : 0;
+  return (
+    <div className="health-card">
+      <div className="health-card__head">
+        <strong>{backend.backend}</strong>
+        <span className={severityClass(backend.severity)}>{backend.severity}</span>
+      </div>
+      <div className="health-card__meta mono">
+        <span>
+          {fmtNum(backend.present_count)} / {fmtNum(backend.expected_count)}
+        </span>
+        <span> · {ratio}% present</span>
+        {backend.unexpected_count > 0 ? (
+          <span> · {fmtNum(backend.unexpected_count)} orphan</span>
+        ) : null}
+      </div>
+      {backend.error ? (
+        <div className="health-card__error">{backend.error}</div>
+      ) : null}
+      {backend.missing.length > 0 ? (
+        <details style={{ marginTop: 8, fontSize: 11 }}>
+          <summary className="muted" style={{ cursor: "pointer" }}>
+            {fmtNum(backend.missing_count)} missing
+            {backend.missing.length > 10 ? " (showing first 10)" : ""}
+          </summary>
+          <ul
+            className="mono"
+            style={{ margin: "6px 0 0", paddingLeft: 18, lineHeight: 1.4 }}
+          >
+            {backend.missing.slice(0, 10).map((name) => (
+              <li key={name}>{name}</li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </div>
   );
 }
 

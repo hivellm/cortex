@@ -486,6 +486,9 @@ export const api = {
   healthDivergence: () => getJson<DivergenceRow[]>("/v1/health/divergence"),
   healthVersions: () => getJson<VersionsReport>("/v1/health/versions"),
   healthConfig: () => getJson<ConfigAudit>("/v1/health/config"),
+  // Phase11e — collection / index inventory diff. Renders under
+  // the existing extras column in the Health view.
+  healthCoverage: () => getJson<CoverageReport>("/v1/health/coverage"),
 
   // Phase9i — retention dashboard endpoints. `sweeps` is paginated
   // by `limit`; `state` is a compact snapshot. Both are cached via
@@ -735,6 +738,31 @@ export type ConfigFinding = {
 export type ConfigAudit = {
   findings: ConfigFinding[];
   surfaces_read: number;
+};
+
+/// Phase11e — coverage audit response shape from
+/// `/v1/health/coverage`. Mirrors `cortex_api::coverage::CoverageResponse`
+/// + `BackendCoverage` exactly so an upstream rename / field add
+/// blows up at compile time on the GUI side.
+export type CoverageBackend = {
+  backend: string;
+  base_url: string | null;
+  severity: "ok" | "warn" | "critical";
+  expected_count: number;
+  present_count: number;
+  missing_count: number;
+  unexpected_count: number;
+  present: string[];
+  missing: string[];
+  unexpected: string[];
+  error: string | null;
+};
+
+export type CoverageReport = {
+  slugs: string[];
+  families: string[];
+  backends: CoverageBackend[];
+  overall_severity: "ok" | "warn" | "critical";
 };
 
 export type HealthSnapshot = {

@@ -72,6 +72,44 @@ vi.mock("../lib/api", () => {
         ],
         surfaces_read: 4,
       }),
+      // Phase11e §2.2 — coverage audit mock. Mirrors the live
+      // shape we observed in the docker stack: 4/144 collections
+      // present in the Vectorizer, 29/144 indexes present in
+      // Meili, both warn-severity.
+      healthCoverage: vi.fn().mockResolvedValue({
+        slugs: ["cortex"],
+        families: [
+          "code", "docs", "decisions", "turns", "governance",
+          "analyses", "knowledge", "learnings", "misc",
+        ],
+        backends: [
+          {
+            backend: "vectorizer",
+            base_url: "http://vectorizer:15002",
+            severity: "warn" as const,
+            expected_count: 9,
+            present_count: 4,
+            missing_count: 5,
+            unexpected_count: 0,
+            present: [
+              "cortex-cortex-code",
+              "cortex-cortex-docs",
+              "cortex-cortex-misc",
+              "cortex-cortex-governance",
+            ],
+            missing: [
+              "cortex-cortex-analyses",
+              "cortex-cortex-decisions",
+              "cortex-cortex-knowledge",
+              "cortex-cortex-learnings",
+              "cortex-cortex-turns",
+            ],
+            unexpected: [],
+            error: null,
+          },
+        ],
+        overall_severity: "warn" as const,
+      }),
     },
   };
 });
@@ -124,5 +162,31 @@ describe("HealthView", () => {
   it("sorts freshness rows by gap_seconds desc and renders the gap label", async () => {
     render(withQuery(<HealthView />));
     expect(await screen.findByText(/90s/)).toBeInTheDocument();
+  });
+
+  // Phase11e §2.2 — Coverage section regression guards. Every
+  // backend the auditor returns gets a card; the missing list
+  // collapses behind a `<details>` so the dashboard stays compact
+  // even when 140 collections are absent.
+  it("renders one coverage card per backend with the present/expected ratio", async () => {
+    render(withQuery(<HealthView />));
+    expect(await screen.findByText("vectorizer")).toBeInTheDocument();
+    // The card carries the "4 / 9" present/expected ratio rendered
+    // by `fmtNum` (4 and 9 — small enough that fmtNum returns the
+    // numerals verbatim) — assert the ratio percentage which is
+    // unique to the coverage card.
+    expect(screen.getByText(/44% present/)).toBeInTheDocument();
+  });
+
+  it("lists the first missing collection inside the coverage card's details panel", async () => {
+    render(withQuery(<HealthView />));
+    // The missing list is collapsed by default — assert the
+    // count summary surfaces; the items themselves render but
+    // are hidden under <details>. testing-library queries the
+    // DOM regardless, so checking the first missing name proves
+    // the projection runs.
+    expect(
+      await screen.findByText("cortex-cortex-analyses"),
+    ).toBeInTheDocument();
   });
 });

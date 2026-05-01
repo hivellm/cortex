@@ -6,7 +6,7 @@
 
 ## 2. Health surface
 - [x] 2.1 Add a new `/v1/health/coverage` endpoint returning `{ slugs, families, backends: [{backend, base_url, severity, expected_count, present_count, missing_count, unexpected_count, present, missing, unexpected, error}], overall_severity }` — landed in [crates/cortex-api/src/http.rs](crates/cortex-api/src/http.rs#L300)
-- [ ] 2.2 Dashboard Health view renders the new section under the existing extras column
+- [x] 2.2 Dashboard Health view renders the new section under the existing extras column — `CoverageSection` + `CoverageCard` in [gui/src/views/Health.tsx](gui/src/views/Health.tsx); per-backend severity pill + present/expected ratio + collapsible `<details>` with the first 10 missing collection names. 7 vitest tests passing (5 existing + 2 new regression guards).
 - [ ] 2.3 `cortex-ops doctor-coverage` CLI wrapper exits with severity 0/1/2 mapping to `complete / partial / empty`
 
 ## 3. Per-intent diagnostic when a collection is missing
