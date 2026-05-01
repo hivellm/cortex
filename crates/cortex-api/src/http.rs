@@ -387,6 +387,16 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
     let env_slugs =
         crate::coverage::slugs_from_env(std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref());
     slugs.extend(env_slugs);
+    // Allow-list override: when `CORTEX_COVERAGE_SLUGS_ONLY` is set,
+    // restrict the audit to those slugs only. Stops the lane-derived
+    // set from including classifier-stamped language tags (rust /
+    // python / typescript / …) that aren't real repos and inflate
+    // the "missing" count under every backend.
+    let only_env = std::env::var("CORTEX_COVERAGE_SLUGS_ONLY").ok();
+    let only_set = crate::coverage::slugs_from_env(only_env.as_deref());
+    if !only_set.is_empty() {
+        slugs.retain(|s| only_set.contains(s));
+    }
     if slugs.is_empty() {
         slugs.insert("cortex".to_string());
     }

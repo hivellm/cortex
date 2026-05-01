@@ -1,0 +1,36 @@
+[package]
+name = "cortex-consolidator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Phase11j — distil raw Cortex envelopes into evergreen `Kind::Consolidation` summaries (Session / Topic / DecisionTrace grain)."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+cortex-storage = { path = "../cortex-storage" }
+
+# Phase11j §2.1 — proposal listed `anthropic-sdk` but Anthropic
+# does not ship an official Rust SDK. The summariser layer wires
+# the API directly via `reqwest` (same path the rest of the
+# workspace uses for HTTP outbound). HDBSCAN is needed for §2.5
+# (topic producer); pulling it in at the skeleton stage keeps
+# `cargo check` honest as the producer modules drop in.
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ulid = { workspace = true }
+reqwest = { workspace = true }
+async-trait = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

@@ -319,6 +319,12 @@ services:
       CORTEX_QUERY_REPORT_MISSING_COLLECTIONS: ${CORTEX_QUERY_REPORT_MISSING_COLLECTIONS:-0}
       CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+      # phase11i — restrict the /v1/health/coverage audit to the 17
+      # canonical Hive repos. Without this, classifier-stamped slugs
+      # (rust / python / typescript / csharp / java / go / gui /
+      # dashboard / project-v / x / tests) leak in from the keyword
+      # lane and inflate every backend's "missing" count.
+      CORTEX_COVERAGE_SLUGS_ONLY: ${CORTEX_COVERAGE_SLUGS_ONLY:-cortex,vectorizer,vectorizersync,nexus,synap,lexum,expert,rulebook,hivehubcloud,hivegpu,compressionprompt,tml,tmldocs,tmltextmate,transmutation,transmutationlite,umicp}
       # cortex-adapter-claude lives on the HOST (Windows named pipe
       # cannot bridge into a Linux container). `host.docker.internal`
       # is Docker Desktop's reserved DNS name for the host's IP, so
