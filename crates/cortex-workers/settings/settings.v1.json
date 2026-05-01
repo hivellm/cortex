@@ -1,5 +1,5 @@
 {
-  "version": "v1",
+  "version": "v2",
   "searchableAttributes": [
     "title",
     "body",
@@ -12,6 +12,7 @@
     "kind",
     "repo",
     "path",
+    "path_prefixes",
     "topics",
     "severity",
     "pii_risk",

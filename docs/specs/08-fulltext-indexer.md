@@ -61,9 +61,17 @@ Shared core (present on every document):
   "summary": "Refactored HNSW ef_search...",      // classifier summary if present
   "title": "hnsw_ef_search",                      // symbol for code, H1 for docs, first 80 chars otherwise
   "body": "pub fn hnsw_ef_search(k: usize) -> ... ",  // the primary searchable text
-  "language": "rust"
+  "language": "rust",
+  "path_prefixes": ["src/", "src/index/", "src/index/hnsw/", "src/index/hnsw/mod.rs"]
 }
 ```
+
+`path_prefixes` (phase11b) is a filterable string array carrying every
+ancestor directory plus the full path. Prefix-scoped queries
+(`scope.files = ["src/index/"]`) translate to
+`path_prefixes IN ['src/index/']` — Meilisearch does **not** support
+`path STARTS WITH ...`, so this filterable array is the only correct
+shape. The field is omitted when the envelope has no `context.path`.
 
 Per-kind extensions live under `ext.<kind>`:
 
@@ -129,7 +137,7 @@ doc_id = "bootstrap:" + repo + ":" + path + ":" + content_hash   // bootstrap ar
 ```jsonc
 {
   "searchableAttributes": ["title", "body", "summary", "path", "topics", "ext.tool_call.tool_name"],
-  "filterableAttributes": ["kind", "repo", "path", "topics", "severity", "pii_risk", "ts", "language",
+  "filterableAttributes": ["kind", "repo", "path", "path_prefixes", "topics", "severity", "pii_risk", "ts", "language",
                            "ext.decision.status", "ext.law_violation.law_id"],
   "sortableAttributes":   ["ts"],
   "displayedAttributes":  ["*"],

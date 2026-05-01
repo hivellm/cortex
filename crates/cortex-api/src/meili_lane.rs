@@ -357,17 +357,24 @@ fn build_meili_filter(scope: &crate::types::Scope, index: &str) -> Option<String
         }
     }
     if caps.path && !scope.files.is_empty() {
-        // OR every file prefix — Meili supports `field STARTS
-        // WITH x OR field STARTS WITH y`. Wrap in parens so the
-        // expression composes safely with the outer AND.
+        // Phase11b — Meili's filter grammar does NOT support
+        // `STARTS WITH`; it rejects the request with
+        // `invalid_search_filter`. The indexer projects every
+        // ancestor path plus the full path into a filterable
+        // array `path_prefixes`, so prefix scoping becomes
+        // `path_prefixes IN ['a/', 'a/b/', 'a/b/c.rs']` — a
+        // constant-cost equality match against the array. Each
+        // `scope.files` entry is forwarded verbatim (callers send
+        // either `dir/` or `dir/file.ext`; both forms appear in
+        // the indexed array).
         let prefixes = scope
             .files
             .iter()
             .filter(|p| !p.is_empty())
-            .map(|p| format!("path STARTS WITH {}", quote_meili(p)))
+            .map(|p| quote_meili(p))
             .collect::<Vec<_>>();
         if !prefixes.is_empty() {
-            clauses.push(format!("({})", prefixes.join(" OR ")));
+            clauses.push(format!("(path_prefixes IN [{}])", prefixes.join(", ")));
         }
     }
 
@@ -1035,7 +1042,14 @@ mod tests {
     }
 
     #[test]
-    fn build_meili_filter_path_starts_with_or_chain_for_files() {
+    fn build_meili_filter_uses_path_prefixes_in_clause_for_files() {
+        // Phase11b §3.4 — the broken predecessor of this test
+        // pinned `path STARTS WITH 'x' OR path STARTS WITH 'y'`,
+        // which Meili rejects with `invalid_search_filter`. The
+        // worker now writes a filterable `path_prefixes` array
+        // covering every ancestor + the full path, so a single
+        // `IN [..]` predicate replaces the OR chain and is the
+        // shape Meili actually accepts.
         let mut s = scope();
         s.files = vec![
             "crates/cortex-api/src/".to_string(),
@@ -1043,18 +1057,44 @@ mod tests {
         ];
         let filter = build_meili_filter(&s, "cortex-cortex-code").expect("clause expected");
         assert!(
-            filter.contains("path STARTS WITH 'crates/cortex-api/src/'"),
-            "first prefix; got `{filter}`"
+            filter.contains("(path_prefixes IN ['crates/cortex-api/src/', 'docs/specs/'])"),
+            "expected single IN clause over path_prefixes; got `{filter}`"
         );
         assert!(
-            filter.contains("path STARTS WITH 'docs/specs/'"),
-            "second prefix; got `{filter}`"
+            !filter.contains("STARTS WITH"),
+            "STARTS WITH must never appear in emitted Meili filters; got `{filter}`"
         );
-        // Multi-prefix path filter must wrap in parens so the
-        // outer AND with other clauses composes correctly.
+    }
+
+    #[test]
+    fn build_meili_filter_path_prefixes_single_entry_still_in_clause() {
+        // Phase11b §3.1 — even with one file the emitter uses the
+        // `IN [..]` shape. Mixing `IN [..]` and `=` for the same
+        // attribute would force the orchestrator to know which
+        // shape the indexer wrote; keeping a single shape avoids
+        // that coupling.
+        let mut s = scope();
+        s.files = vec!["crates/cortex-api/src/meili_lane.rs".to_string()];
+        let filter = build_meili_filter(&s, "cortex-cortex-code").expect("clause expected");
         assert!(
-            filter.contains(" OR "),
-            "multi-prefix file filter ORs — got `{filter}`"
+            filter.contains("(path_prefixes IN ['crates/cortex-api/src/meili_lane.rs'])"),
+            "single-entry path scope must still use IN; got `{filter}`"
+        );
+    }
+
+    #[test]
+    fn build_meili_filter_path_prefixes_composes_with_repo_via_and() {
+        // Phase11b spec scenario "Composes with other clauses via
+        // AND" — the path-prefix clause is wrapped in parens and
+        // joined with sibling clauses by ` AND `.
+        let mut s = scope();
+        s.repo = Some("Cortex".into());
+        s.files = vec!["crates/cortex-api/src/".to_string()];
+        let filter = build_meili_filter(&s, "cortex-cortex-code").expect("clause expected");
+        assert!(filter.starts_with("repo = 'cortex' AND "), "got `{filter}`");
+        assert!(
+            filter.contains(" AND (path_prefixes IN ['crates/cortex-api/src/'])"),
+            "path_prefixes clause must AND in with parens; got `{filter}`"
         );
     }
 

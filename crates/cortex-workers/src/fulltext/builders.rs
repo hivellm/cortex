@@ -19,7 +19,7 @@ use cortex_core::events::{
 use serde_json::{json, Value};
 
 use super::body::{select_body, BodySource};
-use super::document::{bootstrap_doc_id, live_doc_id, Document};
+use super::document::{bootstrap_doc_id, compute_path_prefixes, live_doc_id, Document};
 use crate::embedder::EnrichedEvent;
 
 /// Maximum length of the `title` field. Spec 08 §Document schema:
@@ -84,6 +84,11 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         );
     }
 
+    let path_prefixes = event
+        .context_path
+        .as_deref()
+        .map(compute_path_prefixes)
+        .unwrap_or_default();
     let mut doc = Document {
         id,
         event_id: event.event_id.clone(),
@@ -100,6 +105,7 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         body: chosen.body,
         language,
         truncated: chosen.truncated,
+        path_prefixes,
         ext: BTreeMap::new(),
     };
 

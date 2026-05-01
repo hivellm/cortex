@@ -45,10 +45,29 @@ mod tests {
     #[test]
     fn baked_in_settings_parse() {
         let v = settings_v1_json().expect("v1 settings parse");
-        assert_eq!(v["version"], "v1");
+        // Phase11b §2.3 — version bumped to v2 so the existing
+        // settings-version watcher triggers a re-index pass that
+        // populates the new `path_prefixes` field.
+        assert_eq!(v["version"], "v2");
         assert!(v["searchableAttributes"].as_array().unwrap().len() >= 4);
         assert!(v["sortableAttributes"].as_array().unwrap().contains(
             &Value::String("ts".to_string())
         ));
+    }
+
+    #[test]
+    fn path_prefixes_is_filterable() {
+        // Phase11b §2.2 — `meili_lane::build_filter` emits
+        // `path_prefixes IN [...]`; Meilisearch rejects filters on
+        // attributes that aren't declared filterable, so this is the
+        // load-bearing assertion.
+        let v = settings_v1_json().expect("v1 settings parse");
+        let filterable = v["filterableAttributes"]
+            .as_array()
+            .expect("filterableAttributes is an array");
+        assert!(
+            filterable.contains(&Value::String("path_prefixes".to_string())),
+            "filterableAttributes must include `path_prefixes`",
+        );
     }
 }

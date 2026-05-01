@@ -276,3 +276,59 @@ fn body_falls_back_to_envelope_text_when_classifier_summary_is_none() {
     );
     assert!(!doc.truncated);
 }
+
+#[test]
+fn artifact_doc_carries_path_prefixes_for_filterable_scope() {
+    // Phase11b §1.3 — every projected document gets a
+    // `path_prefixes` array spanning every ancestor directory plus
+    // the full path. The Meili lane filters on this array via
+    // `path_prefixes IN [...]` because Meilisearch rejects
+    // `path STARTS WITH ...` outright.
+    let evt = event(
+        "art-prefix",
+        Kind::Artifact,
+        json!({
+            "artifact_type": "file",
+            "path": "crates/cortex-api/src/meili_lane.rs",
+            "body": "fn build_filter() {}",
+        }),
+        Some("Cortex"),
+        Some("crates/cortex-api/src/meili_lane.rs"),
+        None,
+    );
+    let out = build_doc(&evt, false, 1024 * 1024);
+    let doc = match out {
+        BuildOutcome::Ready(d) => *d,
+        BuildOutcome::Skipped => panic!("artifact must build"),
+    };
+    assert_eq!(
+        doc.path_prefixes,
+        vec![
+            "crates/".to_string(),
+            "crates/cortex-api/".to_string(),
+            "crates/cortex-api/src/".to_string(),
+            "crates/cortex-api/src/meili_lane.rs".to_string(),
+        ],
+    );
+}
+
+#[test]
+fn doc_without_context_path_has_empty_path_prefixes() {
+    // Phase11b §1.3 — turns / tool calls without `context_path`
+    // get an empty `path_prefixes` so the field stays absent in the
+    // serialised JSON (skip_serializing_if = "Vec::is_empty").
+    let evt = event(
+        "turn-no-path",
+        Kind::Turn,
+        json!({ "user_message": "hi", "assistant_message": "hi" }),
+        Some("Cortex"),
+        None,
+        None,
+    );
+    let out = build_doc(&evt, false, 1024 * 1024);
+    let doc = match out {
+        BuildOutcome::Ready(d) => *d,
+        BuildOutcome::Skipped => panic!("turn must build"),
+    };
+    assert!(doc.path_prefixes.is_empty());
+}

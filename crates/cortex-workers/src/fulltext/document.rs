@@ -66,11 +66,52 @@ pub struct Document {
     /// `true` when `body` was truncated to honour the size cap.
     #[serde(default)]
     pub truncated: bool,
+    /// Filterable ancestor paths for prefix-scoped queries
+    /// (phase11b — issue: Meili rejects `path STARTS WITH ...`).
+    /// Contains every ancestor directory plus the full path, each
+    /// directory entry keeping its trailing `/`. Empty when `path`
+    /// is missing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path_prefixes: Vec<String>,
     /// Per-kind extensions keyed by kind family — schema is
     /// `ext.<family>.<field>`. Missing extensions are absent (no
     /// null-padding per spec 08).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub ext: BTreeMap<String, Value>,
+}
+
+/// Compute every ancestor prefix plus the full path for a given
+/// repo-relative path. Used by the indexer to populate the
+/// filterable `path_prefixes` array (phase11b §1.2).
+///
+/// Each directory entry keeps its trailing `/` so a `scope.files`
+/// caller can pass `crates/cortex-api/src/` and match on the same
+/// shape the indexer wrote. The full path is appended last with no
+/// trailing slash, matching the on-disk form.
+///
+/// Returns an empty vector for an empty / whitespace-only / `/`-only
+/// input — there is nothing to scope by.
+pub fn compute_path_prefixes(path: &str) -> Vec<String> {
+    let trimmed = path.trim().trim_matches('/');
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(segments.len());
+    let mut acc = String::new();
+    for (i, seg) in segments.iter().enumerate() {
+        acc.push_str(seg);
+        if i + 1 < segments.len() {
+            acc.push('/');
+            out.push(acc.clone());
+        } else {
+            out.push(acc.clone());
+        }
+    }
+    out
 }
 
 /// Build the doc-id for a live event — the envelope's own `event_id`.
@@ -85,4 +126,71 @@ pub fn live_doc_id(event_id: &str) -> String {
 /// the same repo is idempotent on the Meilisearch side.
 pub fn bootstrap_doc_id(repo: &str, path: &str, content_hash: &str) -> String {
     format!("bootstrap:{repo}:{path}:{content_hash}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_path_prefixes;
+
+    #[test]
+    fn deep_nested_path_yields_each_ancestor_with_trailing_slash() {
+        // Phase11b §1.4 — spec scenario "Deep nested file": the
+        // ancestor list keeps the trailing `/` on every directory
+        // entry and ends with the full path with no slash.
+        assert_eq!(
+            compute_path_prefixes("crates/cortex-api/src/meili_lane.rs"),
+            vec![
+                "crates/".to_string(),
+                "crates/cortex-api/".to_string(),
+                "crates/cortex-api/src/".to_string(),
+                "crates/cortex-api/src/meili_lane.rs".to_string(),
+            ],
+        );
+    }
+
+    #[test]
+    fn single_segment_path_returns_only_the_file() {
+        // Phase11b §1.4 — spec scenario "Single-segment path".
+        assert_eq!(
+            compute_path_prefixes("README.md"),
+            vec!["README.md".to_string()],
+        );
+    }
+
+    #[test]
+    fn empty_path_returns_empty() {
+        // Phase11b §1.4 — spec scenario "Empty / missing path".
+        assert!(compute_path_prefixes("").is_empty());
+        assert!(compute_path_prefixes("   ").is_empty());
+        assert!(compute_path_prefixes("/").is_empty());
+        assert!(compute_path_prefixes("///").is_empty());
+    }
+
+    #[test]
+    fn trailing_and_leading_slashes_are_trimmed() {
+        // Phase11b §1.4 — `cortex_query` callers may send
+        // `crates/cortex-api/src/` with a trailing slash; the helper
+        // must produce the same output as the slash-less form so the
+        // generator and indexer stay aligned.
+        assert_eq!(
+            compute_path_prefixes("/crates/cortex-api/src/"),
+            compute_path_prefixes("crates/cortex-api/src"),
+        );
+    }
+
+    #[test]
+    fn directory_only_input_treats_last_segment_as_leaf() {
+        // Phase11b §1.4 — when the input ends in `/`, the trimmed
+        // form has no leaf-vs-dir distinction. Document this so a
+        // future reader knows the helper is path-shape agnostic: it
+        // only cares about segments, not whether the leaf is a file.
+        assert_eq!(
+            compute_path_prefixes("crates/cortex-api/src/"),
+            vec![
+                "crates/".to_string(),
+                "crates/cortex-api/".to_string(),
+                "crates/cortex-api/src".to_string(),
+            ],
+        );
+    }
 }
