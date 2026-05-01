@@ -303,7 +303,7 @@ impl TailWatcher {
 
             // Re-read the whole file. Cheap because changed sessions
             // are rare and the dedupe set short-circuits emit.
-            let (records, _read_stats) = match read_records(&entry.path) {
+            let (records, read_stats) = match read_records(&entry.path) {
                 Ok(r) => r,
                 Err(err) => {
                     report
@@ -312,6 +312,21 @@ impl TailWatcher {
                     continue;
                 }
             };
+            // Phase11i §5.4 — malformed JSONL lines are *recoverable*
+            // (the reader warns + drops them), but they still belong
+            // in the watcher's drop counter so the dashboard can spot
+            // a corruption regression. Typeless / unknown-kind
+            // records are tracked alongside as a separate counter.
+            if read_stats.malformed_lines > 0 || read_stats.typeless_records > 0 {
+                let bad = read_stats.malformed_lines as u64 + read_stats.typeless_records as u64;
+                report.dropped += bad;
+                tracing::warn!(
+                    path = %entry.path.display(),
+                    malformed = read_stats.malformed_lines,
+                    typeless = read_stats.typeless_records,
+                    "tail: dropped malformed records",
+                );
+            }
             let (envelopes, _map_stats) = map_session(&records, None)?;
             for env in &envelopes {
                 if !self.emitted_ids.insert(env.event_id.clone()) {
