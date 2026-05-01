@@ -343,6 +343,47 @@ services:
       - ${CORTEX_WORKSPACES_HOST:-..}:/workspaces:ro
     restart: unless-stopped
 
+  # phase11i §5.1 — cortex-claude-archive ─ long-running watcher
+  # over the Claude Code JSONL conversation archive on the host.
+  # The mount is read-only (`:ro`) so a buggy parser cannot corrupt
+  # the live transcript. The watcher emits one canonical envelope
+  # per turn / tool_call / agent_call into the archive sink read by
+  # `cortex-api`'s archive_loader at boot, so this service feeds
+  # the keyword + vector lanes without leaning on the live worker
+  # pipeline being up. The host bind-mount default tracks the
+  # platform-specific Claude Code data dir (Windows:
+  # `${USERPROFILE}/.claude/projects`; Unix: `${HOME}/.claude/projects`).
+  cortex-claude-archive:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
+      target: cortex-claude-archive
+    image: cortex/claude-archive:dev
+    container_name: cortex-claude-archive
+    depends_on:
+      synap: { condition: service_healthy }
+      cortex-ingestion: { condition: service_started }
+    networks: [cortex-net]
+    ports:
+      - "${CORTEX_CLAUDE_ARCHIVE_PORT:-17030}:17030"
+    environment:
+      CORTEX_CLAUDE_ARCHIVE_BIND: 0.0.0.0:17030
+      CORTEX_SYNAP_URL: http://synap:15500
+      CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
+    volumes:
+      # Read-only mount of the host's `~/.claude/projects` JSONL
+      # corpus. Override CORTEX_CLAUDE_PROJECTS_HOST in `.env` when
+      # the host stores the archive elsewhere.
+      - ${CORTEX_CLAUDE_PROJECTS_HOST:-${USERPROFILE:-${HOME}}/.claude/projects}:/data/claude-projects:ro
+      # Same bind-mount as cortex-ingestion + cortex-api so the
+      # archive sink lands in the canonical `~/.cortex/archive`
+      # dir; cortex-api's archive_loader re-reads it at boot.
+      - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
+    restart: unless-stopped
+
 # NOTE: `cortex-adapter-claude` deliberately runs OUTSIDE this
 # compose file. It listens on a unix socket (`~/.cortex/adapter-claude.sock`
 # on Linux/macOS) or named pipe (`\\.\pipe\cortex-adapter-claude` on

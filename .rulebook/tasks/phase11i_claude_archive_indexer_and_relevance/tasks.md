@@ -39,7 +39,7 @@
 
 ## 5. Watcher daemon + ops (week 4 day 1-2)
 
-- [ ] 5.1 `docker-compose.yml` — new service `cortex-claude-archive` running `cortex-claude-archive tail`, read-only bind mount `~/.claude/projects/` → `/data/claude-projects:ro`, depends_on synap + cortex-ingestion, restart unless-stopped
+- [x] 5.1 `docker-compose.yml` ships a new `cortex-claude-archive` service. ENTRYPOINT `cortex-claude-archive tail --root /data/claude-projects --projects-only --sink archive --archive-root /var/lib/cortex/archive`, read-only bind mount `${CORTEX_CLAUDE_PROJECTS_HOST:-${USERPROFILE:-${HOME}}/.claude/projects}` → `/data/claude-projects:ro`, archive bind-mount `${CORTEX_HOME_HOST}` → `/var/lib/cortex` (same path cortex-ingestion + cortex-api use so the archive sink survives container recreation and stays operator-readable on the host), depends_on synap (healthy) + cortex-ingestion (started), restart unless-stopped, port `${CORTEX_CLAUDE_ARCHIVE_PORT:-17030}:17030` for the §5.2 health endpoint. Dockerfile gains a `cortex-claude-archive` runtime stage + adds `--bin cortex-claude-archive` to the builder cargo invocation so `docker compose build` produces the binary.
 - [ ] 5.2 Health endpoint `:17030/healthz` returning last_flush_ts, files_watched, envelope_rate, rss_bytes; surface in `/v1/health/coverage` under a `archive_watchers` block
 - [ ] 5.3 RSS hard cap ≤ 512 MiB enforced via assert in IT `cortex_claude_archive_memory_it.rs` (run watcher against 100 k-event fixture, sample RSS, fail if > cap)
 - [ ] 5.4 Failure mode IT: corrupt JSONL line → warn + drop + counter increment; never panic; assert `envelopes_dropped` metric increments

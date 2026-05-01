@@ -73,6 +73,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         --bin cortex-graph-worker \
         --bin cortex-ops \
         --bin cortex-mcp-server \
+        --bin cortex-claude-archive \
  && mkdir -p /out \
  && cp target/release/cortex-api \
        target/release/cortex-ingestion \
@@ -83,6 +84,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
        target/release/cortex-graph-worker \
        target/release/cortex-ops \
        target/release/cortex-mcp-server \
+       target/release/cortex-claude-archive \
        /out/
 
 # -----------------------------------------------------------------
@@ -153,3 +155,15 @@ EXPOSE 17024
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
     CMD curl -fsS http://127.0.0.1:17024/healthz >/dev/null || exit 1
 ENTRYPOINT ["/usr/local/bin/cortex-graph-worker"]
+
+# phase11i §5.1 — long-running watcher that tails the Claude Code
+# JSONL conversation archive (`~/.claude/projects/`) and emits one
+# canonical envelope per turn / tool_call / agent_call. The data
+# path is bind-mounted read-only by docker-compose. Health endpoint
+# `:17030/healthz` lands in §5.2; the EXPOSE here keeps the image
+# forward-compatible.
+FROM runtime-base AS cortex-claude-archive
+COPY --from=builder /out/cortex-claude-archive /usr/local/bin/cortex-claude-archive
+EXPOSE 17030
+ENTRYPOINT ["/usr/local/bin/cortex-claude-archive"]
+CMD ["tail", "--root", "/data/claude-projects", "--projects-only", "--sink", "archive", "--archive-root", "/var/lib/cortex/archive"]
