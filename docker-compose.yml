@@ -212,7 +212,13 @@ services:
       CORTEX_FULLTEXT_SYNAP_URL: http://synap:15500
       CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
       CORTEX_FULLTEXT_MEILI_API_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+      CORTEX_FULLTEXT_BATCH: "100"
+      CORTEX_FULLTEXT_WORKERS: "1"
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
+    deploy:
+      resources:
+        limits:
+          memory: 4g
     restart: unless-stopped
 
   # cortex-graph-worker ─ Nexus Cypher writer.
