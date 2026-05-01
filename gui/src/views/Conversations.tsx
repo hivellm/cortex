@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Tag } from "../atoms/Tag";
 import { api, type SessionSummary } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// Conversations view — chat-history lens over `kind=turn` envelopes.
 /// The list pane shows one row per session (chat thread); selecting
@@ -10,11 +11,12 @@ import { api, type SessionSummary } from "../lib/api";
 /// assistant replies. Both halves are captured by the
 /// UserPromptSubmit and Stop adapter hooks.
 export function ConversationsView() {
+  const connKey = useConnKey();
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [repoFilter, setRepoFilter] = useState<string>("");
 
   const { data: list, isLoading: listLoading, error: listError } = useQuery({
-    queryKey: ["conversations"],
+    queryKey: [connKey, "conversations"],
     queryFn: () => api.conversations(),
     refetchInterval: 8_000,
     refetchIntervalInBackground: true,
@@ -38,7 +40,7 @@ export function ConversationsView() {
   }
 
   const { data: detail, isLoading: detailLoading } = useQuery({
-    queryKey: ["conversation", selectedSession],
+    queryKey: [connKey, "conversation", selectedSession],
     queryFn: () => api.conversation(selectedSession!),
     enabled: !!selectedSession,
     refetchInterval: 5_000,
@@ -155,8 +157,9 @@ function ConversationDetailPane({
   // Sonnet" to trigger. The query stays enabled after first click
   // so the cache survives view re-mounts.
   const [analyzeRequested, setAnalyzeRequested] = useState(false);
+  const connKey = useConnKey();
   const summaryQ = useQuery({
-    queryKey: ["conversation-summary", sessionId],
+    queryKey: [connKey, "conversation-summary", sessionId],
     queryFn: () => api.conversationSummary(sessionId!),
     enabled: !!sessionId && analyzeRequested,
     retry: 0,

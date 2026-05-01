@@ -29,6 +29,7 @@ import {
 } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { useSSE } from "../lib/useSSE";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// Wire-shape for a timeline event the SSE stream yields. Mirrors
 /// the daemon's `TimelineEvent` shape just enough that we can pluck
@@ -143,14 +144,15 @@ type BreakdownRow = {
 };
 
 export function RetentionView() {
+  const connKey = useConnKey();
   const sweepsQ = useQuery({
-    queryKey: ["retention-sweeps"],
+    queryKey: [connKey, "retention-sweeps"],
     queryFn: () => api.retentionSweeps(50),
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
   });
   const stateQ = useQuery({
-    queryKey: ["retention-state"],
+    queryKey: [connKey, "retention-state"],
     queryFn: () => api.retentionState(),
     refetchInterval: 10_000,
   });

@@ -2,10 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Tag } from "../atoms/Tag";
 import { api } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 export function AnalysisView() {
+  const connKey = useConnKey();
   const { data, isLoading, error } = useQuery({
-    queryKey: ["analyses"],
+    queryKey: [connKey, "analyses"],
     queryFn: () => api.analyses(),
     refetchInterval: 15_000,
   });

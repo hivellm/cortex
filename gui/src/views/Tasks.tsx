@@ -11,6 +11,7 @@ import {
   type TaskRow,
   type TaskStatus,
 } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// phase5b — Tasks view.
 ///
@@ -112,8 +113,9 @@ export function TasksView() {
     persistFilters(filters);
   }, [filters]);
 
+  const connKey = useConnKey();
   const summaryQ = useQuery({
-    queryKey: ["tasks-summary", "view"],
+    queryKey: [connKey, "tasks-summary", "view"],
     queryFn: () => api.tasksSummary(),
     refetchInterval: 30_000,
     refetchIntervalInBackground: true,
@@ -125,7 +127,7 @@ export function TasksView() {
   // sits at ~96, plenty of headroom). Filters are applied client
   // side so the chip toggles feel instant.
   const listQ = useQuery({
-    queryKey: ["tasks", "all"],
+    queryKey: [connKey, "tasks", "all"],
     queryFn: () =>
       api.tasks({
         include_archived: true,
@@ -228,7 +230,7 @@ export function TasksView() {
   }, [filtered]);
 
   const detailQ = useQuery({
-    queryKey: ["task", selectedId ?? ""],
+    queryKey: [connKey, "task", selectedId ?? ""],
     queryFn: () => api.task(selectedId!),
     enabled: !!selectedId,
     staleTime: 60_000,

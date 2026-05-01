@@ -14,6 +14,7 @@ import {
   type SubsystemStatus,
 } from "../lib/api";
 import { fmtNum } from "../lib/format";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// Phase8g — Health view. Surfaces the phase8a–8f health system in
 /// the existing dashboard so the user notices stack-wide issues
@@ -22,29 +23,30 @@ import { fmtNum } from "../lib/format";
 /// (HEALTH_STREAM_URL) is wired separately in App.tsx for the
 /// topbar status pill so the view itself stays simple to test.
 export function HealthView() {
+  const connKey = useConnKey();
   const overviewQ = useQuery({
-    queryKey: ["health", "overview"],
+    queryKey: [connKey, "health", "overview"],
     queryFn: () => api.healthOverview(),
     refetchInterval: 5_000,
     refetchIntervalInBackground: true,
   });
   const freshnessQ = useQuery({
-    queryKey: ["health", "freshness"],
+    queryKey: [connKey, "health", "freshness"],
     queryFn: () => api.healthFreshness(),
     refetchInterval: 5_000,
   });
   const divergenceQ = useQuery({
-    queryKey: ["health", "divergence"],
+    queryKey: [connKey, "health", "divergence"],
     queryFn: () => api.healthDivergence(),
     refetchInterval: 5_000,
   });
   const versionsQ = useQuery({
-    queryKey: ["health", "versions"],
+    queryKey: [connKey, "health", "versions"],
     queryFn: () => api.healthVersions(),
     refetchInterval: 30_000,
   });
   const configQ = useQuery({
-    queryKey: ["health", "config"],
+    queryKey: [connKey, "health", "config"],
     queryFn: () => api.healthConfig(),
     refetchInterval: 60_000,
   });
@@ -52,7 +54,7 @@ export function HealthView() {
   // refetch is plenty: collections only appear when the writer
   // path runs the (rare) bootstrap or settings-version bump.
   const coverageQ = useQuery({
-    queryKey: ["health", "coverage"],
+    queryKey: [connKey, "health", "coverage"],
     queryFn: () => api.healthCoverage(),
     refetchInterval: 60_000,
   });

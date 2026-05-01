@@ -5,6 +5,7 @@ import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
 import { api } from "../lib/api";
 import { hasAnyFilter, useFilters } from "../lib/filters";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 // Canonical kinds the cortex-api memory endpoint actually serves —
 // the symbol classes the spec-04 envelope writer stamps. The
@@ -30,8 +31,9 @@ export function MemoryView() {
   const [activeKind, setActiveKind] = useState<string | null>(null);
   const { filters, setFilter, clearFilters } = useFilters();
 
+  const connKey = useConnKey();
   const { data, isLoading, error } = useQuery({
-    queryKey: ["memory", query, filters.session_id ?? "", filters.repo ?? ""],
+    queryKey: [connKey, "memory", query, filters.session_id ?? "", filters.repo ?? ""],
     queryFn: () => api.memory(query, 80, filters),
     refetchInterval: 8000,
     refetchIntervalInBackground: true,

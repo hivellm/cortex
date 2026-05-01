@@ -15,6 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
 import { ACCENT_PRESETS, useTweaks } from "../lib/useTweaks";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 type TweaksProps = {
   open: boolean;
@@ -35,8 +36,9 @@ export function Tweaks({ open, onClose }: TweaksProps) {
     return () => document.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
+  const connKey = useConnKey();
   const statusQ = useQuery({
-    queryKey: ["status"],
+    queryKey: [connKey, "status"],
     queryFn: () => api.status(),
     refetchInterval: open ? 5000 : false,
     enabled: open,

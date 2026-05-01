@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Tag } from "../atoms/Tag";
 import { api, type ClassificationRow } from "../lib/api";
 import { fmtNum } from "../lib/format";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// Classifications view — operator's read on what the per-event
 /// classifier (Sonnet via the local CLI) is producing across the
@@ -32,9 +33,9 @@ export function ClassificationsView() {
     [repoFilter, topicFilter, severityFilter, kindFilter],
   );
 
+  const connKey = useConnKey();
   const { data, isLoading, error } = useQuery({
-    queryKey: [
-      "classifications",
+    queryKey: [connKey, "classifications",
       repoFilter || "all",
       topicFilter || "all",
       severityFilter || "all",
@@ -48,7 +49,7 @@ export function ClassificationsView() {
   // Pull the unfiltered result once so the dropdowns stay populated
   // even when the active filter narrows everything to 0.
   const { data: allData } = useQuery({
-    queryKey: ["classifications", "all"],
+    queryKey: [connKey, "classifications", "all"],
     queryFn: () => api.classifications({ limit: 1 }),
     refetchInterval: 60_000,
   });

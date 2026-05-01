@@ -5,6 +5,7 @@ import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
 import { api, ApiError, postQuery, type QueryRequestBody } from "../lib/api";
 import { useFilters } from "../lib/filters";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// Top-bar search. Replaces the dedicated `Search` view: the input
 /// stays mounted in the header so the user can query from any page,
@@ -50,8 +51,9 @@ export function HeaderSearch() {
   // `scope_repo_required` and the user has to bounce through the
   // sidebar before every query — which the operator (correctly)
   // called "uma merda".
+  const connKey = useConnKey();
   const overviewQ = useQuery({
-    queryKey: ["overview", "header-search"],
+    queryKey: [connKey, "overview", "header-search"],
     queryFn: () => api.overview(),
     refetchInterval: 30_000,
     refetchIntervalInBackground: true,

@@ -26,6 +26,7 @@ import forceAtlas2 from "graphology-layout-forceatlas2";
 import { Icon } from "../atoms/Icon";
 import { api, type GraphPayload } from "../lib/api";
 import { useFilters } from "../lib/filters";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 // Single source of truth for node colors. Same hex table is used
 // by the loader's `KIND_HEX` so the legend dots match the canvas.
@@ -424,9 +425,9 @@ export function GraphView() {
   const isRepoDrilldown =
     !!filters.repo && filters.repo.length > 0 && !filters.session_id;
 
+  const connKey = useConnKey();
   const { data, isLoading, error } = useQuery({
-    queryKey: [
-      "graph",
+    queryKey: [connKey, "graph",
       filters.session_id ?? "",
       (filters.repo ?? []).slice().sort().join("|"),
     ],
@@ -448,7 +449,7 @@ export function GraphView() {
   // far less often than the graph because the per-session repo
   // mapping is stable once a session ends.
   const { data: sessionsRows } = useQuery({
-    queryKey: ["graph-sessions-for-repo-tint"],
+    queryKey: [connKey, "graph-sessions-for-repo-tint"],
     queryFn: () => api.sessions(),
     refetchInterval: 5 * 60_000,
     refetchIntervalInBackground: false,

@@ -3,10 +3,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
 import { Sparkline } from "../atoms/Sparkline";
-import { api, type TimelineEvent } from "../lib/api";
+import { api, getActiveConnection, type TimelineEvent } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { hasAnyFilter, useFilters } from "../lib/filters";
 import { isStreamStale, useSSE } from "../lib/useSSE";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 const KIND_ICON: Record<string, string> = {
   turn: "→",
@@ -324,6 +325,7 @@ const SEARCH_HINT_ATTR = "place" + "holder";
 const SEARCH_HINT_TEXT = "Search events, repos, models…";
 
 export function TimelineView() {
+  const connKey = useConnKey();
   const [query, setQuery] = useState("");
   const [kindFilter, setKindFilter] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<TimelineEvent | null>(null);
@@ -332,6 +334,7 @@ export function TimelineView() {
 
   const queryClient = useQueryClient();
   const queryKey = [
+    connKey,
     "timeline-recent",
     filters.session_id ?? "",
     (filters.repo ?? []).join("|"),
@@ -350,8 +353,13 @@ export function TimelineView() {
   });
 
   // Build the SSE URL with the same filters. Encoded once per
-  // (session_id, repo[], kind, live) tuple so the EventSource
-  // doesn't churn on unrelated re-renders.
+  // (active connection, session_id, repo[], kind, live) tuple so the
+  // EventSource doesn't churn on unrelated re-renders. When the
+  // active connection has a bearer token, append `api_key=…` —
+  // EventSource has no header API, so the daemon's
+  // require_api_key middleware accepts the query-param escape
+  // hatch as the auth path for SSE callers.
+  const activeConn = getActiveConnection();
   const sseUrl = useMemo(() => {
     if (!live) return null;
     const base = "/v1/dashboard/timeline/stream";
@@ -360,17 +368,27 @@ export function TimelineView() {
     for (const r of filters.repo ?? []) qs.append("repo", r);
     if (filters.kind) qs.set("kind", filters.kind);
     if (filters.content_hash) qs.set("content_hash", filters.content_hash);
+    if (activeConn.auth.kind === "bearer" && activeConn.auth.token) {
+      qs.set("api_key", activeConn.auth.token);
+    }
     const tail = qs.toString();
-    // Renderer hits the absolute API in production builds (file://)
-    // and Vite's proxy in dev — same logic the polling fetcher uses.
-    const isFile = typeof window !== "undefined" && window.location.protocol === "file:";
-    const root = isFile ? "http://127.0.0.1:17000" : "";
-    return tail ? `${root}${base}?${tail}` : `${root}${base}`;
-  }, [live, filters.session_id, filters.repo, filters.kind, filters.content_hash]);
+    return tail ? `${activeConn.baseUrl}${base}?${tail}` : `${activeConn.baseUrl}${base}`;
+  }, [
+    live,
+    filters.session_id,
+    filters.repo,
+    filters.kind,
+    filters.content_hash,
+    activeConn.baseUrl,
+    activeConn.auth,
+  ]);
 
   // Live append from SSE. Each incoming TimelineEvent is appended
   // to the front of the cached `timeline-recent` buffer if the id
   // isn't already there; a 200-row cap matches the polling fetch.
+  // The cache slot is keyed on the same connection-scoped key the
+  // useQuery above wrote, so switching connections does not cross-
+  // pollute caches.
   const onSseEvent = useCallback(
     (ev: TimelineEvent) => {
       queryClient.setQueryData<TimelineEvent[]>([...queryKey], (prev) => {
@@ -396,12 +414,12 @@ export function TimelineView() {
   // Overview + sessions feed the stats grid. Both queries are also
   // populated by the Sidebar; TanStack dedupes by key.
   const overviewQ = useQuery({
-    queryKey: ["overview"],
+    queryKey: [connKey, "overview"],
     queryFn: () => api.overview(),
     refetchInterval: live ? 5000 : false,
   });
   const sessionsQ = useQuery({
-    queryKey: ["sessions"],
+    queryKey: [connKey, "sessions"],
     queryFn: () => api.sessions(),
     refetchInterval: live ? 8000 : false,
   });

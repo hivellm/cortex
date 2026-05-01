@@ -316,7 +316,9 @@ export function ConnectionsProvider({ children }: { children: ReactNode }) {
 }
 
 /** Hook for components that need the full store — manage view, header
- * switcher, API layer factory. */
+ * switcher, API layer factory. Throws when no provider is mounted
+ * because every CRUD path actually needs the dispatcher; fixtures
+ * that don't care should reach for `useActiveConnection` instead. */
 export function useConnections(): ConnectionsContextValue {
   const ctx = useContext(ConnectionsContext);
   if (!ctx) {
@@ -329,9 +331,22 @@ export function useConnections(): ConnectionsContextValue {
 
 /** Lightweight hook for components that only need the active
  * connection (most fetchers). Avoids subscribing the component to
- * unrelated CRUD changes. */
+ * unrelated CRUD changes. Falls back to a synthetic local
+ * connection when no provider is mounted so the test harness can
+ * render individual views without wrapping every fixture in a
+ * provider — the fallback mirrors api.ts's default resolver, so
+ * fetchers and queryKeys agree on the fallback id. */
 export function useActiveConnection(): Connection {
-  return useConnections().active;
+  const ctx = useContext(ConnectionsContext);
+  if (ctx) return ctx.active;
+  return {
+    id: LOCAL_CONNECTION_ID,
+    label: "Local",
+    baseUrl: "http://127.0.0.1:17000",
+    auth: { kind: "none" },
+    color: "#22c55e",
+    createdAt: 0,
+  };
 }
 
 export { LOCAL_CONNECTION_ID } from "./types";

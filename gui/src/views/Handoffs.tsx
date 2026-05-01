@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { Tag } from "../atoms/Tag";
 import { api } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 /// Handoffs view — surfaces every `.rulebook/handoff/*.md` snapshot
 /// across all bootstrapped repos, grouped by project. The walker
@@ -12,15 +13,16 @@ import { api } from "../lib/api";
 export function HandoffsView() {
   const [repoFilter, setRepoFilter] = useState<string>("");
 
+  const connKey = useConnKey();
   const { data, isLoading, error } = useQuery({
-    queryKey: ["handoffs", repoFilter || "all"],
+    queryKey: [connKey, "handoffs", repoFilter || "all"],
     queryFn: () => api.handoffs(repoFilter || undefined),
     refetchInterval: 15_000,
     refetchIntervalInBackground: true,
   });
 
   const { data: allRows } = useQuery({
-    queryKey: ["handoffs", "all"],
+    queryKey: [connKey, "handoffs", "all"],
     queryFn: () => api.handoffs(),
     refetchInterval: 60_000,
   });

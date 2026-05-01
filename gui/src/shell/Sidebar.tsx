@@ -5,6 +5,7 @@ import { Sparkline } from "../atoms/Sparkline";
 import { api, type RepoCount, type SessionRow } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { useFilters } from "../lib/filters";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 export type ViewId =
   | "timeline"
@@ -58,8 +59,9 @@ type SidebarProps = {
 export function Sidebar({ view, setView }: SidebarProps) {
   const { filters, setFilter, clearFilters } = useFilters();
 
+  const connKey = useConnKey();
   const sessionsQ = useQuery({
-    queryKey: ["sessions"],
+    queryKey: [connKey, "sessions"],
     queryFn: () => api.sessions(),
     refetchInterval: 8000,
     refetchIntervalInBackground: true,
@@ -67,7 +69,7 @@ export function Sidebar({ view, setView }: SidebarProps) {
   const sessions = sessionsQ.data ?? [];
 
   const overviewQ = useQuery({
-    queryKey: ["overview"],
+    queryKey: [connKey, "overview"],
     queryFn: () => api.overview(),
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
@@ -77,42 +79,42 @@ export function Sidebar({ view, setView }: SidebarProps) {
   // Counts pulled from the same TanStack caches the views populate —
   // re-using the keyed query result avoids a second round of fetches.
   const decisionsQ = useQuery({
-    queryKey: ["decisions"],
+    queryKey: [connKey, "decisions"],
     queryFn: () => api.decisions(),
     refetchInterval: 30_000,
   });
   const lawsQ = useQuery({
-    queryKey: ["laws"],
+    queryKey: [connKey, "laws"],
     queryFn: () => api.laws(),
     refetchInterval: 60_000,
   });
   const analysesQ = useQuery({
-    queryKey: ["analyses"],
+    queryKey: [connKey, "analyses"],
     queryFn: () => api.analyses(),
     refetchInterval: 30_000,
   });
   const toolsQ = useQuery({
-    queryKey: ["tools-stats"],
+    queryKey: [connKey, "tools-stats"],
     queryFn: () => api.toolsStats(),
     refetchInterval: 15_000,
   });
   const conversationsQ = useQuery({
-    queryKey: ["conversations"],
+    queryKey: [connKey, "conversations"],
     queryFn: () => api.conversations(),
     refetchInterval: 15_000,
   });
   const handoffsQ = useQuery({
-    queryKey: ["handoffs", "all"],
+    queryKey: [connKey, "handoffs", "all"],
     queryFn: () => api.handoffs(),
     refetchInterval: 30_000,
   });
   const classificationsQ = useQuery({
-    queryKey: ["classifications", "sidebar"],
+    queryKey: [connKey, "classifications", "sidebar"],
     queryFn: () => api.classifications({ limit: 1 }),
     refetchInterval: 30_000,
   });
   const tasksSummaryQ = useQuery({
-    queryKey: ["tasks-summary"],
+    queryKey: [connKey, "tasks-summary"],
     queryFn: () => api.tasksSummary(),
     refetchInterval: 30_000,
   });
@@ -282,8 +284,9 @@ function SidebarFooter() {
   // Mirror the header's status query so the footer pill agrees with
   // the header's connection indicator without duplicating fetches —
   // TanStack Query dedupes by key.
+  const connKey = useConnKey();
   const statusQ = useQuery({
-    queryKey: ["status"],
+    queryKey: [connKey, "status"],
     queryFn: () => api.status(),
     refetchInterval: 5000,
     refetchIntervalInBackground: true,

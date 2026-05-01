@@ -5,16 +5,18 @@ import { Icon } from "../atoms/Icon";
 import { SeverityBar } from "../atoms/SeverityBar";
 import { Tag } from "../atoms/Tag";
 import { api, type LawRow, type ViolationRow } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 export function LawsView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const connKey = useConnKey();
   const lawsQ = useQuery({
-    queryKey: ["laws"],
+    queryKey: [connKey, "laws"],
     queryFn: () => api.laws(),
     refetchInterval: 30_000,
   });
   const violationsQ = useQuery({
-    queryKey: ["violations"],
+    queryKey: [connKey, "violations"],
     queryFn: () => api.violations(),
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,
@@ -23,7 +25,7 @@ export function LawsView() {
   const lawsRaw = lawsQ.data ?? [];
   const violations = violationsQ.data ?? [];
   const trustQ = useQuery({
-    queryKey: ["trust"],
+    queryKey: [connKey, "trust"],
     queryFn: () => api.trust(),
     refetchInterval: 60_000,
   });

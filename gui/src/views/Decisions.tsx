@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
 import { api, type DecisionChainNode } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 export function DecisionsView() {
   const [showSuperseded, setShowSuperseded] = useState(false);
@@ -12,14 +13,15 @@ export function DecisionsView() {
   // Pull the unfiltered list once so the repo dropdown stays stable
   // even as the filtered view narrows. The list is small (decisions
   // count in the tens, not hundreds) so a second cache is cheap.
+  const connKey = useConnKey();
   const { data: allRows } = useQuery({
-    queryKey: ["decisions", "all"],
+    queryKey: [connKey, "decisions", "all"],
     queryFn: () => api.decisions(),
     refetchInterval: 30_000,
   });
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["decisions", repoFilter || "all"],
+    queryKey: [connKey, "decisions", repoFilter || "all"],
     queryFn: () => api.decisions(repoFilter || undefined),
     refetchInterval: 10_000,
     refetchIntervalInBackground: true,

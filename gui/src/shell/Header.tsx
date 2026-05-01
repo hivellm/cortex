@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
 import { bridge } from "../lib/bridge";
+import { useConnKey } from "../lib/connections/useConnKey";
 import { HeaderSearch } from "./HeaderSearch";
 
 type HeaderProps = {
@@ -16,8 +17,9 @@ export function Header({
   onOpenTweaks,
   onJumpToHealth,
 }: HeaderProps) {
+  const connKey = useConnKey();
   const statusQ = useQuery({
-    queryKey: ["status"],
+    queryKey: [connKey, "status"],
     queryFn: () => api.status(),
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
@@ -27,7 +29,7 @@ export function Header({
   // and renders a green/yellow/red dot visible from every view.
   // Click jumps to /health.
   const healthQ = useQuery({
-    queryKey: ["health", "overview", "topbar"],
+    queryKey: [connKey, "health", "overview", "topbar"],
     queryFn: () => api.healthOverview(),
     refetchInterval: 5000,
     refetchIntervalInBackground: true,

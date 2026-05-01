@@ -2,10 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 
 import { fmtNum } from "../lib/format";
 import { api, type HeatmapBlock } from "../lib/api";
+import { useConnKey } from "../lib/connections/useConnKey";
 
 export function ToolsView() {
+  const connKey = useConnKey();
   const { data, isLoading, error } = useQuery({
-    queryKey: ["tools-stats"],
+    queryKey: [connKey, "tools-stats"],
     queryFn: () => api.toolsStats(),
     refetchInterval: 8000,
     refetchIntervalInBackground: true,
