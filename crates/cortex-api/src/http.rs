@@ -102,13 +102,27 @@ pub fn build_router(service: Arc<QueryService>) -> Router {
     build_router_with(service, None)
 }
 
-/// `build_router` with an optional dashboard mount. Threads the
-/// shared `MemoryKeywordLane` (the one the archive_loader seeds) so
-/// `/v1/dashboard/*` and the `/dashboard/*` static asset route mount
-/// alongside the spec-11 routes.
+/// `build_router_with` mounting the dashboard but no opt-in auth.
+/// Phase3 §7.4 callers (the daemon's `main.rs`) prefer
+/// [`build_router_with_auth`] so the dashboard sub-router can be
+/// guarded by `require_api_key` when `CORTEX_DASHBOARD_AUTH=1`.
 pub fn build_router_with(
     service: Arc<QueryService>,
     dashboard: Option<crate::dashboard::DashboardState>,
+) -> Router {
+    build_router_with_auth(service, dashboard, None)
+}
+
+/// Phase3 §7.4 — full router builder. When `api_key_store` is
+/// `Some(..)` and `CORTEX_DASHBOARD_AUTH=1` the dashboard sub-router
+/// is wrapped with the `require_api_key` middleware (the
+/// `/v1/status`, `/healthz`, and `/v1/query` routes always stay
+/// anonymous). When the env var is unset/false the wrapper is a
+/// no-op, so localhost dev keeps the legacy zero-auth behaviour.
+pub fn build_router_with_auth(
+    service: Arc<QueryService>,
+    dashboard: Option<crate::dashboard::DashboardState>,
+    api_key_store: Option<Arc<crate::storage::api_keys::ApiKeyStore>>,
 ) -> Router {
     let state = ApiState {
         service,
@@ -178,7 +192,16 @@ pub fn build_router_with(
                     }
                 }),
             );
-        router = router.merge(crate::dashboard::build_dashboard_router(dash));
+        let dashboard_router = crate::dashboard::build_dashboard_router(dash);
+        let dashboard_router = if let Some(store) = api_key_store.clone() {
+            // Phase3 §7.4 — only the dashboard sub-router is
+            // wrapped. health_router + metrics_router stay
+            // anonymous so liveness probes don't require a key.
+            crate::auth::wrap_dashboard_router(dashboard_router, store)
+        } else {
+            dashboard_router
+        };
+        router = router.merge(dashboard_router);
         router = router.merge(health_router);
         router = router.merge(metrics_router);
     }

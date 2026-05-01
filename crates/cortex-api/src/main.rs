@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::sync::Arc as StdArc;
 
 use cortex_api::{
@@ -35,12 +35,139 @@ struct Cli {
     /// Verbose tracing output.
     #[arg(long)]
     verbose: bool,
+    /// Phase3 §7.6-7.8 — admin subcommands manage the SQLite
+    /// `api_keys` table the dashboard auth middleware reads from.
+    /// When `Some(..)`, the daemon does not start; the subcommand
+    /// runs and the process exits.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum Command {
+    /// Manage dashboard API keys backing the
+    /// `CORTEX_DASHBOARD_AUTH=1` middleware.
+    Admin {
+        #[command(subcommand)]
+        op: AdminOp,
+    },
+}
+
+#[derive(Debug, Clone, Subcommand)]
+enum AdminOp {
+    /// Mint a new API key. Prints the cleartext exactly once;
+    /// only the Argon2id hash persists.
+    IssueApiKey {
+        /// Scope tag stored on the row. Today only `dashboard`
+        /// is honoured by the middleware; future scopes can carve
+        /// per-route auth (e.g. `query`, `ingest`).
+        #[arg(long, default_value = "dashboard")]
+        scope: String,
+        /// Human-readable label, e.g. `local-gui`, `staging-readonly`.
+        #[arg(long)]
+        label: String,
+    },
+    /// Print every key in the table — id, scope, label, timestamps.
+    /// Hashes are never printed.
+    ListApiKeys,
+    /// Soft-revoke a key by id. The middleware blocks the next
+    /// request that presents it.
+    RevokeApiKey {
+        /// ULID id of the key to revoke (from `list-api-keys`).
+        id: String,
+    },
+}
+
+/// Resolve the path of the `api_keys.sqlite` file. Honours the
+/// `CORTEX_API_KEYS_DB` env override; otherwise falls back to
+/// `~/.cortex/api_keys.sqlite` (or `/tmp/cortex-api-keys.sqlite`
+/// when `HOME` is unset, which only happens in the rare daemon-as-
+/// root config the dev-stack does not exercise).
+fn api_keys_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CORTEX_API_KEYS_DB") {
+        return PathBuf::from(p);
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    let dir = PathBuf::from(home).join(".cortex");
+    std::fs::create_dir_all(&dir).ok();
+    dir.join("api_keys.sqlite")
+}
+
+fn run_admin_op(op: AdminOp) -> Result<()> {
+    let path = api_keys_db_path();
+    let store = cortex_api::storage::api_keys::ApiKeyStore::open(&path)
+        .map_err(|e| anyhow::anyhow!("open api_keys store at {}: {e}", path.display()))?;
+    match op {
+        AdminOp::IssueApiKey { scope, label } => {
+            let issued = store
+                .issue(&scope, &label)
+                .map_err(|e| anyhow::anyhow!("issue: {e}"))?;
+            // Print the cleartext exactly once. Operators copy
+            // this value into the renderer's connection bearer
+            // field; no second chance.
+            println!("id:         {}", issued.id);
+            println!("scope:      {}", issued.scope);
+            println!("label:      {}", issued.label);
+            println!("created_at: {} (epoch ms)", issued.created_at_ms);
+            println!("key:        {}", issued.cleartext);
+            println!();
+            println!("This is the ONLY time the cleartext key is shown.");
+            println!("Persist it now; the daemon stores only the Argon2id hash.");
+        }
+        AdminOp::ListApiKeys => {
+            let rows = store
+                .list()
+                .map_err(|e| anyhow::anyhow!("list: {e}"))?;
+            if rows.is_empty() {
+                println!("(no keys issued)");
+                return Ok(());
+            }
+            println!(
+                "{:<26} {:<12} {:<24} {:<14} {:<14} {:<14}",
+                "id", "scope", "label", "created_at", "last_used_at", "revoked_at",
+            );
+            for r in rows {
+                println!(
+                    "{:<26} {:<12} {:<24} {:<14} {:<14} {:<14}",
+                    r.id,
+                    r.scope,
+                    r.label,
+                    r.created_at_ms,
+                    r.last_used_at_ms
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    r.revoked_at_ms
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                );
+            }
+        }
+        AdminOp::RevokeApiKey { id } => {
+            store
+                .revoke(&id)
+                .map_err(|e| anyhow::anyhow!("revoke: {e}"))?;
+            println!("revoked: {id}");
+        }
+    }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
+
+    if let Some(Command::Admin { op }) = cli.command {
+        // Admin subcommands run synchronously and exit; never start
+        // the HTTP listener. Keeps the surface narrow — operators
+        // running `cortex-api admin issue-api-key` should never
+        // accidentally bind a port.
+        return tokio::task::spawn_blocking(move || run_admin_op(op))
+            .await
+            .map_err(|e| anyhow::anyhow!("admin task join: {e}"))?;
+    }
 
     let vector_memory = Arc::new(MemoryVectorLane::new());
     let keyword_memory = Arc::new(MemoryKeywordLane::new());
@@ -642,9 +769,39 @@ async fn main() -> Result<()> {
         *guard = Some(snapshot);
     }
 
+    // Phase3 §7.4 — open the api_keys store and thread it into the
+    // router builder. When CORTEX_DASHBOARD_AUTH is unset/false the
+    // store is still opened (so admin subcommands can mint keys
+    // ahead of enabling the gate) but the middleware short-circuits
+    // and adds zero per-request overhead.
+    let api_keys_path = api_keys_db_path();
+    let api_keys_store: Option<Arc<cortex_api::storage::api_keys::ApiKeyStore>> =
+        match cortex_api::storage::api_keys::ApiKeyStore::open(&api_keys_path) {
+            Ok(s) => {
+                tracing::info!(
+                    path = %api_keys_path.display(),
+                    auth_enabled = cortex_api::auth::dashboard_auth_enabled(),
+                    "api_keys store opened",
+                );
+                Some(Arc::new(s))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %api_keys_path.display(),
+                    error = %e,
+                    "api_keys store unavailable; dashboard auth gate disabled even if env says enable"
+                );
+                None
+            }
+        };
+
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
-    let app = cortex_api::build_router_with(service, Some(dashboard_state));
+    let app = cortex_api::build_router_with_auth(
+        service,
+        Some(dashboard_state),
+        api_keys_store,
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

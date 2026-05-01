@@ -67,7 +67,7 @@ pub use audit::{build_envelope, AuditPublisher, MemoryAuditPublisher, STREAM_QUE
 pub use audit_store::{AuditStore, DEFAULT_STORE_CAPACITY as AUDIT_STORE_CAPACITY};
 pub use cache::{cache_key, Cache, CacheHandle, InMemoryCache, DEFAULT_TTL, SCHEMA_VERSION};
 pub use fusion::{rrf_fuse, FusionConfig, DEFAULT_RRF_ALPHA, RRF_K};
-pub use http::{build_router, build_router_with, CALLER_HEADER};
+pub use http::{build_router, build_router_with, build_router_with_auth, CALLER_HEADER};
 pub use lanes::{
     GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit, MemoryGraphLane,
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
