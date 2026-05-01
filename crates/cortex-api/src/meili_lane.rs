@@ -1126,4 +1126,93 @@ mod tests {
         assert!(filter.contains("occurred_at >= '2026-04-01T00:00:00Z'"));
         assert!(filter.contains("topics IN ['law']"));
     }
+
+    #[test]
+    fn build_meili_filter_never_emits_starts_with_across_input_matrix() {
+        // phase11h §4.4 regression guard — exhaust the input matrix
+        // across every dimension `build_meili_filter` reads and assert
+        // no combination produces `STARTS WITH`. The previous narrow
+        // test pinned a single fixture; this one walks the cross
+        // product of files / repo / topics / since over both per-repo
+        // and global index names so a future filter-builder edit cannot
+        // reintroduce the broken predicate via a path the old test
+        // didn't exercise.
+        let file_shapes: Vec<Vec<String>> = vec![
+            vec![],
+            vec!["a/".into()],
+            vec!["a/b/c.rs".into()],
+            vec!["a/".into(), "b/".into(), "c/d/e.rs".into()],
+            vec!["very/deep/nested/path/with/many/segments/".into()],
+            vec!["with-dash/".into(), "with_underscore/".into(), "with.dot/".into()],
+        ];
+        let repo_shapes = vec![None, Some("Cortex".to_string()), Some("VectorIzer".to_string())];
+        let topic_shapes = vec![
+            vec![],
+            vec!["code".into()],
+            vec!["code".into(), "doc".into(), "decision".into()],
+        ];
+        let since_shapes = vec![None, Some("2026-04-01T00:00:00Z".to_string())];
+        let index_shapes = vec![
+            "cortex-cortex-code",
+            "cortex-cortex-decisions",
+            "cortex-vectorizer-turns",
+            "cortex_turns",
+            "cortex_decisions",
+            "cortex_laws",
+        ];
+        let mut combos = 0_usize;
+        for files in &file_shapes {
+            for repo in &repo_shapes {
+                for topics in &topic_shapes {
+                    for since in &since_shapes {
+                        for index in &index_shapes {
+                            let mut s = scope();
+                            s.files = files.clone();
+                            s.repo = repo.clone();
+                            s.topics = topics.clone();
+                            s.since = since.clone();
+                            if let Some(filter) = build_meili_filter(&s, index) {
+                                assert!(
+                                    !filter.contains("STARTS WITH"),
+                                    "STARTS WITH leaked at index={index} files={files:?} repo={repo:?} topics={topics:?} since={since:?} → `{filter}`"
+                                );
+                                // While we're here, pin the positive
+                                // shape: any filter touching files
+                                // must use the `path_prefixes IN [..]`
+                                // form; any filter touching topics
+                                // must use `topics IN [..]`. Both are
+                                // the contract Meili accepts.
+                                // When the filter mentions
+                                // `path_prefixes`, it MUST be in the
+                                // `IN [..]` form. Some indexes drop
+                                // the clause entirely (global ones
+                                // without `path_prefixes` as a
+                                // filterable attribute) — that's the
+                                // expected "skip" behaviour and not
+                                // a regression.
+                                if filter.contains("path_prefixes") {
+                                    assert!(
+                                        filter.contains("path_prefixes IN ["),
+                                        "path_prefixes mentioned but not in IN form at index={index} → `{filter}`"
+                                    );
+                                }
+                                if filter.contains(" topics ")
+                                    || filter.contains("(topics ")
+                                    || filter.starts_with("topics ")
+                                {
+                                    assert!(
+                                        filter.contains("topics IN ["),
+                                        "topics mentioned but not in IN form at index={index} → `{filter}`"
+                                    );
+                                }
+                            }
+                            combos += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // 6 file shapes × 3 repos × 3 topic shapes × 2 since × 6 indexes = 648.
+        assert_eq!(combos, 6 * 3 * 3 * 2 * 6);
+    }
 }
