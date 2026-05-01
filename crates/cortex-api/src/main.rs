@@ -877,13 +877,15 @@ async fn audit_coverage_at_boot(
         return None;
     }
 
-    let response = cortex_api::coverage::run_coverage_audit(
+    let archive_watchers = cortex_api::coverage::resolve_archive_watcher_urls();
+    let response = cortex_api::coverage::run_coverage_audit_with_archive_watchers(
         &http,
         slugs,
         vectorizer_url.as_deref(),
         bearer.as_deref(),
         meili_url.as_deref(),
         meili_key.as_deref(),
+        &archive_watchers,
         Duration::from_secs(5),
     )
     .await;

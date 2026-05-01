@@ -216,10 +216,9 @@ where
         .into_iter()
         .filter(|e| match e.kind {
             WalkKind::Session => starts_with(&e.path, &config.root.join("projects")),
-            WalkKind::GlobalHistory
-            | WalkKind::Todo
-            | WalkKind::Plan
-            | WalkKind::Settings => !config.projects_only && config.sidecars,
+            WalkKind::GlobalHistory | WalkKind::Todo | WalkKind::Plan | WalkKind::Settings => {
+                !config.projects_only && config.sidecars
+            }
             WalkKind::CodexHistory | WalkKind::CodexSession => config.codex,
         })
         .collect()
@@ -229,9 +228,7 @@ fn read_dir_sorted(dir: &Path) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut paths: Vec<PathBuf> = rd
-        .filter_map(|r| r.ok().map(|e| e.path()))
-        .collect();
+    let mut paths: Vec<PathBuf> = rd.filter_map(|r| r.ok().map(|e| e.path())).collect();
     paths.sort();
     paths
 }

@@ -339,6 +339,178 @@ pub struct CoverageResponse {
     pub backends: Vec<BackendCoverage>,
     /// Overall severity (worst across backends).
     pub overall_severity: &'static str,
+    /// Phase11i §5.2 — per-watcher health summary for every
+    /// configured `cortex-claude-archive` instance. Empty when no
+    /// `CORTEX_ARCHIVE_WATCHER_URLS` are configured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archive_watchers: Vec<ArchiveWatcherSummary>,
+}
+
+/// Phase11i §5.2 — one entry under
+/// `CoverageResponse.archive_watchers`. Mirrors the JSON returned by
+/// the watcher's `:17030/healthz` endpoint plus the probed URL and
+/// (when the probe failed) a human-readable error string. The
+/// watcher uses `cortex_claude_archive::tail::HealthSnapshot` as the
+/// source of truth; this type re-shapes it into a cortex-api-owned
+/// surface so the dashboard does not depend on the watcher crate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArchiveWatcherSummary {
+    /// URL probed (matches one of `CORTEX_ARCHIVE_WATCHER_URLS`).
+    pub url: String,
+    /// `"healthy"` / `"degraded: <reason>"` / `"unreachable"`.
+    pub status: String,
+    /// Epoch ms of the watcher's most recent emitter flush.
+    /// `0` when the watcher reports no flushes yet (cold start).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub last_flush_ts: i64,
+    /// `.jsonl` files the watcher's most recent walk surfaced.
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub files_watched: usize,
+    /// Envelopes per second over the watcher's most recent sample.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub envelope_rate: f64,
+    /// Process RSS in bytes (sysinfo).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub rss_bytes: u64,
+    /// Cumulative envelopes emitted since the watcher started.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub envelopes_emitted: u64,
+    /// Cumulative envelopes the watcher rejected.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub envelopes_dropped: u64,
+    /// Wall-clock ms since the watcher started.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub uptime_ms: u64,
+    /// Probe error, when the watcher could not be reached / parsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+fn is_zero_usize(v: &usize) -> bool {
+    *v == 0
+}
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
+}
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct WatcherHealthBody {
+    #[serde(default)]
+    last_flush_ts: i64,
+    #[serde(default)]
+    files_watched: usize,
+    #[serde(default)]
+    envelope_rate: f64,
+    #[serde(default)]
+    rss_bytes: u64,
+    #[serde(default)]
+    envelopes_emitted: u64,
+    #[serde(default)]
+    envelopes_dropped: u64,
+    #[serde(default)]
+    uptime_ms: u64,
+    #[serde(default)]
+    status: String,
+}
+
+/// Phase11i §5.2 — probe one watcher's `/healthz` endpoint and
+/// return a summary suitable for the coverage payload. Surfaces
+/// transport / parse errors as `status = "unreachable"` with the
+/// upstream message in `error` so the dashboard can render the
+/// degradation without crashing.
+pub async fn fetch_archive_watcher_status(
+    http: &reqwest::Client,
+    url: &str,
+    timeout: std::time::Duration,
+) -> ArchiveWatcherSummary {
+    let probe_url = format!("{}/healthz", url.trim_end_matches('/'));
+    let send = http.get(&probe_url).timeout(timeout).send().await;
+    let resp = match send {
+        Ok(r) => r,
+        Err(err) => {
+            return ArchiveWatcherSummary {
+                url: url.to_string(),
+                status: "unreachable".into(),
+                last_flush_ts: 0,
+                files_watched: 0,
+                envelope_rate: 0.0,
+                rss_bytes: 0,
+                envelopes_emitted: 0,
+                envelopes_dropped: 0,
+                uptime_ms: 0,
+                error: Some(format!("GET {probe_url}: {err}")),
+            };
+        }
+    };
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return ArchiveWatcherSummary {
+            url: url.to_string(),
+            status: "unreachable".into(),
+            last_flush_ts: 0,
+            files_watched: 0,
+            envelope_rate: 0.0,
+            rss_bytes: 0,
+            envelopes_emitted: 0,
+            envelopes_dropped: 0,
+            uptime_ms: 0,
+            error: Some(format!("{probe_url} returned {status}: {body}")),
+        };
+    }
+    match resp.json::<WatcherHealthBody>().await {
+        Ok(body) => ArchiveWatcherSummary {
+            url: url.to_string(),
+            status: if body.status.is_empty() {
+                "healthy".into()
+            } else {
+                body.status
+            },
+            last_flush_ts: body.last_flush_ts,
+            files_watched: body.files_watched,
+            envelope_rate: body.envelope_rate,
+            rss_bytes: body.rss_bytes,
+            envelopes_emitted: body.envelopes_emitted,
+            envelopes_dropped: body.envelopes_dropped,
+            uptime_ms: body.uptime_ms,
+            error: None,
+        },
+        Err(err) => ArchiveWatcherSummary {
+            url: url.to_string(),
+            status: "unreachable".into(),
+            last_flush_ts: 0,
+            files_watched: 0,
+            envelope_rate: 0.0,
+            rss_bytes: 0,
+            envelopes_emitted: 0,
+            envelopes_dropped: 0,
+            uptime_ms: 0,
+            error: Some(format!("parse {probe_url}: {err}")),
+        },
+    }
+}
+
+/// Phase11i §5.2 — resolve archive watcher URLs from the
+/// `CORTEX_ARCHIVE_WATCHER_URLS` env var (comma-separated). Empty
+/// / unset returns an empty Vec so the coverage path skips the
+/// archive_watchers block entirely.
+pub fn resolve_archive_watcher_urls() -> Vec<String> {
+    std::env::var("CORTEX_ARCHIVE_WATCHER_URLS")
+        .ok()
+        .map(|raw| {
+            raw.split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn severity_label(s: CoverageSeverity) -> &'static str {
@@ -385,6 +557,34 @@ pub async fn run_coverage_audit(
     meili_api_key: Option<&str>,
     timeout: std::time::Duration,
 ) -> CoverageResponse {
+    run_coverage_audit_with_archive_watchers(
+        http,
+        slugs,
+        vectorizer_url,
+        vectorizer_bearer,
+        meili_url,
+        meili_api_key,
+        &[],
+        timeout,
+    )
+    .await
+}
+
+/// Phase11i §5.2 — same as [`run_coverage_audit`] but also probes
+/// every URL in `archive_watcher_urls` for its `:17030/healthz`
+/// snapshot. Used by the live `/v1/health/coverage` handler so the
+/// dashboard surfaces watcher health alongside the lane backends.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coverage_audit_with_archive_watchers(
+    http: &reqwest::Client,
+    slugs: BTreeSet<String>,
+    vectorizer_url: Option<&str>,
+    vectorizer_bearer: Option<&str>,
+    meili_url: Option<&str>,
+    meili_api_key: Option<&str>,
+    archive_watcher_urls: &[String],
+    timeout: std::time::Duration,
+) -> CoverageResponse {
     let expected = expected_collections(&slugs);
     let mut backends: Vec<BackendCoverage> = Vec::with_capacity(2);
     let mut overall = CoverageSeverity::Ok;
@@ -426,11 +626,17 @@ pub async fn run_coverage_audit(
         ));
     }
 
+    let mut archive_watchers: Vec<ArchiveWatcherSummary> = Vec::new();
+    for url in archive_watcher_urls {
+        archive_watchers.push(fetch_archive_watcher_status(http, url, timeout).await);
+    }
+
     CoverageResponse {
         slugs: slugs.into_iter().collect(),
         families: EXPECTED_FAMILIES.to_vec(),
         backends,
         overall_severity: severity_label(overall),
+        archive_watchers,
     }
 }
 
@@ -462,6 +668,69 @@ mod tests {
 
     fn live(s: &[&str]) -> BTreeSet<String> {
         s.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn resolve_archive_watcher_urls_splits_csv_and_trims() {
+        let prior = std::env::var("CORTEX_ARCHIVE_WATCHER_URLS").ok();
+        std::env::set_var(
+            "CORTEX_ARCHIVE_WATCHER_URLS",
+            "http://a:17030 , http://b:17030,, http://c:17030",
+        );
+        let v = resolve_archive_watcher_urls();
+        assert_eq!(
+            v,
+            vec![
+                "http://a:17030".to_string(),
+                "http://b:17030".to_string(),
+                "http://c:17030".to_string()
+            ]
+        );
+        std::env::remove_var("CORTEX_ARCHIVE_WATCHER_URLS");
+        assert!(resolve_archive_watcher_urls().is_empty());
+        if let Some(v) = prior {
+            std::env::set_var("CORTEX_ARCHIVE_WATCHER_URLS", v);
+        }
+    }
+
+    #[test]
+    fn archive_watcher_summary_serialises_zero_fields_compactly() {
+        // Fields default to 0 / 0.0 / empty get skipped via
+        // `skip_serializing_if`, so an unreachable watcher payload
+        // stays compact (just `url`, `status`, `error`).
+        let s = ArchiveWatcherSummary {
+            url: "http://x:17030".into(),
+            status: "unreachable".into(),
+            last_flush_ts: 0,
+            files_watched: 0,
+            envelope_rate: 0.0,
+            rss_bytes: 0,
+            envelopes_emitted: 0,
+            envelopes_dropped: 0,
+            uptime_ms: 0,
+            error: Some("connection refused".into()),
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj.get("url").unwrap(), "http://x:17030");
+        assert_eq!(obj.get("status").unwrap(), "unreachable");
+        assert_eq!(obj.get("error").unwrap(), "connection refused");
+        assert!(!obj.contains_key("last_flush_ts"));
+        assert!(!obj.contains_key("envelope_rate"));
+        assert!(!obj.contains_key("envelopes_emitted"));
+    }
+
+    #[test]
+    fn coverage_response_omits_archive_watchers_when_empty() {
+        let resp = CoverageResponse {
+            slugs: vec!["cortex".into()],
+            families: EXPECTED_FAMILIES.to_vec(),
+            backends: vec![],
+            overall_severity: "ok",
+            archive_watchers: Vec::new(),
+        };
+        let v = serde_json::to_value(&resp).unwrap();
+        assert!(!v.as_object().unwrap().contains_key("archive_watchers"));
     }
 
     #[test]

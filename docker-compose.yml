@@ -329,6 +329,12 @@ services:
       CORTEX_EMBEDDER_WORKER_URL: http://cortex-embedder-worker:17022/healthz
       CORTEX_FULLTEXT_WORKER_URL: http://cortex-fulltext-worker:17023/healthz
       CORTEX_GRAPH_WORKER_URL: http://cortex-graph-worker:17024/healthz
+      # phase11i §5.2 — comma-separated list of cortex-claude-archive
+      # `:17030/healthz` endpoints. /v1/health/coverage probes each one
+      # and surfaces the snapshot under `archive_watchers`. Defaults to
+      # the in-compose service; multi-watcher operators add additional
+      # entries via the env file.
+      CORTEX_ARCHIVE_WATCHER_URLS: ${CORTEX_ARCHIVE_WATCHER_URLS:-http://cortex-claude-archive:17030}
     volumes:
       # Same host bind-mount as cortex-ingestion — the daemon reads
       # the archive at boot to seed the keyword lane (drives the

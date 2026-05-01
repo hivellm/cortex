@@ -37,12 +37,15 @@ pub mod checkpoint;
 pub mod emitter;
 pub mod mapper;
 pub mod reader;
+pub mod tail;
 pub mod types;
 pub mod walker;
 
 pub use checkpoint::{Checkpoint, CheckpointStore};
-pub use emitter::{envelope_to_value, ArchiveEmitter, EmitError, Emitter, StdoutEmitter, STREAM_TAG};
-pub use mapper::{map_session, MappedEnvelope, MapStats};
+pub use emitter::{
+    envelope_to_value, ArchiveEmitter, EmitError, Emitter, StdoutEmitter, STREAM_TAG,
+};
+pub use mapper::{map_session, MapStats, MappedEnvelope};
 pub use reader::{read_records, ReadStats};
 pub use types::{ArchiveError, JsonlRecord, RecordKind};
 pub use walker::{walk, walk_filtered, WalkConfig, WalkEntry, WalkKind};

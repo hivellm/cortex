@@ -193,10 +193,11 @@ impl CheckpointStore {
                 path: tmp_path.display().to_string(),
                 source,
             })?;
-        file.write_all(&bytes).map_err(|source| CheckpointError::Io {
-            path: tmp_path.display().to_string(),
-            source,
-        })?;
+        file.write_all(&bytes)
+            .map_err(|source| CheckpointError::Io {
+                path: tmp_path.display().to_string(),
+                source,
+            })?;
         file.sync_all().map_err(|source| CheckpointError::Io {
             path: tmp_path.display().to_string(),
             source,

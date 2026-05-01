@@ -173,9 +173,7 @@ pub fn map_session(
                     // assistant content is searchable; the graph
                     // writer can stitch the parent later if it
                     // arrives via a different file.
-                    if let Some(turn) =
-                        build_turn_assistant_only(r, &session_id, occurred_at)
-                    {
+                    if let Some(turn) = build_turn_assistant_only(r, &session_id, occurred_at) {
                         stats.turns_emitted += 1;
                         let turn_id = turn.event_id.clone();
                         out.push(turn);
@@ -201,9 +199,10 @@ pub fn map_session(
                     .uuid
                     .as_deref()
                     .map(|u| {
-                        records
-                            .iter()
-                            .any(|other| other.kind.as_deref() == Some("assistant") && other.parent_uuid.as_deref() == Some(u))
+                        records.iter().any(|other| {
+                            other.kind.as_deref() == Some("assistant")
+                                && other.parent_uuid.as_deref() == Some(u)
+                        })
                     })
                     .unwrap_or(false);
                 if !already_paired {
@@ -219,7 +218,10 @@ pub fn map_session(
             // Folded into parent ToolCall via extract_tool_calls
             // when the parent is visible. Standalone attachments
             // never become envelopes on their own.
-            "attachment" | "system" | "file-history-snapshot" | "last-prompt"
+            "attachment"
+            | "system"
+            | "file-history-snapshot"
+            | "last-prompt"
             | "queue-operation" => {
                 stats.dropped_records += 1;
             }
@@ -322,7 +324,10 @@ fn build_turn(
         occurred_at,
         session_id: session_id.to_string(),
         cwd: assistant.cwd.clone().or_else(|| user.cwd.clone()),
-        git_branch: assistant.git_branch.clone().or_else(|| user.git_branch.clone()),
+        git_branch: assistant
+            .git_branch
+            .clone()
+            .or_else(|| user.git_branch.clone()),
         model: assistant_model(assistant),
         repo_slug: None,
         parent_event_id: None,
@@ -550,11 +555,20 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(stats.turns_emitted, 1);
         assert_eq!(stats.tool_calls_emitted, 1);
-        let tool_call = out.iter().find(|e| e.kind == EnvelopeKind::ToolCall).unwrap();
+        let tool_call = out
+            .iter()
+            .find(|e| e.kind == EnvelopeKind::ToolCall)
+            .unwrap();
         assert_eq!(tool_call.payload["tool_name"], json!("Bash"));
         assert_eq!(
             tool_call.parent_event_id.as_deref(),
-            Some(out.iter().find(|e| e.kind == EnvelopeKind::Turn).unwrap().event_id.as_str())
+            Some(
+                out.iter()
+                    .find(|e| e.kind == EnvelopeKind::Turn)
+                    .unwrap()
+                    .event_id
+                    .as_str()
+            )
         );
     }
 

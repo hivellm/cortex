@@ -412,13 +412,15 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
         .ok()
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
-    let response = crate::coverage::run_coverage_audit(
+    let archive_watchers = crate::coverage::resolve_archive_watcher_urls();
+    let response = crate::coverage::run_coverage_audit_with_archive_watchers(
         &http,
         slugs,
         vectorizer_url.as_deref(),
         bearer.as_deref(),
         meili_url.as_deref(),
         meili_key.as_deref(),
+        &archive_watchers,
         Duration::from_secs(5),
     )
     .await;

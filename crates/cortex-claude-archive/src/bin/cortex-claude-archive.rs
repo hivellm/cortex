@@ -33,8 +33,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use cortex_claude_archive::{
-    map_session, read_records, walk, ArchiveEmitter, CheckpointStore, Emitter, MapStats,
-    ReadStats, StdoutEmitter, WalkConfig, WalkEntry, WalkKind,
+    map_session, read_records, walk, ArchiveEmitter, CheckpointStore, Emitter, MapStats, ReadStats,
+    StdoutEmitter, WalkConfig, WalkEntry, WalkKind,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -92,7 +92,11 @@ impl CommonRootArgs {
         // pair is otherwise wired so the caller can explicitly
         // select projects-only OR sidecars-on; the implication
         // here covers the natural case.
-        let projects_only = if self.sidecars { false } else { self.projects_only };
+        let projects_only = if self.sidecars {
+            false
+        } else {
+            self.projects_only
+        };
         Ok(WalkConfig {
             root,
             projects_only,
@@ -139,6 +143,15 @@ struct BootstrapArgs {
 struct TailArgs {
     #[command(flatten)]
     common: CommonRootArgs,
+    /// Where to ship envelopes. The watcher defaults to the
+    /// archive sink so cortex-api's archive_loader picks them up
+    /// at boot; flip to stdout for local debugging.
+    #[arg(long, value_enum, default_value_t = SinkChoice::Archive)]
+    sink: SinkChoice,
+    /// Archive root (only used when `--sink archive`). Defaults to
+    /// `$CORTEX_ARCHIVE_ROOT` or `~/.cortex/archive`.
+    #[arg(long, value_name = "PATH")]
+    archive_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -155,6 +168,13 @@ fn main() -> Result<()> {
         Command::Bootstrap(args) => run_bootstrap(args),
         Command::Tail(args) => run_tail(args),
     }
+}
+
+fn build_runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("build tokio runtime")
 }
 
 fn init_tracing(verbose: bool) {
@@ -179,10 +199,17 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
         .count();
     let sidecar_count = entries.len() - session_count;
     println!("root            : {}", cfg.root.display());
-    println!("scan mode       : projects_only={} sidecars={} codex={}", cfg.projects_only, cfg.sidecars, cfg.codex);
+    println!(
+        "scan mode       : projects_only={} sidecars={} codex={}",
+        cfg.projects_only, cfg.sidecars, cfg.codex
+    );
     println!("session files   : {session_count}");
     println!("sidecar files   : {sidecar_count}");
-    println!("bytes total     : {} ({} MiB)", bytes_total, bytes_total / (1024 * 1024));
+    println!(
+        "bytes total     : {} ({} MiB)",
+        bytes_total,
+        bytes_total / (1024 * 1024)
+    );
     // Rough envelope estimate: ~30% of records map to Turn /
     // ToolCall / AgentCall (the rest are attachment / system /
     // file-history snapshots the mapper drops). 800 records per
@@ -205,11 +232,11 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         })
         .collect();
 
-    let checkpoint_path = args.checkpoint.clone().unwrap_or_else(|| {
-        cfg.root.join(".cortex-claude-archive.checkpoint.json")
-    });
-    let mut checkpoint =
-        CheckpointStore::load(&checkpoint_path).context("loading checkpoint")?;
+    let checkpoint_path = args
+        .checkpoint
+        .clone()
+        .unwrap_or_else(|| cfg.root.join(".cortex-claude-archive.checkpoint.json"));
+    let mut checkpoint = CheckpointStore::load(&checkpoint_path).context("loading checkpoint")?;
 
     let emitter: Box<dyn Emitter> = match args.sink {
         SinkChoice::Stdout => Box::new(StdoutEmitter::new()),
@@ -274,7 +301,10 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         // granularity; future versions track byte offset for
         // partially-processed files.
         if args.resume {
-            if checkpoint.get(&entry.project_dir, &session_filename).is_some() {
+            if checkpoint
+                .get(&entry.project_dir, &session_filename)
+                .is_some()
+            {
                 bar.inc(1);
                 continue;
             }
@@ -339,24 +369,53 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
     }
 
     emitter.flush().context("flushing emitter")?;
-    checkpoint.save_atomic().context("saving final checkpoint")?;
+    checkpoint
+        .save_atomic()
+        .context("saving final checkpoint")?;
     bar.finish_with_message("done");
 
     println!();
-    println!("envelopes emitted : {}", envelopes_emitted.load(Ordering::Relaxed));
-    println!("envelopes dropped : {}", envelopes_dropped.load(Ordering::Relaxed));
-    println!("records consumed  : {}", records_consumed.load(Ordering::Relaxed));
+    println!(
+        "envelopes emitted : {}",
+        envelopes_emitted.load(Ordering::Relaxed)
+    );
+    println!(
+        "envelopes dropped : {}",
+        envelopes_dropped.load(Ordering::Relaxed)
+    );
+    println!(
+        "records consumed  : {}",
+        records_consumed.load(Ordering::Relaxed)
+    );
     println!("checkpoint        : {}", checkpoint_path.display());
     Ok(())
 }
 
 fn run_tail(args: TailArgs) -> Result<()> {
     let cfg = args.common.resolve()?;
-    println!(
-        "tail: not yet implemented — phase11i §5 ships the watcher daemon. Run `bootstrap` for one-shot ingest. Root would be {}.",
-        cfg.root.display()
+    let emitter: Box<dyn Emitter> = match args.sink {
+        SinkChoice::Stdout => Box::new(StdoutEmitter::new()),
+        SinkChoice::Archive => {
+            let root = match args.archive_root {
+                Some(p) => p,
+                None => default_archive_root()?,
+            };
+            Box::new(ArchiveEmitter::new(root, 3))
+        }
+    };
+    let bind = cortex_claude_archive::tail::resolve_health_bind()?;
+    let interval = cortex_claude_archive::tail::resolve_poll_interval();
+    tracing::info!(
+        root = %cfg.root.display(),
+        sink = ?args.sink,
+        bind = %bind,
+        interval_ms = interval.as_millis() as u64,
+        "tail watcher starting (phase11i §5.2)"
     );
-    Ok(())
+    let rt = build_runtime()?;
+    rt.block_on(cortex_claude_archive::tail::run_tail_daemon(
+        cfg, emitter, bind, interval,
+    ))
 }
 
 fn log_read_stats(path: &std::path::Path, stats: &ReadStats) {

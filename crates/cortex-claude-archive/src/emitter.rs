@@ -171,10 +171,7 @@ impl ArchiveEmitter {
         let sequence = next_free_sequence(&dir, &self.stream_tag)?;
         let filename = archive_filename(&self.stream_tag, sequence);
         let path = dir.join(&filename);
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         let encoder = zstd::Encoder::new(BufWriter::new(file), self.level)?.auto_finish();
         open.insert(key, ArchiveFile { path, encoder });
         Ok(())
@@ -328,7 +325,9 @@ mod tests {
     fn archive_emitter_creates_partition_dir_on_first_emit() {
         let dir = tempdir().unwrap();
         let emitter = ArchiveEmitter::new(dir.path().to_path_buf(), 1);
-        emitter.emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z")).unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z"))
+            .unwrap();
         emitter.flush().unwrap();
         // archive_partition splits into year=YYYY/month=MM/day=DD/hour=HH.
         let p = dir
@@ -349,35 +348,35 @@ mod tests {
     fn next_free_sequence_picks_zero_for_empty_dir() {
         let dir = tempdir().unwrap();
         std::fs::create_dir_all(dir.path()).unwrap();
-        assert_eq!(next_free_sequence(dir.path(), "bootstrap-claude").unwrap(), 0);
+        assert_eq!(
+            next_free_sequence(dir.path(), "bootstrap-claude").unwrap(),
+            0
+        );
     }
 
     #[test]
     fn next_free_sequence_skips_used_numbers() {
         let dir = tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("bootstrap-claude-00000.parquet"),
-            b"",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("bootstrap-claude-00007.parquet"),
-            b"",
-        )
-        .unwrap();
-        assert_eq!(next_free_sequence(dir.path(), "bootstrap-claude").unwrap(), 8);
+        std::fs::write(dir.path().join("bootstrap-claude-00000.parquet"), b"").unwrap();
+        std::fs::write(dir.path().join("bootstrap-claude-00007.parquet"), b"").unwrap();
+        assert_eq!(
+            next_free_sequence(dir.path(), "bootstrap-claude").unwrap(),
+            8
+        );
     }
 
     #[test]
     fn second_emit_in_same_hour_uses_same_file() {
         let dir = tempdir().unwrap();
         let emitter = ArchiveEmitter::new(dir.path().to_path_buf(), 1);
-        emitter.emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z")).unwrap();
-        emitter.emit(&fixture(EnvelopeKind::ToolCall, "2026-04-20T17:50:00Z")).unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z"))
+            .unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::ToolCall, "2026-04-20T17:50:00Z"))
+            .unwrap();
         emitter.flush().unwrap();
-        let p = dir
-            .path()
-            .join("events/year=2026/month=04/day=20/hour=17");
+        let p = dir.path().join("events/year=2026/month=04/day=20/hour=17");
         let count = std::fs::read_dir(&p).unwrap().count();
         assert_eq!(count, 1);
     }
@@ -386,8 +385,12 @@ mod tests {
     fn second_emit_in_different_hour_opens_new_file() {
         let dir = tempdir().unwrap();
         let emitter = ArchiveEmitter::new(dir.path().to_path_buf(), 1);
-        emitter.emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z")).unwrap();
-        emitter.emit(&fixture(EnvelopeKind::Turn, "2026-04-20T18:00:00Z")).unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z"))
+            .unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::Turn, "2026-04-20T18:00:00Z"))
+            .unwrap();
         emitter.flush().unwrap();
         let h17 = dir.path().join("events/year=2026/month=04/day=20/hour=17");
         let h18 = dir.path().join("events/year=2026/month=04/day=20/hour=18");
@@ -399,9 +402,13 @@ mod tests {
     fn flush_closes_files_so_next_emit_picks_next_sequence() {
         let dir = tempdir().unwrap();
         let emitter = ArchiveEmitter::new(dir.path().to_path_buf(), 1);
-        emitter.emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z")).unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z"))
+            .unwrap();
         emitter.flush().unwrap();
-        emitter.emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:49:00Z")).unwrap();
+        emitter
+            .emit(&fixture(EnvelopeKind::Turn, "2026-04-20T17:49:00Z"))
+            .unwrap();
         emitter.flush().unwrap();
         let p = dir.path().join("events/year=2026/month=04/day=20/hour=17");
         let files: Vec<_> = std::fs::read_dir(&p).unwrap().flatten().collect();
