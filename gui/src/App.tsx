@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 import { Header } from "./shell/Header";
 import { Sidebar, type ViewId } from "./shell/Sidebar";
 import { Tweaks } from "./shell/Tweaks";
+import { WindowChrome } from "./shell/WindowChrome";
 import { TimelineView } from "./views/Timeline";
 import { MemoryView } from "./views/Memory";
 import { RetentionView } from "./views/Retention";
@@ -98,6 +99,7 @@ function AppShell() {
   return (
     <FiltersContext.Provider value={filtersValue}>
       <div className={`app ${collapsed ? "collapsed" : ""}`}>
+        <WindowChrome />
         <Header
           collapsed={collapsed}
           onToggleSidebar={onToggleSidebar}
