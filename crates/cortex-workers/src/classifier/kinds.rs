@@ -29,6 +29,19 @@ pub fn kind_from_bootstrap(kind: &str) -> Result<Kind, KindMapError> {
         "analysis.imported" | "analysis" => Ok(Kind::Analysis),
         "knowledge.imported" | "knowledge" => Ok(Kind::Knowledge),
         "learning.imported" | "learning" => Ok(Kind::Learning),
+        // Phase11i §2.1 — `cortex-claude-archive` ships envelopes
+        // tagged with the canonical kind shape (`turn`/`tool_call`/
+        // `agent_call`) but the spec contemplates per-tool variants
+        // for future cross-AI work. Accept the dotted-suffix shape
+        // so a future emitter can stamp `turn.claude-code` /
+        // `turn.openai-codex` without further classifier churn.
+        "turn.claude-code" | "turn.openai-codex" | "turn.cursor" | "turn.gemini" => {
+            Ok(Kind::Turn)
+        }
+        "tool_call.claude-code" | "tool_call.openai-codex" | "tool_call.cursor"
+        | "tool_call.gemini" => Ok(Kind::ToolCall),
+        "agent_call.claude-code" | "agent_call.openai-codex" | "agent_call.cursor"
+        | "agent_call.gemini" => Ok(Kind::AgentCall),
         _ => Err(KindMapError::Unknown(kind.to_string())),
     }
 }
@@ -95,5 +108,46 @@ mod tests {
     #[test]
     fn unknown_kind_errors() {
         assert!(kind_from_bootstrap("not_a_real_kind").is_err());
+    }
+
+    // Phase11i §2.1 regression guards — the claude-archive
+    // emitter writes the canonical `turn` / `tool_call` /
+    // `agent_call` strings today; future emitters may carry the
+    // dotted-suffix tool variant. Both shapes must resolve to the
+    // same Kind so the worker stays tool-agnostic.
+    #[test]
+    fn claude_code_dotted_variants_map_to_canonical_kinds() {
+        assert_eq!(
+            kind_from_bootstrap("turn.claude-code").unwrap(),
+            Kind::Turn
+        );
+        assert_eq!(
+            kind_from_bootstrap("tool_call.claude-code").unwrap(),
+            Kind::ToolCall
+        );
+        assert_eq!(
+            kind_from_bootstrap("agent_call.claude-code").unwrap(),
+            Kind::AgentCall
+        );
+    }
+
+    #[test]
+    fn openai_codex_dotted_variants_map_to_canonical_kinds() {
+        assert_eq!(
+            kind_from_bootstrap("turn.openai-codex").unwrap(),
+            Kind::Turn
+        );
+        assert_eq!(
+            kind_from_bootstrap("tool_call.openai-codex").unwrap(),
+            Kind::ToolCall
+        );
+    }
+
+    #[test]
+    fn dotted_variants_are_case_insensitive() {
+        assert_eq!(
+            kind_from_bootstrap("Turn.Claude-Code").unwrap(),
+            Kind::Turn
+        );
     }
 }

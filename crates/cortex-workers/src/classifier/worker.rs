@@ -363,6 +363,12 @@ struct NormalisedEvent {
     /// `session_id`; bootstrap events fall back to whatever they
     /// stamped at synthesis time.
     session_id: Option<String>,
+    /// Phase11i §2.2 — the originating tool tag (`claude-code`,
+    /// `openai-codex`, `bootstrap`, etc.). Carried through so the
+    /// post-classify hook can stamp a `tool:<name>` topic without
+    /// re-deserialising the envelope.
+    #[serde(default)]
+    tool: Option<String>,
 }
 
 impl NormalisedEvent {
@@ -390,6 +396,11 @@ impl NormalisedEvent {
         } else {
             Some(env.session_id.clone())
         };
+        let tool = if env.tool.is_empty() {
+            None
+        } else {
+            Some(env.tool.clone())
+        };
         Ok(Self {
             event_id: env.event_id,
             kind: env.kind,
@@ -399,6 +410,7 @@ impl NormalisedEvent {
             context_path,
             parent_event_id: env.parent_event_id,
             session_id,
+            tool,
         })
     }
 
@@ -442,6 +454,15 @@ impl NormalisedEvent {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        // Phase11i §2.2 — bootstrap events that came from
+        // `cortex-claude-archive` carry a top-level `tool` field
+        // (`claude-code` / `openai-codex`); preserve it so the
+        // post-classify hook can stamp a matching topic.
+        let tool = payload
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
         Ok(Self {
             event_id,
             kind,
@@ -451,6 +472,7 @@ impl NormalisedEvent {
             context_path,
             parent_event_id: None,
             session_id,
+            tool,
         })
     }
 
@@ -462,6 +484,10 @@ impl NormalisedEvent {
             redacted_payload: self.redacted_payload.clone(),
             context_repo: self.context_repo.clone(),
         }
+        // `tool` lives on `NormalisedEvent` — it does not flow
+        // into the classifier (kept tool-agnostic) but the
+        // post-classify hook in `process_one` reads it from the
+        // normalised value to stamp a `tool:<name>` topic.
     }
 
     fn into_enriched(self, classifier: ClassifierOutput) -> EnrichedEvent {
@@ -731,10 +757,28 @@ impl Worker {
                 )]
             }
         };
-        let classifier_output = outputs
+        let mut classifier_output = outputs
             .into_iter()
             .next()
             .unwrap_or_else(|| static_fallback_output(&normalised, &self.config.prompt_version));
+
+        // Phase11i §2.2 — stamp a `tool:<name>` topic so the
+        // retrieval layer can filter on the originating AI agent
+        // (`claude-code` / `openai-codex` / etc.). The classifier
+        // proper does not see the envelope's `tool` field, so we
+        // patch it here from the normalised event. Idempotent —
+        // duplicate topic strings get deduped a few lines below
+        // when the classifier-side dedupe runs (`topics.dedup()`
+        // in StaticClassifier::classify_batch). Only stamp when
+        // the tool tag is non-empty and not already present.
+        if let Some(tool) = normalised.tool.as_deref() {
+            if !tool.is_empty() {
+                let topic = format!("tool:{tool}");
+                if !classifier_output.topics.iter().any(|t| t == &topic) {
+                    classifier_output.topics.push(topic);
+                }
+            }
+        }
 
         // 4. Publish enriched.
         let enriched = normalised.into_enriched(classifier_output);
@@ -815,5 +859,83 @@ fn static_fallback_output(n: &NormalisedEvent, prompt_version: &str) -> Classifi
         latency_ms: 0,
         tokens_in: 0,
         tokens_out: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Phase11i §2.3 — bootstrap envelopes from cortex-claude-archive
+    /// carry a top-level `tool` field. NormalisedEvent must
+    /// preserve it so the post-classify hook can stamp the
+    /// `tool:<name>` topic.
+    #[test]
+    fn bootstrap_envelope_with_tool_field_normalises_with_tool() {
+        let payload = json!({
+            "event_id": "01TEST0000000000000000000A",
+            "kind": "turn",
+            "content_hash": "sha256:abc",
+            "redacted_payload": {"user_message": "hi", "assistant_message": "hello"},
+            "session_id": "sess-1",
+            "tool": "claude-code",
+            "source": {"repo": "Cortex"}
+        });
+        let norm = NormalisedEvent::from_bootstrap_event(&payload).expect("normalise");
+        assert_eq!(norm.tool.as_deref(), Some("claude-code"));
+        assert_eq!(norm.kind, Kind::Turn);
+        assert_eq!(norm.session_id.as_deref(), Some("sess-1"));
+    }
+
+    #[test]
+    fn bootstrap_envelope_without_tool_field_normalises_with_none() {
+        let payload = json!({
+            "event_id": "01TEST0000000000000000000B",
+            "kind": "artifact.code",
+            "content_hash": "sha256:def",
+            "redacted_payload": {},
+            "source": {"repo": "Cortex"}
+        });
+        let norm = NormalisedEvent::from_bootstrap_event(&payload).expect("normalise");
+        assert!(norm.tool.is_none());
+    }
+
+    #[test]
+    fn dotted_tool_kind_resolves_via_kind_from_bootstrap() {
+        // §2.1 cross-check: the dotted `turn.claude-code` shape
+        // round-trips through normalisation as Kind::Turn.
+        let payload = json!({
+            "event_id": "01TEST0000000000000000000C",
+            "kind": "turn.claude-code",
+            "content_hash": "sha256:xyz",
+            "redacted_payload": {},
+            "tool": "claude-code"
+        });
+        let norm = NormalisedEvent::from_bootstrap_event(&payload).expect("normalise");
+        assert_eq!(norm.kind, Kind::Turn);
+        assert_eq!(norm.tool.as_deref(), Some("claude-code"));
+    }
+
+    #[test]
+    fn canonical_envelope_with_tool_field_preserves_it() {
+        // The full Envelope path (STREAM_RAW) carries `tool` as a
+        // typed top-level field; verify the normaliser keeps it.
+        // Serde tags: Stream = lowercase, Kind = snake_case.
+        let env_json = json!({
+            "event_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "schema_version": "1",
+            "occurred_at": "2026-04-20T17:48:02.667Z",
+            "session_id": "sess-x",
+            "stream": "live",
+            "tool": "claude-code",
+            "kind": "turn",
+            "context": {"repo": "cortex", "platform": "claude-code"},
+            "payload": {"user_message": "hi", "assistant_message": "hello", "tokens": null},
+            "content_hash": "sha256:abc"
+        });
+        let norm = NormalisedEvent::from_canonical_envelope(&env_json).expect("normalise");
+        assert_eq!(norm.tool.as_deref(), Some("claude-code"));
+        assert_eq!(norm.kind, Kind::Turn);
     }
 }

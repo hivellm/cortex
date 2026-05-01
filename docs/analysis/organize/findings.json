@@ -6,8 +6,12 @@
     "claude_projects": {
       "root": "C:/Users/Bolado/.claude/projects/",
       "directories": 31,
-      "jsonl_files": 9835,
-      "bytes": 4831838208,
+      "jsonl_files_recursive": 9835,
+      "jsonl_files_top_level": 1019,
+      "bytes_top_level": 1795388426,
+      "bytes_recursive": 4831838208,
+      "live_estimate_command": "cargo run -p cortex-claude-archive --bin cortex-claude-archive -- estimate",
+      "live_estimate_captured_at": "2026-05-01T20:53:00Z",
       "top_projects": [
         {"dir": "e--HiveLLM-Cortex", "sessions": 798, "bytes": 281018368},
         {"dir": "F--Node-hivellm-tml", "sessions": 46, "bytes": 1503238553},
@@ -15,6 +19,7 @@
         {"dir": "e--HiveLLM-Nexus", "sessions": 32, "bytes": 201326592},
         {"dir": "e--HiveLLM-Vectorizer", "sessions": 17, "bytes": 116391936}
       ],
+      "note_on_count_delta": "phase11i §1.12 — the original `find . -name '*.jsonl'` recursive count (9 835) included nested sub-agent dirs (worktrees + sub-agent transcripts under e--UzEngine-0-2 etc.). The walker built in §1.4 only counts top-level <project>/<session>.jsonl entries, which is the canonical conversation surface. Top-level count: 1 019.",
       "record_types": [
         "user", "assistant", "attachment", "system",
         "file-history-snapshot", "last-prompt", "queue-operation"
@@ -32,12 +37,23 @@
     }
   },
   "envelope_estimates": {
-    "parsed_records": 7868000,
-    "envelopes_emitted": 2360000,
-    "vectorizer_chunks": 6000000,
-    "meili_documents": 2360000,
-    "nexus_nodes": 5000000,
-    "nexus_edges": 12000000
+    "_note": "Original (recursive) estimate kept for reference; live_* fields are the canonical numbers from the §1.12 cortex-claude-archive estimate run.",
+    "parsed_records_recursive": 7868000,
+    "envelopes_emitted_recursive": 2360000,
+    "vectorizer_chunks_recursive": 6000000,
+    "meili_documents_recursive": 2360000,
+    "nexus_nodes_recursive": 5000000,
+    "nexus_edges_recursive": 12000000,
+    "live_session_files": 1019,
+    "live_envelopes_estimate": 244560,
+    "live_smoke_subset": {
+      "skipped_top_projects": ["F--Node-*", "e--UzEngine", "e--HiveLLM-Cortex", "e--HiveLLM-Nexus", "e--HiveLLM-Vectorizer", "f--Node-*", "e--HiveLLM-Synap", "e--HiveLLM-Tml", "C--Users-*", "E--UzEngine-*", "f--Node-balrog-*"],
+      "envelopes_emitted_actual": 862,
+      "envelopes_dropped": 0,
+      "records_consumed": 14179,
+      "archive_partitions_written": 24,
+      "captured_at": "2026-05-01T20:55:00Z"
+    }
   },
   "schema_fit": {
     "new_kinds_required_v1": 0,
