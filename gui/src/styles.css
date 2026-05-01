@@ -52,7 +52,6 @@
   --radius-xl: 16px;
 
   --sidebar-w: 232px;
-  --sidebar-w-collapsed: 64px;
   --header-h: 52px;
   --inspector-w: 420px;
 
@@ -132,19 +131,25 @@ a { color: inherit; text-decoration: none; }
 /* ============================================================
    App shell
    ============================================================ */
-.app {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
-  /* `auto` first row collapses to 0 when WindowChrome isn't
-   * rendered (Vite browser preview mode); keeps the layout
-   * identical between Electron and browser. */
-  grid-template-rows: auto var(--header-h) 1fr;
+/* WindowChrome (when Electron is wired) sits ABOVE `.app` as a
+ * sibling so the grid below stays simple — that grid is tuned for
+ * header-height + content rows, and adding a third row caused
+ * auto-placement to misroute children. */
+.app-shell {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  transition: grid-template-columns 200ms ease;
 }
-.app.collapsed { grid-template-columns: var(--sidebar-w-collapsed) 1fr; }
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  grid-template-rows: var(--header-h) 1fr;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 
 /* Header */
 .header {
@@ -242,10 +247,7 @@ a { color: inherit; text-decoration: none; }
   padding: 0 16px;
   height: 100%;
   border-right: 1px solid var(--border);
-  transition: width 200ms ease;
 }
-.app.collapsed .header__brand { width: var(--sidebar-w-collapsed); padding: 0 12px; justify-content: center; }
-.app.collapsed .header__brand-text { display: none; }
 
 .brand-mark {
   width: 22px;
@@ -440,7 +442,6 @@ a { color: inherit; text-decoration: none; }
   color: var(--fg-4);
   padding: 12px 12px 6px;
 }
-.app.collapsed .sidebar__group-label { display: none; }
 
 .nav-item {
   display: flex;
@@ -487,9 +488,6 @@ a { color: inherit; text-decoration: none; }
   border-radius: 999px;
 }
 .nav-item.is-active .nav-count { color: var(--fg-1); border-color: var(--border-strong); }
-.app.collapsed .nav-item { justify-content: center; padding: 9px 0; }
-.app.collapsed .nav-item .nav-label,
-.app.collapsed .nav-item .nav-count { display: none; }
 
 .sidebar__footer {
   margin-top: auto;
@@ -517,9 +515,6 @@ a { color: inherit; text-decoration: none; }
 }
 .repo-pill .repo-name { font-family: var(--font-mono); font-size: 11px; }
 .repo-pill .repo-meta { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--fg-3); }
-.app.collapsed .repo-pill { justify-content: center; padding: 6px; }
-.app.collapsed .repo-pill .repo-name,
-.app.collapsed .repo-pill .repo-meta { display: none; }
 
 /* ============================================================
    Main content area

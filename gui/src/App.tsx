@@ -4,6 +4,7 @@ import { Header } from "./shell/Header";
 import { Sidebar, type ViewId } from "./shell/Sidebar";
 import { Tweaks } from "./shell/Tweaks";
 import { WindowChrome } from "./shell/WindowChrome";
+import { TweaksProvider } from "./lib/useTweaks";
 import { TimelineView } from "./views/Timeline";
 import { MemoryView } from "./views/Memory";
 import { RetentionView } from "./views/Retention";
@@ -18,7 +19,6 @@ import { HandoffsView } from "./views/Handoffs";
 import { ClassificationsView } from "./views/Classifications";
 import { HealthView } from "./views/Health";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
-import { TweaksProvider, useTweaks } from "./lib/useTweaks";
 import type { Filters } from "./lib/api";
 
 export function App() {
@@ -30,13 +30,6 @@ export function App() {
 }
 
 function AppShell() {
-  const { tweaks, setTweak } = useTweaks();
-  const collapsed = tweaks.sidebarCollapsed;
-  const onToggleSidebar = useCallback(
-    () => setTweak("sidebarCollapsed", !collapsed),
-    [collapsed, setTweak],
-  );
-
   const [view, setView] = useState<ViewId>("timeline");
   const [tweaksOpen, setTweaksOpen] = useState(false);
   const [filters, setFiltersState] = useState<Filters>(EMPTY_FILTERS);
@@ -98,17 +91,17 @@ function AppShell() {
 
   return (
     <FiltersContext.Provider value={filtersValue}>
-      <div className={`app ${collapsed ? "collapsed" : ""}`}>
+      <div className="app-shell">
         <WindowChrome />
-        <Header
-          collapsed={collapsed}
-          onToggleSidebar={onToggleSidebar}
-          onOpenTweaks={() => setTweaksOpen(true)}
-          onJumpToHealth={() => setView("health")}
-        />
-        <Sidebar view={view} setView={setView} collapsed={collapsed} />
-        <main className="main">{renderView()}</main>
-        <Tweaks open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
+        <div className="app">
+          <Header
+            onOpenTweaks={() => setTweaksOpen(true)}
+            onJumpToHealth={() => setView("health")}
+          />
+          <Sidebar view={view} setView={setView} />
+          <main className="main">{renderView()}</main>
+          <Tweaks open={tweaksOpen} onClose={() => setTweaksOpen(false)} />
+        </div>
       </div>
     </FiltersContext.Provider>
   );

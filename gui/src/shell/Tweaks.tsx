@@ -142,14 +142,6 @@ export function Tweaks({ open, onClose }: TweaksProps) {
           </Section>
 
           <Section label="Layout">
-            <label className="tweak-toggle">
-              <input
-                type="checkbox"
-                checked={tweaks.sidebarCollapsed}
-                onChange={(e) => setTweak("sidebarCollapsed", e.target.checked)}
-              />
-              <span>Collapse sidebar</span>
-            </label>
             <label className="tweak-slider">
               <span className="tweak-slider__label">
                 Density <span className="mono tabular">{tweaks.density}</span>

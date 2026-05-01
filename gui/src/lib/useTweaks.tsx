@@ -23,9 +23,6 @@ export type TweaksState = {
   /// 1–10 density slider; mapped onto `--header-h` in the DOM sync
   /// effect so larger values give a chunkier UI.
   density: number;
-  /// Mirrors the existing `.app.collapsed` class so the rail can
-  /// shrink without re-keying the layout.
-  sidebarCollapsed: boolean;
 };
 
 export const TWEAKS_STORAGE_KEY = "cortex.tweaks";
@@ -34,7 +31,6 @@ export const DEFAULT_TWEAKS: TweaksState = {
   theme: "dark",
   accentHue: 75,
   density: 7,
-  sidebarCollapsed: false,
 };
 
 /// Five accent presets shown as colour swatches in the drawer.
@@ -70,7 +66,6 @@ function loadFromStorage(): TweaksState {
       density: clampDensity(
         typeof parsed.density === "number" ? parsed.density : DEFAULT_TWEAKS.density,
       ),
-      sidebarCollapsed: !!parsed.sidebarCollapsed,
     };
   } catch {
     return DEFAULT_TWEAKS;

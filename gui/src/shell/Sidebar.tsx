@@ -53,10 +53,9 @@ const NAV: NavItem[] = [
 type SidebarProps = {
   view: ViewId;
   setView: (v: ViewId) => void;
-  collapsed: boolean;
 };
 
-export function Sidebar({ view, setView, collapsed }: SidebarProps) {
+export function Sidebar({ view, setView }: SidebarProps) {
   const { filters, setFilter, clearFilters } = useFilters();
 
   const sessionsQ = useQuery({
@@ -157,7 +156,7 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
   // full stat tile (those land on the Timeline view's stats grid).
   // Honest empty when the overview hasn't returned yet.
   const epm = overview?.series.events_per_min ?? [];
-  const sparkVisible = !collapsed && epm.some((v) => v > 0);
+  const sparkVisible = epm.some((v) => v > 0);
 
   return (
     <aside className="sidebar">
@@ -180,7 +179,6 @@ export function Sidebar({ view, setView, collapsed }: SidebarProps) {
             key={item.id}
             className={`nav-item ${view === item.id ? "is-active" : ""}`}
             onClick={() => setView(item.id)}
-            title={collapsed ? item.label : undefined}
           >
             <span className="nav-icon">
               <Icon name={item.icon} size={15} />

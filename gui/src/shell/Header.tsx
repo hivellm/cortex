@@ -6,8 +6,6 @@ import { bridge } from "../lib/bridge";
 import { HeaderSearch } from "./HeaderSearch";
 
 type HeaderProps = {
-  collapsed: boolean;
-  onToggleSidebar: () => void;
   onOpenTweaks: () => void;
   /// Phase8g — invoked when the topbar health pill is clicked so the
   /// shell can navigate to /health from any view.
@@ -15,8 +13,6 @@ type HeaderProps = {
 };
 
 export function Header({
-  collapsed,
-  onToggleSidebar,
   onOpenTweaks,
   onJumpToHealth,
 }: HeaderProps) {
@@ -49,9 +45,6 @@ export function Header({
   return (
     <header className="header">
       <div className="header__brand">
-        <button className="icon-btn" onClick={onToggleSidebar} title="Toggle sidebar" aria-label="Toggle sidebar">
-          <Icon name="menu" size={15} />
-        </button>
         <span className="brand-mark" />
         <span className="header__brand-text" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <span className="brand-name">Cortex</span>
@@ -100,7 +93,6 @@ export function Header({
           <Icon name="settings" size={15} />
         </button>
       </div>
-      {collapsed ? null : null}
     </header>
   );
 }
