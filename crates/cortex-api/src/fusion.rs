@@ -54,13 +54,19 @@ pub const DEFAULT_RECENCY_LAMBDA_LAW: f32 = 0.0;
 /// recency-decay path to convert `now_ms - hit.ts` into days.
 pub const MS_PER_DAY: f64 = 86_400_000.0;
 
+/// Phase11i §3.2 — default cross-repo boost. `0.0` means
+/// "out-of-scope hits do not contribute" (the legacy hard-filter
+/// behaviour); `1.0` means "weight cross-repo hits the same as
+/// in-scope". The unit-clamp keeps the multiplier well-defined.
+pub const DEFAULT_CROSS_REPO_BOOST: f32 = 0.0;
+
 /// Tunable parameters for [`rrf_fuse`].
 ///
 /// Built once at orchestrator boot from the
 /// `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` env vars and stamped on
 /// every audit envelope so phase6e's harness can attribute
 /// regressions to fusion-tuning changes.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FusionConfig {
     /// Blend weight in `[0.0, 1.0]`. `1.0` = pure positional RRF;
     /// `0.0` = pure normalised native score.
@@ -83,6 +89,20 @@ pub struct FusionConfig {
     /// time" — the path computes `now_ms` lazily so tests can
     /// still control it via the explicit field.
     pub now_ms: i64,
+    /// Phase11i §3.2 — cross-repo boost in `[0.0, 1.0]`. When
+    /// `Some(active_repo)` is supplied alongside a positive
+    /// boost, hits whose `repo` field differs from `active_repo`
+    /// have their fused score multiplied by `cross_repo_boost`.
+    /// `0.0` (default) cleanly excludes cross-repo hits from
+    /// the bundle — the same outcome the per-repo lane filter
+    /// already produces today. `1.0` lets cross-repo hits
+    /// compete on equal footing.
+    pub cross_repo_boost: f32,
+    /// Phase11i §3.2 — active repo slug. When `None`, the
+    /// cross-repo boost has no effect (every hit is treated as
+    /// "in scope"). When `Some(s)`, hits whose `repo` does not
+    /// equal `s` get the boost multiplier applied.
+    pub active_repo: Option<String>,
 }
 
 impl Default for FusionConfig {
@@ -92,6 +112,8 @@ impl Default for FusionConfig {
             k: RRF_K as u32,
             recency_decay_lambda: 0.0,
             now_ms: 0,
+            cross_repo_boost: DEFAULT_CROSS_REPO_BOOST,
+            active_repo: None,
         }
     }
 }
@@ -106,6 +128,8 @@ impl FusionConfig {
             k: k.max(1),
             recency_decay_lambda: 0.0,
             now_ms: 0,
+            cross_repo_boost: DEFAULT_CROSS_REPO_BOOST,
+            active_repo: None,
         }
     }
 
@@ -114,6 +138,17 @@ impl FusionConfig {
     /// override never inverts the multiplier into "older first".
     pub fn with_recency_decay(mut self, lambda: f32) -> Self {
         self.recency_decay_lambda = lambda.max(0.0);
+        self
+    }
+
+    /// Phase11i §3.2 — chain the cross-repo boost + active repo
+    /// onto an existing config. The boost is clamped to
+    /// `[0.0, 1.0]`; an `active_repo` of `Some("")` is treated as
+    /// `None` so canonicalisation upstream that produces an
+    /// empty string never accidentally suppresses every hit.
+    pub fn with_cross_repo_boost(mut self, boost: f32, active_repo: Option<String>) -> Self {
+        self.cross_repo_boost = boost.clamp(0.0, 1.0);
+        self.active_repo = active_repo.filter(|s| !s.is_empty());
         self
     }
 
@@ -192,6 +227,29 @@ pub fn rrf_fuse(lanes: Vec<Vec<LaneHit>>, cfg: &FusionConfig) -> Vec<LaneHit> {
         }
     }
 
+    // Phase11i §3.2 — cross-repo boost. When the orchestrator
+    // forks a parallel cross-repo lane scan, the foreign hits
+    // come back with `repo != active_repo`. We multiply their
+    // accumulated score by `cross_repo_boost` so an in-repo hit
+    // at the same lane position always wins on tie. boost=0
+    // collapses cross-repo hits to score=0, which the sort
+    // naturally pushes to the tail; boost=1 lets foreign hits
+    // compete on equal footing.
+    if let Some(active) = cfg.active_repo.as_deref() {
+        if cfg.cross_repo_boost < 1.0 && !active.is_empty() {
+            let boost = cfg.cross_repo_boost as f64;
+            for (doc_id, score) in scores.iter_mut() {
+                if let Some(hit) = representative.get(doc_id) {
+                    if let Some(repo) = hit.repo.as_deref() {
+                        if !repo.is_empty() && repo != active {
+                            *score *= boost;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let mut out: Vec<(LaneHit, f64)> = representative
         .into_iter()
         .map(|(id, hit)| {
@@ -252,7 +310,7 @@ mod tests {
     /// Positional-only baseline used by the equivalence test below.
     /// Matches the pre-phase6c hard-coded behaviour byte-for-byte.
     fn positional_only(lanes: Vec<Vec<LaneHit>>) -> Vec<LaneHit> {
-        rrf_fuse(lanes, &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 })
+        rrf_fuse(lanes, &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None })
     }
 
     #[test]
@@ -261,7 +319,7 @@ mod tests {
         // reciprocal sum is exact.
         let lane_a = vec![hit("X", 0, None), hit("Y", 0, None)];
         let lane_b = vec![hit("Y", 0, None), hit("X", 0, None)];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 });
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None });
         assert_eq!(fused.len(), 2);
         // X: 1/(60+1) + 1/(60+2) = 1/61 + 1/62; Y: same. Tie broken
         // by doc_id ⇒ X first.
@@ -272,7 +330,7 @@ mod tests {
 
     #[test]
     fn ties_break_on_recency() {
-        let cfg = FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 };
+        let cfg = FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None };
         let lane_a = vec![hit("OLD", 100, None), hit("NEW", 200, None)];
         let lane_b = vec![hit("OLD", 100, None), hit("NEW", 200, None)];
         let fused = rrf_fuse(vec![lane_a, lane_b], &cfg);
@@ -288,7 +346,7 @@ mod tests {
     fn ties_break_on_severity_after_recency() {
         let lane_a = vec![hit("INFO", 100, Some("info"))];
         let lane_b = vec![hit("CRIT", 100, Some("critical"))];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 });
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None });
         assert_eq!(fused[0].doc_id, "CRIT");
     }
 
@@ -366,7 +424,7 @@ mod tests {
         let lane_b = vec![hit_with_score("Y", 0.50)];
         let blended = rrf_fuse(
             vec![lane_a.clone(), lane_b.clone()],
-            &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 },
+            &FusionConfig { alpha: 1.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None },
         );
         let baseline = positional_only(vec![lane_a, lane_b]);
         assert_eq!(blended.len(), baseline.len());
@@ -393,7 +451,7 @@ mod tests {
             hit_with_score("STRONG_RANK2", 0.95),
         ];
         let lane_b = vec![hit_with_score("STRONG_RANK2", 0.90)];
-        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 0.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0 });
+        let fused = rrf_fuse(vec![lane_a, lane_b], &FusionConfig { alpha: 0.0, k: 60, recency_decay_lambda: 0.0, now_ms: 0, cross_repo_boost: 0.0, active_repo: None });
         assert_eq!(
             fused[0].doc_id, "STRONG_RANK2",
             "alpha=0.0 must rank by native score sum"
@@ -452,6 +510,8 @@ mod tests {
             k: 60,
             recency_decay_lambda: 0.02,
             now_ms,
+            cross_repo_boost: 0.0,
+            active_repo: None,
         };
         let fused = rrf_fuse(vec![vec![recent], vec![old]], &cfg);
         assert_eq!(fused[0].doc_id, "RECENT");
@@ -482,6 +542,8 @@ mod tests {
             k: 60,
             recency_decay_lambda: 0.02,
             now_ms,
+            cross_repo_boost: 0.0,
+            active_repo: None,
         };
         let fused = rrf_fuse(vec![vec![untimed], vec![dated]], &cfg);
         // UNTIMED keeps its full score; DATED gets exp(-0.6) ≈ 0.549.
@@ -518,6 +580,123 @@ mod tests {
         );
     }
 
+    fn hit_with_repo(id: &str, repo: &str, native: f64) -> LaneHit {
+        let mut h = hit_with_score(id, native);
+        h.repo = Some(repo.to_string());
+        h
+    }
+
+    #[test]
+    fn cross_repo_boost_zero_collapses_foreign_hits_to_zero() {
+        // active_repo="cortex", boost=0.0 — every "vectorizer" hit
+        // gets multiplied by 0.0 and lands at the tail.
+        let lane = vec![
+            hit_with_repo("V1", "vectorizer", 0.9),
+            hit_with_repo("C1", "cortex", 0.5),
+            hit_with_repo("V2", "vectorizer", 0.85),
+        ];
+        let cfg = FusionConfig::default()
+            .with_cross_repo_boost(0.0, Some("cortex".to_string()));
+        let fused = rrf_fuse(vec![lane], &cfg);
+        // C1 must land first; the two vectorizer hits trail with score=0.
+        assert_eq!(fused[0].doc_id, "C1");
+        for h in &fused[1..] {
+            assert_eq!(h.score, 0.0, "cross-repo hit at boost=0 must score 0");
+        }
+    }
+
+    #[test]
+    fn cross_repo_boost_half_demotes_but_keeps_foreign_hits() {
+        // boost=0.5 — a strong foreign hit can still compete with
+        // a weaker in-repo hit, but the multiplier shrinks its score.
+        let lane = vec![
+            hit_with_repo("V1", "vectorizer", 0.95), // rank 1, foreign
+            hit_with_repo("C1", "cortex", 0.50),     // rank 2, in-repo
+        ];
+        let cfg = FusionConfig {
+            alpha: 1.0, // pure positional so the analysis is exact
+            k: 60,
+            recency_decay_lambda: 0.0,
+            now_ms: 0,
+            cross_repo_boost: 0.5,
+            active_repo: Some("cortex".to_string()),
+        };
+        let fused = rrf_fuse(vec![lane], &cfg);
+        // V1 baseline = 1/61 ≈ 0.01639; multiplied by 0.5 → 0.00820.
+        // C1 baseline = 1/62 ≈ 0.01613; no multiplier.
+        // C1 must outrank V1.
+        assert_eq!(fused[0].doc_id, "C1");
+        assert_eq!(fused[1].doc_id, "V1");
+        assert!(fused[1].score < fused[0].score);
+    }
+
+    #[test]
+    fn cross_repo_boost_one_leaves_scores_unchanged() {
+        // boost=1.0 ⇒ no change; foreign hits compete on equal
+        // footing. Pin against the no-boost (default) ordering.
+        let lane = vec![
+            hit_with_repo("V1", "vectorizer", 0.95),
+            hit_with_repo("C1", "cortex", 0.50),
+        ];
+        let baseline = rrf_fuse(
+            vec![lane.clone()],
+            &FusionConfig {
+                alpha: 1.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 0.0,
+                active_repo: None, // no active repo ⇒ boost no-op
+            },
+        );
+        let with_full_boost = rrf_fuse(
+            vec![lane],
+            &FusionConfig {
+                alpha: 1.0,
+                k: 60,
+                recency_decay_lambda: 0.0,
+                now_ms: 0,
+                cross_repo_boost: 1.0,
+                active_repo: Some("cortex".to_string()),
+            },
+        );
+        // Same ordering and same scores within float epsilon.
+        assert_eq!(baseline.len(), with_full_boost.len());
+        for (a, b) in baseline.iter().zip(with_full_boost.iter()) {
+            assert_eq!(a.doc_id, b.doc_id);
+            assert!((a.score - b.score).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn cross_repo_boost_with_empty_active_repo_is_a_noop() {
+        // Empty-string active_repo (a canonicalisation accident
+        // upstream) must not cause every hit to be classified as
+        // foreign. Builder filters it to None; the multiplier
+        // path observes None and skips entirely.
+        let cfg = FusionConfig::default()
+            .with_cross_repo_boost(0.0, Some(String::new()));
+        assert!(cfg.active_repo.is_none());
+        let lane = vec![
+            hit_with_repo("V1", "vectorizer", 0.9),
+            hit_with_repo("C1", "cortex", 0.5),
+        ];
+        let fused = rrf_fuse(vec![lane], &cfg);
+        for h in &fused {
+            assert!(h.score > 0.0, "no hit should be zeroed out");
+        }
+    }
+
+    #[test]
+    fn cross_repo_boost_clamps_out_of_range_inputs() {
+        let cfg = FusionConfig::default()
+            .with_cross_repo_boost(2.5, Some("cortex".to_string()));
+        assert_eq!(cfg.cross_repo_boost, 1.0);
+        let cfg = FusionConfig::default()
+            .with_cross_repo_boost(-0.4, Some("cortex".to_string()));
+        assert_eq!(cfg.cross_repo_boost, 0.0);
+    }
+
     #[test]
     fn far_future_ts_does_not_panic_or_invert() {
         // A hit whose ts is in the future (clock skew, replay)
@@ -530,6 +709,8 @@ mod tests {
             k: 60,
             recency_decay_lambda: 0.05,
             now_ms,
+            cross_repo_boost: 0.0,
+            active_repo: None,
         };
         let fused = rrf_fuse(vec![vec![future]], &cfg);
         // Score should equal positional (1/61) — no decay applied.

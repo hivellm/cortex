@@ -86,6 +86,16 @@ pub struct Scope {
     /// query without disabling the global default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recency_decay: Option<f32>,
+    /// Phase11i §3.2 — caller-supplied cross-repo boost in
+    /// `[0.0, 1.0]`. When `None`, the orchestrator uses
+    /// [`crate::fusion::DEFAULT_CROSS_REPO_BOOST`] (0.0 — same
+    /// outcome as the existing per-repo lane filter). When
+    /// `Some(b)` with `b > 0`, foreign hits are admitted with
+    /// their fused score multiplied by `b`. Pairs with `repo` —
+    /// hits whose `repo` field differs from `scope.repo` are
+    /// the ones that get the multiplier applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_repo_boost: Option<f32>,
 }
 
 /// Request body for `POST /v1/query`.

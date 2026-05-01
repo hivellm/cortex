@@ -208,6 +208,10 @@ fn canonicalise_scope(req_scope: &Scope) -> Scope {
         // the orchestrator falls back to the per-intent default
         // when this stays None.
         recency_decay: req_scope.recency_decay,
+        // Phase11i §3.2 — cross_repo_boost round-trips verbatim
+        // for the same reason. The orchestrator picks
+        // DEFAULT_CROSS_REPO_BOOST when None.
+        cross_repo_boost: req_scope.cross_repo_boost,
     }
 }
 
