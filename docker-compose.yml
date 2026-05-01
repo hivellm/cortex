@@ -211,6 +211,7 @@ services:
       CORTEX_FULLTEXT_BIND: 0.0.0.0:17023
       CORTEX_FULLTEXT_SYNAP_URL: http://synap:15500
       CORTEX_FULLTEXT_MEILI_URL: http://meilisearch:7700
+      CORTEX_FULLTEXT_MEILI_API_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-cortex-dev-master-key}
     restart: unless-stopped
 
