@@ -14,7 +14,7 @@ use crate::embedder::EnrichedEvent;
 /// Source-code formats only — extensions whose contents are typically
 /// imperative or declarative program text rather than prose.
 const CODE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "rb",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "py", "go", "rb",
     "java", "kt", "scala", "c", "cc", "cpp", "h", "hpp", "cs", "swift",
     "php", "lua", "sh", "bash", "zsh", "ps1", "fish", "sql", "proto",
 ];
@@ -269,6 +269,12 @@ mod tests {
         assert_eq!(
             family_for_event(Kind::Artifact, &[], Some("docs/spec-08.md")),
             "docs"
+        );
+        // issue #3 — Vue SFCs route to `code` so the GUI layer is
+        // retrievable from the per-repo code index instead of `misc`.
+        assert_eq!(
+            family_for_event(Kind::Artifact, &[], Some("gui/src/App.vue")),
+            "code"
         );
     }
 

@@ -106,7 +106,7 @@ The family suffix is picked deterministically from `(kind, classifier.topics, co
 | `kind == artifact` ∧ `topics ⊇ {doc, documentation}`               | `docs`         |
 | anything else (including `memory`, `analysis`, signal-less artifacts) | `misc`      |
 
-`CODE_EXTENSIONS` is the curated allowlist `rs, ts, tsx, js, jsx, mjs, cjs, py, go, rb, java, kt, scala, c, cc, cpp, h, hpp, cs, swift, php, lua, sh, bash, zsh, ps1, fish, sql, proto`. `DOC_EXTENSIONS` is `md, mdx, markdown, rst, adoc, asciidoc, txt, rtf, tex, org`. Files with neither extension and no topic signal land in `misc` rather than silently piling into `docs` (the 2026-04-27 audit failure mode).
+`CODE_EXTENSIONS` is the curated allowlist `rs, ts, tsx, js, jsx, mjs, cjs, vue, py, go, rb, java, kt, scala, c, cc, cpp, h, hpp, cs, swift, php, lua, sh, bash, zsh, ps1, fish, sql, proto` (`.vue` added 2026-05-01 per issue #3 — Vue SFCs were previously routed to `misc`). `DOC_EXTENSIONS` is `md, mdx, markdown, rst, adoc, asciidoc, txt, rtf, tex, org`. Files with neither extension and no topic signal land in `misc` rather than silently piling into `docs` (the 2026-04-27 audit failure mode).
 
 **Tie-break for artifacts with mixed `topics: [code, doc]`:** the path extension always wins because the file itself is the most reliable signal. Only when the extension is unknown does the classifier's topic list arbitrate.
 

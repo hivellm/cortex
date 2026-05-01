@@ -414,11 +414,10 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
         .to_ascii_lowercase();
     match ext.as_str() {
         "md" | "mdx" | "rst" | "txt" | "adoc" => FileClass::Doc,
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "cc" | "cpp"
-        | "h" | "hpp" | "rb" | "ex" | "exs" | "kt" | "swift" | "scala" | "cs" | "php"
-        | "json" | "yaml" | "yml" | "toml" | "sh" | "bash" | "zsh" | "fish" | "ps1" => {
-            FileClass::Code
-        }
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "c" | "cc"
+        | "cpp" | "h" | "hpp" | "rb" | "ex" | "exs" | "kt" | "swift" | "scala" | "cs"
+        | "php" | "json" | "yaml" | "yml" | "toml" | "sh" | "bash" | "zsh" | "fish"
+        | "ps1" => FileClass::Code,
         _ => FileClass::Other,
     }
 }

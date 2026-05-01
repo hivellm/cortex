@@ -239,7 +239,7 @@ Everything downstream (classifier, embedder, graph, full-text) is the same as li
 ### File walker
 
 - Uses `ignore` crate (respects `.gitignore` by default, plus `cortex.toml` excludes).
-- Emits `artifact.code` for source files (language detected by extension or Tree-sitter), `artifact.doc` for `*.md`.
+- Emits `artifact.code` for source files (language detected by extension or Tree-sitter, including `.vue` SFCs — issue #3), `artifact.doc` for `*.md`.
 - Files > 10 MB are skipped with a warning (same rule as spec 08 truncation, but here we skip entirely because they likely aren't source).
 
 ### Git log walker

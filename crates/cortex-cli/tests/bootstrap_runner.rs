@@ -747,6 +747,14 @@ fn classify_path_via_public_api() {
         cortex_cli::bootstrap::classify_path("src/lib.rs", &cfg),
         cortex_cli::bootstrap::FileClass::Code
     );
+    // issue #3 — `.vue` SFCs were silently routed to `FileClass::Other`
+    // (which the emitter drops), making the entire Vue layer of any
+    // GUI invisible to `cortex_query`. Treat them as Code so the
+    // artifact reaches the wire.
+    assert_eq!(
+        cortex_cli::bootstrap::classify_path("gui/src/App.vue", &cfg),
+        cortex_cli::bootstrap::FileClass::Code
+    );
 }
 
 #[test]
