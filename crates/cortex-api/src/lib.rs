@@ -21,6 +21,7 @@ pub mod dashboard;
 pub mod dashboard_series;
 pub mod canary;
 pub mod config_audit;
+pub mod coverage;
 pub mod fusion;
 pub mod health;
 pub mod http;

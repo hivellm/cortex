@@ -1,11 +1,11 @@
 ## 1. Boot-time inventory + observability
-- [ ] 1.1 Define an `expected_collections(slug)` helper that emits the canonical set per spec 08 (`code, docs, misc, governance, decisions, turns, memory, analyses, laws` × every project slug)
-- [ ] 1.2 At cortex-api boot, after the lane probes pass, list the live Vectorizer collections via the SDK's `list_collections` and diff against the expected set
-- [ ] 1.3 Log a `WARN` per missing collection with `vectorizer_url`, `slug`, `kind`, and the routing-matrix entry that depends on it
-- [ ] 1.4 Repeat the same diff for Meili indexes
+- [x] 1.1 Define an `expected_collections(slug)` helper that emits the canonical set per spec 08 (`code, docs, misc, governance, decisions, turns, knowledge, learnings, analyses` × every project slug) — landed in [crates/cortex-api/src/coverage.rs](crates/cortex-api/src/coverage.rs)
+- [x] 1.2 At cortex-api boot, after the lane probes pass, list the live Vectorizer collections via `GET /collections` and diff against the expected set — landed in `audit_coverage_at_boot` in [crates/cortex-api/src/main.rs](crates/cortex-api/src/main.rs)
+- [x] 1.3 Log a `WARN` per missing collection with `vectorizer_url`, `slug`, `family`, and the backend label
+- [x] 1.4 Repeat the same diff for Meili indexes (covers stale 7 non-canonical legacy indexes as `unexpected`)
 
 ## 2. Health surface
-- [ ] 2.1 Extend `/v1/health/lanes` (or add a new `/v1/health/coverage`) returning `{ vector: { expected: [..], present: [..], missing: [..] }, keyword: {..}, graph: {..} }`
+- [x] 2.1 Add a new `/v1/health/coverage` endpoint returning `{ slugs, families, backends: [{backend, base_url, severity, expected_count, present_count, missing_count, unexpected_count, present, missing, unexpected, error}], overall_severity }` — landed in [crates/cortex-api/src/http.rs](crates/cortex-api/src/http.rs#L300)
 - [ ] 2.2 Dashboard Health view renders the new section under the existing extras column
 - [ ] 2.3 `cortex-ops doctor-coverage` CLI wrapper exits with severity 0/1/2 mapping to `complete / partial / empty`
 

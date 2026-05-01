@@ -77,6 +77,7 @@ pub fn build_router_with(
         .route("/v1/ingest", post(crate::ingest_proxy::handle_ingest))
         .route("/healthz", get(handle_healthz))
         .route("/v1/health", get(handle_v1_health))
+        .route("/v1/health/coverage", get(handle_health_coverage))
         .with_state(state);
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
@@ -294,6 +295,113 @@ async fn handle_v1_health(State(state): State<ApiState>) -> Response {
     report.subsystems.sort_by(|a, b| a.name.cmp(&b.name));
     let recomputed = cortex_health::HealthReport::aggregate(report.subsystems);
     (StatusCode::OK, Json(recomputed)).into_response()
+}
+
+/// Phase11e — `GET /v1/health/coverage` runs a live diff between
+/// the routing-matrix expected collection / index set and what the
+/// Vectorizer + Meilisearch actually host. Same code path the
+/// boot-time inventory uses; consumers (dashboard Health view,
+/// `cortex-ops doctor-coverage` CLI) read the JSON to surface
+/// missing collections inline.
+async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    let mut slugs: BTreeSet<String> = state
+        .service
+        .indexed_repos
+        .as_ref()
+        .map(|lane| lane.indexed_repos())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let env_slugs = crate::coverage::slugs_from_env(
+        std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref(),
+    );
+    slugs.extend(env_slugs);
+    if slugs.is_empty() {
+        slugs.insert("cortex".to_string());
+    }
+
+    let http = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": format!("reqwest builder: {e}"),
+                })),
+            )
+                .into_response();
+        }
+    };
+
+    let vectorizer_url = std::env::var("CORTEX_VECTORIZER_URL")
+        .or_else(|_| std::env::var("VECTORIZER_URL"))
+        .ok();
+    let bearer = match vectorizer_url.as_deref() {
+        Some(url) => resolve_vectorizer_bearer_for_audit(&http, url).await,
+        None => None,
+    };
+    let meili_url = std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok();
+    let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
+        .ok()
+        .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+
+    let response = crate::coverage::run_coverage_audit(
+        &http,
+        slugs,
+        vectorizer_url.as_deref(),
+        bearer.as_deref(),
+        meili_url.as_deref(),
+        meili_key.as_deref(),
+        Duration::from_secs(5),
+    )
+    .await;
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+/// Phase11e — resolve a Vectorizer bearer for the on-demand audit
+/// endpoint. Mirrors the boot-time precedence in
+/// `cortex-api/src/main.rs::resolve_vectorizer_bearer`.
+async fn resolve_vectorizer_bearer_for_audit(
+    http: &reqwest::Client,
+    base_url: &str,
+) -> Option<String> {
+    if let Ok(key) = std::env::var("CORTEX_VECTORIZER_API_KEY")
+        .or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+    {
+        if !key.is_empty() {
+            return Some(key);
+        }
+    }
+    let user = std::env::var("CORTEX_VECTORIZER_USER")
+        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER"))
+        .ok()?;
+    let pass = std::env::var("CORTEX_VECTORIZER_PASSWORD")
+        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
+        .ok()?;
+    let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({ "username": user, "password": pass });
+    let resp = http
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .json(&body)
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let j: serde_json::Value = resp.json().await.ok()?;
+    j.get("access_token")
+        .and_then(|v| v.as_str())
+        .map(String::from)
 }
 
 /// Phase8d — `GET /v1/health/config` answers with the same audit

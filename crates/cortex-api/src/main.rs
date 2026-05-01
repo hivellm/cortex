@@ -617,11 +617,173 @@ async fn main() -> Result<()> {
         tracing::info!("canary runner disabled (set CORTEX_CANARY_ENABLED=1 to enable)");
     }
 
+    // Phase11e — boot-time collection / index inventory diff. Logs
+    // a per-backend INFO summary plus a WARN per missing collection
+    // / index so a misconfigured indexer (e.g. embedder shipping
+    // `cortex-cortex-{code,docs,misc,governance}` only, missing
+    // every `*-decisions` / `*-turns` / `*-analyses` collection) is
+    // visible at startup instead of only at query time. Slugs come
+    // from `CORTEX_COVERAGE_SLUGS` plus whatever the keyword lane
+    // already learned from the archive / Meili loader.
+    audit_coverage_at_boot(&keyword_memory).await;
+
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
     let app = cortex_api::build_router_with(service, Some(dashboard_state));
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Phase11e — run the boot-time collection / index inventory diff
+/// against the live Vectorizer + Meili and log per-backend coverage.
+///
+/// `keyword_memory_lane` is the same `Arc<MemoryKeywordLane>` the
+/// `/v1/status.indexed_repos` field reads from; we reuse it as the
+/// canonical source of slugs so the coverage report does not
+/// disagree with the rest of the daemon. The `CORTEX_COVERAGE_SLUGS`
+/// env adds slugs the keyword lane has not yet seen (useful for
+/// pinning new repos before the first envelope flows through).
+async fn audit_coverage_at_boot(keyword_memory: &Arc<cortex_api::MemoryKeywordLane>) {
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    let mut slugs: BTreeSet<String> = keyword_memory
+        .indexed_repos()
+        .into_iter()
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let env_slugs = cortex_api::coverage::slugs_from_env(
+        std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref(),
+    );
+    slugs.extend(env_slugs);
+    if slugs.is_empty() {
+        // Default to the cortex slug so the diff has something to
+        // report on a fresh boot before any envelope has flowed
+        // through. Operators can override via CORTEX_COVERAGE_SLUGS.
+        slugs.insert("cortex".to_string());
+    }
+    let expected = cortex_api::coverage::expected_collections(&slugs);
+    if expected.is_empty() {
+        tracing::debug!("coverage audit: expected set empty; skipping");
+        return;
+    }
+
+    let http = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "coverage audit: reqwest builder failed; skipping");
+            return;
+        }
+    };
+
+    // Vectorizer diff. Use the same login flow as the lane wiring so
+    // the bearer token matches what queries actually send.
+    if let Ok(vectorizer_url) = std::env::var("CORTEX_VECTORIZER_URL")
+        .or_else(|_| std::env::var("VECTORIZER_URL"))
+    {
+        let bearer = resolve_vectorizer_bearer(&http, &vectorizer_url).await;
+        match cortex_api::coverage::fetch_vectorizer_collection_names(
+            &http,
+            &vectorizer_url,
+            bearer.as_deref(),
+            Duration::from_secs(5),
+        )
+        .await
+        {
+            Ok(live) => {
+                let diff = cortex_api::coverage::diff(expected.clone(), live);
+                cortex_api::coverage::log_diff("vectorizer", &vectorizer_url, &diff);
+            }
+            Err(reason) => tracing::warn!(
+                vectorizer_url = %vectorizer_url,
+                reason = %reason,
+                "coverage audit: vectorizer diff skipped"
+            ),
+        }
+    }
+
+    // Meili diff.
+    if let Ok(meili_url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
+        let api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
+            .ok()
+            .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+        match cortex_api::coverage::fetch_meili_index_uids(
+            &http,
+            &meili_url,
+            api_key.as_deref(),
+            Duration::from_secs(5),
+        )
+        .await
+        {
+            Ok(live) => {
+                let diff = cortex_api::coverage::diff(expected, live);
+                cortex_api::coverage::log_diff("meili", &meili_url, &diff);
+            }
+            Err(reason) => tracing::warn!(
+                meili_url = %meili_url,
+                reason = %reason,
+                "coverage audit: meili diff skipped"
+            ),
+        }
+    }
+}
+
+/// Phase11e — resolve a Vectorizer bearer for the inventory probe.
+/// Mirrors the boot-time auth precedence in the vector-lane wiring
+/// (api_key wins, otherwise user+password → /auth/login). Returns
+/// `None` when no credentials are configured (anonymous dev stack).
+async fn resolve_vectorizer_bearer(
+    http: &reqwest::Client,
+    base_url: &str,
+) -> Option<String> {
+    if let Ok(key) = std::env::var("CORTEX_VECTORIZER_API_KEY")
+        .or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+    {
+        if !key.is_empty() {
+            return Some(key);
+        }
+    }
+    let user = std::env::var("CORTEX_VECTORIZER_USER")
+        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER"))
+        .ok()?;
+    let pass = std::env::var("CORTEX_VECTORIZER_PASSWORD")
+        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
+        .ok()?;
+    let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
+    let body = serde_json::json!({ "username": user, "password": pass });
+    match http
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+            Ok(j) => j
+                .get("access_token")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            Err(e) => {
+                tracing::debug!(error = %e, "coverage audit: /auth/login parse failed");
+                None
+            }
+        },
+        Ok(resp) => {
+            tracing::debug!(
+                status = resp.status().as_u16(),
+                "coverage audit: /auth/login non-2xx"
+            );
+            None
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "coverage audit: /auth/login transport failed");
+            None
+        }
+    }
 }
 
 /// Resolve the SQLite metadata database path. Precedence:
