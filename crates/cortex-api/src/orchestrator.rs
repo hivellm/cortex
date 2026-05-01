@@ -699,6 +699,11 @@ fn derive_similar_turns(fused: &[LaneHit], limit: usize) -> Vec<SimilarTurn> {
                     .map(String::from)
                     .unwrap_or_else(|| h.text.clone()),
                 score: h.score,
+                outcome: h
+                    .extras
+                    .get("outcome")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             })
         })
         .take(limit)

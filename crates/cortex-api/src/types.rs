@@ -324,6 +324,13 @@ pub struct SimilarTurn {
     pub summary: String,
     /// KNN score.
     pub score: f64,
+    /// Phase11i §4.2 — outcome label as classified upstream
+    /// (`success` / `error` / `partial` / `blocked_by_law` …).
+    /// Drives the renderer's outcome glyph (`✓` / `✗` / `⚠`).
+    /// Empty / `None` falls back to the neutral glyph so a
+    /// missing-tag regression still renders consistently.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
 }
 
 /// Active law surfaced as an overlay (separate from violations).

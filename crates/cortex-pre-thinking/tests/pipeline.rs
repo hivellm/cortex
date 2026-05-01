@@ -97,6 +97,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
                 model: "claude".into(),
                 summary: "tweak ef".into(),
                 score: 0.6,
+                outcome: None,
             }],
             past_sessions: Vec::new(),
         },

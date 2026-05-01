@@ -193,6 +193,7 @@ mod tests {
                 model: "claude".into(),
                 summary: "summary".repeat(60),
                 score: 0.5,
+                outcome: None,
             })
             .collect();
         let neighbours: Vec<GraphNeighbor> = (0..3)

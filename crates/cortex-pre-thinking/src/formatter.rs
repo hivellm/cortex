@@ -155,7 +155,8 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
             let date = format_ts_date(d.ts);
             writeln!(
                 out,
-                "- **{id} ({status}{date_suffix})** — {title}",
+                "- {glyph} **{id} ({status}{date_suffix})** — {title}",
+                glyph = decision_glyph(&d.status),
                 id = d.id,
                 status = d.status,
                 date_suffix = if date.is_empty() {
@@ -196,9 +197,10 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
             let date = format_ts_date(t.ts);
             writeln!(
                 out,
-                "{}. {} — {model} {summary}",
+                "{}. {glyph} {date} — {model} {summary}",
                 i + 1,
-                date,
+                glyph = outcome_glyph(t.outcome.as_deref()),
+                date = date,
                 model = t.model,
                 summary = trim_one_line(&t.summary),
             )
@@ -345,6 +347,38 @@ fn trim_one_line(s: &str) -> String {
     trimmed.to_string()
 }
 
+/// Phase11i §4.2 — render an outcome label as a single glyph.
+///
+/// Mapping:
+/// - `success` → `✓`
+/// - `error` / `failed` / `failure` → `✗`
+/// - `partial` / `blocked_by_law` / unknown / `None` → `⚠`
+///
+/// The neutral fallback (`⚠`) keeps the column shape consistent
+/// when the upstream classifier did not stamp an outcome — a row
+/// always carries exactly one glyph.
+pub fn outcome_glyph(outcome: Option<&str>) -> &'static str {
+    match outcome.map(str::trim).filter(|s| !s.is_empty()) {
+        Some("success") => "✓",
+        Some("error") | Some("failed") | Some("failure") => "✗",
+        _ => "⚠",
+    }
+}
+
+/// Phase11i §4.2 — render an ADR status as a single glyph.
+///
+/// Mapping:
+/// - `accepted` → `✓`
+/// - `superseded` / `deprecated` / `rejected` → `✗`
+/// - `proposed` / `draft` / unknown → `⚠`
+pub fn decision_glyph(status: &str) -> &'static str {
+    match status.trim() {
+        "accepted" => "✓",
+        "superseded" | "deprecated" | "rejected" => "✗",
+        _ => "⚠",
+    }
+}
+
 fn format_ts_date(ms: i64) -> String {
     if ms <= 0 {
         return String::new();
@@ -429,6 +463,7 @@ mod tests {
                     model: "claude-sonnet".into(),
                     summary: "refactored hnsw_search".into(),
                     score: 0.6,
+                    outcome: Some("success".into()),
                 }],
                 past_sessions: Vec::new(),
             },
@@ -635,6 +670,88 @@ mod tests {
         // couldn't supply a timestamp, keeping the line shape
         // consistent across rows.
         assert!(bundle.contains("sess-Z — — · \"no timestamp\" · 1 turn"));
+    }
+
+    #[test]
+    fn outcome_glyph_table_resolves_known_and_unknown() {
+        assert_eq!(outcome_glyph(Some("success")), "✓");
+        assert_eq!(outcome_glyph(Some("error")), "✗");
+        assert_eq!(outcome_glyph(Some("failed")), "✗");
+        assert_eq!(outcome_glyph(Some("failure")), "✗");
+        assert_eq!(outcome_glyph(Some("partial")), "⚠");
+        assert_eq!(outcome_glyph(Some("blocked_by_law")), "⚠");
+        assert_eq!(outcome_glyph(Some("unknown")), "⚠");
+        assert_eq!(outcome_glyph(Some("")), "⚠");
+        assert_eq!(outcome_glyph(None), "⚠");
+    }
+
+    #[test]
+    fn decision_glyph_table_resolves_known_and_unknown() {
+        assert_eq!(decision_glyph("accepted"), "✓");
+        assert_eq!(decision_glyph("superseded"), "✗");
+        assert_eq!(decision_glyph("deprecated"), "✗");
+        assert_eq!(decision_glyph("rejected"), "✗");
+        assert_eq!(decision_glyph("proposed"), "⚠");
+        assert_eq!(decision_glyph("draft"), "⚠");
+        assert_eq!(decision_glyph(""), "⚠");
+    }
+
+    #[test]
+    fn similar_turn_line_carries_outcome_glyph() {
+        // Default fixture stamps `outcome=Some("success")`, so the
+        // turn line must render the ✓ glyph between the index and
+        // the date.
+        let bundle = format_bundle(
+            "pre_change_context",
+            &populated_response(),
+            &FormatOptions::default(),
+        );
+        assert!(bundle.contains("1. ✓ 2024-05-06 — claude-sonnet refactored hnsw_search"));
+    }
+
+    #[test]
+    fn similar_turn_unknown_outcome_falls_back_to_warning_glyph() {
+        let mut resp = populated_response();
+        resp.results.similar_turns[0].outcome = None;
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("1. ⚠ 2024-05-06 — claude-sonnet"));
+    }
+
+    #[test]
+    fn similar_turn_error_outcome_renders_cross_glyph() {
+        let mut resp = populated_response();
+        resp.results.similar_turns[0].outcome = Some("error".into());
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("1. ✗ 2024-05-06 — claude-sonnet"));
+    }
+
+    #[test]
+    fn decision_line_carries_outcome_glyph() {
+        // Default fixture status is `accepted`, so the decision
+        // line must render the ✓ glyph between the bullet and the
+        // bolded id block.
+        let bundle = format_bundle(
+            "pre_change_context",
+            &populated_response(),
+            &FormatOptions::default(),
+        );
+        assert!(bundle.contains("- ✓ **DEC-0042 (accepted, 2024-05-06)** — Adopt Meilisearch"));
+    }
+
+    #[test]
+    fn decision_line_superseded_renders_cross_glyph() {
+        let mut resp = populated_response();
+        resp.results.decisions[0].status = "superseded".into();
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("- ✗ **DEC-0042 (superseded"));
+    }
+
+    #[test]
+    fn decision_line_proposed_renders_warning_glyph() {
+        let mut resp = populated_response();
+        resp.results.decisions[0].status = "proposed".into();
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("- ⚠ **DEC-0042 (proposed"));
     }
 
     #[test]
