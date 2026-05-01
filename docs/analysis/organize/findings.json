@@ -1,0 +1,99 @@
+{
+  "analysis_id": "organize",
+  "captured_at": "2026-05-01T17:00:00Z",
+  "trigger": "user request: indexar memorias do Claude Code e organizar para relevancia",
+  "corpus": {
+    "claude_projects": {
+      "root": "C:/Users/Bolado/.claude/projects/",
+      "directories": 31,
+      "jsonl_files": 9835,
+      "bytes": 4831838208,
+      "top_projects": [
+        {"dir": "e--HiveLLM-Cortex", "sessions": 798, "bytes": 281018368},
+        {"dir": "F--Node-hivellm-tml", "sessions": 46, "bytes": 1503238553},
+        {"dir": "e--UzEngine", "sessions": 45, "bytes": 1932735283},
+        {"dir": "e--HiveLLM-Nexus", "sessions": 32, "bytes": 201326592},
+        {"dir": "e--HiveLLM-Vectorizer", "sessions": 17, "bytes": 116391936}
+      ],
+      "record_types": [
+        "user", "assistant", "attachment", "system",
+        "file-history-snapshot", "last-prompt", "queue-operation"
+      ]
+    },
+    "claude_sidecars": {
+      "history_jsonl_bytes": 675840,
+      "todos_bytes": 1677721,
+      "plans_bytes": 65536,
+      "shell_snapshots_bytes": 7340032
+    },
+    "codex": {
+      "root": "C:/Users/Bolado/.codex/",
+      "status": "dormant"
+    }
+  },
+  "envelope_estimates": {
+    "parsed_records": 7868000,
+    "envelopes_emitted": 2360000,
+    "vectorizer_chunks": 6000000,
+    "meili_documents": 2360000,
+    "nexus_nodes": 5000000,
+    "nexus_edges": 12000000
+  },
+  "schema_fit": {
+    "new_kinds_required_v1": 0,
+    "kinds_used": ["Turn", "ToolCall", "AgentCall", "Memory", "Artifact"],
+    "new_settings_version": "v2",
+    "new_filterable_fields": ["model", "tool", "session_id", "outcome"]
+  },
+  "relevance_axes": [
+    {
+      "name": "temporal_recency",
+      "field": "occurred_at",
+      "default_lambda": 0.02,
+      "intent_overrides": {"decision_lookup": 0.005, "law_check": 0.0}
+    },
+    {
+      "name": "project_scope",
+      "field": "context.repo",
+      "implemented": true,
+      "extension": "cross_repo_boost"
+    },
+    {
+      "name": "author_model",
+      "fields": ["model", "tool"],
+      "filter": ["Scope.models", "Scope.tools"],
+      "alias_table_required": true
+    },
+    {
+      "name": "session_cohesion",
+      "field": "session_id",
+      "filter": ["Scope.session_id", "Scope.session_cohort"],
+      "boost": {"current": 2.0, "cohort": 1.5}
+    },
+    {
+      "name": "outcome",
+      "field": "outcome",
+      "depends_on": "classifier_outcome_derivation",
+      "boost": {"success": 1.2, "error": 0.5, "blocked_by_law": 0.3}
+    }
+  ],
+  "build_phases": [
+    {"id": "1", "title": "cortex-claude-archive crate", "weeks": 1},
+    {"id": "2", "title": "classifier wiring", "days": 2},
+    {"id": "3", "title": "relevance axes", "weeks": 1.5},
+    {"id": "4", "title": "pre-thinking + measurement", "weeks": 1},
+    {"id": "5", "title": "watcher daemon + ops", "days": 2},
+    {"id": "6", "title": "tail", "days": 1}
+  ],
+  "dependencies": [
+    "phase11h_cortex_query_recall_recovery"
+  ],
+  "task_id": "phase11i_claude_archive_indexer_and_relevance",
+  "evidence_files": [
+    "docs/analysis/organize/01-corpus-inventory.md",
+    "docs/analysis/organize/02-current-pipeline.md",
+    "docs/analysis/organize/03-coverage-gaps.md",
+    "docs/analysis/organize/04-relevance-axes.md",
+    "docs/analysis/organize/05-implementation-plan.md"
+  ]
+}
