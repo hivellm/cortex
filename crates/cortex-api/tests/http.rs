@@ -43,6 +43,7 @@ fn build_test_service_with_indexed_repos(
         audit: audit.clone(),
         audit_store: Arc::new(AuditStore::new()),
         indexed_repos: lane.into(),
+        coverage_snapshot: None,
     };
     (Arc::new(svc), v, k, g, audit)
 }
@@ -212,6 +213,7 @@ async fn rate_limited_caller_gets_429_with_retry_after_header() {
         audit: Arc::new(MemoryAuditPublisher::new()),
         audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
+        coverage_snapshot: None,
     };
     let svc = Arc::new(svc);
     let app = build_router(svc);
@@ -279,6 +281,7 @@ async fn lane_failure_does_not_block_other_lanes() {
         audit: Arc::new(MemoryAuditPublisher::new()),
         audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
+        coverage_snapshot: None,
     });
     let app = build_router(svc);
     let req = pre_change_request("x", Some("vectorizer"));
@@ -314,6 +317,7 @@ async fn budget_exceeded_truncates_response() {
         audit: Arc::new(MemoryAuditPublisher::new()),
         audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
+        coverage_snapshot: None,
     });
     let app = build_router(svc);
     let mut req = pre_change_request("x", Some("vectorizer"));

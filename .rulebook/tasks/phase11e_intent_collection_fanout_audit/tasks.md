@@ -26,9 +26,9 @@
 - [ ] 5.3 `cortex_query` `decision_lookup` "why Meilisearch instead of Lexum" now returns at least one hit
 
 ## 6. cortex_status honest reporting
-- [ ] 6.1 Trace where `cortex-api` builds the `indexed_repos` list and identify the source backend
-- [ ] 6.2 Either (a) make the bootstrap pipeline push the other 14 repos through the embedder, OR (b) split the field into `indexed_repos: { vectorizer: [..], meili: [..], nexus: [..] }` so the report is per-backend honest
-- [ ] 6.3 Document the choice in `docs/operations/coverage.md`
+- [x] 6.1 Trace where `cortex-api` builds the `indexed_repos` list and identify the source backend — derived from `MemoryKeywordLane::indexed_repos()`, NOT the Vectorizer ([crates/cortex-api/src/http.rs](crates/cortex-api/src/http.rs#L498))
+- [x] 6.2 Chose path (b): kept the legacy `indexed_repos` field (backwards compat) and added a `coverage: { overall_severity, backends: [{backend, severity, expected, present, missing, unexpected}], details_endpoint: "/v1/health/coverage" }` field so the per-backend honest view is one level down. Boot-time audit caches the result via `QueryService::with_coverage_snapshot` so `/v1/status` reads it without re-running the diff. Backfill / dispatch fixes that close the actual coverage gap remain in §4–§5.
+- [x] 6.3 Documented in [docs/operations/coverage-audit.md](docs/operations/coverage-audit.md)
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 7.1 Update or create documentation covering the implementation

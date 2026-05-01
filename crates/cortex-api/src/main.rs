@@ -526,12 +526,19 @@ async fn main() -> Result<()> {
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
         .with_fusion(fusion)
         .with_rewriter(rewriter);
+    // Phase11e §6 — coverage snapshot handle, shared between the
+    // boot-time audit (which writes the result here) and `/v1/status`
+    // (which reads it). Empty until the audit completes; subsequent
+    // refreshes overwrite atomically.
+    let coverage_snapshot: Arc<tokio::sync::RwLock<Option<cortex_api::coverage::CoverageResponse>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
     // Wire the `keyword_memory` snapshot into the service so
     // `/v1/status.indexed_repos` and `notice.repo_not_indexed` (issue
     // hivellm/cortex#1) read from the same source the dashboard does.
     let service = Arc::new(
         QueryService::with_memory_defaults(orchestrator)
-            .with_indexed_repos(keyword_memory.clone()),
+            .with_indexed_repos(keyword_memory.clone())
+            .with_coverage_snapshot(coverage_snapshot.clone()),
     );
 
     // Phase8e — silent-drop watcher. Polls the same divergence
@@ -625,7 +632,15 @@ async fn main() -> Result<()> {
     // visible at startup instead of only at query time. Slugs come
     // from `CORTEX_COVERAGE_SLUGS` plus whatever the keyword lane
     // already learned from the archive / Meili loader.
-    audit_coverage_at_boot(&keyword_memory).await;
+    //
+    // Phase11e §6 — the snapshot also writes through to
+    // `coverage_snapshot` so `/v1/status` and `cortex_status` MCP
+    // can report honest per-backend coverage without re-running the
+    // diff on every call.
+    if let Some(snapshot) = audit_coverage_at_boot(&keyword_memory).await {
+        let mut guard = coverage_snapshot.write().await;
+        *guard = Some(snapshot);
+    }
 
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
@@ -643,7 +658,14 @@ async fn main() -> Result<()> {
 /// disagree with the rest of the daemon. The `CORTEX_COVERAGE_SLUGS`
 /// env adds slugs the keyword lane has not yet seen (useful for
 /// pinning new repos before the first envelope flows through).
-async fn audit_coverage_at_boot(keyword_memory: &Arc<cortex_api::MemoryKeywordLane>) {
+///
+/// Returns the [`cortex_api::coverage::CoverageResponse`] the audit
+/// produced so the caller can store it on the status snapshot
+/// (phase11e §6). `None` when no backends are configured or the
+/// expected set is empty (e.g. unit-test environment).
+async fn audit_coverage_at_boot(
+    keyword_memory: &Arc<cortex_api::MemoryKeywordLane>,
+) -> Option<cortex_api::coverage::CoverageResponse> {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
@@ -666,7 +688,7 @@ async fn audit_coverage_at_boot(keyword_memory: &Arc<cortex_api::MemoryKeywordLa
     let expected = cortex_api::coverage::expected_collections(&slugs);
     if expected.is_empty() {
         tracing::debug!("coverage audit: expected set empty; skipping");
-        return;
+        return None;
     }
 
     let http = match reqwest::Client::builder()
@@ -676,60 +698,70 @@ async fn audit_coverage_at_boot(keyword_memory: &Arc<cortex_api::MemoryKeywordLa
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "coverage audit: reqwest builder failed; skipping");
-            return;
+            return None;
         }
     };
 
-    // Vectorizer diff. Use the same login flow as the lane wiring so
-    // the bearer token matches what queries actually send.
-    if let Ok(vectorizer_url) = std::env::var("CORTEX_VECTORIZER_URL")
+    let vectorizer_url = std::env::var("CORTEX_VECTORIZER_URL")
         .or_else(|_| std::env::var("VECTORIZER_URL"))
-    {
-        let bearer = resolve_vectorizer_bearer(&http, &vectorizer_url).await;
-        match cortex_api::coverage::fetch_vectorizer_collection_names(
-            &http,
-            &vectorizer_url,
-            bearer.as_deref(),
-            Duration::from_secs(5),
-        )
-        .await
-        {
-            Ok(live) => {
-                let diff = cortex_api::coverage::diff(expected.clone(), live);
-                cortex_api::coverage::log_diff("vectorizer", &vectorizer_url, &diff);
+        .ok();
+    let bearer = match vectorizer_url.as_deref() {
+        Some(url) => resolve_vectorizer_bearer(&http, url).await,
+        None => None,
+    };
+    let meili_url = std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok();
+    let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
+        .ok()
+        .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+
+    if vectorizer_url.is_none() && meili_url.is_none() {
+        tracing::debug!("coverage audit: no backends configured; skipping");
+        return None;
+    }
+
+    let response = cortex_api::coverage::run_coverage_audit(
+        &http,
+        slugs,
+        vectorizer_url.as_deref(),
+        bearer.as_deref(),
+        meili_url.as_deref(),
+        meili_key.as_deref(),
+        Duration::from_secs(5),
+    )
+    .await;
+
+    // Log per-backend INFO summary + WARN per missing collection.
+    // The structured INFO + WARN records remain the operator's
+    // primary observability surface; the cached response below is
+    // the consumer-facing JSON for `/v1/status` and the MCP tool.
+    for backend in &response.backends {
+        if let Some(url) = backend.base_url.as_deref() {
+            // Reconstruct a CoverageDiff for log_diff's existing
+            // signature without round-tripping the BTreeSets.
+            let diff = cortex_api::coverage::CoverageDiff {
+                expected: backend
+                    .present
+                    .iter()
+                    .chain(backend.missing.iter())
+                    .cloned()
+                    .collect(),
+                present: backend.present.iter().cloned().collect(),
+                missing: backend.missing.iter().cloned().collect(),
+                unexpected: backend.unexpected.iter().cloned().collect(),
+            };
+            cortex_api::coverage::log_diff(backend.backend, url, &diff);
+            if let Some(reason) = backend.error.as_deref() {
+                tracing::warn!(
+                    backend = backend.backend,
+                    base_url = url,
+                    reason = reason,
+                    "coverage audit: backend probe failed"
+                );
             }
-            Err(reason) => tracing::warn!(
-                vectorizer_url = %vectorizer_url,
-                reason = %reason,
-                "coverage audit: vectorizer diff skipped"
-            ),
         }
     }
 
-    // Meili diff.
-    if let Ok(meili_url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
-        let api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
-            .ok()
-            .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
-        match cortex_api::coverage::fetch_meili_index_uids(
-            &http,
-            &meili_url,
-            api_key.as_deref(),
-            Duration::from_secs(5),
-        )
-        .await
-        {
-            Ok(live) => {
-                let diff = cortex_api::coverage::diff(expected, live);
-                cortex_api::coverage::log_diff("meili", &meili_url, &diff);
-            }
-            Err(reason) => tracing::warn!(
-                meili_url = %meili_url,
-                reason = %reason,
-                "coverage audit: meili diff skipped"
-            ),
-        }
-    }
+    Some(response)
 }
 
 /// Phase11e — resolve a Vectorizer bearer for the inventory probe.

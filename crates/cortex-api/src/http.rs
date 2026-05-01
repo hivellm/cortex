@@ -50,7 +50,51 @@ pub struct StatusBody {
     /// lane wired through. Callers use this list to detect "this
     /// repo was never indexed" before issuing a query — see issue
     /// hivellm/cortex#1.
+    ///
+    /// **Phase11e note:** this list reflects whatever the keyword
+    /// lane has seen, which is NOT the same as what every backend
+    /// hosts. Use `coverage` for the per-backend honest view.
     pub indexed_repos: Vec<String>,
+    /// Phase11e §6 — per-backend collection / index inventory
+    /// summary. `None` when no coverage audit has run yet (cold
+    /// boot before the boot-time audit completes, or unit tests).
+    /// Populated from the latest snapshot the boot-time audit
+    /// recorded; the full diff is at `/v1/health/coverage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<CoverageBackendSummaries>,
+}
+
+/// Compact per-backend coverage summary embedded in `/v1/status`.
+/// Designed to fit comfortably inside a `cortex_status` MCP response
+/// without crossing the transport's size cap; the full diff lives
+/// at `/v1/health/coverage`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CoverageBackendSummaries {
+    /// Overall severity across all backends (`ok` / `warn` /
+    /// `critical`). Mirrors the field on `/v1/health/coverage`.
+    pub overall_severity: &'static str,
+    /// Per-backend summary, one row per probed backend.
+    pub backends: Vec<CoverageBackendSummary>,
+    /// Pointer to the full diff endpoint so callers know where to
+    /// read the per-collection breakdown when they need it.
+    pub details_endpoint: &'static str,
+}
+
+/// One row of [`CoverageBackendSummaries`].
+#[derive(Debug, Clone, Serialize)]
+pub struct CoverageBackendSummary {
+    /// `vectorizer` or `meili`.
+    pub backend: &'static str,
+    /// `ok` / `warn` / `critical`.
+    pub severity: &'static str,
+    /// Total expected collection / index names.
+    pub expected: usize,
+    /// Subset of expected that the live backend hosts.
+    pub present: usize,
+    /// Subset of expected that is missing.
+    pub missing: usize,
+    /// Live names that are NOT in the expected set (orphans).
+    pub unexpected: usize,
 }
 
 /// Build the router. The state Arc is cheap to clone per request.
@@ -464,14 +508,51 @@ async fn handle_status(State(state): State<ApiState>) -> Response {
         .as_ref()
         .map(|lane| lane.indexed_repos())
         .unwrap_or_default();
+    // Phase11e §6 — surface a per-backend coverage summary alongside
+    // the legacy `indexed_repos` field. The keyword-lane snapshot
+    // alone hides the embedder/fulltext asymmetry the operator needs
+    // to see (e.g. Meili has 29 indexes but Vectorizer has 4).
+    let coverage = if let Some(handle) = state.service.coverage_snapshot.as_ref() {
+        let guard = handle.read().await;
+        guard.as_ref().map(summarize_coverage)
+    } else {
+        None
+    };
     let body = StatusBody {
         service: "cortex-api",
         version: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
         uptime_ms: u64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
         indexed_repos,
+        coverage,
     };
     (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Phase11e §6 — collapse a full [`crate::coverage::CoverageResponse`]
+/// down to the compact per-backend summary embedded in `/v1/status`.
+/// Operators pull the full diff from `/v1/health/coverage` when they
+/// need the per-collection breakdown.
+fn summarize_coverage(
+    full: &crate::coverage::CoverageResponse,
+) -> CoverageBackendSummaries {
+    let backends = full
+        .backends
+        .iter()
+        .map(|b| CoverageBackendSummary {
+            backend: b.backend,
+            severity: b.severity,
+            expected: b.expected_count,
+            present: b.present_count,
+            missing: b.missing_count,
+            unexpected: b.unexpected_count,
+        })
+        .collect();
+    CoverageBackendSummaries {
+        overall_severity: full.overall_severity,
+        backends,
+        details_endpoint: "/v1/health/coverage",
+    }
 }
 
 async fn handle_query(

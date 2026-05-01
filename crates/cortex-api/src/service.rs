@@ -252,6 +252,15 @@ pub struct QueryService {
     /// from one source. `None` for unit tests that don't care about
     /// the lookup; production wires the lane through `main.rs`.
     pub indexed_repos: Option<Arc<MemoryKeywordLane>>,
+    /// Phase11e §6 — boot-time / periodic coverage audit snapshot.
+    /// Populated by `audit_coverage_at_boot` in `main.rs` (and
+    /// optionally a periodic refresh loop) so `/v1/status` and
+    /// `cortex_status` MCP can report honest per-backend coverage
+    /// without re-running the full diff on every call. `None` when
+    /// the daemon was started without coverage wiring (unit tests,
+    /// cold dev stack); `Some(None)` when the audit ran but every
+    /// backend was unconfigured.
+    pub coverage_snapshot: Option<Arc<tokio::sync::RwLock<Option<crate::coverage::CoverageResponse>>>>,
 }
 
 impl QueryService {
@@ -267,6 +276,7 @@ impl QueryService {
             audit: Arc::new(MemoryAuditPublisher::new()),
             audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
+            coverage_snapshot: None,
         }
     }
 
@@ -274,6 +284,19 @@ impl QueryService {
     /// chain the wiring at startup (`QueryService::with_memory_defaults(...).with_indexed_repos(lane)`).
     pub fn with_indexed_repos(mut self, lane: Arc<MemoryKeywordLane>) -> Self {
         self.indexed_repos = Some(lane);
+        self
+    }
+
+    /// Phase11e §6 — attach a coverage-snapshot handle. The
+    /// boot-time audit (and any future periodic refresh) writes the
+    /// latest [`crate::coverage::CoverageResponse`] into this Arc;
+    /// `/v1/status` and `cortex_status` MCP read from it without
+    /// re-running the diff. Returns `self` so callers can chain.
+    pub fn with_coverage_snapshot(
+        mut self,
+        snapshot: Arc<tokio::sync::RwLock<Option<crate::coverage::CoverageResponse>>>,
+    ) -> Self {
+        self.coverage_snapshot = Some(snapshot);
         self
     }
 
@@ -683,6 +706,7 @@ mod tests {
             audit: audit.clone(),
             audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
+            coverage_snapshot: None,
         };
         let _ = svc.handle("dash", req("x")).await;
         let snap = audit.snapshot();
@@ -707,6 +731,7 @@ mod tests {
             audit: audit.clone(),
             audit_store: store.clone(),
             indexed_repos: None,
+            coverage_snapshot: None,
         };
         let mut r = req("hello-world");
         r.scope.repo = Some("Vectorizer".into());
@@ -842,6 +867,7 @@ mod tests {
             audit: Arc::new(MemoryAuditPublisher::new()),
             audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
+            coverage_snapshot: None,
         };
         // Use distinct queries so the cache doesn't short-circuit
         // (cache hits reuse the rate-limit token on the spec-11 path

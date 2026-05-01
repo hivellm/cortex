@@ -1,6 +1,6 @@
 # Coverage audit — Vectorizer + Meilisearch inventory diff
 
-> **Phase:** phase11e (in progress) · **Owner:** Core team · **Status:** 🟡 Partial (sections 1 + 2.1 of 7)
+> **Phase:** phase11e (in progress) · **Owner:** Core team · **Status:** 🟡 Partial (sections 1 + 2.1 + 6 of 7)
 
 The cortex-api daemon audits the live Vectorizer + Meilisearch
 collection / index inventories against the routing matrix's expected
@@ -78,6 +78,35 @@ shipped) will map these to exit codes 0 / 1 / 2.
 unreachable, JSON shape mismatch). The diff still runs — `live`
 falls back to empty, so every expected name lands in `missing` —
 but the operator sees the transport error string in the field.
+
+## In `/v1/status` and `cortex_status` MCP (phase11e §6)
+
+The boot-time audit's result is cached in `QueryService::coverage_snapshot`
+so `/v1/status` (and the `cortex_status` MCP tool that wraps it)
+can carry a compact per-backend summary without re-running the
+diff on every call:
+
+```json
+{
+  "service": "cortex-api",
+  "version": "0.1.0",
+  "indexed_repos": [...],   // legacy keyword-lane view, kept for backwards compat
+  "coverage": {
+    "overall_severity": "warn",
+    "backends": [
+      { "backend": "vectorizer", "severity": "warn",
+        "expected": 144, "present": 4,  "missing": 140, "unexpected": 0 },
+      { "backend": "meili",      "severity": "warn",
+        "expected": 144, "present": 29, "missing": 115, "unexpected": 7 }
+    ],
+    "details_endpoint": "/v1/health/coverage"
+  }
+}
+```
+
+The summary fits well inside the MCP transport's per-tool-result
+size cap; callers that need the per-collection breakdown follow
+the `details_endpoint` link to the on-demand handler.
 
 ## Configuration
 
