@@ -339,6 +339,7 @@ For each repo under `e:/HiveLLM/`:
 | Git history (commit messages, PR descriptions) | `Turn:historical` | Each commit ≈ one historical "turn" with diff as evidence |
 | Issues / PRs (via `gh` CLI when available) | `Turn:historical` | Linked to the commits/files they touched                 |
 | Existing rule / law files (`rulebook/`, `.cursor/rules/`) | `Law:imported` | Seeds the law registry                                   |
+| Claude Code conversation archive (`~/.claude/projects/<project>/*.jsonl`) | `Turn` / `ToolCall` / `AgentCall` (phase11i) | Walked + tailed by [`cortex-claude-archive`](../crates/cortex-claude-archive/); each user/assistant pair maps to one `Turn`, each `tool_use` block to one `ToolCall`, each Task tool to one `AgentCall`. Sessions persist across daemon restarts. |
 
 ### 6.2 Pipeline
 
@@ -389,8 +390,9 @@ Once a repo is bootstrapped, Cortex tails it:
 - A **filesystem watcher** (notify on Linux/Mac, ReadDirectoryChangesW on Windows) per registered repo emits change events.
 - A **git hook** (`post-commit`, `post-merge`) batches commit-level updates.
 - For repos hosted on GitHub, a thin webhook-receiver service can push PR/issue updates directly into the bootstrap stream.
+- **Claude Code conversation archive** (phase11i §5.2) — [`cortex-claude-archive tail`](../crates/cortex-claude-archive/) runs as a long-running daemon (1 Hz mtime poll, axum `:17030/healthz` endpoint, sysinfo RSS sampler). The compose stack ships it alongside the live workers; cortex-api's `/v1/health/coverage` surfaces the watcher's snapshot under an `archive_watchers` block.
 
-This means after the initial backfill, the corpus stays current automatically — every new commit, doc change, or merged PR appears in retrieval results within seconds.
+This means after the initial backfill, the corpus stays current automatically — every new commit, doc change, merged PR, AND every newly-appended Claude Code session appears in retrieval results within seconds.
 
 ### 6.5 Cost & sizing (estimate)
 

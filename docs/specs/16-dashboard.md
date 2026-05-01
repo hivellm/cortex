@@ -332,6 +332,36 @@ tab showing only `tool_call`/`turn` even though the overview
 reported 287 memories + 26 decisions + 33 analyses + 121
 violations sitting in the same lane).
 
+#### Claude Code archive turns (phase11i §1 + §5)
+
+The Memory browser surfaces `Turn` envelopes ingested by
+[`cortex-claude-archive`](../../crates/cortex-claude-archive/) the
+same way it surfaces live-capture turns. Wire shape on the
+envelope distinguishes the two paths via:
+
+- `tool` field — `"claude-code"` for the conversation archive
+  (vs. `"cortex"` for live capture, `"openai-codex"` / `"cursor"`
+  / `"gemini"` once those adapters land).
+- `stream` field — `Bootstrap` while the watcher is back-filling
+  a session, `Live` once the live adapter takes over (the
+  watcher de-dups by `event_id`, so a session that flips from
+  bootstrap to live mid-stream surfaces under both stream tags
+  without double-counting in the dashboard counters).
+
+The `?tool=<name>` filter (phase11i §3.3) lets operators slice
+by originating AI: `GET /v1/dashboard/memory?kind=turn&tool=claude-code`
+returns only the conversation-archive turns. Same UI affordance
+as the existing `?kind=` filter — repeated values OR together,
+unknown values surface as `400 unknown_tool`.
+
+The `Past sessions` overlay (phase11i §4.1) lives under the
+spec-12 pre-thinking renderer rather than the Memory browser
+itself, but the row-click detail pane on a `Turn` shows its
+parent `session_id` and a "see related sessions" link that
+re-runs `intent=similar_problems` scoped to the same
+`session_cohort` so the dashboard surfaces the same neighbours
+the renderer's overlay does.
+
 ### Decision register
 
 - List view with filters: repo, status (`proposed` / `accepted` / `superseded`), date.

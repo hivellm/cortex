@@ -54,7 +54,7 @@ ignore = "0.4"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 synap-sdk = "0.11"
-vectorizer-sdk = "3.0.3"
+vectorizer-sdk = "3.2.0"
 nexus-graph-sdk = "2.0"
 
 # Pin rustls-webpki >= 0.103.13 to close RUSTSEC-2026-0104 (panic in CRL parsing).
