@@ -324,6 +324,21 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase11e §2.3 — collection / index coverage doctor. Hits
+    /// `<api_url>/v1/health/coverage` and renders the per-backend
+    /// expected/present/missing counts plus the first ten missing
+    /// names. Exit codes mirror the audit's `severity` field:
+    /// `0` ok (every expected name present), `1` warn (at least
+    /// one missing), `2` critical (nothing present at all).
+    DoctorCoverage {
+        /// `cortex-api` base URL. Defaults to `$CORTEX_API_URL`,
+        /// then `http://127.0.0.1:17000`.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase8d — config-coherence audit. Read-only static analysis
     /// of every config surface (`.env`, `~/.cortex/adapter.toml`,
     /// `cortex-plugin/.mcp.json`, `cortex-plugin/hooks/hooks.json`)
@@ -642,6 +657,7 @@ fn main() -> ExitCode {
             json,
         } => doctor_config(workspace, adapter_toml, json),
         Command::DoctorAlerts { state_dir, json } => doctor_alerts(state_dir, json),
+        Command::DoctorCoverage { api_url, json } => doctor_coverage(api_url, json),
         Command::MeiliPrune {
             time_travel,
             dry_run,
@@ -1843,6 +1859,157 @@ fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
         ExitCode::from(2)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// Phase11e §2.3 — `cortex-ops doctor-coverage`. Hits the
+/// `cortex-api` daemon's `/v1/health/coverage` endpoint and
+/// renders the per-backend collection / index inventory diff.
+///
+/// Exit codes mirror the audit's `overall_severity`:
+/// - `0` — every expected name present (severity = ok)
+/// - `1` — at least one missing (severity = warn)
+/// - `2` — nothing expected is present at all (severity =
+///   critical), or the daemon is unreachable
+fn doctor_coverage(api_url: Option<String>, json: bool) -> ExitCode {
+    let url = api_url
+        .or_else(|| std::env::var("CORTEX_API_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17000".to_string());
+    let endpoint = format!("{}/v1/health/coverage", url.trim_end_matches('/'));
+
+    // The workspace's `reqwest` feature set excludes `blocking`, so
+    // build a local single-thread tokio runtime for this one
+    // call rather than asking the whole binary to be async.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("doctor-coverage: tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let payload: serde_json::Value = match rt.block_on(async {
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()?;
+        let resp = http.get(&endpoint).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "{endpoint} returned HTTP {} {}",
+                status.as_u16(),
+                body.chars().take(200).collect::<String>()
+            ));
+        }
+        let parsed: serde_json::Value = resp.json().await?;
+        Ok::<_, anyhow::Error>(parsed)
+    }) {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("doctor-coverage: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let overall = payload
+        .get("overall_severity")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+
+    if json {
+        match serde_json::to_string_pretty(&payload) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("doctor-coverage: serialize: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        let slugs = payload
+            .get("slugs")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let families = payload
+            .get("families")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        println!("cortex-ops doctor-coverage");
+        println!("api_url:         {url}");
+        println!("overall:         {overall}");
+        println!("expected:        {slugs} slugs × {families} families = {} names", slugs * families);
+        println!();
+        if let Some(backends) = payload.get("backends").and_then(|v| v.as_array()) {
+            for backend in backends {
+                let name = backend
+                    .get("backend")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let sev = backend
+                    .get("severity")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let expected = backend
+                    .get("expected_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let present = backend
+                    .get("present_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let missing = backend
+                    .get("missing_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let unexpected = backend
+                    .get("unexpected_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let base_url = backend
+                    .get("base_url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("(not configured)");
+                let ratio = if expected > 0 {
+                    (present as f64 / expected as f64) * 100.0
+                } else {
+                    0.0
+                };
+                println!("[{sev:>4}] {name} @ {base_url}");
+                println!(
+                    "       {present}/{expected} present ({ratio:.0}%) · {missing} missing · {unexpected} orphan"
+                );
+                if let Some(missing_names) =
+                    backend.get("missing").and_then(|v| v.as_array())
+                {
+                    let take = missing_names.iter().take(10);
+                    for name in take {
+                        if let Some(n) = name.as_str() {
+                            println!("         missing: {n}");
+                        }
+                    }
+                    if missing_names.len() > 10 {
+                        println!(
+                            "         …{} more missing — see /v1/health/coverage for full list",
+                            missing_names.len() - 10
+                        );
+                    }
+                }
+                if let Some(err) = backend.get("error").and_then(|v| v.as_str()) {
+                    println!("         error: {err}");
+                }
+                println!();
+            }
+        }
+    }
+
+    match overall {
+        "ok" => ExitCode::SUCCESS,
+        "warn" => ExitCode::from(1),
+        "critical" | _ => ExitCode::from(2),
     }
 }
 
