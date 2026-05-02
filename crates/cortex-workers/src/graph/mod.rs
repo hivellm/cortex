@@ -20,6 +20,7 @@ pub mod nexus_client;
 pub mod patch;
 pub mod resolver;
 pub mod schema;
+pub mod stale_sweeper;
 pub mod worker;
 pub mod writer;
 
@@ -37,6 +38,7 @@ pub use nexus_client::{
 };
 pub use patch::{EdgeOp, GraphPatch, GraphWriteReport, NodeOp};
 pub use schema::SCHEMA_STATEMENTS;
+pub use stale_sweeper::{StaleEdgeSweeper, SweepReport, DEFAULT_SWEEP_INTERVAL_SECS};
 pub use worker::{
     BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer,
     MemorySynapPublisher, OffsetTracker, OutOfOrderBuffer, ReadyBatch, SynapConsumer, SynapHandle,

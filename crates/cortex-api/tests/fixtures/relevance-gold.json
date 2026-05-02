@@ -249,6 +249,116 @@
         "crates/cortex-storage",
         "crates/cortex-api/src/dashboard.rs"
       ]
+    },
+
+    {
+      "id": "rel-031",
+      "intent": "pre_change_context",
+      "query": "tree-sitter rust analyzer for use_declaration and call_expression",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/graph/analyzer/rust.rs",
+        "crates/cortex-workers/src/graph/analyzer/mod.rs"
+      ],
+      "notes": "phase11k §6.4 — Rust analyzer entry; exercises IMPORTS_FILE / CALLS edge classes via the new graph paths."
+    },
+    {
+      "id": "rel-032",
+      "intent": "pre_change_context",
+      "query": "three-tier symbol resolver local-file intra-crate external",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/graph/resolver/mod.rs",
+        "crates/cortex-workers/src/graph/resolver/module_map.rs"
+      ],
+      "notes": "phase11k §6.4 — exercises the resolver tier traversal."
+    },
+    {
+      "id": "rel-033",
+      "intent": "pre_change_context",
+      "query": "markdown analyzer that emits links_to and documents edges",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/graph/markdown/mod.rs",
+        "crates/cortex-workers/src/graph/markdown/links.rs"
+      ],
+      "notes": "phase11k §6.4 — markdown analyzer + LINKS_TO / DOCUMENTS edges (DOCUMENTED_BY traversal)."
+    },
+    {
+      "id": "rel-034",
+      "intent": "pre_change_context",
+      "query": "graph-static envelope shape carrying inline graph_patch metadata",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-cli/src/bootstrap/graph_static.rs"
+      ],
+      "notes": "phase11k §6.4 — bootstrap pass envelope shape (IMPORTS_FILE traversal entry-point)."
+    },
+
+    {
+      "id": "rel-035",
+      "intent": "decision_lookup",
+      "query": "why did we adopt nexus _id over the synthetic natural_key",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        ".rulebook/tasks/phase11l_nexus-external-ids-migration",
+        "crates/cortex-workers/src/graph/identity.rs"
+      ],
+      "notes": "phase11k §6.4 — exercises the CITES chain renderer (Decision → Spec → Code)."
+    },
+    {
+      "id": "rel-036",
+      "intent": "decision_lookup",
+      "query": "decision behind the static-extraction-over-LSP choice for the graph layer",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "docs/analysis/graph",
+        ".rulebook/tasks/phase11k_graph_correlations"
+      ],
+      "notes": "phase11k §6.4 — design rationale for syntactic resolver via CITES chain."
+    },
+    {
+      "id": "rel-037",
+      "intent": "decision_lookup",
+      "query": "rationale for splitting bootstrap-graph-static stream tag from raw",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-cli/src/bootstrap/graph_static.rs"
+      ],
+      "notes": "phase11k §6.4 — stream tag + archive partition rationale."
+    },
+
+    {
+      "id": "rel-038",
+      "intent": "similar_problems",
+      "query": "stale edge sweeper deleting edges with old analyzer_version",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/graph/stale_sweeper.rs",
+        "crates/cortex-workers/src/graph/writer.rs"
+      ],
+      "notes": "phase11k §6.4 — sweeper + delete_edges_by_filter surface."
+    },
+    {
+      "id": "rel-039",
+      "intent": "similar_problems",
+      "query": "patch coalescer dedup by content hash and analyzer version",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/graph/coalescer.rs"
+      ],
+      "notes": "phase11k §6.4 — observe_static_emission dedup."
+    },
+
+    {
+      "id": "rel-040",
+      "intent": "free_search",
+      "query": "pending sentinel for unknown cross-artifact content_hash in patch builder",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/graph/analyzer/patch_builder.rs"
+      ],
+      "notes": "phase11k §6.4 — pending sentinel rewrite (phase11l §5.1)."
     }
   ]
 }

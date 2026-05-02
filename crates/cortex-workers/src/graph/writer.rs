@@ -21,7 +21,7 @@ use super::cypher::CypherTemplates;
 use super::mapper::map_event_to_patch;
 use super::metrics::Metrics;
 use super::nexus_client::{GraphClient, GraphClientError};
-use super::patch::GraphWriteReport;
+use super::patch::{EdgeDeleteFilter, GraphWriteReport};
 use crate::embedder::EnrichedEvent;
 
 /// Writer trait — exactly the signature in spec 07 §Inputs/Outputs.
@@ -45,6 +45,15 @@ pub trait GraphWriter: Send + Sync {
         &self,
         patches: Vec<super::patch::GraphPatch>,
     ) -> Result<GraphWriteReport, GraphClientError>;
+
+    /// Delete all edges matching `filter` from Nexus. Returns the
+    /// number of relationships actually deleted. Used by the stale-edge
+    /// sweeper (phase11k §5.3) to retire edges whose `source_event_id`
+    /// references a superseded content hash.
+    async fn delete_edges_by_filter(
+        &self,
+        filter: EdgeDeleteFilter,
+    ) -> Result<u64, GraphClientError>;
 }
 
 /// Production [`GraphWriter`] backed by a [`GraphClient`] +
@@ -170,5 +179,16 @@ impl GraphWriter for NexusGraphWriter {
             by_label,
             latency_ms,
         })
+    }
+
+    async fn delete_edges_by_filter(
+        &self,
+        filter: EdgeDeleteFilter,
+    ) -> Result<u64, GraphClientError> {
+        let deleted = self.client.delete_edges(&filter).await?;
+        if deleted > 0 {
+            self.metrics.incr_edges_deleted(deleted);
+        }
+        Ok(deleted)
     }
 }

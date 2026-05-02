@@ -280,6 +280,120 @@ mod tests {
     }
 }
 
+/// Filter for bulk edge deletions issued by the stale-edge sweeper
+/// (phase11k §5.3).
+///
+/// All fields are optional; the resulting Cypher predicate is the
+/// AND-conjunction of every `Some` field. An all-`None` filter matches
+/// every edge in the graph — callers must populate at least one field.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct EdgeDeleteFilter {
+    /// Restrict deletion to edges stamped with this `analyzer_version`
+    /// property. Used to retire output from a superseded analyzer run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyzer_version: Option<String>,
+    /// Restrict deletion to edges whose `source_event_id` is in this list.
+    /// The sweeper passes the set of stale event ids identified by the
+    /// hash-change guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_event_ids: Option<Vec<String>>,
+    /// Restrict deletion to edges of these relationship types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_types: Option<Vec<String>>,
+    /// Restrict deletion to edges whose `created_at_ms` is older than
+    /// this Unix-epoch-ms threshold (exclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_than_ms: Option<i64>,
+    /// Restrict deletion to edges whose source (from) node carries this
+    /// label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_label: Option<String>,
+    /// Restrict deletion to edges whose target (to) node natural key
+    /// starts with this prefix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_natural_key_prefix: Option<String>,
+}
+
+impl EdgeDeleteFilter {
+    /// Return `true` if at least one field is `Some`. The sweeper must
+    /// never issue a delete with an all-`None` filter to avoid
+    /// accidentally wiping the entire graph.
+    pub fn is_non_empty(&self) -> bool {
+        self.analyzer_version.is_some()
+            || self.source_event_ids.is_some()
+            || self.edge_types.is_some()
+            || self.older_than_ms.is_some()
+            || self.from_label.is_some()
+            || self.to_natural_key_prefix.is_some()
+    }
+
+    /// Build the WHERE clause body (without the `WHERE` keyword) that
+    /// corresponds to this filter. Returns `None` when the filter is empty.
+    pub fn to_cypher_predicate(&self) -> Option<String> {
+        let mut clauses: Vec<String> = Vec::new();
+
+        if let Some(ver) = &self.analyzer_version {
+            clauses.push(format!(
+                "r.analyzer_version = \"{}\"",
+                escape_cypher_str(ver)
+            ));
+        }
+        if let Some(ids) = &self.source_event_ids {
+            if !ids.is_empty() {
+                let list: Vec<String> = ids
+                    .iter()
+                    .map(|id| format!("\"{}\"", escape_cypher_str(id)))
+                    .collect();
+                clauses.push(format!("r.source_event_id IN [{}]", list.join(", ")));
+            }
+        }
+        if let Some(types) = &self.edge_types {
+            if !types.is_empty() {
+                let list: Vec<String> = types
+                    .iter()
+                    .map(|t| format!("\"{}\"", escape_cypher_str(t)))
+                    .collect();
+                clauses.push(format!("type(r) IN [{}]", list.join(", ")));
+            }
+        }
+        if let Some(ms) = self.older_than_ms {
+            clauses.push(format!("r.created_at_ms < {ms}"));
+        }
+        if let Some(lbl) = &self.from_label {
+            clauses.push(format!("\"{}\" IN labels(a)", escape_cypher_str(lbl)));
+        }
+        if let Some(prefix) = &self.to_natural_key_prefix {
+            clauses.push(format!(
+                "b.natural_key STARTS WITH \"{}\"",
+                escape_cypher_str(prefix)
+            ));
+        }
+
+        if clauses.is_empty() {
+            None
+        } else {
+            Some(clauses.join(" AND "))
+        }
+    }
+}
+
+/// Minimal string escaping for values embedded in a Cypher predicate.
+/// Only handles double-quotes and backslashes; all other characters are
+/// passed through as-is. Non-ASCII characters are replaced with `?` to
+/// stay consistent with `cypher_string_literal` in `nexus_client.rs`.
+fn escape_cypher_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x80 => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out
+}
+
 /// Per-batch report returned by [`crate::GraphWriter::write_batch`].
 ///
 /// Mirrors spec 07 §Inputs/Outputs exactly. The `by_label` map records

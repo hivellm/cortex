@@ -44,6 +44,13 @@ pub struct CoalesceStats {
 /// patches; the type holds it as a struct field so that windows that
 /// span multiple coalesce passes (future feature) can reuse the
 /// allocation by calling [`PatchCoalescer::reset`] between passes.
+///
+/// Phase11k §5.4 added a per-session `(content_hash, analyzer_version)`
+/// dedup so a search-and-replace burst against the same artifact does
+/// not re-emit identical static-extraction patches. The session
+/// table lives on the coalescer struct (not the free `coalesce`
+/// function) so the worker can carry it across batches without the
+/// caller plumbing a third arg through.
 #[derive(Debug, Default)]
 pub struct PatchCoalescer {
     /// Seen `(label, natural_key)` pairs in the current window.
@@ -51,6 +58,14 @@ pub struct PatchCoalescer {
     /// Seen edge tuples in the current window. Populated only when edge
     /// dedup is enabled by a future caller; left empty by [`coalesce`].
     pub seen_edges: BTreeSet<(String, String, String, String, String)>,
+    /// Phase11k §5.4 — per-session dedup on `(content_hash,
+    /// analyzer_version)`. The key is `(repo, path, content_hash,
+    /// analyzer_version)` so two different paths that share a hash
+    /// (rare but possible in deduplicated archives) do not
+    /// false-collapse, and a bumped version forces re-emission.
+    /// Populated by [`Self::observe_static_emission`] from the
+    /// graph worker's batch loop.
+    pub seen_static_emissions: BTreeSet<(String, String, String, String)>,
 }
 
 impl PatchCoalescer {
@@ -63,6 +78,35 @@ impl PatchCoalescer {
     pub fn reset(&mut self) {
         self.seen_nodes.clear();
         self.seen_edges.clear();
+        self.seen_static_emissions.clear();
+    }
+
+    /// Phase11k §5.4 — record a `(repo, path, content_hash,
+    /// analyzer_version)` tuple as already-emitted within this
+    /// session. Returns `true` when the tuple was unseen (callers
+    /// should proceed with the static extraction) and `false` when
+    /// it has already been observed (callers should skip re-emission
+    /// to dedup a search-and-replace burst).
+    pub fn observe_static_emission(
+        &mut self,
+        repo: &str,
+        path: &str,
+        content_hash: &str,
+        analyzer_version: &str,
+    ) -> bool {
+        let key = (
+            repo.to_string(),
+            path.to_string(),
+            content_hash.to_string(),
+            analyzer_version.to_string(),
+        );
+        self.seen_static_emissions.insert(key)
+    }
+
+    /// Number of `(content_hash, analyzer_version)` tuples observed
+    /// so far in this session. Useful for tests + metric pull.
+    pub fn static_emission_count(&self) -> usize {
+        self.seen_static_emissions.len()
     }
 }
 
@@ -213,10 +257,59 @@ mod tests {
         c.seen_nodes.insert(("X".into(), "1".into()));
         c.seen_edges
             .insert(("a".into(), "b".into(), "c".into(), "d".into(), "e".into()));
+        c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11l.1");
         assert_eq!(c.seen_nodes.len(), 1);
         assert_eq!(c.seen_edges.len(), 1);
+        assert_eq!(c.static_emission_count(), 1);
         c.reset();
         assert!(c.seen_nodes.is_empty());
         assert!(c.seen_edges.is_empty());
+        assert_eq!(c.static_emission_count(), 0);
+    }
+
+    // ---------- Phase11k §5.4 — per-session static-emission dedup ----------
+
+    #[test]
+    fn observe_static_emission_first_call_returns_true() {
+        let mut c = PatchCoalescer::new();
+        assert!(c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11l.1"));
+        assert_eq!(c.static_emission_count(), 1);
+    }
+
+    #[test]
+    fn observe_static_emission_repeat_returns_false() {
+        let mut c = PatchCoalescer::new();
+        c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11l.1");
+        // Identical tuple — must dedup.
+        assert!(!c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11l.1"));
+        assert_eq!(c.static_emission_count(), 1);
+    }
+
+    #[test]
+    fn observe_static_emission_different_hash_is_unseen() {
+        let mut c = PatchCoalescer::new();
+        c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11l.1");
+        // Same path + version but new content_hash — search-and-
+        // replace burst landed a real change; must NOT dedup.
+        assert!(c.observe_static_emission("cortex", "src/lib.rs", "sha256:def", "phase11l.1"));
+    }
+
+    #[test]
+    fn observe_static_emission_version_bump_forces_re_emission() {
+        let mut c = PatchCoalescer::new();
+        c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11k.1");
+        // Same content_hash but a bumped analyzer_version — must
+        // re-emit so the bumped extraction logic actually lands.
+        assert!(c.observe_static_emission("cortex", "src/lib.rs", "sha256:abc", "phase11l.1"));
+    }
+
+    #[test]
+    fn observe_static_emission_distinct_paths_do_not_collapse() {
+        let mut c = PatchCoalescer::new();
+        c.observe_static_emission("cortex", "src/a.rs", "sha256:abc", "phase11l.1");
+        // Different path — even if some other quirk produced the
+        // same hash, the tuple key keeps them apart.
+        assert!(c.observe_static_emission("cortex", "src/b.rs", "sha256:abc", "phase11l.1"));
+        assert_eq!(c.static_emission_count(), 2);
     }
 }

@@ -575,6 +575,41 @@ mod tests {
     }
 
     #[test]
+    fn shipped_query_templates_for_pre_thinking_renderer() {
+        // Phase11k §6.1 — three read-side query templates ship in
+        // cypher/ for the pre-thinking renderer's graph-traversal
+        // sub-blocks: code_callers (CALLS 1-hop), doc_trail (CITES
+        // chain), blast_radius (IMPORTS_FILE*1..2). The renderer
+        // loads them via the same template registry the writer
+        // uses; a regression in their on-disk shape would break the
+        // `Past sessions` / `Consolidated context` augmentation.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cypher_dir = manifest_dir.join("cypher");
+        for (name, must_contain) in [
+            ("code_callers", &["MATCH", "CALLS", "$target_id"][..]),
+            ("doc_trail", &["MATCH", "CITES", "$root_id"][..]),
+            ("blast_radius", &["MATCH", "IMPORTS_FILE", "$source_id"][..]),
+        ] {
+            let path = cypher_dir.join(format!("{name}.cypher"));
+            let body = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            for needle in must_contain {
+                assert!(
+                    body.contains(needle),
+                    "{name}.cypher must contain {needle:?}, got:\n{body}"
+                );
+            }
+            // Every read-side template must include a $limit
+            // parameter so the renderer can cap result size — the
+            // pre-thinking budget is a hard constraint.
+            assert!(
+                body.contains("$limit"),
+                "{name}.cypher must accept a $limit parameter"
+            );
+        }
+    }
+
+    #[test]
     fn shipped_node_templates_use_external_id_create_on_conflict_match() {
         // Phase11l §3.3 — every shipped node_*.cypher template MUST
         // route the upsert through Nexus 2.1's reserved `_id` slot

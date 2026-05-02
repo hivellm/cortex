@@ -267,19 +267,101 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
     }
 
     if graph_count > 0 {
-        out.push_str("## Graph neighbours\n");
-        for n in response.results.graph_neighbors.iter().take(graph_count) {
-            writeln!(
-                out,
-                "- {from} -[{relation}]-> {to} (hops={hops})",
-                from = n.from,
-                relation = n.relation,
-                to = n.to,
-                hops = n.hops,
-            )
-            .ok();
+        // Phase11k §6.2 — split graph neighbours into three named
+        // sub-blocks for the relations the renderer specifically
+        // wants to surface (`Connected files (via IMPORTS_FILE)`,
+        // `Documented under (via DOCUMENTED_BY)`, `Cited from (via
+        // CITES)`); everything else falls back to the generic
+        // `Graph neighbours` heading. Sub-block ordering matches
+        // the spec-12 update under phase11k §6.3.
+        let neighbours: Vec<&cortex_api::GraphNeighbor> = response
+            .results
+            .graph_neighbors
+            .iter()
+            .take(graph_count)
+            .collect();
+        let imports: Vec<&cortex_api::GraphNeighbor> = neighbours
+            .iter()
+            .copied()
+            .filter(|n| n.relation == "IMPORTS_FILE")
+            .collect();
+        let documented: Vec<&cortex_api::GraphNeighbor> = neighbours
+            .iter()
+            .copied()
+            .filter(|n| n.relation == "DOCUMENTED_BY")
+            .collect();
+        let cites: Vec<&cortex_api::GraphNeighbor> = neighbours
+            .iter()
+            .copied()
+            .filter(|n| n.relation == "CITES")
+            .collect();
+        let other: Vec<&cortex_api::GraphNeighbor> = neighbours
+            .iter()
+            .copied()
+            .filter(|n| {
+                n.relation != "IMPORTS_FILE"
+                    && n.relation != "DOCUMENTED_BY"
+                    && n.relation != "CITES"
+            })
+            .collect();
+
+        if !imports.is_empty() {
+            out.push_str("## Connected files (via IMPORTS_FILE)\n");
+            for n in &imports {
+                writeln!(
+                    out,
+                    "- {from} -> {to} (hops={hops})",
+                    from = n.from,
+                    to = n.to,
+                    hops = n.hops,
+                )
+                .ok();
+            }
+            out.push('\n');
         }
-        out.push('\n');
+        if !documented.is_empty() {
+            out.push_str("## Documented under (via DOCUMENTED_BY)\n");
+            for n in &documented {
+                writeln!(
+                    out,
+                    "- {from} -> {to} (hops={hops})",
+                    from = n.from,
+                    to = n.to,
+                    hops = n.hops,
+                )
+                .ok();
+            }
+            out.push('\n');
+        }
+        if !cites.is_empty() {
+            out.push_str("## Cited from (via CITES)\n");
+            for n in &cites {
+                writeln!(
+                    out,
+                    "- {from} -> {to} (hops={hops})",
+                    from = n.from,
+                    to = n.to,
+                    hops = n.hops,
+                )
+                .ok();
+            }
+            out.push('\n');
+        }
+        if !other.is_empty() {
+            out.push_str("## Graph neighbours\n");
+            for n in &other {
+                writeln!(
+                    out,
+                    "- {from} -[{relation}]-> {to} (hops={hops})",
+                    from = n.from,
+                    relation = n.relation,
+                    to = n.to,
+                    hops = n.hops,
+                )
+                .ok();
+            }
+            out.push('\n');
+        }
     }
 
     out.push_str("<!-- end cortex -->\n");
@@ -530,6 +612,102 @@ mod tests {
         };
         let bundle = format_bundle("pre_change_context", &populated_response(), &opts);
         assert!(bundle.contains("Graph neighbours"));
+    }
+
+    fn neighbour(from: &str, relation: &str, to: &str, hops: u8) -> GraphNeighbor {
+        GraphNeighbor {
+            from: from.into(),
+            relation: relation.into(),
+            to: to.into(),
+            hops,
+        }
+    }
+
+    #[test]
+    fn imports_file_neighbours_render_under_connected_files_block() {
+        // Phase11k §6.2 — IMPORTS_FILE neighbours land under
+        // `## Connected files (via IMPORTS_FILE)`.
+        let mut resp = populated_response();
+        resp.results.graph_neighbors = vec![neighbour(
+            "Artifact:src/lib.rs",
+            "IMPORTS_FILE",
+            "Artifact:src/foo.rs",
+            1,
+        )];
+        let opts = FormatOptions {
+            graph_cap: 5,
+            ..Default::default()
+        };
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(
+            bundle.contains("## Connected files (via IMPORTS_FILE)"),
+            "missing Connected files block in:\n{bundle}"
+        );
+        assert!(
+            !bundle.contains("Documented under"),
+            "Documented under block must stay absent when no DOCUMENTED_BY hits"
+        );
+    }
+
+    #[test]
+    fn documented_by_neighbours_render_under_documented_under_block() {
+        let mut resp = populated_response();
+        resp.results.graph_neighbors = vec![neighbour(
+            "Artifact:docs/spec.md",
+            "DOCUMENTED_BY",
+            "Symbol:foo::bar",
+            1,
+        )];
+        let opts = FormatOptions {
+            graph_cap: 5,
+            ..Default::default()
+        };
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(
+            bundle.contains("## Documented under (via DOCUMENTED_BY)"),
+            "missing Documented under block in:\n{bundle}"
+        );
+    }
+
+    #[test]
+    fn cites_neighbours_render_under_cited_from_block() {
+        let mut resp = populated_response();
+        resp.results.graph_neighbors = vec![neighbour(
+            "Decision:DEC-0042",
+            "CITES",
+            "Spec:docs/specs/07.md",
+            2,
+        )];
+        let opts = FormatOptions {
+            graph_cap: 5,
+            ..Default::default()
+        };
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(
+            bundle.contains("## Cited from (via CITES)"),
+            "missing Cited from block in:\n{bundle}"
+        );
+    }
+
+    #[test]
+    fn unknown_relation_falls_through_to_generic_block() {
+        // TOUCHED stays in the legacy `## Graph neighbours`
+        // catch-all so nothing the orchestrator surfaces gets
+        // dropped silently.
+        let mut resp = populated_response();
+        resp.results.graph_neighbors = vec![neighbour(
+            "ToolCall:tc-1",
+            "TOUCHED",
+            "Artifact:src/x.rs",
+            1,
+        )];
+        let opts = FormatOptions {
+            graph_cap: 5,
+            ..Default::default()
+        };
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(bundle.contains("## Graph neighbours"));
+        assert!(!bundle.contains("Connected files"));
     }
 
     #[test]

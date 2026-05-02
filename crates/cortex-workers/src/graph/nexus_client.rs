@@ -38,7 +38,7 @@ use thiserror::Error;
 
 use super::config::{GraphConfig, GraphTransport};
 use super::cypher::CypherTemplates;
-use super::patch::{EdgeOp, GraphPatch, NodeOp};
+use super::patch::{EdgeDeleteFilter, EdgeOp, GraphPatch, NodeOp};
 
 /// Per-transaction write counters returned by a successful
 /// [`GraphClient::run_write_tx`] call.
@@ -177,6 +177,17 @@ pub trait GraphClient: Send + Sync {
         patch: &GraphPatch,
         templates: &CypherTemplates,
     ) -> GraphClientResult<WriteStats>;
+
+    /// Delete all edges matching `filter` and return the count of
+    /// deleted relationships. Used by the stale-edge sweeper (phase11k
+    /// §5.3) to retire edges whose `source_event_id` references a
+    /// superseded content hash.
+    ///
+    /// The Cypher emitted is:
+    /// ```cypher
+    /// MATCH (a)-[r]->(b) WHERE <predicate> DELETE r RETURN count(r) AS deleted
+    /// ```
+    async fn delete_edges(&self, filter: &EdgeDeleteFilter) -> GraphClientResult<u64>;
 }
 
 // ---------- Retry helper -------------------------------------------------
@@ -443,6 +454,30 @@ impl GraphClient for LiveNexusClient {
             edges_dropped,
         })
     }
+
+    async fn delete_edges(&self, filter: &EdgeDeleteFilter) -> GraphClientResult<u64> {
+        let predicate = match filter.to_cypher_predicate() {
+            Some(p) => p,
+            None => {
+                return Err(GraphClientError::Nexus(
+                    "delete_edges called with empty filter — refusing to wipe the entire graph"
+                        .into(),
+                ));
+            }
+        };
+        let cypher =
+            format!("MATCH (a)-[r]->(b) WHERE {predicate} DELETE r RETURN count(r) AS deleted");
+        let result = self.execute_with_retry(&cypher, None).await?;
+        // Extract the deletion count from the first row/cell.
+        let deleted = result
+            .rows
+            .first()
+            .and_then(|row| row.as_array())
+            .and_then(|cells| cells.first())
+            .and_then(|v| v.as_u64().or_else(|| v.as_i64().map(|i| i.max(0) as u64)))
+            .unwrap_or(0);
+        Ok(deleted)
+    }
 }
 
 // ---------- Per-row Cypher renderers (Nexus 1.15 compat) ----------------
@@ -697,6 +732,9 @@ pub enum MemoryCall {
     EnsureSchema(Vec<String>),
     /// Captured `run_write_tx` call.
     WriteTx(GraphPatch),
+    /// Captured `delete_edges` call — stores the filter and the canned
+    /// return value that was set via [`MemoryNexusClient::set_delete_count`].
+    DeleteEdges(EdgeDeleteFilter),
 }
 
 /// In-memory graph client for tests. Records every call without
@@ -705,12 +743,21 @@ pub enum MemoryCall {
 pub struct MemoryNexusClient {
     /// Captured calls, in order.
     pub calls: Mutex<Vec<MemoryCall>>,
+    /// Canned return value for [`GraphClient::delete_edges`]. Defaults to 0.
+    pub delete_count: std::sync::atomic::AtomicU64,
 }
 
 impl MemoryNexusClient {
     /// Construct an empty memory client.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set the value [`GraphClient::delete_edges`] will return. Useful
+    /// for testing the sweeper's accumulator logic.
+    pub fn set_delete_count(&self, n: u64) {
+        self.delete_count
+            .store(n, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Snapshot of recorded calls, in arrival order.
@@ -744,6 +791,14 @@ impl GraphClient for MemoryNexusClient {
             edges_upserted: u32::try_from(patch.edges.len()).unwrap_or(u32::MAX),
             edges_dropped: std::collections::BTreeMap::new(),
         })
+    }
+
+    async fn delete_edges(&self, filter: &EdgeDeleteFilter) -> GraphClientResult<u64> {
+        let count = self.delete_count.load(std::sync::atomic::Ordering::Relaxed);
+        if let Ok(mut guard) = self.calls.lock() {
+            guard.push(MemoryCall::DeleteEdges(filter.clone()));
+        }
+        Ok(count)
     }
 }
 

@@ -15,7 +15,7 @@ use cortex_workers::graph::cypher::CypherTemplates;
 use cortex_workers::graph::nexus_client::{
     GraphClient, GraphClientError, MemoryCall, MemoryNexusClient, WriteStats,
 };
-use cortex_workers::graph::patch::GraphPatch;
+use cortex_workers::graph::patch::{EdgeDeleteFilter, GraphPatch};
 use cortex_workers::graph::writer::{GraphWriter, NexusGraphWriter};
 use cortex_workers::graph::{EnrichedEvent, GraphConfig, Metrics};
 use serde_json::{json, Value};
@@ -178,6 +178,10 @@ impl GraphClient for DroppingNexusClient {
             edges_upserted: persisted,
             edges_dropped,
         })
+    }
+
+    async fn delete_edges(&self, _filter: &EdgeDeleteFilter) -> Result<u64, GraphClientError> {
+        Ok(0)
     }
 }
 

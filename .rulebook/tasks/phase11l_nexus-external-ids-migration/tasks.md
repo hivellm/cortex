@@ -34,10 +34,10 @@
 
 ## 6. Bootstrap envelope shape change
 
-- [ ] 6.1 `crates/cortex-cli/src/bootstrap/graph_static.rs::build_envelope` writes `nodes[*]._id` instead of `nodes[*].natural_key` in the embedded `graph_patch` payload; bump `GRAPH_STATIC_ANALYZER_VERSION` from `"phase11k.1"` → `"phase11l.1"` so the §5.4 coalescer dedupes correctly across the cutover
-- [ ] 6.2 `crates/cortex-api/src/archive_loader.rs` parses both shapes during the migration window: prefer `_id` when present, fall back to `natural_key`. Emit a `tracing::warn!` once per partition when the legacy shape is hit so operators can monitor the migration tail
-- [ ] 6.3 Doctor extension surfaces "graph patch envelope shape" in the doctor's report — for a sample partition, count envelopes carrying the legacy `natural_key` slot vs the new `_id` slot and exit non-zero when more than 1% of recent partitions still ship the legacy shape after the migration window closes
-- [ ] 6.4 Update inline test fixtures in `graph_static.rs::tests` to assert the new envelope shape (every emitted envelope carries `nodes[*]._id`); keep ONE legacy-shape test pinning the dual-read path until §10.x removes it
+- [x] 6.1 `crates/cortex-cli/src/bootstrap/graph_static.rs::build_envelope` writes `nodes[*]._id` instead of `nodes[*].natural_key` in the embedded `graph_patch` payload; bump `GRAPH_STATIC_ANALYZER_VERSION` from `"phase11k.1"` → `"phase11l.1"` so the §5.4 coalescer dedupes correctly across the cutover
+- [x] 6.2 `crates/cortex-api/src/archive_loader.rs` parses both shapes during the migration window: prefer `_id` when present, fall back to `natural_key`. Emit a `tracing::warn!` once per partition when the legacy shape is hit so operators can monitor the migration tail
+- [x] 6.3 Doctor extension surfaces "graph patch envelope shape" in the doctor's report — for a sample partition, count envelopes carrying the legacy `natural_key` slot vs the new `_id` slot and exit non-zero when more than 1% of recent partitions still ship the legacy shape after the migration window closes
+- [x] 6.4 Update inline test fixtures in `graph_static.rs::tests` to assert the new envelope shape (every emitted envelope carries `nodes[*]._id`); keep ONE legacy-shape test pinning the dual-read path until §10.x removes it
 
 ## 7. Reindex (drop + replay)
 

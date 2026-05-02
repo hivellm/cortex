@@ -46,6 +46,9 @@ pub struct Metrics {
     pub jobs_processed_total: AtomicU64,
     /// Phase8b — Unix-epoch ms of the most recent successful job.
     pub last_job_ts_ms: AtomicU64,
+    /// Phase11k §5.3 — cumulative count of edges deleted by the stale-edge
+    /// sweeper. Drives `cortex_graph_edges_deleted_total`.
+    pub edges_deleted_total: AtomicU64,
 }
 
 impl Metrics {
@@ -156,6 +159,16 @@ impl Metrics {
         self.last_job_ts_ms.load(Ordering::Relaxed)
     }
 
+    /// Phase11k §5.3 — record `n` edges deleted by the stale sweeper.
+    pub fn incr_edges_deleted(&self, n: u64) {
+        self.edges_deleted_total.fetch_add(n, Ordering::Relaxed);
+    }
+
+    /// Phase11k §5.3 — read the cumulative edges-deleted counter.
+    pub fn edges_deleted_total(&self) -> u64 {
+        self.edges_deleted_total.load(Ordering::Relaxed)
+    }
+
     /// Phase8b — render the graph counters in Prometheus text format.
     pub fn render_prom(&self) -> String {
         use std::fmt::Write as _;
@@ -173,6 +186,12 @@ impl Metrics {
             out,
             "cortex_graph_edges_dropped_total {}",
             self.edges_dropped_total()
+        );
+        out.push_str("# TYPE cortex_graph_edges_deleted_total counter\n");
+        let _ = writeln!(
+            out,
+            "cortex_graph_edges_deleted_total {}",
+            self.edges_deleted_total()
         );
         out
     }

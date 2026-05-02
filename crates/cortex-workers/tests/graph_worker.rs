@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_workers::graph::nexus_client::GraphClientError;
-use cortex_workers::graph::patch::{GraphPatch, GraphWriteReport};
+use cortex_workers::graph::patch::{EdgeDeleteFilter, GraphPatch, GraphWriteReport};
 use cortex_workers::graph::worker::orphan_turn_patch;
 use cortex_workers::graph::{
     BackpressureState, ConsumedMessage, EnrichedEvent, GraphConfig, GraphWriter,
@@ -113,6 +113,13 @@ impl GraphWriter for CountingWriter {
             latency_ms: 1,
         })
     }
+
+    async fn delete_edges_by_filter(
+        &self,
+        _filter: EdgeDeleteFilter,
+    ) -> Result<u64, GraphClientError> {
+        Ok(0)
+    }
 }
 
 #[derive(Default)]
@@ -136,6 +143,13 @@ impl GraphWriter for ConstraintViolatingWriter {
             detail: "duplicate id for Decision".into(),
         })
     }
+
+    async fn delete_edges_by_filter(
+        &self,
+        _filter: EdgeDeleteFilter,
+    ) -> Result<u64, GraphClientError> {
+        Ok(0)
+    }
 }
 
 #[derive(Default)]
@@ -154,6 +168,13 @@ impl GraphWriter for TransientWriter {
         _patches: Vec<GraphPatch>,
     ) -> Result<GraphWriteReport, GraphClientError> {
         Err(GraphClientError::TransientError("nexus 503 boom".into()))
+    }
+
+    async fn delete_edges_by_filter(
+        &self,
+        _filter: EdgeDeleteFilter,
+    ) -> Result<u64, GraphClientError> {
+        Ok(0)
     }
 }
 
@@ -493,6 +514,13 @@ impl GraphWriter for FlakyWriter {
             by_label: std::collections::BTreeMap::new(),
             latency_ms: 1,
         })
+    }
+
+    async fn delete_edges_by_filter(
+        &self,
+        _filter: EdgeDeleteFilter,
+    ) -> Result<u64, GraphClientError> {
+        Ok(0)
     }
 }
 

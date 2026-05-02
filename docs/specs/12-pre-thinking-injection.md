@@ -81,7 +81,29 @@ A deterministic Markdown block. Example:
 <!-- end cortex -->
 ```
 
-Sections are always in the same order: **laws → decisions → similar turns → past sessions → snippets → (optional) graph neighbors**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+Sections are always in the same order: **laws → decisions → similar turns → past sessions → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+
+#### Graph traversal sub-blocks (phase11k §6.2)
+
+The graph layer's static-extraction pass (phase11k §1-§5) materialises three high-signal edge classes the renderer surfaces under named sub-blocks rather than the generic `## Graph neighbours` heading:
+
+- `## Connected files (via IMPORTS_FILE)` — tier-2 / tier-3 imports the touched artifact resolves into. Useful for blast-radius questions ("if I edit this file, what else needs a re-test?"). Backed by the `cypher/blast_radius.cypher` template's `IMPORTS_FILE*1..2` walk.
+- `## Documented under (via DOCUMENTED_BY)` — Rust intra-doc backlinks the markdown analyzer extracted. Surfaces every `:DocSection` that documents a touched symbol. Backed by `cypher/code_callers.cypher` (one-hop direction reversal applied at the renderer).
+- `## Cited from (via CITES)` — ADR / Decision / Analysis chain rooted at a touched node. Useful for design-trace questions ("trace the design behind decision X"). Backed by `cypher/doc_trail.cypher`'s `CITES*1..4` chain.
+
+Worked example (spec → file → symbols → callers chain):
+
+```markdown
+## Cited from (via CITES)
+- Decision:DEC-0042 -> Spec:docs/specs/07-graph-writer.md (hops=1)
+- Spec:docs/specs/07-graph-writer.md -> Artifact:cortex|crates/cortex-workers/src/graph/mapper.rs|sha256:abc (hops=2)
+
+## Connected files (via IMPORTS_FILE)
+- Artifact:cortex|crates/cortex-workers/src/graph/mapper.rs|sha256:abc -> Artifact:cortex|crates/cortex-workers/src/graph/identity.rs|sha256:def (hops=1)
+- Artifact:cortex|crates/cortex-workers/src/graph/mapper.rs|sha256:abc -> Artifact:cortex|crates/cortex-workers/src/graph/patch.rs|sha256:ghi (hops=1)
+```
+
+Edges whose relation does not match one of the three named classes fall through to the catch-all `## Graph neighbours` block so nothing the orchestrator surfaces is silently dropped. Each sub-block honours the `graph_cap` setting independently of the others; a budget squeeze drops the whole graph section before any other content.
 
 #### Outcome glyphs (phase11i §4.2)
 

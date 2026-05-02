@@ -509,6 +509,41 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase11l §7 — graph-side admin operations. Today the only
+    /// subcommand is `drop`, used during the Nexus external-id
+    /// migration to wipe the Cortex graph DB so a fresh
+    /// `cortex-bootstrap --graph-static` pass can rebuild it under
+    /// the new `_id` keying.
+    Graph {
+        #[command(subcommand)]
+        command: GraphCommand,
+    },
+}
+
+/// Phase11l §7.1 — `cortex-ops graph` subcommand surface.
+#[derive(Subcommand)]
+enum GraphCommand {
+    /// Wipe every Cortex-owned label from the Nexus graph DB.
+    /// Refuses to run without `--confirm`. `--dry-run` prints the
+    /// per-label count it would delete and exits without mutation.
+    /// Idempotent — safe to re-run after a partial failure.
+    Drop {
+        /// Required acknowledgement. Without this flag the command
+        /// prints a warning and exits non-zero.
+        #[arg(long)]
+        confirm: bool,
+        /// Print the per-label delete plan + projected counts and
+        /// exit without mutating Nexus.
+        #[arg(long)]
+        dry_run: bool,
+        /// Override the Nexus URL. Defaults to
+        /// `$CORTEX_GRAPH_NEXUS_URL` then `http://127.0.0.1:17002`.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON instead of plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase9b — granularity selector for `cortex-ops rollup`.
@@ -788,7 +823,142 @@ fn main() -> ExitCode {
             metadata_db,
             json,
         } => sessions_backfill_tool(tool, dry_run, apply, limit, metadata_db, json),
+        Command::Graph { command } => match command {
+            GraphCommand::Drop {
+                confirm,
+                dry_run,
+                nexus,
+                json,
+            } => graph_drop(confirm, dry_run, nexus, json),
+        },
     }
+}
+
+/// Phase11l §7.1 — `cortex-ops graph drop` dispatcher. Calls Nexus
+/// `MATCH (n:Label) DETACH DELETE n` for every label Cortex owns,
+/// returning the per-label delete count. Refuses to run without
+/// `--confirm`; `--dry-run` reports the planned counts via
+/// `MATCH (n:Label) RETURN count(n)` without mutation.
+///
+/// Cortex-owned labels list mirrors `SCHEMA_STATEMENTS` plus the
+/// phase11k §1.4 graph-correlation labels. The list lives here
+/// rather than in the schema module because it is admin-only —
+/// the runtime worker never enumerates labels for deletion.
+fn graph_drop(confirm: bool, dry_run: bool, nexus: Option<String>, json: bool) -> ExitCode {
+    use cortex_workers::graph::config::GraphConfig;
+    use cortex_workers::graph::nexus_client::{GraphClient, LiveNexusClient};
+
+    const CORTEX_LABELS: &[&str] = &[
+        "Session",
+        "Turn",
+        "ToolCall",
+        "AgentCall",
+        "Artifact",
+        "Symbol",
+        "Repo",
+        "Decision",
+        "Memory",
+        "Analysis",
+        "Law",
+        "LawViolation",
+        "Knowledge",
+        "Learning",
+        "Consolidation",
+        "Spec",
+        "ExternalPackage",
+        "UnresolvedImport",
+        "DocSection",
+        "Concept",
+        "Topic",
+        "Tool",
+    ];
+
+    if !confirm && !dry_run {
+        eprintln!(
+            "ERROR: cortex-ops graph drop refuses to run without --confirm. \
+             Pass --dry-run to see the plan without mutation."
+        );
+        return ExitCode::from(2);
+    }
+
+    let nexus_url = nexus
+        .or_else(|| std::env::var("CORTEX_GRAPH_NEXUS_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17002".to_string());
+    let cfg = GraphConfig {
+        nexus_url: nexus_url.clone(),
+        ..GraphConfig::default()
+    };
+    let client = match LiveNexusClient::new(cfg) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ERROR: connect to Nexus at {nexus_url}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let _ = (&client as &dyn GraphClient);
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("ERROR: build tokio runtime: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let report = runtime.block_on(async {
+        let mut results: Vec<(String, u64)> = Vec::with_capacity(CORTEX_LABELS.len());
+        for label in CORTEX_LABELS {
+            let cypher = if dry_run {
+                format!("MATCH (n:{label}) RETURN count(n) AS c")
+            } else {
+                format!("MATCH (n:{label}) DETACH DELETE n RETURN count(n) AS c")
+            };
+            match client.sdk().execute_cypher(&cypher, None).await {
+                Ok(out) => {
+                    let count = out
+                        .rows
+                        .first()
+                        .and_then(|row| row.get("c"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    results.push((label.to_string(), count));
+                }
+                Err(e) => {
+                    eprintln!("warn: {label}: {e}");
+                    results.push((label.to_string(), 0));
+                }
+            }
+        }
+        results
+    });
+
+    let total: u64 = report.iter().map(|(_, c)| *c).sum();
+    if json {
+        let payload = serde_json::json!({
+            "mode": if dry_run { "dry-run" } else { "applied" },
+            "nexus_url": nexus_url,
+            "total_nodes": total,
+            "by_label": report
+                .iter()
+                .map(|(l, c)| (l.clone(), *c))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "cortex-ops graph drop @ {nexus_url}  ({}{})",
+            if dry_run { "dry-run" } else { "applied" },
+            if dry_run { "" } else { " — DESTRUCTIVE" }
+        );
+        for (label, count) in &report {
+            println!("  {label:<24}  {count:>10}");
+        }
+        println!("  {:<24}  {total:>10}", "TOTAL");
+    }
+    ExitCode::SUCCESS
 }
 
 /// Phase10i — `cortex-ops sessions backfill-tool` dispatcher.

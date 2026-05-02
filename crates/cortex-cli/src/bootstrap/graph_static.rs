@@ -65,7 +65,7 @@ pub const GRAPH_STATIC_STREAM_TAG: &str = "bootstrap-graph-static";
 /// coalescer (§5.4) dedupes by `(content_hash, analyzer_version)`,
 /// so bumping this string forces the next pass to re-emit even
 /// when content has not changed.
-pub const GRAPH_STATIC_ANALYZER_VERSION: &str = "phase11k.1";
+pub const GRAPH_STATIC_ANALYZER_VERSION: &str = "phase11l.1";
 
 /// Default external-repos TOML path (relative to the repo root).
 /// Matches the convention `cortex_storage::external_repos` documents.
@@ -564,6 +564,57 @@ shared-thing = { workspace = true }
                     == Some(GRAPH_STATIC_ANALYZER_VERSION)
             );
         }
+    }
+
+    #[test]
+    fn graph_static_envelope_carries_external_id_on_every_node() {
+        // Phase11l §6.1 — every NodeOp the bootstrap pass emits MUST
+        // carry the new `external_id` slot so cortex-api's
+        // archive_loader + graph-worker apply patches through Nexus
+        // 2.1's `_id` index seek instead of the legacy MERGE-on-
+        // natural_key path. The phase11l §4.3 doctor audit gates on
+        // this; the unit test pins the producer side.
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+        write_file(root, "src/lib.rs", "pub fn a() {}\n");
+        write_file(root, "docs/x.md", "# Title\nbody\n");
+        let writer = Arc::new(InMemoryArchive::default());
+        run_repo_graph_static("repo", root, &cfg(), writer.as_ref()).unwrap();
+        for (_, env) in writer.rows() {
+            let nodes = env
+                .get("payload")
+                .and_then(|p| p.get("metadata"))
+                .and_then(|m| m.get("graph_patch"))
+                .and_then(|p| p.get("nodes"))
+                .and_then(|n| n.as_array())
+                .expect("nodes array");
+            assert!(!nodes.is_empty(), "graph_patch must emit at least one node");
+            for node in nodes {
+                assert!(
+                    node.get("external_id")
+                        .and_then(|v| v.as_str())
+                        .map(|s| !s.is_empty())
+                        .unwrap_or(false),
+                    "every NodeOp must carry external_id post-phase11l, got {node}"
+                );
+                // ConflictPolicy defaults to "match" — assert it
+                // serialises to the expected SDK string.
+                let cp = node.get("conflict_policy").and_then(|v| v.as_str());
+                assert!(
+                    matches!(cp, Some("match" | "replace" | "error")),
+                    "conflict_policy must serialise to a known SDK string, got {cp:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn graph_static_analyzer_version_stamped_phase11l() {
+        // §6.1 bumps the version stamp so the §5.4 coalescer dedupes
+        // correctly across the cutover. A regression here means
+        // identical patches from the new and old code paths would
+        // collide on the same coalesce-dedup key.
+        assert_eq!(GRAPH_STATIC_ANALYZER_VERSION, "phase11l.1");
     }
 
     #[test]

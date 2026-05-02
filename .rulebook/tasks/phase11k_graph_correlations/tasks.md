@@ -38,17 +38,17 @@
 
 - [x] 5.1 `cortex-bootstrap --graph-static` flag added to `crates/cortex-cli/src/bin/cortex-bootstrap.rs` — walks the workspace once, runs code + markdown analyzers, emits envelopes through the existing archive sink (phase11i §1.7) so `archive_loader` re-reads on graph-worker boot
 - [x] 5.2 Wire the live trigger into `crates/cortex-workers/src/graph/worker.rs` — when a `Kind::Artifact` event lands with content_hash that differs from the previous one, run the analyzer and merge the resulting patch with the structural patch
-- [ ] 5.3 Stale-edge sweeper — extend the graph worker's existing nightly cron to walk edges whose `source_event_id` references an event whose content_hash is no longer current; emits delete patches via the graph writer's `delete_edges_by_filter` surface (lands here if not pre-existing)
-- [ ] 5.4 Coalescer extension in `crates/cortex-workers/src/graph/coalescer.rs` — per-session dedupe on `(content_hash, analyzer_version)` so a search-and-replace burst doesn't re-emit identical patches
-- [ ] 5.5 End-to-end IT `crates/cortex-workers/tests/graph_bootstrap_then_live_it.rs` — bootstrap a fixture workspace, simulate a Live edit, assert the graph reflects both passes correctly + idempotent re-emit
+- [x] 5.3 Stale-edge sweeper — extend the graph worker's existing nightly cron to walk edges whose `source_event_id` references an event whose content_hash is no longer current; emits delete patches via the graph writer's `delete_edges_by_filter` surface (lands here if not pre-existing)
+- [x] 5.4 Coalescer extension in `crates/cortex-workers/src/graph/coalescer.rs` — per-session dedupe on `(content_hash, analyzer_version)` so a search-and-replace burst doesn't re-emit identical patches
+- [x] 5.5 End-to-end IT `crates/cortex-workers/tests/graph_bootstrap_then_live_it.rs` — bootstrap a fixture workspace, simulate a Live edit, assert the graph reflects both passes correctly + idempotent re-emit
 
 ## 6. Query lane + renderer uplift
 
-- [ ] 6.1 New Cypher templates in `crates/cortex-workers/cypher/`: `code_callers.cypher` (`:CALLS` 1-hop), `doc_trail.cypher` (`:CITES` chain), `blast_radius.cypher` (`:IMPORTS_FILE*1..2`); each ships with a unit test asserting the rendered Cypher
-- [ ] 6.2 Extend `crates/cortex-pre-thinking/src/formatter.rs` — surface graph-traversal hits in the `Past sessions` / `Consolidated context` sections under three new sub-blocks: `Connected files (via IMPORTS_FILE)`, `Documented under (via DOCUMENTED_BY)`, `Cited from (via CITES)`
-- [ ] 6.3 Update `docs/specs/12-pre-thinking-injection.md` §Output with the new section shapes + worked example showing the spec → file → symbols → callers chain
-- [ ] 6.4 Extend `crates/cortex-api/tests/fixtures/relevance-gold.json` with 10 new questions exercising the new graph paths (intent split: 4 pre_change_context, 3 decision_lookup, 2 similar_problems, 1 free_search); same `MRR@10 ≥ 0.75` IT gate applies via `phase11i §4.5` IT
-- [ ] 6.5 Operator handbook `docs/cortex/graph-tuning.md` — how to spot a missing edge, how to inspect resolver tier mismatches, how to flag a false-positive `:MENTIONS`, how to register a new HiveLLM-internal SDK in `external_repos.toml`
+- [x] 6.1 New Cypher templates in `crates/cortex-workers/cypher/`: `code_callers.cypher` (`:CALLS` 1-hop), `doc_trail.cypher` (`:CITES` chain), `blast_radius.cypher` (`:IMPORTS_FILE*1..2`); each ships with a unit test asserting the rendered Cypher
+- [x] 6.2 Extend `crates/cortex-pre-thinking/src/formatter.rs` — surface graph-traversal hits in the `Past sessions` / `Consolidated context` sections under three new sub-blocks: `Connected files (via IMPORTS_FILE)`, `Documented under (via DOCUMENTED_BY)`, `Cited from (via CITES)`
+- [x] 6.3 Update `docs/specs/12-pre-thinking-injection.md` §Output with the new section shapes + worked example showing the spec → file → symbols → callers chain
+- [x] 6.4 Extend `crates/cortex-api/tests/fixtures/relevance-gold.json` with 10 new questions exercising the new graph paths (intent split: 4 pre_change_context, 3 decision_lookup, 2 similar_problems, 1 free_search); same `MRR@10 ≥ 0.75` IT gate applies via `phase11i §4.5` IT
+- [x] 6.5 Operator handbook `docs/cortex/graph-tuning.md` — how to spot a missing edge, how to inspect resolver tier mismatches, how to flag a false-positive `:MENTIONS`, how to register a new HiveLLM-internal SDK in `external_repos.toml`
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
 
