@@ -141,11 +141,7 @@ pub trait MeiliClient: Send + Sync {
     async fn ensure_index(&self, index: &str, settings: &Value) -> MeiliResult<bool>;
 
     /// Upsert `docs` into `index`. Returns the Meili task uid.
-    async fn upsert_documents(
-        &self,
-        index: &str,
-        docs: &[Document],
-    ) -> MeiliResult<UpsertReport>;
+    async fn upsert_documents(&self, index: &str, docs: &[Document]) -> MeiliResult<UpsertReport>;
 
     /// Poll `task` until it reaches a terminal status or `timeout`
     /// elapses.
@@ -191,9 +187,8 @@ where
             }
         }
     }
-    Err(last_err.unwrap_or_else(|| {
-        MeiliError::Http("with_retry exhausted attempts without error".into())
-    }))
+    Err(last_err
+        .unwrap_or_else(|| MeiliError::Http("with_retry exhausted attempts without error".into())))
 }
 
 // ---------- Live HTTP client ------------------------------------------
@@ -320,11 +315,7 @@ impl MeiliClient for LiveMeiliClient {
         Ok(true)
     }
 
-    async fn upsert_documents(
-        &self,
-        index: &str,
-        docs: &[Document],
-    ) -> MeiliResult<UpsertReport> {
+    async fn upsert_documents(&self, index: &str, docs: &[Document]) -> MeiliResult<UpsertReport> {
         if docs.is_empty() {
             return Ok(UpsertReport::default());
         }
@@ -429,7 +420,8 @@ impl MeiliClient for LiveMeiliClient {
                 // 202 Accepted (task enqueued) and 204 No Content
                 // are the documented success paths. 404 is also
                 // success — the index already doesn't exist.
-                if status.is_success() || status == StatusCode::ACCEPTED
+                if status.is_success()
+                    || status == StatusCode::ACCEPTED
                     || status == StatusCode::NOT_FOUND
                 {
                     return Ok(());
@@ -510,10 +502,7 @@ struct StatsIndexBody {
 fn classify_reqwest(err: reqwest::Error, purpose: &str) -> MeiliError {
     let is_transient = err.is_timeout()
         || err.is_connect()
-        || err
-            .status()
-            .map(|s| s.is_server_error())
-            .unwrap_or(false);
+        || err.status().map(|s| s.is_server_error()).unwrap_or(false);
     if is_transient {
         MeiliError::TransientError(format!("{purpose}: {err}"))
     } else {
@@ -631,11 +620,7 @@ impl MeiliClient for MemoryMeiliClient {
         Ok(true)
     }
 
-    async fn upsert_documents(
-        &self,
-        name: &str,
-        docs: &[Document],
-    ) -> MeiliResult<UpsertReport> {
+    async fn upsert_documents(&self, name: &str, docs: &[Document]) -> MeiliResult<UpsertReport> {
         let task = self
             .next_task
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

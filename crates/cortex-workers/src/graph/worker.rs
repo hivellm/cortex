@@ -115,12 +115,10 @@ impl OffsetTracker {
         loop {
             let current = self.next.load(Ordering::Relaxed);
             let proposed = offset.saturating_add(1).max(current);
-            match self.next.compare_exchange(
-                current,
-                proposed,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
+            match self
+                .next
+                .compare_exchange(current, proposed, Ordering::AcqRel, Ordering::Relaxed)
+            {
                 Ok(_) => break,
                 Err(_) => continue,
             }
@@ -208,8 +206,7 @@ impl SynapHandle {
     /// Connect to Synap at `base_url` and return a handle for stream I/O.
     pub fn new(base_url: &str) -> Result<Self> {
         let cfg = SynapConfig::new(base_url);
-        let client =
-            SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
+        let client = SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
         Ok(Self {
             streams: client.stream(),
         })
@@ -766,11 +763,8 @@ impl Worker {
 
         // 3. Materialise the patch list — one per event plus one per
         //    orphan Turn id — and hand it to the writer.
-        let mut patches: Vec<GraphPatch> = ready
-            .events
-            .iter()
-            .map(super::map_event_to_patch)
-            .collect();
+        let mut patches: Vec<GraphPatch> =
+            ready.events.iter().map(super::map_event_to_patch).collect();
         for turn_id in &ready.orphan_turn_ids {
             self.metrics.incr_orphans("Turn");
             patches.push(orphan_turn_patch(turn_id));

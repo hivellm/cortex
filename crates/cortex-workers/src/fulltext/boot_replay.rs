@@ -28,9 +28,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::embedder::EnrichedEvent;
 use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Envelope;
-use crate::embedder::EnrichedEvent;
 use cortex_storage::names::{slug_for_repo, UNKNOWN_REPO_SLUG};
 
 use super::indexer::FulltextIndexer;
@@ -212,11 +212,7 @@ fn partition_for(env: &Envelope) -> Partition {
         .as_deref()
         .map(slug_for_repo)
         .unwrap_or_else(|| UNKNOWN_REPO_SLUG.to_string());
-    let path = env
-        .context
-        .extras
-        .get("path")
-        .and_then(|v| v.as_str());
+    let path = env.context.extras.get("path").and_then(|v| v.as_str());
     // No classifier topics on a raw archive walk — pass an empty slice.
     // `family_for_event` falls back to the path extension first and
     // `misc` last, which is the right call for an archive-only replay.
@@ -396,7 +392,10 @@ mod tests {
         );
         assert_eq!(parse_partition_from_uid("cortex-code", "cortex"), None);
         assert_eq!(parse_partition_from_uid("legacy-foo", "cortex"), None);
-        assert_eq!(parse_partition_from_uid("cortex-cortex-bogus", "cortex"), None);
+        assert_eq!(
+            parse_partition_from_uid("cortex-cortex-bogus", "cortex"),
+            None
+        );
     }
 
     #[tokio::test]
@@ -493,12 +492,7 @@ mod tests {
     #[tokio::test]
     async fn replay_is_noop_when_archive_matches_meili() {
         let tmp = TempDir::new().unwrap();
-        let envs = vec![make_envelope(
-            "e1",
-            Kind::Decision,
-            Some("Cortex"),
-            None,
-        )];
+        let envs = vec![make_envelope("e1", Kind::Decision, Some("Cortex"), None)];
         write_archive_file(tmp.path(), "raw-001.parquet", &envs);
 
         let client = Arc::new(MemoryMeiliClient::new());

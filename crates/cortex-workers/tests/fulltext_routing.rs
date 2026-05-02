@@ -26,9 +26,18 @@ fn each_kind_routes_to_a_known_family() {
 #[test]
 fn index_for_uses_prefix_repo_slug_and_family() {
     let repo = Some("Cortex");
-    assert_eq!(index_for("cortex-", Kind::ToolCall, repo), "cortex-cortex-code");
-    assert_eq!(index_for("cortex-", Kind::Decision, repo), "cortex-cortex-decisions");
-    assert_eq!(index_for("cortex-", Kind::Turn, repo), "cortex-cortex-turns");
+    assert_eq!(
+        index_for("cortex-", Kind::ToolCall, repo),
+        "cortex-cortex-code"
+    );
+    assert_eq!(
+        index_for("cortex-", Kind::Decision, repo),
+        "cortex-cortex-decisions"
+    );
+    assert_eq!(
+        index_for("cortex-", Kind::Turn, repo),
+        "cortex-cortex-turns"
+    );
     assert_eq!(
         index_for("cortex-", Kind::LawViolation, repo),
         "cortex-cortex-governance"
@@ -36,8 +45,14 @@ fn index_for_uses_prefix_repo_slug_and_family() {
     // Kind-only routing for `Artifact` lands in `misc` — callers
     // that want code-vs-docs split must use `index_for_event` so the
     // path extension and classifier topics can drive the family.
-    assert_eq!(index_for("cortex-", Kind::Artifact, repo), "cortex-cortex-misc");
-    assert_eq!(index_for("cortex-", Kind::Memory, repo), "cortex-cortex-misc");
+    assert_eq!(
+        index_for("cortex-", Kind::Artifact, repo),
+        "cortex-cortex-misc"
+    );
+    assert_eq!(
+        index_for("cortex-", Kind::Memory, repo),
+        "cortex-cortex-misc"
+    );
     assert_eq!(
         index_for("staging-", Kind::Turn, Some("Tml")),
         "staging-tml-turns"

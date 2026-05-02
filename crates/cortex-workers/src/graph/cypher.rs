@@ -302,9 +302,7 @@ impl CypherTemplates {
 
     /// Iterate over `(name, body)` pairs in lexicographic order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.templates
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
+        self.templates.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
     /// Fail-fast check that every name in `required` is present.
@@ -535,14 +533,7 @@ mod tests {
         let mut props: BTreeMap<String, serde_json::Value> = BTreeMap::new();
         props.insert("at".into(), serde_json::json!(1_714_200_000_000_i64));
         let stmt = render_edge_merge(
-            "Session",
-            "id",
-            "s1",
-            "HAS_TURN",
-            "Turn",
-            "id",
-            "t1",
-            &props,
+            "Session", "id", "s1", "HAS_TURN", "Turn", "id", "t1", &props,
         );
         assert!(stmt.contains("MATCH (a:Session { id: 's1' }), (b:Turn { id: 't1' })"));
         assert!(stmt.contains("MERGE (a)-[r:HAS_TURN]->(b)"));

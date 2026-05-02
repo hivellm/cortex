@@ -114,10 +114,7 @@ async fn oversize_with_summary_produces_summary_plus_raw_oversize() {
         Some("this is the summary text"),
     );
 
-    let report = embedder
-        .embed_batch(&[event])
-        .await
-        .expect("embed_batch");
+    let report = embedder.embed_batch(&[event]).await.expect("embed_batch");
     assert!(report.errors.is_empty(), "{:?}", report.errors);
 
     let uploaded: Vec<Chunk> = client
@@ -159,10 +156,7 @@ async fn oversize_without_summary_raises_embed_error() {
     let md = format!("# Big section\n{body}\n", body = big_body);
     let event = make_event("evt_bad", Kind::Artifact, Some("doc.md"), &md, None);
 
-    let report = embedder
-        .embed_batch(&[event])
-        .await
-        .expect("embed_batch");
+    let report = embedder.embed_batch(&[event]).await.expect("embed_batch");
     assert_eq!(report.errors.len(), 1);
     assert!(matches!(
         report.errors[0],
@@ -186,10 +180,7 @@ async fn empty_payload_is_skipped() {
     let mut event = make_event("evt_empty", Kind::Turn, None, "", None);
     event.redacted_payload = json!({ "content": "   " });
 
-    let report = embedder
-        .embed_batch(&[event])
-        .await
-        .expect("embed_batch");
+    let report = embedder.embed_batch(&[event]).await.expect("embed_batch");
     assert_eq!(report.chunks_skipped_empty, 1);
     assert_eq!(report.chunks_written, 0);
 

@@ -37,6 +37,11 @@ fn family_for(kind: &Kind) -> &'static str {
         // catch-all `misc` bucket.
         Kind::Knowledge => "knowledge",
         Kind::Learning => "learnings",
+        // Phase11j §3.3 — consolidations route to a dedicated
+        // per-repo collection (`cortex-{slug}-consolidations`)
+        // so the spec-12 renderer's `Consolidated context`
+        // section can fan out against a single index.
+        Kind::Consolidation => "consolidations",
         // Catch-all for kinds not explicitly called out in the spec table.
         Kind::AgentCall | Kind::Memory => "misc",
     }
@@ -53,7 +58,9 @@ fn family_for(kind: &Kind) -> &'static str {
 /// `{prefix}-{repo_slug}-code` and doc chunks land in
 /// `{prefix}-{repo_slug}-docs`.
 pub fn collection_for(kind: &Kind, prefix: &str, repo_id: Option<&str>) -> String {
-    let slug = repo_id.map(slug_for_repo).unwrap_or_else(|| UNKNOWN_REPO_SLUG.to_string());
+    let slug = repo_id
+        .map(slug_for_repo)
+        .unwrap_or_else(|| UNKNOWN_REPO_SLUG.to_string());
     repo_scoped_name(prefix, &slug, family_for(kind))
 }
 
@@ -73,7 +80,9 @@ pub fn collection_for_chunk(
     prefix: &str,
     repo_id: Option<&str>,
 ) -> String {
-    let slug = repo_id.map(slug_for_repo).unwrap_or_else(|| UNKNOWN_REPO_SLUG.to_string());
+    let slug = repo_id
+        .map(slug_for_repo)
+        .unwrap_or_else(|| UNKNOWN_REPO_SLUG.to_string());
     match (kind, source) {
         (Kind::Artifact, ChunkSource::Code) => repo_scoped_name(prefix, &slug, "code"),
         (Kind::Artifact, ChunkSource::Doc) => repo_scoped_name(prefix, &slug, "docs"),
@@ -119,7 +128,12 @@ mod tests {
     #[test]
     fn chunk_routing_splits_artifact_by_source() {
         assert_eq!(
-            collection_for_chunk(&Kind::Artifact, &ChunkSource::Code, "cortex", Some("Cortex")),
+            collection_for_chunk(
+                &Kind::Artifact,
+                &ChunkSource::Code,
+                "cortex",
+                Some("Cortex")
+            ),
             "cortex-cortex-code"
         );
         assert_eq!(
@@ -157,4 +171,3 @@ mod tests {
         );
     }
 }
-

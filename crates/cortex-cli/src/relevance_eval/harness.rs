@@ -174,10 +174,7 @@ impl SnippetFetcher for HttpFetcher {
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let api_version = v
-                        .get("version")
-                        .and_then(|s| s.as_str())
-                        .map(String::from);
+                    let api_version = v.get("version").and_then(|s| s.as_str()).map(String::from);
                     StatusSnapshot {
                         indexed_repos,
                         api_version,
@@ -278,11 +275,7 @@ pub fn first_match_rank(
 }
 
 /// Score a single labeled query against a fetched response.
-pub fn score_one(
-    query: &LabeledQuery,
-    response: &QueryResponse,
-    top_k: usize,
-) -> ScoredQuery {
+pub fn score_one(query: &LabeledQuery, response: &QueryResponse, top_k: usize) -> ScoredQuery {
     let snippets = &response.results.snippets;
     let returned = snippets.len();
     let matched = first_match_rank(snippets, &query.expected_doc_ids, top_k);
@@ -498,11 +491,7 @@ mod tests {
             snip(1, "a.rs", Some("sha256:aaa")),
             snip(2, "b.rs", Some("sha256:bbb")),
         ];
-        let m = first_match_rank(
-            &snippets,
-            &["b.rs".to_string(), "a.rs".to_string()],
-            10,
-        );
+        let m = first_match_rank(&snippets, &["b.rs".to_string(), "a.rs".to_string()], 10);
         // a.rs is at rank 1 — should win even though it appears
         // second in the expected list.
         assert_eq!(m.as_ref().map(|(r, _)| *r), Some(1));
@@ -554,32 +543,21 @@ mod tests {
     #[tokio::test]
     async fn run_harness_aggregates_global_and_per_intent() {
         let mut per_query = BTreeMap::new();
-        per_query.insert(
-            "rel-001".to_string(),
-            response(vec![snip(1, "a.rs", None)]),
-        );
-        per_query.insert(
-            "rel-002".to_string(),
-            response(vec![snip(1, "x.rs", None)]),
-        );
+        per_query.insert("rel-001".to_string(), response(vec![snip(1, "a.rs", None)]));
+        per_query.insert("rel-002".to_string(), response(vec![snip(1, "x.rs", None)]));
         let fetcher = FakeFetcher { per_query };
 
         let set = QuerySet {
             version: 1,
             queries: vec![
-                lq("rel-001", vec!["a.rs"]),  // hit
+                lq("rel-001", vec!["a.rs"]),    // hit
                 lq("rel-002", vec!["nope.rs"]), // miss
             ],
         };
 
-        let report = run_harness(
-            &fetcher,
-            &set,
-            &HarnessOptions::default(),
-            "deadbeef",
-        )
-        .await
-        .unwrap();
+        let report = run_harness(&fetcher, &set, &HarnessOptions::default(), "deadbeef")
+            .await
+            .unwrap();
 
         assert_eq!(report.global.total, 2);
         assert_eq!(report.global.matches, 1);

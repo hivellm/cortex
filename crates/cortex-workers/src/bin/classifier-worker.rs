@@ -14,6 +14,7 @@ use cortex_classifier::{
     build_offline_stack, build_stack, BudgetTracker, Classifier, ClassifierCache, ClassifierStack,
     HaikuCliClassifier, HaikuCliConfig, InMemoryCache, PricingTable,
 };
+use cortex_storage::MetadataStore;
 use cortex_workers::admin_health::{
     resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_CLASSIFIER_PORT,
 };
@@ -21,7 +22,6 @@ use cortex_workers::classifier::{
     ClassifierMode, ClassifierWorkerConfig, LiveSynapConsumer, LiveSynapPublisher, SynapHandle,
     Worker,
 };
-use cortex_storage::MetadataStore;
 use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main]
@@ -106,15 +106,12 @@ async fn main() -> Result<()> {
     // extra. The freshness rule keeps the report honest: until
     // the worker observes its first message, the state stays
     // `Degraded` with a "warming up" reason.
-    let port = resolve_port_from_env(
-        "CORTEX_CLASSIFIER_HEALTH_PORT",
-        DEFAULT_CLASSIFIER_PORT,
-    );
+    let port = resolve_port_from_env("CORTEX_CLASSIFIER_HEALTH_PORT", DEFAULT_CLASSIFIER_PORT);
     let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     let worker_for_health = worker.clone();
     // Phase8c — version block in /healthz extras.
-    let version_block = serde_json::to_value(cortex_build::version_info!())
-        .unwrap_or(serde_json::Value::Null);
+    let version_block =
+        serde_json::to_value(cortex_build::version_info!()).unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         let mut extras = serde_json::Map::new();
         extras.insert("version".into(), version_block.clone());
@@ -124,10 +121,7 @@ async fn main() -> Result<()> {
             serde_json::json!(worker_for_health.jobs_processed_total()),
         );
         let last_job_ts_ms = worker_for_health.last_job_ts_ms();
-        extras.insert(
-            "last_job_ts_ms".into(),
-            serde_json::json!(last_job_ts_ms),
-        );
+        extras.insert("last_job_ts_ms".into(), serde_json::json!(last_job_ts_ms));
         let activity_ts = if last_job_ts_ms > 0 {
             last_job_ts_ms
         } else {

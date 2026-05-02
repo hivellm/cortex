@@ -46,11 +46,7 @@ pub struct SelectedBody {
 /// `raw` is the redacted payload text. `summary` is the classifier's
 /// optional short summary. `max_body_bytes` is the per-document size
 /// cap (default 10 MB, configurable on bootstrap restores).
-pub fn select_body(
-    raw: &str,
-    summary: Option<&str>,
-    max_body_bytes: usize,
-) -> SelectedBody {
+pub fn select_body(raw: &str, summary: Option<&str>, max_body_bytes: usize) -> SelectedBody {
     let raw_len = raw.len();
     let oversize = raw_len > OVERSIZE_BODY_BYTES;
 

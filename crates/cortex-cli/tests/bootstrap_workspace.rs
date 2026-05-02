@@ -16,11 +16,7 @@ fn write_synthetic_repo(root: &Path) {
     fs::create_dir_all(root).unwrap();
     fs::create_dir_all(root.join(".git")).unwrap();
     fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-    fs::write(
-        root.join("cortex.toml"),
-        "[cortex]\nid = \"Synthetic\"\n",
-    )
-    .unwrap();
+    fs::write(root.join("cortex.toml"), "[cortex]\nid = \"Synthetic\"\n").unwrap();
 }
 
 #[test]
@@ -109,10 +105,7 @@ fn bootstrap_workspace_example_loads() {
 
     let mut seen = std::collections::BTreeSet::new();
     for repo in &cfg.repos {
-        assert!(
-            !repo.id.trim().is_empty(),
-            "entry has empty id: {repo:?}",
-        );
+        assert!(!repo.id.trim().is_empty(), "entry has empty id: {repo:?}",);
         assert!(
             seen.insert(repo.id.clone()),
             "duplicate id `{}` in template",
@@ -166,7 +159,9 @@ fn preflight_aborts_when_one_path_is_missing() {
         panic!("expected Preflight variant");
     };
     assert!(
-        lines.iter().any(|l| l.contains("Absent") && l.contains("does not exist")),
+        lines
+            .iter()
+            .any(|l| l.contains("Absent") && l.contains("does not exist")),
         "expected absent-path entry, got {lines:?}",
     );
     // Good entry must NOT have produced a failure line.

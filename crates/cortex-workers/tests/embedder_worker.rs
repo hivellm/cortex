@@ -199,8 +199,7 @@ async fn rate_limit_arms_backpressure_and_halts_batch() {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::new());
     let inner = Arc::new(MemoryVectorizerClient::default());
-    let vec_client: Arc<dyn VectorizerClient> =
-        Arc::new(RateLimitedClient::new(inner.clone(), 2));
+    let vec_client: Arc<dyn VectorizerClient> = Arc::new(RateLimitedClient::new(inner.clone(), 2));
     let worker = make_worker(consumer.clone(), publisher.clone(), vec_client);
 
     let event = make_enriched("rl", "fn f() {}", Some("f.rs"));

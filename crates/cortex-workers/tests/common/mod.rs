@@ -38,7 +38,11 @@ pub fn vectorizer_password() -> Option<String> {
 /// Generate a unique collection name with the given suffix. Includes a
 /// ULID so parallel runs of the same test don't collide.
 pub fn unique_collection(suffix: &str) -> String {
-    format!("cortex-it-{}-{}", Ulid::new().to_string().to_lowercase(), suffix)
+    format!(
+        "cortex-it-{}-{}",
+        Ulid::new().to_string().to_lowercase(),
+        suffix
+    )
 }
 
 /// Build a configured [`EmbedderConfig`] for the integration suite.
@@ -105,8 +109,7 @@ pub async fn it_config_authed(prefix: Option<&str>) -> EmbedderConfig {
 /// issued JWT already installed.
 pub async fn live_client() -> LiveVectorizerClient {
     let config = it_config_authed(None).await;
-    LiveVectorizerClient::new(config)
-        .expect("failed to build LiveVectorizerClient for IT run")
+    LiveVectorizerClient::new(config).expect("failed to build LiveVectorizerClient for IT run")
 }
 
 /// Delete a collection best-effort. Dev volume is disposable; failures are
@@ -216,7 +219,6 @@ pub fn skip_if_not_it() -> bool {
 /// Assert two sets of ids contain the same elements, showing a diff on
 /// mismatch. Ordering-insensitive.
 pub fn assert_same_ids(actual: &std::collections::BTreeSet<String>, expected: &[&str]) {
-    let want: std::collections::BTreeSet<String> =
-        expected.iter().map(|s| s.to_string()).collect();
+    let want: std::collections::BTreeSet<String> = expected.iter().map(|s| s.to_string()).collect();
     assert_eq!(actual, &want, "id-set mismatch");
 }

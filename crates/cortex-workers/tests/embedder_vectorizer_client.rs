@@ -82,7 +82,9 @@ async fn with_retry_recovers_after_transient_transport_errors() {
         async move {
             let n = attempts.fetch_add(1, Ordering::SeqCst);
             if n < 2 {
-                Err(VectorizerClientError::Transport("connection refused".into()))
+                Err(VectorizerClientError::Transport(
+                    "connection refused".into(),
+                ))
             } else {
                 Ok("ok")
             }

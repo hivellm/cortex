@@ -200,10 +200,11 @@ pub fn parse_memory_body(input: &str) -> Result<(Frontmatter, String), String> {
         .ok_or_else(|| "frontmatter: missing closing ---".to_string())?;
     let header = &rest[..close_idx];
     // Body starts after the closing `---` line + optional newline.
-    let body_start = close_idx + match rest[close_idx..].starts_with("\n---\n") {
-        true => "\n---\n".len(),
-        false => "\n---".len(),
-    };
+    let body_start = close_idx
+        + match rest[close_idx..].starts_with("\n---\n") {
+            true => "\n---\n".len(),
+            false => "\n---".len(),
+        };
     let body = rest[body_start..].trim_start_matches('\n').to_string();
 
     let mut name: Option<String> = None;
@@ -226,8 +227,7 @@ pub fn parse_memory_body(input: &str) -> Result<(Frontmatter, String), String> {
         }
     }
     let name = name.ok_or_else(|| "frontmatter: name missing".to_string())?;
-    let description =
-        description.ok_or_else(|| "frontmatter: description missing".to_string())?;
+    let description = description.ok_or_else(|| "frontmatter: description missing".to_string())?;
     let kind = kind.ok_or_else(|| "frontmatter: type missing or invalid".to_string())?;
     Ok((
         Frontmatter {
@@ -633,7 +633,11 @@ pub async fn run(
                 }
                 report.clusters.push(ClusterReport {
                     kind: c.kind,
-                    members: c.members.iter().map(|i| files[*i].filename.clone()).collect(),
+                    members: c
+                        .members
+                        .iter()
+                        .map(|i| files[*i].filename.clone())
+                        .collect(),
                     outcome: ClusterOutcome::SkippedAgentError {
                         reason: "max-clusters cap reached".into(),
                     },
@@ -650,7 +654,11 @@ pub async fn run(
                 }
                 report.clusters.push(ClusterReport {
                     kind: c.kind,
-                    members: c.members.iter().map(|i| files[*i].filename.clone()).collect(),
+                    members: c
+                        .members
+                        .iter()
+                        .map(|i| files[*i].filename.clone())
+                        .collect(),
                     outcome: ClusterOutcome::SkippedAgentError { reason },
                 });
                 continue;
@@ -661,27 +669,33 @@ pub async fn run(
                 }
                 report.clusters.push(ClusterReport {
                     kind: c.kind,
-                    members: c.members.iter().map(|i| files[*i].filename.clone()).collect(),
+                    members: c
+                        .members
+                        .iter()
+                        .map(|i| files[*i].filename.clone())
+                        .collect(),
                     outcome: ClusterOutcome::SkippedDrift { min_cosine: min },
                 });
                 continue;
             }
         };
-        if let Err(e) =
-            guard_drift(&merged, &cluster_refs, embedder, plan.drift_floor).await
-        {
+        if let Err(e) = guard_drift(&merged, &cluster_refs, embedder, plan.drift_floor).await {
             for &i in &c.members {
                 singletons_kept.push(i);
             }
             let outcome = match e {
-                MergeError::DriftedTooFar { min } => ClusterOutcome::SkippedDrift {
-                    min_cosine: min,
-                },
+                MergeError::DriftedTooFar { min } => {
+                    ClusterOutcome::SkippedDrift { min_cosine: min }
+                }
                 MergeError::Agent(reason) => ClusterOutcome::SkippedAgentError { reason },
             };
             report.clusters.push(ClusterReport {
                 kind: c.kind,
-                members: c.members.iter().map(|i| files[*i].filename.clone()).collect(),
+                members: c
+                    .members
+                    .iter()
+                    .map(|i| files[*i].filename.clone())
+                    .collect(),
                 outcome,
             });
             continue;
@@ -692,7 +706,11 @@ pub async fn run(
         let filename = format!("consolidated_{short_hash}.md");
         report.clusters.push(ClusterReport {
             kind: c.kind,
-            members: c.members.iter().map(|i| files[*i].filename.clone()).collect(),
+            members: c
+                .members
+                .iter()
+                .map(|i| files[*i].filename.clone())
+                .collect(),
             outcome: ClusterOutcome::Merged {
                 consolidated_filename: filename.clone(),
                 frontmatter: merged.frontmatter.clone(),
@@ -706,7 +724,9 @@ pub async fn run(
     report.files_out = singletons_kept.len() + merged_outputs.len();
 
     if plan.apply {
-        let archive_dir = dir.join("_archive").join(plan.now.format("%Y-%m-%dT%H-%M-%SZ").to_string());
+        let archive_dir = dir
+            .join("_archive")
+            .join(plan.now.format("%Y-%m-%dT%H-%M-%SZ").to_string());
         if !merged_outputs.is_empty() {
             fs::create_dir_all(&archive_dir)?;
         }
@@ -796,8 +816,14 @@ mod tests {
     fn slug_replaces_drive_colon_with_double_dash_and_separator_with_single() {
         // Matches `~/.claude/projects/e--HiveLLM-Cortex/memory/` —
         // the directory Claude Code creates on Windows for this repo.
-        assert_eq!(resolve_project_slug(Path::new("e:/HiveLLM/Cortex")), "e--HiveLLM-Cortex");
-        assert_eq!(resolve_project_slug(Path::new("e:\\HiveLLM\\Cortex")), "e--HiveLLM-Cortex");
+        assert_eq!(
+            resolve_project_slug(Path::new("e:/HiveLLM/Cortex")),
+            "e--HiveLLM-Cortex"
+        );
+        assert_eq!(
+            resolve_project_slug(Path::new("e:\\HiveLLM\\Cortex")),
+            "e--HiveLLM-Cortex"
+        );
     }
 
     #[test]
@@ -817,8 +843,7 @@ mod tests {
 
     #[test]
     fn parse_memory_body_strips_quotes_around_values() {
-        let raw =
-            "---\nname: \"quoted name\"\ndescription: 'desc'\ntype: project\n---\n\nbody\n";
+        let raw = "---\nname: \"quoted name\"\ndescription: 'desc'\ntype: project\n---\n\nbody\n";
         let (fm, _) = parse_memory_body(raw).unwrap();
         assert_eq!(fm.name, "quoted name");
         assert_eq!(fm.description, "desc");
@@ -894,9 +919,21 @@ mod tests {
     #[tokio::test]
     async fn cluster_groups_near_duplicates_within_same_type() {
         let files = synth_files(&[
-            ("a", "feedback", "Always run integration tests against a real database not mocks"),
-            ("b", "feedback", "Always run integration tests against the real database (no mocks)"),
-            ("c", "feedback", "Always run integration tests against a real database; no mocks"),
+            (
+                "a",
+                "feedback",
+                "Always run integration tests against a real database not mocks",
+            ),
+            (
+                "b",
+                "feedback",
+                "Always run integration tests against the real database (no mocks)",
+            ),
+            (
+                "c",
+                "feedback",
+                "Always run integration tests against a real database; no mocks",
+            ),
             ("d", "project", "Cortex pipeline state is stable"),
         ]);
         let embeddings = embed_all(&files).await;
@@ -906,16 +943,29 @@ mod tests {
             .iter()
             .find(|c| c.members.len() == 3)
             .expect("expected one cluster of 3");
-        assert!(big.members.iter().all(|i| files[*i].frontmatter.kind == MemoryType::Feedback));
-        assert!(clusters.iter().any(|c| c.members.len() == 1
-            && files[c.members[0]].frontmatter.kind == MemoryType::Project));
+        assert!(big
+            .members
+            .iter()
+            .all(|i| files[*i].frontmatter.kind == MemoryType::Feedback));
+        assert!(clusters
+            .iter()
+            .any(|c| c.members.len() == 1
+                && files[c.members[0]].frontmatter.kind == MemoryType::Project));
     }
 
     #[tokio::test]
     async fn cluster_never_mixes_types() {
         let files = synth_files(&[
-            ("a", "feedback", "identical body identical body identical body"),
-            ("b", "project", "identical body identical body identical body"),
+            (
+                "a",
+                "feedback",
+                "identical body identical body identical body",
+            ),
+            (
+                "b",
+                "project",
+                "identical body identical body identical body",
+            ),
         ]);
         let embeddings = embed_all(&files).await;
         let clusters = cluster_files(&files, &embeddings, 0.5);
@@ -978,11 +1028,7 @@ mod tests {
         let consolidated: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .starts_with("consolidated_")
-            })
+            .filter(|e| e.file_name().to_string_lossy().starts_with("consolidated_"))
             .collect();
         assert_eq!(consolidated.len(), 1);
         // MEMORY.md regenerated.
@@ -1068,13 +1114,7 @@ mod tests {
 
     #[test]
     fn render_index_caps_each_line_at_150_chars() {
-        let entries = vec![
-            (
-                "name".into(),
-                "file.md".into(),
-                "x".repeat(500),
-            ),
-        ];
+        let entries = vec![("name".into(), "file.md".into(), "x".repeat(500))];
         let index = render_index(&entries);
         let line = index.lines().next().unwrap();
         assert!(line.len() <= 150, "line too long: {}", line.len());

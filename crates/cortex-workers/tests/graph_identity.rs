@@ -13,7 +13,11 @@ fn artifact_key_is_pipe_joined() {
 #[test]
 fn artifact_key_handles_nested_paths() {
     assert_eq!(
-        artifact_natural_key("hivellm/cortex", "crates/cortex-graph/src/lib.rs", "deadbeef"),
+        artifact_natural_key(
+            "hivellm/cortex",
+            "crates/cortex-graph/src/lib.rs",
+            "deadbeef"
+        ),
         "hivellm/cortex|crates/cortex-graph/src/lib.rs|deadbeef"
     );
 }

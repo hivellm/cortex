@@ -14,8 +14,7 @@ use sha2::{Digest, Sha256};
 use super::checkpoint::Checkpoint;
 use super::config::CortexSection;
 use super::emitter::{
-    emit_for_file_multi, emit_turn_historical, kind_passes_filter, BootstrapEvent,
-    BOOTSTRAP_STREAM,
+    emit_for_file_multi, emit_turn_historical, kind_passes_filter, BootstrapEvent, BOOTSTRAP_STREAM,
 };
 use super::git::walk_commits;
 use super::metrics::Metrics;
@@ -302,7 +301,10 @@ pub async fn run_repo_with_dedup(
     // ---- git walk + emit ----
     let mut commits_walked: u64 = 0;
     if repo_cfg.git.include_commits {
-        let since = runner_cfg.since.as_deref().or(repo_cfg.git.since.as_deref());
+        let since = runner_cfg
+            .since
+            .as_deref()
+            .or(repo_cfg.git.since.as_deref());
         match walk_commits(repo_root, since) {
             Ok(commits) => {
                 let mut resume_git = last_git_ref.is_some();
@@ -329,8 +331,8 @@ pub async fn run_repo_with_dedup(
                     }
                     metrics.incr_redactions(u64::from(evt.redactions));
                     publishes_attempted += 1;
-                    if let Err(e) = publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run)
-                        .await
+                    if let Err(e) =
+                        publish(&publisher, &stream, &evt, &metrics, runner_cfg.dry_run).await
                     {
                         metrics.incr_errors(&repo_id, "publish");
                         publishes_failed += 1;
@@ -429,10 +431,7 @@ async fn publish(
 
 /// Helper: run multiple repos with bounded concurrency. Maps to
 /// `--parallelism N`.
-pub async fn run_repos_parallel<F>(
-    parallelism: usize,
-    items: Vec<F>,
-) -> Vec<Result<RepoRunReport>>
+pub async fn run_repos_parallel<F>(parallelism: usize, items: Vec<F>) -> Vec<Result<RepoRunReport>>
 where
     F: std::future::Future<Output = Result<RepoRunReport>> + Send + 'static,
 {

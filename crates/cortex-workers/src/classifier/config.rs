@@ -93,10 +93,7 @@ impl ClassifierWorkerConfig {
                 .unwrap_or(def.prompt_version),
             claude_bin: env::var("CLAUDE_CODE_BIN").unwrap_or(def.claude_bin),
             model: env::var("CORTEX_CLASSIFIER_MODEL").unwrap_or(def.model),
-            cli_timeout_secs: parse_u64(
-                "CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS",
-                def.cli_timeout_secs,
-            ),
+            cli_timeout_secs: parse_u64("CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS", def.cli_timeout_secs),
         }
     }
 }
@@ -148,7 +145,10 @@ mod tests {
         assert_eq!(ClassifierMode::parse("DISABLED"), ClassifierMode::Disabled);
         assert_eq!(ClassifierMode::parse("off"), ClassifierMode::Disabled);
         assert_eq!(ClassifierMode::parse("none"), ClassifierMode::Disabled);
-        assert_eq!(ClassifierMode::parse(" disabled "), ClassifierMode::Disabled);
+        assert_eq!(
+            ClassifierMode::parse(" disabled "),
+            ClassifierMode::Disabled
+        );
     }
 
     use std::sync::Mutex;

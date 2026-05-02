@@ -106,7 +106,9 @@ fn host_claude_credentials_path() -> Option<PathBuf> {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .ok()?;
-    let p = PathBuf::from(home).join(".claude").join(".credentials.json");
+    let p = PathBuf::from(home)
+        .join(".claude")
+        .join(".credentials.json");
     if p.exists() {
         Some(p)
     } else {
@@ -319,9 +321,7 @@ pub struct ClaudeJsonResponse {
 impl ClaudeJsonResponse {
     /// `result` (CLI 2.x) → fallback to `text` (CLI 1.x).
     pub fn body(&self) -> Option<&str> {
-        self.result
-            .as_deref()
-            .or(self.text.as_deref())
+        self.result.as_deref().or(self.text.as_deref())
     }
 }
 

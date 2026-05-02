@@ -22,8 +22,8 @@ pub use log_rotate::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
 
 pub use doctor::{
     coverage_report, coverage_report_full, render_coverage_markdown, scan_hash_coverage,
-    ArchiveProbe, ArchiveSummary, CoverageOptions, CoverageRow, DoctorReport,
-    HashCoverageSummary, LiveNexusCoverageProbe, LiveVectorizerCoverageProbe, MeiliCoverageProbe,
+    ArchiveProbe, ArchiveSummary, CoverageOptions, CoverageRow, DoctorReport, HashCoverageSummary,
+    LiveNexusCoverageProbe, LiveVectorizerCoverageProbe, MeiliCoverageProbe,
     MemoryNexusCoverageProbe, MemoryVectorizerCoverageProbe, NexusCounts, NexusCoverageScan,
     PartitionKey, VectorizerCounts, VectorizerCoverageScan, HASH_COVERAGE_THRESHOLD,
     HASH_COVERAGE_WINDOW_HOURS,

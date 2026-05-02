@@ -37,25 +37,29 @@ use common::*;
 async fn embed_one(
     prefix: &str,
     event: &cortex_workers::embedder::EnrichedEvent,
-) -> (Arc<LiveVectorizerClient>, String, cortex_workers::embedder::EmbedReport) {
+) -> (
+    Arc<LiveVectorizerClient>,
+    String,
+    cortex_workers::embedder::EmbedReport,
+) {
     let base = it_config_authed(Some(prefix)).await;
     let config = EmbedderConfig {
         collection_prefix: prefix.to_string(),
         ..base
     };
-    let live = Arc::new(
-        LiveVectorizerClient::new(config.clone())
-            .expect("live client"),
-    );
+    let live = Arc::new(LiveVectorizerClient::new(config.clone()).expect("live client"));
     let trait_client: Arc<dyn VectorizerClient> = live.clone();
-    let embedder =
-        VectorizerEmbedder::new(config.clone(), trait_client).with_schema(it_schema());
+    let embedder = VectorizerEmbedder::new(config.clone(), trait_client).with_schema(it_schema());
     use cortex_workers::embedder::Embedder;
     let report = embedder
         .embed_batch(std::slice::from_ref(event))
         .await
         .expect("embed_batch");
-    let collection = cortex_workers::embedder::collection_for(&event.kind, prefix, event.context_repo.as_deref());
+    let collection = cortex_workers::embedder::collection_for(
+        &event.kind,
+        prefix,
+        event.context_repo.as_deref(),
+    );
     (live, collection, report)
 }
 
@@ -107,17 +111,8 @@ fn zanzibar_token_finder(input: &str) -> Option<usize> {
 }
 "#;
 
-    let event = enriched_event(
-        "evt_e2e",
-        Kind::ToolCall,
-        Some("handlers.rs"),
-        source,
-        None,
-    );
-    let prefix = format!(
-        "cortex-it-{}",
-        Ulid::new().to_string().to_lowercase()
-    );
+    let event = enriched_event("evt_e2e", Kind::ToolCall, Some("handlers.rs"), source, None);
+    let prefix = format!("cortex-it-{}", Ulid::new().to_string().to_lowercase());
     let (live, collection, report) = embed_one(&prefix, &event).await;
     assert!(
         report.errors.is_empty(),
@@ -184,10 +179,7 @@ async fn oversize_with_summary_roundtrips() {
         Some("this is the summary text"),
     );
 
-    let prefix = format!(
-        "cortex-it-{}",
-        Ulid::new().to_string().to_lowercase()
-    );
+    let prefix = format!("cortex-it-{}", Ulid::new().to_string().to_lowercase());
     let (live, collection, report) = embed_one(&prefix, &event).await;
     assert!(
         report.errors.is_empty(),

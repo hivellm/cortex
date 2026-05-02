@@ -69,7 +69,11 @@ impl FallbackChunker {
         starting_ordinal: u32,
         collection_prefix: &str,
     ) -> Vec<Chunk> {
-        let collection = collection_for(&event.kind, collection_prefix, event.context_repo.as_deref());
+        let collection = collection_for(
+            &event.kind,
+            collection_prefix,
+            event.context_repo.as_deref(),
+        );
         chunk_str(
             text,
             self.window_chars(),
@@ -221,4 +225,3 @@ pub fn sha256_hex(input: &str) -> String {
     }
     out
 }
-

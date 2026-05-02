@@ -14,9 +14,9 @@ use crate::embedder::EnrichedEvent;
 /// Source-code formats only — extensions whose contents are typically
 /// imperative or declarative program text rather than prose.
 const CODE_EXTENSIONS: &[&str] = &[
-    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "py", "go", "rb",
-    "java", "kt", "scala", "c", "cc", "cpp", "h", "hpp", "cs", "swift",
-    "php", "lua", "sh", "bash", "zsh", "ps1", "fish", "sql", "proto",
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "vue", "py", "go", "rb", "java", "kt", "scala",
+    "c", "cc", "cpp", "h", "hpp", "cs", "swift", "php", "lua", "sh", "bash", "zsh", "ps1", "fish",
+    "sql", "proto",
 ];
 
 /// Path extensions that route an artifact to the `docs` family —
@@ -24,8 +24,7 @@ const CODE_EXTENSIONS: &[&str] = &[
 /// when topic hints are also absent (honest middle-ground rather than
 /// silently piling everything into `docs`).
 const DOC_EXTENSIONS: &[&str] = &[
-    "md", "mdx", "markdown", "rst", "adoc", "asciidoc", "txt", "rtf",
-    "tex", "org",
+    "md", "mdx", "markdown", "rst", "adoc", "asciidoc", "txt", "rtf", "tex", "org",
 ];
 
 /// Family suffix for the index a `Kind` routes to when no richer
@@ -60,6 +59,11 @@ pub fn family_for(kind: Kind) -> &'static str {
         // bucket.
         Kind::Knowledge => "knowledge",
         Kind::Learning => "learnings",
+        // Phase11j §3.2 — consolidations route to the
+        // `consolidations` family so the renderer's per-repo lane
+        // hits one index. Per-repo collection name resolves via
+        // `cortex-{slug}-consolidations`.
+        Kind::Consolidation => "consolidations",
     }
 }
 
@@ -70,11 +74,7 @@ pub fn family_for(kind: Kind) -> &'static str {
 /// got 8 285 mixed-bag documents. This function fixes the routing so
 /// `cortex-code`, `cortex-docs`, and `cortex-misc` each get their fair
 /// slice of artifact events.
-pub fn family_for_event(
-    kind: Kind,
-    topics: &[String],
-    context_path: Option<&str>,
-) -> &'static str {
+pub fn family_for_event(kind: Kind, topics: &[String], context_path: Option<&str>) -> &'static str {
     // Non-artifact kinds keep the kind-only routing — their family
     // is unambiguous from the kind alone.
     if !matches!(kind, Kind::Artifact) {
@@ -217,6 +217,9 @@ pub const FAMILIES: &[&str] = &[
     "turns",
     "governance",
     "analyses",
+    "knowledge",
+    "learnings",
+    "consolidations",
     "misc",
 ];
 
@@ -285,11 +288,7 @@ mod tests {
             "code"
         );
         assert_eq!(
-            family_for_event(
-                Kind::Artifact,
-                &["doc".to_string()],
-                Some("README.no-ext"),
-            ),
+            family_for_event(Kind::Artifact, &["doc".to_string()], Some("README.no-ext"),),
             "docs"
         );
     }

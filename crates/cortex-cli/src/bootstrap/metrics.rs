@@ -52,8 +52,7 @@ impl Metrics {
     /// Increment `files_dropped{repo, reason}` by 1.
     pub fn incr_files_dropped(&self, repo: &str, reason: &str) {
         if let Ok(mut m) = self.files_dropped.lock() {
-            *m.entry((repo.to_string(), reason.to_string()))
-                .or_insert(0) += 1;
+            *m.entry((repo.to_string(), reason.to_string())).or_insert(0) += 1;
         }
     }
     /// Increment `events_emitted{repo, kind}` by 1.
@@ -174,10 +173,7 @@ mod tests {
         let m = Metrics::new();
         m.incr_bytes_processed("alpha", 100);
         m.incr_bytes_processed("alpha", 250);
-        assert_eq!(
-            m.bytes_processed.lock().unwrap().get("alpha"),
-            Some(&350)
-        );
+        assert_eq!(m.bytes_processed.lock().unwrap().get("alpha"), Some(&350));
     }
 
     #[test]
@@ -216,10 +212,7 @@ mod tests {
         let m = Metrics::new();
         m.observe_publish_latency(11);
         m.observe_publish_latency(22);
-        assert_eq!(
-            m.publish_latency_ms.lock().unwrap().as_slice(),
-            &[11, 22]
-        );
+        assert_eq!(m.publish_latency_ms.lock().unwrap().as_slice(), &[11, 22]);
     }
 
     #[test]

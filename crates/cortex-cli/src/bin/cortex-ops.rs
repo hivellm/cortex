@@ -920,18 +920,14 @@ fn repo_canonicalize(
 
     // Count rewrite candidates (rows whose `repo` differs from its
     // lowercase form) per table.
-    let sessions_candidates = match count_canonicalize_candidates(
-        conn,
-        "sessions",
-        "repo",
-        target_filter.as_deref(),
-    ) {
-        Ok(n) => n,
-        Err(e) => {
-            eprintln!("repo-canonicalize: count sessions: {e}");
-            return ExitCode::from(1);
-        }
-    };
+    let sessions_candidates =
+        match count_canonicalize_candidates(conn, "sessions", "repo", target_filter.as_deref()) {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("repo-canonicalize: count sessions: {e}");
+                return ExitCode::from(1);
+            }
+        };
     let bootstrap_candidates = match count_canonicalize_candidates(
         conn,
         "bootstrap_jobs",
@@ -961,18 +957,14 @@ fn repo_canonicalize(
     let mut bootstrap_rewrites = 0u64;
     let mut bootstrap_seen_rewrites = 0u64;
     if apply {
-        sessions_rewrites = match apply_canonicalize(
-            conn,
-            "sessions",
-            "repo",
-            target_filter.as_deref(),
-        ) {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("repo-canonicalize: rewrite sessions: {e}");
-                return ExitCode::from(1);
-            }
-        };
+        sessions_rewrites =
+            match apply_canonicalize(conn, "sessions", "repo", target_filter.as_deref()) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("repo-canonicalize: rewrite sessions: {e}");
+                    return ExitCode::from(1);
+                }
+            };
         bootstrap_rewrites = match apply_canonicalize(
             conn,
             "bootstrap_jobs",
@@ -985,18 +977,14 @@ fn repo_canonicalize(
                 return ExitCode::from(1);
             }
         };
-        bootstrap_seen_rewrites = match apply_canonicalize(
-            conn,
-            "bootstrap_seen",
-            "repo",
-            target_filter.as_deref(),
-        ) {
-            Ok(n) => n,
-            Err(e) => {
-                eprintln!("repo-canonicalize: rewrite bootstrap_seen: {e}");
-                return ExitCode::from(1);
-            }
-        };
+        bootstrap_seen_rewrites =
+            match apply_canonicalize(conn, "bootstrap_seen", "repo", target_filter.as_deref()) {
+                Ok(n) => n,
+                Err(e) => {
+                    eprintln!("repo-canonicalize: rewrite bootstrap_seen: {e}");
+                    return ExitCode::from(1);
+                }
+            };
     }
     if json {
         let payload = serde_json::json!({
@@ -1430,8 +1418,7 @@ async fn probe_meili(
         meili_api_key: api_key.map(String::from),
         ..FulltextConfig::default()
     };
-    let client = LiveMeiliClient::new(&config)
-        .map_err(|e| anyhow::anyhow!("meili client: {e}"))?;
+    let client = LiveMeiliClient::new(&config).map_err(|e| anyhow::anyhow!("meili client: {e}"))?;
     cortex_cli::ops::doctor::meili_partition_counts(&client).await
 }
 
@@ -1449,8 +1436,8 @@ async fn probe_vectorizer(
 }
 
 async fn probe_nexus(url: &str) -> anyhow::Result<cortex_cli::ops::NexusCounts> {
-    use cortex_workers::graph::GraphConfig;
     use cortex_cli::ops::{LiveNexusCoverageProbe, NexusCoverageScan};
+    use cortex_workers::graph::GraphConfig;
     // GraphConfig::from_env reads the rest of the auth / transport
     // knobs (CORTEX_NEXUS_USER / _PASSWORD, transport selection, …)
     // so we let the operator set them through the same env vars the
@@ -1541,11 +1528,7 @@ impl cortex_cli::ops::QueryProbe for LiveVectorizerQueryProbe {
     async fn search(&self, query: &str, k: usize) -> Vec<String> {
         let mut seen: std::collections::BTreeSet<String> = Default::default();
         for col in &self.collections {
-            let resp = match self
-                .client
-                .search_vectors(col, query, Some(k), None)
-                .await
-            {
+            let resp = match self.client.search_vectors(col, query, Some(k), None).await {
                 Ok(r) => r,
                 Err(_) => continue,
             };
@@ -1683,10 +1666,7 @@ fn emit_plan(pretty: bool, slice: PlanSlice) -> anyhow::Result<()> {
         out.insert("collections".into(), serde_json::to_value(COLLECTIONS)?);
     }
     if matches!(slice, PlanSlice::All | PlanSlice::Cypher) {
-        out.insert(
-            "cypher".into(),
-            serde_json::to_value(BOOTSTRAP_STATEMENTS)?,
-        );
+        out.insert("cypher".into(), serde_json::to_value(BOOTSTRAP_STATEMENTS)?);
     }
     if matches!(slice, PlanSlice::All | PlanSlice::Indexes) {
         let rows: Vec<_> = INDEXES
@@ -1720,11 +1700,7 @@ fn emit_plan(pretty: bool, slice: PlanSlice) -> anyhow::Result<()> {
 /// Phase8d — `cortex-ops doctor-config`. Runs the cortex-api config
 /// audit (read-only, static analysis) and renders either a plain-text
 /// table or JSON. Exit codes match `Severity`: 0=ok, 1=warn, 2=critical.
-fn doctor_config(
-    workspace: Option<String>,
-    adapter_toml: Option<String>,
-    json: bool,
-) -> ExitCode {
+fn doctor_config(workspace: Option<String>, adapter_toml: Option<String>, json: bool) -> ExitCode {
     use cortex_api::config_audit::{run_audit_with, AuditOptions, AuditPaths, Severity};
 
     let workspace = workspace
@@ -1782,7 +1758,9 @@ fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
             let home = std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| ".".to_string());
-            std::path::PathBuf::from(home).join(".cortex").join("alerts")
+            std::path::PathBuf::from(home)
+                .join(".cortex")
+                .join("alerts")
         }
     };
 
@@ -1840,7 +1818,9 @@ fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
         println!("state_dir:    {}", dir.display());
         println!("any_critical: {any_critical}\n");
         if rows.is_empty() {
-            println!("(no persisted alert state — silent-drop watcher idle or no alerts since boot)");
+            println!(
+                "(no persisted alert state — silent-drop watcher idle or no alerts since boot)"
+            );
         } else {
             for (pair, state) in &rows {
                 let label = match state.alert {
@@ -1941,7 +1921,10 @@ fn doctor_coverage(api_url: Option<String>, json: bool) -> ExitCode {
         println!("cortex-ops doctor-coverage");
         println!("api_url:         {url}");
         println!("overall:         {overall}");
-        println!("expected:        {slugs} slugs × {families} families = {} names", slugs * families);
+        println!(
+            "expected:        {slugs} slugs × {families} families = {} names",
+            slugs * families
+        );
         println!();
         if let Some(backends) = payload.get("backends").and_then(|v| v.as_array()) {
             for backend in backends {
@@ -1982,9 +1965,7 @@ fn doctor_coverage(api_url: Option<String>, json: bool) -> ExitCode {
                 println!(
                     "       {present}/{expected} present ({ratio:.0}%) · {missing} missing · {unexpected} orphan"
                 );
-                if let Some(missing_names) =
-                    backend.get("missing").and_then(|v| v.as_array())
-                {
+                if let Some(missing_names) = backend.get("missing").and_then(|v| v.as_array()) {
                     let take = missing_names.iter().take(10);
                     for name in take {
                         if let Some(n) = name.as_str() {
@@ -2024,9 +2005,7 @@ fn meili_prune(
     batch_size: u32,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::meili_prune::{
-        run_meili_prune, MeiliDoc, MemoryMeiliBackend, PrunePlan,
-    };
+    use cortex_retention::meili_prune::{run_meili_prune, MeiliDoc, MemoryMeiliBackend, PrunePlan};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -2088,7 +2067,9 @@ fn meili_prune(
         },
     ];
     runtime.block_on(async {
-        backend.seed("cortex_turns", preview_seed[..3].to_vec()).await;
+        backend
+            .seed("cortex_turns", preview_seed[..3].to_vec())
+            .await;
         backend
             .seed("cortex_tool_calls", vec![preview_seed[3].clone()])
             .await;
@@ -2140,9 +2121,7 @@ fn turn_digest(
     budget_cents: u64,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::turn_digest::{
-        run_turn_digest, DigestPlan, MemoryDigestBackend, Turn,
-    };
+    use cortex_retention::turn_digest::{run_turn_digest, DigestPlan, MemoryDigestBackend, Turn};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -2388,7 +2367,11 @@ fn cas_vacuum(
 
     let cas_path = cas_db
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var("CORTEX_CAS_DB").ok().map(std::path::PathBuf::from))
+        .or_else(|| {
+            std::env::var("CORTEX_CAS_DB")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
         .unwrap_or_else(|| {
             home_dir()
                 .map(|h| h.join(".cortex/cas.sqlite"))
@@ -2438,7 +2421,10 @@ fn cas_vacuum(
             }
             ExitCode::SUCCESS
         }
-        Err(VacuumError::SafeguardTripped { would_drop, total_blobs }) => {
+        Err(VacuumError::SafeguardTripped {
+            would_drop,
+            total_blobs,
+        }) => {
             eprintln!(
                 "cas-vacuum: safeguard tripped — would_drop={would_drop} > 50 % of total_blobs={total_blobs}; pass --force to override"
             );
@@ -2625,12 +2611,18 @@ fn retention_sweep(
 
     let metadata_path = metadata_db
         .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var("CORTEX_METADATA_DB").ok().map(std::path::PathBuf::from))
+        .or_else(|| {
+            std::env::var("CORTEX_METADATA_DB")
+                .ok()
+                .map(std::path::PathBuf::from)
+        })
         .unwrap_or_else(|| {
             let home = std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
                 .unwrap_or_else(|_| ".".to_string());
-            std::path::PathBuf::from(home).join(".cortex").join("metadata.sqlite")
+            std::path::PathBuf::from(home)
+                .join(".cortex")
+                .join("metadata.sqlite")
         });
 
     let store = match MetadataStore::open(&metadata_path) {
@@ -2916,14 +2908,18 @@ fn memory_consolidate(
 /// a small JSON / plain-text renderer.
 fn schedule(command: ScheduleCommand) -> ExitCode {
     use cortex_cli::ops::scheduler::{
-        next_after, parse_schedule, run_now, seed_defaults, tick, MemoryRunner,
-        ProcessRunner, Scheduler,
+        next_after, parse_schedule, run_now, seed_defaults, tick, MemoryRunner, ProcessRunner,
+        Scheduler,
     };
     use cortex_storage::MetadataStore;
 
     fn resolve_db(arg: Option<String>) -> std::path::PathBuf {
         arg.map(std::path::PathBuf::from)
-            .or_else(|| std::env::var("CORTEX_METADATA_DB").ok().map(std::path::PathBuf::from))
+            .or_else(|| {
+                std::env::var("CORTEX_METADATA_DB")
+                    .ok()
+                    .map(std::path::PathBuf::from)
+            })
             .unwrap_or_else(|| {
                 home_dir()
                     .map(|h| h.join(".cortex").join("metadata.sqlite"))
@@ -3006,7 +3002,11 @@ fn schedule(command: ScheduleCommand) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        ScheduleCommand::Show { name, json, metadata_db } => {
+        ScheduleCommand::Show {
+            name,
+            json,
+            metadata_db,
+        } => {
             let store = match open(metadata_db) {
                 Ok(s) => s,
                 Err(c) => return c,
@@ -3105,7 +3105,11 @@ fn schedule(command: ScheduleCommand) -> ExitCode {
                 }
             }
         }
-        ScheduleCommand::Set { name, cron, metadata_db } => {
+        ScheduleCommand::Set {
+            name,
+            cron,
+            metadata_db,
+        } => {
             if let Err(e) = parse_schedule(&cron) {
                 eprintln!("invalid cron: {e}");
                 return ExitCode::FAILURE;
@@ -3174,9 +3178,10 @@ fn schedule(command: ScheduleCommand) -> ExitCode {
             };
             match seed_defaults(&store, chrono::Utc::now()) {
                 Ok(n) => {
-                    println!("seeded {n} default jobs ({} total)", store.list_cron_jobs()
-                        .map(|j| j.len())
-                        .unwrap_or(0));
+                    println!(
+                        "seeded {n} default jobs ({} total)",
+                        store.list_cron_jobs().map(|j| j.len()).unwrap_or(0)
+                    );
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -3185,7 +3190,10 @@ fn schedule(command: ScheduleCommand) -> ExitCode {
                 }
             }
         }
-        ScheduleCommand::Tick { metadata_db, time_travel } => {
+        ScheduleCommand::Tick {
+            metadata_db,
+            time_travel,
+        } => {
             let store = match open(metadata_db) {
                 Ok(s) => s,
                 Err(c) => return c,
@@ -3258,7 +3266,9 @@ fn metadata_reap(
     let metadata_path = metadata_db
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var("CORTEX_METADATA_DB").ok().map(std::path::PathBuf::from)
+            std::env::var("CORTEX_METADATA_DB")
+                .ok()
+                .map(std::path::PathBuf::from)
         })
         .unwrap_or_else(|| {
             home_dir()
@@ -3266,13 +3276,11 @@ fn metadata_reap(
                 .unwrap_or_else(|| std::path::PathBuf::from(".cortex/metadata.sqlite"))
         });
 
-    let log_dir = log_dir
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            home_dir()
-                .map(|h| h.join(".cortex"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".cortex"))
-        });
+    let log_dir = log_dir.map(std::path::PathBuf::from).unwrap_or_else(|| {
+        home_dir()
+            .map(|h| h.join(".cortex"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".cortex"))
+    });
 
     // SQLite rollup. The `Logs` target skips this branch entirely.
     let only_logs = matches!(target, MetadataReapTargetArg::Logs);
@@ -3324,24 +3332,25 @@ fn metadata_reap(
                         .and_then(|v| v.get("metadata"))
                         .and_then(|v| v.as_table())
                     {
-                        if let Some(v) =
-                            section.get("bootstrap_retain_days").and_then(|v| v.as_integer())
+                        if let Some(v) = section
+                            .get("bootstrap_retain_days")
+                            .and_then(|v| v.as_integer())
                         {
                             plan.bootstrap_retain_days = v;
                         }
-                        if let Some(v) =
-                            section.get("sessions_retain_days").and_then(|v| v.as_integer())
+                        if let Some(v) = section
+                            .get("sessions_retain_days")
+                            .and_then(|v| v.as_integer())
                         {
                             plan.sessions_retain_days = v;
                         }
-                        if let Some(v) =
-                            section.get("spend_retain_days").and_then(|v| v.as_integer())
+                        if let Some(v) = section
+                            .get("spend_retain_days")
+                            .and_then(|v| v.as_integer())
                         {
                             plan.spend_retain_days = v;
                         }
-                        if let Some(v) =
-                            section.get("log_max_bytes").and_then(|v| v.as_integer())
-                        {
+                        if let Some(v) = section.get("log_max_bytes").and_then(|v| v.as_integer()) {
                             log_overrides.max_bytes = u64::try_from(v).ok();
                         }
                         if let Some(v) =
@@ -3349,8 +3358,9 @@ fn metadata_reap(
                         {
                             log_overrides.max_age_days = u32::try_from(v).ok();
                         }
-                        if let Some(v) =
-                            section.get("log_keep_rotations").and_then(|v| v.as_integer())
+                        if let Some(v) = section
+                            .get("log_keep_rotations")
+                            .and_then(|v| v.as_integer())
                         {
                             log_overrides.keep_rotations = usize::try_from(v).ok();
                         }
@@ -3367,14 +3377,8 @@ fn metadata_reap(
             Ok(r) => r,
             Err(e) => {
                 eprintln!("metadata-reap: {e}");
-                let _ = s.finish_retention_sweep(
-                    &sweep_id,
-                    chrono::Utc::now(),
-                    0,
-                    0,
-                    "{}",
-                    "failed",
-                );
+                let _ =
+                    s.finish_retention_sweep(&sweep_id, chrono::Utc::now(), 0, 0, "{}", "failed");
                 return ExitCode::FAILURE;
             }
         }
@@ -3412,9 +3416,8 @@ fn metadata_reap(
     // collapsed across all targets so the dashboard's existing
     // ribbon stays meaningful; `tier_transitions_json` carries the
     // per-target breakdown plus log-rotation counters.
-    let collapsed_total = report.bootstrap_jobs_collapsed
-        + report.sessions_collapsed
-        + report.spend_collapsed;
+    let collapsed_total =
+        report.bootstrap_jobs_collapsed + report.sessions_collapsed + report.spend_collapsed;
     let bookkeeping_json = bookkeeping_payload(&report, &log_outcomes);
     let finished_at = chrono::Utc::now();
     if let Some(s) = store.as_ref() {
@@ -3636,7 +3639,10 @@ fn doctor(
     // Doctor probes the five canonical routes against
     // `CORTEX_API_URL` so a missed registration shows up as a
     // doctor red BEFORE the operator opens the GUI.
-    if let Some(api) = std::env::var("CORTEX_API_URL").ok().filter(|s| !s.is_empty()) {
+    if let Some(api) = std::env::var("CORTEX_API_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
         for path in [
             "/v1/health",
             "/v1/health/freshness",

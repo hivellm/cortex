@@ -131,8 +131,8 @@ impl MeiliFulltextIndexer {
         // serialisation failure here is a programming error, not a
         // runtime failure, so map to MeiliError::Http for symmetry
         // with the rest of the indexer.
-        let settings: Value = settings_v1_json()
-            .map_err(|e| MeiliError::Http(format!("settings_v1_json: {e}")))?;
+        let settings: Value =
+            settings_v1_json().map_err(|e| MeiliError::Http(format!("settings_v1_json: {e}")))?;
         self.client.ensure_index(index, &settings).await?;
         self.metrics.incr_settings_bump();
         if let Ok(mut guard) = self.ensured.lock() {
@@ -152,7 +152,11 @@ impl FulltextIndexer for MeiliFulltextIndexer {
 
         // 1. Build per-event documents and group by target index.
         for event in events {
-            let outcome = build_doc(event, /* bootstrap */ false, self.config.max_body_bytes);
+            let outcome = build_doc(
+                event,
+                /* bootstrap */ false,
+                self.config.max_body_bytes,
+            );
             match outcome {
                 BuildOutcome::Skipped => {
                     skipped = skipped.saturating_add(1);
@@ -188,11 +192,10 @@ impl FulltextIndexer for MeiliFulltextIndexer {
             for chunk in docs.chunks(batch_size) {
                 let upsert_started = Instant::now();
                 let report = self.client.upsert_documents(&index, chunk).await?;
-                let latency_ms = u32::try_from(upsert_started.elapsed().as_millis())
-                    .unwrap_or(u32::MAX);
+                let latency_ms =
+                    u32::try_from(upsert_started.elapsed().as_millis()).unwrap_or(u32::MAX);
                 self.metrics.observe_upsert_latency(&index, latency_ms);
-                self.metrics
-                    .observe_batch_size(report.documents_upserted);
+                self.metrics.observe_batch_size(report.documents_upserted);
                 self.metrics
                     .incr_documents(&index, u64::from(report.documents_upserted));
                 count_for_index = count_for_index.saturating_add(report.documents_upserted);

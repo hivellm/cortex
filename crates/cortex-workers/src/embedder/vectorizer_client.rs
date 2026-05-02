@@ -147,7 +147,10 @@ pub enum VectorizerClientError {
 impl VectorizerClientError {
     /// Whether this error class should be retried by [`with_retry`].
     pub fn is_retriable(&self) -> bool {
-        matches!(self, VectorizerClientError::RateLimited | VectorizerClientError::Transport(_))
+        matches!(
+            self,
+            VectorizerClientError::RateLimited | VectorizerClientError::Transport(_)
+        )
     }
 }
 
@@ -496,8 +499,7 @@ impl VectorizerClient for LiveVectorizerClient {
         let mut total_failed = 0u32;
         let mut new_entries: Vec<UpsertedChunk> = Vec::with_capacity(chunks.len());
         for sub in chunks.chunks(INSERT_BATCH_SIZE) {
-            let payload: Vec<BatchTextRequest> =
-                sub.iter().map(chunk_to_batch_request).collect();
+            let payload: Vec<BatchTextRequest> = sub.iter().map(chunk_to_batch_request).collect();
             let response = with_retry(self.max_retry, || {
                 let payload = payload.clone();
                 async move {
@@ -508,8 +510,7 @@ impl VectorizerClient for LiveVectorizerClient {
                 }
             })
             .await?;
-            total_written =
-                total_written.saturating_add(response.successful_operations as u32);
+            total_written = total_written.saturating_add(response.successful_operations as u32);
             total_failed = total_failed.saturating_add(response.failed_operations as u32);
             for entry in response.results {
                 if entry.status != "ok" {
@@ -800,4 +801,3 @@ impl VectorizerClient for MemoryVectorizerClient {
             .collect())
     }
 }
-

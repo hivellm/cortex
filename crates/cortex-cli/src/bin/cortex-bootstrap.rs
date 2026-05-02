@@ -86,12 +86,16 @@ async fn main() -> Result<()> {
     if args.estimate {
         for (root, id, cfg_override) in &targets {
             let repo_cfg = match cfg_override {
-                Some(p) => load_config(p)
-                    .with_context(|| format!("load workspace cortex.toml for {id}"))?
-                    .cortex,
-                None => load_for_repo(root)
-                    .with_context(|| format!("load cortex.toml for {id}"))?
-                    .cortex,
+                Some(p) => {
+                    load_config(p)
+                        .with_context(|| format!("load workspace cortex.toml for {id}"))?
+                        .cortex
+                }
+                None => {
+                    load_for_repo(root)
+                        .with_context(|| format!("load cortex.toml for {id}"))?
+                        .cortex
+                }
             };
             let est = estimate_repo(root, id, &repo_cfg);
             print!("{}", format_estimate(&est));
@@ -108,8 +112,7 @@ async fn main() -> Result<()> {
             .clone()
             .unwrap_or_else(|| "http://127.0.0.1:17003".to_string());
         let handle = Arc::new(
-            SynapHandle::new(&endpoint)
-                .with_context(|| format!("synap connect {endpoint}"))?,
+            SynapHandle::new(&endpoint).with_context(|| format!("synap connect {endpoint}"))?,
         );
         let pub_ = LiveSynapPublisher::new(handle);
         pub_.prime_room(&args.stream)
@@ -125,10 +128,10 @@ async fn main() -> Result<()> {
             break;
         }
         let cfg = match cfg_override {
-            Some(p) => load_config(p)
-                .with_context(|| format!("load workspace cortex.toml for {id}"))?,
-            None => load_for_repo(root)
-                .with_context(|| format!("load cortex.toml for {id}"))?,
+            Some(p) => {
+                load_config(p).with_context(|| format!("load workspace cortex.toml for {id}"))?
+            }
+            None => load_for_repo(root).with_context(|| format!("load cortex.toml for {id}"))?,
         };
         let repo_cfg = cfg.cortex;
         let resolved_id = repo_cfg.id.clone().unwrap_or_else(|| id.clone());
@@ -217,7 +220,9 @@ async fn main() -> Result<()> {
 
     print_summary_table(&summaries);
 
-    let any_failed = summaries.iter().any(|s| matches!(s.status, RunStatus::Failed { .. }));
+    let any_failed = summaries
+        .iter()
+        .any(|s| matches!(s.status, RunStatus::Failed { .. }));
     if any_failed {
         std::process::exit(1);
     }

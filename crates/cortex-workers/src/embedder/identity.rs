@@ -33,4 +33,3 @@ pub fn dedup_key(event_id: &str, ordinal: u32, chunk_content_hash: &str) -> Stri
     bytes.copy_from_slice(&digest[..16]);
     Ulid::from_bytes(bytes).to_string()
 }
-

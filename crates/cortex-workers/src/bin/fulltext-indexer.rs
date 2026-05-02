@@ -115,13 +115,7 @@ async fn main() -> Result<()> {
     let consumer = Arc::new(LiveSynapConsumer::new(synap.clone()));
     let publisher = Arc::new(LiveSynapPublisher::new(synap));
 
-    let worker = Arc::new(Worker::new(
-        config,
-        indexer,
-        consumer,
-        publisher,
-        metrics,
-    ));
+    let worker = Arc::new(Worker::new(config, indexer, consumer, publisher, metrics));
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_handle = shutdown.clone();
@@ -135,15 +129,12 @@ async fn main() -> Result<()> {
     });
 
     // Phase8a §2.9 / Phase8b §4.3 — admin /healthz + /metrics.
-    let port = resolve_port_from_env(
-        "CORTEX_FULLTEXT_HEALTH_PORT",
-        DEFAULT_FULLTEXT_PORT,
-    );
+    let port = resolve_port_from_env("CORTEX_FULLTEXT_HEALTH_PORT", DEFAULT_FULLTEXT_PORT);
     let metrics_for_health = worker.metrics.clone();
     let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     // Phase8c — version block in /healthz extras.
-    let version_block = serde_json::to_value(cortex_build::version_info!())
-        .unwrap_or(serde_json::Value::Null);
+    let version_block =
+        serde_json::to_value(cortex_build::version_info!()).unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         let mut extras = serde_json::Map::new();
         extras.insert("version".into(), version_block.clone());
@@ -160,10 +151,7 @@ async fn main() -> Result<()> {
             serde_json::json!(metrics_for_health.jobs_processed_total()),
         );
         let last_job_ts_ms = metrics_for_health.last_job_ts_ms();
-        extras.insert(
-            "last_job_ts_ms".into(),
-            serde_json::json!(last_job_ts_ms),
-        );
+        extras.insert("last_job_ts_ms".into(), serde_json::json!(last_job_ts_ms));
         let activity_ts = if last_job_ts_ms > 0 {
             last_job_ts_ms
         } else {

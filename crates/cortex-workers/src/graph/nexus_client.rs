@@ -112,20 +112,15 @@ impl GraphClientError {
                 if *status == 401 || *status == 403 {
                     GraphClientError::AuthFailed(message.clone())
                 } else if *status >= 500 {
-                    GraphClientError::TransientError(format!(
-                        "{purpose}: api {status}: {message}"
-                    ))
+                    GraphClientError::TransientError(format!("{purpose}: api {status}: {message}"))
                 } else {
                     classify_message(message, purpose)
                 }
             }
-            NexusError::Connection(msg)
-            | NexusError::Network(msg) => {
+            NexusError::Connection(msg) | NexusError::Network(msg) => {
                 GraphClientError::TransientError(format!("{purpose}: {msg}"))
             }
-            NexusError::Timeout => {
-                GraphClientError::TransientError(format!("{purpose}: timeout"))
-            }
+            NexusError::Timeout => GraphClientError::TransientError(format!("{purpose}: timeout")),
             NexusError::Http(http_err) => {
                 let is_transient = http_err.is_timeout()
                     || http_err.is_connect()
@@ -192,10 +187,7 @@ pub trait GraphClient: Send + Sync {
 ///
 /// Mirrors the contract of [`crate::embedder::with_retry`] so both
 /// workers behave identically under transient remote-server pressure.
-pub async fn with_retry<F, Fut, T>(
-    max_attempts: u32,
-    mut f: F,
-) -> Result<T, GraphClientError>
+pub async fn with_retry<F, Fut, T>(max_attempts: u32, mut f: F) -> Result<T, GraphClientError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, GraphClientError>>,
@@ -400,9 +392,20 @@ impl GraphClient for LiveNexusClient {
 
         let mut edges_sorted: Vec<&EdgeOp> = patch.edges.iter().collect();
         edges_sorted.sort_by(|a, b| {
-            (a.edge_type.as_str(), a.from_label.as_str(), a.to_label.as_str())
-                .cmp(&(b.edge_type.as_str(), b.from_label.as_str(), b.to_label.as_str()))
-                .then_with(|| (a.from_key.as_str(), a.to_key.as_str()).cmp(&(b.from_key.as_str(), b.to_key.as_str())))
+            (
+                a.edge_type.as_str(),
+                a.from_label.as_str(),
+                a.to_label.as_str(),
+            )
+                .cmp(&(
+                    b.edge_type.as_str(),
+                    b.from_label.as_str(),
+                    b.to_label.as_str(),
+                ))
+                .then_with(|| {
+                    (a.from_key.as_str(), a.to_key.as_str())
+                        .cmp(&(b.from_key.as_str(), b.to_key.as_str()))
+                })
         });
         let mut edges_dropped: std::collections::BTreeMap<String, u32> =
             std::collections::BTreeMap::new();
@@ -419,9 +422,7 @@ impl GraphClient for LiveNexusClient {
                 Ok(()) => {
                     edges_upserted = edges_upserted.saturating_add(1);
                 }
-                Err(GraphClientError::Nexus(detail))
-                    if detail.contains("count=0") =>
-                {
+                Err(GraphClientError::Nexus(detail)) if detail.contains("count=0") => {
                     *edges_dropped.entry(edge.edge_type.clone()).or_insert(0) += 1;
                     tracing::warn!(
                         edge_type = %edge.edge_type,
@@ -840,4 +841,3 @@ mod tests {
         assert!(assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").is_err());
     }
 }
-

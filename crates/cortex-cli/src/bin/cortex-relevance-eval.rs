@@ -134,7 +134,10 @@ fn print_summary(report: &RelevanceReport) {
         println!("omitted:        {}", report.omitted_intents.join(", "));
     }
     println!();
-    println!("{:<22} {:>8} {:>10} {:>10}", "intent", "queries", "recall@10", "mrr_avg");
+    println!(
+        "{:<22} {:>8} {:>10} {:>10}",
+        "intent", "queries", "recall@10", "mrr_avg"
+    );
     println!("{}", "-".repeat(54));
     for (intent, scores) in &report.per_intent {
         println!(
@@ -145,22 +148,25 @@ fn print_summary(report: &RelevanceReport) {
     println!("{}", "-".repeat(54));
     println!(
         "{:<22} {:>8} {:>9.2}% {:>10.4}",
-        "GLOBAL",
-        report.global.total,
-        report.global.recall_at_10_pct,
-        report.global.mrr_avg
+        "GLOBAL", report.global.total, report.global.recall_at_10_pct, report.global.mrr_avg
     );
     println!();
 }
 
 fn print_regression(v: &RegressionVerdict) {
-    println!("=== Regression vs baseline (threshold {:.1}pp) ===", v.threshold_pp);
+    println!(
+        "=== Regression vs baseline (threshold {:.1}pp) ===",
+        v.threshold_pp
+    );
     println!(
         "global recall delta: {:+.2}pp   global mrr delta: {:+.4}",
         v.recall_delta_pp, v.mrr_delta
     );
     if !v.soft_regressions.is_empty() {
-        println!("⚠ per-intent soft regressions: {}", v.soft_regressions.join(", "));
+        println!(
+            "⚠ per-intent soft regressions: {}",
+            v.soft_regressions.join(", ")
+        );
     }
     if !v.worst_queries.is_empty() {
         println!("worst regressed queries: {}", v.worst_queries.join(", "));

@@ -69,8 +69,8 @@ impl QuerySet {
     /// unique, that every entry has at least one expected doc id,
     /// and that the query is non-empty.
     pub fn parse(raw: &str, path: &Path) -> Result<Self> {
-        let set: QuerySet = toml::from_str(raw)
-            .with_context(|| format!("parse query set {}", path.display()))?;
+        let set: QuerySet =
+            toml::from_str(raw).with_context(|| format!("parse query set {}", path.display()))?;
         set.validate()?;
         Ok(set)
     }

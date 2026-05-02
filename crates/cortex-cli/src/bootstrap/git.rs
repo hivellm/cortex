@@ -85,7 +85,10 @@ pub fn current_head_sha(repo_root: &Path) -> Option<String> {
 /// Walk every commit reachable from `--all` in `repo_root`, optionally
 /// constrained by a `since` revision range. Returns one
 /// [`CommitRecord`] per commit in `git log` order (newest first).
-pub fn walk_commits(repo_root: &Path, since: Option<&str>) -> Result<Vec<CommitRecord>, GitWalkError> {
+pub fn walk_commits(
+    repo_root: &Path,
+    since: Option<&str>,
+) -> Result<Vec<CommitRecord>, GitWalkError> {
     let git_dir = repo_root.join(".git");
     if !git_dir.exists() {
         return Err(GitWalkError::NotAGitRepo(repo_root.to_path_buf()));
@@ -244,10 +247,7 @@ mod tests {
         let raw = "\x1eabc\x1f1\x1fa@b\x1fsubj\x1f\nsrc\\foo\\bar.rs\n";
         let commits = parse_log(raw);
         assert_eq!(commits.len(), 1);
-        assert_eq!(
-            commits[0].files_changed,
-            vec!["src/foo/bar.rs".to_string()]
-        );
+        assert_eq!(commits[0].files_changed, vec!["src/foo/bar.rs".to_string()]);
     }
 
     #[test]

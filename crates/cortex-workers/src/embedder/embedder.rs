@@ -281,9 +281,7 @@ impl Embedder for VectorizerEmbedder {
                 // fall through to the windowing path so we never drop content
                 // silently.
                 let prefix = &self.config.collection_prefix;
-                chunks = self
-                    .fallback
-                    .chunk_text(event, &raw, None, 0, prefix);
+                chunks = self.fallback.chunk_text(event, &raw, None, 0, prefix);
             }
 
             // Relabel collections so they honour the configured prefix.
@@ -319,8 +317,7 @@ impl Embedder for VectorizerEmbedder {
                 let summary_text = summary.clone();
                 let summary_hash = sha256_hex(&summary_text);
                 let summary_ord = (ordinal * 2) as u32;
-                let summary_key =
-                    dedup_key(&event.event_id, summary_ord, &summary_hash);
+                let summary_key = dedup_key(&event.event_id, summary_ord, &summary_hash);
                 substituted.push(Chunk {
                     dedup_key: summary_key,
                     parent_event_id: chunk.parent_event_id.clone(),
@@ -465,10 +462,7 @@ impl Embedder for VectorizerEmbedder {
                     Ok(rep) => {
                         report.chunks_written = report.chunks_written.saturating_add(rep.written);
                         report.chunks_deduped = report.chunks_deduped.saturating_add(rep.deduped);
-                        *report
-                            .by_collection
-                            .entry(collection.clone())
-                            .or_insert(0) += rep.written;
+                        *report.by_collection.entry(collection.clone()).or_insert(0) += rep.written;
                         report.new_records.extend(rep.new_entries);
                     }
                     Err(err) => {
@@ -501,10 +495,7 @@ impl Embedder for VectorizerEmbedder {
 }
 
 fn elapsed_ms(start: Instant) -> u32 {
-    start
-        .elapsed()
-        .as_millis()
-        .min(u32::MAX as u128) as u32
+    start.elapsed().as_millis().min(u32::MAX as u128) as u32
 }
 
 #[cfg(test)]
@@ -680,4 +671,3 @@ mod tests {
         assert!(Arc::ptr_eq(&e.metrics, &m));
     }
 }
-

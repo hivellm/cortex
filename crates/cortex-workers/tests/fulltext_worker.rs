@@ -69,10 +69,7 @@ struct CountingIndexer {
 
 #[async_trait]
 impl FulltextIndexer for CountingIndexer {
-    async fn index_batch(
-        &self,
-        events: &[EnrichedEvent],
-    ) -> Result<IndexReport, MeiliError> {
+    async fn index_batch(&self, events: &[EnrichedEvent]) -> Result<IndexReport, MeiliError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         let n = events.len() as u32;
         if let Ok(mut g) = self.last_count.lock() {
@@ -93,10 +90,7 @@ struct TransientIndexer;
 
 #[async_trait]
 impl FulltextIndexer for TransientIndexer {
-    async fn index_batch(
-        &self,
-        _events: &[EnrichedEvent],
-    ) -> Result<IndexReport, MeiliError> {
+    async fn index_batch(&self, _events: &[EnrichedEvent]) -> Result<IndexReport, MeiliError> {
         Err(MeiliError::TransientError("503 boom".into()))
     }
 }
@@ -106,10 +100,7 @@ struct RejectingIndexer;
 
 #[async_trait]
 impl FulltextIndexer for RejectingIndexer {
-    async fn index_batch(
-        &self,
-        _events: &[EnrichedEvent],
-    ) -> Result<IndexReport, MeiliError> {
+    async fn index_batch(&self, _events: &[EnrichedEvent]) -> Result<IndexReport, MeiliError> {
         Err(MeiliError::Rejected {
             status: 400,
             detail: "schema mismatch".into(),
@@ -133,10 +124,7 @@ impl FlakyIndexer {
 
 #[async_trait]
 impl FulltextIndexer for FlakyIndexer {
-    async fn index_batch(
-        &self,
-        events: &[EnrichedEvent],
-    ) -> Result<IndexReport, MeiliError> {
+    async fn index_batch(&self, events: &[EnrichedEvent]) -> Result<IndexReport, MeiliError> {
         let n = self.calls.fetch_add(1, Ordering::Relaxed);
         if n < self.flakes {
             return Err(MeiliError::TransientError(format!("attempt {n}")));
@@ -153,7 +141,11 @@ impl FulltextIndexer for FlakyIndexer {
 
 fn build_worker(
     indexer: Arc<dyn FulltextIndexer>,
-) -> (Arc<Worker>, Arc<MemorySynapConsumer>, Arc<MemorySynapPublisher>) {
+) -> (
+    Arc<Worker>,
+    Arc<MemorySynapConsumer>,
+    Arc<MemorySynapPublisher>,
+) {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::new());
     let metrics = Arc::new(Metrics::new());
@@ -280,7 +272,10 @@ async fn transient_then_success_clears_backpressure_gauge() {
         &enriched("turn-2", Kind::Turn, json!({ "user_message": "" })),
     );
     worker.run_once().await.expect("run_once 2");
-    assert!(!worker.backpressure().is_active(), "success must clear gauge");
+    assert!(
+        !worker.backpressure().is_active(),
+        "success must clear gauge"
+    );
     let envs = publisher.calls_on(STREAM_FULLTEXT_INDEXED);
     assert_eq!(envs.len(), 1);
 }

@@ -311,10 +311,8 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
 /// The order of this list is significant: `classify_path` and the
 /// rescue walk read it top-to-bottom, so subdirectories that should
 /// be `Decision` must precede the catch-all `.rulebook/**` patterns.
-pub const RULEBOOK_DECISION_GLOBS: &[&str] = &[
-    ".rulebook/decisions/*.md",
-    ".rulebook/decisions/**/*.md",
-];
+pub const RULEBOOK_DECISION_GLOBS: &[&str] =
+    &[".rulebook/decisions/*.md", ".rulebook/decisions/**/*.md"];
 
 /// Canonical glob list for spec docs that should fan out into
 /// per-`## ` law envelopes via the emitter's
@@ -323,9 +321,7 @@ pub const RULEBOOK_DECISION_GLOBS: &[&str] = &[
 /// top-level heading so the dashboard's `laws_active` overlay
 /// finally has rules to surface (closes the 2026-04-27 audit's
 /// `laws_active = 0` finding for spec-driven projects).
-pub const RULEBOOK_LAW_GLOBS: &[&str] = &[
-    ".rulebook/specs/**/*.md",
-];
+pub const RULEBOOK_LAW_GLOBS: &[&str] = &[".rulebook/specs/**/*.md"];
 
 /// phase10e — knowledge globs route to `FileClass::Knowledge`
 /// (separate kind, separate Vectorizer collection
@@ -334,16 +330,12 @@ pub const RULEBOOK_LAW_GLOBS: &[&str] = &[
 /// `RULEBOOK_MEMORY_GLOBS` so they piled into the catch-all
 /// memory bucket; the orchestrator could not surface them
 /// distinctly on `pre_change_context` / `decision_lookup`.
-pub const RULEBOOK_KNOWLEDGE_GLOBS: &[&str] = &[
-    ".rulebook/knowledge/**/*.md",
-];
+pub const RULEBOOK_KNOWLEDGE_GLOBS: &[&str] = &[".rulebook/knowledge/**/*.md"];
 
 /// phase10e — learnings globs route to `FileClass::Learning`
 /// (`cortex.learning.fp32` + `cortex_learnings`). Same rationale
 /// as [`RULEBOOK_KNOWLEDGE_GLOBS`].
-pub const RULEBOOK_LEARNING_GLOBS: &[&str] = &[
-    ".rulebook/learnings/**/*.md",
-];
+pub const RULEBOOK_LEARNING_GLOBS: &[&str] = &[".rulebook/learnings/**/*.md"];
 
 /// Canonical glob list for `.rulebook` memory-shaped artifacts:
 /// handoff snapshots and the loose top-level memory files
@@ -414,10 +406,9 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
         .to_ascii_lowercase();
     match ext.as_str() {
         "md" | "mdx" | "rst" | "txt" | "adoc" => FileClass::Doc,
-        "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "c" | "cc"
-        | "cpp" | "h" | "hpp" | "rb" | "ex" | "exs" | "kt" | "swift" | "scala" | "cs"
-        | "php" | "json" | "yaml" | "yml" | "toml" | "sh" | "bash" | "zsh" | "fish"
-        | "ps1" => FileClass::Code,
+        "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "c" | "cc" | "cpp"
+        | "h" | "hpp" | "rb" | "ex" | "exs" | "kt" | "swift" | "scala" | "cs" | "php" | "json"
+        | "yaml" | "yml" | "toml" | "sh" | "bash" | "zsh" | "fish" | "ps1" => FileClass::Code,
         _ => FileClass::Other,
     }
 }

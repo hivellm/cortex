@@ -34,19 +34,14 @@ async fn main() -> Result<()> {
     // with the minted JWT before building the SDK client. Subsequent
     // worker writes ride that bearer token.
     if let Some(pwd) = config.vectorizer_password.clone() {
-        let looks_like_jwt = pwd.split('.').count() == 3
-            && pwd.split('.').all(|s| !s.is_empty());
+        let looks_like_jwt = pwd.split('.').count() == 3 && pwd.split('.').all(|s| !s.is_empty());
         if !looks_like_jwt {
             tracing::info!(
                 user = %config.vectorizer_user,
                 "vectorizer password does not look like a JWT — running /auth/login"
             );
-            match LiveVectorizerClient::login(
-                &config.vectorizer_url,
-                &config.vectorizer_user,
-                &pwd,
-            )
-            .await
+            match LiveVectorizerClient::login(&config.vectorizer_url, &config.vectorizer_user, &pwd)
+                .await
             {
                 Ok(jwt) => {
                     tracing::info!("vectorizer /auth/login succeeded");
@@ -81,13 +76,7 @@ async fn main() -> Result<()> {
         metrics.clone(),
     ));
 
-    let worker = Arc::new(Worker::new(
-        config,
-        embedder,
-        consumer,
-        publisher,
-        metrics,
-    ));
+    let worker = Arc::new(Worker::new(config, embedder, consumer, publisher, metrics));
 
     // Graceful shutdown — Ctrl-C flips the flag, each `run_forever` loop
     // notices at the next iteration boundary.
@@ -107,16 +96,13 @@ async fn main() -> Result<()> {
     // the shared Metrics registry. Freshness uses the per-job
     // last_job_ts (when the worker has processed at least one job)
     // and falls back to the boot timestamp until then.
-    let port = resolve_port_from_env(
-        "CORTEX_EMBEDDER_HEALTH_PORT",
-        DEFAULT_EMBEDDER_PORT,
-    );
+    let port = resolve_port_from_env("CORTEX_EMBEDDER_HEALTH_PORT", DEFAULT_EMBEDDER_PORT);
     let metrics_for_health = worker.metrics.clone();
     let started_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
     // Phase8c — capture version block once; closure clones the JSON
     // each probe (cheap; stamps git_sha / build_ts / dirty).
-    let version_block = serde_json::to_value(cortex_build::version_info!())
-        .unwrap_or(serde_json::Value::Null);
+    let version_block =
+        serde_json::to_value(cortex_build::version_info!()).unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         let mut extras = serde_json::Map::new();
         extras.insert("version".into(), version_block.clone());
@@ -133,10 +119,7 @@ async fn main() -> Result<()> {
             serde_json::json!(metrics_for_health.jobs_processed_total()),
         );
         let last_job_ts_ms = metrics_for_health.last_job_ts_ms();
-        extras.insert(
-            "last_job_ts_ms".into(),
-            serde_json::json!(last_job_ts_ms),
-        );
+        extras.insert("last_job_ts_ms".into(), serde_json::json!(last_job_ts_ms));
         let activity_ts = if last_job_ts_ms > 0 {
             last_job_ts_ms
         } else {

@@ -645,6 +645,7 @@ dependencies = [
  "clap",
  "cortex-api",
  "cortex-build",
+ "cortex-consolidator",
  "cortex-core",
  "cortex-retention",
  "cortex-storage",

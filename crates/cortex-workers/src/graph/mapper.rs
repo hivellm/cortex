@@ -98,10 +98,7 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
     // browser. Sessions are normally 26-char ULIDs so the first 12
     // chars uniquely identify a session in practice.
     let session_short = session_id.chars().take(12).collect::<String>();
-    stamp_display_label(
-        &mut session_props,
-        &format!("Session {session_short}"),
-    );
+    stamp_display_label(&mut session_props, &format!("Session {session_short}"));
     patch.nodes.push(NodeOp {
         label: "Session".to_string(),
         natural_key: session_id.clone(),
@@ -129,6 +126,11 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
         // mapping here.
         Kind::Knowledge => emit_memory(event, &session_id, &mut patch),
         Kind::Learning => emit_memory(event, &session_id, &mut patch),
+        // Phase11j — Consolidations ride the memory mapping path
+        // (Session OWNS Consolidation), same as knowledge /
+        // learnings. The dedicated `:Consolidation` label below
+        // gives the dashboard a colour-coded slot.
+        Kind::Consolidation => emit_memory(event, &session_id, &mut patch),
     }
 
     // Sonnet-extracted entity/relation layer. Independent from the
@@ -165,10 +167,7 @@ fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
         by_id.insert(ent.identifier.as_str(), ent);
         let label = entity_type_to_label(&ent.entity_type);
         let mut props = BTreeMap::new();
-        props.insert(
-            "id".to_string(),
-            Value::String(ent.identifier.clone()),
-        );
+        props.insert("id".to_string(), Value::String(ent.identifier.clone()));
         // Display caption for the Nexus / Cytoscape viewer. Prefer
         // the Sonnet-supplied human label (e.g. a decision title)
         // when present; fall back to the identifier itself, which
@@ -294,6 +293,7 @@ fn anchor_label_for_kind(kind: Kind) -> &'static str {
         Kind::Artifact => "Artifact",
         Kind::Knowledge => "Knowledge",
         Kind::Learning => "Learning",
+        Kind::Consolidation => "Consolidation",
     }
 }
 
@@ -303,20 +303,22 @@ fn anchor_label_for_kind(kind: Kind) -> &'static str {
 fn normalise_relation_label(raw: &str) -> Option<String> {
     let upper = raw.trim().to_ascii_uppercase().replace([' ', '-'], "_");
     match upper.as_str() {
-        "REFERENCES" | "IMPLEMENTS" | "FIXES" | "DISCUSSES" | "DEFINES"
-        | "DEPENDS_ON" | "SUPERSEDES" | "OBSERVED_IN" | "TOUCHED" => Some(upper),
+        "REFERENCES" | "IMPLEMENTS" | "FIXES" | "DISCUSSES" | "DEFINES" | "DEPENDS_ON"
+        | "SUPERSEDES" | "OBSERVED_IN" | "TOUCHED" => Some(upper),
         _ => None,
     }
 }
 
 fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
     let turn_id = event.event_id.clone();
-    let payload: Option<TurnPayload> =
-        serde_json::from_value(event.redacted_payload.clone()).ok();
+    let payload: Option<TurnPayload> = serde_json::from_value(event.redacted_payload.clone()).ok();
 
     let mut props = BTreeMap::new();
     props.insert("id".to_string(), Value::String(turn_id.clone()));
-    props.insert("session_id".to_string(), Value::String(session_id.to_string()));
+    props.insert(
+        "session_id".to_string(),
+        Value::String(session_id.to_string()),
+    );
     props.insert(
         "content_hash".to_string(),
         Value::String(event.content_hash.clone()),
@@ -398,21 +400,26 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
     // Nexus instead of a bare ULID.
     let display = match (event.kind, payload.as_ref()) {
         (Kind::AgentCall, _) => agent_call_display(event),
-        (_, Some(p)) => format!("{} {}", p.tool_name, tool_call_target(p)).trim().to_string(),
-        (_, None) => format!("ToolCall {}", tool_call_id.chars().take(12).collect::<String>()),
+        (_, Some(p)) => format!("{} {}", p.tool_name, tool_call_target(p))
+            .trim()
+            .to_string(),
+        (_, None) => format!(
+            "ToolCall {}",
+            tool_call_id.chars().take(12).collect::<String>()
+        ),
     };
     let display = if display.is_empty() {
-        format!("ToolCall {}", tool_call_id.chars().take(12).collect::<String>())
+        format!(
+            "ToolCall {}",
+            tool_call_id.chars().take(12).collect::<String>()
+        )
     } else {
         display
     };
     stamp_display_label(&mut props, &clip_display(&display, 96));
 
     if let Some(p) = payload.as_ref() {
-        props.insert(
-            "tool_name".to_string(),
-            Value::String(p.tool_name.clone()),
-        );
+        props.insert("tool_name".to_string(), Value::String(p.tool_name.clone()));
         props.insert("outcome".to_string(), Value::String(p.outcome.clone()));
         if let Some(d) = p.duration_ms {
             props.insert("duration_ms".to_string(), Value::from(d));
@@ -467,10 +474,8 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
 
     // Fold context.repo + context.path into an Artifact + IN_REPO when
     // the envelope carries them.
-    if let (Some(repo), Some(path)) = (
-        event.context_repo.as_deref(),
-        event.context_path.as_deref(),
-    ) {
+    if let (Some(repo), Some(path)) = (event.context_repo.as_deref(), event.context_path.as_deref())
+    {
         emit_artifact_node(repo, path, &event.content_hash, patch);
     }
 
@@ -500,10 +505,7 @@ fn emit_touched_edge(
     emit_artifact_node(repo, &touched.path, content_hash, patch);
     let artifact_key = artifact_natural_key(repo, &touched.path, content_hash);
     let mut edge_props = BTreeMap::new();
-    edge_props.insert(
-        "operation".to_string(),
-        Value::String(touched.kind.clone()),
-    );
+    edge_props.insert("operation".to_string(), Value::String(touched.kind.clone()));
     patch.edges.push(EdgeOp {
         edge_type: "TOUCHED".to_string(),
         from_label: "ToolCall".to_string(),
@@ -515,10 +517,8 @@ fn emit_touched_edge(
 }
 
 fn emit_artifact(event: &EnrichedEvent, patch: &mut GraphPatch) {
-    if let (Some(repo), Some(path)) = (
-        event.context_repo.as_deref(),
-        event.context_path.as_deref(),
-    ) {
+    if let (Some(repo), Some(path)) = (event.context_repo.as_deref(), event.context_path.as_deref())
+    {
         emit_artifact_node(repo, path, &event.content_hash, patch);
         // Phase4c §2 — surface code symbols as first-class graph
         // nodes when the artifact is a recognised source file. The
@@ -537,12 +537,7 @@ fn emit_artifact(event: &EnrichedEvent, patch: &mut GraphPatch) {
 /// symbol — phase4c §2.2 forbids logging an error in those cases
 /// because most artifact events legitimately have no code symbols
 /// to extract.
-fn emit_symbol_patches(
-    event: &EnrichedEvent,
-    repo: &str,
-    path: &str,
-    patch: &mut GraphPatch,
-) {
+fn emit_symbol_patches(event: &EnrichedEvent, repo: &str, path: &str, patch: &mut GraphPatch) {
     let chunker = CodeChunker::new();
     let chunks = match chunker.chunk(event) {
         Ok(c) => c,
@@ -675,7 +670,10 @@ fn emit_memory(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) 
     stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = payload.as_ref() {
         props.insert("title".to_string(), Value::String(p.name.clone()));
-        props.insert("memory_type".to_string(), Value::String(p.memory_type.clone()));
+        props.insert(
+            "memory_type".to_string(),
+            Value::String(p.memory_type.clone()),
+        );
         props.insert("op".to_string(), Value::String(p.op.clone()));
     }
     patch.nodes.push(NodeOp {
@@ -826,7 +824,10 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
             props.insert("status".to_string(), Value::String(p.status.clone()));
         }
         if let Some(decision) = p.decision_id.as_deref() {
-            props.insert("decision_id".to_string(), Value::String(decision.to_string()));
+            props.insert(
+                "decision_id".to_string(),
+                Value::String(decision.to_string()),
+            );
         }
         if !p.panel.is_empty() {
             props.insert(
@@ -839,10 +840,14 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
     // — canonical wins when both are populated (defensive against an
     // event that happens to carry both shapes).
     if let Some(t) = imported_title.as_deref() {
-        props.entry("title".to_string()).or_insert_with(|| Value::String(t.to_string()));
+        props
+            .entry("title".to_string())
+            .or_insert_with(|| Value::String(t.to_string()));
     }
     if let Some(s) = imported_status.as_deref() {
-        props.entry("status".to_string()).or_insert_with(|| Value::String(s.to_string()));
+        props
+            .entry("status".to_string())
+            .or_insert_with(|| Value::String(s.to_string()));
     }
     if let Some(p) = imported_source_path.as_deref() {
         props.insert("source_path".to_string(), Value::String(p.to_string()));
@@ -908,10 +913,7 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
     stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = payload.as_ref() {
         props.insert("law_id".to_string(), Value::String(p.law_id.clone()));
-        props.insert(
-            "severity".to_string(),
-            Value::String(p.severity.clone()),
-        );
+        props.insert("severity".to_string(), Value::String(p.severity.clone()));
         props.insert("message".to_string(), Value::String(p.message.clone()));
         if let Some(tier) = p.tier {
             props.insert("tier".to_string(), Value::from(tier));
@@ -1016,7 +1018,9 @@ fn agent_call_display(event: &EnrichedEvent) -> String {
     let payload: Option<AgentCallPayload> =
         serde_json::from_value(event.redacted_payload.clone()).ok();
     match payload {
-        Some(p) if !p.description.is_empty() => format!("Task: {} · {}", p.agent_type, p.description),
+        Some(p) if !p.description.is_empty() => {
+            format!("Task: {} · {}", p.agent_type, p.description)
+        }
         Some(p) => format!("Task: {}", p.agent_type),
         None => format!(
             "AgentCall {}",

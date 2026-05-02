@@ -73,10 +73,7 @@ struct FakeFetcher {
 
 #[async_trait::async_trait]
 impl SnippetFetcher for FakeFetcher {
-    async fn fetch(
-        &self,
-        query: &LabeledQuery,
-    ) -> anyhow::Result<QueryResponse> {
+    async fn fetch(&self, query: &LabeledQuery) -> anyhow::Result<QueryResponse> {
         self.per_query
             .get(&query.id)
             .cloned()
@@ -202,10 +199,7 @@ async fn omits_intents_when_scope_repo_not_in_indexed_snapshot() {
     struct OtherRepoFetcher;
     #[async_trait::async_trait]
     impl SnippetFetcher for OtherRepoFetcher {
-        async fn fetch(
-            &self,
-            _q: &LabeledQuery,
-        ) -> anyhow::Result<QueryResponse> {
+        async fn fetch(&self, _q: &LabeledQuery) -> anyhow::Result<QueryResponse> {
             unreachable!("must be omitted before fetch");
         }
         async fn status_snapshot(&self) -> StatusSnapshot {
@@ -219,12 +213,7 @@ async fn omits_intents_when_scope_repo_not_in_indexed_snapshot() {
 
     let set = QuerySet {
         version: 1,
-        queries: vec![lq(
-            "rel-001",
-            Intent::Explain,
-            "anything",
-            &["whatever"],
-        )],
+        queries: vec![lq("rel-001", Intent::Explain, "anything", &["whatever"])],
     };
     let report = run_harness(
         &OtherRepoFetcher,
@@ -243,10 +232,7 @@ async fn unreachable_status_records_full_omission() {
     struct DownFetcher;
     #[async_trait::async_trait]
     impl SnippetFetcher for DownFetcher {
-        async fn fetch(
-            &self,
-            _q: &LabeledQuery,
-        ) -> anyhow::Result<QueryResponse> {
+        async fn fetch(&self, _q: &LabeledQuery) -> anyhow::Result<QueryResponse> {
             unreachable!("must be omitted before fetch");
         }
         async fn status_snapshot(&self) -> StatusSnapshot {
@@ -260,14 +246,9 @@ async fn unreachable_status_records_full_omission() {
         version: 1,
         queries: vec![lq("rel-001", Intent::Explain, "x", &["y"])],
     };
-    let report = run_harness(
-        &DownFetcher,
-        &set,
-        &HarnessOptions::default(),
-        "fixed-sha",
-    )
-    .await
-    .unwrap();
+    let report = run_harness(&DownFetcher, &set, &HarnessOptions::default(), "fixed-sha")
+        .await
+        .unwrap();
     assert!(report.omitted_intents.contains(&"explain".to_string()));
     assert!(report.queries.is_empty());
     assert_eq!(report.global.total, 0);

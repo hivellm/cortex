@@ -51,9 +51,10 @@ mod tests {
         // filterable set. Phase11b's v2 introduced `path_prefixes`.
         assert_eq!(v["version"], "v3");
         assert!(v["searchableAttributes"].as_array().unwrap().len() >= 4);
-        assert!(v["sortableAttributes"].as_array().unwrap().contains(
-            &Value::String("ts".to_string())
-        ));
+        assert!(v["sortableAttributes"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("ts".to_string())));
     }
 
     #[test]

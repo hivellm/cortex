@@ -108,9 +108,9 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("crates/cortex-graph/cypher"));
     let templates = load_from_dir(&cypher_dir)
         .with_context(|| format!("load cypher templates from {:?}", cypher_dir))?;
-    templates.ensure_required(REQUIRED_TEMPLATES).with_context(|| {
-        format!("required cypher templates missing under {:?}", cypher_dir)
-    })?;
+    templates
+        .ensure_required(REQUIRED_TEMPLATES)
+        .with_context(|| format!("required cypher templates missing under {:?}", cypher_dir))?;
     let templates = Arc::new(templates);
 
     let client = Arc::new(
@@ -120,14 +120,8 @@ async fn main() -> Result<()> {
     // Smoke-probe before consuming the archive so a bad Nexus state
     // (auth, transport mismatch, dropped connection) surfaces in one
     // line instead of after a 30-minute scan.
-    match client
-        .execute_with_retry("RETURN 1 AS smoke", None)
-        .await
-    {
-        Ok(r) => tracing::info!(
-            rows = r.rows.len(),
-            "nexus smoke probe ok"
-        ),
+    match client.execute_with_retry("RETURN 1 AS smoke", None).await {
+        Ok(r) => tracing::info!(rows = r.rows.len(), "nexus smoke probe ok"),
         Err(e) => {
             return Err(anyhow::anyhow!(
                 "nexus smoke probe failed (writer cannot proceed): {e}"
@@ -215,7 +209,10 @@ async fn main() -> Result<()> {
         }
     }
     if trimmed > 0 {
-        tracing::info!(trimmed, "redacted_payload trimmed to fit Cypher size budget");
+        tracing::info!(
+            trimmed,
+            "redacted_payload trimmed to fit Cypher size budget"
+        );
     }
 
     tracing::info!(
@@ -233,16 +230,33 @@ async fn main() -> Result<()> {
             println!("event_id: {}", ev.event_id);
             println!("kind: {:?}", ev.kind);
             println!("session_id: {:?}", ev.session_id);
-            println!("payload bytes: {}", serde_json::to_string(&ev.redacted_payload).map(|s| s.len()).unwrap_or(0));
-            println!("=== patch: {} nodes, {} edges ===", patch.nodes.len(), patch.edges.len());
+            println!(
+                "payload bytes: {}",
+                serde_json::to_string(&ev.redacted_payload)
+                    .map(|s| s.len())
+                    .unwrap_or(0)
+            );
+            println!(
+                "=== patch: {} nodes, {} edges ===",
+                patch.nodes.len(),
+                patch.edges.len()
+            );
             for (i, n) in patch.nodes.iter().enumerate() {
-                println!("  node[{i}] label={} key_len={} props={}", n.label, n.natural_key.len(), n.props.len());
+                println!(
+                    "  node[{i}] label={} key_len={} props={}",
+                    n.label,
+                    n.natural_key.len(),
+                    n.props.len()
+                );
                 let cy = render_node_merge_for_print(n);
                 println!("    cypher_len={} bytes", cy.len());
                 println!("    cypher: {cy}");
             }
             for (i, e) in patch.edges.iter().enumerate() {
-                println!("  edge[{i}] {} {}->{}", e.edge_type, e.from_label, e.to_label);
+                println!(
+                    "  edge[{i}] {} {}->{}",
+                    e.edge_type, e.from_label, e.to_label
+                );
             }
             println!("=== sending each node statement individually ===");
             for (i, n) in patch.nodes.iter().enumerate() {
@@ -251,7 +265,10 @@ async fn main() -> Result<()> {
                     Ok(r) => println!("  node[{i}] OK rows={}", r.rows.len()),
                     Err(e) => {
                         println!("  node[{i}] ERR {e}");
-                        println!("    cypher head: {}", &cy.chars().take(400).collect::<String>());
+                        println!(
+                            "    cypher head: {}",
+                            &cy.chars().take(400).collect::<String>()
+                        );
                     }
                 }
             }
@@ -337,6 +354,7 @@ fn kind_label(k: cortex_core::events::Kind) -> &'static str {
         Kind::Artifact => "artifact",
         Kind::Knowledge => "knowledge",
         Kind::Learning => "learning",
+        Kind::Consolidation => "consolidation",
     }
 }
 

@@ -138,11 +138,7 @@ impl MemoryQueryProbe {
 #[async_trait]
 impl QueryProbe for MemoryQueryProbe {
     async fn search(&self, query: &str, k: usize) -> Vec<String> {
-        let mut out = self
-            .fixtures
-            .get(query)
-            .cloned()
-            .unwrap_or_default();
+        let mut out = self.fixtures.get(query).cloned().unwrap_or_default();
         out.truncate(k);
         out
     }
@@ -278,10 +274,8 @@ mod tests {
 
     #[test]
     fn jaccard_empty_pair_is_one_by_convention() {
-        let obs: JaccardObservation = JaccardObservation::compute(
-            std::iter::empty::<String>(),
-            std::iter::empty::<String>(),
-        );
+        let obs: JaccardObservation =
+            JaccardObservation::compute(std::iter::empty::<String>(), std::iter::empty::<String>());
         assert_eq!(obs.union, 0);
         assert!((obs.jaccard - 1.0).abs() < 1e-9);
     }
@@ -300,7 +294,10 @@ mod tests {
         let mut probe = MemoryQueryProbe::new();
         probe.seed(
             "auth",
-            ["a/1", "a/2", "a/3", "a/4"].iter().map(|s| s.to_string()).collect(),
+            ["a/1", "a/2", "a/3", "a/4"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         );
         let out = probe.search("auth", 2).await;
         assert_eq!(out, vec!["a/1".to_string(), "a/2".to_string()]);
@@ -318,15 +315,7 @@ mod tests {
         meili_p.seed(q, vec!["A".into(), "B".into(), "C".into()]);
         nexus_p.seed(q, vec!["X".into(), "Y".into(), "Z".into()]);
 
-        let reports = run_query_probes(
-            &[q.to_string()],
-            5,
-            &meili_p,
-            &vec_p,
-            &nexus_p,
-            0.2,
-        )
-        .await;
+        let reports = run_query_probes(&[q.to_string()], 5, &meili_p, &vec_p, &nexus_p, 0.2).await;
         assert_eq!(reports.len(), 1);
         let r = &reports[0];
         assert!((r.vec_meili.jaccard - 1.0).abs() < 1e-9);
@@ -352,15 +341,7 @@ mod tests {
         vec_p.seed(q, vec!["A".into(), "B".into()]);
         meili_p.seed(q, vec!["A".into(), "B".into()]);
 
-        let reports = run_query_probes(
-            &[q.to_string()],
-            5,
-            &meili_p,
-            &vec_p,
-            &nexus_p,
-            0.2,
-        )
-        .await;
+        let reports = run_query_probes(&[q.to_string()], 5, &meili_p, &vec_p, &nexus_p, 0.2).await;
         assert!(!reports[0].below_threshold);
     }
 

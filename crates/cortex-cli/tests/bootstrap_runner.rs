@@ -80,7 +80,10 @@ async fn estimate_mode_walks_without_writes() {
     let repo = make_fixture_repo();
     let cfg = fixture_config();
     let est = estimate_repo(repo.path(), "Fixture", &cfg);
-    assert!(est.files_kept >= 4, "fixture must keep code+doc+adr+law+memory");
+    assert!(
+        est.files_kept >= 4,
+        "fixture must keep code+doc+adr+law+memory"
+    );
     assert!(est.events_total > 0);
     assert_eq!(est.commits, 0, "fixture has no .git");
 }
@@ -179,7 +182,10 @@ async fn idempotent_replay_reuses_checkpoint_resume() {
     .await
     .unwrap();
 
-    assert!(publisher2.count() <= 1, "resume past last_file emits at most stragglers");
+    assert!(
+        publisher2.count() <= 1,
+        "resume past last_file emits at most stragglers"
+    );
     let _ = after_first;
 }
 
@@ -222,9 +228,7 @@ async fn redaction_strips_synthetic_secret_from_env() {
         .iter()
         .find(|e| e.source["path"] == Value::String(".env".to_string()))
         .expect("memory.imported for .env");
-    let body = env_doc.redacted_payload["body"]
-        .as_str()
-        .expect("body str");
+    let body = env_doc.redacted_payload["body"].as_str().expect("body str");
     assert!(
         !body.contains("AKIAIOSFODNN7EXAMPLEAAAAA"),
         "synthetic AWS key must be redacted: {body}"
@@ -363,7 +367,10 @@ async fn drops_oversize_files_and_records_drop_reason() {
     assert!(
         entries.iter().any(|e| matches!(
             e,
-            cortex_cli::bootstrap::WalkEntry::Dropped { reason: "oversize", .. }
+            cortex_cli::bootstrap::WalkEntry::Dropped {
+                reason: "oversize",
+                ..
+            }
         )),
         "oversize file must surface as Dropped{{reason=oversize}}"
     );
@@ -418,7 +425,8 @@ async fn walker_emits_knowledge_and_learning_envelopes_from_rulebook() {
     fs::create_dir_all(repo.path().join(".rulebook/knowledge/anti-patterns")).unwrap();
     fs::create_dir_all(repo.path().join(".rulebook/learnings")).unwrap();
     fs::write(
-        repo.path().join(".rulebook/knowledge/patterns/use-rrf-fusion.md"),
+        repo.path()
+            .join(".rulebook/knowledge/patterns/use-rrf-fusion.md"),
         "# Use RRF fusion\n\nReciprocal-rank fusion stabilises lane blends.\n",
     )
     .unwrap();
@@ -429,7 +437,8 @@ async fn walker_emits_knowledge_and_learning_envelopes_from_rulebook() {
     )
     .unwrap();
     fs::write(
-        repo.path().join(".rulebook/learnings/2026-04-30-phase10c.md"),
+        repo.path()
+            .join(".rulebook/learnings/2026-04-30-phase10c.md"),
         "# phase10c learning\n\nFile-level body hash is the right dedup key.\n",
     )
     .unwrap();
@@ -487,7 +496,12 @@ async fn walker_emits_knowledge_and_learning_envelopes_from_rulebook() {
     let pattern_body = knowledge_envs
         .iter()
         .find(|e| e.redacted_payload["category"] == "pattern")
-        .map(|e| e.redacted_payload["body"].as_str().unwrap_or("").to_string())
+        .map(|e| {
+            e.redacted_payload["body"]
+                .as_str()
+                .unwrap_or("")
+                .to_string()
+        })
         .unwrap_or_default();
     assert!(
         pattern_body.contains("Reciprocal-rank fusion"),
@@ -537,7 +551,10 @@ async fn walker_emits_repo_in_canonical_lowercase() {
     .await
     .unwrap();
     let envelopes = publisher.snapshot();
-    assert!(!envelopes.is_empty(), "publisher must receive at least one event");
+    assert!(
+        !envelopes.is_empty(),
+        "publisher must receive at least one event"
+    );
     for (_stream, env) in &envelopes {
         let repo_field = env.source["repo"].as_str().unwrap_or("");
         assert_eq!(
@@ -585,7 +602,10 @@ async fn rerun_with_no_changes_publishes_zero_new_events() {
     .await
     .unwrap();
     assert!(report1.events_published >= 4);
-    assert_eq!(report1.files_suppressed, 0, "first run has nothing to suppress");
+    assert_eq!(
+        report1.files_suppressed, 0,
+        "first run has nothing to suppress"
+    );
     let ledger_rows = dedup
         .lock()
         .unwrap()
@@ -693,7 +713,10 @@ async fn rerun_after_editing_one_file_publishes_only_that_file() {
         report2.events_published, 1,
         "exactly one event published — the one edited file"
     );
-    assert!(report2.files_suppressed >= 4, "every other file is suppressed");
+    assert!(
+        report2.files_suppressed >= 4,
+        "every other file is suppressed"
+    );
     let code_events = publisher2.by_kind("artifact.code");
     assert_eq!(code_events.len(), 1);
     assert_eq!(code_events[0].source["path"], "src/lib.rs");

@@ -29,8 +29,8 @@ pub fn spawn_health_listener(
 ) {
     let started_at = chrono::Utc::now().to_rfc3339();
     tokio::spawn(async move {
-        if let Err(e) = serve_standalone(port, subsystem_name, crate_version, started_at, provider)
-            .await
+        if let Err(e) =
+            serve_standalone(port, subsystem_name, crate_version, started_at, provider).await
         {
             tracing::warn!(
                 subsystem = subsystem_name,
@@ -138,9 +138,7 @@ pub mod rules {
                 Some("no activity recorded yet (warming up)".into()),
             );
         }
-        if now_ms.saturating_sub(last_activity_ms)
-            > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000
-        {
+        if now_ms.saturating_sub(last_activity_ms) > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000 {
             return (
                 HealthState::Degraded,
                 Some(format!(
@@ -160,27 +158,39 @@ mod tests {
     #[test]
     fn resolve_port_falls_back_when_env_missing() {
         std::env::remove_var("CORTEX_TEST_HEALTH_PORT_AAA");
-        assert_eq!(resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_AAA", 17099), 17099);
+        assert_eq!(
+            resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_AAA", 17099),
+            17099
+        );
     }
 
     #[test]
     fn resolve_port_honours_valid_env_override() {
         std::env::set_var("CORTEX_TEST_HEALTH_PORT_BBB", "17777");
-        assert_eq!(resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_BBB", 17000), 17777);
+        assert_eq!(
+            resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_BBB", 17000),
+            17777
+        );
         std::env::remove_var("CORTEX_TEST_HEALTH_PORT_BBB");
     }
 
     #[test]
     fn resolve_port_falls_back_on_garbage() {
         std::env::set_var("CORTEX_TEST_HEALTH_PORT_CCC", "abc");
-        assert_eq!(resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_CCC", 17000), 17000);
+        assert_eq!(
+            resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_CCC", 17000),
+            17000
+        );
         std::env::remove_var("CORTEX_TEST_HEALTH_PORT_CCC");
     }
 
     #[test]
     fn resolve_port_falls_back_on_zero() {
         std::env::set_var("CORTEX_TEST_HEALTH_PORT_DDD", "0");
-        assert_eq!(resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_DDD", 17000), 17000);
+        assert_eq!(
+            resolve_port_from_env("CORTEX_TEST_HEALTH_PORT_DDD", 17000),
+            17000
+        );
         std::env::remove_var("CORTEX_TEST_HEALTH_PORT_DDD");
     }
 

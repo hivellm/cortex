@@ -230,11 +230,7 @@ fn split_sections(text: &str) -> Vec<RawSection> {
             }
         }
 
-        let heading = if !in_fence {
-            parse_heading(line)
-        } else {
-            None
-        };
+        let heading = if !in_fence { parse_heading(line) } else { None };
 
         if let Some(h) = heading {
             if !cur_text.is_empty() || !cur_path.is_empty() {
@@ -285,7 +281,10 @@ fn split_sections(text: &str) -> Vec<RawSection> {
 }
 
 fn memchr_newline(bytes: &[u8], from: usize) -> Option<usize> {
-    bytes[from..].iter().position(|b| *b == b'\n').map(|p| p + from)
+    bytes[from..]
+        .iter()
+        .position(|b| *b == b'\n')
+        .map(|p| p + from)
 }
 
 /// Recognise `#`, `##`, `###` at the start of a line (after optional leading
@@ -461,4 +460,3 @@ fn section_symbol(path: &[Heading]) -> Option<String> {
     }
     Some(parts.join(" > "))
 }
-

@@ -145,19 +145,14 @@ impl RegressionVerdict {
         baseline: &RelevanceReport,
         threshold_pp: f64,
     ) -> Self {
-        let recall_delta_pp =
-            current.global.recall_at_10_pct - baseline.global.recall_at_10_pct;
+        let recall_delta_pp = current.global.recall_at_10_pct - baseline.global.recall_at_10_pct;
         let mrr_delta = current.global.mrr_avg - baseline.global.mrr_avg;
 
         let mut per_intent_recall_delta_pp = BTreeMap::new();
         let mut per_intent_mrr_delta = BTreeMap::new();
         let mut soft_regressions = Vec::new();
         for (intent, base_scores) in &baseline.per_intent {
-            let cur = current
-                .per_intent
-                .get(intent)
-                .cloned()
-                .unwrap_or_default();
+            let cur = current.per_intent.get(intent).cloned().unwrap_or_default();
             let r = cur.recall_at_10_pct - base_scores.recall_at_10_pct;
             let m = cur.mrr_avg - base_scores.mrr_avg;
             per_intent_recall_delta_pp.insert(intent.clone(), r);
@@ -392,21 +387,19 @@ mod tests {
     fn load_round_trips_through_disk() {
         let dir = tempfile::tempdir().unwrap();
         let mut report = synthesize_report(IntentScores::default(), vec![qr("a", true, Some(2))]);
-        report
-            .per_intent
-            .insert("explain".into(), IntentScores {
+        report.per_intent.insert(
+            "explain".into(),
+            IntentScores {
                 total: 1,
                 matches: 1,
                 recall_at_10_pct: 100.0,
                 mrr_avg: 0.5,
-            });
+            },
+        );
         let path = report.write_pretty(dir.path(), "round-trip").unwrap();
         let parsed = RelevanceReport::load(&path).expect("load");
         assert_eq!(parsed.queries.len(), 1);
-        assert_eq!(
-            parsed.per_intent.get("explain").map(|s| s.matches),
-            Some(1)
-        );
+        assert_eq!(parsed.per_intent.get("explain").map(|s| s.matches), Some(1));
     }
 
     #[test]
@@ -444,7 +437,13 @@ mod tests {
         // explain bucket dropped 30pp on recall — soft regression.
         assert!(v.soft_regressions.contains(&"explain".to_string()));
         assert!(
-            (v.per_intent_recall_delta_pp.get("explain").copied().unwrap() - -30.0).abs() < 1e-9
+            (v.per_intent_recall_delta_pp
+                .get("explain")
+                .copied()
+                .unwrap()
+                - -30.0)
+                .abs()
+                < 1e-9
         );
     }
 

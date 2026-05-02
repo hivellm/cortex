@@ -87,9 +87,7 @@ pub fn kind_passes_filter(filter_tokens: &[String], kind: &str) -> bool {
     if filter_tokens.is_empty() {
         return true;
     }
-    filter_tokens
-        .iter()
-        .any(|t| kind_token_matches(t, kind))
+    filter_tokens.iter().any(|t| kind_token_matches(t, kind))
 }
 
 /// Build a single envelope from a set of inputs already prepared by
@@ -142,7 +140,13 @@ pub fn emit_artifact_code(
         "text": body,
         "language": language,
     });
-    Some(finalise("artifact.code", session_id, source, payload, stream))
+    Some(finalise(
+        "artifact.code",
+        session_id,
+        source,
+        payload,
+        stream,
+    ))
 }
 
 /// Build the `artifact.doc` event for one accepted documentation file.
@@ -167,7 +171,13 @@ pub fn emit_artifact_doc(
         "text": body,
         "title": derive_doc_title(body, rel_path),
     });
-    Some(finalise("artifact.doc", session_id, source, payload, stream))
+    Some(finalise(
+        "artifact.doc",
+        session_id,
+        source,
+        payload,
+        stream,
+    ))
 }
 
 /// Build the `turn.historical` event for one git commit.
@@ -323,7 +333,9 @@ pub fn emit_spec_laws_imported(
 
     // No `## ` boundaries at all → fall back to single law per file.
     if sections.is_empty() {
-        return vec![emit_law_imported(repo_id, session_id, git_ref, rel_path, body, stream)];
+        return vec![emit_law_imported(
+            repo_id, session_id, git_ref, rel_path, body, stream,
+        )];
     }
 
     sections
@@ -354,8 +366,7 @@ pub fn emit_spec_laws_imported(
 /// single-law `emit_law_imported` path used by `.claude/rules/*.md`.
 fn is_spec_doc_path(rel_path: &str) -> bool {
     let normalised = rel_path.replace('\\', "/");
-    normalised.contains("/.rulebook/specs/")
-        || normalised.starts_with(".rulebook/specs/")
+    normalised.contains("/.rulebook/specs/") || normalised.starts_with(".rulebook/specs/")
 }
 
 /// Slugify a section title for use inside a synthesised law id.
@@ -784,9 +795,8 @@ fn front_matter_date_to_rfc3339(raw: &str) -> Option<String> {
 /// lists alike. Returns `None` when nothing matches.
 fn extract_analysis_slug(line: &str) -> Option<String> {
     for token in line.split(|c: char| c == ',' || c.is_whitespace()) {
-        let token = token.trim_matches(|c: char| {
-            c == '`' || c == '"' || c == '\'' || c == '(' || c == ')'
-        });
+        let token =
+            token.trim_matches(|c: char| c == '`' || c == '"' || c == '\'' || c == '(' || c == ')');
         if token.starts_with("docs/analysis/") {
             return Some(token.to_string());
         }
@@ -913,7 +923,10 @@ pub fn emit_for_file_multi(
     body: &str,
     stream: &str,
 ) -> Vec<BootstrapEvent> {
-    let WalkEntry::Accepted { rel_path, class, .. } = entry else {
+    let WalkEntry::Accepted {
+        rel_path, class, ..
+    } = entry
+    else {
         return Vec::new();
     };
     if body.trim().is_empty() {
@@ -1091,14 +1104,17 @@ mod tests {
             body: "More detail".into(),
             files_changed: vec!["src/parser.rs".into()],
         };
-        let evt =
-            emit_turn_historical("Vectorizer", "01TESTSESSION0000000000000", &commit, BOOTSTRAP_STREAM);
+        let evt = emit_turn_historical(
+            "Vectorizer",
+            "01TESTSESSION0000000000000",
+            &commit,
+            BOOTSTRAP_STREAM,
+        );
         assert_eq!(evt.kind, "turn.historical");
         assert_eq!(evt.ts, 1_710_000_000_000);
         assert_eq!(evt.source["author"], "a@b.c");
         assert_eq!(evt.source["git_ref"], "abcdef");
-        assert!(evt
-            .redacted_payload["message"]
+        assert!(evt.redacted_payload["message"]
             .as_str()
             .unwrap()
             .contains("fix: tighten parser"));
@@ -1235,10 +1251,7 @@ mod tests {
         assert_eq!(evt.kind, "law.imported");
         assert_eq!(evt.redacted_payload["law_id"], "LAW-007");
         assert_eq!(evt.redacted_payload["severity"], "critical");
-        assert_eq!(
-            evt.redacted_payload["detector"],
-            "hook:pre_commit_no_skip"
-        );
+        assert_eq!(evt.redacted_payload["detector"], "hook:pre_commit_no_skip");
     }
 
     #[test]
@@ -1310,7 +1323,10 @@ mod tests {
             evt.redacted_payload["source_path"],
             "docs/analysis/cortex/00-index.md"
         );
-        assert!(evt.redacted_payload["body"].as_str().unwrap().starts_with("# Cortex"));
+        assert!(evt.redacted_payload["body"]
+            .as_str()
+            .unwrap()
+            .starts_with("# Cortex"));
     }
 
     #[test]
@@ -1368,15 +1384,36 @@ mod tests {
     #[test]
     fn content_hash_is_deterministic_for_same_payload() {
         let body = "# Same\n\nSame body.";
-        let a = emit_decision_imported("R", "01TESTSESSION0000000000000", None, "a.md", body, BOOTSTRAP_STREAM);
-        let b = emit_decision_imported("R", "01TESTSESSION0000000000000", None, "a.md", body, BOOTSTRAP_STREAM);
+        let a = emit_decision_imported(
+            "R",
+            "01TESTSESSION0000000000000",
+            None,
+            "a.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
+        let b = emit_decision_imported(
+            "R",
+            "01TESTSESSION0000000000000",
+            None,
+            "a.md",
+            body,
+            BOOTSTRAP_STREAM,
+        );
         assert_eq!(a.content_hash, b.content_hash);
     }
 
     #[test]
     fn empty_body_returns_none_for_artifact_paths() {
         let e = entry("src/lib.rs", FileClass::Code, 0);
-        let evt = emit_for_file("R", "01TESTSESSION0000000000000", None, &e, "   \n  ", BOOTSTRAP_STREAM);
+        let evt = emit_for_file(
+            "R",
+            "01TESTSESSION0000000000000",
+            None,
+            &e,
+            "   \n  ",
+            BOOTSTRAP_STREAM,
+        );
         assert!(evt.is_none());
     }
 
@@ -1446,7 +1483,8 @@ mod tests {
             size_bytes: 200,
             class: FileClass::Law,
         };
-        let body = "# Git\n\n## Allowed\n\nstatus / diff / log.\n\n## Forbidden\n\nrebase / reset.\n";
+        let body =
+            "# Git\n\n## Allowed\n\nstatus / diff / log.\n\n## Forbidden\n\nrebase / reset.\n";
         let events = emit_for_file_multi(
             "Cortex",
             "01TESTSESSION0000000000000",
@@ -1490,7 +1528,10 @@ mod tests {
     #[test]
     fn slug_from_title_handles_punctuation_and_unicode() {
         assert_eq!(slug_from_title("Critical Rules"), "critical-rules");
-        assert_eq!(slug_from_title("PROHIBITION 1: No Shortcuts"), "prohibition-1-no-shortcuts");
+        assert_eq!(
+            slug_from_title("PROHIBITION 1: No Shortcuts"),
+            "prohibition-1-no-shortcuts"
+        );
         assert_eq!(slug_from_title("   "), "section");
         let long = "a".repeat(60);
         assert!(slug_from_title(&long).len() <= 32);

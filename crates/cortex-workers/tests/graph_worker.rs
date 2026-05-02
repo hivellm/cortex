@@ -44,12 +44,7 @@ fn classifier(event_id: &str) -> ClassifierOutput {
     }
 }
 
-fn enriched(
-    event_id: &str,
-    kind: Kind,
-    payload: Value,
-    parent: Option<&str>,
-) -> EnrichedEvent {
+fn enriched(event_id: &str, kind: Kind, payload: Value, parent: Option<&str>) -> EnrichedEvent {
     EnrichedEvent {
         event_id: event_id.to_string(),
         kind,
@@ -86,8 +81,10 @@ impl GraphWriter for CountingWriter {
         &self,
         events: &[EnrichedEvent],
     ) -> Result<GraphWriteReport, GraphClientError> {
-        let patches: Vec<GraphPatch> =
-            events.iter().map(cortex_workers::graph::map_event_to_patch).collect();
+        let patches: Vec<GraphPatch> = events
+            .iter()
+            .map(cortex_workers::graph::map_event_to_patch)
+            .collect();
         self.write_patches(patches).await
     }
 
@@ -160,7 +157,13 @@ impl GraphWriter for TransientWriter {
     }
 }
 
-fn build_worker(writer: Arc<dyn GraphWriter>) -> (Arc<Worker>, Arc<MemorySynapConsumer>, Arc<MemorySynapPublisher>) {
+fn build_worker(
+    writer: Arc<dyn GraphWriter>,
+) -> (
+    Arc<Worker>,
+    Arc<MemorySynapConsumer>,
+    Arc<MemorySynapPublisher>,
+) {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::new());
     let metrics = Arc::new(Metrics::new());
@@ -171,7 +174,13 @@ fn build_worker(writer: Arc<dyn GraphWriter>) -> (Arc<Worker>, Arc<MemorySynapCo
         out_of_order_buffer_secs: 1,
         ..GraphConfig::default()
     };
-    let worker = Arc::new(Worker::new(cfg, writer, consumer.clone(), publisher.clone(), metrics));
+    let worker = Arc::new(Worker::new(
+        cfg,
+        writer,
+        consumer.clone(),
+        publisher.clone(),
+        metrics,
+    ));
     (worker, consumer, publisher)
 }
 
@@ -209,7 +218,12 @@ async fn replay_skips_already_processed_event() {
     let writer: Arc<dyn GraphWriter> = Arc::new(CountingWriter::default());
     let (worker, consumer, publisher) = build_worker(writer.clone());
 
-    let turn = enriched("turn-replay", Kind::Turn, json!({ "user_message": "" }), None);
+    let turn = enriched(
+        "turn-replay",
+        Kind::Turn,
+        json!({ "user_message": "" }),
+        None,
+    );
     enqueue(&consumer, 0, &turn);
     enqueue(&consumer, 1, &turn);
 
@@ -254,12 +268,19 @@ async fn out_of_order_buffer_holds_tool_call_until_turn_arrives() {
         Some("turn-X"),
     );
     let ready = buffer.ingest(vec![tool_call.clone()]);
-    assert!(ready.events.is_empty(), "tool_call must be buffered until parent arrives");
+    assert!(
+        ready.events.is_empty(),
+        "tool_call must be buffered until parent arrives"
+    );
     assert_eq!(buffer.pending(), 1);
 
     let turn = enriched("turn-X", Kind::Turn, json!({ "user_message": "" }), None);
     let ready2 = buffer.ingest(vec![turn]);
-    assert_eq!(ready2.events.len(), 2, "turn flushes the buffered tool_call");
+    assert_eq!(
+        ready2.events.len(),
+        2,
+        "turn flushes the buffered tool_call"
+    );
     assert_eq!(buffer.pending(), 0);
 }
 
@@ -355,7 +376,12 @@ async fn transient_error_engages_backpressure_and_does_not_ack() {
     let writer: Arc<dyn GraphWriter> = Arc::new(TransientWriter);
     let (worker, consumer, publisher) = build_worker(writer);
 
-    let turn = enriched("turn-flaky", Kind::Turn, json!({ "user_message": "" }), None);
+    let turn = enriched(
+        "turn-flaky",
+        Kind::Turn,
+        json!({ "user_message": "" }),
+        None,
+    );
     enqueue(&consumer, 0, &turn);
 
     worker.run_once().await.expect("run_once");
@@ -375,7 +401,12 @@ async fn paused_backpressure_skips_consumption_entirely() {
     worker.backpressure().force_since(aged);
     assert!(worker.backpressure().is_paused());
 
-    let turn = enriched("turn-paused", Kind::Turn, json!({ "user_message": "" }), None);
+    let turn = enriched(
+        "turn-paused",
+        Kind::Turn,
+        json!({ "user_message": "" }),
+        None,
+    );
     enqueue(&consumer, 0, &turn);
 
     let processed = worker.run_once().await.expect("run_once");
@@ -391,10 +422,7 @@ async fn orphan_turn_patch_carries_orphan_flag() {
     assert_eq!(patch.nodes[0].label, "Turn");
     assert_eq!(patch.nodes[0].natural_key, "turn-Z");
     assert_eq!(
-        patch.nodes[0]
-            .props
-            .get("orphan")
-            .and_then(|v| v.as_bool()),
+        patch.nodes[0].props.get("orphan").and_then(|v| v.as_bool()),
         Some(true)
     );
 }
@@ -438,8 +466,10 @@ impl GraphWriter for FlakyWriter {
         &self,
         events: &[EnrichedEvent],
     ) -> Result<GraphWriteReport, GraphClientError> {
-        let patches: Vec<GraphPatch> =
-            events.iter().map(cortex_workers::graph::map_event_to_patch).collect();
+        let patches: Vec<GraphPatch> = events
+            .iter()
+            .map(cortex_workers::graph::map_event_to_patch)
+            .collect();
         self.write_patches(patches).await
     }
     async fn write_patches(
@@ -564,7 +594,10 @@ async fn coalescer_collapses_artifact_upserts_keeping_all_touched_edges() {
     // The coalescer correctness invariant the test asserts is therefore
     // weaker: dedup_hits stay zero (no spurious dedup) and edges
     // outnumber Artifacts.
-    assert!(touched_edges >= artifact_count, "TOUCHED edges per Artifact");
+    assert!(
+        touched_edges >= artifact_count,
+        "TOUCHED edges per Artifact"
+    );
     assert_eq!(stats.edge_dedup_hits, 0);
 }
 
@@ -616,8 +649,18 @@ async fn transient_error_then_success_clears_backpressure_gauge() {
     let writer: Arc<dyn GraphWriter> = Arc::new(FlakyWriter::new(1));
     let (worker, consumer, publisher) = build_worker(writer);
 
-    let turn1 = enriched("turn-flaky-1", Kind::Turn, json!({ "user_message": "" }), None);
-    let turn2 = enriched("turn-flaky-2", Kind::Turn, json!({ "user_message": "" }), None);
+    let turn1 = enriched(
+        "turn-flaky-1",
+        Kind::Turn,
+        json!({ "user_message": "" }),
+        None,
+    );
+    let turn2 = enriched(
+        "turn-flaky-2",
+        Kind::Turn,
+        json!({ "user_message": "" }),
+        None,
+    );
     enqueue(&consumer, 0, &turn1);
 
     // First run: transient → backpressure armed, no graphed envelope.
@@ -628,7 +671,10 @@ async fn transient_error_then_success_clears_backpressure_gauge() {
     // Second run with a different event: writer succeeds, gauge clears.
     enqueue(&consumer, 1, &turn2);
     worker.run_once().await.expect("run_once 2");
-    assert!(!worker.backpressure().is_active(), "success must clear gauge");
+    assert!(
+        !worker.backpressure().is_active(),
+        "success must clear gauge"
+    );
     let graphed = publisher.calls_on(STREAM_GRAPHED);
     assert_eq!(graphed.len(), 1, "one graphed envelope after recovery");
 }

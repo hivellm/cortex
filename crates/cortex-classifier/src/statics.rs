@@ -225,6 +225,16 @@ fn classify_one(kind: &Kind, payload: &Value) -> (Option<String>, Vec<String>, S
                 }
             }
         }
+        // Phase11j — Consolidations carry the `consolidations`
+        // canonical topic + the per-grain label so the dashboard
+        // can filter by grain. Severity stays at info (curated
+        // material, not a notable event).
+        Kind::Consolidation => {
+            topics.push("consolidations".into());
+            if let Some(grain) = payload.get("grain").and_then(|v| v.as_str()) {
+                topics.push(grain.to_string());
+            }
+        }
     }
 
     if flat.contains("[REDACTED:") {
@@ -287,4 +297,3 @@ mod tests {
         );
     }
 }
-

@@ -44,9 +44,9 @@ fn makefile_has_doctor_consistency_target_with_canonical_cargo_command() {
     );
     // The recipe must shell the canonical cargo command. Match
     // loose on whitespace so the test doesn't break on tab/space drift.
-    let recipe_ok = body
-        .lines()
-        .any(|l| l.contains("cargo run") && l.contains("cortex-ops") && l.contains("doctor-consistency"));
+    let recipe_ok = body.lines().any(|l| {
+        l.contains("cargo run") && l.contains("cortex-ops") && l.contains("doctor-consistency")
+    });
     assert!(
         recipe_ok,
         "doctor-consistency recipe must shell `cargo run -p cortex-ops -- doctor-consistency`",

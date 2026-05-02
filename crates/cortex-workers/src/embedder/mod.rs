@@ -29,11 +29,11 @@ pub use identity::dedup_key;
 pub use metrics::Metrics;
 pub use routing::collection_for;
 pub use vectorizer_client::{
-    with_retry, CollectionSchema, LiveVectorizerClient, MemoryCall, MemoryVectorizerClient,
-    Metric, UpsertReport, UpsertedChunk, VectorizerClient, VectorizerClientError,
+    with_retry, CollectionSchema, LiveVectorizerClient, MemoryCall, MemoryVectorizerClient, Metric,
+    UpsertReport, UpsertedChunk, VectorizerClient, VectorizerClientError,
 };
 pub use worker::{
-    BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher,
-    MemorySynapConsumer, MemorySynapPublisher, OffsetTracker, SynapConsumer, SynapHandle,
-    SynapPublisher, Worker, STREAM_EMBEDDED, STREAM_ENRICHED, STREAM_INVALID,
+    BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer,
+    MemorySynapPublisher, OffsetTracker, SynapConsumer, SynapHandle, SynapPublisher, Worker,
+    STREAM_EMBEDDED, STREAM_ENRICHED, STREAM_INVALID,
 };

@@ -42,9 +42,6 @@ fn canonical_fixture_parses_and_meets_coverage() {
         "explain",
     ] {
         let n = by_intent.get(required).copied().unwrap_or(0);
-        assert!(
-            n >= 10,
-            "intent {required} must have ≥10 queries; got {n}"
-        );
+        assert!(n >= 10, "intent {required} must have ≥10 queries; got {n}");
     }
 }

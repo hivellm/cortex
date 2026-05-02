@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::embedder::EnrichedEvent;
 use anyhow::Result;
 use async_trait::async_trait;
 use cortex_classifier::{
@@ -25,7 +26,6 @@ use cortex_classifier::{
     PricingTable, Severity,
 };
 use cortex_core::events::{Envelope, Kind};
-use crate::embedder::EnrichedEvent;
 use cortex_storage::{hour_bucket_rfc3339, MetadataStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -233,9 +233,7 @@ impl SynapPublisher for LiveSynapPublisher {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("not found") || msg.contains("Room") {
-                    if let Err(create_err) =
-                        self.handle.streams().create_room(room, None).await
-                    {
+                    if let Err(create_err) = self.handle.streams().create_room(room, None).await {
                         tracing::debug!(
                             room,
                             error = %create_err,

@@ -110,12 +110,10 @@ impl OffsetTracker {
         loop {
             let current = self.next.load(Ordering::Relaxed);
             let proposed = offset.saturating_add(1).max(current);
-            match self.next.compare_exchange(
-                current,
-                proposed,
-                Ordering::AcqRel,
-                Ordering::Relaxed,
-            ) {
+            match self
+                .next
+                .compare_exchange(current, proposed, Ordering::AcqRel, Ordering::Relaxed)
+            {
                 Ok(_) => break,
                 Err(_) => continue,
             }
@@ -203,8 +201,7 @@ impl SynapHandle {
     /// Connect to Synap at `base_url` and return a handle for stream I/O.
     pub fn new(base_url: &str) -> Result<Self> {
         let cfg = SynapConfig::new(base_url);
-        let client =
-            SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
+        let client = SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
         Ok(Self {
             streams: client.stream(),
         })
@@ -577,7 +574,11 @@ impl Worker {
         }
 
         // 3. Embed.
-        let report = match self.embedder.embed_batch(std::slice::from_ref(&event)).await {
+        let report = match self
+            .embedder
+            .embed_batch(std::slice::from_ref(&event))
+            .await
+        {
             Ok(r) => r,
             Err(err) => {
                 // Fatal embedder error (not a per-event issue).
@@ -695,4 +696,3 @@ enum LoopControl {
     /// Halt the current batch (rate-limit observed).
     Halt,
 }
-

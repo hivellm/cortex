@@ -224,7 +224,10 @@ fn yaml_document_chunks() {
 
 #[test]
 fn toml_document_chunks() {
-    let event = make_event("Cargo.toml", "[package]\nname = \"x\"\nversion = \"0.1.0\"\n");
+    let event = make_event(
+        "Cargo.toml",
+        "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+    );
     let _ = CodeChunker::new().chunk(&event).unwrap();
 }
 

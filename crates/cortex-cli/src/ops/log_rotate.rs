@@ -67,10 +67,7 @@ pub struct LogRotateOutcome {
 /// Inspect `path` and rotate when it exceeds `max_bytes` OR is older
 /// than `max_age_days`. No-op when the file is missing, empty, or
 /// fresh.
-pub fn rotate_if_needed(
-    path: &Path,
-    opts: &LogRotateOpts,
-) -> io::Result<LogRotateOutcome> {
+pub fn rotate_if_needed(path: &Path, opts: &LogRotateOpts) -> io::Result<LogRotateOutcome> {
     let mut outcome = LogRotateOutcome::default();
     let metadata = match fs::metadata(path) {
         Ok(m) => m,
@@ -118,18 +115,13 @@ pub fn rotate_if_needed(
 fn file_age_days(metadata: &fs::Metadata, now: DateTime<Utc>) -> io::Result<i64> {
     let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
     let now_sys: SystemTime = now.into();
-    let elapsed = now_sys
-        .duration_since(modified)
-        .unwrap_or(Duration::ZERO);
+    let elapsed = now_sys.duration_since(modified).unwrap_or(Duration::ZERO);
     Ok(i64::try_from(elapsed.as_secs() / 86_400).unwrap_or(i64::MAX))
 }
 
 fn produce_rotated_path(path: &Path, opts: &LogRotateOpts) -> PathBuf {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("log");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("log");
     let suffix = opts.now.format("%Y-%m-%d").to_string();
     let mut candidate = parent.join(format!("{stem}.{suffix}.gz"));
     // If a rotation for the same day already exists, append a
@@ -160,10 +152,7 @@ fn gzip_file_to(src: &Path, dst: &Path) -> io::Result<()> {
 
 fn prune_old_rotations(path: &Path, keep: usize) -> io::Result<Vec<PathBuf>> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("log");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("log");
     let prefix = format!("{stem}.");
     let mut rotations: Vec<(SystemTime, PathBuf)> = Vec::new();
     for entry in fs::read_dir(parent)? {

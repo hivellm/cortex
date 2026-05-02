@@ -68,7 +68,8 @@ impl CodeLanguage {
         match self {
             CodeLanguage::Rust => {
                 static CELL: OnceLock<Language> = OnceLock::new();
-                CELL.get_or_init(|| tree_sitter_rust::LANGUAGE.into()).clone()
+                CELL.get_or_init(|| tree_sitter_rust::LANGUAGE.into())
+                    .clone()
             }
             CodeLanguage::TypeScript => {
                 static CELL: OnceLock<Language> = OnceLock::new();
@@ -105,7 +106,8 @@ impl CodeLanguage {
             }
             CodeLanguage::Cpp => {
                 static CELL: OnceLock<Language> = OnceLock::new();
-                CELL.get_or_init(|| tree_sitter_cpp::LANGUAGE.into()).clone()
+                CELL.get_or_init(|| tree_sitter_cpp::LANGUAGE.into())
+                    .clone()
             }
             CodeLanguage::Json => {
                 static CELL: OnceLock<Language> = OnceLock::new();
@@ -241,7 +243,10 @@ impl Chunker for CodeChunker {
         };
         let root = tree.root_node();
         if root.has_error() && root.named_child_count() == 0 {
-            tracing::debug!(lang = lang.label(), "parse produced no usable root children");
+            tracing::debug!(
+                lang = lang.label(),
+                "parse produced no usable root children"
+            );
             return Ok(Vec::new());
         }
 
@@ -388,9 +393,7 @@ fn node_name_text(node: &Node<'_>, bytes: &[u8], lang: CodeLanguage) -> Option<S
         CodeLanguage::Go => {
             if node.kind() == "method_declaration" {
                 if let Some(name) = node.child_by_field_name("name") {
-                    if let Ok(s) =
-                        std::str::from_utf8(&bytes[name.start_byte()..name.end_byte()])
-                    {
+                    if let Ok(s) = std::str::from_utf8(&bytes[name.start_byte()..name.end_byte()]) {
                         return Some(s.trim().to_string());
                     }
                 }
@@ -451,4 +454,3 @@ fn find_first_identifier(node: &Node<'_>, bytes: &[u8]) -> Option<String> {
     }
     None
 }
-

@@ -45,7 +45,11 @@ fn event(event_id: &str, kind: Kind, payload: serde_json::Value) -> EnrichedEven
     }
 }
 
-fn build_indexer() -> (Arc<MemoryMeiliClient>, Arc<MeiliFulltextIndexer>, Arc<Metrics>) {
+fn build_indexer() -> (
+    Arc<MemoryMeiliClient>,
+    Arc<MeiliFulltextIndexer>,
+    Arc<Metrics>,
+) {
     let client = Arc::new(MemoryMeiliClient::new());
     let metrics = Arc::new(Metrics::new());
     let cfg = FulltextConfig {
@@ -99,8 +103,14 @@ async fn index_batch_groups_events_per_index() {
     assert_eq!(report.documents_upserted, 3);
     // Per-repo isolation: events with `context_repo = "Vectorizer"` route to
     // `cortex-vectorizer-{family}` instead of the legacy shared `cortex-{family}`.
-    assert_eq!(report.by_index.get("cortex-vectorizer-code").copied(), Some(2));
-    assert_eq!(report.by_index.get("cortex-vectorizer-decisions").copied(), Some(1));
+    assert_eq!(
+        report.by_index.get("cortex-vectorizer-code").copied(),
+        Some(2)
+    );
+    assert_eq!(
+        report.by_index.get("cortex-vectorizer-decisions").copied(),
+        Some(1)
+    );
 
     let calls = client.calls_snapshot();
     let mut indexes_seen: Vec<String> = calls
@@ -131,18 +141,19 @@ async fn empty_payload_event_is_counted_as_skipped() {
     let report = indexer.index_batch(&events).await.expect("index_batch");
     assert_eq!(report.documents_upserted, 0);
     assert_eq!(report.documents_skipped, 1);
-    assert_eq!(metrics.skipped_empty.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(
+        metrics
+            .skipped_empty
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
 }
 
 #[tokio::test]
 async fn oversize_event_increments_truncated_counter_and_flag() {
     let (_client, indexer, metrics) = build_indexer();
     let raw = "z".repeat(20 * 1024);
-    let events = vec![event(
-        "evt-big",
-        Kind::Turn,
-        json!({ "user_message": raw }),
-    )];
+    let events = vec![event("evt-big", Kind::Turn, json!({ "user_message": raw }))];
     // Small max_body_bytes to force truncation regardless of payload.
     let small_cfg = FulltextConfig {
         upsert_batch: 4,
@@ -155,7 +166,12 @@ async fn oversize_event_increments_truncated_counter_and_flag() {
     let report = indexer2.index_batch(&events).await.expect("index_batch");
     assert_eq!(report.documents_upserted, 1);
     assert_eq!(report.documents_truncated, 1);
-    assert_eq!(metrics2.truncated.load(std::sync::atomic::Ordering::Relaxed), 1);
+    assert_eq!(
+        metrics2
+            .truncated
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
     let _ = (indexer, metrics);
 }
 
@@ -282,12 +298,12 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
 
     // Every destination from the spec-08 matrix should be populated.
     let want = [
-        ("cortex-vectorizer-code", 2),         // tool_call + .rs artifact
-        ("cortex-vectorizer-turns", 2),        // turn + agent_call
+        ("cortex-vectorizer-code", 2),  // tool_call + .rs artifact
+        ("cortex-vectorizer-turns", 2), // turn + agent_call
         ("cortex-vectorizer-decisions", 1),
         ("cortex-vectorizer-governance", 1),
-        ("cortex-vectorizer-docs", 1),         // .md artifact
-        ("cortex-vectorizer-misc", 1),         // unknown-ext artifact
+        ("cortex-vectorizer-docs", 1), // .md artifact
+        ("cortex-vectorizer-misc", 1), // unknown-ext artifact
     ];
     for (idx, expected) in want {
         assert_eq!(

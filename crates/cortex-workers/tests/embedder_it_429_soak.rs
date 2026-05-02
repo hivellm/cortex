@@ -22,8 +22,8 @@ use async_trait::async_trait;
 use cortex_core::events::Kind;
 use cortex_workers::embedder::{
     BackpressureState, Chunk, CollectionSchema, ConsumedMessage, EmbedderConfig,
-    LiveSynapPublisher, MemorySynapConsumer, MemorySynapPublisher, MemoryVectorizerClient,
-    Metrics, UpsertReport, VectorizerClient, VectorizerClientError, VectorizerEmbedder, Worker,
+    LiveSynapPublisher, MemorySynapConsumer, MemorySynapPublisher, MemoryVectorizerClient, Metrics,
+    UpsertReport, VectorizerClient, VectorizerClientError, VectorizerEmbedder, Worker,
     STREAM_EMBEDDED, STREAM_ENRICHED, STREAM_INVALID,
 };
 

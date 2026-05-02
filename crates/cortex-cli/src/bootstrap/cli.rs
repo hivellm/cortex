@@ -79,7 +79,11 @@ pub struct CliArgs {
     pub stream: String,
 
     /// Checkpoint file path.
-    #[arg(long, default_value = ".cortex-bootstrap.state.json", value_name = "FILE")]
+    #[arg(
+        long,
+        default_value = ".cortex-bootstrap.state.json",
+        value_name = "FILE"
+    )]
     pub checkpoint: PathBuf,
 
     /// Structured logs format.

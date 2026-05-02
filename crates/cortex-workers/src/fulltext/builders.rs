@@ -143,11 +143,12 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
             }
             Err(_) => (fallback_text(&event.redacted_payload), None),
         },
-        Kind::ToolCall => match serde_json::from_value::<ToolCall>(event.redacted_payload.clone())
-        {
-            Ok(tc) => (tool_call_text(&tc), Some(tc.tool_name)),
-            Err(_) => (fallback_text(&event.redacted_payload), None),
-        },
+        Kind::ToolCall => {
+            match serde_json::from_value::<ToolCall>(event.redacted_payload.clone()) {
+                Ok(tc) => (tool_call_text(&tc), Some(tc.tool_name)),
+                Err(_) => (fallback_text(&event.redacted_payload), None),
+            }
+        }
         Kind::AgentCall => {
             match serde_json::from_value::<AgentCall>(event.redacted_payload.clone()) {
                 Ok(a) => {
@@ -163,20 +164,21 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
-        Kind::Memory => match serde_json::from_value::<MemoryPayload>(event.redacted_payload.clone())
-        {
-            Ok(m) => {
-                let mut out = m.name.clone();
-                if let Some(b) = m.body.as_deref() {
-                    if !out.is_empty() {
-                        out.push('\n');
+        Kind::Memory => {
+            match serde_json::from_value::<MemoryPayload>(event.redacted_payload.clone()) {
+                Ok(m) => {
+                    let mut out = m.name.clone();
+                    if let Some(b) = m.body.as_deref() {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(b);
                     }
-                    out.push_str(b);
+                    (out, m.description)
                 }
-                (out, m.description)
+                Err(_) => (fallback_text(&event.redacted_payload), None),
             }
-            Err(_) => (fallback_text(&event.redacted_payload), None),
-        },
+        }
         Kind::Decision => {
             match serde_json::from_value::<DecisionPayload>(event.redacted_payload.clone()) {
                 Ok(d) => {
@@ -198,19 +200,19 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
-        Kind::LawViolation => match serde_json::from_value::<LawViolationPayload>(
-            event.redacted_payload.clone(),
-        ) {
-            Ok(lv) => {
-                let mut out = format!("{}: {}", lv.law_id, lv.message);
-                if !lv.evidence.is_null() {
-                    out.push('\n');
-                    out.push_str(&lv.evidence.to_string());
+        Kind::LawViolation => {
+            match serde_json::from_value::<LawViolationPayload>(event.redacted_payload.clone()) {
+                Ok(lv) => {
+                    let mut out = format!("{}: {}", lv.law_id, lv.message);
+                    if !lv.evidence.is_null() {
+                        out.push('\n');
+                        out.push_str(&lv.evidence.to_string());
+                    }
+                    (out, None)
                 }
-                (out, None)
+                Err(_) => (fallback_text(&event.redacted_payload), None),
             }
-            Err(_) => (fallback_text(&event.redacted_payload), None),
-        },
+        }
         Kind::Artifact => {
             match serde_json::from_value::<ArtifactPayload>(event.redacted_payload.clone()) {
                 Ok(a) => {
@@ -232,6 +234,28 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
         Kind::Learning => {
             match serde_json::from_value::<LearningPayload>(event.redacted_payload.clone()) {
                 Ok(l) => (l.body, None),
+                Err(_) => (fallback_text(&event.redacted_payload), None),
+            }
+        }
+        // Phase11j — Consolidations index the summary body so the
+        // keyword lane can match against takeaways + summary text.
+        // Title goes through `derive_title` below.
+        Kind::Consolidation => {
+            match serde_json::from_value::<cortex_core::events::ConsolidationPayload>(
+                event.redacted_payload.clone(),
+            ) {
+                Ok(c) => {
+                    let mut body = c.summary_markdown;
+                    if !c.takeaways.is_empty() {
+                        body.push_str("\n\n");
+                        for t in &c.takeaways {
+                            body.push_str("- ");
+                            body.push_str(t);
+                            body.push('\n');
+                        }
+                    }
+                    (body, None)
+                }
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
@@ -292,12 +316,19 @@ fn derive_title(event: &EnrichedEvent, raw: &str) -> String {
             .and_then(|a| a.path.or_else(|| a.url.clone()))
             .or_else(|| event.context_path.clone())
             .unwrap_or_else(|| event.event_id.clone()),
-        Kind::Knowledge => serde_json::from_value::<KnowledgePayload>(event.redacted_payload.clone())
-            .map(|k| k.title)
-            .unwrap_or_else(|_| event.event_id.clone()),
+        Kind::Knowledge => {
+            serde_json::from_value::<KnowledgePayload>(event.redacted_payload.clone())
+                .map(|k| k.title)
+                .unwrap_or_else(|_| event.event_id.clone())
+        }
         Kind::Learning => serde_json::from_value::<LearningPayload>(event.redacted_payload.clone())
             .map(|l| l.title)
             .unwrap_or_else(|_| event.event_id.clone()),
+        Kind::Consolidation => serde_json::from_value::<cortex_core::events::ConsolidationPayload>(
+            event.redacted_payload.clone(),
+        )
+        .map(|c| c.title)
+        .unwrap_or_else(|_| event.event_id.clone()),
     };
     take_first_chars(&candidate, TITLE_MAX_CHARS)
 }
@@ -396,9 +427,9 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
             }
         }
         Kind::Knowledge => {
-            if let Ok(k) = serde_json::from_value::<KnowledgePayload>(
-                event.redacted_payload.clone(),
-            ) {
+            if let Ok(k) =
+                serde_json::from_value::<KnowledgePayload>(event.redacted_payload.clone())
+            {
                 doc.ext.insert(
                     "knowledge".to_string(),
                     json!({
@@ -409,9 +440,8 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
             }
         }
         Kind::Learning => {
-            if let Ok(l) = serde_json::from_value::<LearningPayload>(
-                event.redacted_payload.clone(),
-            ) {
+            if let Ok(l) = serde_json::from_value::<LearningPayload>(event.redacted_payload.clone())
+            {
                 let mut payload = json!({
                     "learning_id": l.learning_id,
                 });
@@ -419,6 +449,29 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
                     payload["related_task"] = Value::String(t);
                 }
                 doc.ext.insert("learning".to_string(), payload);
+            }
+        }
+        Kind::Consolidation => {
+            if let Ok(c) = serde_json::from_value::<cortex_core::events::ConsolidationPayload>(
+                event.redacted_payload.clone(),
+            ) {
+                doc.ext.insert(
+                    "consolidation".to_string(),
+                    json!({
+                        "consolidation_id": c.consolidation_id,
+                        "grain": match c.grain {
+                            cortex_core::events::ConsolidationGrain::Session => "session",
+                            cortex_core::events::ConsolidationGrain::Topic => "topic",
+                            cortex_core::events::ConsolidationGrain::DecisionTrace => "decision_trace",
+                        },
+                        "depth": match c.depth {
+                            cortex_core::events::ConsolidationDepth::Shallow => "shallow",
+                            cortex_core::events::ConsolidationDepth::Deep => "deep",
+                        },
+                        "model": c.model,
+                        "source_event_count": c.source_event_count,
+                    }),
+                );
             }
         }
         Kind::Turn | Kind::Artifact => {
@@ -442,6 +495,7 @@ fn kind_label(kind: Kind) -> &'static str {
         Kind::Artifact => "artifact",
         Kind::Knowledge => "knowledge",
         Kind::Learning => "learning",
+        Kind::Consolidation => "consolidation",
     }
 }
 

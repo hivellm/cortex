@@ -201,14 +201,6 @@ async fn write_batch_records_dropped_edges_into_metrics() {
     );
     let _ = w.write_batch(&[evt]).await.expect("write");
 
-    let dropped_total: u64 = w
-        .metrics()
-        .edges_dropped_snapshot()
-        .values()
-        .copied()
-        .sum();
-    assert!(
-        dropped_total >= 1,
-        "edges_dropped total = {dropped_total}"
-    );
+    let dropped_total: u64 = w.metrics().edges_dropped_snapshot().values().copied().sum();
+    assert!(dropped_total >= 1, "edges_dropped total = {dropped_total}");
 }

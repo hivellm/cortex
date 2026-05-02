@@ -6,8 +6,8 @@
 
 #![warn(missing_docs)]
 
-pub mod config;
 pub mod coalescer;
+pub mod config;
 pub mod cypher;
 pub mod identity;
 pub mod mapper;
@@ -18,12 +18,12 @@ pub mod schema;
 pub mod worker;
 pub mod writer;
 
-pub use config::{GraphConfig, GraphTransport};
+pub use crate::embedder::EnrichedEvent;
 pub use coalescer::{CoalesceStats, PatchCoalescer};
+pub use config::{GraphConfig, GraphTransport};
 pub use cypher::{
     edge_template_name, node_template_name, CypherLoadError, CypherTemplates, REQUIRED_TEMPLATES,
 };
-pub use crate::embedder::EnrichedEvent;
 pub use identity::artifact_natural_key;
 pub use mapper::map_event_to_patch;
 pub use metrics::Metrics;
@@ -33,9 +33,8 @@ pub use nexus_client::{
 pub use patch::{EdgeOp, GraphPatch, GraphWriteReport, NodeOp};
 pub use schema::SCHEMA_STATEMENTS;
 pub use worker::{
-    BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher,
-    MemorySynapConsumer, MemorySynapPublisher, OffsetTracker, OutOfOrderBuffer, ReadyBatch,
-    SynapConsumer, SynapHandle, SynapPublisher, Worker, BACKPRESSURE_SOAK, STREAM_ENRICHED,
-    STREAM_GRAPHED, STREAM_INVALID,
+    BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer,
+    MemorySynapPublisher, OffsetTracker, OutOfOrderBuffer, ReadyBatch, SynapConsumer, SynapHandle,
+    SynapPublisher, Worker, BACKPRESSURE_SOAK, STREAM_ENRICHED, STREAM_GRAPHED, STREAM_INVALID,
 };
 pub use writer::{GraphWriter, NexusGraphWriter};

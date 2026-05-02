@@ -170,8 +170,7 @@ impl SynapHandle {
     /// Connect to Synap at `base_url`.
     pub fn new(base_url: &str) -> Result<Self> {
         let cfg = SynapConfig::new(base_url);
-        let client =
-            SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
+        let client = SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
         Ok(Self {
             streams: client.stream(),
         })
@@ -409,7 +408,10 @@ impl Worker {
         self.metrics.set_backpressure(self.backpressure.is_active());
 
         let batch_size = self.config.upsert_batch.max(1);
-        let msgs = self.consumer.next_batch(STREAM_ENRICHED, batch_size).await?;
+        let msgs = self
+            .consumer
+            .next_batch(STREAM_ENRICHED, batch_size)
+            .await?;
         let received = msgs.len();
         self.handle_batch(msgs).await?;
         Ok(received)

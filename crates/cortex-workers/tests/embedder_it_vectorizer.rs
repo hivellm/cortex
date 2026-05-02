@@ -62,9 +62,7 @@ async fn upsert_batch_of_64_succeeds() {
             make_chunk(
                 &format!("it64-{i:02}"),
                 &name,
-                &format!(
-                    "alpha beta gamma payload number {i} — embed me please.",
-                ),
+                &format!("alpha beta gamma payload number {i} — embed me please.",),
             )
         })
         .collect();
@@ -87,10 +85,7 @@ async fn upsert_batch_of_64_succeeds() {
     // every client dedup key back to itself.
     let mut seen_keys: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     for entry in &report.new_entries {
-        assert!(
-            !entry.server_id.is_empty(),
-            "empty server_id in {entry:?}"
-        );
+        assert!(!entry.server_id.is_empty(), "empty server_id in {entry:?}");
         assert!(
             entry.dedup_key.starts_with("it64-"),
             "unexpected dedup_key round-trip: {entry:?}"
@@ -145,10 +140,7 @@ async fn exists_returns_correct_subset() {
             )
         })
         .collect();
-    client
-        .upsert_chunks(&name, &chunks)
-        .await
-        .expect("upsert");
+    client.upsert_chunks(&name, &chunks).await.expect("upsert");
 
     // Wait for the server to surface the ten vectors via its list view.
     let total_ready = wait_until(
@@ -354,9 +346,7 @@ async fn schema_drift_fails_fast() {
     schema.dim = 768;
     let res = client.ensure_collection(&name, &schema).await;
     match res {
-        Err(VectorizerClientError::SchemaMismatch {
-            collection, detail,
-        }) => {
+        Err(VectorizerClientError::SchemaMismatch { collection, detail }) => {
             assert_eq!(collection, name);
             assert!(
                 detail.contains("dimension") || detail.contains("dim"),

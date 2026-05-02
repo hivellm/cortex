@@ -44,8 +44,7 @@ impl SynapHandle {
     /// Connect to Synap at `base_url`.
     pub fn new(base_url: &str) -> Result<Self> {
         let cfg = SynapConfig::new(base_url);
-        let client =
-            SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
+        let client = SynapClient::new(cfg).map_err(|e| anyhow::anyhow!("synap client: {e}"))?;
         Ok(Self {
             streams: client.stream(),
         })
@@ -114,12 +113,9 @@ impl Publisher for LiveSynapPublisher {
                 Err(e) => {
                     let msg = e.to_string();
                     last = Some(anyhow::anyhow!("synap publish: {e}"));
-                    if !attempted_create
-                        && (msg.contains("not found") || msg.contains("Room"))
-                    {
+                    if !attempted_create && (msg.contains("not found") || msg.contains("Room")) {
                         attempted_create = true;
-                        if let Err(create_err) =
-                            self.handle.streams().create_room(room, None).await
+                        if let Err(create_err) = self.handle.streams().create_room(room, None).await
                         {
                             tracing::debug!(
                                 room,

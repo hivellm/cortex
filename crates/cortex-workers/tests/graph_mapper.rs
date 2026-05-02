@@ -79,7 +79,14 @@ fn tool_call_with_touched_files_emits_touched_edges() {
             { "kind": "read", "path": "src/main.rs" },
         ]
     });
-    let evt = event("tc1", Kind::ToolCall, payload, Some("hivellm/cortex"), None, None);
+    let evt = event(
+        "tc1",
+        Kind::ToolCall,
+        payload,
+        Some("hivellm/cortex"),
+        None,
+        None,
+    );
     let patch = map_event_to_patch(&evt);
 
     assert_eq!(count_edges(&patch, "TOUCHED"), 2);
@@ -327,7 +334,14 @@ fn law_violation_with_observed_kind_turn_picks_turn_label() {
         "observed_event_id": "01HXTURN0000000000000000Z",
         "observed_event_kind": "turn"
     });
-    let evt = event("lv-with-turn", Kind::LawViolation, payload, None, None, None);
+    let evt = event(
+        "lv-with-turn",
+        Kind::LawViolation,
+        payload,
+        None,
+        None,
+        None,
+    );
     let patch = map_event_to_patch(&evt);
 
     let observed_in = patch
@@ -426,7 +440,10 @@ fn imported_analysis_emits_analysis_node_and_analyzes_edge_to_repo() {
         .iter()
         .find(|n| n.label == "Repo" && n.natural_key == "Cortex")
         .expect("Repo node must be present");
-    assert_eq!(repo.props.get("name").and_then(|v| v.as_str()), Some("Cortex"));
+    assert_eq!(
+        repo.props.get("name").and_then(|v| v.as_str()),
+        Some("Cortex")
+    );
 
     let analyzes = patch
         .edges
@@ -528,12 +545,16 @@ fn classifier_extracted_entities_become_typed_nodes_and_edges() {
     let patch = map_event_to_patch(&evt);
 
     // One typed node per entity, deduplicated by `(entity_type, identifier)`.
-    assert!(patch.nodes.iter().any(|n| n.label == "Decision"
-        && n.natural_key == "decision|DEC-0042"));
+    assert!(patch
+        .nodes
+        .iter()
+        .any(|n| n.label == "Decision" && n.natural_key == "decision|DEC-0042"));
     assert!(patch.nodes.iter().any(|n| n.label == "Artifact"
         && n.natural_key == "artifact|crates/cortex-api/src/orchestrator.rs"));
-    assert!(patch.nodes.iter().any(|n| n.label == "Concept"
-        && n.natural_key == "concept|rrf-fusion"));
+    assert!(patch
+        .nodes
+        .iter()
+        .any(|n| n.label == "Concept" && n.natural_key == "concept|rrf-fusion"));
 
     // One typed edge per relation, anchored at the Turn.
     assert_eq!(count_edges(&patch, "IMPLEMENTS"), 1);
@@ -644,7 +665,12 @@ pub fn run(input: &str) -> bool {\n\
         .nodes
         .iter()
         .filter(|n| n.label == "Symbol")
-        .filter_map(|n| n.props.get("name").and_then(|v| v.as_str()).map(String::from))
+        .filter_map(|n| {
+            n.props
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
         .collect();
     assert!(
         symbol_names.contains(&"PreThinkingTool".to_string()),

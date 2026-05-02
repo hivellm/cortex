@@ -70,7 +70,11 @@ async fn memory_client_records_ensure_schema() {
 async fn memory_client_records_write_tx_with_correct_counts() {
     let client = MemoryNexusClient::new();
     let patch = GraphPatch {
-        nodes: vec![node("Turn", "T1"), node("Turn", "T2"), node("Session", "S1")],
+        nodes: vec![
+            node("Turn", "T1"),
+            node("Turn", "T2"),
+            node("Session", "S1"),
+        ],
         edges: vec![
             edge("HAS_TURN", "Session", "S1", "Turn", "T1"),
             edge("HAS_TURN", "Session", "S1", "Turn", "T2"),
@@ -212,10 +216,7 @@ fn json_to_sdk_value_round_trips_primitives() {
         SdkValue::Bool(true)
     ));
     assert!(matches!(json_to_sdk_value(&json!(42)), SdkValue::Int(42)));
-    assert!(matches!(
-        json_to_sdk_value(&json!(1.5)),
-        SdkValue::Float(_)
-    ));
+    assert!(matches!(json_to_sdk_value(&json!(1.5)), SdkValue::Float(_)));
     match json_to_sdk_value(&json!("hi")) {
         SdkValue::String(s) => assert_eq!(s, "hi"),
         other => panic!("expected String, got {other:?}"),

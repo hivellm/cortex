@@ -207,7 +207,8 @@ mod tests {
     fn coalescer_new_and_reset() {
         let mut c = PatchCoalescer::new();
         c.seen_nodes.insert(("X".into(), "1".into()));
-        c.seen_edges.insert(("a".into(), "b".into(), "c".into(), "d".into(), "e".into()));
+        c.seen_edges
+            .insert(("a".into(), "b".into(), "c".into(), "d".into(), "e".into()));
         assert_eq!(c.seen_nodes.len(), 1);
         assert_eq!(c.seen_edges.len(), 1);
         c.reset();

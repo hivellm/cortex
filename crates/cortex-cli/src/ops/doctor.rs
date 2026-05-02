@@ -154,7 +154,10 @@ fn partition_key_for_envelope(env: &serde_json::Value) -> Option<PartitionKey> {
     if repo.is_empty() {
         return None;
     }
-    let path = ctx.get("path").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let path = ctx
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let topics: Vec<String> = env
         .get("classifier")
         .and_then(|c| c.get("topics"))
@@ -441,16 +444,12 @@ impl<'a, C: MeiliClient + ?Sized> MeiliCoverageProbe<'a, C> {
 
 #[async_trait]
 trait MeiliCoverageScan {
-    async fn scan(
-        &self,
-    ) -> anyhow::Result<(BTreeMap<PartitionKey, u64>, Vec<String>)>;
+    async fn scan(&self) -> anyhow::Result<(BTreeMap<PartitionKey, u64>, Vec<String>)>;
 }
 
 #[async_trait]
 impl<C: MeiliClient + ?Sized + Sync> MeiliCoverageScan for MeiliCoverageProbe<'_, C> {
-    async fn scan(
-        &self,
-    ) -> anyhow::Result<(BTreeMap<PartitionKey, u64>, Vec<String>)> {
+    async fn scan(&self) -> anyhow::Result<(BTreeMap<PartitionKey, u64>, Vec<String>)> {
         let indexes = self
             .client
             .list_indexes()
@@ -665,9 +664,7 @@ pub fn render_coverage_markdown(report: &DoctorReport) -> String {
             None => "—".to_string(),
         };
         let status = if row.inconsistent {
-            row.reason
-                .clone()
-                .unwrap_or_else(|| "inconsistent".into())
+            row.reason.clone().unwrap_or_else(|| "inconsistent".into())
         } else if row.suspicious {
             row.reason
                 .clone()
@@ -805,11 +802,7 @@ impl LiveVectorizerCoverageProbe {
     /// transport sniffs the three-segment JWT shape and sends it
     /// as `Authorization: Bearer …`. Same flow `cortex-embedder`'s
     /// `LiveVectorizerClient::login` follows.
-    pub async fn new(
-        base_url: &str,
-        username: &str,
-        password: &str,
-    ) -> anyhow::Result<Self> {
+    pub async fn new(base_url: &str, username: &str, password: &str) -> anyhow::Result<Self> {
         let pre_auth = vectorizer_sdk::ClientConfig {
             base_url: Some(base_url.to_string()),
             api_key: None,
@@ -1066,7 +1059,10 @@ mod tests {
             .unwrap()
             .timestamp_millis();
         let summary = scan_hash_coverage(tmp.path(), now_ms, 24, HASH_COVERAGE_THRESHOLD);
-        assert_eq!(summary.tool_calls_total, 2, "the old envelope must not count");
+        assert_eq!(
+            summary.tool_calls_total, 2,
+            "the old envelope must not count"
+        );
         assert_eq!(summary.tool_calls_with_hash, 1);
         assert!(summary.ratio < HASH_COVERAGE_THRESHOLD);
         assert!(summary.failed);
@@ -1240,11 +1236,7 @@ mod tests {
         assert!(!report.failed, "suspicious must not flip failed");
         let row = &report.rows[0];
         assert!(row.suspicious);
-        assert!(row
-            .reason
-            .as_deref()
-            .unwrap()
-            .contains("ratio"));
+        assert!(row.reason.as_deref().unwrap().contains("ratio"));
     }
 
     #[test]

@@ -16,13 +16,13 @@ use cortex_classifier::{
     build_offline_stack, BudgetTracker, Classifier, ClassifierError, ClassifierOutput,
     ClassifierSource, EnrichmentInput, InMemoryCache, PiiRisk, PricingTable, Severity,
 };
+use cortex_core::events::{Context as EvtContext, Envelope, Kind, Stream};
+use cortex_storage::MetadataStore;
 use cortex_workers::classifier::{
     ConsumedMessage, MemorySynapConsumer, MemorySynapPublisher, Worker, STREAM_BOOTSTRAP,
     STREAM_ENRICHED, STREAM_RAW,
 };
-use cortex_core::events::{Context as EvtContext, Envelope, Kind, Stream};
 use cortex_workers::embedder::EnrichedEvent;
-use cortex_storage::MetadataStore;
 use serde_json::{json, Value};
 
 fn worker_with_offline_stack() -> (
@@ -229,7 +229,9 @@ impl Classifier for FixedTokenBackend {
 async fn metadata_store_records_classifier_spend_after_publish() {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::new());
-    let store = Arc::new(std::sync::Mutex::new(MetadataStore::open_in_memory().unwrap()));
+    let store = Arc::new(std::sync::Mutex::new(
+        MetadataStore::open_in_memory().unwrap(),
+    ));
 
     // 10k input + 4k output tokens against HAIKU_4_5 pricing
     // ($0.001/1k in, $0.005/1k out) = $0.01 + $0.02 = $0.03 = 3 cents.

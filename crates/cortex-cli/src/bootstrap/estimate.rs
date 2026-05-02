@@ -122,8 +122,7 @@ pub fn estimate_repo(repo_root: &Path, repo_id: &str, cfg: &CortexSection) -> Es
     let redacted_bytes_est = code_bytes + doc_bytes;
     let classifier_input_tokens_est = redacted_bytes_est / 4;
     let classifier_output_tokens_est = events_total * 350;
-    let embedding_storage_bytes_est =
-        (code_chunks_est + doc_chunks_est) * (1024 * 4 + 1024); // 4 KB float vector + ~1 KB metadata
+    let embedding_storage_bytes_est = (code_chunks_est + doc_chunks_est) * (1024 * 4 + 1024); // 4 KB float vector + ~1 KB metadata
     let graph_nodes_est =
         files_kept + commits + decision_count + law_count + memory_count + analysis_count;
     let graph_edges_est = (graph_nodes_est * 18) / 10;
