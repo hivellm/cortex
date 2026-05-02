@@ -78,3 +78,57 @@ After implementing, capture at least one entry per task:
 8. The mandatory tail (docs + tests + verify) is **not optional** — `rulebook_task_archive` will refuse to close the task otherwise.
 
 <!-- RULEBOOK:END -->
+
+## Agentes, Teams e paralelismo (project-specific — sobrevive a `rulebook update`)
+
+**Use agentes e Teams agressivamente. O default é delegar e paralelizar, não executar tudo no main thread.**
+
+### Quando delegar a um agente (não fazer no main)
+
+Spawn um agente sempre que um destes for verdade:
+
+- **Pesquisa/exploração que vai gastar >3 queries** → `Explore` ou `researcher` (haiku). Protege o contexto principal.
+- **Implementação de >50 linhas em 1+ arquivo** → `implementer` (sonnet). Main coordena, agente escreve.
+- **Escrever testes** → `tester` (sonnet).
+- **Code review pós-implementação** → `code-reviewer` ou `feature-dev:code-reviewer`.
+- **Decisão arquitetural / ADR** → `architect` (opus).
+- **Build/CI quebrado** → `build-engineer`.
+- **Auditoria de segurança / deps** → `security-reviewer` (haiku).
+- **Refactor que toca padrões repetidos** → `refactoring-agent`.
+- **Migração (DB / API / framework)** → `migration-engineer`.
+- **Performance profiling** → `performance-engineer`.
+
+Regra prática: se a tarefa não cabe em ≤2 ferramentas + uma resposta curta, **delega**.
+
+### Paralelismo é mandatório para trabalho independente
+
+- Múltiplas leituras / greps / globs independentes → **uma única mensagem com várias tool calls em paralelo**, nunca em sequência.
+- Múltiplos agentes em frentes ortogonais → spawn no mesmo turno (uma mensagem, vários blocos `Agent`).
+- Pesquisa + implementação de feature diferente → paralelo.
+- Type-check + test + lint independentes → paralelo.
+
+Se você se pegar fazendo tool calls em série quando poderiam ser paralelas, está errado.
+
+### Teams para trabalho multi-agente em background
+
+Trabalho de fundo com 2+ agentes **DEVE** usar Team (`team_name`). Background `Agent` standalone não consegue `SendMessage` — viola a regra `multi-agent-teams.md` e o hook bloqueia.
+
+Padrão: `team-lead` orquestra → `researcher` (haiku) + `implementer` (sonnet) + `tester` (sonnet). Spawn todos no mesmo turno com `team_name` setado.
+
+### Skills e agentes custom
+
+Sempre que identificar um padrão recorrente que valha automatizar, **proponha criar uma skill ou agente**:
+
+- Workflow que repete em ≥3 sessões → skill em `.claude/skills/`.
+- Tarefa especializada com prompt longo + ferramentas restritas → agente em `.claude/agents/`.
+- Cron / loop / sweep → `/schedule` ou `/loop`.
+
+Não pergunte permissão para sugerir — sugira concretamente (nome, escopo, gatilhos) ao final do trabalho relevante.
+
+### Anti-padrões (não fazer)
+
+- Main agent escrevendo 300 linhas de código direto sem delegar.
+- Tool calls em série quando são independentes.
+- Reusar o main para pesquisa exploratória extensa (queima contexto).
+- Background `Agent` sem `team_name` (será bloqueado).
+- "Vou eu mesmo, é mais rápido" — quase sempre não é, e custa contexto.

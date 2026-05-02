@@ -58,6 +58,14 @@ clap = { workspace = true }
 zstd = { workspace = true }
 
 vectorizer-sdk = { workspace = true }
+
+# Phase11k §1.1 — graph correlation static analyzer.
+# `pulldown-cmark` powers the markdown extraction pass under
+# `src/graph/markdown/`; tree-sitter-rust (and the other grammars
+# already declared above for the embedder's symbol chunker) drive
+# the code analyzer under `src/graph/analyzer/`.
+pulldown-cmark = { workspace = true }
+toml = { workspace = true }
 nexus-graph-sdk = { workspace = true }
 synap-sdk = { workspace = true }
 

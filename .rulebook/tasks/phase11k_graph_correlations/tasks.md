@@ -1,38 +1,38 @@
 ## 1. Tree-sitter analyzer + Rust support (in cortex-workers)
 
-- [ ] 1.1 New module `crates/cortex-workers/src/graph/analyzer/mod.rs` — `CodeAnalyzer` trait + `CodeEdge` / `ResolutionTarget` / `EdgeType` types; per-language analyzer signature; pulldown-cmark + tree-sitter-rust workspace deps appended to `cortex-workers/Cargo.toml`
-- [ ] 1.2 `crates/cortex-workers/src/graph/analyzer/rust.rs` — Rust analyzer with four Tree-sitter queries (use_decl, call_expr, type_use, impl_block) producing `Vec<CodeEdge>` per file; reuses the existing grammar registry from `embedder/chunker_code.rs`
-- [ ] 1.3 `crates/cortex-workers/src/graph/resolver/` (new submodule) — `ModuleMap` builder (Cargo.toml + `mod foo;` walk), three-tier `SymbolResolver` (local-file / intra-crate / external), `PackageMap` reading workspace `[dependencies]`, new `crates/cortex-storage/src/external_repos.rs` TOML loader for HiveLLM-internal SDK declarations
-- [ ] 1.4 GraphPatch builder bridging `CodeEdge` → `EdgeOp` consumed by `cortex-workers/src/graph/mapper.rs`; new schema constraints (`spec_path`, `external_package_natural_key`, `doc_section_natural_key`) appended to `schema::SCHEMA_STATEMENTS`
-- [ ] 1.5 12 unit tests in `analyzer/rust.rs::tests` pinning every query against fixture Rust files (use_decl / call_expr / type_use / impl_block coverage)
-- [ ] 1.6 Resolver IT `crates/cortex-workers/tests/graph_resolver_it.rs` — 8 cases pinning tier-1/tier-2/tier-3 dispatch + the `:UNRESOLVED_IMPORT` fallback
-- [ ] 1.7 End-to-end IT `crates/cortex-workers/tests/graph_analyzer_rust_it.rs` — synthesise a 3-file Rust crate, run the analyzer, assert the edge set matches the proposal verbatim
+- [x] 1.1 New module `crates/cortex-workers/src/graph/analyzer/mod.rs` — `CodeAnalyzer` trait + `CodeEdge` / `ResolutionTarget` / `EdgeType` types; per-language analyzer signature; pulldown-cmark + tree-sitter-rust workspace deps appended to `cortex-workers/Cargo.toml`
+- [x] 1.2 `crates/cortex-workers/src/graph/analyzer/rust.rs` — Rust analyzer with four Tree-sitter queries (use_decl, call_expr, type_use, impl_block) producing `Vec<CodeEdge>` per file; reuses the existing grammar registry from `embedder/chunker_code.rs`
+- [x] 1.3 `crates/cortex-workers/src/graph/resolver/` (new submodule) — `ModuleMap` builder (Cargo.toml + `mod foo;` walk), three-tier `SymbolResolver` (local-file / intra-crate / external), `PackageMap` reading workspace `[dependencies]`, new `crates/cortex-storage/src/external_repos.rs` TOML loader for HiveLLM-internal SDK declarations
+- [x] 1.4 GraphPatch builder bridging `CodeEdge` → `EdgeOp` consumed by `cortex-workers/src/graph/mapper.rs`; new schema constraints (`spec_path`, `external_package_natural_key`, `doc_section_natural_key`) appended to `schema::SCHEMA_STATEMENTS`
+- [x] 1.5 12 unit tests in `analyzer/rust.rs::tests` pinning every query against fixture Rust files (use_decl / call_expr / type_use / impl_block coverage)
+- [x] 1.6 Resolver IT `crates/cortex-workers/tests/graph_resolver_it.rs` — 8 cases pinning tier-1/tier-2/tier-3 dispatch + the `:UNRESOLVED_IMPORT` fallback
+- [x] 1.7 End-to-end IT `crates/cortex-workers/tests/graph_analyzer_rust_it.rs` — synthesise a 3-file Rust crate, run the analyzer, assert the edge set matches the proposal verbatim
 
 ## 2. Multi-language analyzers (TS / Python / Go)
 
-- [ ] 2.1 `crates/cortex-workers/src/graph/analyzer/typescript.rs` — TS + TSX analyzer covering import_statement, call_expression, class extends, member call resolution
-- [ ] 2.2 `crates/cortex-workers/src/graph/analyzer/python.rs` — import / call / class inheritance queries
-- [ ] 2.3 `crates/cortex-workers/src/graph/analyzer/go.rs` — import / call / type-decl queries
-- [ ] 2.4 Per-language unit tests inline in each analyzer module covering import / call / type-use extraction (same shape as §1.5)
-- [ ] 2.5 Multi-language IT `crates/cortex-workers/tests/graph_analyzer_multi_lang_it.rs` — workspace mixing Rust + TS + Python emits coherent cross-language edges (Rust crate's `vectorizer-sdk` resolves the same way a TS workspace import does)
+- [x] 2.1 `crates/cortex-workers/src/graph/analyzer/typescript.rs` — TS + TSX analyzer covering import_statement, call_expression, class extends, member call resolution
+- [x] 2.2 `crates/cortex-workers/src/graph/analyzer/python.rs` — import / call / class inheritance queries
+- [x] 2.3 `crates/cortex-workers/src/graph/analyzer/go.rs` — import / call / type-decl queries
+- [x] 2.4 Per-language unit tests inline in each analyzer module covering import / call / type-use extraction (same shape as §1.5)
+- [x] 2.5 Multi-language IT `crates/cortex-workers/tests/graph_analyzer_multi_lang_it.rs` — workspace mixing Rust + TS + Python emits coherent cross-language edges (Rust crate's `vectorizer-sdk` resolves the same way a TS workspace import does)
 
 ## 3. Markdown analyzer + doc↔code edges (in cortex-workers)
 
-- [ ] 3.1 `crates/cortex-workers/src/graph/markdown/mod.rs` — `MarkdownAnalyzer` entry point, `MarkdownEdge` type, pulldown-cmark walker scaffold
-- [ ] 3.2 `markdown/links.rs` — emits `:LINKS_TO`, `:DOCUMENTS`, `:LINKS_TO_SECTION`; resolves relative paths against the workspace root
-- [ ] 3.3 `markdown/sections.rs` — emits `:DocSection` (GitHub-flavoured slug) + implicit `:CONTAINS` parent edges
-- [ ] 3.4 `markdown/mentions.rs` — backtick-token symbol mentions with three-tier disambiguation; `confidence` prop on every edge
-- [ ] 3.5 `markdown/code_blocks.rs` — fenced-code first-line `// path/to/file.rs` extraction → `:DESCRIBES_PATH`
-- [ ] 3.6 `crates/cortex-workers/src/graph/resolver/intra_doc.rs` — Rust `///` intra-doc parser via Tree-sitter, emits `:DOCUMENTED_BY` + `:DOCSTRING_REFERENCES`
-- [ ] 3.7 Markdown analyzer IT `crates/cortex-workers/tests/graph_markdown_it.rs` — 10 cases covering link / section / mention / code-block / intra-doc extraction
-- [ ] 3.8 Mention-precision IT `crates/cortex-workers/tests/graph_mentions_precision_it.rs` — 50 hand-curated mentions, ≥ 95 % precision against the resolved-symbol assertion set
+- [x] 3.1 `crates/cortex-workers/src/graph/markdown/mod.rs` — `MarkdownAnalyzer` entry point, `MarkdownEdge` type, pulldown-cmark walker scaffold
+- [x] 3.2 `markdown/links.rs` — emits `:LINKS_TO`, `:DOCUMENTS`, `:LINKS_TO_SECTION`; resolves relative paths against the workspace root
+- [x] 3.3 `markdown/sections.rs` — emits `:DocSection` (GitHub-flavoured slug) + implicit `:CONTAINS` parent edges
+- [x] 3.4 `markdown/mentions.rs` — backtick-token symbol mentions with three-tier disambiguation; `confidence` prop on every edge
+- [x] 3.5 `markdown/code_blocks.rs` — fenced-code first-line `// path/to/file.rs` extraction → `:DESCRIBES_PATH`
+- [x] 3.6 `crates/cortex-workers/src/graph/resolver/intra_doc.rs` — Rust `///` intra-doc parser via Tree-sitter, emits `:DOCUMENTED_BY` + `:DOCSTRING_REFERENCES`
+- [x] 3.7 Markdown analyzer IT `crates/cortex-workers/tests/graph_markdown_it.rs` — 10 cases covering link / section / mention / code-block / intra-doc extraction
+- [x] 3.8 Mention-precision IT `crates/cortex-workers/tests/graph_mentions_precision_it.rs` — 50 hand-curated mentions, ≥ 95 % precision against the resolved-symbol assertion set
 
 ## 4. Decision / Knowledge / Learning / Consolidation citations
 
-- [ ] 4.1 Extend the markdown analyzer to walk `Decision`/`Knowledge`/`Learning`/`Consolidation` payload bodies; each becomes an in-bound source for `:CITES` edges
-- [ ] 4.2 Resolve `DecisionPayload.links[]` (currently dead in the graph layer) into typed `:CITES` edges against the right Artifact / Decision / Analysis target via the same path resolver
-- [ ] 4.3 Materialise `:DERIVED_FROM` edges from `Consolidation.payload.source_event_ids[]` so the curated layer is navigable; wires into `cortex-workers/src/graph/mapper.rs::emit_memory` (the path Consolidation envelopes already ride)
-- [ ] 4.4 Citation-chain IT `crates/cortex-workers/tests/graph_citation_chain_it.rs` — walks an ADR → Spec → Analysis → Code chain and asserts the full chain is traversable in 4 hops with `confidence ≥ 0.9`
+- [x] 4.1 Extend the markdown analyzer to walk `Decision`/`Knowledge`/`Learning`/`Consolidation` payload bodies; each becomes an in-bound source for `:CITES` edges
+- [x] 4.2 Resolve `DecisionPayload.links[]` (currently dead in the graph layer) into typed `:CITES` edges against the right Artifact / Decision / Analysis target via the same path resolver
+- [x] 4.3 Materialise `:DERIVED_FROM` edges from `Consolidation.payload.source_event_ids[]` so the curated layer is navigable; wires into `cortex-workers/src/graph/mapper.rs::emit_memory` (the path Consolidation envelopes already ride)
+- [x] 4.4 Citation-chain IT `crates/cortex-workers/tests/graph_citation_chain_it.rs` — walks an ADR → Spec → Analysis → Code chain and asserts the full chain is traversable in 4 hops with `confidence ≥ 0.9`
 
 ## 5. Bootstrap + live triggers
 

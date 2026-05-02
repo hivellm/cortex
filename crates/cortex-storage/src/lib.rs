@@ -19,6 +19,7 @@
 pub mod archive;
 pub mod cas;
 pub mod collections;
+pub mod external_repos;
 pub mod fulltext;
 pub mod graph;
 pub mod metadata;

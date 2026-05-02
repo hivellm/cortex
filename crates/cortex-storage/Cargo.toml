@@ -22,5 +22,9 @@ zstd = { workspace = true }
 sha2 = { workspace = true }
 once_cell = { workspace = true }
 
+# Phase11k §1.3 — TOML loader for the cross-repo SDK registry
+# (`crates/cortex-storage/src/external_repos.rs`).
+toml = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }

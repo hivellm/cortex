@@ -6,6 +6,10 @@
 
 #![warn(missing_docs)]
 
+pub mod analyzer;
+pub mod citations;
+pub mod markdown;
+pub mod resolver;
 pub mod coalescer;
 pub mod config;
 pub mod cypher;

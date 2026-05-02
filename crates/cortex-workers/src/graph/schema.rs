@@ -35,6 +35,14 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE INDEX turn_ts IF NOT EXISTS FOR (t:Turn) ON (t.ts)",
     "CREATE INDEX tool_call_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name)",
     "CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name)",
+    // phase11k §1.4 — graph correlation layer adds three new node
+    // labels (`ExternalPackage`, `UnresolvedImport`, `DocSection`)
+    // plus the existing `Spec` label gains a `path` natural key now
+    // that doc↔code edges target it.
+    "CREATE CONSTRAINT external_package_natural_key IF NOT EXISTS FOR (p:ExternalPackage) REQUIRE p.natural_key IS UNIQUE",
+    "CREATE CONSTRAINT unresolved_import_natural_key IF NOT EXISTS FOR (u:UnresolvedImport) REQUIRE u.natural_key IS UNIQUE",
+    "CREATE CONSTRAINT doc_section_natural_key IF NOT EXISTS FOR (d:DocSection) REQUIRE d.natural_key IS UNIQUE",
+    "CREATE CONSTRAINT spec_path IF NOT EXISTS FOR (s:Spec) REQUIRE s.path IS UNIQUE",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like

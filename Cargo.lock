@@ -823,6 +823,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.18",
+ "toml",
  "zstd",
 ]
 
@@ -840,6 +841,7 @@ dependencies = [
  "cortex-health",
  "cortex-storage",
  "nexus-graph-sdk",
+ "pulldown-cmark",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -848,6 +850,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "tree-sitter",
@@ -2481,8 +2484,15 @@ checksum = "7c3a14896dfa883796f1cb410461aef38810ea05f2b2c33c5aded3649095fdad"
 dependencies = [
  "bitflags",
  "memchr",
+ "pulldown-cmark-escape",
  "unicase",
 ]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pulldown-cmark-to-cmark"
