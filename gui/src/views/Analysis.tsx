@@ -1,12 +1,14 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { DetailDrawer } from "../atoms/DetailDrawer";
 import { Tag } from "../atoms/Tag";
-import { api } from "../lib/api";
+import { api, type AnalysisRow } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
 
 export function AnalysisView() {
   const [repoFilter, setRepoFilter] = useState<string>("");
+  const [openRow, setOpenRow] = useState<AnalysisRow | null>(null);
   const connKey = useConnKey();
 
   // Unfiltered fetch keeps the dropdown options stable as the
@@ -107,7 +109,20 @@ export function AnalysisView() {
           // upstream produced.
           const statusBadge = badgeToken(a.status) || "draft";
           return (
-            <article key={a.id} className="analysis-card">
+            <article
+              key={a.id}
+              className="analysis-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => setOpenRow(a)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpenRow(a);
+                }
+              }}
+              title="Click to view full analysis"
+            >
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
                   <span className="mono" style={{ fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>
@@ -185,6 +200,50 @@ export function AnalysisView() {
           );
         })
       )}
+
+      <DetailDrawer
+        open={!!openRow}
+        onClose={() => setOpenRow(null)}
+        title={
+          <span>
+            <span className="mono" style={{ color: "var(--accent)", marginRight: 8 }}>
+              {openRow?.id}
+            </span>
+            {openRow?.title ?? ""}
+          </span>
+        }
+        subtitle={
+          openRow ? (
+            <span>
+              {openRow.repo ? `${openRow.repo} · ` : ""}
+              {openRow.status}
+              {openRow.source_path ? ` · ${openRow.source_path}` : ""}
+              {openRow.occurred_at ? ` · ${openRow.occurred_at}` : ""}
+            </span>
+          ) : null
+        }
+      >
+        {openRow ? (
+          <>
+            {!openRow.source_path ? (
+              <div className="drawer__meta">
+                <span>rounds: <strong>{openRow.rounds}</strong></span>
+                <span>duration: <strong>{openRow.duration_s}s</strong></span>
+                <span>judge: <strong>{openRow.judge || "—"}</strong></span>
+                {openRow.decision_id ? (
+                  <span>→ <strong>{openRow.decision_id}</strong></span>
+                ) : null}
+                {openRow.panel.length > 0 ? (
+                  <span>panel: <strong>{openRow.panel.join(", ")}</strong></span>
+                ) : null}
+              </div>
+            ) : null}
+            <pre className="drawer__markdown">
+              {openRow.verdict?.trim() ? openRow.verdict : "(no body captured)"}
+            </pre>
+          </>
+        ) : null}
+      </DetailDrawer>
     </div>
   );
 }

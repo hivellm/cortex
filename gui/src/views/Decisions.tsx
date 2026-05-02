@@ -1,14 +1,16 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { DetailDrawer } from "../atoms/DetailDrawer";
 import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
-import { api, type DecisionChainNode } from "../lib/api";
+import { api, type DecisionChainNode, type DecisionRow } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
 
 export function DecisionsView() {
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [repoFilter, setRepoFilter] = useState<string>("");
+  const [openId, setOpenId] = useState<string | null>(null);
 
   // Pull the unfiltered list once so the repo dropdown stays stable
   // even as the filtered view narrows. The list is small (decisions
@@ -118,6 +120,16 @@ export function DecisionsView() {
             <article
               key={d.id}
               className={`decision ${d.status === "superseded" ? "is-superseded" : ""}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => setOpenId(d.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setOpenId(d.id);
+                }
+              }}
+              title="Click to view full decision"
             >
               <div className="decision__head">
                 <span className="decision__id">{d.id}</span>
@@ -181,7 +193,83 @@ export function DecisionsView() {
           ))}
         </div>
       )}
+
+      <DecisionDrawer
+        id={openId}
+        row={openId ? rowsRaw.find((r) => r.id === openId) ?? null : null}
+        onClose={() => setOpenId(null)}
+      />
     </div>
+  );
+}
+
+function DecisionDrawer({
+  id,
+  row,
+  onClose,
+}: {
+  id: string | null;
+  row: DecisionRow | null;
+  onClose: () => void;
+}) {
+  const connKey = useConnKey();
+  const { data, isLoading, error } = useQuery({
+    queryKey: [connKey, "decision-detail", id ?? ""],
+    queryFn: () => api.decisionDetail(id as string),
+    enabled: !!id,
+  });
+
+  return (
+    <DetailDrawer
+      open={!!id}
+      onClose={onClose}
+      title={
+        <span>
+          <span className="mono" style={{ color: "var(--accent)", marginRight: 8 }}>
+            {id}
+          </span>
+          {row?.title ?? data?.title ?? ""}
+        </span>
+      }
+      subtitle={
+        <span>
+          {row?.repo ? `${row.repo} · ` : ""}
+          {row?.status ?? data?.status ?? ""}
+          {row?.occurred_at ? ` · ${row.occurred_at}` : ""}
+        </span>
+      }
+    >
+      {(row?.author || row?.source_analysis || row?.supersedes || row?.superseded_by) ? (
+        <div className="drawer__meta">
+          {row.author ? <span>by <strong>{row.author}</strong></span> : null}
+          {row.source_analysis ? (
+            <span>from <strong>{row.source_analysis}</strong></span>
+          ) : null}
+          {row.supersedes ? (
+            <span>supersedes <strong>{row.supersedes}</strong></span>
+          ) : null}
+          {row.superseded_by ? (
+            <span>superseded by <strong>{row.superseded_by}</strong></span>
+          ) : null}
+          {row.tags.length > 0 ? (
+            <span>tags: <strong>{row.tags.join(", ")}</strong></span>
+          ) : null}
+        </div>
+      ) : null}
+      {error ? (
+        <pre className="drawer__markdown" style={{ color: "var(--err, #f88)" }}>
+          Failed to load decision body.
+        </pre>
+      ) : isLoading ? (
+        <pre className="drawer__markdown muted">Loading…</pre>
+      ) : (
+        <pre className="drawer__markdown">
+          {data?.body_markdown?.trim()
+            ? data.body_markdown
+            : row?.rationale ?? "(no body)"}
+        </pre>
+      )}
+    </DetailDrawer>
   );
 }
 
