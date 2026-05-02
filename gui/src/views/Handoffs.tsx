@@ -29,7 +29,13 @@ export function HandoffsView() {
 
   const rows = useMemo(() => {
     const list = [...(data ?? [])];
-    list.sort((a, b) => (b.updated_ms ?? 0) - (a.updated_ms ?? 0));
+    list.sort((a, b) => {
+      const ms = (b.updated_ms ?? 0) - (a.updated_ms ?? 0);
+      if (ms !== 0) return ms;
+      // Fallback: filenames are ISO-8601 timestamps (`2026-05-02T03-02-23.md`),
+      // so lex-desc on filename gives newest-first when ts is missing/zero.
+      return (b.filename ?? "").localeCompare(a.filename ?? "");
+    });
     return list;
   }, [data]);
   const repos = useMemo(() => {
