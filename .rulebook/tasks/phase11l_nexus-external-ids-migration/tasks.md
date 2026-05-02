@@ -1,8 +1,8 @@
 ## 1. Dependency gate (Nexus phase9 status check)
 
-- [ ] 1.1 Track Nexus `phase9_external-node-ids` status in `.rulebook/PLANS.md`; this Cortex task does NOT start §2 onward until Nexus §4 (Cypher executor branches) AND §5 (REST/RPC/SDK) land in a tagged Nexus 2.x release
-- [ ] 1.2 Smoke IT `crates/cortex-workers/tests/nexus_external_id_smoke_it.rs` (gated on `CORTEX_NEXUS_EXTERNAL_ID_IT=1`) — issues `CREATE (n:Artifact {_id: 'sha256:test', name: 'foo'}) ON CONFLICT MATCH` against the live Nexus, verifies the round-trip via `GET /nodes/by-external-id/sha256:test`, and asserts `RETURN n._id` projects the original prefixed string
-- [ ] 1.3 Pin minimum SDK in `Cargo.toml` workspace deps (`nexus-graph-sdk = "2.x"`) once §1.2 is green; document the version bump in `CHANGELOG.md` under "Changed"
+- [x] 1.1 Track Nexus `phase9_external-node-ids` status in `.rulebook/PLANS.md`; this Cortex task does NOT start §2 onward until Nexus §4 (Cypher executor branches) AND §5 (REST/RPC/SDK) land in a tagged Nexus 2.x release
+- [x] 1.2 Smoke IT `crates/cortex-workers/tests/nexus_external_id_smoke_it.rs` (gated on `CORTEX_NEXUS_EXTERNAL_ID_IT=1`) — issues `CREATE (n:Artifact {_id: 'sha256:test', name: 'foo'}) ON CONFLICT MATCH` against the live Nexus, verifies the round-trip via `GET /nodes/by-external-id/sha256:test`, and asserts `RETURN n._id` projects the original prefixed string
+- [x] 1.3 Pin minimum SDK in `Cargo.toml` workspace deps (`nexus-graph-sdk = "2.x"`) once §1.2 is green; document the version bump in `CHANGELOG.md` under "Changed"
 
 ## 2. NodeOp surface + identity helpers
 
