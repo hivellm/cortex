@@ -647,6 +647,7 @@ dependencies = [
  "cortex-build",
  "cortex-consolidator",
  "cortex-core",
+ "cortex-ingestion",
  "cortex-retention",
  "cortex-storage",
  "cortex-workers",

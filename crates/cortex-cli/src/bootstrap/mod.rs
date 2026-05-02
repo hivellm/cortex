@@ -12,6 +12,7 @@ pub mod config;
 pub mod emitter;
 pub mod estimate;
 pub mod git;
+pub mod graph_static;
 pub mod metrics;
 pub mod publisher;
 pub mod runner;
@@ -32,6 +33,10 @@ pub use emitter::{
 };
 pub use estimate::{estimate_repo, format_estimate, Estimate};
 pub use git::{current_head_sha, parse_log, walk_commits, CommitRecord, GitWalkError};
+pub use graph_static::{
+    open_archive_writer, run_repo_graph_static, GraphStaticReport, GRAPH_STATIC_ANALYZER_VERSION,
+    GRAPH_STATIC_STREAM_TAG,
+};
 pub use metrics::Metrics;
 pub use publisher::{LiveSynapPublisher, MemoryPublisher, Publisher, SynapHandle};
 pub use runner::{

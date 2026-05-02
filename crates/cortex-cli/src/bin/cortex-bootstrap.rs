@@ -12,8 +12,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cortex_cli::bootstrap::{
     current_head_sha, estimate_repo, format_estimate, load_config, load_for_repo, load_workspace,
-    preflight_workspace, run_repo, write_atomic, Checkpoint, CliArgs, LiveSynapPublisher,
-    LogFormat, MemoryPublisher, Metrics, Publisher, RepoRunReport, RunnerConfig, SynapHandle,
+    open_archive_writer, preflight_workspace, run_repo, run_repo_graph_static, write_atomic,
+    Checkpoint, CliArgs, GraphStaticReport, LiveSynapPublisher, LogFormat, MemoryPublisher,
+    Metrics, Publisher, RepoRunReport, RunnerConfig, SynapHandle,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -100,6 +101,43 @@ async fn main() -> Result<()> {
             let est = estimate_repo(root, id, &repo_cfg);
             print!("{}", format_estimate(&est));
         }
+        return Ok(());
+    }
+
+    if args.graph_static {
+        let archive_root = args.graph_archive_root.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("--graph-static requires --graph-archive-root <PATH>")
+        })?;
+        std::fs::create_dir_all(archive_root)
+            .with_context(|| format!("create archive root {}", archive_root.display()))?;
+        let writer = open_archive_writer(archive_root);
+        let mut reports: Vec<GraphStaticReport> = Vec::with_capacity(targets.len());
+        for (root, id, cfg_override) in &targets {
+            if shutdown.load(Ordering::Relaxed) {
+                tracing::info!("shutdown requested before repo {id}; exiting");
+                break;
+            }
+            let cfg = match cfg_override {
+                Some(p) => load_config(p)
+                    .with_context(|| format!("load workspace cortex.toml for {id}"))?,
+                None => {
+                    load_for_repo(root).with_context(|| format!("load cortex.toml for {id}"))?
+                }
+            };
+            let resolved_id = cfg.cortex.id.clone().unwrap_or_else(|| id.clone());
+            let report = run_repo_graph_static(&resolved_id, root, &cfg.cortex, writer.as_ref())
+                .with_context(|| format!("graph-static pass for {resolved_id}"))?;
+            eprintln!(
+                "[graph-static] {}: {} files analyzed, {} edges, {} envelopes, {:.1} s",
+                report.repo_id,
+                report.files_analyzed,
+                report.edges_emitted,
+                report.envelopes_written,
+                report.duration_secs,
+            );
+            reports.push(report);
+        }
+        print_graph_static_summary(&reports);
         return Ok(());
     }
 
@@ -285,6 +323,43 @@ impl RunSummary {
                 reason: reason.to_string(),
             },
         }
+    }
+}
+
+fn print_graph_static_summary(rows: &[GraphStaticReport]) {
+    if rows.is_empty() {
+        return;
+    }
+    let id_width = rows
+        .iter()
+        .map(|r| r.repo_id.len())
+        .max()
+        .unwrap_or(4)
+        .max(4);
+    eprintln!();
+    eprintln!(
+        "{:<id_width$}  {:>10}  {:>10}  {:>10}  {:>10}",
+        "repo",
+        "analyzed",
+        "edges",
+        "nodes",
+        "envelopes",
+        id_width = id_width,
+    );
+    eprintln!(
+        "{}",
+        "-".repeat(id_width + 4 + 10 + 2 + 10 + 2 + 10 + 2 + 10)
+    );
+    for r in rows {
+        eprintln!(
+            "{:<id_width$}  {:>10}  {:>10}  {:>10}  {:>10}",
+            r.repo_id,
+            r.files_analyzed,
+            r.edges_emitted,
+            r.nodes_emitted,
+            r.envelopes_written,
+            id_width = id_width,
+        );
     }
 }
 

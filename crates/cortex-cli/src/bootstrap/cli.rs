@@ -93,6 +93,24 @@ pub struct CliArgs {
     /// Debug logging.
     #[arg(long)]
     pub verbose: bool,
+
+    /// Phase11k §5.1 — run the static graph-extraction pass instead
+    /// of the regular Synap-publishing bootstrap. Walks every
+    /// selected repo, runs the per-language code analyzers and the
+    /// markdown analyzer, builds [`GraphPatch`] entries via the
+    /// resolver, and writes one canonical envelope per analyzed
+    /// file to the zstd-NDJSON archive sink that
+    /// `cortex-api::archive_loader` re-reads at boot. Synap, the
+    /// runner, and the checkpoint logic are bypassed in this mode.
+    ///
+    /// [`GraphPatch`]: cortex_workers::graph::patch::GraphPatch
+    #[arg(long)]
+    pub graph_static: bool,
+
+    /// Archive root the graph-static mode writes into. Required
+    /// when [`Self::graph_static`] is set; ignored otherwise.
+    #[arg(long, value_name = "PATH")]
+    pub graph_archive_root: Option<PathBuf>,
 }
 
 /// Logging output mode.
@@ -169,6 +187,29 @@ mod tests {
         let args = CliArgs::parse_from(["cortex-bootstrap", "--resume"]);
         assert!(args.repo_roots.is_empty());
         assert!(!args.requires_repo_roots());
+    }
+
+    #[test]
+    fn cli_parses_graph_static_flag() {
+        let args = CliArgs::parse_from([
+            "cortex-bootstrap",
+            "Vectorizer/",
+            "--graph-static",
+            "--graph-archive-root",
+            "/var/lib/cortex/archive",
+        ]);
+        assert!(args.graph_static);
+        assert_eq!(
+            args.graph_archive_root.as_deref(),
+            Some(std::path::Path::new("/var/lib/cortex/archive"))
+        );
+    }
+
+    #[test]
+    fn cli_graph_static_defaults_off() {
+        let args = CliArgs::parse_from(["cortex-bootstrap", "Vectorizer/"]);
+        assert!(!args.graph_static);
+        assert!(args.graph_archive_root.is_none());
     }
 
     #[test]

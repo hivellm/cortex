@@ -35,6 +35,7 @@ cortex-storage = { path = "../cortex-storage" }
 cortex-workers = { path = "../cortex-workers" }
 cortex-api = { path = "../cortex-api" }
 cortex-build = { path = "../cortex-build" }
+cortex-ingestion = { path = "../cortex-ingestion" }
 cortex-retention = { path = "../cortex-retention" }
 cortex-consolidator = { path = "../cortex-consolidator" }
 
