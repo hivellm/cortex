@@ -20,10 +20,10 @@
 
 ## 4. Schema bootstrap rewrite
 
-- [ ] 4.1 `crates/cortex-workers/src/graph/schema.rs::SCHEMA_STATEMENTS` drops the seven `natural_key`-keyed CONSTRAINT statements (`artifact_natural_key`, `symbol_natural_key`, `external_package_natural_key`, `unresolved_import_natural_key`, `doc_section_natural_key`, plus any phase11k-introduced equivalents); add a comment block citing this task explaining the supersession
-- [ ] 4.2 Keep secondary identity constraints (`session_id`, `turn_id`, `tool_call_id`, `decision_id`, `memory_id`, `analysis_id`, `law_id`, `violation_id`, `repo_name`, `spec_path`) — those properties also serve as the `_id` value, so the constraint is belt-and-braces against an SDK regression
-- [ ] 4.3 Doctor extension `crates/cortex-cli/src/ops/doctor.rs::check_node_op_external_id` — sample a small batch of envelopes from the archive partition, parse the embedded graph patch, and assert every NodeOp carries `external_id: Some(_)`; surface a clear PASS/FAIL line in the doctor's report
-- [ ] 4.4 Schema-bootstrap IT against Nexus 2.x: drop a fresh DB, apply `SCHEMA_STATEMENTS`, assert the seven dropped constraints are absent and the kept ones are present
+- [x] 4.1 `crates/cortex-workers/src/graph/schema.rs::SCHEMA_STATEMENTS` drops the seven `natural_key`-keyed CONSTRAINT statements (`artifact_natural_key`, `symbol_natural_key`, `external_package_natural_key`, `unresolved_import_natural_key`, `doc_section_natural_key`, plus any phase11k-introduced equivalents); add a comment block citing this task explaining the supersession
+- [x] 4.2 Keep secondary identity constraints (`session_id`, `turn_id`, `tool_call_id`, `decision_id`, `memory_id`, `analysis_id`, `law_id`, `violation_id`, `repo_name`, `spec_path`) — those properties also serve as the `_id` value, so the constraint is belt-and-braces against an SDK regression
+- [x] 4.3 Doctor extension `crates/cortex-cli/src/ops/doctor.rs::check_node_op_external_id` — sample a small batch of envelopes from the archive partition, parse the embedded graph patch, and assert every NodeOp carries `external_id: Some(_)`; surface a clear PASS/FAIL line in the doctor's report
+- [x] 4.4 Schema-bootstrap IT against Nexus 2.x: drop a fresh DB, apply `SCHEMA_STATEMENTS`, assert the seven dropped constraints are absent and the kept ones are present
 
 ## 5. UNKNOWN_CONTENT_HASH sentinel rewrite
 

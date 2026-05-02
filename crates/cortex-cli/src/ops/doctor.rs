@@ -64,6 +64,127 @@ pub struct ArchiveSummary {
     pub partitions: BTreeMap<PartitionKey, u64>,
 }
 
+/// Phase11l §4.3 + §6.3 — graph-static envelope shape audit.
+///
+/// Walks every `.parquet` partition under an archive root, parses
+/// the inline `payload.metadata.graph_patch` attached by
+/// `cortex-bootstrap --graph-static`, and counts how many of the
+/// embedded `NodeOp` entries carry the post-phase11l `external_id`
+/// slot vs. the legacy `natural_key`-only shape. Surfaces a clear
+/// PASS/FAIL line in the doctor's report so an operator can
+/// monitor the migration tail.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphPatchShapeAudit {
+    /// Total envelopes that carried an inline `graph_patch`.
+    pub envelopes_with_patch: u64,
+    /// Total `NodeOp` entries seen across every patch.
+    pub nodes_total: u64,
+    /// `NodeOp` entries that already carry `external_id: Some(_)`.
+    pub nodes_with_external_id: u64,
+    /// `NodeOp` entries still on the legacy shape (no `external_id`).
+    pub nodes_legacy_only: u64,
+}
+
+impl GraphPatchShapeAudit {
+    /// Ratio of post-phase11l-shape nodes over the total. `0.0` when
+    /// no patches were observed (fresh archive).
+    pub fn external_id_ratio(&self) -> f64 {
+        if self.nodes_total == 0 {
+            0.0
+        } else {
+            (self.nodes_with_external_id as f64) / (self.nodes_total as f64)
+        }
+    }
+
+    /// True when every observed node carries `external_id` (or the
+    /// archive is empty). The doctor's PASS gate.
+    pub fn passes(&self) -> bool {
+        self.nodes_legacy_only == 0
+    }
+}
+
+/// Walk an archive root and audit the embedded graph-patch shapes.
+/// Best-effort — unreadable / non-graph-patch envelopes are skipped
+/// silently (the doctor's job is to flag the legacy shape, not to
+/// validate every envelope).
+pub fn audit_graph_patch_shape(archive_root: &Path) -> GraphPatchShapeAudit {
+    let mut audit = GraphPatchShapeAudit::default();
+    let events_dir = archive_root.join("events");
+    if !events_dir.exists() {
+        return audit;
+    }
+    audit_dir(&events_dir, &mut audit);
+    audit
+}
+
+fn audit_dir(dir: &Path, audit: &mut GraphPatchShapeAudit) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            audit_dir(&path, audit);
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("parquet") {
+            continue;
+        }
+        if let Err(e) = audit_file(&path, audit) {
+            tracing::debug!(
+                path = %path.display(),
+                error = %e,
+                "doctor graph-patch audit: skipping unreadable file"
+            );
+        }
+    }
+}
+
+fn audit_file(path: &Path, audit: &mut GraphPatchShapeAudit) -> Result<()> {
+    use std::io::{BufRead, BufReader};
+    let file = std::fs::File::open(path)?;
+    let decoder = zstd::stream::read::Decoder::new(file)?;
+    let reader = BufReader::new(decoder);
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let env: serde_json::Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let patch = match env
+            .get("payload")
+            .and_then(|p| p.get("metadata"))
+            .and_then(|m| m.get("graph_patch"))
+        {
+            Some(p) => p,
+            None => continue,
+        };
+        audit.envelopes_with_patch = audit.envelopes_with_patch.saturating_add(1);
+        let nodes = match patch.get("nodes").and_then(|n| n.as_array()) {
+            Some(arr) => arr,
+            None => continue,
+        };
+        for node in nodes {
+            audit.nodes_total = audit.nodes_total.saturating_add(1);
+            let has_external_id = node
+                .get("external_id")
+                .map(|v| !v.is_null())
+                .unwrap_or(false);
+            if has_external_id {
+                audit.nodes_with_external_id = audit.nodes_with_external_id.saturating_add(1);
+            } else {
+                audit.nodes_legacy_only = audit.nodes_legacy_only.saturating_add(1);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Walks a `cortex-ingestion` archive root and counts envelopes
 /// per `(repo_slug, family)` using the same routing function the
 /// live fulltext worker applies. Read-only — never writes back.
@@ -1364,5 +1485,115 @@ mod tests {
         assert_eq!(summary.partitions.len(), 2);
         assert_eq!(summary.partitions.get(&key("cortex", "code")), Some(&2));
         assert_eq!(summary.partitions.get(&key("rulebook", "docs")), Some(&1));
+    }
+
+    // ---------- Phase11l §4.3 — graph-patch shape audit ----------
+
+    fn write_envelope_partition(root: &Path, lines: &[serde_json::Value]) {
+        use std::io::Write;
+        let dir = root.join("events/year=2026/month=05/day=02/hour=04");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bootstrap-graph-static-00000.parquet");
+        let mut buf: Vec<u8> = Vec::new();
+        for env in lines {
+            let line = serde_json::to_string(env).unwrap();
+            buf.extend_from_slice(line.as_bytes());
+            buf.push(b'\n');
+        }
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 0).unwrap();
+        encoder.write_all(&buf).unwrap();
+        let compressed = encoder.finish().unwrap();
+        std::fs::write(&path, compressed).unwrap();
+    }
+
+    #[test]
+    fn audit_passes_when_every_node_carries_external_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_envelope_partition(
+            tmp.path(),
+            &[serde_json::json!({
+                "kind": "artifact",
+                "payload": {
+                    "metadata": {
+                        "graph_patch": {
+                            "nodes": [
+                                { "label": "Artifact", "natural_key": "k1", "external_id": "k1", "props": {} },
+                                { "label": "Symbol",   "natural_key": "k2", "external_id": "k2", "props": {} },
+                            ],
+                            "edges": []
+                        }
+                    }
+                }
+            })],
+        );
+        let audit = audit_graph_patch_shape(tmp.path());
+        assert_eq!(audit.envelopes_with_patch, 1);
+        assert_eq!(audit.nodes_total, 2);
+        assert_eq!(audit.nodes_with_external_id, 2);
+        assert_eq!(audit.nodes_legacy_only, 0);
+        assert_eq!(audit.external_id_ratio(), 1.0);
+        assert!(audit.passes());
+    }
+
+    #[test]
+    fn audit_flags_legacy_only_node_op_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_envelope_partition(
+            tmp.path(),
+            &[serde_json::json!({
+                "kind": "artifact",
+                "payload": {
+                    "metadata": {
+                        "graph_patch": {
+                            "nodes": [
+                                // Legacy shape — `external_id` absent.
+                                { "label": "Artifact", "natural_key": "k1", "props": {} }
+                            ],
+                            "edges": []
+                        }
+                    }
+                }
+            })],
+        );
+        let audit = audit_graph_patch_shape(tmp.path());
+        assert_eq!(audit.nodes_total, 1);
+        assert_eq!(audit.nodes_with_external_id, 0);
+        assert_eq!(audit.nodes_legacy_only, 1);
+        assert_eq!(audit.external_id_ratio(), 0.0);
+        assert!(
+            !audit.passes(),
+            "audit must NOT pass when any node lacks external_id"
+        );
+    }
+
+    #[test]
+    fn audit_handles_envelope_without_graph_patch() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_envelope_partition(
+            tmp.path(),
+            &[
+                serde_json::json!({
+                    "kind": "artifact",
+                    "payload": { "body": "no graph_patch attached" }
+                }),
+                serde_json::json!({
+                    "kind": "tool_call",
+                    "payload": { "tool_name": "Read", "input": {} }
+                }),
+            ],
+        );
+        let audit = audit_graph_patch_shape(tmp.path());
+        assert_eq!(audit.envelopes_with_patch, 0);
+        assert_eq!(audit.nodes_total, 0);
+        assert!(audit.passes(), "empty audit must pass (no work to flag)");
+    }
+
+    #[test]
+    fn audit_returns_default_for_missing_archive_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No `events/` subdirectory created — typical fresh install.
+        let audit = audit_graph_patch_shape(tmp.path());
+        assert_eq!(audit, GraphPatchShapeAudit::default());
+        assert!(audit.passes());
     }
 }

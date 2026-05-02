@@ -6,43 +6,53 @@
 //! refuses to accept events against an unknown schema.
 //!
 //! Statement ordering: constraints first (they are what the writer
-//! relies on for `MERGE` idempotency), then secondary indexes used by
+//! relies on for upsert idempotency), then secondary indexes used by
 //! the read path (spec 11). Each constraint name is unique inside Nexus
 //! so re-running the bootstrap is cheap.
+//!
+//! ## Phase11l §4 — `natural_key` constraints retired
+//!
+//! The seven `*_natural_key` and the `Symbol.natural_key` uniqueness
+//! constraints (`artifact_natural_key`, `symbol_natural_key`,
+//! `external_package_natural_key`, `unresolved_import_natural_key`,
+//! `doc_section_natural_key`) shipped in phase4c–phase11k were retired
+//! in phase11l once the writer started keying on Nexus 2.1's reserved
+//! `_id` slot. The external-id catalog index Nexus maintains
+//! (`ExternalIdIndex`, phase9 §1.4) enforces uniqueness structurally
+//! — a duplicate `_id` cannot be inserted regardless of label, so a
+//! per-label `IS UNIQUE` constraint on the legacy `natural_key`
+//! property is redundant. Removing them shrinks the bootstrap
+//! surface and removes the silent-overwrite trap where two upserts
+//! against the same `natural_key` could land on different internal
+//! ids when the constraint was missing on a fresh DB. Secondary
+//! identity constraints (`session_id`, `turn_id`, …, `repo_name`,
+//! `spec_path`) stay because those properties carry semantic meaning
+//! beyond `_id` (they are the wire-shape adapters expose to callers).
 
 /// Cypher statements applied at worker startup, in order.
 ///
 /// The list mirrors the schema in spec 07 §Schema bootstrapping
-/// verbatim, plus three extra constraints not in the spec body that
-/// architecture §4.2 implies as `id` keys (`Memory`, `Analysis`,
-/// `LawViolation`) and the `Repo.name` uniqueness constraint that the
-/// `IN_REPO` edge depends on.
+/// (post-phase11l revision): identity constraints on the
+/// adapter-facing properties (`Session.id`, `Turn.id`, …,
+/// `Repo.name`, `Spec.path`) plus a small set of secondary indexes
+/// the read path uses. The legacy `*_natural_key` constraints were
+/// retired alongside the §3 templates rewrite — see the module
+/// header.
 pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE CONSTRAINT session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE",
     "CREATE CONSTRAINT turn_id IF NOT EXISTS FOR (t:Turn) REQUIRE t.id IS UNIQUE",
     "CREATE CONSTRAINT tool_call_id IF NOT EXISTS FOR (tc:ToolCall) REQUIRE tc.id IS UNIQUE",
-    "CREATE CONSTRAINT artifact_natural_key IF NOT EXISTS FOR (a:Artifact) REQUIRE a.natural_key IS UNIQUE",
     "CREATE CONSTRAINT decision_id IF NOT EXISTS FOR (d:Decision) REQUIRE d.id IS UNIQUE",
     "CREATE CONSTRAINT memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE",
     "CREATE CONSTRAINT analysis_id IF NOT EXISTS FOR (a:Analysis) REQUIRE a.id IS UNIQUE",
     "CREATE CONSTRAINT law_id IF NOT EXISTS FOR (l:Law) REQUIRE l.id IS UNIQUE",
     "CREATE CONSTRAINT violation_id IF NOT EXISTS FOR (v:LawViolation) REQUIRE v.id IS UNIQUE",
     "CREATE CONSTRAINT repo_name IF NOT EXISTS FOR (r:Repo) REQUIRE r.name IS UNIQUE",
-    // phase4c — Symbol nodes carry a composite natural key so the
-    // DEFINES edge MERGE matches the same Symbol across re-runs.
-    "CREATE CONSTRAINT symbol_natural_key IF NOT EXISTS FOR (s:Symbol) REQUIRE s.natural_key IS UNIQUE",
+    "CREATE CONSTRAINT spec_path IF NOT EXISTS FOR (s:Spec) REQUIRE s.path IS UNIQUE",
     "CREATE INDEX artifact_repo_path IF NOT EXISTS FOR (a:Artifact) ON (a.repo, a.path)",
     "CREATE INDEX turn_ts IF NOT EXISTS FOR (t:Turn) ON (t.ts)",
     "CREATE INDEX tool_call_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name)",
     "CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name)",
-    // phase11k §1.4 — graph correlation layer adds three new node
-    // labels (`ExternalPackage`, `UnresolvedImport`, `DocSection`)
-    // plus the existing `Spec` label gains a `path` natural key now
-    // that doc↔code edges target it.
-    "CREATE CONSTRAINT external_package_natural_key IF NOT EXISTS FOR (p:ExternalPackage) REQUIRE p.natural_key IS UNIQUE",
-    "CREATE CONSTRAINT unresolved_import_natural_key IF NOT EXISTS FOR (u:UnresolvedImport) REQUIRE u.natural_key IS UNIQUE",
-    "CREATE CONSTRAINT doc_section_natural_key IF NOT EXISTS FOR (d:DocSection) REQUIRE d.natural_key IS UNIQUE",
-    "CREATE CONSTRAINT spec_path IF NOT EXISTS FOR (s:Spec) REQUIRE s.path IS UNIQUE",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like
@@ -50,4 +60,85 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
 /// `Vec<String>` they can push into.
 pub fn statements() -> Vec<String> {
     SCHEMA_STATEMENTS.iter().map(|s| s.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn natural_key_constraints_are_retired_post_phase11l() {
+        // Phase11l §4.1 — the seven `natural_key`-keyed CONSTRAINT
+        // statements are no longer part of the bootstrap. Nexus 2.1's
+        // ExternalIdIndex enforces uniqueness on `_id` structurally.
+        // A regression here means the writer is back to declaring
+        // redundant constraints that conflict with the index seek path.
+        let joined = SCHEMA_STATEMENTS.join("\n");
+        for retired in [
+            "artifact_natural_key",
+            "symbol_natural_key",
+            "external_package_natural_key",
+            "unresolved_import_natural_key",
+            "doc_section_natural_key",
+        ] {
+            assert!(
+                !joined.contains(retired),
+                "phase11l §4.1 dropped `{retired}`; it must not return to SCHEMA_STATEMENTS"
+            );
+        }
+        // Sanity: no statement still references `natural_key` at all.
+        assert!(
+            !joined.contains("natural_key"),
+            "no SCHEMA_STATEMENT may still reference the legacy `natural_key` property"
+        );
+    }
+
+    #[test]
+    fn secondary_identity_constraints_remain() {
+        // The adapter-facing identity properties keep their
+        // uniqueness constraints — they encode wire-shape contracts
+        // beyond the `_id` slot (callers query by these values, the
+        // dashboard projects them as captions, etc.).
+        let joined = SCHEMA_STATEMENTS.join("\n");
+        for kept in [
+            "session_id",
+            "turn_id",
+            "tool_call_id",
+            "decision_id",
+            "memory_id",
+            "analysis_id",
+            "law_id",
+            "violation_id",
+            "repo_name",
+            "spec_path",
+        ] {
+            assert!(
+                joined.contains(kept),
+                "phase11l §4.2 kept `{kept}` as a secondary check; it MUST remain"
+            );
+        }
+    }
+
+    #[test]
+    fn statements_helper_round_trips_const() {
+        let cloned = statements();
+        assert_eq!(cloned.len(), SCHEMA_STATEMENTS.len());
+        for (i, owned) in cloned.iter().enumerate() {
+            assert_eq!(owned.as_str(), SCHEMA_STATEMENTS[i]);
+        }
+    }
+
+    #[test]
+    fn every_statement_is_idempotent() {
+        // Every statement MUST carry an `IF NOT EXISTS` clause —
+        // re-running the bootstrap is part of the worker's startup
+        // contract, and a non-idempotent CREATE would refuse the
+        // second boot.
+        for stmt in SCHEMA_STATEMENTS {
+            assert!(
+                stmt.contains("IF NOT EXISTS"),
+                "non-idempotent statement: {stmt}"
+            );
+        }
+    }
 }
