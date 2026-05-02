@@ -349,11 +349,9 @@ fn upsert_node(
     }
     let mut props: BTreeMap<String, Value> = BTreeMap::new();
     fill_props(&mut props);
-    patch.nodes.push(NodeOp {
-        label: label.to_string(),
-        natural_key: natural_key.to_string(),
-        props,
-    });
+    let mut node = NodeOp::with_identity(label, natural_key);
+    node.props = props;
+    patch.nodes.push(node);
 }
 
 fn upsert_artifact_node(patch: &mut GraphPatch, repo: &str, path: &str, content_hash: &str) {

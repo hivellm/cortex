@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 use crate::embedder::{ChunkSource, Chunker, CodeChunker};
 
 use super::identity::{artifact_natural_key, symbol_natural_key};
-use super::patch::{EdgeOp, GraphPatch, NodeOp};
+use super::patch::{ConflictPolicy, EdgeOp, GraphPatch, NodeOp};
 use crate::embedder::EnrichedEvent;
 
 /// Cap a human-readable label so a single node never explodes the
@@ -102,6 +102,8 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
     patch.nodes.push(NodeOp {
         label: "Session".to_string(),
         natural_key: session_id.clone(),
+        external_id: Some(session_id.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props: session_props,
     });
 
@@ -189,6 +191,8 @@ fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
         patch.nodes.push(NodeOp {
             label: label.to_string(),
             natural_key: format!("{}|{}", ent.entity_type, ent.identifier),
+            external_id: Some(format!("{}|{}", ent.entity_type, ent.identifier)),
+            conflict_policy: ConflictPolicy::default(),
             props,
         });
     }
@@ -370,6 +374,8 @@ fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
     patch.nodes.push(NodeOp {
         label: "Turn".to_string(),
         natural_key: turn_id.clone(),
+        external_id: Some(turn_id.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
     patch.edges.push(EdgeOp {
@@ -444,6 +450,8 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
     patch.nodes.push(NodeOp {
         label: "ToolCall".to_string(),
         natural_key: tool_call_id.clone(),
+        external_id: Some(tool_call_id.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
 
@@ -596,6 +604,8 @@ fn emit_symbol_patches(event: &EnrichedEvent, repo: &str, path: &str, patch: &mu
         patch.nodes.push(NodeOp {
             label: "Symbol".to_string(),
             natural_key: key.clone(),
+            external_id: Some(key.clone()),
+            conflict_policy: ConflictPolicy::default(),
             props,
         });
         patch.edges.push(EdgeOp {
@@ -624,6 +634,8 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
     patch.nodes.push(NodeOp {
         label: "Artifact".to_string(),
         natural_key: key.clone(),
+        external_id: Some(key.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
 
@@ -636,6 +648,8 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
     patch.nodes.push(NodeOp {
         label: "Repo".to_string(),
         natural_key: repo.to_string(),
+        external_id: Some(repo.to_string()),
+        conflict_policy: ConflictPolicy::default(),
         props: repo_props,
     });
 
@@ -679,6 +693,8 @@ fn emit_memory(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) 
     patch.nodes.push(NodeOp {
         label: "Memory".to_string(),
         natural_key: memory_id.clone(),
+        external_id: Some(memory_id.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
     patch.edges.push(EdgeOp {
@@ -725,6 +741,8 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
     patch.nodes.push(NodeOp {
         label: "Decision".to_string(),
         natural_key: decision_key.clone(),
+        external_id: Some(decision_key.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
 
@@ -856,6 +874,8 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
     patch.nodes.push(NodeOp {
         label: "Analysis".to_string(),
         natural_key: analysis_key.clone(),
+        external_id: Some(analysis_key.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
 
@@ -872,6 +892,8 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
         patch.nodes.push(NodeOp {
             label: "Repo".to_string(),
             natural_key: repo.to_string(),
+            external_id: Some(repo.to_string()),
+            conflict_policy: ConflictPolicy::default(),
             props: repo_props,
         });
         patch.edges.push(EdgeOp {
@@ -922,6 +944,8 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
     patch.nodes.push(NodeOp {
         label: "LawViolation".to_string(),
         natural_key: violation_key.clone(),
+        external_id: Some(violation_key.clone()),
+        conflict_policy: ConflictPolicy::default(),
         props,
     });
 
@@ -940,6 +964,8 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
         patch.nodes.push(NodeOp {
             label: "Law".to_string(),
             natural_key: law_id.clone(),
+            external_id: Some(law_id.clone()),
+            conflict_policy: ConflictPolicy::default(),
             props: law_props,
         });
         patch.edges.push(EdgeOp {

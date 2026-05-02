@@ -6,10 +6,10 @@
 
 ## 2. NodeOp surface + identity helpers
 
-- [ ] 2.1 Extend `crates/cortex-workers/src/graph/patch.rs::NodeOp` with `pub external_id: Option<String>` and `pub conflict_policy: ConflictPolicy` (new enum `Match` | `Replace` | `Error`, `Match` as `Default`)
-- [ ] 2.2 Update every callsite that constructs a `NodeOp` to populate `external_id` from the `natural_key` field (no value change — the same string fills the new slot); the `props["natural_key"]` stamp stays for one transitional release as a soft fallback
-- [ ] 2.3 Add `crates/cortex-workers/src/graph/identity.rs::external_id_for_node(label, natural_key)` helper that returns the canonical `_id` string (currently identity, but factoring this through one helper means future per-label format changes land in one place)
-- [ ] 2.4 Unit tests: every `NodeOp` constructor path produces a populated `external_id`; serde round-trip preserves the new field; `ConflictPolicy::default() == Match`
+- [x] 2.1 Extend `crates/cortex-workers/src/graph/patch.rs::NodeOp` with `pub external_id: Option<String>` and `pub conflict_policy: ConflictPolicy` (new enum `Match` | `Replace` | `Error`, `Match` as `Default`)
+- [x] 2.2 Update every callsite that constructs a `NodeOp` to populate `external_id` from the `natural_key` field (no value change — the same string fills the new slot); the `props["natural_key"]` stamp stays for one transitional release as a soft fallback
+- [x] 2.3 Add `crates/cortex-workers/src/graph/identity.rs::external_id_for_node(label, natural_key)` helper that returns the canonical `_id` string (currently identity, but factoring this through one helper means future per-label format changes land in one place)
+- [x] 2.4 Unit tests: every `NodeOp` constructor path produces a populated `external_id`; serde round-trip preserves the new field; `ConflictPolicy::default() == Match`
 
 ## 3. Cypher templates
 

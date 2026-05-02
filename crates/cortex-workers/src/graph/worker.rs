@@ -43,7 +43,7 @@ use super::analyzer_dispatch::{run_if_changed, AnalyzerState};
 use super::config::GraphConfig;
 use super::metrics::Metrics;
 use super::nexus_client::GraphClientError;
-use super::patch::{GraphPatch, NodeOp};
+use super::patch::{ConflictPolicy, GraphPatch, NodeOp};
 use super::writer::GraphWriter;
 use crate::embedder::EnrichedEvent;
 
@@ -558,6 +558,8 @@ pub fn orphan_turn_patch(turn_id: &str) -> GraphPatch {
         nodes: vec![NodeOp {
             label: "Turn".to_string(),
             natural_key: turn_id.to_string(),
+            external_id: Some(turn_id.to_string()),
+            conflict_policy: ConflictPolicy::default(),
             props,
         }],
         edges: vec![],

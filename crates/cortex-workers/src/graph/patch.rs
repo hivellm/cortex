@@ -9,10 +9,39 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+/// Conflict-resolution policy applied when a node upsert lands on
+/// an `external_id` that already exists in the catalog. Mirrors the
+/// Nexus 2.1 `ConflictPolicy` enum (`error` / `match` / `replace`)
+/// the SDK's `create_node_with_external_id` accepts.
+///
+/// Phase11l §2.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ConflictPolicy {
+    /// Return the existing internal id, leave properties untouched.
+    /// Default for every Cortex upsert: re-running the same patch
+    /// stays idempotent without overwriting whatever the graph
+    /// worker / dashboard already learned about the node.
+    #[default]
+    Match,
+    /// Reuse the existing internal id but overwrite the property
+    /// bag. Used by the §5 sentinel-redirect path once the
+    /// canonical content_hash arrives.
+    Replace,
+    /// Surface a duplicate-id error. Reserved for the future
+    /// `cortex-ops graph drop` admin command's post-drop sanity
+    /// check; the regular write path uses `Match`.
+    Error,
+}
+
 /// Upsert entry for a single node.
 ///
-/// `natural_key` is the primary identity used inside Nexus `MERGE`
-/// statements; `props` is the bag of properties to set / update.
+/// `natural_key` is the primary identity Cortex stamps on every node
+/// (the legacy `MERGE { natural_key: $key }` Cypher path still relies
+/// on it; the §3 templates rewrite drops the `MERGE` form). Phase11l
+/// §2 added [`Self::external_id`] as the canonical identity slot the
+/// Nexus 2.1 `_id` route reads — it shadows `natural_key` once the
+/// new templates ship and the legacy field becomes a soft fallback.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeOp {
     /// Cypher node label (e.g. `Turn`, `Artifact`, `Decision`).
@@ -20,8 +49,41 @@ pub struct NodeOp {
     /// Natural key for the node (e.g. `turn_id`, or
     /// `repo|path|content_hash` for `Artifact`).
     pub natural_key: String,
+    /// Phase11l §2.1 — Nexus 2.1 reserved `_id` slot. When `Some`,
+    /// the writer issues `CREATE … {_id: external_id} ON CONFLICT
+    /// <conflict_policy>` instead of the legacy `MERGE` shape. When
+    /// `None`, the legacy `MERGE { natural_key }` path runs as a
+    /// soft fallback. New construction sites populate this from
+    /// `natural_key` via [`super::identity::external_id_for_node`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// Phase11l §2.1 — conflict policy passed to the Nexus 2.1
+    /// upsert. Defaults to [`ConflictPolicy::Match`] so re-running
+    /// the same patch is idempotent without clobbering downstream-
+    /// stamped properties.
+    #[serde(default)]
+    pub conflict_policy: ConflictPolicy,
     /// Property bag to set with `SET n += $props`.
     pub props: BTreeMap<String, serde_json::Value>,
+}
+
+impl NodeOp {
+    /// Phase11l §2 — preferred construction path. Stamps both the
+    /// legacy `natural_key` (for the soft `MERGE` fallback) AND the
+    /// Nexus 2.1 `external_id` slot from the same canonical key
+    /// string. `conflict_policy` defaults to
+    /// [`ConflictPolicy::Match`]; callers that need `Replace` or
+    /// `Error` semantics override post-construction.
+    pub fn with_identity(label: impl Into<String>, natural_key: impl Into<String>) -> Self {
+        let nk = natural_key.into();
+        Self {
+            label: label.into(),
+            external_id: Some(nk.clone()),
+            natural_key: nk,
+            conflict_policy: ConflictPolicy::default(),
+            props: BTreeMap::new(),
+        }
+    }
 }
 
 /// Upsert entry for a single edge.
@@ -73,11 +135,7 @@ mod tests {
     use super::*;
 
     fn node(label: &str, key: &str) -> NodeOp {
-        NodeOp {
-            label: label.into(),
-            natural_key: key.into(),
-            props: BTreeMap::new(),
-        }
+        NodeOp::with_identity(label, key)
     }
 
     fn edge(t: &str) -> EdgeOp {
@@ -143,6 +201,82 @@ mod tests {
         let parsed: GraphWriteReport = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.nodes_upserted, 3);
         assert_eq!(parsed.by_label.get("Turn"), Some(&1));
+    }
+
+    // ---------- Phase11l §2.4 ----------
+
+    #[test]
+    fn conflict_policy_default_is_match() {
+        assert_eq!(ConflictPolicy::default(), ConflictPolicy::Match);
+    }
+
+    #[test]
+    fn conflict_policy_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ConflictPolicy::Match).unwrap(),
+            "\"match\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ConflictPolicy::Replace).unwrap(),
+            "\"replace\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ConflictPolicy::Error).unwrap(),
+            "\"error\""
+        );
+    }
+
+    #[test]
+    fn node_op_with_identity_populates_external_id_from_natural_key() {
+        let n = NodeOp::with_identity("Artifact", "cortex|src/lib.rs|sha256:abc");
+        assert_eq!(n.label, "Artifact");
+        assert_eq!(n.natural_key, "cortex|src/lib.rs|sha256:abc");
+        assert_eq!(
+            n.external_id.as_deref(),
+            Some("cortex|src/lib.rs|sha256:abc"),
+            "external_id must mirror natural_key for the soft-fallback period"
+        );
+        assert_eq!(n.conflict_policy, ConflictPolicy::Match);
+        assert!(n.props.is_empty());
+    }
+
+    #[test]
+    fn node_op_serde_round_trips_with_external_id_and_policy() {
+        let mut n = NodeOp::with_identity("Symbol", "cortex|rust|crate::foo::bar");
+        n.props
+            .insert("language".into(), serde_json::Value::String("rust".into()));
+        n.conflict_policy = ConflictPolicy::Replace;
+        let json = serde_json::to_string(&n).unwrap();
+        assert!(
+            json.contains("\"external_id\":\"cortex|rust|crate::foo::bar\""),
+            "external_id must serialise; got {json}"
+        );
+        assert!(
+            json.contains("\"conflict_policy\":\"replace\""),
+            "conflict_policy must serialise; got {json}"
+        );
+        let parsed: NodeOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.external_id.as_deref(),
+            Some("cortex|rust|crate::foo::bar")
+        );
+        assert_eq!(parsed.conflict_policy, ConflictPolicy::Replace);
+    }
+
+    #[test]
+    fn node_op_legacy_json_without_new_fields_still_deserializes() {
+        // Wire shape from before phase11l §2 — `external_id` and
+        // `conflict_policy` absent. The soft-fallback contract requires
+        // both fields default cleanly so a half-replayed archive does
+        // not block the worker.
+        let legacy = r#"{
+            "label":"Artifact",
+            "natural_key":"cortex|src/x.rs|sha256:abc",
+            "props":{}
+        }"#;
+        let parsed: NodeOp = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.external_id.is_none());
+        assert_eq!(parsed.conflict_policy, ConflictPolicy::Match);
     }
 }
 

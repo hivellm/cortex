@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::patch::{EdgeOp, GraphPatch, NodeOp};
+use super::patch::{ConflictPolicy, EdgeOp, GraphPatch, NodeOp};
 
 /// Counters returned alongside a coalesced patch.
 #[derive(Debug, Clone, Default)]
@@ -109,6 +109,8 @@ mod tests {
         NodeOp {
             label: label.into(),
             natural_key: key.into(),
+            external_id: Some(key.into()),
+            conflict_policy: ConflictPolicy::default(),
             props: props.into_iter().map(|(k, v)| (k.into(), v)).collect(),
         }
     }

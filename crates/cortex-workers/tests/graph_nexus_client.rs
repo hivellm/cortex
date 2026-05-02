@@ -22,7 +22,7 @@ use cortex_workers::graph::nexus_client::{
     json_to_sdk_value, with_retry, GraphClient, GraphClientError, LiveNexusClient, MemoryCall,
     MemoryNexusClient, WriteStats,
 };
-use cortex_workers::graph::patch::{EdgeOp, GraphPatch, NodeOp};
+use cortex_workers::graph::patch::{ConflictPolicy, EdgeOp, GraphPatch, NodeOp};
 use cortex_workers::graph::schema;
 use nexus_sdk::{NexusError, Value as SdkValue};
 
@@ -34,6 +34,8 @@ fn node(label: &str, key: &str) -> NodeOp {
     NodeOp {
         label: label.to_string(),
         natural_key: key.to_string(),
+        external_id: Some(key.to_string()),
+        conflict_policy: ConflictPolicy::default(),
         props: empty_props(),
     }
 }
