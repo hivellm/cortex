@@ -175,12 +175,13 @@ local_path = "../Vectorizer"
 crate_name = "vectorizer"
 "#;
         let index = ExternalRepoIndex::from_toml_str(toml).expect("parse");
-        let map = PackageMap::from_workspace(
-            ["vectorizer-sdk".to_string(), "tokio".to_string()],
-            &index,
-        );
+        let map =
+            PackageMap::from_workspace(["vectorizer-sdk".to_string(), "tokio".to_string()], &index);
         let v = map.find("vectorizer").expect("alias");
-        assert_eq!(v.local_path.as_deref(), Some(std::path::Path::new("../Vectorizer")));
+        assert_eq!(
+            v.local_path.as_deref(),
+            Some(std::path::Path::new("../Vectorizer"))
+        );
         let t = map.find("tokio").expect("tokio");
         assert!(t.local_path.is_none());
     }

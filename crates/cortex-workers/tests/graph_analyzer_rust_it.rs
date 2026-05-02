@@ -115,12 +115,20 @@ fn run_analyzer(
     let resolver = SymbolResolver::new(module_map, package_map, &ls);
     let edges = RustAnalyzer::new().extract(src, REPO, rel_path);
     let mut hashes: BTreeMap<(String, String), String> = BTreeMap::new();
-    hashes.insert((REPO.into(), "src/module_a.rs".into()), fake_hash_for("src/module_a.rs"));
-    hashes.insert((REPO.into(), "src/module_b.rs".into()), fake_hash_for("src/module_b.rs"));
-    hashes.insert((REPO.into(), "src/lib.rs".into()), fake_hash_for("src/lib.rs"));
-    let lookup = move |repo: &str, path: &str| {
-        hashes.get(&(repo.to_string(), path.to_string())).cloned()
-    };
+    hashes.insert(
+        (REPO.into(), "src/module_a.rs".into()),
+        fake_hash_for("src/module_a.rs"),
+    );
+    hashes.insert(
+        (REPO.into(), "src/module_b.rs".into()),
+        fake_hash_for("src/module_b.rs"),
+    );
+    hashes.insert(
+        (REPO.into(), "src/lib.rs".into()),
+        fake_hash_for("src/lib.rs"),
+    );
+    let lookup =
+        move |repo: &str, path: &str| hashes.get(&(repo.to_string(), path.to_string())).cloned();
     let content_hash = fake_hash_for(rel_path);
     let ctx = PatchBuildContext {
         source_repo: REPO,
@@ -154,11 +162,24 @@ fn three_file_crate_emits_all_edge_classes_in_proposal() {
     let package_map = build_package_map();
     assert!(!module_map.is_empty(), "module map must populate");
 
-    let edges_lib = run_analyzer(&crate_files.lib_src, "src/lib.rs", &module_map, &package_map);
-    let edges_a =
-        run_analyzer(&crate_files.module_a_src, "src/module_a.rs", &module_map, &package_map);
-    let edges_b =
-        run_analyzer(&crate_files.module_b_src, "src/module_b.rs", &module_map, &package_map);
+    let edges_lib = run_analyzer(
+        &crate_files.lib_src,
+        "src/lib.rs",
+        &module_map,
+        &package_map,
+    );
+    let edges_a = run_analyzer(
+        &crate_files.module_a_src,
+        "src/module_a.rs",
+        &module_map,
+        &package_map,
+    );
+    let edges_b = run_analyzer(
+        &crate_files.module_b_src,
+        "src/module_b.rs",
+        &module_map,
+        &package_map,
+    );
 
     // 1. `use crate::module_a::helper;` → IMPORTS_FILE → module_a artifact.
     assert!(

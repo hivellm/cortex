@@ -706,3 +706,60 @@ async fn rpc_and_http_transport_selectors_resolve_correctly() {
     // Cleanup so other tests see a clean env.
     std::env::remove_var("CORTEX_GRAPH_TRANSPORT");
 }
+
+// ---------- §5.2 live static-analyzer integration ----------
+
+/// Phase11k §5.2: an Artifact event whose path ends in `.rs` and whose
+/// payload contains a `body` field must trigger the Rust static analyzer
+/// and produce at least one `UNRESOLVED_IMPORT` or `IMPORTS_EXTERNAL` edge
+/// in the coalesced patch that the writer sees.
+#[tokio::test]
+async fn static_analyzer_runs_on_artifact_event_with_rust_body() {
+    let writer: Arc<CountingWriter> = Arc::new(CountingWriter::default());
+    let writer_dyn: Arc<dyn GraphWriter> = writer.clone();
+    let (worker, consumer, publisher) = build_worker(writer_dyn);
+
+    let artifact = EnrichedEvent {
+        event_id: "evt-artifact-rust".to_string(),
+        kind: Kind::Artifact,
+        content_hash: "sha256:rustbody01".to_string(),
+        redacted_payload: json!({ "body": "use tokio::spawn;" }),
+        classifier: classifier("evt-artifact-rust"),
+        context_repo: Some("hivellm/cortex".to_string()),
+        context_path: Some("src/lib.rs".to_string()),
+        parent_event_id: None,
+        session_id: None,
+    };
+    enqueue(&consumer, 0, &artifact);
+
+    worker.run_once().await.expect("run_once");
+
+    // Verify the batch was published (i.e., write_patches was called).
+    let graphed = publisher.calls_on(STREAM_GRAPHED);
+    assert_eq!(graphed.len(), 1, "one graphed envelope expected");
+
+    // The coalesced patch stored in CountingWriter must contain an
+    // import edge emitted by the Rust static analyzer.
+    let last_patch = writer
+        .last_patch
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("write_patches must have been called");
+
+    let has_import_edge = last_patch
+        .edges
+        .iter()
+        .any(|e| e.edge_type == "UNRESOLVED_IMPORT" || e.edge_type == "IMPORTS_EXTERNAL");
+
+    assert!(
+        has_import_edge,
+        "expected UNRESOLVED_IMPORT or IMPORTS_EXTERNAL edge from Rust analyzer; \
+         edges present: {:?}",
+        last_patch
+            .edges
+            .iter()
+            .map(|e| &e.edge_type)
+            .collect::<Vec<_>>()
+    );
+}

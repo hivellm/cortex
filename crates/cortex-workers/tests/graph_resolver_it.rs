@@ -56,10 +56,7 @@ fn build_fixtures() -> (ModuleMap, PackageMap) {
     (mm, pm)
 }
 
-fn run_with_local(
-    source: &str,
-    local_seed: &[(&str, &str)],
-) -> Vec<EdgeOp> {
+fn run_with_local(source: &str, local_seed: &[(&str, &str)]) -> Vec<EdgeOp> {
     let (mm, pm) = build_fixtures();
     let mut ls = LocalSymbols::new("cortex", "rust", "src/lib.rs");
     for (bare, qualified) in local_seed {

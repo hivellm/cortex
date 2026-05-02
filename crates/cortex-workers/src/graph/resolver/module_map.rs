@@ -76,7 +76,10 @@ impl ModuleMap {
             return;
         }
         if let Some(last) = parts.last().cloned() {
-            self.by_basename.entry(last).or_default().push(entry.clone());
+            self.by_basename
+                .entry(last)
+                .or_default()
+                .push(entry.clone());
         }
         self.by_path.insert(parts, entry);
     }
@@ -113,10 +116,7 @@ impl ModuleMap {
 ///
 /// Returns an empty map when `crate_root` does not exist; an
 /// `io::Error` when reading a discovered child file fails.
-pub fn build_rust_module_map_from_root(
-    repo: &str,
-    crate_root: &Path,
-) -> io::Result<ModuleMap> {
+pub fn build_rust_module_map_from_root(repo: &str, crate_root: &Path) -> io::Result<ModuleMap> {
     let mut map = ModuleMap::new();
     if !crate_root.exists() {
         return Ok(map);
@@ -205,13 +205,8 @@ fn collect_top_level_items(
     let mut cur = node.walk();
     for child in node.named_children(&mut cur) {
         match child.kind() {
-            "function_item"
-            | "struct_item"
-            | "enum_item"
-            | "trait_item"
-            | "const_item"
-            | "static_item"
-            | "type_item" => {
+            "function_item" | "struct_item" | "enum_item" | "trait_item" | "const_item"
+            | "static_item" | "type_item" => {
                 if let Some(name) = node_name(child, bytes) {
                     let qualified = join_qualified(prefix, &name);
                     out.push(ModuleEntry {
@@ -413,10 +408,8 @@ mod inner {
     fn nested() {}
 }
 ";
-        let entries =
-            extract_rust_module_entries("cortex", "src/lib.rs", &["crate".into()], src);
-        let names: Vec<&str> =
-            entries.iter().map(|e| e.qualified_name.as_str()).collect();
+        let entries = extract_rust_module_entries("cortex", "src/lib.rs", &["crate".into()], src);
+        let names: Vec<&str> = entries.iter().map(|e| e.qualified_name.as_str()).collect();
         assert!(names.contains(&"crate::helper"));
         assert!(names.contains(&"crate::Foo"));
         assert!(names.contains(&"crate::inner"));
@@ -463,10 +456,8 @@ impl Foo {
     fn run(&self) {}
 }
 ";
-        let entries =
-            extract_rust_module_entries("cortex", "src/lib.rs", &["crate".into()], src);
-        let names: Vec<&str> =
-            entries.iter().map(|e| e.qualified_name.as_str()).collect();
+        let entries = extract_rust_module_entries("cortex", "src/lib.rs", &["crate".into()], src);
+        let names: Vec<&str> = entries.iter().map(|e| e.qualified_name.as_str()).collect();
         assert!(names.contains(&"crate::Foo"));
         assert!(names.contains(&"crate::Foo::run"));
     }

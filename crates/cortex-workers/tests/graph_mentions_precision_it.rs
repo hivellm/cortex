@@ -14,8 +14,8 @@
 //! validated separately as the "skip" assertion set so a regression
 //! that *adds* a false-positive emission still trips the test.
 
-use cortex_workers::graph::markdown::MarkdownAnalyzer;
 use cortex_workers::graph::analyzer::EdgeType;
+use cortex_workers::graph::markdown::MarkdownAnalyzer;
 
 #[derive(Debug, Clone, Copy)]
 enum Expectation {

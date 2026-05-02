@@ -72,7 +72,12 @@ impl CodeAnalyzer for TypescriptAnalyzer {
         }
         let bytes = source.as_bytes();
         let mut edges = Vec::new();
-        let mut walker = TsWalker { repo, path, bytes, edges: &mut edges };
+        let mut walker = TsWalker {
+            repo,
+            path,
+            bytes,
+            edges: &mut edges,
+        };
         let mut scope: Vec<String> = Vec::new();
         walker.walk(root, &mut scope);
         edges

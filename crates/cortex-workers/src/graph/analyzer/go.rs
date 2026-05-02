@@ -55,7 +55,12 @@ impl CodeAnalyzer for GoAnalyzer {
         }
         let bytes = source.as_bytes();
         let mut edges = Vec::new();
-        let mut walker = GoWalker { repo, path, bytes, edges: &mut edges };
+        let mut walker = GoWalker {
+            repo,
+            path,
+            bytes,
+            edges: &mut edges,
+        };
         let mut scope: Vec<String> = Vec::new();
         walker.walk(root, &mut scope);
         edges

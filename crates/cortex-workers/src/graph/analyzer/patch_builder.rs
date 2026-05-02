@@ -128,8 +128,14 @@ fn emit_edge(
     ctx: &PatchBuildContext<'_>,
 ) {
     match resolved {
-        ResolvedTarget::Workspace { symbol, artifact, tier } => {
-            emit_workspace_edge(patch, edge, from_key, from_label, &symbol, &artifact, tier, ctx);
+        ResolvedTarget::Workspace {
+            symbol,
+            artifact,
+            tier,
+        } => {
+            emit_workspace_edge(
+                patch, edge, from_key, from_label, &symbol, &artifact, tier, ctx,
+            );
         }
         ResolvedTarget::ExternalPackage { node } => {
             emit_external_edge(patch, edge, from_key, from_label, &node, ctx);
@@ -396,7 +402,11 @@ fn split_artifact_key(key: &str) -> Option<(String, String, String)> {
     if parts.len() != 3 {
         return None;
     }
-    Some((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()))
+    Some((
+        parts[0].to_string(),
+        parts[1].to_string(),
+        parts[2].to_string(),
+    ))
 }
 
 fn extract_qualified_name(symbol_key: &str) -> String {
@@ -424,9 +434,7 @@ mod tests {
     fn with_known_hash<'a>(
         map: &'a BTreeMap<(String, String), String>,
     ) -> impl Fn(&str, &str) -> Option<String> + 'a {
-        move |repo: &str, path: &str| {
-            map.get(&(repo.to_string(), path.to_string())).cloned()
-        }
+        move |repo: &str, path: &str| map.get(&(repo.to_string(), path.to_string())).cloned()
     }
 
     fn fixtures() -> (ModuleMap, PackageMap, LocalSymbols) {
@@ -476,8 +484,11 @@ mod tests {
         let edges =
             RustAnalyzer::new().extract("use crate::module_a::helper;\n", "cortex", "src/lib.rs");
         let p = run(&edges);
-        let imports: Vec<&EdgeOp> =
-            p.edges.iter().filter(|e| e.edge_type == "IMPORTS_FILE").collect();
+        let imports: Vec<&EdgeOp> = p
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "IMPORTS_FILE")
+            .collect();
         assert_eq!(imports.len(), 1);
         let e = imports[0];
         assert_eq!(e.from_label, "Artifact");
@@ -541,8 +552,11 @@ mod tests {
             "src/lib.rs",
         );
         let p = run(&edges);
-        let re: Vec<&EdgeOp> =
-            p.edges.iter().filter(|e| e.edge_type == "RE_EXPORTS").collect();
+        let re: Vec<&EdgeOp> = p
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "RE_EXPORTS")
+            .collect();
         assert_eq!(re.len(), 1);
         assert_eq!(re[0].to_label, "Artifact");
     }
@@ -552,8 +566,7 @@ mod tests {
         let edges =
             RustAnalyzer::new().extract("fn outer() { helper(); }\n", "cortex", "src/lib.rs");
         let p = run(&edges);
-        let calls: Vec<&EdgeOp> =
-            p.edges.iter().filter(|e| e.edge_type == "CALLS").collect();
+        let calls: Vec<&EdgeOp> = p.edges.iter().filter(|e| e.edge_type == "CALLS").collect();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].from_label, "Symbol");
         assert_eq!(calls[0].to_key, "cortex|rust|crate::module_a::helper");
@@ -598,11 +611,8 @@ mod tests {
             content_hash_for: &lookup,
             analyzer_version: "phase11k.1",
         };
-        let edges = RustAnalyzer::new().extract(
-            "use crate::module_a::helper;\n",
-            "cortex",
-            "src/lib.rs",
-        );
+        let edges =
+            RustAnalyzer::new().extract("use crate::module_a::helper;\n", "cortex", "src/lib.rs");
         let p = build_graph_patch(&edges, &ctx);
         let imp = p
             .edges

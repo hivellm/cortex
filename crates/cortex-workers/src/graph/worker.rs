@@ -39,6 +39,7 @@ use synap_sdk::stream::StreamManager;
 use synap_sdk::types::Event;
 use synap_sdk::{SynapClient, SynapConfig};
 
+use super::analyzer_dispatch::{run_if_changed, AnalyzerState};
 use super::config::GraphConfig;
 use super::metrics::Metrics;
 use super::nexus_client::GraphClientError;
@@ -579,6 +580,11 @@ pub struct Worker {
     backpressure: Arc<BackpressureState>,
     buffer: Arc<OutOfOrderBuffer>,
     processed: Mutex<BTreeSet<String>>,
+    /// Per-file content-hash dedup table for the live static analyzer
+    /// (phase11k §5.2). Shared across the worker pool so the same
+    /// `(repo, path, hash)` triple is never re-analyzed by two
+    /// concurrent workers.
+    analyzer_state: Arc<AnalyzerState>,
 }
 
 impl Worker {
@@ -600,6 +606,7 @@ impl Worker {
             backpressure: Arc::new(BackpressureState::new()),
             buffer: Arc::new(OutOfOrderBuffer::new(timeout)),
             processed: Mutex::new(BTreeSet::new()),
+            analyzer_state: Arc::new(AnalyzerState::new()),
         }
     }
 
@@ -768,6 +775,17 @@ impl Worker {
         for turn_id in &ready.orphan_turn_ids {
             self.metrics.incr_orphans("Turn");
             patches.push(orphan_turn_patch(turn_id));
+        }
+
+        // 3a. Phase11k §5.2 — live static-analyzer pass.
+        // For each Artifact event whose content_hash changed since the last
+        // run, dispatch the appropriate static analyzer and append its patch
+        // to the batch before write_patches so the writer's coalescer can
+        // dedup the result against the structural patch above.
+        for event in &ready.events {
+            if let Some(static_patch) = run_if_changed(&self.analyzer_state, event) {
+                patches.push(static_patch);
+            }
         }
 
         let event_count = ready.events.len();

@@ -37,7 +37,7 @@
 ## 5. Bootstrap + live triggers
 
 - [x] 5.1 `cortex-bootstrap --graph-static` flag added to `crates/cortex-cli/src/bin/cortex-bootstrap.rs` — walks the workspace once, runs code + markdown analyzers, emits envelopes through the existing archive sink (phase11i §1.7) so `archive_loader` re-reads on graph-worker boot
-- [ ] 5.2 Wire the live trigger into `crates/cortex-workers/src/graph/worker.rs` — when a `Kind::Artifact` event lands with content_hash that differs from the previous one, run the analyzer and merge the resulting patch with the structural patch
+- [x] 5.2 Wire the live trigger into `crates/cortex-workers/src/graph/worker.rs` — when a `Kind::Artifact` event lands with content_hash that differs from the previous one, run the analyzer and merge the resulting patch with the structural patch
 - [ ] 5.3 Stale-edge sweeper — extend the graph worker's existing nightly cron to walk edges whose `source_event_id` references an event whose content_hash is no longer current; emits delete patches via the graph writer's `delete_edges_by_filter` surface (lands here if not pre-existing)
 - [ ] 5.4 Coalescer extension in `crates/cortex-workers/src/graph/coalescer.rs` — per-session dedupe on `(content_hash, analyzer_version)` so a search-and-replace burst doesn't re-emit identical patches
 - [ ] 5.5 End-to-end IT `crates/cortex-workers/tests/graph_bootstrap_then_live_it.rs` — bootstrap a fixture workspace, simulate a Live edit, assert the graph reflects both passes correctly + idempotent re-emit

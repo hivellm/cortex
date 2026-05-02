@@ -7,17 +7,18 @@
 #![warn(missing_docs)]
 
 pub mod analyzer;
+pub mod analyzer_dispatch;
 pub mod citations;
-pub mod markdown;
-pub mod resolver;
 pub mod coalescer;
 pub mod config;
 pub mod cypher;
 pub mod identity;
 pub mod mapper;
+pub mod markdown;
 pub mod metrics;
 pub mod nexus_client;
 pub mod patch;
+pub mod resolver;
 pub mod schema;
 pub mod worker;
 pub mod writer;

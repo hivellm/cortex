@@ -90,8 +90,10 @@ pub fn parse(source: &str) -> ParsedMarkdown<'_> {
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(source, opts);
-    let events: Vec<(Event<'_>, std::ops::Range<usize>)> =
-        parser.into_offset_iter().map(|(ev, range)| (ev, range)).collect();
+    let events: Vec<(Event<'_>, std::ops::Range<usize>)> = parser
+        .into_offset_iter()
+        .map(|(ev, range)| (ev, range))
+        .collect();
     ParsedMarkdown { source, events }
 }
 
@@ -209,10 +211,7 @@ pub fn slugify(text: &str) -> String {
 /// `docs/foo/bar.md`. Absolute paths and external URLs (`https://`)
 /// pass through unchanged.
 pub fn resolve_relative_link(source_path: &str, link: &str) -> String {
-    if link.starts_with("http://")
-        || link.starts_with("https://")
-        || link.starts_with("mailto:")
-    {
+    if link.starts_with("http://") || link.starts_with("https://") || link.starts_with("mailto:") {
         return link.to_string();
     }
     let mut parts: Vec<&str> = source_path.split('/').collect();

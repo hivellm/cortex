@@ -17,9 +17,7 @@ use cortex_workers::graph::citations::{
     citations_for_learning, derived_from_edges,
 };
 use cortex_workers::graph::patch::EdgeOp;
-use cortex_workers::graph::resolver::{
-    LocalSymbols, ModuleMap, PackageMap, SymbolResolver,
-};
+use cortex_workers::graph::resolver::{LocalSymbols, ModuleMap, PackageMap, SymbolResolver};
 
 use cortex_core::events::{
     ConsolidationDepth, ConsolidationGrain, ConsolidationPayload, ConsolidationScope,

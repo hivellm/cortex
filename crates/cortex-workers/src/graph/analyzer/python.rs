@@ -56,7 +56,12 @@ impl CodeAnalyzer for PythonAnalyzer {
         }
         let bytes = source.as_bytes();
         let mut edges = Vec::new();
-        let mut walker = PyWalker { repo, path, bytes, edges: &mut edges };
+        let mut walker = PyWalker {
+            repo,
+            path,
+            bytes,
+            edges: &mut edges,
+        };
         let mut scope: Vec<String> = Vec::new();
         walker.walk(root, &mut scope);
         edges
@@ -258,9 +263,7 @@ impl PyWalker<'_> {
         for c in superclasses.named_children(&mut cur) {
             let Some(name) = self.text(c) else { continue };
             let target = if name.contains('.') {
-                ResolutionTarget::ModulePath(
-                    name.split('.').map(|p| p.to_string()).collect(),
-                )
+                ResolutionTarget::ModulePath(name.split('.').map(|p| p.to_string()).collect())
             } else {
                 ResolutionTarget::SymbolName(name)
             };

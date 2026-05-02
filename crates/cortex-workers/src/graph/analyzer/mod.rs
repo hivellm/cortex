@@ -284,7 +284,10 @@ mod tests {
         assert_eq!(EdgeType::Mentions.label(), "MENTIONS");
         assert_eq!(EdgeType::DescribesPath.label(), "DESCRIBES_PATH");
         assert_eq!(EdgeType::DocumentedBy.label(), "DOCUMENTED_BY");
-        assert_eq!(EdgeType::DocstringReferences.label(), "DOCSTRING_REFERENCES");
+        assert_eq!(
+            EdgeType::DocstringReferences.label(),
+            "DOCSTRING_REFERENCES"
+        );
         assert_eq!(EdgeType::Cites.label(), "CITES");
         assert_eq!(EdgeType::DerivedFrom.label(), "DERIVED_FROM");
         assert_eq!(EdgeType::Contains.label(), "CONTAINS");

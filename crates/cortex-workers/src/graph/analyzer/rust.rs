@@ -92,7 +92,12 @@ impl CodeAnalyzer for RustAnalyzer {
 
         let bytes = source.as_bytes();
         let mut edges: Vec<CodeEdge> = Vec::new();
-        let mut walker = Walker { repo, path, bytes, edges: &mut edges };
+        let mut walker = Walker {
+            repo,
+            path,
+            bytes,
+            edges: &mut edges,
+        };
         let mut scope: Vec<String> = Vec::new();
         walker.walk(root, &mut scope);
         edges
@@ -130,7 +135,9 @@ impl Walker<'_> {
         if e <= s || e > self.bytes.len() {
             return None;
         }
-        std::str::from_utf8(&self.bytes[s..e]).ok().map(|t| t.trim().to_string())
+        std::str::from_utf8(&self.bytes[s..e])
+            .ok()
+            .map(|t| t.trim().to_string())
     }
 
     fn line_of(&self, node: Node<'_>) -> Option<u32> {
@@ -157,13 +164,8 @@ impl Walker<'_> {
                 }
                 return;
             }
-            "function_item"
-            | "trait_item"
-            | "struct_item"
-            | "enum_item"
-            | "mod_item"
-            | "const_item"
-            | "static_item" => {
+            "function_item" | "trait_item" | "struct_item" | "enum_item" | "mod_item"
+            | "const_item" | "static_item" => {
                 let pushed = self.push_named_decl(node, scope);
                 self.walk_named_children(node, scope);
                 if pushed {
@@ -448,12 +450,7 @@ fn first_child_is_visibility_modifier(node: Node<'_>) -> bool {
 /// Handles `scoped_identifier`, `scoped_use_list`, `use_list`,
 /// `use_as_clause`, `use_wildcard`, plain `identifier`, `crate`,
 /// `self`, `super`.
-fn flatten_use_tree(
-    node: Node<'_>,
-    bytes: &[u8],
-    prefix: &[String],
-    out: &mut Vec<Vec<String>>,
-) {
+fn flatten_use_tree(node: Node<'_>, bytes: &[u8], prefix: &[String], out: &mut Vec<Vec<String>>) {
     match node.kind() {
         "scoped_identifier" => {
             let parts = scoped_identifier_components(node, bytes);
@@ -643,7 +640,12 @@ mod tests {
     fn imports(edges: &[CodeEdge]) -> Vec<&CodeEdge> {
         edges
             .iter()
-            .filter(|e| matches!(e.edge_type, EdgeType::ImportsFile | EdgeType::ImportsExternal))
+            .filter(|e| {
+                matches!(
+                    e.edge_type,
+                    EdgeType::ImportsFile | EdgeType::ImportsExternal
+                )
+            })
             .collect()
     }
 
@@ -808,8 +810,9 @@ mod tests {
                 && e.to_target == ResolutionTarget::SymbolName("Bar".into())));
         // The struct's own name (`Foo`) must NOT produce a type-use
         // edge.
-        assert!(!t.iter().any(|e| e.to_target
-            == ResolutionTarget::SymbolName("Foo".into())));
+        assert!(!t
+            .iter()
+            .any(|e| e.to_target == ResolutionTarget::SymbolName("Foo".into())));
     }
 
     /// (9) `impl Trait for Type` → IMPLEMENTS(Type → Trait); methods

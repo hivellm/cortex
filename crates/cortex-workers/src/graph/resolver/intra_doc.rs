@@ -98,7 +98,8 @@ fn find_matching_bracket(bytes: &[u8], open: usize) -> Option<usize> {
 }
 
 fn looks_like_path(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
         && s.chars().any(|c| c.is_ascii_alphanumeric())
 }
 

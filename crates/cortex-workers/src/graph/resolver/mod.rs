@@ -111,7 +111,11 @@ impl LocalSymbols {
 
     /// Insert one bare-name → qualified-name mapping. Returns the
     /// previous binding (if any) so callers can detect shadowing.
-    pub fn insert(&mut self, bare: impl Into<String>, qualified: impl Into<String>) -> Option<String> {
+    pub fn insert(
+        &mut self,
+        bare: impl Into<String>,
+        qualified: impl Into<String>,
+    ) -> Option<String> {
         self.by_name.insert(bare.into(), qualified.into())
     }
 }
@@ -152,9 +156,7 @@ impl<'a> SymbolResolver<'a> {
                     natural_key: name.clone(),
                 },
             },
-            ResolutionTarget::Resolved(node) => ResolvedTarget::PreResolved {
-                node: node.clone(),
-            },
+            ResolutionTarget::Resolved(node) => ResolvedTarget::PreResolved { node: node.clone() },
         }
     }
 
@@ -183,7 +185,11 @@ impl<'a> SymbolResolver<'a> {
             return ResolvedTarget::Workspace {
                 symbol: NodeRef {
                     label: "Symbol".into(),
-                    natural_key: symbol_natural_key(&entry.repo, entry.language, &entry.qualified_name),
+                    natural_key: symbol_natural_key(
+                        &entry.repo,
+                        entry.language,
+                        &entry.qualified_name,
+                    ),
                 },
                 artifact: NodeRef {
                     label: "Artifact".into(),
@@ -207,7 +213,11 @@ impl<'a> SymbolResolver<'a> {
             return ResolvedTarget::Workspace {
                 symbol: NodeRef {
                     label: "Symbol".into(),
-                    natural_key: symbol_natural_key(&entry.repo, entry.language, &entry.qualified_name),
+                    natural_key: symbol_natural_key(
+                        &entry.repo,
+                        entry.language,
+                        &entry.qualified_name,
+                    ),
                 },
                 artifact: NodeRef {
                     label: "Artifact".into(),
@@ -276,7 +286,11 @@ mod tests {
         let r = SymbolResolver::new(&mm, &pm, &ls);
         let out = r.resolve(&ResolutionTarget::SymbolName("helper".into()));
         match out {
-            ResolvedTarget::Workspace { tier, symbol, artifact } => {
+            ResolvedTarget::Workspace {
+                tier,
+                symbol,
+                artifact,
+            } => {
                 assert_eq!(tier, ResolutionTier::LocalFile);
                 assert_eq!(symbol.natural_key, "cortex|rust|crate::lib::helper");
                 assert_eq!(artifact.natural_key, "cortex|crates/foo/src/lib.rs");

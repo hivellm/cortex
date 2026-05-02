@@ -4,14 +4,10 @@
 //! patch-builder pipeline so the wire shape of every doc-edge class
 //! is pinned to the proposal verbatim.
 
-use cortex_workers::graph::analyzer::{
-    build_graph_patch, PatchBuildContext,
-};
+use cortex_workers::graph::analyzer::{build_graph_patch, PatchBuildContext};
 use cortex_workers::graph::markdown::MarkdownAnalyzer;
 use cortex_workers::graph::patch::EdgeOp;
-use cortex_workers::graph::resolver::{
-    LocalSymbols, ModuleMap, PackageMap, SymbolResolver,
-};
+use cortex_workers::graph::resolver::{LocalSymbols, ModuleMap, PackageMap, SymbolResolver};
 
 fn run(source: &str, path: &str) -> Vec<EdgeOp> {
     let mm = ModuleMap::new();
@@ -63,36 +59,28 @@ fn doc_to_doc_link_emits_links_to() {
 /// Case 4 — `[src](path/to/file.rs)` becomes a DOCUMENTS edge.
 #[test]
 fn doc_to_code_link_emits_documents_against_artifact() {
-    let edges = run(
-        "see [src](../crates/foo/src/lib.rs)\n",
-        "docs/spec.md",
-    );
-    assert!(edges.iter().any(|e| e.edge_type == "DOCUMENTS"
-        && e.to_label == "Artifact"));
+    let edges = run("see [src](../crates/foo/src/lib.rs)\n", "docs/spec.md");
+    assert!(edges
+        .iter()
+        .any(|e| e.edge_type == "DOCUMENTS" && e.to_label == "Artifact"));
 }
 
 /// Case 5 — `[output](file.md#anchor)` emits LINKS_TO_SECTION.
 #[test]
 fn fragment_link_emits_links_to_section() {
-    let edges = run(
-        "see [output](./other.md#output)\n",
-        "docs/spec.md",
-    );
-    assert!(edges.iter().any(|e| e.edge_type == "LINKS_TO_SECTION"
-        && e.to_label == "DocSection"));
+    let edges = run("see [output](./other.md#output)\n", "docs/spec.md");
+    assert!(edges
+        .iter()
+        .any(|e| e.edge_type == "LINKS_TO_SECTION" && e.to_label == "DocSection"));
 }
 
 /// Case 6 — qualified backtick mention emits a high-confidence
 /// MENTIONS edge.
 #[test]
 fn qualified_mention_emits_mentions_edge() {
-    let edges = run(
-        "the `crate::Foo::bar` helper does X.\n",
-        "docs/spec.md",
-    );
+    let edges = run("the `crate::Foo::bar` helper does X.\n", "docs/spec.md");
     assert!(edges.iter().any(|e| e.edge_type == "MENTIONS"
-        && e.props.get("kind").and_then(|v| v.as_str())
-            == Some("mention_qualified")));
+        && e.props.get("kind").and_then(|v| v.as_str()) == Some("mention_qualified")));
 }
 
 /// Case 7 — capitalised bare token classified as type mention.

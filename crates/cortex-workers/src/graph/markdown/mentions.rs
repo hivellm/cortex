@@ -66,10 +66,7 @@ fn looks_like_symbol(token: &str) -> bool {
         return false;
     }
     // Reject pure punctuation / lifetime annotations / numbers.
-    if !token
-        .chars()
-        .any(|c| c.is_ascii_alphabetic())
-    {
+    if !token.chars().any(|c| c.is_ascii_alphabetic()) {
         return false;
     }
     // Reject things that smell like a path or URL.

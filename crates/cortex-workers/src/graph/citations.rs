@@ -67,7 +67,10 @@ pub fn extract_payload_citations(
         // distinguish via `kind` because explicit `[text](file.rs)`
         // links also produce `Documents` edges and those legitimately
         // become `Cites`.
-        if matches!(edge.kind, "section_root" | "section_contains" | "fenced_path") {
+        if matches!(
+            edge.kind,
+            "section_root" | "section_contains" | "fenced_path"
+        ) {
             continue;
         }
         if edge.edge_type == EdgeType::Contains {
@@ -126,10 +129,7 @@ pub fn citations_for_learning(payload: &LearningPayload, repo: &str) -> Vec<Code
 /// Consolidation summaries are not on-disk; the synthetic path
 /// rooted at `consolidations/<id>` keeps the markdown analyzer's
 /// relative-path resolution tight to the consolidation namespace.
-pub fn citations_for_consolidation(
-    payload: &ConsolidationPayload,
-    repo: &str,
-) -> Vec<CodeEdge> {
+pub fn citations_for_consolidation(payload: &ConsolidationPayload, repo: &str) -> Vec<CodeEdge> {
     let owner = PayloadCitationSource {
         label: "Consolidation",
         natural_key: payload.consolidation_id.clone(),
@@ -145,10 +145,7 @@ pub fn citations_for_consolidation(
 /// Default target label is `Turn` because the consolidator's
 /// session-grain producer publishes Turn-rooted source sets; callers
 /// override via the second argument when they know better.
-pub fn derived_from_edges(
-    payload: &ConsolidationPayload,
-    target_label: &str,
-) -> Vec<CodeEdge> {
+pub fn derived_from_edges(payload: &ConsolidationPayload, target_label: &str) -> Vec<CodeEdge> {
     let owner_node = NodeRef {
         label: "Consolidation".into(),
         natural_key: payload.consolidation_id.clone(),
@@ -225,8 +222,9 @@ mod tests {
     fn decision_body_mention_emits_cites_edge() {
         let body = "the `crate::workers::run_worker` is canonical";
         let edges = citations_for_decision(&decision_fixture(body), "cortex");
-        assert!(edges.iter().any(|e| e.edge_type == EdgeType::Cites
-            && e.kind.starts_with("mention_")));
+        assert!(edges
+            .iter()
+            .any(|e| e.edge_type == EdgeType::Cites && e.kind.starts_with("mention_")));
     }
 
     #[test]
@@ -253,10 +251,7 @@ mod tests {
 
     #[test]
     fn consolidation_body_link_routes_through_cites() {
-        let payload = consolidation_fixture(
-            "see [target](../crates/foo/src/lib.rs)\n",
-            vec![],
-        );
+        let payload = consolidation_fixture("see [target](../crates/foo/src/lib.rs)\n", vec![]);
         let edges = citations_for_consolidation(&payload, "cortex");
         assert!(edges.iter().any(|e| e.edge_type == EdgeType::Cites));
     }

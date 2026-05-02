@@ -13,10 +13,7 @@
 
 use pulldown_cmark::{Event, Tag};
 
-
-use super::super::analyzer::{
-    artifact_logical_key, CodeEdge, EdgeType, NodeRef, ResolutionTarget,
-};
+use super::super::analyzer::{artifact_logical_key, CodeEdge, EdgeType, NodeRef, ResolutionTarget};
 use super::{
     is_markdown_path, is_source_path, markdown_source_node, resolve_relative_link, ParsedMarkdown,
 };
@@ -130,10 +127,7 @@ mod tests {
 
     #[test]
     fn doc_to_code_link_emits_documents() {
-        let edges = extract_for(
-            "see [src](../crates/foo/src/lib.rs)\n",
-            "docs/spec.md",
-        );
+        let edges = extract_for("see [src](../crates/foo/src/lib.rs)\n", "docs/spec.md");
         let d: Vec<&CodeEdge> = edges
             .iter()
             .filter(|e| e.edge_type == EdgeType::Documents)

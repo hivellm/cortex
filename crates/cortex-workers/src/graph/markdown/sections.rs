@@ -15,9 +15,7 @@
 //! 2. Sub-headings emit `:CONTAINS` from their nearest higher-depth
 //!    ancestor.
 
-use super::super::analyzer::{
-    artifact_logical_key, CodeEdge, EdgeType, NodeRef, ResolutionTarget,
-};
+use super::super::analyzer::{artifact_logical_key, CodeEdge, EdgeType, NodeRef, ResolutionTarget};
 use super::{doc_section_node, each_heading, slugify, ParsedMarkdown};
 
 fn doc_section_target(repo: &str, path: &str, slug: &str) -> ResolutionTarget {
@@ -69,8 +67,8 @@ pub fn extract(parsed: &ParsedMarkdown<'_>, repo: &str, path: &str) -> Vec<CodeE
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::parse;
+    use super::*;
 
     #[test]
     fn top_level_heading_emits_documents_edge() {
