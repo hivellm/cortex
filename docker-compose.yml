@@ -102,6 +102,11 @@ services:
     environment:
       CORTEX_INGESTION_BIND: 0.0.0.0:17010
       CORTEX_SYNAP_URL: http://synap:15500
+      # Legacy name that cortex-ingestion's IngestionConfig::from_env
+      # currently reads (config.rs:65). The CORTEX_SYNAP_URL above is
+      # the project-namespaced canonical form; the duplicate keeps
+      # the publisher live until the code fix lands.
+      SYNAP_URL: http://synap:15500
       CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
     volumes:
       # Bind-mount the host's `~/.cortex` directory so the
