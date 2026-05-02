@@ -186,8 +186,11 @@ impl Orchestrator {
         Ok(produced)
     }
 
-    /// Run the DecisionTrace producer against `input`. Always
-    /// promotes to Opus (deeper grain → higher fidelity).
+    /// Run the DecisionTrace producer against `input`. Picks Opus
+    /// first (auto-promotion); falls back to Haiku once on
+    /// `CostCeiling` / `RateLimited` / `UpstreamUnavailable` so a
+    /// transient Opus quota failure doesn't lose the trace
+    /// entirely. Other errors propagate verbatim.
     pub async fn run_decision_trace(
         &self,
         input: &crate::producer::decision_trace::DecisionTraceInput,
@@ -198,10 +201,39 @@ impl Orchestrator {
         };
         let sel = ProducerSelection::for_trigger(&trigger);
         self.gate_budget(sel.summariser, "decision_trace")?;
-        let summariser = self.summariser_for(&sel);
-        let produced = crate::producer::decision_trace::produce(input, summariser.as_ref()).await?;
-        self.record_cost(sel.grain_label(), produced.cost_cents);
-        Ok(produced)
+        let opus = self.summariser_for(&sel);
+        match crate::producer::decision_trace::produce(input, opus.as_ref()).await {
+            Ok(produced) => {
+                self.record_cost(sel.grain_label(), produced.cost_cents);
+                Ok(produced)
+            }
+            Err(err) if Self::is_quota_failure(&err) => {
+                tracing::warn!(
+                    %err,
+                    "Opus DecisionTrace quota failure; falling back to Haiku"
+                );
+                self.gate_budget(SummariserKind::Haiku45, "decision_trace")?;
+                let haiku = self.haiku.clone();
+                let produced =
+                    crate::producer::decision_trace::produce(input, haiku.as_ref()).await?;
+                self.record_cost(sel.grain_label(), produced.cost_cents);
+                Ok(produced)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Return `true` when an error is a quota / transient failure
+    /// the orchestrator should retry against Haiku.
+    fn is_quota_failure(err: &crate::producer::ProducerError) -> bool {
+        matches!(
+            err,
+            crate::producer::ProducerError::Summariser(
+                crate::summariser::SummariserError::CostCeiling(_)
+                    | crate::summariser::SummariserError::RateLimited { .. }
+                    | crate::summariser::SummariserError::UpstreamUnavailable(_),
+            )
+        )
     }
 
     /// Estimate the upcoming charge against the budget. The
@@ -360,6 +392,142 @@ mod tests {
         assert_eq!(g.per_grain["session"].consolidations, 1);
         assert_eq!(g.per_grain["session"].cost_cents, 80);
         assert_eq!(g.total_cents, 80);
+    }
+
+    /// In-memory summariser that always errors with the supplied
+    /// `SummariserError`. Drives the fallback test below.
+    struct FailingSummariser {
+        kind: SK,
+        err: SummariserError,
+    }
+    impl FailingSummariser {
+        fn new(kind: SK, err: SummariserError) -> Self {
+            Self { kind, err }
+        }
+    }
+    #[async_trait::async_trait]
+    impl Sum for FailingSummariser {
+        fn kind(&self) -> SK {
+            self.kind
+        }
+        async fn summarise(&self, _r: Req) -> Result<SummariserResult, SummariserError> {
+            // Re-construct the error each call since SummariserError
+            // doesn't impl Clone.
+            Err(match &self.err {
+                SummariserError::CostCeiling(c) => SummariserError::CostCeiling(*c),
+                SummariserError::RateLimited { retry_after_ms } => SummariserError::RateLimited {
+                    retry_after_ms: *retry_after_ms,
+                },
+                SummariserError::UpstreamUnavailable(s) => {
+                    SummariserError::UpstreamUnavailable(s.clone())
+                }
+                SummariserError::Transport(s) => SummariserError::Transport(s.clone()),
+                SummariserError::Upstream { status, body } => SummariserError::Upstream {
+                    status: *status,
+                    body: body.clone(),
+                },
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn run_decision_trace_falls_back_to_haiku_on_opus_quota_failure() {
+        use std::sync::Arc;
+        let opus = Arc::new(FailingSummariser::new(
+            SK::Opus47,
+            SummariserError::UpstreamUnavailable("503".into()),
+        ));
+        let body = serde_json::to_string(&serde_json::json!({
+            "title": "fallback decision trace",
+            "summary_markdown": "x".repeat(400),
+            "takeaways": ["chain converged on Meili"]
+        }))
+        .unwrap();
+        let haiku = Arc::new(StubSummariser {
+            kind: SK::Haiku45,
+            text: body,
+            cost: 80,
+        });
+        let orch = Orchestrator::new(haiku, opus);
+        let decision = cortex_core::events::Envelope {
+            event_id: "01HXEVT0000000000000000099".into(),
+            schema_version: "1".into(),
+            occurred_at: "2026-04-20T11:00:00Z".into(),
+            ingested_at: None,
+            session_id: "01HXSESS00000000000000000A".into(),
+            stream: cortex_core::events::Stream::Live,
+            tool: "cortex-cli".into(),
+            model: None,
+            kind: cortex_core::events::Kind::Decision,
+            context: cortex_core::events::Context {
+                repo: Some("cortex".into()),
+                branch: None,
+                commit: None,
+                cwd: None,
+                user: None,
+                platform: "linux".into(),
+                ide: None,
+                extras: Default::default(),
+            },
+            payload: serde_json::json!({"decision_id": "DEC-99", "title": "x", "status": "accepted"}),
+            redactions: vec![],
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
+            parent_event_id: None,
+        };
+        let input = crate::producer::decision_trace::DecisionTraceInput {
+            decision,
+            chain: vec![],
+            repo: Some("cortex".into()),
+        };
+        let produced = orch
+            .run_decision_trace(&input)
+            .await
+            .expect("fallback path lands");
+        assert_eq!(
+            produced.payload.depth,
+            cortex_core::events::ConsolidationDepth::Shallow
+        );
+        assert_eq!(produced.cost_cents, 80);
+    }
+
+    #[tokio::test]
+    async fn re_running_session_producer_emits_same_consolidation_id() {
+        use std::sync::Arc;
+        let body = serde_json::to_string(&serde_json::json!({
+            "title": "tune ef_search",
+            "summary_markdown": "x".repeat(400),
+            "takeaways": ["raise ef_search to 128"]
+        }))
+        .unwrap();
+        let haiku1 = Arc::new(StubSummariser {
+            kind: SK::Haiku45,
+            text: body.clone(),
+            cost: 80,
+        });
+        let haiku2 = Arc::new(StubSummariser {
+            kind: SK::Haiku45,
+            text: body,
+            cost: 80,
+        });
+        let opus = Arc::new(StubSummariser {
+            kind: SK::Opus47,
+            text: ok_session_payload(),
+            cost: 5_000,
+        });
+        let orch1 = Orchestrator::new(haiku1, opus.clone());
+        let orch2 = Orchestrator::new(haiku2, opus);
+        let input = crate::producer::session::SessionInput {
+            session_id: "01HXSESS00000000000000000A".into(),
+            repo: Some("cortex".into()),
+            envelopes: vec![turn_envelope()],
+        };
+        let p1 = orch1.run_session(&input).await.expect("first run");
+        let p2 = orch2.run_session(&input).await.expect("second run");
+        assert_eq!(
+            p1.payload.consolidation_id, p2.payload.consolidation_id,
+            "same input must produce the same consolidation_id (idempotent re-run)"
+        );
     }
 
     #[tokio::test]

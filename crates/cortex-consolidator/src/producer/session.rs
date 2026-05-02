@@ -191,10 +191,11 @@ pub async fn produce(
     }
 
     let repos: Vec<String> = input.repo.clone().into_iter().collect();
+    let scope = ConsolidationScope::SessionId(input.session_id.clone());
     let payload = ConsolidationPayload {
-        consolidation_id: ulid::Ulid::new().to_string(),
+        consolidation_id: super::derive_consolidation_id(ConsolidationGrain::Session, &scope),
         grain: ConsolidationGrain::Session,
-        scope: ConsolidationScope::SessionId(input.session_id.clone()),
+        scope,
         title: clip_title(&parsed.title),
         summary_markdown: parsed.summary_markdown,
         takeaways: parsed.takeaways,

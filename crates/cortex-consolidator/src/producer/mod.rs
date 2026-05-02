@@ -44,6 +44,36 @@ pub enum ProducerError {
     ValidationFailed(String),
 }
 
+/// Phase11j §2.10 — derive a stable `consolidation_id` from the
+/// `(grain, scope)` pair so a re-run of the same producer against
+/// the same input does NOT emit a fresh id. The shape is
+/// `cons-{grain_short}-{sha256[:24]}` — short enough to read in a
+/// log line, long enough to avoid collisions across the corpus.
+pub fn derive_consolidation_id(
+    grain: cortex_core::events::ConsolidationGrain,
+    scope: &cortex_core::events::ConsolidationScope,
+) -> String {
+    use cortex_core::events::{ConsolidationGrain as G, ConsolidationScope as S};
+    use sha2::{Digest, Sha256};
+    let grain_short = match grain {
+        G::Session => "ses",
+        G::Topic => "top",
+        G::DecisionTrace => "dec",
+    };
+    let scope_key = match scope {
+        S::SessionId(s) => format!("session_id:{s}"),
+        S::Topic(s) => format!("topic:{s}"),
+        S::DecisionId(s) => format!("decision_id:{s}"),
+    };
+    let mut hasher = Sha256::new();
+    hasher.update(grain_short.as_bytes());
+    hasher.update(b"|");
+    hasher.update(scope_key.as_bytes());
+    let hash = hasher.finalize();
+    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+    format!("cons-{grain_short}-{}", &hex[..24])
+}
+
 /// Validate a produced payload against the §1.5 invariants. The
 /// orchestrator calls this after every producer run so a hallucinated
 /// model output never escapes the consolidator. Wraps the
@@ -122,5 +152,28 @@ mod tests {
         p.summary_markdown = "too short".into();
         let err = validate_produced(&p).expect_err("undersize summary");
         assert!(format!("{err}").contains("summary_markdown"));
+    }
+
+    #[test]
+    fn derive_consolidation_id_is_deterministic_per_grain_and_scope() {
+        let s1 = ConsolidationScope::SessionId("01HXSESS01".into());
+        let s2 = ConsolidationScope::SessionId("01HXSESS01".into());
+        let id1 = derive_consolidation_id(ConsolidationGrain::Session, &s1);
+        let id2 = derive_consolidation_id(ConsolidationGrain::Session, &s2);
+        assert_eq!(id1, id2, "same (grain, scope) must produce same id");
+        assert!(id1.starts_with("cons-ses-"));
+    }
+
+    #[test]
+    fn derive_consolidation_id_differs_across_grains_and_scopes() {
+        let same_scope = ConsolidationScope::SessionId("01HXSESS01".into());
+        let session_id = derive_consolidation_id(ConsolidationGrain::Session, &same_scope);
+        let topic_scope = ConsolidationScope::Topic("hnsw".into());
+        let topic_id = derive_consolidation_id(ConsolidationGrain::Topic, &topic_scope);
+        let other_session = ConsolidationScope::SessionId("01HXSESS02".into());
+        let other_session_id = derive_consolidation_id(ConsolidationGrain::Session, &other_session);
+        assert_ne!(session_id, topic_id, "grain disambiguates");
+        assert_ne!(session_id, other_session_id, "scope disambiguates");
+        assert!(topic_id.starts_with("cons-top-"));
     }
 }

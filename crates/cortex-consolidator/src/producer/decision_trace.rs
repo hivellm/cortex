@@ -181,10 +181,11 @@ pub async fn produce(
         source_event_ids.truncate(CONSOLIDATION_SOURCE_IDS_INLINE_CAP);
     }
 
+    let scope = ConsolidationScope::DecisionId(input.decision_id().to_string());
     let payload = ConsolidationPayload {
-        consolidation_id: ulid::Ulid::new().to_string(),
+        consolidation_id: super::derive_consolidation_id(ConsolidationGrain::DecisionTrace, &scope),
         grain: ConsolidationGrain::DecisionTrace,
-        scope: ConsolidationScope::DecisionId(input.decision_id().to_string()),
+        scope,
         title: clip_title(&parsed.title),
         summary_markdown: parsed.summary_markdown,
         takeaways: parsed.takeaways,
