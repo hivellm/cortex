@@ -18,9 +18,11 @@
 //! 3. **Cross-artifact content_hash.** When tier-2 produces a target
 //!    `:Artifact` (the file that owns the resolved symbol), the
 //!    builder asks the caller-supplied [`ContentHashLookup`] for that
-//!    file's current hash. A miss falls through to a sentinel
-//!    `*` marker so the upsert is still idempotent under repeat
-//!    runs against the same workspace state.
+//!    file's current hash. A miss falls through to a per-`(repo,
+//!    path)` sentinel id (`pending|repo|path`) via
+//!    [`pending_artifact_id`] so the upsert stays idempotent under
+//!    repeat runs against the same workspace state AND under Nexus
+//!    2.1's `_id` uniqueness rule (phase11l §5.1).
 //!
 //! Schema invariants the builder relies on (added in
 //! [`crate::graph::schema::SCHEMA_STATEMENTS`]):
@@ -39,10 +41,45 @@ use crate::graph::identity::artifact_natural_key;
 use crate::graph::patch::{EdgeOp, GraphPatch, NodeOp};
 use crate::graph::resolver::{ResolutionTier, ResolvedTarget, SymbolResolver};
 
-/// Sentinel content-hash component used when the cross-artifact
-/// hash is not known. Keeps `:Artifact` upserts idempotent without
-/// forging a real hash.
+/// Sentinel content-hash component used by the pre-phase11l wire
+/// shape when the cross-artifact hash was unknown. Kept as a
+/// `pub const` for downstream tooling that grepped the legacy
+/// shape. New code should use [`PENDING_ARTIFACT_PREFIX`] +
+/// [`pending_artifact_id`] instead — the legacy `*` sentinel
+/// collides with itself under Nexus 2.1's `_id` uniqueness, so
+/// every unknown-hash sibling would otherwise collapse onto a
+/// single shared node.
+#[deprecated(
+    since = "0.1.0-alpha",
+    note = "phase11l §5.1 — use PENDING_ARTIFACT_PREFIX / pending_artifact_id; \
+            the `*` sentinel collides under `_id` uniqueness"
+)]
 pub const UNKNOWN_CONTENT_HASH: &str = "*";
+
+/// Phase11l §5.1 — prefix on the deterministic sentinel id the
+/// patch builder emits when a cross-artifact `(repo, path)` whose
+/// canonical content_hash is not yet known shows up in a graph
+/// patch. The full id is `pending|{repo}|{path}`. The format is
+/// per-`(repo, path)` so two unknown-hash siblings under the same
+/// path collapse to the same sentinel node (idempotent under
+/// Nexus 2.1's `_id` uniqueness), but two distinct paths produce
+/// two distinct sentinels (no false-merge across the workspace).
+pub const PENDING_ARTIFACT_PREFIX: &str = "pending|";
+
+/// Build the sentinel id for an unknown-hash cross-artifact key.
+/// The sweeper (phase11k §5.3 + phase11l §5.3) catches every node
+/// whose `_id` starts with [`PENDING_ARTIFACT_PREFIX`] and rewires
+/// edges once the canonical content_hash arrives.
+pub fn pending_artifact_id(repo: &str, path: &str) -> String {
+    format!("{PENDING_ARTIFACT_PREFIX}{repo}|{path}")
+}
+
+/// True when an artifact natural-key string is a phase11l §5.1
+/// pending sentinel. The sweeper uses this to scope its delete /
+/// redirect work without scanning every `:Artifact` node.
+pub fn is_pending_artifact_id(natural_key: &str) -> bool {
+    natural_key.starts_with(PENDING_ARTIFACT_PREFIX)
+}
 
 /// Callback shape — `(repo, path) → Option<content_hash>`. The patch
 /// builder holds a reference to one of these so it can fold target-
@@ -65,8 +102,9 @@ pub struct PatchBuildContext<'a> {
     /// Resolver bound to the workspace's module + package maps.
     pub resolver: &'a SymbolResolver<'a>,
     /// Cross-artifact content-hash lookup. Returning `None` is fine —
-    /// the builder substitutes [`UNKNOWN_CONTENT_HASH`] so the wire
-    /// shape stays valid.
+    /// the builder substitutes a per-`(repo, path)` sentinel via
+    /// [`pending_artifact_id`] so the wire shape stays valid + idempotent
+    /// (phase11l §5.1).
     pub content_hash_for: &'a ContentHashLookup<'a>,
     /// Static-extraction version stamp. Carried on the
     /// [`EdgeOp::props`] under the key `analyzer_version` so the
@@ -382,13 +420,20 @@ fn canonicalize_artifact_key(raw: &str, ctx: &PatchBuildContext<'_>) -> String {
         2 => {
             let repo = parts[0];
             let path = parts[1];
-            let hash = if repo == ctx.source_repo && path == ctx.source_path {
-                ctx.source_content_hash.to_string()
+            if repo == ctx.source_repo && path == ctx.source_path {
+                artifact_natural_key(repo, path, ctx.source_content_hash)
+            } else if let Some(hash) = (ctx.content_hash_for)(repo, path) {
+                artifact_natural_key(repo, path, &hash)
             } else {
-                (ctx.content_hash_for)(repo, path)
-                    .unwrap_or_else(|| UNKNOWN_CONTENT_HASH.to_string())
-            };
-            artifact_natural_key(repo, path, &hash)
+                // Phase11l §5.1 — deterministic per-`(repo, path)`
+                // sentinel. The pre-phase11l wire shape used the `*`
+                // content-hash slot, which collapsed every unknown
+                // sibling onto one shared `_id` under Nexus 2.1's
+                // uniqueness rule. The sweeper redirects these to
+                // the canonical `:Artifact` once the real hash flows
+                // in.
+                pending_artifact_id(repo, path)
+            }
         }
         3 => raw.to_string(),
         _ => raw.to_string(),
@@ -492,7 +537,11 @@ mod tests {
         assert_eq!(e.from_label, "Artifact");
         assert_eq!(e.from_key, "cortex|src/lib.rs|sha256:abc");
         assert_eq!(e.to_label, "Artifact");
-        assert_eq!(e.to_key, "cortex|src/module_a.rs|*");
+        // Phase11l §5.1 — unknown cross-artifact hash now resolves
+        // to `pending|repo|path` instead of the legacy `repo|path|*`
+        // shape so two unknown-hash siblings on the same path
+        // collapse correctly under Nexus 2.1's `_id` uniqueness.
+        assert_eq!(e.to_key, "pending|cortex|src/module_a.rs");
         assert_eq!(
             e.props.get("tier").and_then(|v| v.as_str()),
             Some("intra_crate")
@@ -660,5 +709,99 @@ mod tests {
         let p = run(&[edge]);
         let e = p.edges.first().expect("one edge");
         assert_eq!(e.from_key, "cortex|src/lib.rs|sha256:abc");
+    }
+
+    // ---------- Phase11l §5.2 ----------
+
+    #[test]
+    fn pending_artifact_id_format_is_per_repo_and_path() {
+        let id = pending_artifact_id("cortex", "src/module_a.rs");
+        assert_eq!(id, "pending|cortex|src/module_a.rs");
+        // Distinct paths must produce distinct sentinels.
+        assert_ne!(
+            pending_artifact_id("cortex", "src/a.rs"),
+            pending_artifact_id("cortex", "src/b.rs")
+        );
+        // Distinct repos must produce distinct sentinels.
+        assert_ne!(
+            pending_artifact_id("cortex", "src/a.rs"),
+            pending_artifact_id("vectorizer", "src/a.rs")
+        );
+    }
+
+    #[test]
+    fn is_pending_artifact_id_recognises_sentinel_only() {
+        assert!(is_pending_artifact_id("pending|cortex|src/lib.rs"));
+        assert!(!is_pending_artifact_id("cortex|src/lib.rs|sha256:abc"));
+        assert!(!is_pending_artifact_id("cortex|src/lib.rs"));
+        // Empty / partial prefixes must NOT match.
+        assert!(!is_pending_artifact_id("pending"));
+        assert!(!is_pending_artifact_id(""));
+    }
+
+    #[test]
+    fn unknown_cross_artifact_hash_emits_pending_sentinel() {
+        let edges =
+            RustAnalyzer::new().extract("use crate::module_a::helper;\n", "cortex", "src/lib.rs");
+        let p = run(&edges);
+        let imp = p
+            .edges
+            .iter()
+            .find(|e| e.edge_type == "IMPORTS_FILE")
+            .expect("imports edge");
+        assert_eq!(
+            imp.to_key, "pending|cortex|src/module_a.rs",
+            "phase11l §5.1 — unknown cross-artifact hash MUST resolve to a deterministic per-(repo, path) sentinel"
+        );
+        assert!(
+            is_pending_artifact_id(&imp.to_key),
+            "is_pending_artifact_id must recognise the emitted shape"
+        );
+    }
+
+    #[test]
+    fn pending_sentinel_collapses_two_unknowns_on_same_repo_path() {
+        // Two distinct edges both targeting the same unknown-hash
+        // sibling MUST land on the same `to_key` so Nexus 2.1's `_id`
+        // uniqueness collapses them onto a single sentinel node
+        // rather than rejecting one. Idempotency under
+        // `ConflictPolicy::Match`.
+        let edges = RustAnalyzer::new().extract(
+            "use crate::module_a::helper;\nuse crate::module_a::Special;\n",
+            "cortex",
+            "src/lib.rs",
+        );
+        let p = run(&edges);
+        let imps: Vec<&EdgeOp> = p
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "IMPORTS_FILE")
+            .collect();
+        assert!(!imps.is_empty(), "expected at least one IMPORTS_FILE edge");
+        let first_to_key = imps[0].to_key.as_str();
+        for e in &imps {
+            assert_eq!(
+                e.to_key, first_to_key,
+                "every unknown-hash sibling on the same (repo, path) MUST collapse to one sentinel"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_sentinel_node_upserted_with_artifact_label() {
+        let edges =
+            RustAnalyzer::new().extract("use crate::module_a::helper;\n", "cortex", "src/lib.rs");
+        let p = run(&edges);
+        let sentinel = p
+            .nodes
+            .iter()
+            .find(|n| n.natural_key == "pending|cortex|src/module_a.rs")
+            .expect("sentinel artifact node must be upserted");
+        assert_eq!(sentinel.label, "Artifact");
+        // The repo / path props on the sentinel are absent (the key
+        // shape doesn't match the canonical `repo|path|hash` triple
+        // split_artifact_key parses), but the label MUST stay
+        // `:Artifact` so the §5.3 sweeper can find it via a single
+        // label scan.
     }
 }

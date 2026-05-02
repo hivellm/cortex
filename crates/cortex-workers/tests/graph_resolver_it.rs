@@ -110,7 +110,7 @@ fn tier2_module_path_use_resolves_to_workspace_artifact() {
     let imp = first_edge_of(&edges, "IMPORTS_FILE");
     assert_eq!(imp.from_key, "cortex|src/lib.rs|sha256:abc");
     assert_eq!(imp.to_label, "Artifact");
-    assert_eq!(imp.to_key, "cortex|src/workers.rs|*");
+    assert_eq!(imp.to_key, "pending|cortex|src/workers.rs");
     assert_eq!(
         imp.props.get("tier").and_then(|v| v.as_str()),
         Some("intra_crate")
@@ -192,7 +192,7 @@ fn pub_use_keeps_re_exports_label_through_resolution() {
     let edges = run_with_local("pub use crate::workers::run_worker;\n", &[]);
     let re = first_edge_of(&edges, "RE_EXPORTS");
     assert_eq!(re.to_label, "Artifact");
-    assert_eq!(re.to_key, "cortex|src/workers.rs|*");
+    assert_eq!(re.to_key, "pending|cortex|src/workers.rs");
     assert_eq!(
         re.props.get("tier").and_then(|v| v.as_str()),
         Some("intra_crate")

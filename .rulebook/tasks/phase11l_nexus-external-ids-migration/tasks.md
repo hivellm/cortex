@@ -27,10 +27,10 @@
 
 ## 5. UNKNOWN_CONTENT_HASH sentinel rewrite
 
-- [ ] 5.1 Replace `crates/cortex-workers/src/graph/analyzer/patch_builder.rs::UNKNOWN_CONTENT_HASH = "*"` with a deterministic placeholder format `format!("pending|{repo}|{path}")` (no content_hash slot); export it as `pub const PENDING_ARTIFACT_PREFIX: &str = "pending|"`
-- [ ] 5.2 Patch-builder unit test pinning the placeholder shape: a tier-2 IMPORTS_FILE edge whose target hash is unknown emits `to_key = "pending|cortex|src/module.rs"` instead of `"cortex|src/module.rs|*"`; the conflict policy on that node is still `Match` so two unknowns keyed on the same `(repo, path)` collapse correctly
-- [ ] 5.3 Stale-sentinel sweeper extension — extend the phase11k §5.3 stale-edge sweeper to also redirect placeholder nodes once the canonical hash arrives: when a real `:Artifact` lands with `_id = "cortex|src/module.rs|sha256:abc"`, the sweeper deletes the placeholder `_id = "pending|cortex|src/module.rs"` after re-pointing every `IMPORTS_FILE` edge from the placeholder to the canonical artifact
-- [ ] 5.4 IT `crates/cortex-workers/tests/graph_pending_to_canonical_it.rs` — emit a tier-2 IMPORTS_FILE patch with unknown sibling hash, assert placeholder created; emit the canonical sibling artifact patch; run the sweeper; assert (a) placeholder removed (b) edges re-pointed (c) no orphan edges remain
+- [x] 5.1 Replace `crates/cortex-workers/src/graph/analyzer/patch_builder.rs::UNKNOWN_CONTENT_HASH = "*"` with a deterministic placeholder format `format!("pending|{repo}|{path}")` (no content_hash slot); export it as `pub const PENDING_ARTIFACT_PREFIX: &str = "pending|"`
+- [x] 5.2 Patch-builder unit test pinning the placeholder shape: a tier-2 IMPORTS_FILE edge whose target hash is unknown emits `to_key = "pending|cortex|src/module.rs"` instead of `"cortex|src/module.rs|*"`; the conflict policy on that node is still `Match` so two unknowns keyed on the same `(repo, path)` collapse correctly
+- [ ] 5.3 ⏸ blocked: phase11k §5.3 — Stale-sentinel sweeper extension — extend the phase11k §5.3 stale-edge sweeper to also redirect placeholder nodes once the canonical hash arrives: when a real `:Artifact` lands with `_id = "cortex|src/module.rs|sha256:abc"`, the sweeper deletes the placeholder `_id = "pending|cortex|src/module.rs"` after re-pointing every `IMPORTS_FILE` edge from the placeholder to the canonical artifact
+- [ ] 5.4 ⏸ blocked: phase11k §5.3 — IT `crates/cortex-workers/tests/graph_pending_to_canonical_it.rs` — emit a tier-2 IMPORTS_FILE patch with unknown sibling hash, assert placeholder created; emit the canonical sibling artifact patch; run the sweeper; assert (a) placeholder removed (b) edges re-pointed (c) no orphan edges remain
 
 ## 6. Bootstrap envelope shape change
 
