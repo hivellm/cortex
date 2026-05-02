@@ -187,6 +187,14 @@ Identical schema, exposed as an MCP tool (`cortex.query`) so agent hosts can cal
 
 ## Design
 
+### Read path on Nexus 2.1 `_id` (phase11l §9.4)
+
+Post-phase11l, every Cortex graph node carries Nexus 2.1's reserved `_id` slot as its canonical identity (ADR-004). The query API's read path benefits structurally:
+
+- **Index seek** — `MATCH (n {_id: $x})` and `MATCH (n) WHERE n._id = $x` are planned as `ExternalIdSeek` operators (Nexus phase9 §4.6). Pre-phase11l, the same shape on `natural_key` resolved through a label-scan + property-comparison; the new path is O(1) for hash variants and O(log n) for string variants.
+- **Projection** — `RETURN n._id` returns the original prefixed string the caller stamped (`sha256:abc…` / `str:cortex|src/lib.rs|sha256:def` / etc.). The legacy `natural_key` property still ships on the node for one soft-fallback release; new callers project `_id`.
+- **Cross-system lookup** — `GET /v1/nodes/by-external-id/<id>` (mirrors Nexus's `/data/nodes/by-external-id` route) resolves a node by its canonical key without round-tripping through the property store. The dashboard's graph view uses this path via the `_id` field on every Artifact / Symbol entry it surfaces.
+
 ### Intent → strategy table
 
 | Intent                 | Vector | Keyword | Graph expansion                                     | Overlay                          |

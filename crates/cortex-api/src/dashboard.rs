@@ -2622,6 +2622,13 @@ async fn query_nexus_graph(
             "name",
             "agent_call",
         ),
+        // Phase11l §8 — Artifact identity moved from the synthetic
+        // `natural_key` property to Nexus 2.1's reserved `_id` slot.
+        // The dashboard reads through `a._id` so the graph view
+        // colour-coding stays accurate post-migration. The legacy
+        // `natural_key` property still ships on the node for one
+        // soft-fallback release; this read path follows the
+        // canonical identity.
         (
             "ToolCall",
             "id",
@@ -2629,20 +2636,12 @@ async fn query_nexus_graph(
             "tool_call",
             "TOUCHED",
             "Artifact",
-            "natural_key",
+            "_id",
             "name",
             "artifact",
         ),
         (
-            "Artifact",
-            "natural_key",
-            "name",
-            "artifact",
-            "IN_REPO",
-            "Repo",
-            "name",
-            "name",
-            "repo",
+            "Artifact", "_id", "name", "artifact", "IN_REPO", "Repo", "name", "name", "repo",
         ),
         (
             "LawViolation",

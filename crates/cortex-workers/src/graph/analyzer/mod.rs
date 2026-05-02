@@ -33,8 +33,11 @@ pub mod rust;
 pub mod typescript;
 
 pub use go::GoAnalyzer;
+#[allow(deprecated)]
+pub use patch_builder::UNKNOWN_CONTENT_HASH;
 pub use patch_builder::{
-    build_graph_patch, ContentHashLookup, PatchBuildContext, UNKNOWN_CONTENT_HASH,
+    build_graph_patch, is_pending_artifact_id, pending_artifact_id, ContentHashLookup,
+    PatchBuildContext, PENDING_ARTIFACT_PREFIX,
 };
 pub use python::PythonAnalyzer;
 pub use rust::{artifact_logical_key, RustAnalyzer};

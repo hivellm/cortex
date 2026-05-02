@@ -155,6 +155,35 @@ impl StaleEdgeSweeper {
         Ok(0)
     }
 
+    /// Phase11l §5.3 — redirect every `pending|repo|path` sentinel
+    /// node to its canonical `:Artifact` once the real content_hash
+    /// arrives. Walks edges whose `to_natural_key_prefix` matches
+    /// the sentinel form and issues bulk-deletes for the now-stale
+    /// pointers. The live trigger (phase11k §5.2) re-emits the same
+    /// edges against the canonical artifact in the next batch, so
+    /// the redirect collapses to a delete + re-add (idempotent
+    /// under [`ConflictPolicy::Match`]).
+    ///
+    /// Returns the number of sentinel-pointed edges deleted. Zero
+    /// when no pending sentinels remain (the steady-state outcome).
+    pub async fn redirect_pending_sentinels(&self) -> Result<u64, GraphClientError> {
+        // Build a filter that targets every edge whose target node
+        // natural key is a pending sentinel. The writer's bulk-
+        // delete machinery handles the rest; the live trigger from
+        // phase11k §5.2 re-emits against the canonical artifact on
+        // the next batch.
+        let filter = EdgeDeleteFilter {
+            to_natural_key_prefix: Some(
+                crate::graph::analyzer::PENDING_ARTIFACT_PREFIX.to_string(),
+            ),
+            ..Default::default()
+        };
+        if !filter.is_non_empty() {
+            return Ok(0);
+        }
+        self.writer.delete_edges_by_filter(filter).await
+    }
+
     /// Spawn a tokio task that calls [`Self::sweep_once`] every
     /// [`Self::interval`]. The task runs until the returned
     /// [`JoinHandle`] is dropped or aborted.
@@ -319,6 +348,42 @@ mod tests {
         assert!(pred.contains(" AND "));
         assert!(pred.contains("phase11k.1"));
         assert!(pred.contains("IMPORTS_FILE"));
+    }
+
+    #[tokio::test]
+    async fn redirect_pending_sentinels_issues_filter_with_pending_prefix() {
+        let writer = Arc::new(RecordingWriter {
+            canned_count: 7,
+            ..RecordingWriter::default()
+        });
+        let sweeper = StaleEdgeSweeper::new(writer.clone(), "phase11l.1");
+        let deleted = sweeper
+            .redirect_pending_sentinels()
+            .await
+            .expect("redirect");
+        assert_eq!(deleted, 7);
+        let calls = writer.deletes.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let filter = &calls[0];
+        assert_eq!(
+            filter.to_natural_key_prefix.as_deref(),
+            Some(crate::graph::analyzer::PENDING_ARTIFACT_PREFIX)
+        );
+        assert!(
+            filter.is_non_empty(),
+            "redirect filter must satisfy is_non_empty so the writer never wipes the entire graph"
+        );
+    }
+
+    #[tokio::test]
+    async fn redirect_pending_sentinels_returns_zero_when_writer_reports_none() {
+        let writer = Arc::new(RecordingWriter::default());
+        let sweeper = StaleEdgeSweeper::new(writer, "phase11l.1");
+        let deleted = sweeper
+            .redirect_pending_sentinels()
+            .await
+            .expect("redirect");
+        assert_eq!(deleted, 0);
     }
 
     #[tokio::test]

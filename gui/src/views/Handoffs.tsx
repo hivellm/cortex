@@ -27,7 +27,11 @@ export function HandoffsView() {
     refetchInterval: 60_000,
   });
 
-  const rows = data ?? [];
+  const rows = useMemo(() => {
+    const list = [...(data ?? [])];
+    list.sort((a, b) => (b.updated_ms ?? 0) - (a.updated_ms ?? 0));
+    return list;
+  }, [data]);
   const repos = useMemo(() => {
     const s = new Set<string>();
     for (const r of allRows ?? []) {

@@ -52,8 +52,8 @@
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 7.1 Update or create documentation covering the implementation — CHANGELOG entry for phase11k; `docs/architecture.md` §6 (graph correlation layer alongside retrieval lanes); `docs/specs/07-graph-writer.md` §Schema + §Edge types refresh; `docs/cortex/graph-tuning.md` (already produced by §6.5)
-- [ ] 7.2 Write tests covering the new behavior — every IT named in §1-§6 lands; coverage ≥ 95 % on the new `cortex-workers/src/graph/analyzer/`, `resolver/`, `markdown/` modules; the citation-chain IT is the headline acceptance gate
-- [ ] 7.3 Run tests and confirm they pass — `cargo check`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test --all-features`, full IT suite gated by `CORTEX_*_IT=1` (CODE_GRAPH, MARKDOWN_GRAPH, CITATION_CHAIN); all green
-- [ ] 7.4 Capture learnings: `rulebook_learn_capture` for any non-obvious finding from the implementation (Tree-sitter query gotchas, resolver disambiguation tuning, prompt → static-extraction trade-offs)
-- [ ] 7.5 Capture decision: `rulebook_decision_create` for the static-extraction-over-LSP choice (§2.3 risk + §1 design rationale) pinned against a quantitative reassessment trigger (when does the syntactic resolver's ~10 % wrong-target rate become unacceptable?)
+- [x] 7.1 Update or create documentation covering the implementation — CHANGELOG entry for phase11k; `docs/architecture.md` §6 (graph correlation layer alongside retrieval lanes); `docs/specs/07-graph-writer.md` §Schema + §Edge types refresh; `docs/cortex/graph-tuning.md` (already produced by §6.5)
+- [x] 7.2 Write tests covering the new behavior — every IT named in §1-§6 lands; coverage ≥ 95 % on the new `cortex-workers/src/graph/analyzer/`, `resolver/`, `markdown/` modules; the citation-chain IT is the headline acceptance gate
+- [x] 7.3 Run tests and confirm they pass — `cargo check`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test --all-features`, full IT suite gated by `CORTEX_*_IT=1` (CODE_GRAPH, MARKDOWN_GRAPH, CITATION_CHAIN); all green
+- [x] 7.4 Capture learnings: `rulebook_learn_capture` for any non-obvious finding from the implementation (Tree-sitter query gotchas, resolver disambiguation tuning, prompt → static-extraction trade-offs)
+- [x] 7.5 Capture decision: `rulebook_decision_create` for the static-extraction-over-LSP choice (§2.3 risk + §1 design rationale) pinned against a quantitative reassessment trigger (when does the syntactic resolver's ~10 % wrong-target rate become unacceptable?)

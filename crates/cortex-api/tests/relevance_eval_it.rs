@@ -382,9 +382,11 @@ mod scoring_math {
     #[test]
     fn gold_fixture_loads_and_matches_intent_breakdown() {
         // Sanity: every entry parses, ids are unique, and the
-        // intent split agrees with the §4.4 commitment.
+        // intent split agrees with the §4.4 commitment + phase11k
+        // §6.4 extension (10 new entries: 4 pre_change_context, 3
+        // decision_lookup, 2 similar_problems, 1 free_search).
         let gold = load_gold();
-        assert_eq!(gold.queries.len(), 30);
+        assert_eq!(gold.queries.len(), 40);
         let mut by_intent: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut seen_ids: std::collections::BTreeSet<&str> = Default::default();
         for q in &gold.queries {
@@ -392,10 +394,16 @@ mod scoring_math {
             assert!(!q.expected_doc_ids.is_empty(), "{} has no expected", q.id);
             *by_intent.entry(q.intent.label()).or_default() += 1;
         }
-        assert_eq!(by_intent.get("pre_change_context").copied(), Some(10));
-        assert_eq!(by_intent.get("decision_lookup").copied(), Some(5));
-        assert_eq!(by_intent.get("similar_problems").copied(), Some(10));
+        // Original phase11i §4.4 split (30 queries):
+        //   10 pre_change_context, 5 decision_lookup, 10 similar_problems,
+        //   3 law_check, 2 free_search.
+        // Phase11k §6.4 extension (+10 queries):
+        //   +4 pre_change_context, +3 decision_lookup, +2 similar_problems,
+        //   +1 free_search. Final 14/8/12/3/3 split.
+        assert_eq!(by_intent.get("pre_change_context").copied(), Some(14));
+        assert_eq!(by_intent.get("decision_lookup").copied(), Some(8));
+        assert_eq!(by_intent.get("similar_problems").copied(), Some(12));
         assert_eq!(by_intent.get("law_check").copied(), Some(3));
-        assert_eq!(by_intent.get("free_search").copied(), Some(2));
+        assert_eq!(by_intent.get("free_search").copied(), Some(3));
     }
 }

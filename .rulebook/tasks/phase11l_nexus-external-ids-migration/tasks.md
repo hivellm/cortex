@@ -29,8 +29,8 @@
 
 - [x] 5.1 Replace `crates/cortex-workers/src/graph/analyzer/patch_builder.rs::UNKNOWN_CONTENT_HASH = "*"` with a deterministic placeholder format `format!("pending|{repo}|{path}")` (no content_hash slot); export it as `pub const PENDING_ARTIFACT_PREFIX: &str = "pending|"`
 - [x] 5.2 Patch-builder unit test pinning the placeholder shape: a tier-2 IMPORTS_FILE edge whose target hash is unknown emits `to_key = "pending|cortex|src/module.rs"` instead of `"cortex|src/module.rs|*"`; the conflict policy on that node is still `Match` so two unknowns keyed on the same `(repo, path)` collapse correctly
-- [ ] 5.3 ⏸ blocked: phase11k §5.3 — Stale-sentinel sweeper extension — extend the phase11k §5.3 stale-edge sweeper to also redirect placeholder nodes once the canonical hash arrives: when a real `:Artifact` lands with `_id = "cortex|src/module.rs|sha256:abc"`, the sweeper deletes the placeholder `_id = "pending|cortex|src/module.rs"` after re-pointing every `IMPORTS_FILE` edge from the placeholder to the canonical artifact
-- [ ] 5.4 ⏸ blocked: phase11k §5.3 — IT `crates/cortex-workers/tests/graph_pending_to_canonical_it.rs` — emit a tier-2 IMPORTS_FILE patch with unknown sibling hash, assert placeholder created; emit the canonical sibling artifact patch; run the sweeper; assert (a) placeholder removed (b) edges re-pointed (c) no orphan edges remain
+- [x] 5.3 Stale-sentinel sweeper extension — extend the phase11k §5.3 stale-edge sweeper to also redirect placeholder nodes once the canonical hash arrives: when a real `:Artifact` lands with `_id = "cortex|src/module.rs|sha256:abc"`, the sweeper deletes the placeholder `_id = "pending|cortex|src/module.rs"` after re-pointing every `IMPORTS_FILE` edge from the placeholder to the canonical artifact
+- [x] 5.4 IT `crates/cortex-workers/tests/graph_pending_to_canonical_it.rs` — emit a tier-2 IMPORTS_FILE patch with unknown sibling hash, assert placeholder created; emit the canonical sibling artifact patch; run the sweeper; assert (a) placeholder removed (b) edges re-pointed (c) no orphan edges remain
 
 ## 6. Bootstrap envelope shape change
 
@@ -41,28 +41,28 @@
 
 ## 7. Reindex (drop + replay)
 
-- [ ] 7.1 New admin command `cortex-ops graph drop --confirm --dry-run` in `crates/cortex-cli/src/ops/graph_drop.rs` — calls Nexus's `MATCH (n) DETACH DELETE n` (or the SDK's equivalent admin surface) for the Cortex graph DB. Refuses to run without `--confirm`. `--dry-run` prints the count it would delete
-- [ ] 7.2 Re-run `cortex-bootstrap --graph-static` against every workspace repo declared in `cortex-bootstrap.toml`. Document the operator runbook in `docs/cortex/external-id-migration.md` (new file): pre-migration checklist, drop, replay, post-migration verification queries, rollback notes
-- [ ] 7.3 Boot graph-worker; archive_loader replays the live event stream into the new schema. Verify the live trigger from phase11k §5.2 picks up the new `_id` slot correctly (every Artifact event lands with `_id` on the resulting GraphPatch)
-- [ ] 7.4 Verification IT — run the phase11i gold-set against the post-migration graph; assert `MRR@10 ≥ 0.75` (the same gate phase11i shipped); document any drift in `docs/cortex/external-id-migration.md` §Verification
+- [x] 7.1 New admin command `cortex-ops graph drop --confirm --dry-run` in `crates/cortex-cli/src/ops/graph_drop.rs` — calls Nexus's `MATCH (n) DETACH DELETE n` (or the SDK's equivalent admin surface) for the Cortex graph DB. Refuses to run without `--confirm`. `--dry-run` prints the count it would delete
+- [x] 7.2 Re-run `cortex-bootstrap --graph-static` against every workspace repo declared in `cortex-bootstrap.toml`. Document the operator runbook in `docs/cortex/external-id-migration.md` (new file): pre-migration checklist, drop, replay, post-migration verification queries, rollback notes
+- [x] 7.3 Boot graph-worker; archive_loader replays the live event stream into the new schema. Verify the live trigger from phase11k §5.2 picks up the new `_id` slot correctly (every Artifact event lands with `_id` on the resulting GraphPatch)
+- [x] 7.4 Verification IT — run the phase11i gold-set against the post-migration graph; assert `MRR@10 ≥ 0.75` (the same gate phase11i shipped); document any drift in `docs/cortex/external-id-migration.md` §Verification
 
 ## 8. Dashboard surface
 
-- [ ] 8.1 `crates/cortex-api/src/dashboard.rs` reads `n._id` instead of `props["natural_key"]` for the canonical node identity in the graph view colour-coding; the existing `display_label` prop stays unchanged so the human-facing labels are invariant
-- [ ] 8.2 Update inline dashboard tests that pin the JSON shape — assert the `id` field in the graph payload tracks `_id`, not `natural_key`
-- [ ] 8.3 IT `crates/cortex-api/tests/dashboard_external_id_it.rs` — seed a small graph via the new mapper, hit `/v1/dashboard/graph`, assert every node carries an `id` field whose value matches the `_id` slot
+- [x] 8.1 `crates/cortex-api/src/dashboard.rs` reads `n._id` instead of `props["natural_key"]` for the canonical node identity in the graph view colour-coding; the existing `display_label` prop stays unchanged so the human-facing labels are invariant
+- [x] 8.2 Update inline dashboard tests that pin the JSON shape — assert the `id` field in the graph payload tracks `_id`, not `natural_key`
+- [x] 8.3 IT `crates/cortex-api/tests/dashboard_external_id_it.rs` — seed a small graph via the new mapper, hit `/v1/dashboard/graph`, assert every node carries an `id` field whose value matches the `_id` slot
 
 ## 9. ADR + migration documentation
 
-- [ ] 9.1 `rulebook_decision_create` — record the supersession: "Cortex graph nodes carry their identity in Nexus's reserved `_id` slot, replacing the synthetic `natural_key` property convention shipped in phase4-phase11k". Names the quantitative reassessment trigger (Nexus query latency p95 on Artifact MERGE vs. CREATE ON CONFLICT MATCH; if the gap drops below 5% the migration value is no longer self-evident and the legacy fallback can stay)
-- [ ] 9.2 `docs/cortex/external-id-migration.md` — operator runbook: pre-migration checklist, drop command, replay command, post-migration verification (gold-set IT + dashboard smoke), rollback procedure (revert the SDK pin, restore the `MERGE`-based templates from git, re-run drop + replay against the legacy schema)
-- [ ] 9.3 Update `docs/specs/07-graph-writer.md` §Stable identity to point at Nexus's `_id` as the canonical identity surface; deprecate the synthetic `natural_key` convention with a "removed in phase11l_nexus-external-ids-migration" note pointing at this ADR
-- [ ] 9.4 Update `docs/specs/11-query-api.md` §Read path to document `MATCH (n {_id: …})` as an index seek and the `RETURN n._id` projection shape
+- [x] 9.1 `rulebook_decision_create` — record the supersession: "Cortex graph nodes carry their identity in Nexus's reserved `_id` slot, replacing the synthetic `natural_key` property convention shipped in phase4-phase11k". Names the quantitative reassessment trigger (Nexus query latency p95 on Artifact MERGE vs. CREATE ON CONFLICT MATCH; if the gap drops below 5% the migration value is no longer self-evident and the legacy fallback can stay)
+- [x] 9.2 `docs/cortex/external-id-migration.md` — operator runbook: pre-migration checklist, drop command, replay command, post-migration verification (gold-set IT + dashboard smoke), rollback procedure (revert the SDK pin, restore the `MERGE`-based templates from git, re-run drop + replay against the legacy schema)
+- [x] 9.3 Update `docs/specs/07-graph-writer.md` §Stable identity to point at Nexus's `_id` as the canonical identity surface; deprecate the synthetic `natural_key` convention with a "removed in phase11l_nexus-external-ids-migration" note pointing at this ADR
+- [x] 9.4 Update `docs/specs/11-query-api.md` §Read path to document `MATCH (n {_id: …})` as an index seek and the `RETURN n._id` projection shape
 
 ## 10. Tail (mandatory — enforced by rulebook v5.3.0)
 
-- [ ] 10.1 Update or create documentation covering the implementation — CHANGELOG entry under "Changed" (`feat(graph): adopt Nexus _id for all node identities`); `docs/architecture.md` §6 graph correlation layer identity story; `docs/cortex/external-id-migration.md` operator runbook (already produced by §9.2); `docs/specs/07-graph-writer.md` §Stable identity rewrite (already produced by §9.3); `docs/specs/11-query-api.md` §Read path update (already produced by §9.4)
-- [ ] 10.2 Write tests covering the new behavior — every IT named in §1-§8 lands; coverage ≥ 95 % on the modified `cortex-workers/src/graph/{patch,schema,coalescer,mapper}.rs` slices; the post-migration gold-set IT is the headline acceptance gate
-- [ ] 10.3 Run tests and confirm they pass — `cargo check`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test --all-features`, full IT suite gated by `CORTEX_*_IT=1` (NEXUS_EXTERNAL_ID, GRAPH_PENDING_TO_CANONICAL, DASHBOARD_EXTERNAL_ID, RELEVANCE plus the phase11i headline); all green
-- [ ] 10.4 Capture learnings: `rulebook_learn_capture` for any non-obvious finding from the migration (Nexus SDK 2.x ergonomics, ON CONFLICT REPLACE vs MATCH semantics in production, the `pending|repo|path` placeholder behaviour under high concurrency)
-- [ ] 10.5 Capture decision: §9.1 produces the ADR. Sanity-check it lists the trigger for revisiting (when the legacy `MERGE` path can be deleted entirely — driven by the §6.3 doctor's "≤ 1% legacy envelopes" gate)
+- [x] 10.1 Update or create documentation covering the implementation — CHANGELOG entry under "Changed" (`feat(graph): adopt Nexus _id for all node identities`); `docs/architecture.md` §6 graph correlation layer identity story; `docs/cortex/external-id-migration.md` operator runbook (already produced by §9.2); `docs/specs/07-graph-writer.md` §Stable identity rewrite (already produced by §9.3); `docs/specs/11-query-api.md` §Read path update (already produced by §9.4)
+- [x] 10.2 Write tests covering the new behavior — every IT named in §1-§8 lands; coverage ≥ 95 % on the modified `cortex-workers/src/graph/{patch,schema,coalescer,mapper}.rs` slices; the post-migration gold-set IT is the headline acceptance gate
+- [x] 10.3 Run tests and confirm they pass — `cargo check`, `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`, `cargo test --all-features`, full IT suite gated by `CORTEX_*_IT=1` (NEXUS_EXTERNAL_ID, GRAPH_PENDING_TO_CANONICAL, DASHBOARD_EXTERNAL_ID, RELEVANCE plus the phase11i headline); all green
+- [x] 10.4 Capture learnings: `rulebook_learn_capture` for any non-obvious finding from the migration (Nexus SDK 2.x ergonomics, ON CONFLICT REPLACE vs MATCH semantics in production, the `pending|repo|path` placeholder behaviour under high concurrency)
+- [x] 10.5 Capture decision: §9.1 produces the ADR. Sanity-check it lists the trigger for revisiting (when the legacy `MERGE` path can be deleted entirely — driven by the §6.3 doctor's "≤ 1% legacy envelopes" gate)

@@ -117,9 +117,12 @@ RETURN a.repo, a.path, s.language
 
 ### Stable identity
 
-- **Natural keys** (e.g. `session_id`, `turn_id`) are used verbatim as the Nexus node key. Nexus `MERGE` semantics handle idempotency.
-- **Composite keys** (e.g. `Artifact (repo, path, content_hash)`) are concatenated `repo|path|content_hash` and stored as `natural_key`; Nexus has a unique index on `Artifact.natural_key`.
-- **Generated ULIDs** (`Decision`, `Analysis`, `LawViolation`) are produced upstream (by `cortex-core` or the adapter) and passed through — the graph writer never mints new IDs.
+**Phase11l update — Nexus 2.1 reserved `_id` slot.** Cortex graph nodes carry their identity in the Nexus 2.1 reserved `_id` property. The pre-phase11l `natural_key` convention (and its per-label `IS UNIQUE` constraints) was retired in favour of Nexus's `ExternalIdIndex`. ADR-004 captures the rationale + reassessment trigger.
+
+- **Adapter-facing identity** (`session_id`, `turn_id`, `decision_id`, …) is stamped as the canonical key string AND as the node's `_id` slot. Two surfaces, one value: SDK callers query by the semantic property (e.g. `Session.id`) while the writer's upsert path keys on `_id`.
+- **Composite keys** (`Artifact (repo, path, content_hash)`, `Symbol (repo, language, qualified_name)`) are concatenated `|`-delimited and stamped as the `_id` slot. The legacy `natural_key` property still ships on the node for one soft-fallback release.
+- **Generated ULIDs** (`Decision`, `Analysis`, `LawViolation`, `Memory`, `Knowledge`, `Learning`, `Consolidation`) are produced upstream (by `cortex-core` or the adapter) and passed through — the graph writer never mints new IDs.
+- **Pending sentinels** (`pending|repo|path`, phase11l §5.1) cover the case where a cross-artifact `(repo, path)` lands before its canonical content_hash arrives; the §5.3 stale-edge sweeper redirects every sentinel-pointed edge once the canonical artifact is written.
 
 ### Nexus client
 
@@ -143,40 +146,45 @@ impl NexusClient {
 
 ### Cypher generation
 
-All writes go through a single parametrized `UNWIND` template, for example for `ToolCall`:
+All writes go through a single parametrized `UNWIND` template. Phase11l §3 rewrote every node template from the legacy `MERGE { natural_key }` shape to Nexus 2.1's `CREATE { _id } ON CONFLICT MATCH`:
 
 ```cypher
 UNWIND $rows AS row
-MERGE (tc:ToolCall {id: row.id})
-SET tc += row.props
-WITH tc, row
-MATCH (t:Turn {id: row.turn_id})
-MERGE (t)-[r:HAS_TOOL_CALL]->(tc)
-SET r.ts = coalesce(r.ts, row.ts);
+CREATE (n:ToolCall {_id: row.key}) ON CONFLICT MATCH
+SET n += row.props
 ```
 
-One template per (label × incoming edge) pattern. Templates live in `cortex-workers/cypher/` as `.cypher` files loaded at startup. No string concatenation of user data.
+Edge templates kept their existing `MATCH … MERGE` shape — they match endpoints on the endpoint's identity property and benefit transparently from the index seek when that property is `_id`. One template per (label × incoming edge) pattern. Templates live in `cortex-workers/cypher/` as `.cypher` files loaded at startup. No string concatenation of user data.
+
+Phase11k §6.1 added three read-side query templates the pre-thinking renderer loads through the same registry: `code_callers.cypher` (`:CALLS` 1-hop), `doc_trail.cypher` (`:CITES` chain), `blast_radius.cypher` (`:IMPORTS_FILE*1..2`).
 
 ### Schema bootstrapping
 
-On worker startup:
+On worker startup (post-phase11l §4):
 
 ```cypher
+-- Adapter-facing identity constraints. These properties carry
+-- semantic meaning beyond the `_id` slot; the constraints are
+-- belt-and-braces against an SDK regression.
 CREATE CONSTRAINT session_id IF NOT EXISTS FOR (s:Session) REQUIRE s.id IS UNIQUE;
 CREATE CONSTRAINT turn_id IF NOT EXISTS FOR (t:Turn) REQUIRE t.id IS UNIQUE;
 CREATE CONSTRAINT tool_call_id IF NOT EXISTS FOR (tc:ToolCall) REQUIRE tc.id IS UNIQUE;
-CREATE CONSTRAINT artifact_natural_key IF NOT EXISTS FOR (a:Artifact) REQUIRE a.natural_key IS UNIQUE;
 CREATE CONSTRAINT decision_id IF NOT EXISTS FOR (d:Decision) REQUIRE d.id IS UNIQUE;
+CREATE CONSTRAINT memory_id IF NOT EXISTS FOR (m:Memory) REQUIRE m.id IS UNIQUE;
+CREATE CONSTRAINT analysis_id IF NOT EXISTS FOR (a:Analysis) REQUIRE a.id IS UNIQUE;
 CREATE CONSTRAINT law_id IF NOT EXISTS FOR (l:Law) REQUIRE l.id IS UNIQUE;
--- phase4c: Symbol nodes carry a composite natural key
-CREATE CONSTRAINT symbol_natural_key IF NOT EXISTS FOR (s:Symbol) REQUIRE s.natural_key IS UNIQUE;
+CREATE CONSTRAINT violation_id IF NOT EXISTS FOR (v:LawViolation) REQUIRE v.id IS UNIQUE;
+CREATE CONSTRAINT repo_name IF NOT EXISTS FOR (r:Repo) REQUIRE r.name IS UNIQUE;
+CREATE CONSTRAINT spec_path IF NOT EXISTS FOR (s:Spec) REQUIRE s.path IS UNIQUE;
+
+-- Secondary read-path indexes.
 CREATE INDEX artifact_repo_path IF NOT EXISTS FOR (a:Artifact) ON (a.repo, a.path);
 CREATE INDEX turn_ts IF NOT EXISTS FOR (t:Turn) ON (t.ts);
 CREATE INDEX tool_call_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name);
 CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name);
 ```
 
-Idempotent; runs every startup. Failure here is fatal — no writes happen without schema.
+Idempotent; runs every startup. Failure here is fatal — no writes happen without schema. The five `*_natural_key` uniqueness constraints shipped in phase4c-phase11k were retired in phase11l §4.1; Nexus 2.1's `ExternalIdIndex` enforces uniqueness on `_id` structurally, removing the need for per-label constraints on the legacy `natural_key` property. ADR-004 records the supersession.
 
 ### Concurrency
 
