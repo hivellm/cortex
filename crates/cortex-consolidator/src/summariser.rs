@@ -48,10 +48,14 @@ impl SummariserKind {
 /// representation captures the published rates without rounding.
 /// The orchestrator divides by 1_000_000 when surfacing the running
 /// total to operators.
-pub const HAIKU45_INPUT_MICROCENTS_PER_1K: u64 = 80; // $0.0008/M tokens × 1k
-pub const HAIKU45_OUTPUT_MICROCENTS_PER_1K: u64 = 400; // $0.004/M tokens × 1k
-pub const OPUS47_INPUT_MICROCENTS_PER_1K: u64 = 1_500_000; // $15/M tokens × 1k
-pub const OPUS47_OUTPUT_MICROCENTS_PER_1K: u64 = 7_500_000; // $75/M tokens × 1k
+/// Haiku 4.5 input price: $0.0008/M tokens × 1 k = 80 micro-cents/1 k.
+pub const HAIKU45_INPUT_MICROCENTS_PER_1K: u64 = 80;
+/// Haiku 4.5 output price: $0.004/M tokens × 1 k = 400 micro-cents/1 k.
+pub const HAIKU45_OUTPUT_MICROCENTS_PER_1K: u64 = 400;
+/// Opus 4.7 input price: $15/M tokens × 1 k = 1 500 000 micro-cents/1 k.
+pub const OPUS47_INPUT_MICROCENTS_PER_1K: u64 = 1_500_000;
+/// Opus 4.7 output price: $75/M tokens × 1 k = 7 500 000 micro-cents/1 k.
+pub const OPUS47_OUTPUT_MICROCENTS_PER_1K: u64 = 7_500_000;
 
 /// Compute USD cents for a (input_tokens, output_tokens) pair under
 /// the given model's pricing. Rounds half-up to the nearest cent.
