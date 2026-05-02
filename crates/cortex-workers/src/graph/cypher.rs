@@ -573,4 +573,55 @@ mod tests {
             .ensure_required(REQUIRED_TEMPLATES)
             .expect("shipped cypher/ must satisfy REQUIRED_TEMPLATES");
     }
+
+    #[test]
+    fn shipped_node_templates_use_external_id_create_on_conflict_match() {
+        // Phase11l §3.3 — every shipped node_*.cypher template MUST
+        // route the upsert through Nexus 2.1's reserved `_id` slot
+        // (`CREATE (n:Label {_id: row.key}) ON CONFLICT MATCH`). The
+        // legacy `MERGE { natural_key | id | name: row.key }` shape is
+        // a regression: it bypasses the external-id index seek, costs
+        // the per-template hash-vs-property comparison, and reintroduces
+        // the silent-overwrite class the §2 ConflictPolicy enum was
+        // designed to make explicit.
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cypher_dir = manifest_dir.join("cypher");
+        let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(&cypher_dir)
+            .expect("read cypher/ dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("node_") && n.ends_with(".cypher"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        entries.sort();
+        assert!(
+            !entries.is_empty(),
+            "cypher/ must ship at least one node_*.cypher template"
+        );
+        for path in entries {
+            let body = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(
+                body.contains("_id: row.key"),
+                "{name}: must key on Nexus reserved `_id` slot, got:\n{body}"
+            );
+            assert!(
+                body.contains("ON CONFLICT MATCH"),
+                "{name}: must carry an explicit `ON CONFLICT MATCH` modifier, got:\n{body}"
+            );
+            assert!(
+                body.contains("CREATE (n:"),
+                "{name}: must use CREATE form, got:\n{body}"
+            );
+            assert!(
+                !body.contains("MERGE (n:"),
+                "{name}: legacy MERGE shape regressed, got:\n{body}"
+            );
+        }
+    }
 }

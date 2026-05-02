@@ -22,7 +22,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::patch::{ConflictPolicy, EdgeOp, GraphPatch, NodeOp};
+#[cfg(test)]
+use super::patch::ConflictPolicy;
+use super::patch::{EdgeOp, GraphPatch, NodeOp};
 
 /// Counters returned alongside a coalesced patch.
 #[derive(Debug, Clone, Default)]

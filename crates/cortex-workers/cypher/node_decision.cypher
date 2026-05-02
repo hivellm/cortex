@@ -1,3 +1,3 @@
 UNWIND $rows AS row
-MERGE (n:Decision { id: row.key })
+CREATE (n:Decision { _id: row.key }) ON CONFLICT MATCH
 SET n += row.props

@@ -1,3 +1,3 @@
 UNWIND $rows AS row
-MERGE (n:Artifact { natural_key: row.key })
+CREATE (n:Artifact { _id: row.key }) ON CONFLICT MATCH
 SET n += row.props

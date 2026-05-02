@@ -1,3 +1,3 @@
 UNWIND $rows AS row
-MERGE (n:Turn { id: row.key })
+CREATE (n:Turn { _id: row.key }) ON CONFLICT MATCH
 SET n += row.props

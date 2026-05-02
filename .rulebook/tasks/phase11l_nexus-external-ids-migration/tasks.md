@@ -13,10 +13,10 @@
 
 ## 3. Cypher templates
 
-- [ ] 3.1 Rewrite `crates/cortex-workers/cypher/node_*.cypher` (twelve files: `node_{analysis,artifact,decision,law,law_violation,memory,repo,session,symbol,tool_call,turn}.cypher` plus the phase11k-introduced `node_{external_package,unresolved_import,doc_section}.cypher` if present): `MERGE (n:Label { natural_key: row.key }) SET n += row.props` → `CREATE (n:Label {_id: row.key}) ON CONFLICT MATCH SET n += row.props`
-- [ ] 3.2 Verify edge templates (`crates/cortex-workers/cypher/edge_*.cypher`) keep their existing `MATCH … MERGE` shape — they already match endpoints on the endpoint's identity property and benefit transparently from the index seek when that property is `_id`
-- [ ] 3.3 Per-template unit test in `crates/cortex-workers/src/graph/cypher.rs::tests` asserting the rendered Cypher contains `_id: row.key` and `ON CONFLICT MATCH` for every node template
-- [ ] 3.4 Compatibility test against Nexus 2.x sandbox: replay a 100-node fixture patch through both the legacy MERGE path and the new ON CONFLICT MATCH path; assert the resulting graph state is identical (same node count, same property bag, same edge cardinality)
+- [x] 3.1 Rewrite `crates/cortex-workers/cypher/node_*.cypher` (twelve files: `node_{analysis,artifact,decision,law,law_violation,memory,repo,session,symbol,tool_call,turn}.cypher` plus the phase11k-introduced `node_{external_package,unresolved_import,doc_section}.cypher` if present): `MERGE (n:Label { natural_key: row.key }) SET n += row.props` → `CREATE (n:Label {_id: row.key}) ON CONFLICT MATCH SET n += row.props`
+- [x] 3.2 Verify edge templates (`crates/cortex-workers/cypher/edge_*.cypher`) keep their existing `MATCH … MERGE` shape — they already match endpoints on the endpoint's identity property and benefit transparently from the index seek when that property is `_id`
+- [x] 3.3 Per-template unit test in `crates/cortex-workers/src/graph/cypher.rs::tests` asserting the rendered Cypher contains `_id: row.key` and `ON CONFLICT MATCH` for every node template
+- [x] 3.4 Compatibility test against Nexus 2.x sandbox: replay a 100-node fixture patch through both the legacy MERGE path and the new ON CONFLICT MATCH path; assert the resulting graph state is identical (same node count, same property bag, same edge cardinality)
 
 ## 4. Schema bootstrap rewrite
 
