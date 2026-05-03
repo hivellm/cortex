@@ -8,7 +8,7 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase11j_consolidation_tier | 30/42 | consolidation_tier |
+| ⬚ | phase11j_consolidation_tier | 35/42 | consolidation_tier |
 
 ## phase11k
 
@@ -26,5 +26,5 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase11o_vectorizer_demotion_api | 0/5 | vectorizer_demotion_api |
+| 🚫 | phase11o_vectorizer_demotion_api | 2/14 | vectorizer_demotion_api |
 

@@ -1,7 +1,7 @@
 ## 1. Coordination — vectorizer + vectorizer-sdk (external)
 
-- [ ] 1.1 Open an upstream issue / PR in `hivellm/vectorizer` requesting the `move_to_collection` + `delete_vectors` server endpoints described in this task's proposal §1.
-- [ ] 1.2 Open the matching `vectorizer-sdk` (Rust) PR exposing the new client methods per proposal §2 + §3.
+- [x] 1.1 Upstream issue opened: https://github.com/hivellm/vectorizer/issues/265 — covers the new `POST /collections/{src}/vectors/move` server endpoint, exposes the existing `delete_vector` + `batch_delete_vectors` server routes through the SDK, atomic-per-vector ordering (dst insert before src delete), per-id `MoveReport.results` error surface, dim/encoding mismatch handling, additive wire bump 3.2 → 3.3. Acceptance checklist landed in the issue body.
+- [x] 1.2 SDK changes folded into the single combined issue #265 — `vectorizer-sdk` lives in the same `hivellm/vectorizer` workspace under `sdks/rust/`, so server + Rust SDK + TS/Python SDK ship together. Issue body lists the three Rust SDK methods (`delete_vector`, `delete_vectors`, `move_to_collection`) with their exact signatures + return types.
 - [ ] 1.3 Pin the released `vectorizer-sdk` version that carries them in this repo's workspace `Cargo.toml`.
 
 ## 2. Cortex-side — pruner module + sinks
