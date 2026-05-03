@@ -211,6 +211,39 @@ pub async fn fetch_vectorizer_collection_names(
     Ok(out)
 }
 
+/// Phase11m §1 — fetch the set of repos that have at least one
+/// `Repo` node in Nexus. Used by the coverage audit so the dashboard
+/// can flag slugs the orchestrator expects (driven by the keyword
+/// lane + `CORTEX_COVERAGE_SLUGS` env) but the graph backend has
+/// never seen — typically a sign the graph-writer skipped the repo
+/// or the bootstrap phase never ran.
+///
+/// Names are lower-cased to match the slug normalisation the rest of
+/// the audit applies. `Repo.name` is the writer-side identity
+/// property (see `cortex_workers::graph::schema::INIT_STATEMENTS`'s
+/// `CREATE CONSTRAINT repo_name FOR (r:Repo) REQUIRE r.name IS UNIQUE`).
+pub async fn fetch_nexus_repo_names(
+    client: &nexus_sdk::NexusClient,
+    timeout: std::time::Duration,
+) -> Result<BTreeSet<String>, String> {
+    let cypher = "MATCH (r:Repo) RETURN r.name AS name";
+    let res = tokio::time::timeout(timeout, client.execute_cypher(cypher, None))
+        .await
+        .map_err(|_| format!("nexus query timeout after {:?}", timeout))?
+        .map_err(|e| format!("nexus execute_cypher: {e}"))?;
+    let mut out = BTreeSet::new();
+    for row in &res.rows {
+        let Some(cells) = row.as_array() else { continue };
+        if let Some(name) = cells.first().and_then(|v| v.as_str()) {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                out.insert(trimmed.to_ascii_lowercase());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Fetch the live Meilisearch index-uid set via `GET /indexes`. The
 /// master key is optional (Meili can be unauthenticated in dev). Times
 /// out at `timeout` so a stuck server cannot block boot.
@@ -585,6 +618,36 @@ pub async fn run_coverage_audit_with_archive_watchers(
     archive_watcher_urls: &[String],
     timeout: std::time::Duration,
 ) -> CoverageResponse {
+    run_coverage_audit_full(
+        http,
+        slugs,
+        vectorizer_url,
+        vectorizer_bearer,
+        meili_url,
+        meili_api_key,
+        None,
+        archive_watcher_urls,
+        timeout,
+    )
+    .await
+}
+
+/// Phase11m §1 — full audit that, on top of Vectorizer + Meili +
+/// archive watchers, also probes Nexus when a client is provided.
+/// Per-slug "present" means the graph backend has at least one
+/// `Repo` node with `r.name == <slug>`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_coverage_audit_full(
+    http: &reqwest::Client,
+    slugs: BTreeSet<String>,
+    vectorizer_url: Option<&str>,
+    vectorizer_bearer: Option<&str>,
+    meili_url: Option<&str>,
+    meili_api_key: Option<&str>,
+    nexus_client: Option<&nexus_sdk::NexusClient>,
+    archive_watcher_urls: &[String],
+    timeout: std::time::Duration,
+) -> CoverageResponse {
     let expected = expected_collections(&slugs);
     let mut backends: Vec<BackendCoverage> = Vec::with_capacity(2);
     let mut overall = CoverageSeverity::Ok;
@@ -624,6 +687,24 @@ pub async fn run_coverage_audit_with_archive_watchers(
             d,
             err,
         ));
+    }
+
+    if let Some(client) = nexus_client {
+        // Nexus uses the slug itself as the "name" because the graph
+        // is global — there is no per-slug × family cross-product.
+        // Expected = the slugs the orchestrator audits; live = slugs
+        // with at least one `Repo` node in Nexus.
+        let nexus_expected: BTreeSet<String> = slugs.clone();
+        let (live, err) = match fetch_nexus_repo_names(client, timeout).await {
+            Ok(set) => (set, None),
+            Err(reason) => (BTreeSet::new(), Some(reason)),
+        };
+        let d = diff(nexus_expected, live);
+        let sev = d.severity();
+        if sev > overall {
+            overall = sev;
+        }
+        backends.push(into_backend_coverage("nexus", None, d, err));
     }
 
     let mut archive_watchers: Vec<ArchiveWatcherSummary> = Vec::new();
@@ -832,6 +913,21 @@ mod tests {
             super::parse_canonical_name("cortex-cortex-bogus"),
             (None, None)
         );
+    }
+
+    #[test]
+    fn nexus_diff_treats_slugs_themselves_as_expected_names() {
+        // Phase11m §1 — Nexus uses slugs (not slug × family) as the
+        // expected set. Verify the diff partitions slugs the right
+        // way when fed simulated `live = nexus_repo_names` output.
+        let slugs: BTreeSet<String> =
+            ["cortex", "rulebook", "vectorizer"].into_iter().map(String::from).collect();
+        let live: BTreeSet<String> = ["cortex", "vectorizer"].into_iter().map(String::from).collect();
+        let d = diff(slugs, live);
+        assert_eq!(d.expected.len(), 3);
+        assert_eq!(d.present.len(), 2);
+        assert!(d.missing.contains("rulebook"));
+        assert_eq!(d.severity(), CoverageSeverity::Warn);
     }
 
     #[test]

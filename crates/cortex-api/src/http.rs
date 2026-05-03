@@ -28,6 +28,10 @@ pub struct ApiState {
     pub service: Arc<QueryService>,
     /// Start instant — surfaced as `uptime_ms` on the status endpoint.
     pub started_at: Arc<Instant>,
+    /// Phase11m §1 — Nexus client shared with the dashboard so the
+    /// coverage handler can include a `nexus` backend in the diff.
+    /// `None` when the daemon was started without a Nexus URL.
+    pub nexus: Option<Arc<nexus_sdk::NexusClient>>,
 }
 
 /// `/v1/status` response body — consumed by the spec-18
@@ -127,6 +131,7 @@ pub fn build_router_with_auth(
     let state = ApiState {
         service,
         started_at: Arc::new(Instant::now()),
+        nexus: dashboard.as_ref().and_then(|d| d.nexus.clone()),
     };
     let mut router = Router::new()
         .route("/v1/query", post(handle_query))
@@ -430,13 +435,14 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     let archive_watchers = crate::coverage::resolve_archive_watcher_urls();
-    let response = crate::coverage::run_coverage_audit_with_archive_watchers(
+    let response = crate::coverage::run_coverage_audit_full(
         &http,
         slugs,
         vectorizer_url.as_deref(),
         bearer.as_deref(),
         meili_url.as_deref(),
         meili_key.as_deref(),
+        state.nexus.as_deref(),
         &archive_watchers,
         Duration::from_secs(5),
     )
