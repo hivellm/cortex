@@ -11,8 +11,8 @@ use cortex_core::events::{
     Kind, TimeSpan, CONSOLIDATION_SOURCE_IDS_INLINE_CAP,
 };
 
-use crate::summariser::{Summariser, SummariserRequest};
-use crate::templates::Template;
+use super::super::summariser::{Summariser, SummariserRequest};
+use super::super::templates::Template;
 
 use super::{validate_produced, ProducedConsolidation, ProducerError};
 
@@ -193,8 +193,8 @@ pub async fn produce(
         source_event_count,
         model: result.kind.model_id().to_string(),
         depth: match result.kind {
-            crate::summariser::SummariserKind::Haiku45 => ConsolidationDepth::Shallow,
-            crate::summariser::SummariserKind::Opus47 => ConsolidationDepth::Deep,
+            super::super::summariser::SummariserKind::Haiku45 => ConsolidationDepth::Shallow,
+            super::super::summariser::SummariserKind::Opus47 => ConsolidationDepth::Deep,
         },
         outcome_distribution: Default::default(),
         temporal_span: TimeSpan {
@@ -221,7 +221,7 @@ fn clip_title(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::summariser::{
+    use super::super::super::summariser::{
         SummariserError, SummariserKind, SummariserRequest as Req, SummariserResult,
     };
     use cortex_core::events::{Context, Stream};

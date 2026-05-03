@@ -47,10 +47,10 @@ pub mod templates;
 /// One-stop import set for callers wiring the consolidator into
 /// the daemon or test harnesses.
 pub mod prelude {
-    pub use crate::cost_telemetry::{CostBudget, CostLedger, GrainCost};
-    pub use crate::orchestrator::{Orchestrator, ProducerSelection, Trigger};
-    pub use crate::producer::ProducerError;
-    pub use crate::summariser::{Summariser, SummariserError, SummariserKind, SummariserResult};
+    pub use super::cost_telemetry::{CostBudget, CostLedger, GrainCost};
+    pub use super::orchestrator::{Orchestrator, ProducerSelection, Trigger};
+    pub use super::producer::ProducerError;
+    pub use super::summariser::{Summariser, SummariserError, SummariserKind, SummariserResult};
 }
 
 #[cfg(test)]

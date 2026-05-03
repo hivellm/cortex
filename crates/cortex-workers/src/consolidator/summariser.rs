@@ -80,7 +80,7 @@ pub fn cost_cents(kind: SummariserKind, input_tokens: u64, output_tokens: u64) -
 /// Summariser request — a rendered prompt + a budget cap.
 #[derive(Debug, Clone)]
 pub struct SummariserRequest {
-    /// Rendered prompt (already produced by [`crate::templates`]).
+    /// Rendered prompt (already produced by [`super::templates`]).
     pub prompt: String,
     /// Hard cap on output tokens. Producers leave this `None` to
     /// pick up the per-grain default (1 024 — large enough for the

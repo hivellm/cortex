@@ -21,9 +21,9 @@
 
 use std::sync::Arc;
 
-use cortex_consolidator::orchestrator::Orchestrator;
-use cortex_consolidator::producer::session::SessionInput;
-use cortex_consolidator::summariser::{
+use cortex_workers::consolidator::orchestrator::Orchestrator;
+use cortex_workers::consolidator::producer::session::SessionInput;
+use cortex_workers::consolidator::summariser::{
     Summariser, SummariserError, SummariserKind, SummariserRequest, SummariserResult,
 };
 use cortex_core::events::{

@@ -6,7 +6,7 @@
 //! producer must fill), a max-output-bytes cap, and a required
 //! `takeaways[]` count. The producer renders the template against
 //! a `(key, value)` mapping and ships the rendered text through a
-//! [`crate::summariser::Summariser`] impl.
+//! [`super::summariser::Summariser`] impl.
 
 use cortex_core::events::ConsolidationGrain;
 
@@ -28,11 +28,11 @@ pub struct Template {
 }
 
 /// Phase11j §2.2 — Session producer prompt body.
-pub const SESSION_TEMPLATE_BODY: &str = include_str!("../templates/session.md");
+pub const SESSION_TEMPLATE_BODY: &str = include_str!("../../templates/session.md");
 /// Topic producer prompt body (HDBSCAN-clustered turns).
-pub const TOPIC_TEMPLATE_BODY: &str = include_str!("../templates/topic.md");
+pub const TOPIC_TEMPLATE_BODY: &str = include_str!("../../templates/topic.md");
 /// Decision-trace producer prompt body.
-pub const DECISION_TRACE_TEMPLATE_BODY: &str = include_str!("../templates/decision_trace.md");
+pub const DECISION_TRACE_TEMPLATE_BODY: &str = include_str!("../../templates/decision_trace.md");
 
 impl Template {
     /// Resolve the template for a grain.

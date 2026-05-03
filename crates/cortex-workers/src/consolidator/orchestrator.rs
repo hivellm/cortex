@@ -10,7 +10,7 @@
 
 use cortex_core::events::ConsolidationGrain;
 
-use crate::summariser::SummariserKind;
+use super::summariser::SummariserKind;
 
 /// What kicked off a consolidation run. The orchestrator reads the
 /// variant to pick the producer + summariser.
@@ -101,32 +101,32 @@ impl ProducerSelection {
 /// picks the summariser via the auto-promotion rule, gates against
 /// the budget, runs the producer, and records the realised cost.
 pub struct Orchestrator {
-    haiku: std::sync::Arc<dyn crate::summariser::Summariser>,
-    opus: std::sync::Arc<dyn crate::summariser::Summariser>,
-    cost: std::sync::Arc<std::sync::Mutex<crate::cost_telemetry::CostLedger>>,
-    budget: crate::cost_telemetry::CostBudget,
+    haiku: std::sync::Arc<dyn super::summariser::Summariser>,
+    opus: std::sync::Arc<dyn super::summariser::Summariser>,
+    cost: std::sync::Arc<std::sync::Mutex<super::cost_telemetry::CostLedger>>,
+    budget: super::cost_telemetry::CostBudget,
 }
 
 impl Orchestrator {
     /// Construct an orchestrator with the two summariser handles
     /// the auto-promotion rule needs.
     pub fn new(
-        haiku: std::sync::Arc<dyn crate::summariser::Summariser>,
-        opus: std::sync::Arc<dyn crate::summariser::Summariser>,
+        haiku: std::sync::Arc<dyn super::summariser::Summariser>,
+        opus: std::sync::Arc<dyn super::summariser::Summariser>,
     ) -> Self {
         Self {
             haiku,
             opus,
             cost: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::cost_telemetry::CostLedger::default(),
+                super::cost_telemetry::CostLedger::default(),
             )),
-            budget: crate::cost_telemetry::CostBudget::default(),
+            budget: super::cost_telemetry::CostBudget::default(),
         }
     }
 
     /// Override the default $1 000/month budget. Builder method so
     /// existing callers keep the default.
-    pub fn with_budget(mut self, budget: crate::cost_telemetry::CostBudget) -> Self {
+    pub fn with_budget(mut self, budget: super::cost_telemetry::CostBudget) -> Self {
         self.budget = budget;
         self
     }
@@ -135,7 +135,7 @@ impl Orchestrator {
     pub fn summariser_for(
         &self,
         selection: &ProducerSelection,
-    ) -> std::sync::Arc<dyn crate::summariser::Summariser> {
+    ) -> std::sync::Arc<dyn super::summariser::Summariser> {
         match selection.summariser {
             SummariserKind::Haiku45 => self.haiku.clone(),
             SummariserKind::Opus47 => self.opus.clone(),
@@ -146,7 +146,7 @@ impl Orchestrator {
     /// the running spend without holding the orchestrator.
     pub fn cost_ledger(
         &self,
-    ) -> std::sync::Arc<std::sync::Mutex<crate::cost_telemetry::CostLedger>> {
+    ) -> std::sync::Arc<std::sync::Mutex<super::cost_telemetry::CostLedger>> {
         self.cost.clone()
     }
 
@@ -157,15 +157,15 @@ impl Orchestrator {
     /// before the producer runs.
     pub async fn run_session(
         &self,
-        input: &crate::producer::session::SessionInput,
-    ) -> Result<crate::producer::ProducedConsolidation, crate::producer::ProducerError> {
+        input: &super::producer::session::SessionInput,
+    ) -> Result<super::producer::ProducedConsolidation, super::producer::ProducerError> {
         let trigger = Trigger::SessionEnd {
             session_id: input.session_id.clone(),
         };
         let sel = ProducerSelection::for_trigger(&trigger);
         self.gate_budget(sel.summariser, "session")?;
         let summariser = self.summariser_for(&sel);
-        let produced = crate::producer::session::produce(input, summariser.as_ref()).await?;
+        let produced = super::producer::session::produce(input, summariser.as_ref()).await?;
         self.record_cost(sel.grain_label(), produced.cost_cents);
         Ok(produced)
     }
@@ -173,15 +173,15 @@ impl Orchestrator {
     /// Run the Topic producer against `cluster`. Picks Haiku.
     pub async fn run_topic(
         &self,
-        cluster: &crate::producer::topic::TopicCluster,
-    ) -> Result<crate::producer::ProducedConsolidation, crate::producer::ProducerError> {
+        cluster: &super::producer::topic::TopicCluster,
+    ) -> Result<super::producer::ProducedConsolidation, super::producer::ProducerError> {
         let trigger = Trigger::NightlyTopic {
             repo: cluster.repo.clone(),
         };
         let sel = ProducerSelection::for_trigger(&trigger);
         self.gate_budget(sel.summariser, "topic")?;
         let summariser = self.summariser_for(&sel);
-        let produced = crate::producer::topic::produce(cluster, summariser.as_ref()).await?;
+        let produced = super::producer::topic::produce(cluster, summariser.as_ref()).await?;
         self.record_cost(sel.grain_label(), produced.cost_cents);
         Ok(produced)
     }
@@ -193,8 +193,8 @@ impl Orchestrator {
     /// entirely. Other errors propagate verbatim.
     pub async fn run_decision_trace(
         &self,
-        input: &crate::producer::decision_trace::DecisionTraceInput,
-    ) -> Result<crate::producer::ProducedConsolidation, crate::producer::ProducerError> {
+        input: &super::producer::decision_trace::DecisionTraceInput,
+    ) -> Result<super::producer::ProducedConsolidation, super::producer::ProducerError> {
         let trigger = Trigger::DecisionLanded {
             decision_id: input.decision_id().to_string(),
             force_deep: false,
@@ -202,7 +202,7 @@ impl Orchestrator {
         let sel = ProducerSelection::for_trigger(&trigger);
         self.gate_budget(sel.summariser, "decision_trace")?;
         let opus = self.summariser_for(&sel);
-        match crate::producer::decision_trace::produce(input, opus.as_ref()).await {
+        match super::producer::decision_trace::produce(input, opus.as_ref()).await {
             Ok(produced) => {
                 self.record_cost(sel.grain_label(), produced.cost_cents);
                 Ok(produced)
@@ -215,7 +215,7 @@ impl Orchestrator {
                 self.gate_budget(SummariserKind::Haiku45, "decision_trace")?;
                 let haiku = self.haiku.clone();
                 let produced =
-                    crate::producer::decision_trace::produce(input, haiku.as_ref()).await?;
+                    super::producer::decision_trace::produce(input, haiku.as_ref()).await?;
                 self.record_cost(sel.grain_label(), produced.cost_cents);
                 Ok(produced)
             }
@@ -225,13 +225,13 @@ impl Orchestrator {
 
     /// Return `true` when an error is a quota / transient failure
     /// the orchestrator should retry against Haiku.
-    fn is_quota_failure(err: &crate::producer::ProducerError) -> bool {
+    fn is_quota_failure(err: &super::producer::ProducerError) -> bool {
         matches!(
             err,
-            crate::producer::ProducerError::Summariser(
-                crate::summariser::SummariserError::CostCeiling(_)
-                    | crate::summariser::SummariserError::RateLimited { .. }
-                    | crate::summariser::SummariserError::UpstreamUnavailable(_),
+            super::producer::ProducerError::Summariser(
+                super::summariser::SummariserError::CostCeiling(_)
+                    | super::summariser::SummariserError::RateLimited { .. }
+                    | super::summariser::SummariserError::UpstreamUnavailable(_),
             )
         )
     }
@@ -246,7 +246,7 @@ impl Orchestrator {
         &self,
         kind: SummariserKind,
         grain_label: &str,
-    ) -> Result<(), crate::producer::ProducerError> {
+    ) -> Result<(), super::producer::ProducerError> {
         let _ = grain_label;
         let estimated = match kind {
             SummariserKind::Haiku45 => 100,
@@ -254,8 +254,8 @@ impl Orchestrator {
         };
         let ledger = self.cost.lock().expect("cost ledger lock poisoned");
         if !self.budget.can_afford(&ledger, estimated) {
-            return Err(crate::producer::ProducerError::Summariser(
-                crate::summariser::SummariserError::CostCeiling(ledger.total_cents),
+            return Err(super::producer::ProducerError::Summariser(
+                super::summariser::SummariserError::CostCeiling(ledger.total_cents),
             ));
         }
         Ok(())
@@ -302,7 +302,7 @@ mod tests {
         assert_eq!(sel.summariser, SummariserKind::Opus47);
     }
 
-    use crate::summariser::{
+    use super::super::summariser::{
         Summariser as Sum, SummariserError, SummariserKind as SK, SummariserRequest as Req,
         SummariserResult,
     };
@@ -380,7 +380,7 @@ mod tests {
             cost: 5_000,
         });
         let orch = Orchestrator::new(haiku, opus);
-        let input = crate::producer::session::SessionInput {
+        let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),
             envelopes: vec![turn_envelope()],
@@ -475,7 +475,7 @@ mod tests {
                 .into(),
             parent_event_id: None,
         };
-        let input = crate::producer::decision_trace::DecisionTraceInput {
+        let input = super::super::producer::decision_trace::DecisionTraceInput {
             decision,
             chain: vec![],
             repo: Some("cortex".into()),
@@ -517,7 +517,7 @@ mod tests {
         });
         let orch1 = Orchestrator::new(haiku1, opus.clone());
         let orch2 = Orchestrator::new(haiku2, opus);
-        let input = crate::producer::session::SessionInput {
+        let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),
             envelopes: vec![turn_envelope()],
@@ -547,10 +547,10 @@ mod tests {
         // a second once the first lands. The gate compares *the
         // estimated charge* against the cap, so a 100-cent estimate
         // against a 99-cent ledger remainder must trip.
-        let orch = Orchestrator::new(haiku, opus).with_budget(crate::cost_telemetry::CostBudget {
+        let orch = Orchestrator::new(haiku, opus).with_budget(super::super::cost_telemetry::CostBudget {
             monthly_cents_cap: 100,
         });
-        let input = crate::producer::session::SessionInput {
+        let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),
             envelopes: vec![turn_envelope()],

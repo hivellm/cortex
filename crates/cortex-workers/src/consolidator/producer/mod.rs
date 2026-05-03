@@ -1,8 +1,8 @@
 //! Phase11j §2.4-§2.6 — producers.
 //!
 //! Each producer takes a grain-specific input, renders the matching
-//! [`crate::templates::Template`], runs it through a
-//! [`crate::summariser::Summariser`], parses the JSON response into
+//! [`super::templates::Template`], runs it through a
+//! [`super::summariser::Summariser`], parses the JSON response into
 //! a [`cortex_core::events::ConsolidationPayload`], and surfaces the
 //! result. The §2.1 skeleton ships the trait + shared error surface
 //! so the producer bodies (§2.4..§2.7) can land without reshaping
@@ -33,7 +33,7 @@ pub enum ProducerError {
     EmptyInput(String),
     /// Summariser returned an error after retry.
     #[error("summariser: {0}")]
-    Summariser(#[from] crate::summariser::SummariserError),
+    Summariser(#[from] super::summariser::SummariserError),
     /// Summariser returned a body the parser could not turn into a
     /// valid payload (missing keys, wrong types, etc.).
     #[error("summariser response did not match contract: {0}")]

@@ -22,10 +22,6 @@ path = "src/bin/cortex-ops.rs"
 name = "cortex-relevance-eval"
 path = "src/bin/cortex-relevance-eval.rs"
 
-[[bin]]
-name = "cortex-consolidator"
-path = "src/bin/cortex-consolidator.rs"
-
 [build-dependencies]
 cortex-build = { path = "../cortex-build" }
 
@@ -36,7 +32,6 @@ cortex-workers = { path = "../cortex-workers" }
 cortex-api = { path = "../cortex-api" }
 cortex-build = { path = "../cortex-build" }
 cortex-retention = { path = "../cortex-retention" }
-cortex-consolidator = { path = "../cortex-consolidator" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
