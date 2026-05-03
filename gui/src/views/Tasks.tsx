@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { DetailDrawer } from "../atoms/DetailDrawer";
 import { Icon } from "../atoms/Icon";
 import { Tag } from "../atoms/Tag";
 import {
@@ -433,13 +434,7 @@ export function TasksView() {
       ) : groupedByRepo.length === 0 ? (
         <Empty msg="No tasks match the active filter chips." />
       ) : (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: selectedId ? "minmax(0, 1fr) 480px" : "1fr",
-            gap: 16,
-          }}
-        >
+        <div>
           <div>
             {groupedByRepo.map(({ repo, phases, total: repoTotal, done: repoDone }) => (
               <section key={repo} style={{ marginBottom: 24 }}>
@@ -564,14 +559,13 @@ export function TasksView() {
             ))}
           </div>
 
-          {selectedId ? (
-            <DetailPanel
-              detail={detailQ.data}
-              isLoading={detailQ.isLoading}
-              error={detailQ.error}
-              onClose={() => setSelectedId(null)}
-            />
-          ) : null}
+          <TaskDrawer
+            open={!!selectedId}
+            detail={detailQ.data}
+            isLoading={detailQ.isLoading}
+            error={detailQ.error}
+            onClose={() => setSelectedId(null)}
+          />
         </div>
       )}
     </div>
@@ -705,53 +699,43 @@ function PhaseTags({ p }: { p: PhaseBreakdown }) {
   );
 }
 
-function DetailPanel({
+function TaskDrawer({
+  open,
   detail,
   isLoading,
   error,
   onClose,
 }: {
+  open: boolean;
   detail: import("../lib/api").TaskDetail | undefined;
   isLoading: boolean;
   error: unknown;
   onClose: () => void;
 }) {
   return (
-    <aside
-      className="card"
-      style={{
-        position: "sticky",
-        top: 12,
-        alignSelf: "start",
-        maxHeight: "calc(100vh - 120px)",
-        overflowY: "auto",
-        padding: 16,
-      }}
-    >
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          marginBottom: 8,
-        }}
-      >
-        <span className="mono" style={{ fontSize: 12, color: "var(--fg-1)" }}>
-          {detail?.id ?? "…"}
+    <DetailDrawer
+      open={open}
+      onClose={onClose}
+      title={
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <span className="mono" style={{ color: "var(--accent)" }}>
+            {detail?.id ?? "…"}
+          </span>
+          <span>{detail?.title ?? ""}</span>
         </span>
-        {detail ? <StatusPill status={detail.status} /> : null}
-        <button
-          type="button"
-          onClick={onClose}
-          className="btn btn--ghost btn--sm"
-          style={{ marginLeft: "auto" }}
-          title="Close detail panel"
-          aria-label="Close detail panel"
-        >
-          <Icon name="close" size={13} />
-        </button>
-      </header>
-
+      }
+      subtitle={
+        detail ? (
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+            <StatusPill status={detail.status} />
+            <span>
+              {detail.progress.done}/{detail.progress.total} items
+            </span>
+            {detail.summary ? <span>· {detail.summary}</span> : null}
+          </span>
+        ) : null
+      }
+    >
       {error ? (
         <div style={{ color: "var(--critical)", fontSize: 12 }}>
           Could not load task detail.
@@ -760,13 +744,6 @@ function DetailPanel({
         <div style={{ color: "var(--fg-3)", fontSize: 12 }}>Loading…</div>
       ) : (
         <>
-          <h2 style={{ fontSize: 14, marginBottom: 8 }}>{detail.title}</h2>
-          {detail.summary ? (
-            <p style={{ color: "var(--fg-1)", fontSize: 12, marginBottom: 12 }}>
-              {detail.summary}
-            </p>
-          ) : null}
-
           <ProgressBar done={detail.progress.done} total={detail.progress.total} />
 
           <h3
@@ -781,22 +758,7 @@ function DetailPanel({
           >
             Proposal
           </h3>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              color: "var(--fg-1)",
-              background: "var(--bg-2)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              padding: 10,
-              maxHeight: 360,
-              overflowY: "auto",
-              margin: 0,
-            }}
-          >
+          <pre className="drawer__markdown">
             {detail.proposal_md.trim() || "(no proposal text)"}
           </pre>
 
@@ -815,7 +777,7 @@ function DetailPanel({
           <ChecklistView sections={detail.checklist} />
         </>
       )}
-    </aside>
+    </DetailDrawer>
   );
 }
 
