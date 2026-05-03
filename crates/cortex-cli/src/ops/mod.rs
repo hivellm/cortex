@@ -16,7 +16,7 @@ pub mod probe;
 /// a dependency on this crate (`cortex-cli` already depends on
 /// `cortex-api`). The path here is a re-export so existing callers
 /// keep working with a one-line import update.
-pub use cortex_retention::scheduler;
+pub use cortex_workers::retention::scheduler;
 
 pub use log_rotate::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
 

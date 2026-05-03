@@ -561,8 +561,8 @@ dependencies = [
  "cortex-build",
  "cortex-core",
  "cortex-health",
- "cortex-retention",
  "cortex-storage",
+ "cortex-workers",
  "data-encoding",
  "futures",
  "nexus-graph-sdk",
@@ -611,7 +611,6 @@ dependencies = [
  "cortex-api",
  "cortex-build",
  "cortex-core",
- "cortex-retention",
  "cortex-storage",
  "cortex-workers",
  "cron",
@@ -706,28 +705,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-retention"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "cortex-build",
- "cortex-core",
- "cortex-storage",
- "cron",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "ulid",
- "zstd",
-]
-
-[[package]]
 name = "cortex-storage"
 version = "0.1.0"
 dependencies = [
@@ -758,6 +735,7 @@ dependencies = [
  "cortex-core",
  "cortex-health",
  "cortex-storage",
+ "cron",
  "ignore",
  "indicatif",
  "nexus-graph-sdk",
@@ -765,6 +743,7 @@ dependencies = [
  "pulldown-cmark",
  "regex",
  "reqwest 0.12.28",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

@@ -112,7 +112,7 @@ enum Command {
     /// path automatically (defaulting to `low` would silently
     /// retain unclassified PII).
     ///
-    /// The library surface (`cortex_retention::pii_enforce`)
+    /// The library surface (`cortex_workers::retention::pii_enforce`)
     /// exposes the matcher + cohort logic + run_enforcement
     /// orchestrator. The production backend (live Vectorizer /
     /// Meili / CAS / classifier wiring) lands when phase9k's cron
@@ -697,7 +697,7 @@ enum ScheduleCommand {
 
 /// Phase9g — `cortex.toml [retention.metadata]` overrides for the
 /// log rotator. The reaper's SQL retention horizons land directly on
-/// [`cortex_retention::metadata_reap::ReapPlan`]; the rotator knobs
+/// [`cortex_workers::retention::metadata_reap::ReapPlan`]; the rotator knobs
 /// don't have a home there, so the CLI threads them through this
 /// small struct.
 #[derive(Debug, Default, Clone, Copy)]
@@ -708,7 +708,7 @@ struct LogConfigOverrides {
 }
 
 /// Phase9g — target selector for `cortex-ops metadata-reap`. Mirrors
-/// [`cortex_retention::metadata_reap::ReapTarget`] but lives in the
+/// [`cortex_workers::retention::metadata_reap::ReapTarget`] but lives in the
 /// CLI to keep the clap-derive surface here.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum MetadataReapTargetArg {
@@ -2663,7 +2663,7 @@ fn meili_prune(
     batch_size: u32,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::meili_prune::{run_meili_prune, MeiliDoc, MemoryMeiliBackend, PrunePlan};
+    use cortex_workers::retention::meili_prune::{run_meili_prune, MeiliDoc, MemoryMeiliBackend, PrunePlan};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -2779,7 +2779,7 @@ fn turn_digest(
     budget_cents: u64,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::turn_digest::{run_turn_digest, DigestPlan, MemoryDigestBackend, Turn};
+    use cortex_workers::retention::turn_digest::{run_turn_digest, DigestPlan, MemoryDigestBackend, Turn};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -2880,7 +2880,7 @@ fn pii_enforce(
     cohort: Option<String>,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::pii_enforce::{
+    use cortex_workers::retention::pii_enforce::{
         run_enforcement, EnforcementPlan, MemoryPiiBackend, PiiCohort, PiiRisk, PiiTarget,
     };
 
@@ -3010,7 +3010,7 @@ fn cas_vacuum(
     cas_db: Option<String>,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::cas_vacuum::{open_store, run, VacuumError, VacuumOpts};
+    use cortex_workers::retention::cas_vacuum::{open_store, run, VacuumError, VacuumOpts};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -3106,7 +3106,7 @@ fn rollup(
     archive_root: Option<String>,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::parquet_rollup::{
+    use cortex_workers::retention::parquet_rollup::{
         apply_three_year_drop, compact_partition, enumerate_compactable, quarantine_pre_existing,
         Granularity, RollupCounts,
     };
@@ -3249,7 +3249,7 @@ fn retention_sweep(
     metadata_db: Option<String>,
     json: bool,
 ) -> ExitCode {
-    use cortex_retention::{run_sweep, MemoryVectorizerOps, SweepError, SweepPlan};
+    use cortex_workers::retention::{run_sweep, MemoryVectorizerOps, SweepError, SweepPlan};
     use cortex_storage::MetadataStore;
 
     let now = match time_travel {
@@ -3291,7 +3291,7 @@ fn retention_sweep(
         }
     };
 
-    let sweep_id = cortex_retention::new_sweep_id();
+    let sweep_id = cortex_workers::retention::new_sweep_id();
     if let Err(e) = store.start_retention_sweep(&sweep_id, now, 3600) {
         eprintln!("retention-sweep: {e}");
         // Code 2 — another sweep in flight (per spec).
@@ -3907,7 +3907,7 @@ fn metadata_reap(
     json: bool,
 ) -> ExitCode {
     use cortex_cli::ops::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
-    use cortex_retention::metadata_reap::{run, ReapPlan, ReapTarget};
+    use cortex_workers::retention::metadata_reap::{run, ReapPlan, ReapTarget};
     use cortex_storage::MetadataStore;
 
     let now = match time_travel {
@@ -3954,7 +3954,7 @@ fn metadata_reap(
         }
     };
 
-    let sweep_id = cortex_retention::new_sweep_id();
+    let sweep_id = cortex_workers::retention::new_sweep_id();
     if let Some(s) = store.as_ref() {
         if let Err(e) = s.start_retention_sweep(&sweep_id, now, 3600) {
             eprintln!("metadata-reap: {e}");
@@ -4041,7 +4041,7 @@ fn metadata_reap(
             }
         }
     } else {
-        cortex_retention::metadata_reap::ReapReport::default()
+        cortex_workers::retention::metadata_reap::ReapReport::default()
     };
 
     // Log rotation. Always runs unless `--skip-logs`. The reaper
@@ -4177,7 +4177,7 @@ fn metadata_reap(
 }
 
 fn bookkeeping_payload(
-    report: &cortex_retention::metadata_reap::ReapReport,
+    report: &cortex_workers::retention::metadata_reap::ReapReport,
     log_outcomes: &[(std::path::PathBuf, cortex_cli::ops::LogRotateOutcome)],
 ) -> String {
     let metadata_reap = serde_json::from_str::<serde_json::Value>(&report.metadata_reap_json())

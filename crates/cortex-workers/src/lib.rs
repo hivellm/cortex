@@ -30,3 +30,4 @@ pub mod embedder;
 pub mod fulltext;
 pub mod graph;
 pub mod ingestion;
+pub mod retention;

@@ -31,7 +31,6 @@ cortex-storage = { path = "../cortex-storage" }
 cortex-workers = { path = "../cortex-workers" }
 cortex-api = { path = "../cortex-api" }
 cortex-build = { path = "../cortex-build" }
-cortex-retention = { path = "../cortex-retention" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

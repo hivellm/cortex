@@ -13,7 +13,7 @@
 //! 2. The spawn helper seeds the eight default cron rows (idempotent
 //!    — operators who disabled a row keep their setting across
 //!    restarts), then launches a `tokio::time::interval` loop that
-//!    invokes [`cortex_retention::scheduler::tick`] every
+//!    invokes [`cortex_workers::retention::scheduler::tick`] every
 //!    [`DEFAULT_TICK_INTERVAL_SECS`] seconds.
 //! 3. The runner is [`ProcessRunner`], so each due row spawns the
 //!    matching `cortex-ops <subcommand>` and inherits PATH from the
@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Utc};
-use cortex_retention::scheduler::{
+use cortex_workers::retention::scheduler::{
     next_after, seed_defaults, ProcessRunner, RunOutcome, Runner, Scheduler, TickReport,
     DEFAULT_TICK_INTERVAL_SECS,
 };
@@ -312,7 +312,7 @@ mod tests {
         // The runner is a synthetic always-success runner so the
         // tick can be observed end-to-end without spawning a real
         // subprocess.
-        use cortex_retention::scheduler::{RunError, RunOutcome};
+        use cortex_workers::retention::scheduler::{RunError, RunOutcome};
         struct AlwaysSuccess;
         #[async_trait::async_trait]
         impl Runner for AlwaysSuccess {

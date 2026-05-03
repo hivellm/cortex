@@ -45,6 +45,10 @@ required-features = ["claude-archive"]
 name = "cortex-consolidator"
 path = "src/bin/cortex-consolidator.rs"
 
+[[bin]]
+name = "cortex-retention-sweep"
+path = "src/bin/cortex-retention-sweep.rs"
+
 [features]
 default = []
 # phase11s §3 — claude-archive walks ~/.claude/projects/ and emits
@@ -76,6 +80,8 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
+rusqlite = { workspace = true }
+cron = { workspace = true }
 sha2 = { workspace = true }
 ulid = { workspace = true }
 reqwest = { workspace = true }

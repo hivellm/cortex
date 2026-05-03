@@ -23,22 +23,22 @@
 mod support;
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
-use cortex_retention::cas_vacuum::{run as cas_run, VacuumOpts};
-use cortex_retention::meili_prune::{
+use cortex_workers::retention::cas_vacuum::{run as cas_run, VacuumOpts};
+use cortex_workers::retention::meili_prune::{
     run_meili_prune, MeiliBackend, MeiliDoc, MemoryMeiliBackend, PrunePlan,
 };
-use cortex_retention::metadata_reap::{run as reap_run, ReapPlan};
-use cortex_retention::parquet_rollup::{
+use cortex_workers::retention::metadata_reap::{run as reap_run, ReapPlan};
+use cortex_workers::retention::parquet_rollup::{
     apply_three_year_drop, compact_partition, enumerate_compactable, quarantine_pre_existing,
     Granularity,
 };
-use cortex_retention::pii_enforce::{
+use cortex_workers::retention::pii_enforce::{
     run_enforcement, EnforcementPlan, MemoryPiiBackend, PiiRisk, PiiTarget,
 };
-use cortex_retention::turn_digest::{
+use cortex_workers::retention::turn_digest::{
     run_turn_digest, DigestPlan, DigestResult, MemoryDigestBackend, Turn,
 };
-use cortex_retention::{run_sweep, MemoryVectorizerOps, SweepPlan, Tier};
+use cortex_workers::retention::{run_sweep, MemoryVectorizerOps, SweepPlan, Tier};
 use cortex_storage::cas::CasContentType;
 use cortex_storage::{CasStore, MetadataStore};
 
@@ -526,7 +526,7 @@ fn write_archive_files(corpus: &[SynthEnvelope], archive_root: &std::path::Path)
 
 async fn seed_vector_collections(ops: &MemoryVectorizerOps, corpus: &[SynthEnvelope]) {
     use std::collections::BTreeMap;
-    let mut by_collection: BTreeMap<String, Vec<cortex_retention::RecordRef>> =
+    let mut by_collection: BTreeMap<String, Vec<cortex_workers::retention::RecordRef>> =
         BTreeMap::new();
     for env in corpus {
         // Only kinds participating in the sweep land in tier

@@ -22,7 +22,7 @@ cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-health = { path = "../cortex-health", features = ["client"] }
 cortex-build = { path = "../cortex-build" }
-cortex-retention = { path = "../cortex-retention" }
+cortex-workers = { path = "../cortex-workers" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

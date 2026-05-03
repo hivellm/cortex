@@ -9,8 +9,8 @@
 use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
-use cortex_retention::pii_enforce::PiiRisk;
-use cortex_retention::{RecordRef, SweepKind, Tier};
+use cortex_workers::retention::pii_enforce::PiiRisk;
+use cortex_workers::retention::{RecordRef, SweepKind, Tier};
 
 /// Canonical envelope kinds the corpus mixes. Mirrors the spec-04
 /// kind set without coupling the test to that crate (kept as a
