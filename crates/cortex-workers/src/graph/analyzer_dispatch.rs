@@ -173,8 +173,8 @@ enum AnalyzerKind {
 mod tests {
     use super::*;
 
-    use cortex_classifier::types::{ClassifierSource, PiiRisk, Severity};
-    use cortex_classifier::ClassifierOutput;
+    use crate::classifier::types::{ClassifierSource, PiiRisk, Severity};
+    use crate::classifier::ClassifierOutput;
     use serde_json::json;
 
     fn fixture_classifier(event_id: &str) -> ClassifierOutput {

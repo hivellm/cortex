@@ -1,6 +1,6 @@
 //! Integration tests for `cortex_workers::embedder::vectorizer_client`.
 
-use cortex_classifier::Severity;
+use cortex_workers::classifier::Severity;
 use cortex_core::events::Kind;
 use cortex_workers::embedder::{
     with_retry, Chunk, ChunkMetadata, ChunkSource, MemoryVectorizerClient, VectorizerClient,

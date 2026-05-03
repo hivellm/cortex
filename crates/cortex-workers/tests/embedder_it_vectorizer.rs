@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_workers::embedder::{
     Embedder, EmbedderConfig, EnrichedEvent, VectorizerClient, VectorizerClientError,

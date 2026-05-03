@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::embedder::EnrichedEvent;
 use anyhow::Result;
 use async_trait::async_trait;
-use cortex_classifier::{
+use crate::classifier::{
     Classifier, ClassifierOutput, ClassifierSource, ClassifierStack, EnrichmentInput, PiiRisk,
     PricingTable, Severity,
 };

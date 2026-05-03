@@ -10,15 +10,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use cortex_classifier::{
-    build_offline_stack, build_stack, BudgetTracker, Classifier, ClassifierCache, ClassifierStack,
-    HaikuCliClassifier, HaikuCliConfig, InMemoryCache, PricingTable,
-};
 use cortex_storage::MetadataStore;
 use cortex_workers::admin_health::{
     resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_CLASSIFIER_PORT,
 };
 use cortex_workers::classifier::{
+    build_offline_stack, build_stack, BudgetTracker, Classifier, ClassifierCache, ClassifierStack,
+    HaikuCliClassifier, HaikuCliConfig, InMemoryCache, PricingTable,
+};
+use cortex_workers::classifier_worker::{
     ClassifierMode, ClassifierWorkerConfig, LiveSynapConsumer, LiveSynapPublisher, SynapHandle,
     Worker,
 };

@@ -8,9 +8,9 @@
 //! parser and fall back to [`StaticClassifier`](crate::StaticClassifier) when the CLI is
 //! unreachable.
 
-use crate::errors::ClassifierError;
-use crate::prompt::{PromptTemplate, PROMPT_V1};
-use crate::types::{
+use super::errors::ClassifierError;
+use super::prompt::{PromptTemplate, PROMPT_V1};
+use super::types::{
     Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
 };
 use async_trait::async_trait;
@@ -361,18 +361,18 @@ pub struct ClassifierRecord {
     pub pii_risk: PiiRisk,
     /// Extra redaction suggestions.
     #[serde(default)]
-    pub redaction_suggestions: Vec<crate::types::RedactionSuggestion>,
+    pub redaction_suggestions: Vec<super::types::RedactionSuggestion>,
     /// Short summary.
     #[serde(default)]
     pub summary: Option<String>,
     /// Typed entities the model identified inside the event.
     /// Each becomes a Nexus node in the graph mapper.
     #[serde(default)]
-    pub entities: Vec<crate::types::ExtractedEntity>,
+    pub entities: Vec<super::types::ExtractedEntity>,
     /// Semantic relations between this event and the listed
     /// entities. Each becomes a typed edge in Nexus.
     #[serde(default)]
-    pub relations: Vec<crate::types::ExtractedRelation>,
+    pub relations: Vec<super::types::ExtractedRelation>,
 }
 
 /// Normalize free-form classifier topics against the controlled vocab —
@@ -381,7 +381,7 @@ pub struct ClassifierRecord {
 /// tests can exercise the helper directly.
 #[doc(hidden)]
 pub fn normalise_topics(mut topics: Vec<String>) -> Vec<String> {
-    use crate::prompt::TOPIC_VOCAB_V1;
+    use super::prompt::TOPIC_VOCAB_V1;
     topics.retain(|t| TOPIC_VOCAB_V1.iter().any(|v| v == &t.as_str()));
     topics.sort();
     topics.dedup();

@@ -3,7 +3,7 @@
 //! These tests do not touch the network; they run under the default
 //! `cargo test` invocation.
 
-use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_workers::embedder::{
     Chunk, ChunkSource, Chunker, CodeChunker, DocChunker, EnrichedEvent, FallbackChunker,

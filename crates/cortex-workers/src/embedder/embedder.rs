@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use cortex_classifier::ClassifierOutput;
+use crate::classifier::ClassifierOutput;
 use cortex_core::events::Kind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -501,7 +501,7 @@ fn elapsed_ms(start: Instant) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cortex_classifier::{ClassifierSource, PiiRisk, Severity};
+    use crate::classifier::{ClassifierSource, PiiRisk, Severity};
 
     fn classifier(event_id: &str) -> ClassifierOutput {
         ClassifierOutput {

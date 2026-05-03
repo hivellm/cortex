@@ -4,8 +4,8 @@
 //! Synap-backed impl lives behind the same trait and plugs in under the
 //! full worker wiring.
 
-use crate::errors::ClassifierError;
-use crate::types::{Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput};
+use super::errors::ClassifierError;
+use super::types::{Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput};
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Mutex;

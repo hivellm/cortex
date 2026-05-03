@@ -5,7 +5,7 @@
 //! extensions; these tests pin the resulting document shape so
 //! downstream filters (spec 11 query orchestrator) stay stable.
 
-use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_workers::fulltext::{build_doc, BuildOutcome, EnrichedEvent};
 use serde_json::json;

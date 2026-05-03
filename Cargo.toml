@@ -4,7 +4,6 @@ members = [
     "crates/cortex-core",
     "crates/cortex-storage",
     "crates/cortex-ingestion",
-    "crates/cortex-classifier",
     "crates/cortex-workers",
     "crates/cortex-cli",
     "crates/cortex-adapter-claude-code",

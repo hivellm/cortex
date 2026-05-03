@@ -37,7 +37,6 @@ cortex-build = { path = "../cortex-build" }
 
 [dependencies]
 cortex-core = { path = "../cortex-core" }
-cortex-classifier = { path = "../cortex-classifier" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-health = { path = "../cortex-health", features = ["server"] }
 cortex-build = { path = "../cortex-build" }
@@ -51,6 +50,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
 sha2 = { workspace = true }
 ulid = { workspace = true }
 reqwest = { workspace = true }

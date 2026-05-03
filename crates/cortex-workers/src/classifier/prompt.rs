@@ -1,6 +1,6 @@
 //! Prompt template + topic vocabulary.
 
-use crate::types::EnrichmentInput;
+use super::types::EnrichmentInput;
 
 /// Seed controlled-vocabulary for the classifier (v1). Add new terms via a new
 /// prompt version only — changes require re-classifying historical events.
@@ -59,7 +59,7 @@ pub struct PromptTemplate {
 /// v1 prompt as specified in spec 05.
 pub const PROMPT_V1: PromptTemplate = PromptTemplate {
     version: "v1",
-    body: include_str!("../prompts/classifier.v1.txt"),
+    body: include_str!("../../prompts/classifier.v1.txt"),
 };
 
 /// Phase9h — auto-memory consolidator merge prompt. Rendered with the
@@ -69,7 +69,7 @@ pub const PROMPT_V1: PromptTemplate = PromptTemplate {
 /// CLI driver) can be added without revising the template.
 pub const CONSOLIDATE_AUTO_MEMORY_V1: PromptTemplate = PromptTemplate {
     version: "v1",
-    body: include_str!("../prompts/consolidate_auto_memory.v1.txt"),
+    body: include_str!("../../prompts/consolidate_auto_memory.v1.txt"),
 };
 
 impl PromptTemplate {

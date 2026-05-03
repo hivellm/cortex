@@ -1,6 +1,6 @@
 //! Integration tests for `cortex_workers::embedder::chunker_doc`.
 
-use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_workers::embedder::chunker_doc::LONG_FENCE_LINES;
 use cortex_workers::embedder::{ChunkSource, Chunker, DocChunker, EnrichedEvent};

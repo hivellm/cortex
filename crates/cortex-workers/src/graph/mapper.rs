@@ -164,7 +164,7 @@ fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
     // Index entities by identifier so the relation pass below can
     // look up `entity_type` and pick the right Nexus label without
     // re-parsing.
-    let mut by_id: BTreeMap<&str, &cortex_classifier::types::ExtractedEntity> = BTreeMap::new();
+    let mut by_id: BTreeMap<&str, &crate::classifier::types::ExtractedEntity> = BTreeMap::new();
     for ent in entities {
         by_id.insert(ent.identifier.as_str(), ent);
         let label = entity_type_to_label(&ent.entity_type);

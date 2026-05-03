@@ -1,6 +1,6 @@
 //! Integration tests for `cortex_workers::embedder::embedder`.
 
-use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
 use cortex_workers::embedder::embedder::OVERSIZE_CHUNK_BYTES;
 use cortex_workers::embedder::{

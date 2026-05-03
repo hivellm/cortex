@@ -1,10 +1,10 @@
-//! Integration tests for `cortex_classifier::budget`.
+//! Integration tests for `cortex_workers::classifier::budget`.
 
 use async_trait::async_trait;
-use cortex_classifier::budget::{BudgetState, BudgetTracker, BudgetedClassifier};
-use cortex_classifier::errors::ClassifierError;
-use cortex_classifier::stats::PricingTable;
-use cortex_classifier::types::{
+use cortex_workers::classifier::budget::{BudgetState, BudgetTracker, BudgetedClassifier};
+use cortex_workers::classifier::errors::ClassifierError;
+use cortex_workers::classifier::stats::PricingTable;
+use cortex_workers::classifier::types::{
     Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
 };
 use cortex_core::events::Kind;

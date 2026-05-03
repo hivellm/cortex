@@ -221,7 +221,7 @@ pub trait Classifier: Send + Sync {
     async fn classify_batch(
         &self,
         events: &[EnrichmentInput],
-    ) -> Result<Vec<ClassifierOutput>, crate::errors::ClassifierError>;
+    ) -> Result<Vec<ClassifierOutput>, super::errors::ClassifierError>;
 }
 
 #[async_trait]
@@ -229,7 +229,7 @@ impl<T: Classifier + ?Sized> Classifier for Box<T> {
     async fn classify_batch(
         &self,
         events: &[EnrichmentInput],
-    ) -> Result<Vec<ClassifierOutput>, crate::errors::ClassifierError> {
+    ) -> Result<Vec<ClassifierOutput>, super::errors::ClassifierError> {
         (**self).classify_batch(events).await
     }
 }
@@ -379,7 +379,7 @@ mod tests {
         async fn classify_batch(
             &self,
             events: &[EnrichmentInput],
-        ) -> Result<Vec<ClassifierOutput>, crate::errors::ClassifierError> {
+        ) -> Result<Vec<ClassifierOutput>, super::super::errors::ClassifierError> {
             Ok(events
                 .iter()
                 .map(|e| ClassifierOutput {

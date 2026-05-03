@@ -1,9 +1,9 @@
 //! Default composition that layers `Budgeted ← Cached ← backend`.
 
-use crate::budget::{BudgetTracker, BudgetedClassifier};
-use crate::cache::{CachedClassifier, ClassifierCache};
-use crate::statics::StaticClassifier;
-use crate::types::Classifier;
+use super::budget::{BudgetTracker, BudgetedClassifier};
+use super::cache::{CachedClassifier, ClassifierCache};
+use super::statics::StaticClassifier;
+use super::types::Classifier;
 use std::sync::Arc;
 
 /// Fully-composed classifier ready to consume from a worker loop.

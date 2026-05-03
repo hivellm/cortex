@@ -5,9 +5,6 @@
 //! Default composition: `Budgeted ← Cached ← (HaikuCli | HaikuSdk)`
 //! with `StaticClassifier` as budget-exhausted / offline fallback.
 
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
-
 pub mod budget;
 pub mod cache;
 pub mod composer;

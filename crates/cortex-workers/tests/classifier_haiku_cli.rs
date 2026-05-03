@@ -1,7 +1,7 @@
-//! Integration tests for `cortex_classifier::haiku_cli`.
+//! Integration tests for `cortex_workers::classifier::haiku_cli`.
 
-use cortex_classifier::haiku_cli::{normalise_topics, ClassifierOutputBatch, ClaudeJsonResponse};
-use cortex_classifier::types::Severity;
+use cortex_workers::classifier::haiku_cli::{normalise_topics, ClassifierOutputBatch, ClaudeJsonResponse};
+use cortex_workers::classifier::types::Severity;
 
 #[test]
 fn normalise_drops_out_of_vocab() {

@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use cortex_classifier::{ClassifierOutput, PiiRisk, Severity};
+use crate::classifier::{ClassifierOutput, PiiRisk, Severity};
 use cortex_core::events::{
     AgentCall, AnalysisPayload, ArtifactPayload, DecisionPayload, Kind, KnowledgePayload,
     LawViolationPayload, LearningPayload, MemoryPayload, ToolCall, Turn,
@@ -579,7 +579,7 @@ fn assert_classifier_output_used(_o: &ClassifierOutput) {}
 #[cfg(test)]
 mod top_level_projection_tests {
     use super::*;
-    use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+    use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
     use cortex_core::events::Kind;
     use serde_json::json;
 

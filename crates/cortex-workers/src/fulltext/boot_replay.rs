@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::embedder::EnrichedEvent;
-use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Envelope;
 use cortex_storage::names::{slug_for_repo, UNKNOWN_REPO_SLUG};
 

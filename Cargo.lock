@@ -601,24 +601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-classifier"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "cortex-core",
- "once_cell",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "cortex-claude-archive"
 version = "0.1.0"
 dependencies = [
@@ -847,12 +829,13 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-build",
- "cortex-classifier",
  "cortex-core",
  "cortex-health",
  "cortex-storage",
  "nexus-graph-sdk",
+ "once_cell",
  "pulldown-cmark",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

@@ -1,10 +1,10 @@
-//! Integration tests for `cortex_classifier::composer`.
+//! Integration tests for `cortex_workers::classifier::composer`.
 
-use cortex_classifier::budget::BudgetTracker;
-use cortex_classifier::cache::InMemoryCache;
-use cortex_classifier::composer::build_offline_stack;
-use cortex_classifier::stats::PricingTable;
-use cortex_classifier::types::{Classifier, EnrichmentInput};
+use cortex_workers::classifier::budget::BudgetTracker;
+use cortex_workers::classifier::cache::InMemoryCache;
+use cortex_workers::classifier::composer::build_offline_stack;
+use cortex_workers::classifier::stats::PricingTable;
+use cortex_workers::classifier::types::{Classifier, EnrichmentInput};
 use cortex_core::events::Kind;
 use serde_json::json;
 use std::sync::Arc;

@@ -1,7 +1,7 @@
-//! Integration tests for `cortex_classifier::prompt`.
+//! Integration tests for `cortex_workers::classifier::prompt`.
 
-use cortex_classifier::prompt::PROMPT_V1;
-use cortex_classifier::types::EnrichmentInput;
+use cortex_workers::classifier::prompt::PROMPT_V1;
+use cortex_workers::classifier::types::EnrichmentInput;
 use cortex_core::events::Kind;
 use serde_json::json;
 

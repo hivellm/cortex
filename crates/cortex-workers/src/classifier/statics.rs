@@ -4,8 +4,8 @@
 //! redacted payload. Every rule is pure and deterministic so the output is
 //! reproducible and testable without a network.
 
-use crate::errors::ClassifierError;
-use crate::types::{
+use super::errors::ClassifierError;
+use super::types::{
     Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
 };
 use async_trait::async_trait;

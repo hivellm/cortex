@@ -1,6 +1,6 @@
-//! Integration tests for `cortex_classifier::stats`.
+//! Integration tests for `cortex_workers::classifier::stats`.
 
-use cortex_classifier::stats::PricingTable;
+use cortex_workers::classifier::stats::PricingTable;
 
 #[test]
 fn spend_cents_rounds_up() {
