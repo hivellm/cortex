@@ -1,7 +1,7 @@
-//! Integration tests for `cortex_ingestion::archive`.
+//! Integration tests for `cortex_workers::ingestion::archive`.
 
-use cortex_ingestion::archive::{read_archive_file, InMemoryArchive, NdJsonZstdArchive};
-use cortex_ingestion::ArchiveWriter;
+use cortex_workers::ingestion::archive::{read_archive_file, InMemoryArchive, NdJsonZstdArchive};
+use cortex_workers::ingestion::ArchiveWriter;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 

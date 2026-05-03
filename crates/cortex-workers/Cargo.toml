@@ -32,6 +32,10 @@ path = "src/bin/graph-writer.rs"
 name = "cortex-graph-backfill"
 path = "src/bin/graph-backfill.rs"
 
+[[bin]]
+name = "cortex-ingestion"
+path = "src/bin/cortex-ingestion.rs"
+
 [build-dependencies]
 cortex-build = { path = "../cortex-build" }
 
@@ -50,6 +54,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
 sha2 = { workspace = true }
@@ -87,4 +94,5 @@ tree-sitter-toml-ng = "0.7"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+reqwest = { workspace = true }
 wiremock = "0.6"

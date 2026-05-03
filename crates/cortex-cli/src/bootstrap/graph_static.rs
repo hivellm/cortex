@@ -38,7 +38,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use cortex_core::canonical_json::canonicalize;
-use cortex_ingestion::archive::ArchiveWriter;
+use cortex_workers::ingestion::archive::ArchiveWriter;
 use cortex_storage::external_repos::ExternalRepoIndex;
 use cortex_workers::graph::analyzer::{
     build_graph_patch, AnalyzerLanguage, CodeAnalyzer, GoAnalyzer, PatchBuildContext,
@@ -432,10 +432,10 @@ fn build_envelope(
 }
 
 /// On-disk archive constructor used by the binary main. Wraps
-/// [`cortex_ingestion::archive::NdJsonZstdArchive`] at the supplied
+/// [`cortex_workers::ingestion::archive::NdJsonZstdArchive`] at the supplied
 /// root with a sensible default zstd level.
 pub fn open_archive_writer(root: &Path) -> std::sync::Arc<dyn ArchiveWriter> {
-    std::sync::Arc::new(cortex_ingestion::archive::NdJsonZstdArchive::new(
+    std::sync::Arc::new(cortex_workers::ingestion::archive::NdJsonZstdArchive::new(
         root.to_path_buf(),
         3,
     ))
@@ -444,7 +444,7 @@ pub fn open_archive_writer(root: &Path) -> std::sync::Arc<dyn ArchiveWriter> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cortex_ingestion::archive::InMemoryArchive;
+    use cortex_workers::ingestion::archive::InMemoryArchive;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;

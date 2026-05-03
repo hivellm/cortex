@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use cortex_ingestion::{
+use cortex_workers::ingestion::{
     build_router, AppState, IngestionConfig, Metrics, NdJsonZstdArchive, Publisher, SynapPublisher,
 };
 use std::sync::Arc;
@@ -29,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
         }
         None => {
             info!("synap publisher disabled (SYNAP_URL unset); using memory publisher");
-            Arc::new(cortex_ingestion::MemoryPublisher::default())
+            Arc::new(cortex_workers::ingestion::MemoryPublisher::default())
         }
     };
 

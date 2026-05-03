@@ -1,10 +1,10 @@
-//! Integration tests for `cortex_ingestion::router`.
+//! Integration tests for `cortex_workers::ingestion::router`.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
-use cortex_ingestion::archive::InMemoryArchive;
-use cortex_ingestion::{
+use cortex_workers::ingestion::archive::InMemoryArchive;
+use cortex_workers::ingestion::{
     build_router, AppState, ArchiveWriter, MemoryPublisher, Metrics,
 };
 use cortex_storage::{STREAM_EVENTS_BOOTSTRAP, STREAM_EVENTS_RAW};
@@ -37,7 +37,7 @@ fn build_app() -> (Router, Arc<InMemoryArchive>, Arc<MemoryPublisher>, Arc<Metri
     let publisher: Arc<MemoryPublisher> = Arc::new(MemoryPublisher::default());
     let metrics = Arc::new(Metrics::default());
     let archive_dyn: Arc<dyn ArchiveWriter> = archive.clone();
-    let pub_dyn: Arc<dyn cortex_ingestion::Publisher> = publisher.clone();
+    let pub_dyn: Arc<dyn cortex_workers::ingestion::Publisher> = publisher.clone();
     let state = AppState::new(archive_dyn, pub_dyn, metrics.clone());
     (build_router(state), archive, publisher, metrics)
 }

@@ -26,3 +26,4 @@ pub mod classifier_worker;
 pub mod embedder;
 pub mod fulltext;
 pub mod graph;
+pub mod ingestion;

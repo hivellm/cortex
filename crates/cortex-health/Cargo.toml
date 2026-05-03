@@ -14,7 +14,7 @@ path = "src/lib.rs"
 default = []
 # `server` pulls in axum + tokio so worker binaries can spawn an
 # admin /healthz listener with a one-line call. Crates that already
-# own an axum Router (cortex-api, cortex-ingestion) skip this
+# own an axum Router (cortex-api, cortex-workers ingestion module) skip this
 # feature and mount the SubsystemStatus serializer inline.
 server = ["dep:axum", "dep:tokio", "dep:tracing"]
 # `client` pulls in reqwest so the cortex-api aggregator can fan

@@ -8,14 +8,14 @@
 
 ## 2. cortex-ingestion → cortex-workers/src/ingestion/ + bin
 
-- [ ] 2.1 Move `crates/cortex-ingestion/src/**` (lib code only — bin handled in §2.2) to `crates/cortex-workers/src/ingestion/`. Update internal `crate::` paths.
-- [ ] 2.2 Move `crates/cortex-ingestion/src/bin/cortex-ingestion.rs` to `crates/cortex-workers/src/bin/cortex-ingestion.rs`. Add `[[bin]] name = "cortex-ingestion"` + `path = "src/bin/cortex-ingestion.rs"` to `crates/cortex-workers/Cargo.toml`. Bin name preserved.
-- [ ] 2.3 Add `pub mod ingestion;` to `crates/cortex-workers/src/lib.rs` re-exporting the ingestion API surface as `cortex_workers::ingestion::*`.
-- [ ] 2.4 Move `crates/cortex-ingestion/tests/*` to `crates/cortex-workers/tests/` with the `ingestion_` filename prefix. Repoint test imports.
-- [ ] 2.5 Drop `cortex-ingestion = { path = "../cortex-ingestion" }` from `crates/cortex-cli/Cargo.toml:38`. Repoint every `use cortex_ingestion::*` in `cortex-cli` to `cortex_workers::ingestion::*`. If `cortex-cli` did not already declare a path dep on `cortex-workers`, add `cortex-workers = { path = "../cortex-workers" }`.
-- [ ] 2.6 Update the comment-only mention in `crates/cortex-health/Cargo.toml:17` from `cortex-ingestion` to `cortex-workers (ingestion module)`.
-- [ ] 2.7 Remove `cortex-ingestion` from the workspace `members` array in the root `Cargo.toml`.
-- [ ] 2.8 Verify `cargo check -p cortex-workers -p cortex-cli -p cortex-health` zero errors, `cargo test -p cortex-workers -p cortex-cli` 100 % pass on the ingestion-related tests. Verify `cargo build --bin cortex-ingestion` produces a runnable binary identical in surface to the old one (`--help` output diff = empty). Delete `crates/cortex-ingestion/` only after gates are green.
+- [x] 2.1 `git mv` moved `crates/cortex-ingestion/src/{archive,config,lib,metrics,publisher,router}.rs` → `crates/cortex-workers/src/ingestion/`. Renamed `lib.rs` → `mod.rs`. Rewrote sibling-module imports inside `ingestion/router.rs` (`crate::archive` / `crate::metrics` / `crate::publisher` → `super::archive` / `super::metrics` / `super::publisher`). The other moved files had no `crate::` self-references.
+- [x] 2.2 Moved `cortex-ingestion/src/main.rs` → `cortex-workers/src/bin/cortex-ingestion.rs`. Added `[[bin]] name = "cortex-ingestion"` + `path = "src/bin/cortex-ingestion.rs"` to workers Cargo.toml. Bin name preserved. Repointed the bin's `use cortex_ingestion::{…}` to `use cortex_workers::ingestion::{…}` and the inline `cortex_ingestion::MemoryPublisher::default()` likewise. The duplicate `cortex-ingestion` `build.rs` (just `cortex_build::emit_version_env()`) was identical to the one cortex-workers already ships, so the old file was deleted with the rest of the crate.
+- [x] 2.3 `pub mod ingestion;` added to `cortex-workers/src/lib.rs`. Lib + bin reachable via `cortex_workers::ingestion::*`.
+- [x] 2.4 Moved 4 test files: `cortex-ingestion/tests/{archive,metrics,publisher,router}.rs` → `cortex-workers/tests/ingestion_{archive,metrics,publisher,router}.rs`. Bulk-rewrote `cortex_ingestion::` → `cortex_workers::ingestion::` in all 4.
+- [x] 2.5 Dropped `cortex-ingestion = { path = "../cortex-ingestion" }` from `cortex-cli/Cargo.toml:38`. cortex-cli already had `cortex-workers = { path = "../cortex-workers" }`, so no new path-dep needed. Repointed every `cortex_ingestion::archive::*` in `cortex-cli/src/bootstrap/graph_static.rs` (4 occurrences across `use`, doc-comment, runtime call, and `#[cfg(test)] use`) to `cortex_workers::ingestion::archive::*`.
+- [x] 2.6 `cortex-health/Cargo.toml:17` comment updated from `(cortex-api, cortex-ingestion)` → `(cortex-api, cortex-workers ingestion module)`. No source change.
+- [x] 2.7 Workspace `Cargo.toml` member entry `crates/cortex-ingestion` dropped (13 → 12 members).
+- [x] 2.8 Gates verified — `cargo check -p cortex-workers -p cortex-cli -p cortex-health` clean (0 errors); `cargo test -p cortex-workers --lib --tests` 561 passed / 0 failed (the 26 newly-relocated ingestion tests count toward the +26 delta vs §1's 535 baseline); `cargo test -p cortex-cli` 207 passed / 0 failed; `cargo build --bin cortex-ingestion` produced the runnable binary. After all gates green, `git rm -r crates/cortex-ingestion` deleted the residual `Cargo.toml` + `CHANGELOG.md` + `README.md` + `build.rs` (the `src/` and `tests/` were emptied by `git mv`).
 
 ## 3. cortex-claude-archive → cortex-workers/src/claude_archive/ + bin (feature-gated)
 

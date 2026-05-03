@@ -1,6 +1,6 @@
-//! Integration tests for `cortex_ingestion::publisher`.
+//! Integration tests for `cortex_workers::ingestion::publisher`.
 
-use cortex_ingestion::{MemoryPublisher, Publisher};
+use cortex_workers::ingestion::{MemoryPublisher, Publisher};
 
 #[tokio::test]
 async fn memory_publisher_records_calls() {

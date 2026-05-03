@@ -638,7 +638,6 @@ dependencies = [
  "cortex-build",
  "cortex-consolidator",
  "cortex-core",
- "cortex-ingestion",
  "cortex-retention",
  "cortex-storage",
  "cortex-workers",
@@ -713,32 +712,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
-]
-
-[[package]]
-name = "cortex-ingestion"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "chrono",
- "cortex-build",
- "cortex-core",
- "cortex-health",
- "cortex-storage",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "synap-sdk",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "zstd",
 ]
 
 [[package]]
@@ -826,6 +799,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "clap",
  "cortex-build",
@@ -845,6 +819,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
+ "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
  "tree-sitter",

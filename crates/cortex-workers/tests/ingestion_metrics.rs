@@ -1,6 +1,6 @@
-//! Integration tests for `cortex_ingestion::metrics`.
+//! Integration tests for `cortex_workers::ingestion::metrics`.
 
-use cortex_ingestion::Metrics;
+use cortex_workers::ingestion::Metrics;
 use std::sync::atomic::Ordering;
 
 #[test]
