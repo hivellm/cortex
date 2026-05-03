@@ -230,7 +230,18 @@ pub fn emit_decision_imported(
 ) -> BootstrapEvent {
     let parsed = parse_decision_markdown(body, rel_path);
     let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
+    // Phase11p hotfix — `DecisionPayload::decision_id` is REQUIRED for
+    // the spec-11 lane projection contract (phase11k §1.2). Without
+    // it, the workers' `serde_json::from_value::<DecisionPayload>(...)`
+    // parse fails and `apply_top_level_projection` silently skips
+    // stamping `decision_id` / `decision_title` / `decision_status`
+    // on the Meili document. Synthesise the id from the filename
+    // stem (matches the existing law-id convention in
+    // `emit_law_imported`); the upstream ADR registry uses the same
+    // shape.
+    let decision_id = filename_stem(rel_path);
     let mut payload = json!({
+        "decision_id": decision_id,
         "title": parsed.title,
         "status": parsed.status,
         "supersedes": parsed.supersedes,
