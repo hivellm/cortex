@@ -1,20 +1,34 @@
-//! Cortex classifier worker (was crate `cortex-classifier-worker`).
+//! Cortex event classifier.
 //!
-//! Bridges `cortex.events.raw` (live ingestion) and
-//! `cortex.events.bootstrap` (spec 09 backfill) onto
-//! `cortex.events.enriched`, the stream the embedder, graph writer,
-//! and full-text indexer all consume.
+//! The pipeline takes a redacted event, emits `ClassifierOutput` with
+//! topics, severity, PII risk, and (for oversize payloads) a summary.
+//! Default composition: `Budgeted ← Cached ← (HaikuCli | HaikuSdk)`
+//! with `StaticClassifier` as budget-exhausted / offline fallback.
 
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod config;
-pub mod kinds;
-pub mod worker;
+pub mod budget;
+pub mod cache;
+pub mod composer;
+pub mod errors;
+pub mod haiku_cli;
+pub mod prompt;
+pub mod statics;
+pub mod stats;
+pub mod types;
 
-pub use config::{ClassifierMode, ClassifierWorkerConfig};
-pub use kinds::{kind_from_bootstrap, KindMapError};
-pub use worker::{
-    ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer,
-    MemorySynapPublisher, OffsetTracker, SynapConsumer, SynapHandle, SynapPublisher, Worker,
-    STREAM_BOOTSTRAP, STREAM_ENRICHED, STREAM_RAW,
+pub use budget::{BudgetTracker, BudgetedClassifier};
+pub use cache::{CacheError, CachedClassifier, ClassifierCache, InMemoryCache};
+pub use composer::{build_offline_stack, build_stack, ClassifierStack};
+pub use errors::ClassifierError;
+pub use haiku_cli::{HaikuCliClassifier, HaikuCliConfig};
+pub use prompt::{
+    render_consolidate_auto_memory, PromptTemplate, CONSOLIDATE_AUTO_MEMORY_V1, TOPIC_VOCAB_V1,
+};
+pub use statics::StaticClassifier;
+pub use stats::{ClassifierSpend, PricingTable};
+pub use types::{
+    Classifier, ClassifierMode, ClassifierOutput, ClassifierSource, EnrichmentInput,
+    ExtractedEntity, ExtractedRelation, PiiRisk, RedactionSuggestion, Severity,
 };
