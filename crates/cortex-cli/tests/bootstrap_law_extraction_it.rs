@@ -131,6 +131,83 @@ async fn agents_override_emits_one_law_envelope_per_law_cortex_heading() {
 }
 
 #[tokio::test]
+async fn rerun_over_unchanged_agents_override_does_not_re_emit_law_envelopes() {
+    // Phase11p §4.1 regression — the phase11k §3.2 split path emits N
+    // `law.imported` envelopes per AGENTS file. The dedup ledger
+    // (`bootstrap_seen`) keys on the FILE body hash, so a re-run with
+    // unchanged content must suppress every one of the N envelopes,
+    // not just the first.
+    use cortex_cli::bootstrap::run_repo_with_dedup;
+    use std::sync::{Arc as ArcStd, Mutex};
+
+    let repo = fixture_with_two_laws();
+    let cfg = fixture_config();
+    let dedup = ArcStd::new(Mutex::new(
+        cortex_storage::MetadataStore::open_in_memory().unwrap(),
+    ));
+    let runner_cfg = RunnerConfig {
+        repo_id: "Fixture".into(),
+        stream: "cortex.events.bootstrap".into(),
+        since: None,
+        dry_run: false,
+        kind_filter: Vec::new(),
+    };
+
+    // First walk — both LAW-CORTEX-001 + LAW-CORTEX-002 land.
+    let publisher1 = Arc::new(MemoryPublisher::new());
+    let pub_dyn1: Arc<dyn Publisher> = publisher1.clone();
+    let mut checkpoint1 = Checkpoint::new("now".into());
+    run_repo_with_dedup(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn1,
+        Arc::new(Metrics::new()),
+        &mut checkpoint1,
+        None,
+        None,
+        Some(dedup.clone()),
+    )
+    .await
+    .expect("first walk");
+    assert_eq!(
+        publisher1.by_kind("law.imported").len(),
+        2,
+        "first walk MUST emit one envelope per LAW-CORTEX heading",
+    );
+
+    // Second walk — the AGENTS file body is unchanged; the ledger MUST
+    // dedupe it as a single (repo, path, content_hash) row even though
+    // the emitter would otherwise produce two envelopes from it.
+    let publisher2 = Arc::new(MemoryPublisher::new());
+    let pub_dyn2: Arc<dyn Publisher> = publisher2.clone();
+    let mut checkpoint2 = Checkpoint::new("now".into());
+    let report = run_repo_with_dedup(
+        repo.path(),
+        &runner_cfg,
+        &cfg,
+        pub_dyn2,
+        Arc::new(Metrics::new()),
+        &mut checkpoint2,
+        None,
+        None,
+        Some(dedup.clone()),
+    )
+    .await
+    .expect("second walk");
+    assert_eq!(
+        publisher2.by_kind("law.imported").len(),
+        0,
+        "unchanged AGENTS file body MUST suppress all N split envelopes on re-run",
+    );
+    assert!(
+        report.files_suppressed >= 1,
+        "files_suppressed must surface the dedup count (got {})",
+        report.files_suppressed,
+    );
+}
+
+#[tokio::test]
 async fn law_files_without_matching_headings_fall_back_to_single_envelope() {
     // Phase11k §3.2 — when extract_pattern is set but the body has
     // no matching `## LAW-...` heading, the emitter falls back to

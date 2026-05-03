@@ -24,6 +24,18 @@
 use super::meili_client::{MeiliClient, MeiliError};
 use super::routing::is_canonical_index_name;
 
+/// Phase11p §1.1 — one row in the canonical-empty audit list. The
+/// caller decides whether to drop or preserve; the lib never deletes
+/// canonical indexes itself because empty-canonical can be a legitimate
+/// transient state (per-repo lazy materialisation right after settings
+/// PATCH, before the first upsert lands). The `cortex-ops sweep-empty`
+/// CLI gates the destructive call on operator `--apply`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyCanonical {
+    /// Canonical Meili index uid (`cortex-{slug}-{family}`).
+    pub uid: String,
+}
+
 /// Per-run summary the boot path logs and tests assert against.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SweepReport {
@@ -91,6 +103,39 @@ where
         }
     }
     Ok(report)
+}
+
+/// Phase11p §1.1 — list canonical Meili indexes that hold zero
+/// documents. Returns the candidates so the caller (the
+/// `cortex-ops sweep-empty` CLI) can dry-run + operator-confirm
+/// before the destructive `delete_index` call.
+///
+/// Why a separate sibling to [`sweep_stale_indexes`]: the existing
+/// sweep targets non-canonical names (the phase4a stale set) and
+/// auto-deletes them on boot because their presence is by definition
+/// a migration artefact. Canonical-but-empty is different — a fresh
+/// per-repo index after a settings PATCH but before the first upsert
+/// is also empty-canonical, and dropping it would force the next
+/// upsert to recreate it. The audit-time use is "operator wants to
+/// reclaim long-abandoned repo names"; the lib returns the list, the
+/// CLI decides.
+pub async fn sweep_empty_canonical<C>(client: &C) -> Result<Vec<EmptyCanonical>, MeiliError>
+where
+    C: MeiliClient + ?Sized,
+{
+    let indexes = client.list_indexes().await?;
+    let mut out: Vec<EmptyCanonical> = Vec::new();
+    for index in indexes {
+        if !is_canonical_index_name(&index.uid) {
+            continue;
+        }
+        if index.number_of_documents > 0 {
+            continue;
+        }
+        out.push(EmptyCanonical { uid: index.uid });
+    }
+    out.sort_by(|a, b| a.uid.cmp(&b.uid));
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -198,5 +243,77 @@ mod tests {
         let client = MemoryMeiliClient::new();
         let report = sweep_stale_indexes(&client).await.unwrap();
         assert_eq!(report, SweepReport::default());
+    }
+
+    #[tokio::test]
+    async fn sweep_empty_canonical_buckets_inputs_correctly() {
+        // Phase11p §1.3 — exercise every (canonical?, empty?) bucket:
+        // canonical-populated stays out of the result; canonical-empty
+        // lands in the result; non-canonical (populated or empty)
+        // never lands here (handled by sweep_stale_indexes).
+        let client = MemoryMeiliClient::new();
+        // Canonical, populated — must NOT appear in result.
+        client.seed_index("cortex-cortex-code", 4_748);
+        client.seed_index("cortex-tml-code", 189_872);
+        // Canonical, empty — must appear in result.
+        client.seed_index("cortex-csharp-code", 0);
+        client.seed_index("cortex-rust-governance", 0);
+        client.seed_index("cortex-tests-decisions", 0);
+        // Non-canonical, populated — never appears here.
+        client.seed_index("legacy-foo", 42);
+        // Non-canonical, empty — handled by sweep_stale_indexes; never
+        // appears in this list.
+        client.seed_index("cortex-code", 0);
+
+        let candidates = sweep_empty_canonical(&client).await.unwrap();
+        // Result is sorted alphabetically; pin the exact list.
+        assert_eq!(
+            candidates,
+            vec![
+                EmptyCanonical {
+                    uid: "cortex-csharp-code".to_string(),
+                },
+                EmptyCanonical {
+                    uid: "cortex-rust-governance".to_string(),
+                },
+                EmptyCanonical {
+                    uid: "cortex-tests-decisions".to_string(),
+                },
+            ],
+        );
+        // Crucially: the function MUST NOT call delete_index on its
+        // own — operator-only via the cortex-ops CLI.
+        let calls = client.calls_snapshot();
+        let deletes: Vec<&str> = calls
+            .iter()
+            .filter_map(|c| match c {
+                MemoryCall::DeleteIndex { name } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            deletes.is_empty(),
+            "sweep_empty_canonical MUST be read-only; saw deletes: {deletes:?}",
+        );
+    }
+
+    #[tokio::test]
+    async fn sweep_empty_canonical_returns_empty_when_every_index_is_populated() {
+        let client = MemoryMeiliClient::new();
+        client.seed_index("cortex-cortex-code", 100);
+        client.seed_index("cortex-cortex-decisions", 17);
+        let candidates = sweep_empty_canonical(&client).await.unwrap();
+        assert!(candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sweep_empty_canonical_skips_non_canonical_empty_names() {
+        // sweep_stale_indexes owns the non-canonical bucket; this
+        // function MUST NOT poach those names.
+        let client = MemoryMeiliClient::new();
+        client.seed_index("cortex-code", 0); // non-canonical, empty
+        client.seed_index("legacy-foo", 0); // non-canonical, empty
+        let candidates = sweep_empty_canonical(&client).await.unwrap();
+        assert!(candidates.is_empty());
     }
 }

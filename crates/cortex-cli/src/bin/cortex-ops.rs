@@ -518,6 +518,70 @@ enum Command {
         #[command(subcommand)]
         command: GraphCommand,
     },
+    /// Phase11p §4.3 — dedupe `law.imported` documents on every
+    /// `cortex-{slug}-governance` Meili index. Groups documents by
+    /// `(law_id, content_hash)`; for each duplicate group, keeps the
+    /// oldest by `ts ASC` and drops the rest. Default is dry-run;
+    /// pass `--apply` to actually `DELETE` the documents.
+    ///
+    /// Why grouping on `content_hash` rather than `event_id`: the
+    /// pre-phase10c bootstrap history landed multiple envelopes for
+    /// the same law text under different ULIDs; the ledger now
+    /// suppresses re-emits but cannot retroactively dedupe what's
+    /// already at rest. This op cleans the storage layer.
+    DedupeLaws {
+        /// Meilisearch base URL. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL` then `http://127.0.0.1:17004`.
+        #[arg(long)]
+        meili: Option<String>,
+        /// Meilisearch master / admin API key.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Restrict the dedupe to one per-repo governance index
+        /// (uid form: `cortex-{slug}-governance`). Omit to scan
+        /// every governance index plus the global `cortex_laws`.
+        #[arg(long)]
+        index: Option<String>,
+        /// Apply the deletes. Without this flag the command runs
+        /// dry — only prints the per-group keep / drop plan.
+        #[arg(long)]
+        apply: bool,
+        /// Emit JSON instead of plain text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase11p §1.2 — drop empty Meili indexes. Default is dry-run
+    /// (lists candidates only); pass `--apply` to actually delete.
+    /// Combines two predicates:
+    ///
+    /// 1. **Non-canonical empties** — names that don't match
+    ///    `cortex-{slug}-{family}` (legacy migration leftovers).
+    /// 2. **Canonical empties** — `cortex-{slug}-{family}` indexes
+    ///    that exist but hold zero documents (renamed / abandoned
+    ///    repos that survived the per-project bootstrap).
+    ///
+    /// The dry-run is read-only and safe to run on production. The
+    /// `--apply` path issues `DELETE /indexes/{uid}` per candidate;
+    /// the next bootstrap re-creates whichever names a live repo
+    /// still needs.
+    SweepEmpty {
+        /// Meilisearch base URL. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL` then `http://127.0.0.1:17004`.
+        #[arg(long)]
+        meili: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY` then
+        /// `$MEILI_MASTER_KEY`.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Apply the deletion. Without this flag the command runs
+        /// dry — only prints the candidate list and exits.
+        #[arg(long)]
+        apply: bool,
+        /// Emit JSON instead of plain text.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase11l §7.1 — `cortex-ops graph` subcommand surface.
@@ -831,6 +895,19 @@ fn main() -> ExitCode {
                 json,
             } => graph_drop(confirm, dry_run, nexus, json),
         },
+        Command::SweepEmpty {
+            meili,
+            meili_key,
+            apply,
+            json,
+        } => sweep_empty(meili, meili_key, apply, json),
+        Command::DedupeLaws {
+            meili,
+            meili_key,
+            index,
+            apply,
+            json,
+        } => dedupe_laws(meili, meili_key, index, apply, json),
     }
 }
 
@@ -844,6 +921,417 @@ fn main() -> ExitCode {
 /// phase11k §1.4 graph-correlation labels. The list lives here
 /// rather than in the schema module because it is admin-only —
 /// the runtime worker never enumerates labels for deletion.
+/// Phase11p §1.2 — `cortex-ops sweep-empty` dispatcher. Lists empty
+/// Meili indexes (non-canonical legacy + canonical-but-zero) and
+/// optionally `DELETE`s them when `--apply` is set. Non-canonical
+/// names are dropped immediately; canonical names need explicit
+/// approval because empty-canonical can be a transient state right
+/// after a settings PATCH but before the first upsert.
+fn sweep_empty(
+    meili: Option<String>,
+    meili_key: Option<String>,
+    apply: bool,
+    json: bool,
+) -> ExitCode {
+    use cortex_workers::fulltext::meili_client::MeiliClient;
+    use cortex_workers::fulltext::sweep::{sweep_empty_canonical, sweep_stale_indexes};
+    use cortex_workers::fulltext::{FulltextConfig, LiveMeiliClient};
+
+    let meili_url = meili
+        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
+    let api_key = meili_key
+        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok())
+        .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+
+    let cfg = FulltextConfig {
+        meili_url: meili_url.clone(),
+        meili_api_key: api_key,
+        ..FulltextConfig::default()
+    };
+    let client = match LiveMeiliClient::new(&cfg) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("sweep-empty: meili client: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sweep-empty: tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let canonical_empty = match runtime.block_on(sweep_empty_canonical(&client)) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("sweep-empty: list canonical empties: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Plan-only: list non-canonical names alongside canonical empties.
+    // sweep_stale_indexes mutates by default (it's the boot-time
+    // reaper), so the dry-run path enumerates manually here. Reusing
+    // the lib's classifier keeps the predicates honest.
+    let indexes = match runtime.block_on(client.list_indexes()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("sweep-empty: list indexes: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    use cortex_workers::fulltext::routing::is_canonical_index_name;
+    let mut non_canonical_empty: Vec<String> = indexes
+        .iter()
+        .filter(|i| !is_canonical_index_name(&i.uid) && i.number_of_documents == 0)
+        .map(|i| i.uid.clone())
+        .collect();
+    non_canonical_empty.sort();
+
+    let canonical_empty_uids: Vec<String> =
+        canonical_empty.iter().map(|c| c.uid.clone()).collect();
+
+    if !apply {
+        if json {
+            let body = serde_json::json!({
+                "mode": "dry_run",
+                "meili_url": meili_url,
+                "non_canonical_empty": non_canonical_empty,
+                "canonical_empty": canonical_empty_uids,
+                "total_candidates": non_canonical_empty.len() + canonical_empty_uids.len(),
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string())
+            );
+        } else {
+            println!("cortex-ops sweep-empty (dry-run)");
+            println!("meili: {meili_url}");
+            println!(
+                "non-canonical empty ({}):",
+                non_canonical_empty.len()
+            );
+            for n in &non_canonical_empty {
+                println!("  would drop: {n}");
+            }
+            println!(
+                "canonical empty ({}):",
+                canonical_empty_uids.len()
+            );
+            for n in &canonical_empty_uids {
+                println!("  would drop: {n}");
+            }
+            println!(
+                "total candidates: {}. Pass --apply to delete.",
+                non_canonical_empty.len() + canonical_empty_uids.len()
+            );
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    // --apply: run the canonical sweep first (it auto-drops non-canonical
+    // empties as a side effect of the existing boot-time reaper) and
+    // then delete each canonical-empty candidate one by one.
+    let stale_report = match runtime.block_on(sweep_stale_indexes(&client)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("sweep-empty: sweep_stale_indexes: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut canonical_dropped: Vec<String> = Vec::new();
+    let mut canonical_failed: Vec<(String, String)> = Vec::new();
+    for c in &canonical_empty {
+        match runtime.block_on(client.delete_index(&c.uid)) {
+            Ok(()) => canonical_dropped.push(c.uid.clone()),
+            Err(e) => canonical_failed.push((c.uid.clone(), e.to_string())),
+        }
+    }
+
+    if json {
+        let body = serde_json::json!({
+            "mode": "apply",
+            "meili_url": meili_url,
+            "non_canonical_dropped": stale_report.deleted_stale_empty,
+            "non_canonical_warned_names": stale_report.warned_names,
+            "canonical_dropped": canonical_dropped,
+            "canonical_failed": canonical_failed
+                .iter()
+                .map(|(n, e)| serde_json::json!({"uid": n, "error": e}))
+                .collect::<Vec<_>>(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".to_string())
+        );
+    } else {
+        println!("cortex-ops sweep-empty (apply)");
+        println!("meili: {meili_url}");
+        println!(
+            "non-canonical dropped: {} (warned-preserved: {})",
+            stale_report.deleted_stale_empty, stale_report.kept_warning,
+        );
+        println!("canonical dropped: {}", canonical_dropped.len());
+        for n in &canonical_dropped {
+            println!("  dropped: {n}");
+        }
+        if !canonical_failed.is_empty() {
+            println!("canonical failed: {}", canonical_failed.len());
+            for (n, e) in &canonical_failed {
+                println!("  failed: {n}: {e}");
+            }
+        }
+    }
+
+    if canonical_failed.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(3)
+    }
+}
+
+/// Phase11p §4.3 — dedupe `law.imported` documents on each
+/// `cortex-{slug}-governance` Meili index plus the global
+/// `cortex_laws`. Groups by `(law_id, content_hash)` and keeps the
+/// oldest by `ts`. Default is dry-run; `--apply` issues
+/// `DELETE /indexes/{uid}/documents/delete-batch` per group.
+fn dedupe_laws(
+    meili: Option<String>,
+    meili_key: Option<String>,
+    target_index: Option<String>,
+    apply: bool,
+    json: bool,
+) -> ExitCode {
+    let meili_url = meili
+        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
+    let api_key = meili_key
+        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok())
+        .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("dedupe-laws: tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    runtime.block_on(async move {
+        match dedupe_laws_async(&meili_url, api_key.as_deref(), target_index.as_deref(), apply, json).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("dedupe-laws: {e}");
+                ExitCode::from(2)
+            }
+        }
+    })
+}
+
+async fn dedupe_laws_async(
+    meili_url: &str,
+    api_key: Option<&str>,
+    target_index: Option<&str>,
+    apply: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| anyhow::anyhow!("reqwest builder: {e}"))?;
+
+    let auth = |req: reqwest::RequestBuilder| match api_key {
+        Some(k) => req.bearer_auth(k),
+        None => req,
+    };
+
+    // List candidate indexes — every per-repo `cortex-{slug}-governance`
+    // plus the global `cortex_laws`.
+    let candidates: Vec<String> = if let Some(t) = target_index {
+        vec![t.to_string()]
+    } else {
+        let stats: serde_json::Value = auth(http.get(format!("{}/stats", meili_url.trim_end_matches('/'))))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        let map = stats
+            .get("indexes")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| anyhow::anyhow!("/stats payload missing `indexes`"))?;
+        map.keys()
+            .filter(|k| k.ends_with("-governance") || k.as_str() == "cortex_laws")
+            .cloned()
+            .collect()
+    };
+
+    #[derive(Default)]
+    struct IndexReport {
+        total_docs: usize,
+        groups: usize,
+        keep: Vec<String>,
+        drop: Vec<String>,
+    }
+    let mut per_index: std::collections::BTreeMap<String, IndexReport> = std::collections::BTreeMap::new();
+
+    for index in &candidates {
+        let mut all_docs: Vec<serde_json::Value> = Vec::new();
+        let mut offset = 0usize;
+        let limit = 1000;
+        loop {
+            let url = format!(
+                "{}/indexes/{}/documents?limit={}&offset={}",
+                meili_url.trim_end_matches('/'),
+                index,
+                limit,
+                offset
+            );
+            let resp = auth(http.get(&url)).send().await?;
+            if !resp.status().is_success() {
+                anyhow::bail!("list documents {index} offset={offset}: status {}", resp.status());
+            }
+            let body: serde_json::Value = resp.json().await?;
+            let results = body
+                .get("results")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            if results.is_empty() {
+                break;
+            }
+            offset += results.len();
+            all_docs.extend(results);
+            // Stop when offset exceeds total reported to avoid loops on
+            // edge servers.
+            let total = body.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            if total > 0 && offset >= total {
+                break;
+            }
+        }
+
+        // Group by (law_id, content_hash). Keep the document with the
+        // oldest `ts` (numeric epoch ms).
+        let mut groups: std::collections::HashMap<
+            (String, String),
+            Vec<(String, i64)>,
+        > = std::collections::HashMap::new();
+        for d in &all_docs {
+            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let law_id = d
+                .get("law_id")
+                .and_then(|v| v.as_str())
+                .or_else(|| d.get("ext").and_then(|e| e.get("law_violation")).and_then(|lv| lv.get("law_id")).and_then(|v| v.as_str()))
+                .unwrap_or("")
+                .to_string();
+            let content_hash = d
+                .get("content_hash")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            if id.is_empty() || (law_id.is_empty() && content_hash.is_empty()) {
+                continue;
+            }
+            let ts = d.get("ts").and_then(|v| v.as_i64()).unwrap_or(0);
+            groups
+                .entry((law_id, content_hash))
+                .or_default()
+                .push((id, ts));
+        }
+
+        let mut report = IndexReport {
+            total_docs: all_docs.len(),
+            ..Default::default()
+        };
+        for (_key, mut docs) in groups {
+            if docs.len() < 2 {
+                continue;
+            }
+            report.groups += 1;
+            docs.sort_by_key(|d| d.1);
+            let keeper = docs.first().unwrap().0.clone();
+            report.keep.push(keeper);
+            for (drop_id, _) in docs.into_iter().skip(1) {
+                report.drop.push(drop_id);
+            }
+        }
+
+        per_index.insert(index.clone(), report);
+    }
+
+    // Render plan + optionally apply.
+    if json {
+        let body: serde_json::Value = serde_json::json!({
+            "mode": if apply { "apply" } else { "dry_run" },
+            "meili_url": meili_url,
+            "indexes": per_index
+                .iter()
+                .map(|(k, v)| serde_json::json!({
+                    "uid": k,
+                    "total_docs": v.total_docs,
+                    "duplicate_groups": v.groups,
+                    "kept": v.keep.len(),
+                    "to_drop": v.drop.len(),
+                    "drop_ids": v.drop,
+                }))
+                .collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&body)?);
+    } else {
+        println!("cortex-ops dedupe-laws ({})", if apply { "apply" } else { "dry-run" });
+        println!("meili: {meili_url}");
+        for (uid, r) in &per_index {
+            println!(
+                "  {uid}: total={}, groups={}, keep={}, drop={}",
+                r.total_docs,
+                r.groups,
+                r.keep.len(),
+                r.drop.len()
+            );
+        }
+        let total_drop: usize = per_index.values().map(|r| r.drop.len()).sum();
+        println!("Total docs to drop: {total_drop}");
+    }
+
+    if !apply {
+        return Ok(());
+    }
+
+    // --apply: Meili's `delete-batch` endpoint accepts a JSON array
+    // of document ids.
+    for (uid, report) in &per_index {
+        if report.drop.is_empty() {
+            continue;
+        }
+        let url = format!(
+            "{}/indexes/{}/documents/delete-batch",
+            meili_url.trim_end_matches('/'),
+            uid
+        );
+        // Chunk into 500 ids per request to stay within Meili's
+        // body-size guard.
+        for chunk in report.drop.chunks(500) {
+            let resp = auth(http.post(&url).json(&chunk)).send().await?;
+            if !resp.status().is_success() {
+                let detail = resp.text().await.unwrap_or_default();
+                anyhow::bail!("delete-batch {uid}: {detail}");
+            }
+        }
+        eprintln!("dedupe-laws: applied {} deletes on {}", report.drop.len(), uid);
+    }
+    Ok(())
+}
+
 fn graph_drop(confirm: bool, dry_run: bool, nexus: Option<String>, json: bool) -> ExitCode {
     use cortex_workers::graph::config::GraphConfig;
     use cortex_workers::graph::nexus_client::{GraphClient, LiveNexusClient};
