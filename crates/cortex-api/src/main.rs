@@ -642,6 +642,35 @@ async fn main() -> Result<()> {
     } else {
         tracing::info!("dashboard watcher: disabled by CORTEX_DASHBOARD_WATCH=0");
     }
+
+    // Phase11n §2.5 — SQLite tail loop for `.rulebook/memory/memory.db`.
+    // The FS watcher cannot tell the GUI which row appeared on a `.db`
+    // mtime jitter; this loop polls the database read-only at the same
+    // 250 ms cadence and emits one `MemoryAppended` per genuinely-new
+    // row. Gated by `CORTEX_DASHBOARD_MEMORY_TAIL` (default `1`).
+    let memory_tail_enabled = std::env::var("CORTEX_DASHBOARD_MEMORY_TAIL")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let mut memory_tail_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    if watch_enabled && memory_tail_enabled {
+        let run_flag = std::sync::Arc::new(|| true) as std::sync::Arc<dyn Fn() -> bool + Send + Sync>;
+        for root in &rulebook_roots {
+            let db_path = root.join("memory").join("memory.db");
+            let handle = cortex_api::memory_tail::spawn_tail_loop(
+                db_path.clone(),
+                dashboard_bus.clone(),
+                cortex_api::dashboard_watcher::DEFAULT_DEBOUNCE,
+                run_flag.clone(),
+            );
+            tracing::info!(
+                memory_db = %db_path.display(),
+                "dashboard memory tail: started"
+            );
+            memory_tail_handles.push(handle);
+        }
+    } else if !memory_tail_enabled {
+        tracing::info!("dashboard memory tail: disabled by CORTEX_DASHBOARD_MEMORY_TAIL=0");
+    }
     // Keep watchers alive for the daemon lifetime. Leaking is the right
     // shape here — the process owns them until it exits, and any other
     // hold pattern would force every downstream caller to thread the

@@ -26,6 +26,7 @@ pub mod dashboard;
 pub mod dashboard_consumer;
 pub mod dashboard_series;
 pub mod dashboard_watcher;
+pub mod memory_tail;
 pub mod fusion;
 pub mod health;
 pub mod http;

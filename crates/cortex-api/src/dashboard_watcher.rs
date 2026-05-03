@@ -71,7 +71,7 @@ impl Default for DashboardEventBus {
 
 /// Entry-points the watcher recursively monitors, relative to the
 /// `.rulebook/` root.
-const WATCH_SUBDIRS: &[&str] = &["tasks", "handoff", "decisions", "knowledge"];
+const WATCH_SUBDIRS: &[&str] = &["tasks", "handoff", "decisions", "knowledge", "learnings"];
 
 /// Spawn the file-system watcher and return a handle that keeps the
 /// watcher alive. Drop the handle to stop watching.
@@ -154,6 +154,17 @@ pub fn classify(root: &Path, path: &Path) -> Option<DashboardEvent> {
             let id = file.strip_suffix(".md").unwrap_or(file).to_string();
             (DashboardEventKind::KnowledgeAdded, id)
         }
+        "learnings" => {
+            // .rulebook/learnings/<slug>.md (sibling .metadata.json fires
+            // its own event; both round-trip through the same dedup ring).
+            let file = comps.next()?.as_os_str().to_str()?;
+            let id = file
+                .strip_suffix(".metadata.json")
+                .or_else(|| file.strip_suffix(".md"))
+                .unwrap_or(file)
+                .to_string();
+            (DashboardEventKind::LearningAdded, id)
+        }
         _ => return None,
     };
     Some(DashboardEvent {
@@ -207,6 +218,24 @@ mod tests {
         let ev = classify(root, &p).expect("matched");
         assert!(matches!(ev.kind, DashboardEventKind::KnowledgeAdded));
         assert_eq!(ev.entity_id, "pattern_42");
+    }
+
+    #[test]
+    fn classify_learning_strips_md_suffix() {
+        let root = Path::new("/proj/.rulebook");
+        let p = root.join("learnings/2026-05-03T05-00-00-some-insight.md");
+        let ev = classify(root, &p).expect("matched");
+        assert!(matches!(ev.kind, DashboardEventKind::LearningAdded));
+        assert_eq!(ev.entity_id, "2026-05-03T05-00-00-some-insight");
+    }
+
+    #[test]
+    fn classify_learning_strips_metadata_json_suffix() {
+        let root = Path::new("/proj/.rulebook");
+        let p = root.join("learnings/2026-05-03T05-00-00-foo.metadata.json");
+        let ev = classify(root, &p).expect("matched");
+        assert!(matches!(ev.kind, DashboardEventKind::LearningAdded));
+        assert_eq!(ev.entity_id, "2026-05-03T05-00-00-foo");
     }
 
     #[test]

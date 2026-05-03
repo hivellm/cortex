@@ -66,6 +66,7 @@ otherwise) to produce a cross-event session summary.
 | `CORTEX_ANALYZER_API_KEY`    | (none)                             | Falls back to `ANTHROPIC_API_KEY`. Skips CLI when set. |
 | `CORTEX_DASHBOARD_WATCH`     | `1`                                | Spec 21 — set `0` to disable the `.rulebook/` filesystem watcher feeding `/v1/dashboard/stream`. |
 | `CORTEX_DASHBOARD_PUBLISH`   | `1`                                | Spec 21 — gates the MCP-side publisher (read by `cortex-mcp-server`). |
+| `CORTEX_DASHBOARD_MEMORY_TAIL` | `1`                              | phase11n §2 — set `0` to disable the SQLite tail loop polling `.rulebook/memory/memory.db` for new rows. The loop runs at the same 250 ms cadence the FS watcher debounces at; rows committed after daemon start emit one `memory.appended` event per row. |
 
 ## Run
 

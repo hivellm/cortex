@@ -32,6 +32,7 @@ export const DASHBOARD_EVENT_KINDS = [
   "decision.changed",
   "memory.appended",
   "knowledge.added",
+  "learning.added",
 ] as const;
 
 export type DashboardEventKind = (typeof DASHBOARD_EVENT_KINDS)[number];
@@ -86,6 +87,14 @@ function keyPrefixesFor(
       return [[connKey, "memory"]];
     case "knowledge.added":
       return [[connKey, "knowledge"]];
+    case "learning.added":
+      // Learnings live alongside memory in the dashboard surface; both
+      // query keys invalidate so the learnings panel + the memory
+      // counter pill refresh in lockstep.
+      return [
+        [connKey, "learnings"],
+        [connKey, "memory"],
+      ];
   }
 }
 

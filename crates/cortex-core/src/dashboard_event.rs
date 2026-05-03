@@ -64,6 +64,10 @@ pub enum DashboardEventKind {
     /// `entity_id` is the knowledge entry id.
     #[serde(rename = "knowledge.added")]
     KnowledgeAdded,
+    /// A learning entry was captured under `.rulebook/learnings/`.
+    /// `entity_id` is the learning slug (basename without `.md`).
+    #[serde(rename = "learning.added")]
+    LearningAdded,
 }
 
 /// Publisher attribution. Mainly observability — the GUI does not switch

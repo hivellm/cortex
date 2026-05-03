@@ -684,6 +684,7 @@ fn encode_dashboard_event(event: &cortex_core::DashboardEvent) -> Result<SseEven
         cortex_core::DashboardEventKind::DecisionChanged => "decision.changed",
         cortex_core::DashboardEventKind::MemoryAppended => "memory.appended",
         cortex_core::DashboardEventKind::KnowledgeAdded => "knowledge.added",
+        cortex_core::DashboardEventKind::LearningAdded => "learning.added",
     };
     let payload = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
     Ok(SseEvent::default()

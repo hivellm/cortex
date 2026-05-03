@@ -18,6 +18,7 @@ describe("DASHBOARD_EVENT_KINDS", () => {
       "decision.changed",
       "memory.appended",
       "knowledge.added",
+      "learning.added",
     ]);
   });
 });
@@ -46,9 +47,9 @@ describe("invalidateAllDashboardQueries", () => {
 
   it("fires one invalidate per dashboard key prefix", () => {
     invalidateAllDashboardQueries(client, "test-conn");
-    // 5 kinds: tasks emits 2 prefixes (tasks + tasks-summary), the
-    // others emit 1 each = 6 total invalidations.
-    expect(calls).toHaveLength(6);
+    // 6 kinds: tasks emits 2 prefixes (tasks + tasks-summary), learning
+    // emits 2 (learnings + memory), the rest emit 1 each = 8 total.
+    expect(calls).toHaveLength(8);
     expect(calls).toEqual(
       expect.arrayContaining([
         ["test-conn", "tasks"],
@@ -57,6 +58,7 @@ describe("invalidateAllDashboardQueries", () => {
         ["test-conn", "decisions"],
         ["test-conn", "memory"],
         ["test-conn", "knowledge"],
+        ["test-conn", "learnings"],
       ]),
     );
   });
