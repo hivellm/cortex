@@ -204,6 +204,14 @@ pub struct PromoteConfig {
     /// Glob patterns for files that should produce `*.imported` events.
     #[serde(default)]
     pub promote_patterns: Vec<String>,
+    /// Phase11k §3.2 — optional regex string applied to the first
+    /// token of `## ` headings inside Law-classified files. When set
+    /// AND a heading's first token matches, the bootstrap walker
+    /// emits one `law.imported` envelope per match (with `law_id` =
+    /// the matched token) instead of a single envelope for the whole
+    /// file. Unset = single-law-per-file behaviour preserved.
+    #[serde(default)]
+    pub extract_pattern: Option<String>,
 }
 
 /// `[cortex.memories]` — files imported as `memory.imported` events.

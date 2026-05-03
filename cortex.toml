@@ -62,7 +62,18 @@ promote_patterns = [
     ".rulebook/laws/*.yaml",
     ".rulebook/laws/*.yml",
     ".claude/rules/*.md",
+    # Phase11k §3.1 — AGENTS override / shared rule files declare
+    # `LAW-CORTEX-*` policies inline; promoting them as Law makes the
+    # bootstrap walker emit one `law.imported` envelope per matched
+    # heading (see `extract_pattern` below).
+    "AGENTS.override.md",
+    "AGENTS.md",
 ]
+# Phase11k §3.2 — when set, the Law-classified file's body is scanned
+# for `## ` headings whose first token matches this pattern. Each
+# match becomes its own `law.imported` envelope with `law_id` =
+# the matched token, instead of one giant single-law envelope.
+extract_pattern = "^LAW-[A-Z0-9-]+$"
 
 [cortex.analyses]
 promote_patterns = [

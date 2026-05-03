@@ -75,6 +75,10 @@ fn turn_doc_carries_shared_core_and_no_extension() {
     assert!(doc.body.contains("Refactor the HNSW search"));
     assert!(doc.body.contains("Ack"));
     assert!(doc.ext.is_empty(), "Turn carries no ext");
+    // Phase11k §1.5 — every turn document carries a top-level
+    // `turn_id` (= envelope event_id) so `derive_similar_turns`
+    // groups hits by turn without re-deriving the id from the doc id.
+    assert_eq!(doc.turn_id.as_deref(), Some("turn-1"));
 }
 
 #[test]
@@ -134,6 +138,15 @@ fn decision_doc_carries_ext_with_status_and_supersedes() {
     assert_eq!(ext["status"], "accepted");
     assert_eq!(ext["supersedes"], "DEC-0001");
     assert!(ext["tags"].is_array());
+    // Phase11k §1.5 — top-level governance projection: the spec-11
+    // lane projection contract reads these directly off
+    // `extras_raw`, so they MUST be stamped on the wire payload in
+    // addition to the legacy `ext.decision.*` nesting (which the
+    // dashboard's facet view still uses for its filterable schema).
+    assert_eq!(doc.decision_id.as_deref(), Some("DEC-0042"));
+    assert_eq!(doc.decision_title.as_deref(), Some("Adopt Meilisearch"));
+    assert_eq!(doc.decision_status.as_deref(), Some("accepted"));
+    assert_eq!(doc.decision_supersedes.as_deref(), Some("DEC-0001"));
 }
 
 #[test]
@@ -162,6 +175,13 @@ fn law_violation_doc_carries_ext_with_law_id_and_tier() {
     assert_eq!(ext["violation_id"], "VIO-0007");
     assert_eq!(ext["law_id"], "LAW-007");
     assert_eq!(ext["tier"], 2);
+    // Phase11k §1.5 — top-level governance projection mirrors the
+    // legacy `ext.law_violation.*` nesting onto `law_id` /
+    // `law_severity` / `law_tier` so the spec-11 lane projection
+    // contract surfaces the violation overlay.
+    assert_eq!(doc.law_id.as_deref(), Some("LAW-007"));
+    assert_eq!(doc.law_severity.as_deref(), Some("critical"));
+    assert_eq!(doc.law_tier.as_deref(), Some("2"));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 # Cortex governance ingestion contract
 
-> **Status:** 🟡 partial — write-side ✅ / read-side projection ⚠️
-> **Last updated:** 2026-05-01 (phase11h §3.6)
+> **Status:** 🟢 closed — write-side ✅ / read-side projection ✅ / cross-repo lane ✅ / extraction ✅ / watcher ✅
+> **Last updated:** 2026-05-03 (phase11k §1–§5)
 > **Owner:** Core team
 
 This is the contract for how ADRs and behavioral laws end up in
@@ -17,17 +17,12 @@ Cortex, queryable through `/v1/query` intents `decision_lookup` and
 | Spec / RULEBOOK | `.rulebook/specs/**/*.md` | also classified as Law (FileClass::Law) |
 | Override / memory | `AGENTS.override.md`, `CLAUDE.md`, `AGENTS.md`, `.rulebook/memory/**/*.md` | `[cortex.memories].import_files` |
 
-> **Caveat:** `LAW-CORTEX-*` declarations currently live in
-> `AGENTS.override.md`, which is classified as `Kind::Memory` (per
-> `[cortex.memories]`). It is **not** picked up by the law promote
-> patterns. To make `law_check` retrieve `LAW-CORTEX-001`, either:
->
-> 1. Move the LAW-CORTEX-* declarations into `.claude/rules/` (or
->    `.rulebook/laws/*.yaml`) so the law walker picks them up, **or**
-> 2. Extend `[cortex.laws].promote_patterns` to include
->    `AGENTS.override.md`.
->
-> Filed as part of `phase11k` (writer-side governance projection).
+> **Resolved (phase11k §3):** `[cortex.laws].promote_patterns` now
+> includes `AGENTS.override.md` and `AGENTS.md`, and a new
+> `[cortex.laws].extract_pattern = "^LAW-[A-Z0-9-]+$"` knob splits
+> AGENTS files into one `law.imported` envelope per matching `## `
+> heading. `LAW-CORTEX-001`, `LAW-CORTEX-002`, … reach the law lane
+> as addressable rows.
 
 ## Write path (bootstrap)
 
@@ -62,17 +57,15 @@ Cortex, queryable through `/v1/query` intents `decision_lookup` and
 
 | Intent | Vector lane | Keyword lane | Notes |
 |---|---|---|---|
-| `decision_lookup` | `cortex.decision.fp32` (global) + `cortex-{slug}-decisions` (per-repo, phase11e §5.3) | `cortex_decisions` (global, **does not yet exist server-side**) + `cortex-{slug}-decisions` | Per-repo lane returns hits as `results.snippets` today; `results.decisions[]` requires writer-side projection of `decision_id` + `decision_title` + `decision_status` to top-level fields (open follow-up). |
-| `law_check` | (none) | `cortex_laws` (global, **does not yet exist server-side**) | Per-repo `cortex-{slug}-governance` is queried but `results.violations[]` requires writer-side projection (`law_id`, `severity`, `tier`) to top-level fields (open follow-up). |
+| `decision_lookup` | `cortex.decision.fp32` (global) + `cortex-{slug}-decisions` (per-repo) | `cortex_decisions` (global) + `cortex-{slug}-decisions` | `results.decisions[]` populated via the spec-11 lane projection contract: `decision_id` / `decision_title` / `decision_status` / `decision_supersedes` are top-level fields stamped by the worker (phase11k §1); the global lane is dual-written by phase11k §2. |
+| `law_check` | (none) | `cortex_laws` (global) + `cortex-{slug}-governance` | `results.laws_active` populated by the same projection contract: `law_id` / `law_severity` / `law_tier` top-level. The global lane is dual-written by phase11k §2 so `law_check` answers cross-repo without enumerating repos. |
 
-## Open follow-ups (filed for phase11k)
+## Phase11k closure summary
 
-1. **Writer-side top-level projection** — `cortex-workers/src/fulltext/builders.rs`'s `Document` struct needs `decision_id`, `decision_title`, `decision_status`, `law_id`, `severity`, `tier`, `turn_id` as top-level fields when the source kind matches. Today the entire payload is serialised into `body` as a JSON string and the spec-11 lane projection contract has nothing to read.
-2. **Global decisions/laws Meili indexes** — `cortex_decisions` and `cortex_laws` (no repo prefix) are queried by the orchestrator strategies but never written. Either:
-   - Update the fulltext worker to ALSO write each Decision/LawViolation envelope to the global index, or
-   - Update the strategies to drop the global lane and rely on per-repo only.
-3. **`AGENTS.override.md` law extraction** — `LAW-CORTEX-*` declarations live in a file currently classified as Memory. Either move them or extend `[cortex.laws].promote_patterns`.
-4. **Auto-republish on file change** — today every ADR / law update needs a manual `cortex-bootstrap --force <repo>` to re-flow through the workers. A file watcher (or bootstrap-time scan triggered by `inotify` / `fs::Event`) should re-publish on change.
+1. **Writer-side top-level projection** ✅ — `cortex-workers/src/fulltext/document.rs::Document` carries `decision_id`, `decision_title`, `decision_status`, `decision_supersedes`, `law_id`, `law_severity`, `law_tier`, `turn_id` as top-level optional fields. Settings v5 marks them filterable + searchable so the dashboard's facet view + the orchestrator's lane projection both pick them up.
+2. **Global decisions/laws Meili indexes** ✅ — `routing::index_for_event_global(kind)` returns `cortex_decisions` for Decision and `cortex_laws` for LawViolation; the indexer dual-writes per-repo + global so a query without `scope.repo` resolves cross-repo.
+3. **`AGENTS.override.md` law extraction** ✅ — `cortex.toml` adds `AGENTS.override.md` / `AGENTS.md` to `[cortex.laws].promote_patterns` and ships an `extract_pattern = "^LAW-[A-Z0-9-]+$"` knob. The bootstrap emitter splits the body into one `law.imported` envelope per matching `## LAW-...` heading.
+4. **Auto-republish on file change** ✅ — `cortex-claude-archive::governance_watcher::GovernanceWatcher` polls `.rulebook/decisions/`, `.rulebook/laws/`, `.claude/rules/`, `AGENTS.override.md`, `AGENTS.md` and emits a change to a `GovernanceEmitter` on every content-hash drift. `MemoryGovernanceEmitter` is the test seam; a Synap-bound emitter ships in the §6 follow-up.
 
 ## Verification today
 

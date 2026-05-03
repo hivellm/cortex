@@ -73,6 +73,49 @@ pub struct Document {
     /// is missing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path_prefixes: Vec<String>,
+    // Phase11k §1.1 — top-level lane projection fields. The spec-11
+    // lane projection contract (`crates/cortex-api/src/meili_lane.rs`
+    // → `LANE_EXTRAS_KEYS`) flattens unknown top-level Meili fields
+    // into `extras_raw` and from there into `LaneHit.extras`. Stamping
+    // these at the top of the document — instead of nesting them under
+    // `ext.decision.*` / `ext.law_violation.*` — lets the orchestrator's
+    // overlay derivers (`derive_decisions`, `derive_laws`,
+    // `derive_similar_turns`) read them with no transform layer in
+    // between. Each field is `Option<String>` so it stays absent on
+    // documents whose kind doesn't apply.
+    /// ADR identifier copied off `DecisionPayload.decision_id`. Set
+    /// only when the document's `kind == "decision"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_id: Option<String>,
+    /// ADR title copied off `DecisionPayload.title`. Searchable so a
+    /// free-text query against the title still hits the row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_title: Option<String>,
+    /// ADR status (`proposed` / `accepted` / `superseded` /
+    /// `deprecated`). Filterable for status-scoped queries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_status: Option<String>,
+    /// ADR id this decision supersedes, when the supersession chain
+    /// stamps one. Filterable so the dashboard's chain view scopes to
+    /// the parent ADR.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_supersedes: Option<String>,
+    /// Law identifier (`LAW-CORTEX-001`, `LAW-007`, …). Set on
+    /// `kind == "law_violation"` documents. Searchable + filterable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub law_id: Option<String>,
+    /// Law violation severity copied off `LawViolationPayload.severity`
+    /// (`info` / `notable` / `critical`). Filterable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub law_severity: Option<String>,
+    /// Law enforcement tier (1–4) rendered as a string. Filterable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub law_tier: Option<String>,
+    /// Turn id (= envelope `event_id`) copied verbatim onto
+    /// `kind == "turn"` documents so the spec-11 `derive_similar_turns`
+    /// overlay can group hits by turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     /// Per-kind extensions keyed by kind family — schema is
     /// `ext.<family>.<field>`. Missing extensions are absent (no
     /// null-padding per spec 08).

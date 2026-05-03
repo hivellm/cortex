@@ -359,6 +359,129 @@ pub fn emit_spec_laws_imported(
         .collect()
 }
 
+/// Phase11k §3.2 — emit one `law.imported` envelope per `## `
+/// heading whose first token matches the project's
+/// `[cortex.laws].extract_pattern`. When the body has no matching
+/// heading, falls back to a single-law envelope via
+/// [`emit_law_imported`] so files that pre-date the extract path
+/// still produce something.
+///
+/// The pattern check is deliberately narrow: only the regex shipped
+/// in `cortex.toml` (`^LAW-[A-Z0-9-]+$`) is supported without
+/// pulling in the `regex` crate. The implementation tests each
+/// heading's first whitespace-delimited token for the prefix
+/// (`LAW-`) plus the character class (`[A-Z0-9-]`). This is the
+/// only pattern shipped in the spec; if a future config wants a
+/// richer one the regex crate can be added then.
+pub fn emit_extracted_laws_imported(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    rel_path: &str,
+    body: &str,
+    pattern: &str,
+    stream: &str,
+) -> Vec<BootstrapEvent> {
+    let extractor = LawTokenExtractor::compile(pattern);
+    let mut sections: Vec<(String, String, String)> = Vec::new(); // (law_id, title, body)
+    let mut current: Option<(String, String, String)> = None;
+    for line in body.lines() {
+        if let Some(rest) = line.strip_prefix("## ") {
+            let trimmed = rest.trim();
+            if let Some(token) = extractor.match_first_token(trimmed) {
+                if let Some(prev) = current.take() {
+                    sections.push(prev);
+                }
+                let mut buf = String::new();
+                buf.push_str(line);
+                buf.push('\n');
+                current = Some((token.to_string(), trimmed.to_string(), buf));
+                continue;
+            }
+        }
+        if let Some((_, _, ref mut buf)) = current {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    if let Some(prev) = current.take() {
+        sections.push(prev);
+    }
+
+    if sections.is_empty() {
+        // No heading matched the pattern — fall back so the file's
+        // contents still reach the dashboard as a single law envelope.
+        return vec![emit_law_imported(
+            repo_id, session_id, git_ref, rel_path, body, stream,
+        )];
+    }
+
+    sections
+        .into_iter()
+        .enumerate()
+        .map(|(idx, (law_id, title, section_body))| {
+            let source = build_source(repo_id, Some(rel_path), git_ref, None, None);
+            let payload = json!({
+                "law_id": law_id,
+                "title": title,
+                "severity": "critical",
+                "detector": Value::Null,
+                "body": section_body,
+                "section_index": idx,
+                "source_path": rel_path,
+            });
+            finalise("law.imported", session_id, source, payload, stream)
+        })
+        .collect()
+}
+
+/// Phase11k §3.2 — minimal extractor for the shipped
+/// `^LAW-[A-Z0-9-]+$` pattern. Avoids pulling the `regex` crate for
+/// a single fixed shape. Future patterns would either add `regex`
+/// or extend this matcher.
+struct LawTokenExtractor {
+    /// Pattern after stripping the `^` / `$` anchors so we can match
+    /// against a whitespace-delimited token directly.
+    inner: String,
+}
+
+impl LawTokenExtractor {
+    fn compile(pattern: &str) -> Self {
+        let trimmed = pattern.trim();
+        let after_caret = trimmed.strip_prefix('^').unwrap_or(trimmed);
+        let stripped = after_caret.strip_suffix('$').unwrap_or(after_caret);
+        Self {
+            inner: stripped.to_string(),
+        }
+    }
+
+    /// Return the first whitespace-delimited token in `heading` when
+    /// it satisfies the configured pattern, else `None`. The shipped
+    /// pattern (`LAW-[A-Z0-9-]+`) is the only shape tested here:
+    /// `LAW-` prefix followed by one-or-more `[A-Z0-9-]` chars.
+    fn match_first_token<'a>(&self, heading: &'a str) -> Option<&'a str> {
+        let token = heading.split_whitespace().next()?;
+        // The shipped pattern is LAW- prefix + character class.
+        // Reject tokens that don't start with LAW- regardless of the
+        // configured pattern's prefix — broadening this would require
+        // the regex crate.
+        if !self.inner.starts_with("LAW-") {
+            return None;
+        }
+        let suffix = token.strip_prefix("LAW-")?;
+        if suffix.is_empty() {
+            return None;
+        }
+        if !suffix
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-')
+        {
+            return None;
+        }
+        Some(token)
+    }
+}
+
 /// Detect spec-doc shape from a repo-rooted path. The walker
 /// classifies `.rulebook/specs/**/*.md` as `FileClass::Law`; the
 /// emitter dispatch uses this predicate to decide whether to take
@@ -923,6 +1046,26 @@ pub fn emit_for_file_multi(
     body: &str,
     stream: &str,
 ) -> Vec<BootstrapEvent> {
+    emit_for_file_multi_with_extract(
+        repo_id, session_id, git_ref, entry, body, None, stream,
+    )
+}
+
+/// Phase11k §3.2 — same as [`emit_for_file_multi`] but with an
+/// optional `[cortex.laws].extract_pattern` plumbed through the Law
+/// dispatch arm. When set AND the file is Law-classified AND not a
+/// spec doc, the body is split per matching `## ` heading. When
+/// unset, behaviour matches the legacy [`emit_for_file_multi`]
+/// surface (single-law-per-file for `.claude/rules/*.md` etc.).
+pub fn emit_for_file_multi_with_extract(
+    repo_id: &str,
+    session_id: &str,
+    git_ref: Option<&str>,
+    entry: &WalkEntry,
+    body: &str,
+    laws_extract_pattern: Option<&str>,
+    stream: &str,
+) -> Vec<BootstrapEvent> {
     let WalkEntry::Accepted {
         rel_path, class, ..
     } = entry
@@ -951,11 +1094,16 @@ pub fn emit_for_file_multi(
             repo_id, session_id, git_ref, rel_path, body, stream,
         )],
         FileClass::Law => {
-            // Spec docs fan out into per-section laws; everything
-            // else (`.claude/rules/*.md`, `[cortex.laws]` patterns)
-            // stays single-law.
+            // Spec docs fan out into per-section laws; AGENTS-style
+            // files with an `extract_pattern` fan out per-LAW heading;
+            // everything else (`.claude/rules/*.md`, `[cortex.laws]`
+            // patterns without extract) stays single-law.
             if is_spec_doc_path(rel_path) {
                 emit_spec_laws_imported(repo_id, session_id, git_ref, rel_path, body, stream)
+            } else if let Some(pattern) = laws_extract_pattern.filter(|p| !p.is_empty()) {
+                emit_extracted_laws_imported(
+                    repo_id, session_id, git_ref, rel_path, body, pattern, stream,
+                )
             } else {
                 vec![emit_law_imported(
                     repo_id, session_id, git_ref, rel_path, body, stream,

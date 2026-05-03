@@ -188,6 +188,27 @@ pub fn index_for(prefix: &str, kind: Kind, repo_id: Option<&str>) -> String {
     index_name(prefix, &slug, family_for(kind))
 }
 
+/// Phase11k §2.1 — resolve the GLOBAL Meili index a governance event
+/// fans out to in addition to the per-repo `cortex-{slug}-{family}`
+/// write. Returns `Some("cortex_decisions")` for `Kind::Decision` and
+/// `Some("cortex_laws")` for `Kind::LawViolation`; every other kind
+/// stays per-repo only (returning `None`).
+///
+/// The dual-write is what makes `decision_lookup` /
+/// `law_check` answerable with no `scope.repo` set — the per-repo
+/// indexes alone require the caller to enumerate every repo, which
+/// the strategy layer in `cortex-api/src/strategies.rs` cannot do.
+/// Writing the same envelope to both lets the per-repo lane stay the
+/// authoritative source for repo-scoped reads while the global lane
+/// answers cross-repo questions ("have we ever decided X?").
+pub fn index_for_event_global(kind: Kind) -> Option<&'static str> {
+    match kind {
+        Kind::Decision => Some(cortex_storage::names::INDEX_DECISIONS),
+        Kind::LawViolation => Some(cortex_storage::names::INDEX_LAWS),
+        _ => None,
+    }
+}
+
 /// Compose the full index name from a complete [`EnrichedEvent`].
 /// Reads `event.kind`, `event.classifier.topics`, and
 /// `event.context_path` so artifact events route to `cortex-*-code`
@@ -384,6 +405,46 @@ mod tests {
                     "round-trip failed for slug={slug:?} family={family:?} → {name:?}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn index_for_event_global_returns_decisions_for_decision_kind() {
+        // Phase11k §2.1 — Decision events MUST dual-write to the
+        // global `cortex_decisions` index so cross-repo lookups
+        // resolve without enumerating repos.
+        assert_eq!(index_for_event_global(Kind::Decision), Some("cortex_decisions"));
+    }
+
+    #[test]
+    fn index_for_event_global_returns_laws_for_law_violation_kind() {
+        assert_eq!(
+            index_for_event_global(Kind::LawViolation),
+            Some("cortex_laws")
+        );
+    }
+
+    #[test]
+    fn index_for_event_global_returns_none_for_non_governance_kinds() {
+        // Every non-governance kind stays per-repo only — dual-write
+        // would dilute the global lanes (their schema is governance-
+        // specific) and the audit picked governance as the only
+        // family that warrants cross-repo reachability.
+        for kind in [
+            Kind::Turn,
+            Kind::ToolCall,
+            Kind::AgentCall,
+            Kind::Memory,
+            Kind::Analysis,
+            Kind::Artifact,
+            Kind::Knowledge,
+            Kind::Learning,
+            Kind::Consolidation,
+        ] {
+            assert!(
+                index_for_event_global(kind).is_none(),
+                "kind={kind:?} must not dual-write",
+            );
         }
     }
 

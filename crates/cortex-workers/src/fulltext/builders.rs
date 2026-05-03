@@ -106,10 +106,19 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         language,
         truncated: chosen.truncated,
         path_prefixes,
+        decision_id: None,
+        decision_title: None,
+        decision_status: None,
+        decision_supersedes: None,
+        law_id: None,
+        law_severity: None,
+        law_tier: None,
+        turn_id: None,
         ext: BTreeMap::new(),
     };
 
     apply_extensions(event, &mut doc);
+    apply_top_level_projection(event, &mut doc);
     BuildOutcome::Ready(Box::new(doc))
 }
 
@@ -483,6 +492,55 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
     }
 }
 
+/// Phase11k §1.2 — stamp the spec-11 lane-projection contract keys at
+/// the TOP level of the Meili document. The read-side projection in
+/// `crates/cortex-api/src/meili_lane.rs::project` flattens unknown
+/// top-level fields into `extras_raw`, then copies them into
+/// `LaneHit.extras` via `LANE_EXTRAS_KEYS`. The orchestrator's overlay
+/// derivers (`derive_decisions`, `derive_laws`, `derive_similar_turns`)
+/// read those keys directly off `extras` — so without this step the
+/// `decisions[]` / `violations[]` overlays come back empty even when
+/// the per-repo `cortex-{slug}-decisions` / `-governance` indexes are
+/// fully populated. Nesting under `ext.decision.*` would force the
+/// reader to flatten one level deeper, which Meili's filterable schema
+/// can't express.
+fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
+    match event.kind {
+        Kind::Decision => {
+            if let Ok(d) = serde_json::from_value::<DecisionPayload>(event.redacted_payload.clone())
+            {
+                doc.decision_id = Some(d.decision_id);
+                doc.decision_title = Some(d.title);
+                doc.decision_status = Some(d.status);
+                doc.decision_supersedes = d.supersedes;
+            }
+        }
+        Kind::LawViolation => {
+            if let Ok(lv) =
+                serde_json::from_value::<LawViolationPayload>(event.redacted_payload.clone())
+            {
+                doc.law_id = Some(lv.law_id);
+                doc.law_severity = Some(lv.severity);
+                doc.law_tier = lv.tier.map(|t| t.to_string());
+            }
+        }
+        Kind::Turn => {
+            doc.turn_id = Some(event.event_id.clone());
+        }
+        Kind::ToolCall
+        | Kind::AgentCall
+        | Kind::Memory
+        | Kind::Analysis
+        | Kind::Artifact
+        | Kind::Knowledge
+        | Kind::Learning
+        | Kind::Consolidation => {
+            // No top-level projection for these kinds — their overlay
+            // contracts (if any) read from `ext.<family>.*` already.
+        }
+    }
+}
+
 fn kind_label(kind: Kind) -> &'static str {
     match kind {
         Kind::Turn => "turn",
@@ -517,3 +575,251 @@ fn pii_risk_label(p: PiiRisk) -> &'static str {
 
 #[allow(dead_code)]
 fn assert_classifier_output_used(_o: &ClassifierOutput) {}
+
+#[cfg(test)]
+mod top_level_projection_tests {
+    use super::*;
+    use cortex_classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+    use cortex_core::events::Kind;
+    use serde_json::json;
+
+    fn classifier(event_id: &str) -> ClassifierOutput {
+        ClassifierOutput {
+            event_id: event_id.to_string(),
+            kind_refinement: None,
+            topics: Vec::new(),
+            severity: Severity::Info,
+            pii_risk: PiiRisk::Low,
+            redaction_suggestions: Vec::new(),
+            summary: None,
+            entities: Vec::new(),
+            relations: Vec::new(),
+            source: ClassifierSource::StaticFallback,
+            prompt_version: "v1".into(),
+            model: "static-v1".into(),
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+        }
+    }
+
+    fn evt(event_id: &str, kind: Kind, payload: serde_json::Value) -> EnrichedEvent {
+        EnrichedEvent {
+            event_id: event_id.to_string(),
+            kind,
+            content_hash: format!("h-{event_id}"),
+            redacted_payload: payload,
+            classifier: classifier(event_id),
+            context_repo: None,
+            context_path: None,
+            parent_event_id: None,
+            session_id: None,
+        }
+    }
+
+    fn ready(out: BuildOutcome) -> Document {
+        match out {
+            BuildOutcome::Ready(d) => *d,
+            BuildOutcome::Skipped => panic!("expected Ready, got Skipped"),
+        }
+    }
+
+    #[test]
+    fn decision_event_stamps_decision_id_title_status_supersedes() {
+        // Phase11k §1.4 — the spec-11 lane projection contract reads
+        // these directly off `extras_raw`. Stamp at the top level so
+        // the orchestrator's `derive_decisions` overlay surfaces a
+        // populated `results.decisions[]`.
+        let doc = ready(build_doc(
+            &evt(
+                "dec-1",
+                Kind::Decision,
+                json!({
+                    "decision_id": "ADR-0042",
+                    "title": "Adopt Meili",
+                    "status": "accepted",
+                    "body": "We pick Meili over Lexum for v1.",
+                    "supersedes": "ADR-0001",
+                    "tags": []
+                }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert_eq!(doc.decision_id.as_deref(), Some("ADR-0042"));
+        assert_eq!(doc.decision_title.as_deref(), Some("Adopt Meili"));
+        assert_eq!(doc.decision_status.as_deref(), Some("accepted"));
+        assert_eq!(doc.decision_supersedes.as_deref(), Some("ADR-0001"));
+    }
+
+    #[test]
+    fn decision_event_without_supersedes_leaves_field_absent() {
+        let doc = ready(build_doc(
+            &evt(
+                "dec-2",
+                Kind::Decision,
+                json!({
+                    "decision_id": "ADR-0099",
+                    "title": "Adopt Nexus",
+                    "status": "proposed",
+                    "body": "Body",
+                    "tags": []
+                }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert_eq!(doc.decision_id.as_deref(), Some("ADR-0099"));
+        assert!(doc.decision_supersedes.is_none());
+        // `skip_serializing_if = "Option::is_none"` keeps the field
+        // out of the wire payload entirely — pin that contract too.
+        let raw = serde_json::to_value(&doc).expect("serialise");
+        assert!(raw.get("decision_supersedes").is_none());
+    }
+
+    #[test]
+    fn law_violation_event_stamps_law_id_severity_tier() {
+        let doc = ready(build_doc(
+            &evt(
+                "lv-1",
+                Kind::LawViolation,
+                json!({
+                    "violation_id": "VIO-0001",
+                    "law_id": "LAW-CORTEX-001",
+                    "severity": "critical",
+                    "tier": 1,
+                    "message": "task sequence cherry pick",
+                    "evidence": null
+                }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert_eq!(doc.law_id.as_deref(), Some("LAW-CORTEX-001"));
+        assert_eq!(doc.law_severity.as_deref(), Some("critical"));
+        assert_eq!(doc.law_tier.as_deref(), Some("1"));
+    }
+
+    #[test]
+    fn law_violation_event_without_tier_leaves_field_absent() {
+        let doc = ready(build_doc(
+            &evt(
+                "lv-2",
+                Kind::LawViolation,
+                json!({
+                    "violation_id": "VIO-0002",
+                    "law_id": "LAW-008",
+                    "severity": "notable",
+                    "message": "x",
+                    "evidence": null
+                }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert!(doc.law_tier.is_none());
+    }
+
+    #[test]
+    fn turn_event_stamps_turn_id_equal_to_event_id() {
+        let doc = ready(build_doc(
+            &evt(
+                "turn-abc",
+                Kind::Turn,
+                json!({ "user_message": "hi", "assistant_message": "hi" }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert_eq!(doc.turn_id.as_deref(), Some("turn-abc"));
+        // Non-turn projection keys stay absent.
+        assert!(doc.decision_id.is_none());
+        assert!(doc.law_id.is_none());
+    }
+
+    #[test]
+    fn non_governance_kinds_carry_no_top_level_projection() {
+        // Memory / Knowledge / Learning / Analysis / etc. carry their
+        // own overlay contracts under `ext.<family>.*` — the top-level
+        // projection MUST stay absent so the JSON wire shape doesn't
+        // grow null-padding.
+        let doc = ready(build_doc(
+            &evt(
+                "mem-1",
+                Kind::Memory,
+                json!({
+                    "memory_id": "MEM-1",
+                    "name": "n",
+                    "memory_type": "user",
+                    "op": "save"
+                }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert!(doc.decision_id.is_none());
+        assert!(doc.decision_title.is_none());
+        assert!(doc.law_id.is_none());
+        assert!(doc.turn_id.is_none());
+        let raw = serde_json::to_value(&doc).expect("serialise");
+        for key in [
+            "decision_id",
+            "decision_title",
+            "decision_status",
+            "decision_supersedes",
+            "law_id",
+            "law_severity",
+            "law_tier",
+            "turn_id",
+        ] {
+            assert!(
+                raw.get(key).is_none(),
+                "Memory document must not carry `{key}`",
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_decision_payload_does_not_panic() {
+        // Defensive: a worker should tolerate junk payloads rather
+        // than poison the whole batch. The serde-from_value branch
+        // returns Err and the projection silently skips.
+        let doc = ready(build_doc(
+            &evt(
+                "dec-bad",
+                Kind::Decision,
+                json!({ "title": "no decision_id" }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert!(doc.decision_id.is_none());
+        assert!(doc.decision_title.is_none());
+    }
+
+    #[test]
+    fn round_trip_preserves_top_level_fields_through_serde() {
+        let mut e = evt(
+            "dec-rt",
+            Kind::Decision,
+            json!({
+                "decision_id": "ADR-RT",
+                "title": "Round trip",
+                "status": "accepted",
+                "body": "body",
+                "tags": []
+            }),
+        );
+        // Force topics non-empty so the field round-trips — Document
+        // serialises `topics` with `skip_serializing_if =
+        // "Vec::is_empty"`, and the deserialiser does not default
+        // missing arrays. Spec 08 documents this trade-off.
+        e.classifier.topics = vec!["search".into()];
+        let doc = ready(build_doc(&e, false, 1024 * 1024));
+        let raw = serde_json::to_string(&doc).expect("serialise");
+        let parsed: Document = serde_json::from_str(&raw).expect("round-trip");
+        assert_eq!(parsed.decision_id.as_deref(), Some("ADR-RT"));
+        assert_eq!(parsed.decision_title.as_deref(), Some("Round trip"));
+        assert_eq!(parsed.decision_status.as_deref(), Some("accepted"));
+    }
+}

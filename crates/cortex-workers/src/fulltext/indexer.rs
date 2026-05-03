@@ -28,7 +28,7 @@ use super::config::FulltextConfig;
 use super::document::Document;
 use super::meili_client::{MeiliClient, MeiliError};
 use super::metrics::Metrics;
-use super::routing::index_for_event;
+use super::routing::{index_for_event, index_for_event_global};
 use super::settings::settings_v1_json;
 use crate::embedder::EnrichedEvent;
 
@@ -169,7 +169,26 @@ impl FulltextIndexer for MeiliFulltextIndexer {
                     }
                     let index_name = index_for_event(&self.config.index_prefix, event);
                     self.metrics.incr_routed(&index_name);
-                    by_index.entry(index_name).or_default().push(*doc);
+                    // Phase11k §2.2 — governance kinds dual-write to
+                    // the global `cortex_decisions` / `cortex_laws`
+                    // index so `decision_lookup` / `law_check` can
+                    // answer without `scope.repo`. The per-repo index
+                    // remains authoritative for scoped reads; the
+                    // global one is the cross-repo overlay. The
+                    // document instance is shared by `Arc`-cloning the
+                    // boxed payload — both lanes write the same row,
+                    // so dedupe by `doc.id` is automatic.
+                    let global_target = index_for_event_global(event.kind)
+                        .map(|name| name.to_string());
+                    let doc_unboxed = *doc;
+                    if let Some(global) = global_target {
+                        self.metrics.incr_routed(&global);
+                        by_index
+                            .entry(global)
+                            .or_default()
+                            .push(doc_unboxed.clone());
+                    }
+                    by_index.entry(index_name).or_default().push(doc_unboxed);
                 }
             }
         }

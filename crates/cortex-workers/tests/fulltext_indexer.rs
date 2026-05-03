@@ -100,9 +100,10 @@ async fn index_batch_groups_events_per_index() {
         ),
     ];
     let report = indexer.index_batch(&events).await.expect("index_batch");
-    assert_eq!(report.documents_upserted, 3);
-    // Per-repo isolation: events with `context_repo = "Vectorizer"` route to
-    // `cortex-vectorizer-{family}` instead of the legacy shared `cortex-{family}`.
+    // Phase11k §2.2 — Decision events dual-write to the global
+    // `cortex_decisions` index in addition to the per-repo target.
+    // 2 ToolCall (per-repo only) + 1 Decision (per-repo + global) = 4.
+    assert_eq!(report.documents_upserted, 4);
     assert_eq!(
         report.by_index.get("cortex-vectorizer-code").copied(),
         Some(2)
@@ -111,6 +112,7 @@ async fn index_batch_groups_events_per_index() {
         report.by_index.get("cortex-vectorizer-decisions").copied(),
         Some(1)
     );
+    assert_eq!(report.by_index.get("cortex_decisions").copied(), Some(1));
 
     let calls = client.calls_snapshot();
     let mut indexes_seen: Vec<String> = calls
@@ -125,7 +127,8 @@ async fn index_batch_groups_events_per_index() {
         indexes_seen,
         vec![
             "cortex-vectorizer-code".to_string(),
-            "cortex-vectorizer-decisions".to_string()
+            "cortex-vectorizer-decisions".to_string(),
+            "cortex_decisions".to_string(),
         ]
     );
 }
@@ -294,7 +297,10 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
     ];
 
     let report = indexer.index_batch(&events).await.expect("index_batch");
-    assert_eq!(report.documents_upserted, 8);
+    // Phase11k §2.2 — governance kinds dual-write to global indexes:
+    // 6 non-governance + 1 Decision (per-repo + global) + 1 LawViolation
+    // (per-repo + global) = 10 upserts.
+    assert_eq!(report.documents_upserted, 10);
 
     // Every destination from the spec-08 matrix should be populated.
     let want = [
@@ -304,6 +310,9 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
         ("cortex-vectorizer-governance", 1),
         ("cortex-vectorizer-docs", 1), // .md artifact
         ("cortex-vectorizer-misc", 1), // unknown-ext artifact
+        // Phase11k §2.2 — global dual-write targets.
+        ("cortex_decisions", 1),
+        ("cortex_laws", 1),
     ];
     for (idx, expected) in want {
         assert_eq!(

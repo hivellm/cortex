@@ -177,9 +177,9 @@ orchestrator's strategies layer changed.
 |---|---|
 | `/overview`, `/timeline/recent`, `/sessions` | every hit (group by `symbol_to_kind`, `session_id`) |
 | `/memory` | `symbol = turn / tool_call / agent_call / decision / analysis` |
-| `/decisions`, `/decisions/{id}` | `symbol = "decision"`; merges `extras.{title,status,supersedes,body_markdown}` over the legacy text-scrape fallback |
-| `/laws` | `symbol = "law_violation"` deduped by `extras.law_id` (until spec-13 ships a canonical catalogue source) |
-| `/violations` | `symbol = "law_violation"`; surfaces `extras.law_id` and `severity = critical → action = blocked` |
+| `/decisions`, `/decisions/{id}` | `symbol = "decision"`; merges `extras.{title,status,supersedes,body_markdown}` over the legacy text-scrape fallback. **Phase11k §1**: also reads top-level `decision_id` / `decision_title` / `decision_status` / `decision_supersedes` (filterable in settings v5) so the supersession-chain view scopes via Meili filters instead of an in-memory pass. |
+| `/laws` | `symbol = "law_violation"` deduped by `extras.law_id` (until spec-13 ships a canonical catalogue source). **Phase11k §1**: top-level `law_id` / `law_severity` / `law_tier` are filterable so the catalogue can group by tier without re-parsing the body. |
+| `/violations` | `symbol = "law_violation"`; surfaces `extras.law_id` and `severity = critical → action = blocked`. **Phase11k §2**: cross-repo violations land in the global `cortex_laws` index alongside the per-repo `cortex-{slug}-governance` index, so the dashboard can surface a global "active laws across the workspace" view via the dual-write contract. |
 | `/analyses` | `symbol = "analysis"` |
 | `/tools/stats` | hits with a `tool_call:<name>` symbol; aggregates calls and the 7×24 weekday × hour heatmap |
 | `/trust` | empty until spec-14 ships the `(model, repo)` derivation pipeline — handler returns honest empty arrays plus `source: "stub_until_spec14"` so the GUI shows the right empty-state copy |

@@ -461,8 +461,10 @@ mod tests {
         assert_eq!(report.missing_partitions, 1);
         // All three Decision envelopes route to the rulebook decisions
         // index; the two Artifact envelopes were skipped because their
-        // partition was already present in Meili.
-        assert_eq!(report.replayed_events, 3);
+        // partition was already present in Meili. Phase11k §2 — Decision
+        // events ALSO dual-write to the global `cortex_decisions` index,
+        // so the upsert count doubles (3 per-repo + 3 global = 6).
+        assert_eq!(report.replayed_events, 6);
 
         // Per-partition metric records exactly the three replays under
         // (rulebook, decisions); the (cortex, code) partition stays at 0.

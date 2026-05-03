@@ -39,6 +39,10 @@ zstd = { workspace = true }
 # pins the polling cadence at 1 s.
 axum = { workspace = true }
 sysinfo = { workspace = true }
+# phase11k §4 — governance auto-republish watcher uses the same
+# `ignore` crate the bootstrap walker leans on so directory walks
+# share one tested traversal implementation.
+ignore = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

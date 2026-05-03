@@ -628,6 +628,7 @@ dependencies = [
  "clap",
  "cortex-core",
  "cortex-storage",
+ "ignore",
  "indicatif",
  "serde",
  "serde_json",

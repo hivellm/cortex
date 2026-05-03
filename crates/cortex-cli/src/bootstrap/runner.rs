@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 use super::checkpoint::Checkpoint;
 use super::config::CortexSection;
 use super::emitter::{
-    emit_for_file_multi, emit_turn_historical, kind_passes_filter, BootstrapEvent, BOOTSTRAP_STREAM,
+    emit_for_file_multi_with_extract, emit_turn_historical, kind_passes_filter, BootstrapEvent,
+    BOOTSTRAP_STREAM,
 };
 use super::git::walk_commits;
 use super::metrics::Metrics;
@@ -244,8 +245,15 @@ pub async fn run_repo_with_dedup(
                 // `law.imported` per `## ` section. The publish loop
                 // handles N events per walked file so the
                 // per-section laws all reach Synap.
-                let mut events =
-                    emit_for_file_multi(&repo_id, &session_id, None, entry, &body, &stream);
+                let mut events = emit_for_file_multi_with_extract(
+                    &repo_id,
+                    &session_id,
+                    None,
+                    entry,
+                    &body,
+                    repo_cfg.laws.extract_pattern.as_deref(),
+                    &stream,
+                );
                 // Phase11e §5 — apply the user-supplied kind filter
                 // BEFORE the publish loop so the walker still does
                 // its full pass (the dedup ledger needs the full
