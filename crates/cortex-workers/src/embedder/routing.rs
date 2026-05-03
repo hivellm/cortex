@@ -42,6 +42,10 @@ fn family_for(kind: &Kind) -> &'static str {
         // so the spec-12 renderer's `Consolidated context`
         // section can fan out against a single index.
         Kind::Consolidation => "consolidations",
+        // phase11r §3.2 — topic cards route to their own per-repo
+        // collection (`cortex-{slug}-topic_cards`) so the synthesis
+        // lane has its own embedding space.
+        Kind::TopicCard => "topic_cards",
         // Catch-all for kinds not explicitly called out in the spec table.
         Kind::AgentCall | Kind::Memory => "misc",
     }

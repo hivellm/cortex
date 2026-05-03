@@ -93,6 +93,16 @@ pub enum Kind {
     /// fetching the underlying turns. Drives the spec-12
     /// "Consolidated context" section in the pre-thinking bundle.
     Consolidation,
+    /// phase11r — living-synthesis topic card. The LLM rewrites the
+    /// payload's `synthesis_markdown` whenever new evidence lands
+    /// (consolidations, decisions, laws, raw turns), surfaces
+    /// contradictions explicitly, and exposes a staleness signal.
+    /// The pre-thinking renderer prefers a topic card over the raw
+    /// "Consolidated context" block when one matches the query
+    /// scope. Drives the MCP tools `cortex_topic_get` /
+    /// `cortex_topic_drill` / `cortex_topic_neighbors` /
+    /// `cortex_topic_diff` / `cortex_synthesize`.
+    TopicCard,
 }
 
 impl Kind {
@@ -110,6 +120,7 @@ impl Kind {
             Kind::Knowledge => "knowledge",
             Kind::Learning => "learning",
             Kind::Consolidation => "consolidation",
+            Kind::TopicCard => "topic_card",
         }
     }
 }
@@ -446,6 +457,184 @@ pub const CONSOLIDATION_SUMMARY_MIN_BYTES: usize = 200;
 /// Summary upper bound (bytes) — see §1.5 validator.
 pub const CONSOLIDATION_SUMMARY_MAX_BYTES: usize = 2_000;
 
+/// Phase11r §1 — payload for [`Kind::TopicCard`].
+///
+/// Living-synthesis topic card. The LLM rewrites
+/// `synthesis_markdown` whenever new evidence lands; the producer
+/// stamps `revision` (monotonic) and resets `events_since_last_rev`
+/// per rewrite. Contradictions surface explicitly so the model
+/// never silently averages conflicting evidence; the staleness
+/// signal (`synthesis_age_d`, `events_since_last_rev`) lets the
+/// pre-thinking renderer downgrade the card when confidence drops.
+///
+/// Field-level invariants enforced by the §1.5 validator:
+/// - `topic_slug` matches `^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$`
+/// - `200 <= synthesis_markdown.len() <= 4000` bytes
+/// - `evidence.len() >= 1`
+/// - `open_questions.len() <= 8`
+/// - `related_topic_ids.len() <= 32`
+/// - `0.0 <= confidence <= 1.0`
+/// - every `contradictions[*].evidence_a` / `evidence_b` references
+///   an item in `evidence`
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TopicCardPayload {
+    /// Deterministic id derived from `(topic_slug, repo_scope)` via
+    /// [`derive_topic_card_id`]. Re-emitting the same card lands on
+    /// the same id; new revisions stamp the same id with an
+    /// incremented `revision`.
+    pub topic_card_id: String,
+    /// Kebab-case slug, ≤ 80 chars, unique per `repos` scope.
+    pub topic_slug: String,
+    /// Repo scope (usually one entry).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repos: Vec<String>,
+    /// Monotonic revision. `1` on first emit; the producer increments
+    /// it on every rewrite that changes `synthesis_markdown`.
+    pub revision: u32,
+    /// LLM-maintained prose summary (200-4 000 bytes).
+    pub synthesis_markdown: String,
+    /// Typed references the synthesiser cited. The §1.5 validator
+    /// requires `>= 1` entry per emitted card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<EvidenceRef>,
+    /// Surfaced contradictions across evidence items. Heuristic-
+    /// detected and validated against the `evidence` set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contradictions: Vec<Contradiction>,
+    /// Open questions the synthesiser noted (≤ 8 items).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_questions: Vec<String>,
+    /// Adjacent topic-card ids (≤ 32). Drives the
+    /// `cortex_topic_neighbors` MCP tool walk.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_topic_ids: Vec<String>,
+    /// Synthesis confidence, `0.0..=1.0`. The pre-thinking renderer
+    /// downgrades the topic-card section to fallback when this drops
+    /// below `0.6`.
+    pub confidence: f32,
+    /// Wall-clock timestamp of the last rewrite (RFC 3339).
+    pub last_rev_at: String,
+    /// Counter of new evidence events observed since `last_rev_at`.
+    /// The trigger fires a rewrite when this crosses
+    /// [`TOPIC_CARD_TRIGGER_EVENTS_THRESHOLD`].
+    pub events_since_last_rev: u32,
+    /// Identifier of the model the synthesiser used.
+    pub synthesis_model: String,
+    /// Realised cost of the last rewrite (USD micro-cents per
+    /// `cost_telemetry::cost_cents` convention).
+    pub synthesis_cost_cents: u32,
+}
+
+/// Phase11r §1 — typed evidence reference.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EvidenceRef {
+    /// What kind of source this evidence points to.
+    pub kind: EvidenceKind,
+    /// ULID / id of the source envelope.
+    pub id: String,
+    /// Caller-assigned weight in `0.0..=1.0` (skip when uniform).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
+    /// Revision the synthesiser was on when it cited this evidence.
+    /// Lets `cortex_topic_diff` distinguish "this was always cited"
+    /// from "this is a fresh citation since rev N".
+    pub cited_at_rev: u32,
+}
+
+/// Discriminator for [`EvidenceRef::kind`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceKind {
+    /// References a [`Kind::Consolidation`] envelope.
+    Consolidation,
+    /// References a [`Kind::Decision`] envelope.
+    Decision,
+    /// References a law (definition or violation).
+    Law,
+    /// References a [`Kind::Turn`] envelope.
+    Turn,
+}
+
+/// Phase11r §1 — surfaced contradiction across evidence items.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Contradiction {
+    /// Detector class.
+    pub kind: ContradictionKind,
+    /// Evidence id (must match an `EvidenceRef.id` in the same
+    /// payload's `evidence` vec — validated by §1.5 helper).
+    pub evidence_a: String,
+    /// Evidence id (must match an `EvidenceRef.id` in `evidence`).
+    pub evidence_b: String,
+    /// Revision the synthesiser surfaced this contradiction on.
+    pub surfaced_at_rev: u32,
+    /// Lifecycle status — drives the renderer's "open contradictions"
+    /// filter so reconciled / deprecated entries do not pollute the
+    /// pre-thinking bundle.
+    pub status: ContradictionStatus,
+}
+
+/// Discriminator for [`Contradiction::kind`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContradictionKind {
+    /// Two `Kind::Decision` refs where one supersedes the other.
+    DecisionSupersession,
+    /// `Kind::LawViolation` cites a law version different from the
+    /// latest active version of the same law.
+    LawViolationMismatch,
+    /// Two consolidations with overlapping `temporal_span` carry
+    /// conflicting `outcome_distribution` majorities.
+    OutcomeDivergence,
+}
+
+/// Discriminator for [`Contradiction::status`].
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContradictionStatus {
+    /// Surfaced and not yet resolved by a follow-up rewrite or
+    /// operator intervention.
+    Open,
+    /// The synthesiser (Opus escalation path) reconciled the
+    /// contradiction in a later revision.
+    Reconciled,
+    /// The contradiction is now stale (one of the evidence items
+    /// got superseded itself).
+    Deprecated,
+}
+
+/// Slug max length (chars) — see §1.5 validator.
+pub const TOPIC_CARD_SLUG_MAX_CHARS: usize = 80;
+/// Synthesis lower bound (bytes) — see §1.5 validator.
+pub const TOPIC_CARD_SYNTHESIS_MIN_BYTES: usize = 200;
+/// Synthesis upper bound (bytes) — see §1.5 validator.
+pub const TOPIC_CARD_SYNTHESIS_MAX_BYTES: usize = 4_000;
+/// Open-questions cap — see §1.5 validator.
+pub const TOPIC_CARD_OPEN_QUESTIONS_MAX: usize = 8;
+/// Related-topics cap — see §1.5 validator.
+pub const TOPIC_CARD_RELATED_MAX: usize = 32;
+
+/// Phase11r §1.3 — derive a deterministic topic-card id from the
+/// `(topic_slug, repo_scope)` pair. The hash uses SHA-256 of the
+/// `slug\0repo_scope` string and prepends `topic-` so the id is
+/// debuggable + greppable. Idempotent: same inputs always yield
+/// the same id, so a re-run of the synthesiser never duplicates the
+/// envelope.
+pub fn derive_topic_card_id(topic_slug: &str, repo_scope: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(topic_slug.as_bytes());
+    hasher.update([0u8]);
+    hasher.update(repo_scope.as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(6 + 24);
+    hex.push_str("topic-");
+    for byte in digest.iter().take(12) {
+        use std::fmt::Write;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    hex
+}
+
 /// Payload for [`Kind::Memory`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MemoryPayload {
@@ -676,5 +865,122 @@ mod consolidation_tests {
             CONSOLIDATION_SOURCE_IDS_INLINE_CAP
         );
         assert_eq!(p.source_event_count, unclipped_total);
+    }
+}
+
+#[cfg(test)]
+mod topic_card_tests {
+    use super::*;
+
+    fn sample_payload() -> TopicCardPayload {
+        TopicCardPayload {
+            topic_card_id: derive_topic_card_id("auth-rewrite", "cortex"),
+            topic_slug: "auth-rewrite".into(),
+            repos: vec!["cortex".into()],
+            revision: 3,
+            synthesis_markdown: "x".repeat(450),
+            evidence: vec![EvidenceRef {
+                kind: EvidenceKind::Decision,
+                id: "DEC-0042".into(),
+                weight: Some(0.8),
+                cited_at_rev: 2,
+            }],
+            contradictions: vec![Contradiction {
+                kind: ContradictionKind::DecisionSupersession,
+                evidence_a: "DEC-0042".into(),
+                evidence_b: "DEC-0050".into(),
+                surfaced_at_rev: 3,
+                status: ContradictionStatus::Open,
+            }],
+            open_questions: vec!["does this preserve token rotation?".into()],
+            related_topic_ids: vec![derive_topic_card_id("session-management", "cortex")],
+            confidence: 0.78,
+            last_rev_at: "2026-05-03T05:00:00Z".into(),
+            events_since_last_rev: 4,
+            synthesis_model: "claude-haiku-4-5".into(),
+            synthesis_cost_cents: 80,
+        }
+    }
+
+    #[test]
+    fn schema_stem_maps_topic_card() {
+        assert_eq!(Kind::TopicCard.schema_stem(), "topic_card");
+    }
+
+    #[test]
+    fn kind_topic_card_serialises_snake_case() {
+        let json = serde_json::to_string(&Kind::TopicCard).unwrap();
+        assert_eq!(json, "\"topic_card\"");
+        let parsed: Kind = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, Kind::TopicCard);
+    }
+
+    #[test]
+    fn payload_serde_round_trip_preserves_every_field() {
+        let p = sample_payload();
+        let json = serde_json::to_string(&p).expect("serialize");
+        let parsed: TopicCardPayload = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, p);
+    }
+
+    #[test]
+    fn evidence_kind_serialises_snake_case() {
+        for (kind, tag) in [
+            (EvidenceKind::Consolidation, "\"consolidation\""),
+            (EvidenceKind::Decision, "\"decision\""),
+            (EvidenceKind::Law, "\"law\""),
+            (EvidenceKind::Turn, "\"turn\""),
+        ] {
+            assert_eq!(serde_json::to_string(&kind).unwrap(), tag);
+        }
+    }
+
+    #[test]
+    fn contradiction_status_serialises_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ContradictionStatus::Open).unwrap(),
+            "\"open\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ContradictionStatus::Reconciled).unwrap(),
+            "\"reconciled\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ContradictionStatus::Deprecated).unwrap(),
+            "\"deprecated\""
+        );
+    }
+
+    #[test]
+    fn derive_topic_card_id_is_deterministic_per_slug_repo_pair() {
+        let a = derive_topic_card_id("auth-rewrite", "cortex");
+        let b = derive_topic_card_id("auth-rewrite", "cortex");
+        assert_eq!(a, b);
+        assert!(a.starts_with("topic-"));
+        // 6 prefix chars + 24 hex chars = 30 total
+        assert_eq!(a.len(), 30);
+    }
+
+    #[test]
+    fn derive_topic_card_id_differs_across_slugs() {
+        let a = derive_topic_card_id("auth-rewrite", "cortex");
+        let b = derive_topic_card_id("auth-other", "cortex");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn derive_topic_card_id_differs_across_repo_scope() {
+        let a = derive_topic_card_id("auth-rewrite", "cortex");
+        let b = derive_topic_card_id("auth-rewrite", "vectorizer");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn constants_match_phase11r_spec() {
+        assert_eq!(TOPIC_CARD_SLUG_MAX_CHARS, 80);
+        assert_eq!(TOPIC_CARD_SYNTHESIS_MIN_BYTES, 200);
+        assert_eq!(TOPIC_CARD_SYNTHESIS_MAX_BYTES, 4_000);
+        assert_eq!(TOPIC_CARD_OPEN_QUESTIONS_MAX, 8);
+        assert_eq!(TOPIC_CARD_RELATED_MAX, 32);
     }
 }

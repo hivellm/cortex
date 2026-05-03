@@ -235,6 +235,15 @@ fn classify_one(kind: &Kind, payload: &Value) -> (Option<String>, Vec<String>, S
                 topics.push(grain.to_string());
             }
         }
+        // phase11r §3.2 — TopicCards carry the `topic_cards`
+        // canonical topic + the topic_slug as a topic so the
+        // dashboard can filter by topic. Severity stays at info.
+        Kind::TopicCard => {
+            topics.push("topic_cards".into());
+            if let Some(slug) = payload.get("topic_slug").and_then(|v| v.as_str()) {
+                topics.push(slug.to_string());
+            }
+        }
     }
 
     if flat.contains("[REDACTED:") {

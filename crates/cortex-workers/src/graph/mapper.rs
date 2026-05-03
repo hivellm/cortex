@@ -133,6 +133,7 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
         // learnings. The dedicated `:Consolidation` label below
         // gives the dashboard a colour-coded slot.
         Kind::Consolidation => emit_memory(event, &session_id, &mut patch),
+        Kind::TopicCard => emit_memory(event, &session_id, &mut patch),
     }
 
     // Sonnet-extracted entity/relation layer. Independent from the
@@ -298,6 +299,7 @@ fn anchor_label_for_kind(kind: Kind) -> &'static str {
         Kind::Knowledge => "Knowledge",
         Kind::Learning => "Learning",
         Kind::Consolidation => "Consolidation",
+        Kind::TopicCard => "TopicCard",
     }
 }
 

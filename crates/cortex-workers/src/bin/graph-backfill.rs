@@ -355,6 +355,7 @@ fn kind_label(k: cortex_core::events::Kind) -> &'static str {
         Kind::Knowledge => "knowledge",
         Kind::Learning => "learning",
         Kind::Consolidation => "consolidation",
+        Kind::TopicCard => "topic_card",
     }
 }
 

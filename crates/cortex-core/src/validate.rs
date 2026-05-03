@@ -42,6 +42,7 @@ const ANALYSIS_SCHEMA: &str = include_str!("../schemas/kinds/analysis.schema.jso
 const LAW_VIOLATION_SCHEMA: &str = include_str!("../schemas/kinds/law_violation.schema.json");
 const ARTIFACT_SCHEMA: &str = include_str!("../schemas/kinds/artifact.schema.json");
 const CONSOLIDATION_SCHEMA: &str = include_str!("../schemas/kinds/consolidation.schema.json");
+const TOPIC_CARD_SCHEMA: &str = include_str!("../schemas/kinds/topic_card.schema.json");
 
 static VALIDATOR: Lazy<Validator> =
     Lazy::new(|| Validator::new().expect("embedded schemas must always compile"));
@@ -88,6 +89,7 @@ impl Validator {
             ("law_violation", compile(LAW_VIOLATION_SCHEMA)?),
             ("artifact", compile(ARTIFACT_SCHEMA)?),
             ("consolidation", compile(CONSOLIDATION_SCHEMA)?),
+            ("topic_card", compile(TOPIC_CARD_SCHEMA)?),
         ]
         .into_iter()
         .collect();
@@ -243,6 +245,280 @@ pub fn validate_consolidation_payload(
         });
     }
     Ok(())
+}
+
+/// Phase11r §1.5 — validate the cross-field invariants the JSON Schema
+/// cannot express on a [`crate::events::TopicCardPayload`]:
+///
+/// 1. `evidence` is non-empty.
+/// 2. Every `contradictions[*].evidence_a` / `evidence_b` references
+///    an `EvidenceRef.id` present in the same payload's `evidence`
+///    vector. Orphan references would let the renderer point at a
+///    citation the operator cannot fetch.
+///
+/// Returns `Ok(())` on a match, `Err(ValidationError::Schema { … })`
+/// otherwise. Callers should run this *after* the per-kind JSON
+/// Schema check.
+pub fn validate_topic_card_payload(
+    payload: &crate::events::TopicCardPayload,
+) -> Result<(), ValidationError> {
+    if payload.evidence.is_empty() {
+        return Err(ValidationError::Schema {
+            path: "/payload/evidence".into(),
+            message: "evidence_required: at least one EvidenceRef must be cited".into(),
+        });
+    }
+    let known: std::collections::HashSet<&str> = payload
+        .evidence
+        .iter()
+        .map(|e| e.id.as_str())
+        .collect();
+    for (idx, c) in payload.contradictions.iter().enumerate() {
+        if !known.contains(c.evidence_a.as_str()) {
+            return Err(ValidationError::Schema {
+                path: format!("/payload/contradictions/{idx}/evidence_a"),
+                message: format!(
+                    "contradiction_references_unknown_evidence: {}",
+                    c.evidence_a
+                ),
+            });
+        }
+        if !known.contains(c.evidence_b.as_str()) {
+            return Err(ValidationError::Schema {
+                path: format!("/payload/contradictions/{idx}/evidence_b"),
+                message: format!(
+                    "contradiction_references_unknown_evidence: {}",
+                    c.evidence_b
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod topic_card_validate_tests {
+    use super::*;
+    use crate::events::{
+        Contradiction, ContradictionKind, ContradictionStatus, EvidenceKind, EvidenceRef,
+        TopicCardPayload,
+    };
+
+    fn ok_payload() -> TopicCardPayload {
+        TopicCardPayload {
+            topic_card_id: crate::events::derive_topic_card_id("auth-rewrite", "cortex"),
+            topic_slug: "auth-rewrite".into(),
+            repos: vec!["cortex".into()],
+            revision: 1,
+            synthesis_markdown: "x".repeat(400),
+            evidence: vec![EvidenceRef {
+                kind: EvidenceKind::Decision,
+                id: "DEC-0042".into(),
+                weight: None,
+                cited_at_rev: 1,
+            }],
+            contradictions: vec![],
+            open_questions: vec![],
+            related_topic_ids: vec![],
+            confidence: 0.85,
+            last_rev_at: "2026-05-03T05:00:00Z".into(),
+            events_since_last_rev: 0,
+            synthesis_model: "claude-haiku-4-5".into(),
+            synthesis_cost_cents: 80,
+        }
+    }
+
+    #[test]
+    fn accepts_minimal_payload() {
+        validate_topic_card_payload(&ok_payload()).expect("baseline ok");
+    }
+
+    #[test]
+    fn rejects_empty_evidence() {
+        let mut p = ok_payload();
+        p.evidence.clear();
+        let err = validate_topic_card_payload(&p).expect_err("empty evidence");
+        match err {
+            ValidationError::Schema { path, message } => {
+                assert_eq!(path, "/payload/evidence");
+                assert!(message.contains("evidence_required"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_orphan_contradiction_evidence_a() {
+        let mut p = ok_payload();
+        p.contradictions.push(Contradiction {
+            kind: ContradictionKind::DecisionSupersession,
+            evidence_a: "DEC-9999".into(), // not in evidence
+            evidence_b: "DEC-0042".into(),
+            surfaced_at_rev: 1,
+            status: ContradictionStatus::Open,
+        });
+        let err = validate_topic_card_payload(&p).expect_err("orphan a");
+        match err {
+            ValidationError::Schema { path, message } => {
+                assert_eq!(path, "/payload/contradictions/0/evidence_a");
+                assert!(message.contains("contradiction_references_unknown_evidence"));
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_orphan_contradiction_evidence_b() {
+        let mut p = ok_payload();
+        p.contradictions.push(Contradiction {
+            kind: ContradictionKind::DecisionSupersession,
+            evidence_a: "DEC-0042".into(),
+            evidence_b: "DEC-7777".into(), // not in evidence
+            surfaced_at_rev: 1,
+            status: ContradictionStatus::Open,
+        });
+        let err = validate_topic_card_payload(&p).expect_err("orphan b");
+        match err {
+            ValidationError::Schema { path, .. } => {
+                assert_eq!(path, "/payload/contradictions/0/evidence_b");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_contradiction_with_both_refs_in_evidence() {
+        let mut p = ok_payload();
+        p.evidence.push(EvidenceRef {
+            kind: EvidenceKind::Decision,
+            id: "DEC-0050".into(),
+            weight: None,
+            cited_at_rev: 1,
+        });
+        p.contradictions.push(Contradiction {
+            kind: ContradictionKind::DecisionSupersession,
+            evidence_a: "DEC-0042".into(),
+            evidence_b: "DEC-0050".into(),
+            surfaced_at_rev: 1,
+            status: ContradictionStatus::Open,
+        });
+        validate_topic_card_payload(&p).expect("both refs in evidence");
+    }
+
+    #[test]
+    fn schema_validator_rejects_synthesis_below_floor() {
+        let envelope = serde_json::json!({
+            "event_id": "01HX0000000000000000000001",
+            "schema_version": "1",
+            "occurred_at": "2026-05-03T05:00:00Z",
+            "session_id": "01HXY00000000000000000000Z",
+            "stream": "live",
+            "tool": "claude-code",
+            "kind": "topic_card",
+            "context": {
+                "platform": "linux"
+            },
+            "payload": {
+                "topic_card_id": "topic-0123456789abcdef01234567",
+                "topic_slug": "auth-rewrite",
+                "repos": ["cortex"],
+                "revision": 1,
+                "synthesis_markdown": "tooshort",
+                "evidence": [
+                    {"kind": "decision", "id": "DEC-0042", "cited_at_rev": 1}
+                ],
+                "confidence": 0.5,
+                "last_rev_at": "2026-05-03T05:00:00Z",
+                "events_since_last_rev": 0,
+                "synthesis_model": "claude-haiku-4-5",
+                "synthesis_cost_cents": 80
+            },
+            "content_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "redactions": []
+        });
+        let v = Validator::shared();
+        let err = v.validate_event(&envelope).expect_err("below floor");
+        let mentions_synthesis = err.iter().any(|e| match e {
+            ValidationError::Schema { path, .. } => path.contains("synthesis_markdown"),
+            _ => false,
+        });
+        assert!(mentions_synthesis, "errors did not flag synthesis_markdown: {err:?}");
+    }
+
+    #[test]
+    fn schema_validator_accepts_minimal_envelope() {
+        let envelope = serde_json::json!({
+            "event_id": "01HX0000000000000000000001",
+            "schema_version": "1",
+            "occurred_at": "2026-05-03T05:00:00Z",
+            "session_id": "01HXY00000000000000000000Z",
+            "stream": "live",
+            "tool": "claude-code",
+            "kind": "topic_card",
+            "context": {
+                "platform": "linux"
+            },
+            "payload": {
+                "topic_card_id": "topic-0123456789abcdef01234567",
+                "topic_slug": "auth-rewrite",
+                "repos": ["cortex"],
+                "revision": 1,
+                "synthesis_markdown": "x".repeat(400),
+                "evidence": [
+                    {"kind": "decision", "id": "DEC-0042", "cited_at_rev": 1}
+                ],
+                "confidence": 0.5,
+                "last_rev_at": "2026-05-03T05:00:00Z",
+                "events_since_last_rev": 0,
+                "synthesis_model": "claude-haiku-4-5",
+                "synthesis_cost_cents": 80
+            },
+            "content_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "redactions": []
+        });
+        let v = Validator::shared();
+        v.validate_event(&envelope).expect("minimal envelope ok");
+    }
+
+    #[test]
+    fn schema_validator_rejects_invalid_slug() {
+        let envelope = serde_json::json!({
+            "event_id": "01HX0000000000000000000001",
+            "schema_version": "1",
+            "occurred_at": "2026-05-03T05:00:00Z",
+            "session_id": "01HXY00000000000000000000Z",
+            "stream": "live",
+            "tool": "claude-code",
+            "kind": "topic_card",
+            "context": {
+                "platform": "linux"
+            },
+            "payload": {
+                "topic_card_id": "topic-0123456789abcdef01234567",
+                "topic_slug": "Auth_Rewrite",
+                "repos": ["cortex"],
+                "revision": 1,
+                "synthesis_markdown": "x".repeat(400),
+                "evidence": [
+                    {"kind": "decision", "id": "DEC-0042", "cited_at_rev": 1}
+                ],
+                "confidence": 0.5,
+                "last_rev_at": "2026-05-03T05:00:00Z",
+                "events_since_last_rev": 0,
+                "synthesis_model": "claude-haiku-4-5",
+                "synthesis_cost_cents": 80
+            },
+            "content_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "redactions": []
+        });
+        let v = Validator::shared();
+        let err = v.validate_event(&envelope).expect_err("uppercase slug");
+        let mentions_slug = err.iter().any(|e| match e {
+            ValidationError::Schema { path, .. } => path.contains("topic_slug"),
+            _ => false,
+        });
+        assert!(mentions_slug, "errors did not flag topic_slug: {err:?}");
+    }
 }
 
 #[cfg(test)]

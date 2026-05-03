@@ -64,6 +64,11 @@ pub fn family_for(kind: Kind) -> &'static str {
         // hits one index. Per-repo collection name resolves via
         // `cortex-{slug}-consolidations`.
         Kind::Consolidation => "consolidations",
+        // phase11r §3.1 — topic cards route to their own family so
+        // the synthesis lane stays independent of the per-session
+        // consolidations and the renderer can address them as
+        // top-priority context.
+        Kind::TopicCard => "topic_cards",
     }
 }
 

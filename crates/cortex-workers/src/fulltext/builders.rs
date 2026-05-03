@@ -268,6 +268,28 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
+        // phase11r §3.1 — TopicCards index synthesis_markdown plus
+        // any open_questions so the keyword lane matches against
+        // both the prose body and the surfaced questions.
+        Kind::TopicCard => {
+            match serde_json::from_value::<cortex_core::events::TopicCardPayload>(
+                event.redacted_payload.clone(),
+            ) {
+                Ok(t) => {
+                    let mut body = t.synthesis_markdown;
+                    if !t.open_questions.is_empty() {
+                        body.push_str("\n\n");
+                        for q in &t.open_questions {
+                            body.push_str("- ");
+                            body.push_str(q);
+                            body.push('\n');
+                        }
+                    }
+                    (body, None)
+                }
+                Err(_) => (fallback_text(&event.redacted_payload), None),
+            }
+        }
     }
 }
 
@@ -337,6 +359,11 @@ fn derive_title(event: &EnrichedEvent, raw: &str) -> String {
             event.redacted_payload.clone(),
         )
         .map(|c| c.title)
+        .unwrap_or_else(|_| event.event_id.clone()),
+        Kind::TopicCard => serde_json::from_value::<cortex_core::events::TopicCardPayload>(
+            event.redacted_payload.clone(),
+        )
+        .map(|t| t.topic_slug)
         .unwrap_or_else(|_| event.event_id.clone()),
     };
     take_first_chars(&candidate, TITLE_MAX_CHARS)
@@ -483,6 +510,24 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
                 );
             }
         }
+        Kind::TopicCard => {
+            if let Ok(t) = serde_json::from_value::<cortex_core::events::TopicCardPayload>(
+                event.redacted_payload.clone(),
+            ) {
+                doc.ext.insert(
+                    "topic_card".to_string(),
+                    json!({
+                        "topic_card_id": t.topic_card_id,
+                        "topic_slug": t.topic_slug,
+                        "revision": t.revision,
+                        "confidence": t.confidence,
+                        "contradictions_count": t.contradictions.len(),
+                        "synthesis_model": t.synthesis_model,
+                        "events_since_last_rev": t.events_since_last_rev,
+                    }),
+                );
+            }
+        }
         Kind::Turn | Kind::Artifact => {
             // No extension fields beyond the shared core for these
             // kinds in v1 — `Turn`'s tokens belong on a separate
@@ -534,7 +579,8 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
         | Kind::Artifact
         | Kind::Knowledge
         | Kind::Learning
-        | Kind::Consolidation => {
+        | Kind::Consolidation
+        | Kind::TopicCard => {
             // No top-level projection for these kinds — their overlay
             // contracts (if any) read from `ext.<family>.*` already.
         }
@@ -554,6 +600,7 @@ fn kind_label(kind: Kind) -> &'static str {
         Kind::Knowledge => "knowledge",
         Kind::Learning => "learning",
         Kind::Consolidation => "consolidation",
+        Kind::TopicCard => "topic_card",
     }
 }
 
