@@ -526,17 +526,33 @@ impl TaskLoader {
             }
         }
 
-        // COLD PATH: refresh the full row index, find the chosen row,
-        // re-read its files, and store the parsed detail in the cache.
-        let snapshot = self.rows();
-        let active = snapshot
-            .iter()
-            .find(|r| !r.archived && r.row.id == id)
-            .cloned();
-        let archived = snapshot
-            .iter()
-            .find(|r| r.archived && r.row.id == id)
-            .cloned();
+        // QUICK INDEX CHECK: look at the cached row index without
+        // invalidating drifted rows. The MultiTaskLoader iterates
+        // every per-project loader; only the loader that owns the
+        // id should pay the heavier cold-path cost. Loaders that
+        // don't own this id return None after a single read lock —
+        // no per-loader stat sweep on the hot path.
+        let need_scan = {
+            let cache = self.cache.read().expect("tasks loader cache poisoned");
+            cache.scanned_at.is_none()
+        };
+        if need_scan {
+            self.full_scan();
+        }
+        let (active, archived) = {
+            let cache = self.cache.read().expect("tasks loader cache poisoned");
+            let active = cache
+                .rows
+                .iter()
+                .find(|r| !r.archived && r.row.id == id)
+                .cloned();
+            let archived = cache
+                .rows
+                .iter()
+                .find(|r| r.archived && r.row.id == id)
+                .cloned();
+            (active, archived)
+        };
         let chosen = active.clone().or_else(|| archived.clone())?;
         let also_archived = active.is_some() && archived.is_some();
         let current = read_stamps(&chosen.dir);
