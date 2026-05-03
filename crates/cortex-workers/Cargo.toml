@@ -36,6 +36,19 @@ path = "src/bin/graph-backfill.rs"
 name = "cortex-ingestion"
 path = "src/bin/cortex-ingestion.rs"
 
+[[bin]]
+name = "cortex-claude-archive"
+path = "src/bin/cortex-claude-archive.rs"
+required-features = ["claude-archive"]
+
+[features]
+default = []
+# phase11s §3 — claude-archive walks ~/.claude/projects/ and emits
+# bootstrap envelopes. Heavy deps (indicatif, sysinfo, ignore) only
+# pulled when this feature is on. Operators that never run the
+# archive walker keep their default cortex-workers build lean.
+claude-archive = ["dep:indicatif", "dep:sysinfo", "dep:ignore"]
+
 [build-dependencies]
 cortex-build = { path = "../cortex-build" }
 
@@ -91,6 +104,11 @@ tree-sitter-md = "0.5"
 tree-sitter-json = "0.24"
 tree-sitter-yaml = "0.7"
 tree-sitter-toml-ng = "0.7"
+
+# phase11s §3 — claude-archive optional deps.
+indicatif = { version = "0.17", optional = true }
+sysinfo = { workspace = true, optional = true }
+ignore = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

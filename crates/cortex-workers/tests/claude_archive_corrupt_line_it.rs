@@ -1,3 +1,4 @@
+#![cfg(feature = "claude-archive")]
 //! Phase11i §5.4 — corrupt JSONL line failure-mode IT.
 //!
 //! A session file that interleaves valid records with malformed lines
@@ -14,8 +15,8 @@
 
 use std::sync::Arc;
 
-use cortex_claude_archive::tail::{TailState, TailWatcher};
-use cortex_claude_archive::{StdoutEmitter, WalkConfig};
+use cortex_workers::claude_archive::tail::{TailState, TailWatcher};
+use cortex_workers::claude_archive::{StdoutEmitter, WalkConfig};
 
 fn write_corrupt_session(path: &std::path::Path) {
     use std::io::Write;

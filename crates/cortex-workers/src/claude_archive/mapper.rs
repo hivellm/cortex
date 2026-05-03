@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::types::{ArchiveError, JsonlRecord};
+use super::types::{ArchiveError, JsonlRecord};
 
 /// Counters returned alongside each successful map. Surfaced via
 /// the CLI's `estimate` subcommand and the watcher daemon's

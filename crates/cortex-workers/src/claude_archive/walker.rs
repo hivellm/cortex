@@ -42,7 +42,7 @@ pub struct WalkEntry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WalkKind {
     /// `<project>/<session>.jsonl` — full conversation transcript.
-    /// Goes through the [`crate::reader`] + [`crate::mapper`]
+    /// Goes through the [`super::reader`] + [`super::mapper`]
     /// pipeline.
     Session,
     /// `~/.claude/history.jsonl` — global command history. Each

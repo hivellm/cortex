@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use cortex_claude_archive::{
+use cortex_workers::claude_archive::{
     map_session, read_records, walk, ArchiveEmitter, CheckpointStore, Emitter, MapStats, ReadStats,
     StdoutEmitter, WalkConfig, WalkEntry, WalkKind,
 };
@@ -349,7 +349,7 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         // Stamp checkpoint after every file so a crash mid-run
         // never re-emits more than one file's worth of work.
         if let Some(uuid) = last_uuid {
-            let cp = cortex_claude_archive::Checkpoint {
+            let cp = cortex_workers::claude_archive::Checkpoint {
                 session_id: envelopes
                     .last()
                     .map(|e| e.session_id.clone())
@@ -403,8 +403,8 @@ fn run_tail(args: TailArgs) -> Result<()> {
             Box::new(ArchiveEmitter::new(root, 3))
         }
     };
-    let bind = cortex_claude_archive::tail::resolve_health_bind()?;
-    let interval = cortex_claude_archive::tail::resolve_poll_interval();
+    let bind = cortex_workers::claude_archive::tail::resolve_health_bind()?;
+    let interval = cortex_workers::claude_archive::tail::resolve_poll_interval();
     tracing::info!(
         root = %cfg.root.display(),
         sink = ?args.sink,
@@ -413,7 +413,7 @@ fn run_tail(args: TailArgs) -> Result<()> {
         "tail watcher starting (phase11i §5.2)"
     );
     let rt = build_runtime()?;
-    rt.block_on(cortex_claude_archive::tail::run_tail_daemon(
+    rt.block_on(cortex_workers::claude_archive::tail::run_tail_daemon(
         cfg, emitter, bind, interval,
     ))
 }

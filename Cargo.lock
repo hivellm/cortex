@@ -601,32 +601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-claude-archive"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum",
- "chrono",
- "clap",
- "cortex-core",
- "cortex-storage",
- "ignore",
- "indicatif",
- "serde",
- "serde_json",
- "sha2",
- "sysinfo",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "zstd",
-]
-
-[[package]]
 name = "cortex-cli"
 version = "0.1.0"
 dependencies = [
@@ -806,6 +780,8 @@ dependencies = [
  "cortex-core",
  "cortex-health",
  "cortex-storage",
+ "ignore",
+ "indicatif",
  "nexus-graph-sdk",
  "once_cell",
  "pulldown-cmark",
@@ -815,6 +791,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "synap-sdk",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

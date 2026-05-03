@@ -28,7 +28,7 @@ pub enum ArchiveError {
     },
     /// A JSONL line failed to parse. The reader continues with the
     /// next line; this variant is surfaced via the `errors` counter
-    /// in [`crate::reader::ReadStats`].
+    /// in [`super::reader::ReadStats`].
     #[error("malformed JSONL at {path}:{line}: {source}")]
     MalformedJson {
         path: String,
@@ -46,7 +46,7 @@ pub enum ArchiveError {
         tag: String,
     },
     /// The mapper rejected an envelope projection. Surfaces in
-    /// [`crate::mapper::MapStats::dropped_records`].
+    /// [`super::mapper::MapStats::dropped_records`].
     #[error("mapper rejection: {reason}")]
     MapperRejection { reason: String },
 }

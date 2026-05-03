@@ -1,3 +1,4 @@
+#![cfg(feature = "claude-archive")]
 //! Phase11k §4.3 — governance watcher integration test.
 //!
 //! Modifies a fixture ADR file and asserts the change reaches the
@@ -12,7 +13,7 @@ use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cortex_claude_archive::governance_watcher::{
+use cortex_workers::claude_archive::governance_watcher::{
     GovernanceChange, GovernanceWatcher, MemoryGovernanceEmitter,
 };
 use tempfile::TempDir;

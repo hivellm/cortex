@@ -37,7 +37,7 @@ use serde::Serialize;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
 
-use crate::{map_session, read_records, walk, Emitter, WalkConfig, WalkKind};
+use super::{map_session, read_records, walk, Emitter, WalkConfig, WalkKind};
 
 /// Default polling cadence — one tick per second strikes a balance
 /// between latency to the dashboard and wasted stat() syscalls on

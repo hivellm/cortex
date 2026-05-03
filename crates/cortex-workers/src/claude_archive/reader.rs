@@ -19,7 +19,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use crate::types::{ArchiveError, JsonlRecord, RecordKind};
+use super::types::{ArchiveError, JsonlRecord, RecordKind};
 
 /// Aggregate counters returned alongside each successful read.
 /// Surfaced to the caller (CLI / watcher) for telemetry.

@@ -31,7 +31,7 @@ use cortex_storage::{archive_filename, archive_partition};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::mapper::{EnvelopeKind, MappedEnvelope};
+use super::mapper::{EnvelopeKind, MappedEnvelope};
 
 /// Stream tag used by every archive file written from this crate.
 /// `cortex-api`'s archive_loader matches on the prefix when it

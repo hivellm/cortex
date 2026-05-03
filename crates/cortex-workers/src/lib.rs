@@ -23,6 +23,8 @@
 pub mod admin_health;
 pub mod classifier;
 pub mod classifier_worker;
+#[cfg(feature = "claude-archive")]
+pub mod claude_archive;
 pub mod embedder;
 pub mod fulltext;
 pub mod graph;

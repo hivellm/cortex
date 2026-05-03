@@ -1,3 +1,4 @@
+#![cfg(feature = "claude-archive")]
 //! Phase11i §5.3 — RSS hard cap IT.
 //!
 //! Drives the watcher's polling loop against a synthetic 100k-event
@@ -22,8 +23,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cortex_claude_archive::tail::{TailState, TailWatcher};
-use cortex_claude_archive::{StdoutEmitter, WalkConfig};
+use cortex_workers::claude_archive::tail::{TailState, TailWatcher};
+use cortex_workers::claude_archive::{StdoutEmitter, WalkConfig};
 
 const ENV_GATE: &str = "CORTEX_ARCHIVE_MEMORY_IT";
 const TARGET_RECORDS: usize = 100_000;
