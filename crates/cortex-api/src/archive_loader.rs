@@ -20,7 +20,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use cortex_core::events::{AgentCall, Envelope, Kind, ToolCall, Turn};
+use cortex_core::events::{AgentCall, ConsolidationPayload, Envelope, Kind, ToolCall, Turn};
 use thiserror::Error;
 
 use crate::lanes::{LaneHit, MemoryKeywordLane};
@@ -293,6 +293,28 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
                 }
             );
             (text, Some(format!("agent_call:{}", ac.agent_type)))
+        }
+        Kind::Consolidation => {
+            // Phase11j §3.8 — render `title + summary preview` so the
+            // keyword-lane fallback surfaces consolidations alongside
+            // raw envelopes until the live spec-08 indexer routes
+            // them to the dedicated `cortex_consolidations` Meili
+            // index. Symbol carries the grain so the dashboard can
+            // group consolidations by Session / Topic / DecisionTrace
+            // without re-decoding the payload.
+            let cp: ConsolidationPayload = serde_json::from_value(env.payload.clone()).ok()?;
+            let preview = clip(&cp.summary_markdown, 320);
+            let text = if cp.title.is_empty() {
+                preview.to_string()
+            } else {
+                format!("[{}] {preview}", cp.title)
+            };
+            let grain_label = match cp.grain {
+                cortex_core::events::ConsolidationGrain::Session => "session",
+                cortex_core::events::ConsolidationGrain::Topic => "topic",
+                cortex_core::events::ConsolidationGrain::DecisionTrace => "decision_trace",
+            };
+            (text, Some(format!("consolidation:{grain_label}")))
         }
         _ => return None,
     };
@@ -639,5 +661,48 @@ mod tests {
         assert!(hit.text.contains("file_path"));
         assert!(hit.text.contains("ok"));
         assert_eq!(hit.symbol.as_deref(), Some("tool_call:Edit"));
+    }
+
+    #[test]
+    fn renders_consolidation_with_title_and_summary_preview() {
+        // Phase11j §3.8 — keyword-lane fallback for the
+        // `Kind::Consolidation` branch. The hit text leads with the
+        // title in brackets, followed by the clipped summary preview;
+        // symbol carries `consolidation:<grain>` so the dashboard
+        // group-by-grain works without re-decoding the payload.
+        use cortex_core::events::{
+            ConsolidationDepth, ConsolidationGrain, ConsolidationPayload, ConsolidationScope,
+            TimeSpan,
+        };
+        let mut env = turn_envelope("ignored");
+        env.kind = Kind::Consolidation;
+        env.payload = serde_json::to_value(ConsolidationPayload {
+            consolidation_id: "cons-ses-deadbeefcafe".to_string(),
+            grain: ConsolidationGrain::Session,
+            scope: ConsolidationScope::SessionId("01SESSION".to_string()),
+            title: "Auth refactor session".to_string(),
+            summary_markdown: "Reworked the JWT middleware to drop the cached \
+                key so token rotation lands within ~250 ms instead of the \
+                previous 5 min TTL window."
+                .to_string(),
+            takeaways: vec!["use shorter cache TTL".to_string()],
+            source_event_ids: vec!["01EVT".to_string()],
+            source_event_count: 1,
+            model: "claude-haiku-4-5".to_string(),
+            depth: ConsolidationDepth::Shallow,
+            outcome_distribution: BTreeMap::new(),
+            temporal_span: TimeSpan {
+                start_ms: 0,
+                end_ms: 1_000,
+                duration_ms: 1_000,
+            },
+            repos: vec!["cortex".to_string()],
+            tags: Vec::new(),
+        })
+        .unwrap();
+        let hit = envelope_to_hit(&env).unwrap();
+        assert!(hit.text.starts_with("[Auth refactor session]"));
+        assert!(hit.text.contains("JWT middleware"));
+        assert_eq!(hit.symbol.as_deref(), Some("consolidation:session"));
     }
 }

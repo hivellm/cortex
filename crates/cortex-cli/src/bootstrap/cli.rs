@@ -111,6 +111,35 @@ pub struct CliArgs {
     /// when [`Self::graph_static`] is set; ignored otherwise.
     #[arg(long, value_name = "PATH")]
     pub graph_archive_root: Option<PathBuf>,
+
+    /// Phase11j §3.7 — run only the Meilisearch settings push, no
+    /// repo walks, no Synap publish. PATCHes the baked-in
+    /// `settings.v1.json` against every canonical global index in
+    /// `cortex-storage::names::ALL_INDEXES` plus, when
+    /// `--workspace` / positional repo roots are supplied, every
+    /// per-repo `cortex-{slug}-{family}` uid the embedder + indexer
+    /// would target. Settings PATCH is non-destructive: Meili
+    /// applies new attributes additively without dropping documents
+    /// or task history. The `version` field baked into
+    /// `settings.v1.json` is stripped before forwarding so Meili
+    /// accepts it.
+    #[arg(long)]
+    pub apply_settings_only: bool,
+
+    /// Phase11j §3.7 — Meilisearch base URL the
+    /// `--apply-settings-only` mode targets. Falls back to the
+    /// `CORTEX_MEILI_URL` env var, then `http://127.0.0.1:17004`
+    /// (the default `cortex-up` port). Ignored when
+    /// `--apply-settings-only` is unset.
+    #[arg(long, value_name = "URL", env = "CORTEX_MEILI_URL")]
+    pub meili_url: Option<String>,
+
+    /// Phase11j §3.7 — Meilisearch master key for the
+    /// `--apply-settings-only` mode. Falls back to
+    /// `CORTEX_MEILI_KEY`; passing `--apply-settings-only` against
+    /// a server with auth enabled requires this to be set.
+    #[arg(long, value_name = "KEY", env = "CORTEX_MEILI_KEY")]
+    pub meili_api_key: Option<String>,
 }
 
 /// Logging output mode.
@@ -131,8 +160,11 @@ impl CliArgs {
     /// Whether the `repo_roots` argument is mandatory for this
     /// invocation. `--resume` and `--workspace` both supply repo
     /// targets without positional args.
+    /// `--apply-settings-only` runs against the global canonical
+    /// index list when no repo roots are supplied, so it is also
+    /// allowed without positional args.
     pub fn requires_repo_roots(&self) -> bool {
-        !self.resume && self.workspace.is_none()
+        !self.resume && self.workspace.is_none() && !self.apply_settings_only
     }
 }
 
@@ -216,5 +248,41 @@ mod tests {
     fn clap_metadata_is_well_formed() {
         // Sanity: the command builds its help / version without panic.
         CliArgs::command().debug_assert();
+    }
+
+    #[test]
+    fn cli_apply_settings_only_does_not_require_repo_roots() {
+        // Phase11j §3.7 — `--apply-settings-only` walks the global
+        // canonical index list, so it must parse without positional
+        // repo roots and must opt out of `requires_repo_roots`.
+        let args = CliArgs::parse_from(["cortex-bootstrap", "--apply-settings-only"]);
+        assert!(args.apply_settings_only);
+        assert!(args.repo_roots.is_empty());
+        assert!(!args.requires_repo_roots());
+    }
+
+    #[test]
+    fn cli_apply_settings_only_accepts_meili_overrides() {
+        // The flag honours `--meili-url` + `--meili-api-key` for the
+        // staging-deploy case where the operator points the push at a
+        // non-default Meili. Both fields fall back to env vars in
+        // production; the CLI still has to parse them when given.
+        let args = CliArgs::parse_from([
+            "cortex-bootstrap",
+            "--apply-settings-only",
+            "--meili-url",
+            "http://10.0.0.4:7700",
+            "--meili-api-key",
+            "secret-token",
+        ]);
+        assert!(args.apply_settings_only);
+        assert_eq!(args.meili_url.as_deref(), Some("http://10.0.0.4:7700"));
+        assert_eq!(args.meili_api_key.as_deref(), Some("secret-token"));
+    }
+
+    #[test]
+    fn cli_apply_settings_only_defaults_off() {
+        let args = CliArgs::parse_from(["cortex-bootstrap", "Vectorizer/"]);
+        assert!(!args.apply_settings_only);
     }
 }

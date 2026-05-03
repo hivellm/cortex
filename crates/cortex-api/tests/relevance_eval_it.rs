@@ -201,8 +201,8 @@ async fn relevance_gold_set_meets_mrr_threshold() {
     let gold = load_gold();
     assert_eq!(
         gold.queries.len(),
-        30,
-        "phase11i §4.4 pinned the gold set at 30 entries"
+        50,
+        "gold set size pinned at 50 (phase11i §4.4 baseline 30 + phase11k §6.4 +10 + phase11j §4.5 +10)"
     );
 
     let mut scores = AggregateScores::default();
@@ -383,10 +383,9 @@ mod scoring_math {
     fn gold_fixture_loads_and_matches_intent_breakdown() {
         // Sanity: every entry parses, ids are unique, and the
         // intent split agrees with the §4.4 commitment + phase11k
-        // §6.4 extension (10 new entries: 4 pre_change_context, 3
-        // decision_lookup, 2 similar_problems, 1 free_search).
+        // §6.4 extension + phase11j §4.5 extension.
         let gold = load_gold();
-        assert_eq!(gold.queries.len(), 40);
+        assert_eq!(gold.queries.len(), 50);
         let mut by_intent: BTreeMap<&'static str, usize> = BTreeMap::new();
         let mut seen_ids: std::collections::BTreeSet<&str> = Default::default();
         for q in &gold.queries {
@@ -399,11 +398,14 @@ mod scoring_math {
         //   3 law_check, 2 free_search.
         // Phase11k §6.4 extension (+10 queries):
         //   +4 pre_change_context, +3 decision_lookup, +2 similar_problems,
-        //   +1 free_search. Final 14/8/12/3/3 split.
-        assert_eq!(by_intent.get("pre_change_context").copied(), Some(14));
-        assert_eq!(by_intent.get("decision_lookup").copied(), Some(8));
-        assert_eq!(by_intent.get("similar_problems").copied(), Some(12));
+        //   +1 free_search. → 14/8/12/3/3.
+        // Phase11j §4.5 extension (+10 queries — consolidations lane):
+        //   +3 pre_change_context, +2 decision_lookup, +3 similar_problems,
+        //   +2 free_search. Final 17/10/15/3/5 split.
+        assert_eq!(by_intent.get("pre_change_context").copied(), Some(17));
+        assert_eq!(by_intent.get("decision_lookup").copied(), Some(10));
+        assert_eq!(by_intent.get("similar_problems").copied(), Some(15));
         assert_eq!(by_intent.get("law_check").copied(), Some(3));
-        assert_eq!(by_intent.get("free_search").copied(), Some(3));
+        assert_eq!(by_intent.get("free_search").copied(), Some(5));
     }
 }

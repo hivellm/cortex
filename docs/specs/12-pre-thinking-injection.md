@@ -68,10 +68,10 @@ A deterministic Markdown block. Example:
 1. ✓ 2026-02-11 — Claude Sonnet refactored `hnsw_search` to accept `ef` per-call.
 2. ⚠ 2025-12-03 — Gemini benchmarked ef_search=128 and concluded it was safe up to 2M.
 
-## Past sessions (3)
-1. 01HXSESS01 — 2026-02-11 · "tune ef_search for 2M-vector benchmark" · 18 turns
-2. 01HXSESS02 — 2025-12-03 · "wire HNSW recall guard into CI" · 9 turns
-3. 01HXSESS03 — 2025-11-04 · "make hnsw_search take ef per call" · 4 turns
+## Consolidated context (3)
+1. session/cons-ses-aaa1 · 2026-02-11 · ✓ · Auth refactor session — JWT cache TTL drop
+2. topic/cons-top-bbb2 · 2026-01-04 · ✓ · HNSW ef_search tuning across the 2M-vector benchmark family
+3. decision_trace/cons-dec-ccc3 · 2025-09-21 · ⚠ · Trace from DEC-0042 back through the predecessor benchmarks
 
 ## Relevant snippets (3)
 1. `Vectorizer/src/index/hnsw/mod.rs:hnsw_search` — current implementation with configurable `ef`.
@@ -81,7 +81,9 @@ A deterministic Markdown block. Example:
 <!-- end cortex -->
 ```
 
-Sections are always in the same order: **laws → decisions → similar turns → past sessions → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+Sections are always in the same order: **laws → decisions → similar turns → consolidated context → past sessions (fallback only) → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+
+Phase11j §4.2 — when the consolidations lane returns ≥ 1 hit, the renderer emits the **Consolidated context** section and **suppresses the legacy Past sessions block** (§4.3 fallback). When the lane returns zero hits, the renderer falls back to the original past-sessions section so cold caches degrade gracefully.
 
 #### Graph traversal sub-blocks (phase11k §6.2)
 
@@ -123,7 +125,19 @@ A new section surfaces the top sessions whose centroid embedding is most similar
 N. <session_id> — <YYYY-MM-DD> · "<first user prompt clipped to 80 bytes>" · <turn_count> turn(s)
 ```
 
-Caps: top **3** sessions by centroid similarity, each prompt clipped to **80 bytes** on a UTF-8 boundary. The section is omitted entirely when the upstream surfaces no past sessions, so cold caches degrade silently. The section sits between **Similar past turns** and **Relevant snippets** to keep the order: laws → decisions → similar turns → past sessions → snippets → graph.
+Caps: top **3** sessions by centroid similarity, each prompt clipped to **80 bytes** on a UTF-8 boundary. The section is omitted entirely when the upstream surfaces no past sessions, so cold caches degrade silently. Phase11j §4.3 — also suppressed whenever the **Consolidated context** section has ≥ 1 entry; the consolidations are the higher-fidelity replacement and rendering both at once would surface the same context twice.
+
+#### Consolidated context (phase11j §4.2)
+
+Replaces **Past sessions** when the consolidations lane returns ≥ 1 hit. Each row is one line:
+
+```text
+N. <grain>/<consolidation_id> · <YYYY-MM-DD> · ✓|✗|⚠ · <title clipped to one line>
+```
+
+Where `grain ∈ {session, topic, decision_trace}` mirrors `ConsolidationPayload.grain`, the date is the consolidation's `ts` formatted as `YYYY-MM-DD` (em-dash when the upstream did not supply one), the glyph is the dominant outcome (`✓` success, `✗` error / failure, `⚠` partial / blocked / unknown — same vocabulary the Similar past turns section uses), and the title is the consolidation's pre-clipped one-line title (`title` is constrained to ≤ 80 chars by the spec-11j payload validator, so the renderer just trims trailing whitespace).
+
+Caps: top **3** consolidations by similarity (configurable via `FormatOptions.consolidations_cap`). The section sits between **Similar past turns** and **Past sessions** in the section order. The section is omitted entirely when the upstream returns no consolidations; the **Past sessions** fallback then runs as before.
 
 ## Design
 

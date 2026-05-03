@@ -1,12 +1,13 @@
 {
-  "version": "v3",
+  "version": "v4",
   "searchableAttributes": [
     "title",
     "body",
     "summary",
     "path",
     "topics",
-    "ext.tool_call.tool_name"
+    "ext.tool_call.tool_name",
+    "ext.consolidation.outcome_distribution"
   ],
   "filterableAttributes": [
     "kind",
@@ -23,9 +24,19 @@
     "model",
     "tool",
     "session_id",
-    "outcome"
+    "outcome",
+    "ext.consolidation.grain",
+    "ext.consolidation.depth",
+    "ext.consolidation.model",
+    "ext.consolidation.consolidation_id"
   ],
-  "sortableAttributes": ["ts"],
+  "sortableAttributes": [
+    "ts",
+    "ext.consolidation.grain",
+    "ext.consolidation.depth",
+    "ext.consolidation.model",
+    "ext.consolidation.consolidation_id"
+  ],
   "displayedAttributes": ["*"],
   "rankingRules": [
     "words",

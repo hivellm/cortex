@@ -9,8 +9,8 @@
 use serde_json::json;
 
 use cortex_storage::names::{
-    COLLECTION_DECISION_FP32, COLLECTION_TURN_FP32, COLLECTION_TURN_PQ, INDEX_DECISIONS,
-    INDEX_LAWS, INDEX_TURNS,
+    COLLECTION_CONSOLIDATION_FP32, COLLECTION_DECISION_FP32, COLLECTION_TURN_FP32,
+    COLLECTION_TURN_PQ, INDEX_CONSOLIDATIONS, INDEX_DECISIONS, INDEX_LAWS, INDEX_TURNS,
 };
 
 use crate::lanes::{GraphRequest, KeywordRequest, VectorRequest};
@@ -99,7 +99,17 @@ pub fn build_plan(req: &QueryRequest) -> Plan {
 }
 
 fn pre_change_context(req: &QueryRequest) -> Plan {
-    let collections = vec![repo_scoped(req, "code"), repo_scoped(req, "docs")];
+    // Phase11j §4.1 — fan out to the consolidations lane alongside
+    // the code/docs corpus. Hot tier collection + global Meili index
+    // keep the read path simple (no per-repo consolidation index
+    // exists yet — consolidations live in the global lane the
+    // dashboard reads, scope.repo is honoured via the document
+    // `repo` filter).
+    let collections = vec![
+        repo_scoped(req, "code"),
+        repo_scoped(req, "docs"),
+        COLLECTION_CONSOLIDATION_FP32.to_string(),
+    ];
     let vectors = collections
         .into_iter()
         .map(|c| VectorRequest {
@@ -113,6 +123,7 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
         repo_scoped(req, "code"),
         repo_scoped(req, "docs"),
         repo_scoped(req, "decisions"),
+        INDEX_CONSOLIDATIONS.to_string(),
     ]
     .into_iter()
     .map(|i| KeywordRequest {
@@ -240,6 +251,17 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             k: req.k,
             scope: req.scope.clone(),
         },
+        // Phase11j §4.1 — consolidations beat raw turns at recalling
+        // similar past problems because they distill the lesson
+        // learned. Hot tier only: warm tier holds older Shallow
+        // consolidations whose recall tradeoff is wrong for this
+        // strategy.
+        VectorRequest {
+            collection: COLLECTION_CONSOLIDATION_FP32.to_string(),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
     ];
     let keywords = vec![
         KeywordRequest {
@@ -250,6 +272,15 @@ fn similar_problems(req: &QueryRequest) -> Plan {
         },
         KeywordRequest {
             index: repo_scoped(req, "turns"),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+        // Phase11j §4.1 — global consolidations index supplies the
+        // literal-phrase recall path (a tool name, an error string)
+        // alongside the vector lane.
+        KeywordRequest {
+            index: INDEX_CONSOLIDATIONS.to_string(),
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
@@ -570,6 +601,45 @@ mod tests {
         let plan = build_plan(&req(Intent::FreeSearch));
         assert!(plan.overlays.is_empty());
         assert!(plan.graphs.is_empty());
+    }
+
+    #[test]
+    fn pre_change_context_includes_consolidations_lane() {
+        // Phase11j §4.1 — `pre_change_context` must fan out to the
+        // consolidations vector + keyword stores so the renderer's
+        // `Consolidated context` section has rows to read. Drift
+        // here means consolidations land in storage but never reach
+        // the agent's pre-thinking bundle.
+        let plan = build_plan(&req(Intent::PreChangeContext));
+        let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
+        assert!(
+            collections.contains(&COLLECTION_CONSOLIDATION_FP32),
+            "pre_change_context must query cortex.consolidation.fp32: {collections:?}"
+        );
+        let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(
+            indexes.contains(&INDEX_CONSOLIDATIONS),
+            "pre_change_context must query cortex_consolidations: {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn similar_problems_includes_consolidations_lane() {
+        // Phase11j §4.1 — `similar_problems` benefits even more
+        // from the consolidations lane than `pre_change_context`
+        // because consolidations distill the lesson learned from
+        // past sessions into a single recall-tuned row.
+        let plan = build_plan(&req(Intent::SimilarProblems));
+        let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
+        assert!(
+            collections.contains(&COLLECTION_CONSOLIDATION_FP32),
+            "similar_problems must query cortex.consolidation.fp32: {collections:?}"
+        );
+        let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(
+            indexes.contains(&INDEX_CONSOLIDATIONS),
+            "similar_problems must query cortex_consolidations: {indexes:?}"
+        );
     }
 
     #[test]

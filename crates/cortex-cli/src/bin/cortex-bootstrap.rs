@@ -104,6 +104,10 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.apply_settings_only {
+        return run_apply_settings_only(&args, &targets).await;
+    }
+
     if args.graph_static {
         let archive_root = args.graph_archive_root.as_deref().ok_or_else(|| {
             anyhow::anyhow!("--graph-static requires --graph-archive-root <PATH>")
@@ -437,4 +441,100 @@ fn install_ctrlc_handler() -> Arc<AtomicBool> {
         handle.store(true, Ordering::Relaxed);
     });
     shutdown
+}
+
+/// Phase11j §3.7 — non-destructive settings push.
+///
+/// Walks every canonical Meilisearch index (`ALL_INDEXES` plus, when
+/// the operator passed repo targets, every `cortex-{slug}-{family}`
+/// uid the embedder + indexer would target on a normal run) and
+/// PATCHes the baked-in `settings.v1.json`. Index creation is
+/// idempotent; settings PATCH is additive (Meili applies new
+/// attributes without dropping documents). Used to roll forward a
+/// settings version (e.g. v3 → v4) without re-publishing every event.
+async fn run_apply_settings_only(
+    args: &CliArgs,
+    targets: &[(PathBuf, String, Option<PathBuf>)],
+) -> Result<()> {
+    use cortex_storage::names::{
+        repo_scoped_name, slug_for_repo, ALL_INDEXES, NS_PREFIX,
+    };
+    use cortex_workers::fulltext::{
+        settings_v1_json, FulltextConfig, LiveMeiliClient, MeiliClient, FAMILIES,
+    };
+
+    let settings = settings_v1_json().context("baked-in settings.v1.json unparseable")?;
+    let version = settings
+        .get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("(unset)")
+        .to_string();
+
+    // Resolve Meili connection. CLI flag wins, then env, then default
+    // (the cortex-up port).
+    let meili_url = args
+        .meili_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
+    let meili_api_key = args.meili_api_key.clone();
+
+    let client = LiveMeiliClient::new(&FulltextConfig {
+        meili_url: meili_url.clone(),
+        meili_api_key,
+        ..FulltextConfig::default()
+    })
+    .map_err(|e| anyhow::anyhow!("LiveMeiliClient build: {e}"))?;
+
+    // Build the index list: every canonical global, plus per-repo
+    // permutations for any target the operator passed in.
+    let mut indexes: Vec<String> = ALL_INDEXES.iter().map(|s| s.to_string()).collect();
+    for (_, id, _) in targets {
+        let slug = slug_for_repo(id);
+        for family in FAMILIES {
+            indexes.push(repo_scoped_name(NS_PREFIX, &slug, family));
+        }
+    }
+    indexes.sort();
+    indexes.dedup();
+
+    tracing::info!(
+        meili_url,
+        version,
+        canonical = ALL_INDEXES.len(),
+        per_repo = indexes.len() - ALL_INDEXES.len(),
+        total = indexes.len(),
+        "apply-settings-only: starting"
+    );
+
+    let mut applied: u32 = 0;
+    let mut failed: Vec<(String, String)> = Vec::new();
+    for index in &indexes {
+        match client.ensure_index(index, &settings).await {
+            Ok(_) => {
+                applied += 1;
+                tracing::info!(index = %index, "apply-settings-only: ok");
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                tracing::warn!(index = %index, error = %msg, "apply-settings-only: failed");
+                failed.push((index.clone(), msg));
+            }
+        }
+    }
+
+    println!(
+        "apply-settings-only: version={version} applied={applied}/{total} failed={fail}",
+        total = indexes.len(),
+        fail = failed.len(),
+    );
+    if !failed.is_empty() {
+        for (idx, err) in &failed {
+            println!("  - {idx}: {err}");
+        }
+        anyhow::bail!(
+            "apply-settings-only: {} index/indexes failed (see log above)",
+            failed.len()
+        );
+    }
+    Ok(())
 }

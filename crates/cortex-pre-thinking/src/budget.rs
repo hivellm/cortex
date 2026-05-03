@@ -215,6 +215,7 @@ mod tests {
                 graph_neighbors: neighbours,
                 similar_turns: turns,
                 past_sessions: Vec::new(),
+                consolidations: Vec::new(),
             },
             laws_active: vec![LawRef {
                 id: "LAW-007".into(),

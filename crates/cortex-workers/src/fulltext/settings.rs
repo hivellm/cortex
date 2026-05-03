@@ -45,16 +45,58 @@ mod tests {
     #[test]
     fn baked_in_settings_parse() {
         let v = settings_v1_json().expect("v1 settings parse");
-        // Phase11i §3.3 — version bumped to v3 so the
+        // Phase11j §3.4 — version bumped to v4 so the
         // settings-version watcher triggers a re-index pass that
-        // adds `model` / `tool` / `session_id` / `outcome` to the
-        // filterable set. Phase11b's v2 introduced `path_prefixes`.
-        assert_eq!(v["version"], "v3");
+        // adds the per-consolidation `ext.consolidation.*`
+        // filterable + sortable + searchable fields the dashboard
+        // grain/depth/model facets read. Phase11i's v3 added
+        // `model` / `tool` / `session_id` / `outcome`; phase11b's v2
+        // introduced `path_prefixes`.
+        assert_eq!(v["version"], "v4");
         assert!(v["searchableAttributes"].as_array().unwrap().len() >= 4);
         assert!(v["sortableAttributes"]
             .as_array()
             .unwrap()
             .contains(&Value::String("ts".to_string())));
+    }
+
+    #[test]
+    fn consolidation_axis_fields_are_filterable_and_sortable() {
+        // Phase11j §3.4 — the dashboard memory view filters the
+        // consolidations lane on grain / depth / model and sorts on
+        // consolidation_id. Pin the contract so a future settings
+        // rev cannot drop one without surfacing here first.
+        let v = settings_v1_json().expect("v1 settings parse");
+        let filterable = v["filterableAttributes"]
+            .as_array()
+            .expect("filterableAttributes is an array");
+        let sortable = v["sortableAttributes"]
+            .as_array()
+            .expect("sortableAttributes is an array");
+        let searchable = v["searchableAttributes"]
+            .as_array()
+            .expect("searchableAttributes is an array");
+        for required in [
+            "ext.consolidation.grain",
+            "ext.consolidation.depth",
+            "ext.consolidation.model",
+            "ext.consolidation.consolidation_id",
+        ] {
+            assert!(
+                filterable.contains(&Value::String(required.to_string())),
+                "filterableAttributes must include `{required}` for phase11j §3.4",
+            );
+            assert!(
+                sortable.contains(&Value::String(required.to_string())),
+                "sortableAttributes must include `{required}` for phase11j §3.4",
+            );
+        }
+        assert!(
+            searchable.contains(&Value::String(
+                "ext.consolidation.outcome_distribution".to_string()
+            )),
+            "searchableAttributes must include `ext.consolidation.outcome_distribution` for phase11j §3.4",
+        );
     }
 
     #[test]

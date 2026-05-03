@@ -92,6 +92,15 @@ pub const COLLECTION_KNOWLEDGE_FP32: &str = "cortex.knowledge.fp32";
 /// `rulebook_learn_capture`). Same shape as
 /// [`COLLECTION_KNOWLEDGE_FP32`].
 pub const COLLECTION_LEARNING_FP32: &str = "cortex.learning.fp32";
+/// phase11j — `Kind::Consolidation` summaries, hot tier (FP32 vectors).
+/// Holds the recent + Deep-depth consolidations the dashboard's
+/// "Consolidated context" lane reads. PQ-compressed sibling lives at
+/// [`COLLECTION_CONSOLIDATION_PQ`] for older Shallow consolidations.
+pub const COLLECTION_CONSOLIDATION_FP32: &str = "cortex.consolidation.fp32";
+/// phase11j — `Kind::Consolidation` summaries, warm tier
+/// (PQ-compressed). Demotion target for Shallow consolidations
+/// older than the consolidation-tier retention window.
+pub const COLLECTION_CONSOLIDATION_PQ: &str = "cortex.consolidation.pq";
 /// Cold fallback (binary-quantized).
 pub const COLLECTION_COLD_BINARY: &str = "cortex.cold.binary";
 
@@ -116,6 +125,10 @@ pub const INDEX_LAWS: &str = "cortex_laws";
 pub const INDEX_KNOWLEDGE: &str = "cortex_knowledge";
 /// phase10e — learning entries (implementation insights).
 pub const INDEX_LEARNINGS: &str = "cortex_learnings";
+/// phase11j — `Kind::Consolidation` summaries, single global index
+/// the dashboard's consolidations lane filters on. Per-repo scoping
+/// is handled by the `repo` filter inside the documents themselves.
+pub const INDEX_CONSOLIDATIONS: &str = "cortex_consolidations";
 
 /// Every known Meilisearch index.
 pub const ALL_INDEXES: &[&str] = &[
@@ -129,6 +142,7 @@ pub const ALL_INDEXES: &[&str] = &[
     INDEX_LAWS,
     INDEX_KNOWLEDGE,
     INDEX_LEARNINGS,
+    INDEX_CONSOLIDATIONS,
 ];
 
 // ---------- Nexus graph ----------

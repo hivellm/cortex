@@ -159,6 +159,27 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         encoding: "fp32",
         hnsw: HnswParams { m: 32, ef_search: 128 },
     },
+    // phase11j — consolidation summaries. Hot tier carries the recent
+    // window + every Deep-depth consolidation (high-recall HNSW so the
+    // pre-thinking renderer's "Consolidated context" lane finds them
+    // on tight similarity gates); warm tier holds older Shallow
+    // consolidations for cost.
+    CollectionSchema {
+        name: crate::names::COLLECTION_CONSOLIDATION_FP32,
+        description: "Consolidation summaries (hot, recent + Deep)",
+        tier: CollectionTier::Hot,
+        dim: EMBED_DIM,
+        encoding: "fp32",
+        hnsw: HnswParams { m: 48, ef_search: 256 },
+    },
+    CollectionSchema {
+        name: crate::names::COLLECTION_CONSOLIDATION_PQ,
+        description: "Consolidation summaries (warm, older Shallow)",
+        tier: CollectionTier::Warm,
+        dim: EMBED_DIM,
+        encoding: "pq",
+        hnsw: HnswParams { m: 16, ef_search: 64 },
+    },
     CollectionSchema {
         name: crate::names::COLLECTION_COLD_BINARY,
         description: "Binary-quantized fallback (any kind, >365 days)",
@@ -169,3 +190,40 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
     },
 ];
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::names::{COLLECTION_CONSOLIDATION_FP32, COLLECTION_CONSOLIDATION_PQ};
+
+    #[test]
+    fn consolidation_collections_are_declared() {
+        // Phase11j §3.5 — both tiers must be present so the embedder
+        // worker can `ensure_collection` them at boot. Drop here is
+        // load-bearing for the consolidator → Vectorizer write path.
+        let names: Vec<&str> = COLLECTIONS.iter().map(|c| c.name).collect();
+        assert!(
+            names.contains(&COLLECTION_CONSOLIDATION_FP32),
+            "COLLECTIONS must include cortex.consolidation.fp32",
+        );
+        assert!(
+            names.contains(&COLLECTION_CONSOLIDATION_PQ),
+            "COLLECTIONS must include cortex.consolidation.pq",
+        );
+    }
+
+    #[test]
+    fn consolidation_hot_tier_uses_recall_tuned_hnsw() {
+        // Phase11j §3.5 — pre-thinking's "Consolidated context" lane
+        // ranks consolidations on tight similarity gates; the hot
+        // collection mirrors decisions/analyses recall settings
+        // (m=48, ef_search=256) so the lane returns the right rows.
+        let hot = COLLECTIONS
+            .iter()
+            .find(|c| c.name == COLLECTION_CONSOLIDATION_FP32)
+            .expect("hot consolidation collection declared");
+        assert_eq!(hot.tier, CollectionTier::Hot);
+        assert_eq!(hot.encoding, "fp32");
+        assert_eq!(hot.hnsw.m, 48);
+        assert_eq!(hot.hnsw.ef_search, 256);
+    }
+}

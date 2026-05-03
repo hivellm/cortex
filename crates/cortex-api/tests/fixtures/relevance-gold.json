@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Phase11i §4.4 — hand-curated relevance gold-set scoped at the cortex-api IT (rel-001 .. rel-030). 10 pre_change_context · 5 decision_lookup · 10 similar_problems · 3 law_check · 2 free_search. Each entry pairs a query/intent/scope with 1-3 acceptable hits — recall@10 counts the query as satisfied when ANY entry from `expected_doc_ids` appears in the top-10 fused snippets. The matcher is identical to cortex-cli's harness: composite ids, exact `repo`/`path`/`symbol`/`content_hash`/`collection`, OR substring of `path` / `symbol`. Curators should keep the substring shape (partial paths) so the fixture survives chunk-hash drift.",
+  "description": "Phase11i §4.4 — hand-curated relevance gold-set scoped at the cortex-api IT (rel-001 .. rel-040 from phase11i/k, rel-041 .. rel-050 from phase11j §4.5 — consolidations lane). 10 pre_change_context · 5 decision_lookup · 10 similar_problems · 3 law_check · 2 free_search · 4 phase11k pre_change_context · 3 phase11k decision_lookup · 2 phase11k similar_problems · 1 phase11k free_search · 3 phase11j pre_change_context · 3 phase11j similar_problems · 2 phase11j decision_lookup · 2 phase11j free_search. Each entry pairs a query/intent/scope with 1-3 acceptable hits — recall@10 counts the query as satisfied when ANY entry from `expected_doc_ids` appears in the top-10 fused snippets. The matcher is identical to cortex-cli's harness: composite ids, exact `repo`/`path`/`symbol`/`content_hash`/`collection`, OR substring of `path` / `symbol`. Curators should keep the substring shape (partial paths) so the fixture survives chunk-hash drift.",
   "queries": [
     {
       "id": "rel-001",
@@ -359,6 +359,114 @@
         "crates/cortex-workers/src/graph/analyzer/patch_builder.rs"
       ],
       "notes": "phase11k §6.4 — pending sentinel rewrite (phase11l §5.1)."
+    },
+
+    {
+      "id": "rel-041",
+      "intent": "pre_change_context",
+      "query": "consolidation grain enum session topic decision_trace",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-core/src/events.rs",
+        "crates/cortex-consolidator/src"
+      ],
+      "notes": "phase11j §4.5 — exercises the consolidations vector lane via a kind-discriminator query."
+    },
+    {
+      "id": "rel-042",
+      "intent": "pre_change_context",
+      "query": "consolidator orchestrator dispatching session topic decision producers",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-consolidator/src/orchestrator.rs",
+        "crates/cortex-consolidator/src/producer"
+      ],
+      "notes": "phase11j §4.5 — orchestrator → producer fan-out path."
+    },
+    {
+      "id": "rel-043",
+      "intent": "pre_change_context",
+      "query": "anthropic summariser haiku and opus pricing micro cents",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-consolidator/src/summariser.rs"
+      ],
+      "notes": "phase11j §4.5 — summariser cost helpers + AnthropicSummariser."
+    },
+    {
+      "id": "rel-044",
+      "intent": "similar_problems",
+      "query": "deduping consolidations across re runs with stable consolidation_id",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-consolidator/src/producer",
+        "crates/cortex-consolidator/src/orchestrator.rs"
+      ],
+      "notes": "phase11j §4.5 — derive_consolidation_id contract + idempotent re-run."
+    },
+    {
+      "id": "rel-045",
+      "intent": "similar_problems",
+      "query": "cost ledger budget cap and per grain accumulation for consolidator",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-consolidator/src/cost_telemetry.rs"
+      ],
+      "notes": "phase11j §4.5 — cost_telemetry guardrail surface."
+    },
+    {
+      "id": "rel-046",
+      "intent": "similar_problems",
+      "query": "topic cluster minimum size three for hdbscan consolidation producer",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-consolidator/src/producer/topic.rs"
+      ],
+      "notes": "phase11j §4.5 — TopicCluster + MIN_CLUSTER_SIZE contract."
+    },
+    {
+      "id": "rel-047",
+      "intent": "decision_lookup",
+      "query": "why opus auto promotion on decision trace consolidation grain",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-consolidator/src/orchestrator.rs",
+        "crates/cortex-consolidator/src/producer/decision_trace.rs"
+      ],
+      "notes": "phase11j §4.5 — ProducerSelection::for_trigger Opus auto-promote."
+    },
+    {
+      "id": "rel-048",
+      "intent": "decision_lookup",
+      "query": "scope variant must match grain validator rule for consolidation",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-core/src/validate.rs",
+        "crates/cortex-core/src/events.rs"
+      ],
+      "notes": "phase11j §4.5 — validate_consolidation_payload cross-field rule."
+    },
+    {
+      "id": "rel-049",
+      "intent": "free_search",
+      "query": "consolidations dashboard meili index v4 settings push",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/settings/settings.v1.json",
+        "crates/cortex-workers/src/fulltext/settings.rs"
+      ],
+      "notes": "phase11j §4.5 — v3→v4 settings bump + ext.consolidation.* axis fields."
+    },
+    {
+      "id": "rel-050",
+      "intent": "free_search",
+      "query": "consolidated context section pre thinking renderer fallback past sessions",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-pre-thinking/src/formatter.rs",
+        "docs/specs/12-pre-thinking-injection.md"
+      ],
+      "notes": "phase11j §4.5 — Consolidated context section + §4.3 fallback rule."
     }
   ]
 }

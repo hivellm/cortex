@@ -24,7 +24,7 @@
 //! workspace root is unset or unreachable the loader yields empty
 //! slices — cold-stack dev keeps booting.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -258,6 +258,23 @@ pub struct TaskLoader {
     repo: Option<String>,
     /// Cached rows + the `Instant` of the last full scan.
     cache: RwLock<Cached>,
+    /// Per-id cache of parsed `TaskDetail` bodies (proposal_md +
+    /// checklist + specs listing). Keyed by task id; invalidated
+    /// whenever the underlying `proposal.md` / `tasks.md` /
+    /// `.metadata.json` mtimes drift from the stamps captured at
+    /// fetch time. Avoids re-reading those files (slow on Windows
+    /// bind mounts) on every dashboard click.
+    details: RwLock<HashMap<String, CachedDetail>>,
+}
+
+#[derive(Clone)]
+struct CachedDetail {
+    /// Directory we stamped + parsed when filling this entry. Stored
+    /// so the hot path can `read_stamps(dir)` without first walking
+    /// the full row index to map id → dir.
+    dir: PathBuf,
+    stamps: FileStamps,
+    detail: TaskDetail,
 }
 
 /// Internal cache state.
@@ -300,6 +317,7 @@ impl TaskLoader {
             ttl: DEFAULT_TTL,
             repo: None,
             cache: RwLock::new(Cached::default()),
+            details: RwLock::new(HashMap::new()),
         }
     }
 
@@ -494,6 +512,22 @@ impl TaskLoader {
     /// active and archived, the active row wins and `also_archived`
     /// is set to `true` on the response.
     pub fn detail(&self, id: &str) -> Option<TaskDetail> {
+        // HOT PATH: if we already cached this id, stat just its dir
+        // (3 files) and return immediately when the stamps match.
+        // Avoids the rows() sweep that stats every task in the tree
+        // (~2610 stats for 870 tasks × 3 files) on every click —
+        // catastrophic on Windows bind mounts.
+        if let Ok(cache) = self.details.read() {
+            if let Some(entry) = cache.get(id) {
+                let current = read_stamps(&entry.dir);
+                if stamps_match(&entry.stamps, &current) {
+                    return Some(entry.detail.clone());
+                }
+            }
+        }
+
+        // COLD PATH: refresh the full row index, find the chosen row,
+        // re-read its files, and store the parsed detail in the cache.
         let snapshot = self.rows();
         let active = snapshot
             .iter()
@@ -505,17 +539,29 @@ impl TaskLoader {
             .cloned();
         let chosen = active.clone().or_else(|| archived.clone())?;
         let also_archived = active.is_some() && archived.is_some();
+        let current = read_stamps(&chosen.dir);
         let proposal_md = read_to_string(&chosen.dir.join("proposal.md")).unwrap_or_default();
         let tasks_md = read_to_string(&chosen.dir.join("tasks.md")).unwrap_or_default();
         let checklist = parse_checklist(&tasks_md);
         let specs = list_specs(&chosen.dir);
-        Some(TaskDetail {
+        let detail = TaskDetail {
             row: chosen.row,
             proposal_md,
             checklist,
             specs,
             also_archived,
-        })
+        };
+        if let Ok(mut cache) = self.details.write() {
+            cache.insert(
+                id.to_string(),
+                CachedDetail {
+                    dir: chosen.dir,
+                    stamps: current,
+                    detail: detail.clone(),
+                },
+            );
+        }
+        Some(detail)
     }
 }
 
@@ -1286,6 +1332,31 @@ mod tests {
         assert!(!detail.also_archived);
         assert!(detail.proposal_md.contains("Widen"));
         assert_eq!(detail.checklist.len(), 1);
+    }
+
+    #[test]
+    fn detail_cache_returns_same_body_on_repeat_calls() {
+        // Phase11m+ — verify the cache code path doesn't drop data
+        // between calls. The repeat call must yield identical
+        // proposal_md / checklist regardless of whether disk was
+        // re-read or the cache served the value.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let active = root.join("tasks/phase1_demo");
+        fs::create_dir_all(&active).unwrap();
+        fs::write(active.join("proposal.md"), "ORIGINAL BODY\n").unwrap();
+        fs::write(active.join("tasks.md"), "## 1. Foo\n- [ ] one\n").unwrap();
+        fs::write(
+            active.join(".metadata.json"),
+            r#"{"status":"pending","createdAt":"2026-04-01T00:00:00Z","updatedAt":"2026-04-01T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let loader = TaskLoader::new(root).with_ttl(Duration::from_millis(0));
+        let first = loader.detail("phase1_demo").expect("first detail");
+        let second = loader.detail("phase1_demo").expect("second detail");
+        assert_eq!(first.proposal_md, second.proposal_md);
+        assert_eq!(first.checklist.len(), second.checklist.len());
+        assert_eq!(first.proposal_md.trim(), "ORIGINAL BODY");
     }
 
     #[test]

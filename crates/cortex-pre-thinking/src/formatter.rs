@@ -38,6 +38,11 @@ pub mod section_caps {
     /// preview. Spec calls for an 80-char clip; we cap at the byte
     /// equivalent of 80 ASCII chars to keep the section compact.
     pub const PAST_SESSION_PROMPT_BYTES: usize = 80;
+    /// Phase11j §4.2 — max consolidation entries the
+    /// "Consolidated context" section renders. Spec calls for top-3
+    /// by similarity; the consolidations replace the past-sessions
+    /// section when ≥ 1 hit lands.
+    pub const CONSOLIDATIONS: usize = 3;
     /// Max bytes per snippet text.
     pub const SNIPPET_BYTES: usize = 1024;
     /// Max bytes per decision body.
@@ -69,6 +74,8 @@ pub struct FormatOptions {
     /// Per-prompt byte cap for the past-sessions section
     /// (phase11i §4.1).
     pub past_session_prompt_byte_cap: usize,
+    /// Maximum number of consolidations to render (phase11j §4.2).
+    pub consolidations_cap: usize,
     /// Maximum number of snippets to render.
     pub snippets_cap: usize,
     /// Maximum number of graph neighbours to render.
@@ -89,6 +96,7 @@ impl Default for FormatOptions {
             similar_turns_cap: section_caps::SIMILAR_TURNS,
             past_sessions_cap: section_caps::PAST_SESSIONS,
             past_session_prompt_byte_cap: section_caps::PAST_SESSION_PROMPT_BYTES,
+            consolidations_cap: section_caps::CONSOLIDATIONS,
             snippets_cap: section_caps::SNIPPETS,
             graph_cap: section_caps::GRAPH_NEIGHBORS,
             snippet_trim: SnippetTrim::Full,
@@ -108,17 +116,31 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
         .similar_turns
         .len()
         .min(opts.similar_turns_cap);
-    let past_sessions_count = response
+    let consolidations_count = response
         .results
-        .past_sessions
+        .consolidations
         .len()
-        .min(opts.past_sessions_cap);
+        .min(opts.consolidations_cap);
+    // Phase11j §4.3 — `Past sessions` falls back when zero
+    // consolidations match. Computing both counts up-front so the
+    // empty-bundle short-circuit accounts for either section
+    // landing.
+    let past_sessions_count = if consolidations_count > 0 {
+        0
+    } else {
+        response
+            .results
+            .past_sessions
+            .len()
+            .min(opts.past_sessions_cap)
+    };
     let snippets_count = response.results.snippets.len().min(opts.snippets_cap);
     let graph_count = response.results.graph_neighbors.len().min(opts.graph_cap);
 
     if laws_count == 0
         && decisions_count == 0
         && turns_count == 0
+        && consolidations_count == 0
         && past_sessions_count == 0
         && snippets_count == 0
         && graph_count == 0
@@ -203,6 +225,42 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
                 date = date,
                 model = t.model,
                 summary = trim_one_line(&t.summary),
+            )
+            .ok();
+        }
+        out.push('\n');
+    }
+
+    // Phase11j §4.2 — "Consolidated context": one line per
+    // consolidation, ordered by upstream similarity. Format pins
+    // `grain/id · date · ✓|✗|⚠ · title` so the agent gets the
+    // distilled lesson without reading every turn that fed it.
+    // When ≥ 1 consolidation matches, this section replaces
+    // "Past sessions" (§4.3 fallback rule); otherwise it is
+    // skipped and "Past sessions" runs as before.
+    if consolidations_count > 0 {
+        writeln!(out, "## Consolidated context ({consolidations_count})").ok();
+        for (i, c) in response
+            .results
+            .consolidations
+            .iter()
+            .take(consolidations_count)
+            .enumerate()
+        {
+            let date = format_ts_date(c.ts);
+            writeln!(
+                out,
+                "{}. {grain}/{id} · {date_field} · {glyph} · {title}",
+                i + 1,
+                grain = c.grain,
+                id = c.consolidation_id,
+                date_field = if date.is_empty() {
+                    "—".to_string()
+                } else {
+                    date
+                },
+                glyph = outcome_glyph(c.outcome.as_deref()),
+                title = trim_one_line(&c.title),
             )
             .ok();
         }
@@ -548,6 +606,7 @@ mod tests {
                     outcome: Some("success".into()),
                 }],
                 past_sessions: Vec::new(),
+                consolidations: Vec::new(),
             },
             laws_active: vec![LawRef {
                 id: "LAW-012".into(),
@@ -734,6 +793,135 @@ mod tests {
             turn_count,
             score,
         }
+    }
+
+    fn consolidation(
+        id: &str,
+        grain: &str,
+        ts: i64,
+        title: &str,
+        outcome: Option<&str>,
+        score: f64,
+    ) -> cortex_api::ConsolidationRef {
+        cortex_api::ConsolidationRef {
+            consolidation_id: id.into(),
+            grain: grain.into(),
+            ts,
+            title: title.into(),
+            outcome: outcome.map(|s| s.to_string()),
+            score,
+        }
+    }
+
+    #[test]
+    fn consolidated_context_section_renders_when_present() {
+        // Phase11j §4.2 — `Consolidated context` section format pin:
+        // `grain/id · YYYY-MM-DD · ✓|✗|⚠ · title`. One line per
+        // consolidation, top-3 by similarity (cap at
+        // `consolidations_cap`).
+        let mut resp = populated_response();
+        resp.results.consolidations = vec![
+            consolidation(
+                "cons-ses-aaa",
+                "session",
+                1_715_000_000_000,
+                "Auth refactor session",
+                Some("success"),
+                0.92,
+            ),
+            consolidation(
+                "cons-top-bbb",
+                "topic",
+                1_716_000_000_000,
+                "JWT rotation pattern",
+                Some("partial"),
+                0.85,
+            ),
+        ];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(
+            bundle.contains("## Consolidated context (2)"),
+            "missing header in:\n{bundle}"
+        );
+        assert!(bundle.contains("session/cons-ses-aaa"));
+        assert!(bundle.contains("Auth refactor session"));
+        assert!(bundle.contains("topic/cons-top-bbb"));
+    }
+
+    #[test]
+    fn consolidations_replace_past_sessions_when_at_least_one_matches() {
+        // Phase11j §4.3 — fallback rule: when a consolidation
+        // matches, the past-sessions section is suppressed; when
+        // none match, past-sessions runs as before.
+        let mut resp = populated_response();
+        resp.results.consolidations = vec![consolidation(
+            "cons-ses-x",
+            "session",
+            1_715_000_000_000,
+            "single match",
+            None,
+            0.7,
+        )];
+        resp.results.past_sessions = vec![past_session(
+            "sess-Y",
+            1_715_000_000_000,
+            "prompt",
+            3,
+            0.6,
+        )];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("Consolidated context"));
+        assert!(
+            !bundle.contains("Past sessions"),
+            "past sessions must be suppressed when consolidations are present:\n{bundle}"
+        );
+    }
+
+    #[test]
+    fn past_sessions_falls_back_when_no_consolidations_match() {
+        // Phase11j §4.3 — empty consolidations → renderer falls back
+        // to the original past-sessions block.
+        let mut resp = populated_response();
+        resp.results.consolidations = Vec::new();
+        resp.results.past_sessions = vec![past_session(
+            "sess-fallback",
+            1_715_000_000_000,
+            "prompt",
+            2,
+            0.5,
+        )];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(!bundle.contains("Consolidated context"));
+        assert!(bundle.contains("## Past sessions (1)"));
+        assert!(bundle.contains("sess-fallback"));
+    }
+
+    #[test]
+    fn consolidations_cap_caps_section_size() {
+        // Spec calls for top-3; the cap is configurable and the
+        // renderer takes the first N entries the upstream surfaced.
+        let mut resp = populated_response();
+        resp.results.consolidations = (0..6)
+            .map(|i| {
+                consolidation(
+                    &format!("cons-ses-{i}"),
+                    "session",
+                    1_715_000_000_000,
+                    "title",
+                    None,
+                    0.5,
+                )
+            })
+            .collect();
+        let opts = FormatOptions {
+            consolidations_cap: 2,
+            ..Default::default()
+        };
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(bundle.contains("## Consolidated context (2)"));
+        assert!(bundle.contains("cons-ses-0"));
+        assert!(bundle.contains("cons-ses-1"));
+        assert!(!bundle.contains("cons-ses-2"));
     }
 
     #[test]

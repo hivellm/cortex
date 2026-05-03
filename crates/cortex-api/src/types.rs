@@ -523,6 +523,41 @@ pub struct ResultsBag {
     /// degrades on cold caches.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub past_sessions: Vec<PastSession>,
+    /// Phase11j §4.2 — consolidated-context overlay. When ≥ 1
+    /// consolidation matches the query, the renderer's
+    /// "Consolidated context" section replaces "Past sessions"
+    /// and lists the top-3 by similarity. Falls back to
+    /// `past_sessions` when this is empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub consolidations: Vec<ConsolidationRef>,
+}
+
+/// Phase11j §4.2 — one consolidation entry surfaced under
+/// `results.consolidations`. Carries just the fields the
+/// pre-thinking renderer needs (id, grain, date, title, outcome
+/// glyph driver) — the full `ConsolidationPayload` lives in the
+/// upstream consolidator's storage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ConsolidationRef {
+    /// Stable consolidation id (`cons-ses-...`, `cons-top-...`,
+    /// `cons-dec-...`).
+    pub consolidation_id: String,
+    /// `session` / `topic` / `decision_trace` — drives the
+    /// `grain/id` prefix the renderer prints.
+    pub grain: String,
+    /// Consolidation timestamp (epoch ms; renderers convert to
+    /// `YYYY-MM-DD`).
+    pub ts: i64,
+    /// One-line title (≤ 80 chars by spec 11j §1).
+    pub title: String,
+    /// Dominant outcome from the source-event distribution.
+    /// Drives the renderer's outcome glyph (`✓` / `✗` / `⚠`).
+    /// Empty when the consolidation could not infer a dominant
+    /// outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// Similarity score that placed this entry in the top-N.
+    pub score: f64,
 }
 
 /// Convenience helper to build an empty response stamped with a fresh
