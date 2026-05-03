@@ -325,6 +325,20 @@ Cortex starts cold. The capture layer (§5.1) only sees *new* AI interactions �
 
 This bootstrap is a **one-time + incremental** ingestion job, separate from the live capture pipeline but sharing the same processing layer (§5.2) and storage backends.
 
+### 6.0 Tiered storage: raw → consolidation → Parquet archive
+
+Three tiers of derived state sit alongside the raw envelope corpus, each with a different cost / fidelity tradeoff:
+
+| Tier              | Source                                    | Storage                                         | Lifetime                          |
+|-------------------|-------------------------------------------|-------------------------------------------------|-----------------------------------|
+| **Raw events**    | Live capture + bootstrap                  | Vectorizer hot (`cortex.{turn,tool_call,…}.fp32`) + per-repo Meili indexes + Nexus | 0-90 days hot, 90-365 days warm (PQ), > 365 days cold (binary) |
+| **Consolidations** (phase11j) | LLM summarisation of raw windows | Vectorizer `cortex.consolidation.{fp32,pq}` + global `cortex_consolidations` Meili index | Same hot/warm/cold schedule as raw |
+| **Parquet archive** | Bootstrap + every live envelope routed through `cortex.events.{raw,bootstrap}` | zstd-NDJSON partitions on local disk under `$CORTEX_ARCHIVE_ROOT` | Indefinite — durable replay source for hot/warm/cold rebuilds |
+
+Consolidations distill many raw events into one summary the agent can read in a single line. The pre-thinking renderer's `## Consolidated context` section (spec 12 §Output) reads them through the same query lanes the raw retrieval uses; nothing in the pipeline knows the difference except the dedicated index / collection (`cortex_consolidations`, `cortex.consolidation.fp32` + `.pq`) and the `kind = consolidation` filter. See [`docs/cortex/consolidation-tuning.md`](cortex/consolidation-tuning.md) for the operator handbook (cost guardrails, fidelity threshold tuning, prompt template iteration).
+
+The Parquet archive is the durable source for everything below it: a tier rebuild walks the matching partition window, streams envelopes back through `cortex.events.bootstrap`, and lets the standard processing layer re-populate Vectorizer + Meili + Nexus. The pruner (phase11j §5, blocked on the upstream Vectorizer SDK gaining `move_to_collection` + `delete_vectors` — tracked by `phase11o_vectorizer_demotion_api`) is the demotion driver that walks active consolidations, resolves `source_event_id` lifetimes, and moves events between hot / warm / cold per the schedule above. Until the SDK ships, the Parquet archive carries the only complete cold-tier representation; the Vectorizer + Meili tiers grow monotonically.
+
 ### 6.1 What gets indexed
 
 For each repo under `e:/HiveLLM/`:

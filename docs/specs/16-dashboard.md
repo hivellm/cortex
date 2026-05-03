@@ -30,7 +30,7 @@ A single web UI that surfaces everything Cortex captures: live session timeline,
 |---------------------------|--------------------------------------|
 | `/`                       | Overview (today's activity, counters) |
 | `/timeline`               | Live session timeline (SSE)           |
-| `/memory`                 | Faceted memory browser                |
+| `/memory`                 | Faceted memory browser (phase11j: consolidations lane with `Grain` / `Depth` / `Model` filter chips, sortable by date or `consolidation_id`) |
 | `/decisions`              | Decision register                     |
 | `/decisions/:id`          | Decision detail + supersession graph  |
 | `/laws`                   | Law dashboard                         |

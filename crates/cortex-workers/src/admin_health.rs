@@ -218,8 +218,11 @@ mod tests {
 
     #[test]
     fn freshness_state_degraded_when_stale() {
+        // `DEFAULT_FRESHNESS_DEGRADED_SECS` was bumped 120 → 600 in
+        // `cortex-health` after this test landed; clear the new
+        // threshold by ~2x so the assertion stays load-bearing.
         let stale = chrono::Utc::now()
-            .checked_sub_signed(chrono::Duration::seconds(120))
+            .checked_sub_signed(chrono::Duration::seconds(1_300))
             .unwrap()
             .timestamp_millis()
             .max(0) as u64;
