@@ -8,6 +8,10 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 > First substantive cut of Cortex — workspace, ingestion bus, classifier worker, the four indexers, query API, dashboard backend + GUI, MCP server, and Claude Code plugin. Spec coverage: **13/18 🟢**, **5/18 🟡**.
 
+### Changed
+
+- **phase11s — workers consolidation merge.** Folded five sibling crates (`cortex-classifier`, `cortex-ingestion`, `cortex-claude-archive`, `cortex-consolidator`, `cortex-retention`) into `cortex-workers` as modules under `src/<area>/`. Workspace member count: **14 → 9**. Bin names preserved on the operator-facing surface. Heavy claude-archive deps (`indicatif`, `sysinfo`, `ignore`) gated behind a new `claude-archive` Cargo feature (default OFF); other merged areas link unconditionally because their deps were already shared with workers. New operator bin `cortex-retention-sweep` pins the systemd / docker bin-name slot for the tier-transition sweep (dry-run-only today; `cortex-ops sweep` continues to host the live LiveVectorizerOps adapter until a follow-up task lifts it). The duplicate `cortex-consolidator` bin (one in `cortex-cli`, one in `cortex-consolidator`) was reconciled into a single unified bin under `cortex-workers/src/bin/cortex-consolidator.rs` exposing all 5 subcommands (`estimate` + `run-session` + `run-topic` + `run-decision` + `nightly`). See [ADR-007](.rulebook/decisions/007-cortex-workers-as-the-default-host-for-worker-style-daemons.md) and [`docs/cortex/workers-modules.md`](docs/cortex/workers-modules.md) for the module → bin map.
+
 ### Added
 
 #### Foundation (Phase 0)
