@@ -177,13 +177,30 @@ pub fn render_edge_merge(
         esc_to = cypher_str_escape(to_key),
     );
     if !props.is_empty() {
-        stmt.push_str(" SET ");
+        // Phase11p hotfix — Nexus 2.1's Cypher engine does NOT bind
+        // the relationship variable `r` for a bare `SET r.X = ...`
+        // clause that follows a MERGE: the engine raises
+        // `Unknown variable 'r' in SET clause`. Live worker logs on
+        // 2026-05-03 showed every TOUCHED / IN_REPO edge MERGE with
+        // properties failing this way (~50 % of graph writes).
+        //
+        // Workaround: use the MERGE-scoped `ON CREATE SET` /
+        // `ON MATCH SET` clauses, which Nexus DOES bind correctly.
+        // Both branches set the same props so the property snapshot
+        // is consistent regardless of whether MERGE created or
+        // matched the edge — equivalent to the original `SET r.X`
+        // semantics.
+        let mut props_clause = String::with_capacity(props.len() * 32);
         for (i, (k, v)) in props.iter().enumerate() {
             if i > 0 {
-                stmt.push_str(", ");
+                props_clause.push_str(", ");
             }
-            let _ = write!(stmt, "r.{k} = {}", render_value(v));
+            let _ = write!(props_clause, "r.{k} = {}", render_value(v));
         }
+        let _ = write!(
+            stmt,
+            " ON CREATE SET {props_clause} ON MATCH SET {props_clause}"
+        );
     }
     stmt.push_str(" RETURN count(*) AS written");
     stmt
@@ -537,7 +554,11 @@ mod tests {
         );
         assert!(stmt.contains("MATCH (a:Session { id: 's1' }), (b:Turn { id: 't1' })"));
         assert!(stmt.contains("MERGE (a)-[r:HAS_TURN]->(b)"));
-        assert!(stmt.contains("SET r.at = 1714200000000"));
+        // Phase11p hotfix — use ON CREATE / ON MATCH SET because
+        // Nexus 2.1 does not bind `r` for a bare `SET r.X` after
+        // MERGE (raises "Unknown variable 'r' in SET clause").
+        assert!(stmt.contains("ON CREATE SET r.at = 1714200000000"));
+        assert!(stmt.contains("ON MATCH SET r.at = 1714200000000"));
         assert!(stmt.ends_with("RETURN count(*) AS written"));
     }
 

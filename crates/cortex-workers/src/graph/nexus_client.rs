@@ -533,15 +533,22 @@ fn render_edge_merge(edge: &EdgeOp) -> String {
         rt = edge.edge_type,
     );
     if !edge.props.is_empty() {
-        cy.push_str(" SET ");
+        // Phase11p hotfix — Nexus 2.1 raises
+        // `Unknown variable 'r' in SET clause` when SET follows
+        // MERGE without scoping through ON CREATE / ON MATCH.
+        // Mirror the workaround in `cypher::render_edge_merge`.
+        let mut props_clause = String::new();
         let mut first = true;
         for (k, v) in &edge.props {
             if !first {
-                cy.push_str(", ");
+                props_clause.push_str(", ");
             }
             first = false;
-            cy.push_str(&format!("r.{k} = {}", value_to_cypher_literal(v)));
+            props_clause.push_str(&format!("r.{k} = {}", value_to_cypher_literal(v)));
         }
+        cy.push_str(&format!(
+            " ON CREATE SET {props_clause} ON MATCH SET {props_clause}"
+        ));
     }
     cy.push_str(" RETURN count(r) AS written");
     cy
