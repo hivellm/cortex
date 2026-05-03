@@ -46,6 +46,7 @@ exposes:
 - `/v1/dashboard/trust`
 - `/v1/dashboard/conversations`, `/v1/dashboard/conversations/{session_id}`
 - `/v1/dashboard/handoffs`
+- `/v1/dashboard/stream` (SSE — dashboard delta events; spec 21)
 
 Conversation detail goes through the [`analyzer`](src/analyzer.rs)
 module, which calls Sonnet (CLI when on PATH, direct Anthropic API
@@ -63,6 +64,8 @@ otherwise) to produce a cross-event session summary.
 | `CORTEX_API_SYNAP_URL`       | `http://127.0.0.1:17003`           | Synap base URL (for the SSE timeline bridge).          |
 | `CORTEX_ANALYZER_MODEL`      | `claude-sonnet-4-6`                | Sonnet model id used by the cross-event analyzer.      |
 | `CORTEX_ANALYZER_API_KEY`    | (none)                             | Falls back to `ANTHROPIC_API_KEY`. Skips CLI when set. |
+| `CORTEX_DASHBOARD_WATCH`     | `1`                                | Spec 21 — set `0` to disable the `.rulebook/` filesystem watcher feeding `/v1/dashboard/stream`. |
+| `CORTEX_DASHBOARD_PUBLISH`   | `1`                                | Spec 21 — gates the MCP-side publisher (read by `cortex-mcp-server`). |
 
 ## Run
 

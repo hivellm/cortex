@@ -19,13 +19,14 @@ export function DecisionsView() {
   const { data: allRows } = useQuery({
     queryKey: [connKey, "decisions", "all"],
     queryFn: () => api.decisions(),
-    refetchInterval: 30_000,
+    // Spec 21 — useDashboardStream pushes on decision.changed.
+    refetchInterval: 300_000,
   });
 
   const { data, isLoading, error } = useQuery({
     queryKey: [connKey, "decisions", repoFilter || "all"],
     queryFn: () => api.decisions(repoFilter || undefined),
-    refetchInterval: 10_000,
+    refetchInterval: 300_000,
     refetchIntervalInBackground: true,
   });
 

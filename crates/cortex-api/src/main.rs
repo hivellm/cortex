@@ -544,6 +544,7 @@ async fn main() -> Result<()> {
     //
     // Falls back to `<cwd>/.rulebook` so `cargo run` from the repo
     // root just works on a single-project deployment.
+    let mut rulebook_roots: Vec<PathBuf> = Vec::new();
     let task_loaders: Vec<cortex_api::TaskLoader> = if let Ok(roots) =
         std::env::var("CORTEX_RULEBOOK_ROOTS")
     {
@@ -563,6 +564,7 @@ async fn main() -> Result<()> {
                 repo_slug = ?slug,
                 "tasks loader: registered project"
             );
+            rulebook_roots.push(p.clone());
             let mut loader = cortex_api::TaskLoader::new(p);
             if let Some(s) = slug {
                 loader = loader.with_repo(s);
@@ -595,6 +597,7 @@ async fn main() -> Result<()> {
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
             .map(|s| s.to_ascii_lowercase());
+        rulebook_roots.push(rulebook_root.clone());
         let mut loader = cortex_api::TaskLoader::new(rulebook_root);
         if let Some(s) = slug {
             loader = loader.with_repo(s);
@@ -604,6 +607,46 @@ async fn main() -> Result<()> {
         task_loaders
     };
     let tasks = StdArc::new(cortex_api::MultiTaskLoader::new(task_loaders));
+
+    // Phase11m §2.4 — dashboard event bus + filesystem watcher per root.
+    // Watcher publishes `DashboardEvent`s (TaskChanged / HandoffAppended /
+    // DecisionChanged / KnowledgeAdded) into the bus; SSE subscribers fan
+    // them out to GUI clients. Watchers are gated by `CORTEX_DASHBOARD_WATCH`
+    // (default `1`) so cold-stack tests can opt out without unsetting the
+    // root env vars.
+    let dashboard_bus = cortex_api::dashboard_watcher::DashboardEventBus::new();
+    let watch_enabled = std::env::var("CORTEX_DASHBOARD_WATCH")
+        .map(|v| v != "0")
+        .unwrap_or(true);
+    let mut watcher_handles: Vec<cortex_api::dashboard_watcher::WatcherHandle> = Vec::new();
+    if watch_enabled {
+        for root in &rulebook_roots {
+            match cortex_api::dashboard_watcher::spawn_watcher(root.clone(), dashboard_bus.clone())
+            {
+                Ok(h) => {
+                    tracing::info!(
+                        rulebook_root = %root.display(),
+                        "dashboard watcher: started"
+                    );
+                    watcher_handles.push(h);
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        rulebook_root = %root.display(),
+                        error = %err,
+                        "dashboard watcher: failed to start (push updates fall back to MCP path only)"
+                    );
+                }
+            }
+        }
+    } else {
+        tracing::info!("dashboard watcher: disabled by CORTEX_DASHBOARD_WATCH=0");
+    }
+    // Keep watchers alive for the daemon lifetime. Leaking is the right
+    // shape here — the process owns them until it exits, and any other
+    // hold pattern would force every downstream caller to thread the
+    // handles through just to satisfy the borrow checker.
+    Box::leak(Box::new(watcher_handles));
 
     // SQLite metadata store powering `series.classifier_cost_usd_today`.
     // Opened best-effort — when the file is unreachable (first boot
@@ -635,6 +678,7 @@ async fn main() -> Result<()> {
         tasks,
         metadata,
         loader_metrics: loader_metrics.clone(),
+        events_bus: dashboard_bus,
     };
 
     // Phase11i §3.6 — load relevance.toml first so the env-derived

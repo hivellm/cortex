@@ -117,25 +117,30 @@ export function TasksView() {
   const summaryQ = useQuery({
     queryKey: [connKey, "tasks-summary", "view"],
     queryFn: () => api.tasksSummary(),
-    refetchInterval: 30_000,
+    // Spec 21 — useDashboardStream pushes invalidations on every write;
+    // this interval is just the safety net for the SSE-down window.
+    refetchInterval: 300_000,
     refetchIntervalInBackground: true,
   });
 
   const summary = summaryQ.data;
 
-  // Pull the full list once (capped at 500 rows — current corpus
-  // sits at ~96, plenty of headroom). Filters are applied client
-  // side so the chip toggles feel instant.
+  // Pull the full list once. Limit is intentionally well above the
+  // current corpus (~870) so client-side chip filters operate on the
+  // complete set; if the corpus ever crosses this, switch to paged
+  // fetch instead of bumping the cap blindly.
   const listQ = useQuery({
     queryKey: [connKey, "tasks", "all"],
     queryFn: () =>
       api.tasks({
         include_archived: true,
-        limit: 500,
+        limit: 5000,
         sort: "phase",
         order: "asc",
       }),
-    refetchInterval: 30_000,
+    // Spec 21 — useDashboardStream pushes invalidations on every write;
+    // this interval is just the safety net for the SSE-down window.
+    refetchInterval: 300_000,
     refetchIntervalInBackground: true,
   });
 

@@ -214,7 +214,7 @@ pub struct ListQuery {
     pub repo: Vec<String>,
     /// When `false`, archived rows are dropped before paging.
     pub include_archived: bool,
-    /// Max rows returned. Capped at 500 by the loader.
+    /// Max rows returned. Capped at 5000 by the loader.
     pub limit: usize,
     /// Skip this many rows after sort/filter. Default 0.
     pub offset: usize,
@@ -477,7 +477,7 @@ impl TaskLoader {
         sort_rows(&mut filtered, query.sort, query.order);
 
         let total = filtered.len() as u32;
-        let limit = query.limit.min(500);
+        let limit = query.limit.min(5000);
         let limit = if limit == 0 { 200 } else { limit };
         let offset = query.offset.min(filtered.len());
         let end = offset.saturating_add(limit).min(filtered.len());
@@ -590,7 +590,7 @@ impl MultiTaskLoader {
         // `summary` and `by_phase` aggregations stay correct because
         // we collect them independently from the unbounded merge.
         let inner_query = ListQuery {
-            limit: 500,
+            limit: 5000,
             offset: 0,
             ..query.clone()
         };
@@ -623,7 +623,7 @@ impl MultiTaskLoader {
         }
         sort_rows(&mut tasks, query.sort, query.order);
         let total = tasks.len() as u32;
-        let limit = query.limit.min(500);
+        let limit = query.limit.min(5000);
         let limit = if limit == 0 { 200 } else { limit };
         let offset = query.offset.min(tasks.len());
         let end = offset.saturating_add(limit).min(tasks.len());

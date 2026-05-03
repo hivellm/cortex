@@ -47,6 +47,7 @@ A single web UI that surfaces everything Cortex captures: live session timeline,
 ```
 GET  /v1/dashboard/overview
 GET  /v1/dashboard/timeline/stream        SSE — live events (architecture §5.6)
+GET  /v1/dashboard/stream                 SSE — dashboard delta events (spec 21)
 GET  /v1/dashboard/memory?facets=...
 GET  /v1/dashboard/decisions
 GET  /v1/dashboard/decisions/{id}

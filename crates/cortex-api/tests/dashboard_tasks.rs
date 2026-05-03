@@ -62,6 +62,7 @@ fn build_router(root: &std::path::Path) -> axum::Router {
         .with_ttl(Duration::from_millis(0))])),
         metadata: None,
         loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
+        events_bus: cortex_api::dashboard_watcher::DashboardEventBus::new(),
     };
     build_dashboard_router(state)
 }

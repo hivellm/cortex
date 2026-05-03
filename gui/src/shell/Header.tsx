@@ -4,6 +4,7 @@ import { Icon } from "../atoms/Icon";
 import { api } from "../lib/api";
 import { bridge } from "../lib/bridge";
 import { useConnKey } from "../lib/connections/useConnKey";
+import type { DashboardStreamStatus } from "../lib/useDashboardStream";
 import { ConnectionSwitcher } from "./ConnectionSwitcher";
 import { HeaderSearch } from "./HeaderSearch";
 
@@ -15,12 +16,16 @@ type HeaderProps = {
   /// Phase3 §5 — invoked when the user picks "Manage connections…"
   /// from the active-connection switcher dropdown.
   onJumpToConnections?: () => void;
+  /// Spec 21 — dashboard push-stream status, owned by `App.tsx`'s
+  /// single `useDashboardStream` call. Drives the "stream" pill.
+  dashboardStream?: DashboardStreamStatus;
 };
 
 export function Header({
   onOpenTweaks,
   onJumpToHealth,
   onJumpToConnections,
+  dashboardStream,
 }: HeaderProps) {
   const connKey = useConnKey();
   const statusQ = useQuery({
@@ -92,6 +97,21 @@ export function Header({
           <span className="dot" />
           <span className="mono">{pillLabel}</span>
         </span>
+        {dashboardStream && (
+          <span
+            className={`status-pill ${dashboardStream.connected ? "" : "is-paused"}`}
+            title={
+              dashboardStream.connected
+                ? `dashboard push stream connected · ${dashboardStream.reconnects} reconnect${dashboardStream.reconnects === 1 ? "" : "s"}`
+                : "dashboard push stream disconnected — falling back to 5 min polling"
+            }
+          >
+            <span className="dot" />
+            <span className="mono">
+              {dashboardStream.connected ? "stream" : "stream offline"}
+            </span>
+          </span>
+        )}
         <button
           className="icon-btn"
           onClick={onOpenTweaks}

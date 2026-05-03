@@ -64,6 +64,11 @@ pub struct DashboardState {
     /// `/healthz` extras and the new `/v1/health/freshness`
     /// endpoint so a stalled loader localises immediately.
     pub loader_metrics: Arc<crate::LoaderMetrics>,
+    /// Phase11m §2.4 — push channel carrying dashboard delta events
+    /// from the file-system watcher (and, in §4, the Synap consumer).
+    /// SSE subscribers on `/v1/dashboard/stream` fan these out to GUI
+    /// clients. Cloning is cheap (`Arc` inside).
+    pub events_bus: crate::dashboard_watcher::DashboardEventBus,
 }
 
 /// Build the dashboard sub-router carrying the `/v1/dashboard/*` JSON
@@ -75,6 +80,7 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/overview", get(overview))
         .route("/v1/dashboard/timeline/recent", get(timeline_recent))
         .route("/v1/dashboard/timeline/stream", get(timeline_stream))
+        .route("/v1/dashboard/stream", get(dashboard_stream))
         .route("/v1/dashboard/memory", get(memory))
         .route("/v1/dashboard/decisions", get(decisions))
         .route("/v1/dashboard/laws", get(laws))
@@ -613,6 +619,76 @@ fn encode_sse(event: &TimelineEvent) -> Result<SseEvent, Infallible> {
     Ok(SseEvent::default()
         .id(event.id.clone())
         .event("timeline")
+        .data(payload))
+}
+
+/// `GET /v1/dashboard/stream` — SSE stream of dashboard delta events
+/// (spec 21). On connect emits a single `event: hello` frame with
+/// `{ server_ts, lost_window }`; subsequent frames carry one
+/// [`cortex_core::DashboardEvent`] each, with the SSE `event:` field
+/// set to the kind tag (`task.changed`, `handoff.appended`, …).
+///
+/// Lossy: when the per-subscriber broadcast lags, the handler emits a
+/// fresh `hello { lost_window: true }` so the GUI can fire a global
+/// `invalidateQueries` to resync, then resumes streaming.
+async fn dashboard_stream(
+    State(state): State<DashboardState>,
+) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let mut rx = state.events_bus.subscribe();
+    let stream = async_stream::stream! {
+        // First frame: hello with no lost-window — the subscription
+        // started cleanly. Carries the server clock so the GUI can
+        // detect skew when correlating timestamps.
+        yield encode_dashboard_hello(false);
+
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    yield encode_dashboard_event(&event);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    // Slow subscriber dropped some events. Tell the GUI
+                    // it must resync, then keep streaming. The broadcast
+                    // receiver auto-recovers — no resubscribe needed.
+                    yield encode_dashboard_hello(true);
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    // Bus is gone — daemon shutting down. End the stream.
+                    break;
+                }
+            }
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(15))
+            .text("keep-alive"),
+    )
+}
+
+fn encode_dashboard_hello(lost_window: bool) -> Result<SseEvent, Infallible> {
+    let body = serde_json::json!({
+        "server_ts": chrono::Utc::now().to_rfc3339(),
+        "lost_window": lost_window,
+    });
+    Ok(SseEvent::default()
+        .event("hello")
+        .data(body.to_string()))
+}
+
+fn encode_dashboard_event(event: &cortex_core::DashboardEvent) -> Result<SseEvent, Infallible> {
+    let kind_tag = match event.kind {
+        cortex_core::DashboardEventKind::TaskChanged => "task.changed",
+        cortex_core::DashboardEventKind::HandoffAppended => "handoff.appended",
+        cortex_core::DashboardEventKind::DecisionChanged => "decision.changed",
+        cortex_core::DashboardEventKind::MemoryAppended => "memory.appended",
+        cortex_core::DashboardEventKind::KnowledgeAdded => "knowledge.added",
+    };
+    let payload = serde_json::to_string(event).unwrap_or_else(|_| "{}".to_string());
+    Ok(SseEvent::default()
+        .id(event.event_id.clone())
+        .event(kind_tag)
         .data(payload))
 }
 
@@ -3245,7 +3321,7 @@ pub struct TasksListQuery {
     /// Drop archived rows when set to `false`. Defaults to `true`.
     #[serde(default)]
     pub include_archived: Option<bool>,
-    /// Page size (default 200, capped at 500 by the loader).
+    /// Page size (default 200, capped at 5000 by the loader).
     #[serde(default)]
     pub limit: Option<usize>,
     /// Page offset (default 0).
@@ -3698,6 +3774,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = overview(State(state)).await;
         assert_eq!(resp.status(), StatusCode::OK);
@@ -3790,6 +3867,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = timeline_recent(
             State(state),
@@ -3830,6 +3908,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = timeline_recent(
             State(state),
@@ -3869,6 +3948,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -3907,6 +3987,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -3946,6 +4027,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = timeline_recent(
             State(state),
@@ -4028,6 +4110,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = conversations_list(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4135,6 +4218,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = sessions(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4169,6 +4253,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = timeline_recent(
             State(state),
@@ -4259,6 +4344,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -4305,6 +4391,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -4354,6 +4441,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -4394,6 +4482,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -4444,6 +4533,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -4486,6 +4576,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = memory(
             State(state),
@@ -4525,6 +4616,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = overview(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4596,6 +4688,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = overview(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4632,6 +4725,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = tools_stats(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4663,6 +4757,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = trust(State(state)).await;
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4699,6 +4794,7 @@ mod tests {
             ])),
             metadata: Some(std::sync::Arc::new(std::sync::Mutex::new(metadata))),
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         }
     }
 
@@ -4818,6 +4914,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = retention_sweeps(State(state), Query(RetentionSweepsQuery::default())).await;
         let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
@@ -4888,6 +4985,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: std::sync::Arc::new(crate::LoaderMetrics::new()),
+            events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         };
         let resp = retention_state(State(state)).await;
         let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)

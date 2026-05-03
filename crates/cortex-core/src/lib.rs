@@ -10,6 +10,7 @@
 
 pub mod canonical_json;
 pub mod content_hash;
+pub mod dashboard_event;
 pub mod events;
 pub mod ids;
 pub mod redact;
@@ -18,6 +19,7 @@ pub mod vocab;
 
 pub use canonical_json::{canonicalize, CanonicalJsonError};
 pub use content_hash::{content_hash, ContentHash};
+pub use dashboard_event::{DashboardEvent, DashboardEventKind, DashboardEventSource};
 pub use events::{
     AgentCall, AnalysisPayload, ArtifactPayload, Context, DecisionPayload, Envelope, Kind,
     LawViolationPayload, MemoryPayload, Stream, ToolCall, Turn,

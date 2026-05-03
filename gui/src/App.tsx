@@ -24,6 +24,7 @@ import { ClassificationsView } from "./views/Classifications";
 import { HealthView } from "./views/Health";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
 import type { Filters } from "./lib/api";
+import { useDashboardStream } from "./lib/useDashboardStream";
 
 export function App() {
   return (
@@ -41,6 +42,11 @@ function AppShell() {
   const [view, setView] = useState<ViewId>("timeline");
   const [tweaksOpen, setTweaksOpen] = useState(false);
   const [filters, setFiltersState] = useState<Filters>(EMPTY_FILTERS);
+  // Spec 21 — single dashboard SSE stream. Subscribing here once at the
+  // app shell guarantees every view's react-query cache gets push
+  // invalidations regardless of which view is mounted. The status
+  // snapshot drives the connection pill in the header.
+  const dashboardStream = useDashboardStream();
 
   const setFilter = useCallback(
     <K extends keyof Filters>(key: K, value: Filters[K] | undefined) => {
@@ -108,6 +114,7 @@ function AppShell() {
             onOpenTweaks={() => setTweaksOpen(true)}
             onJumpToHealth={() => setView("health")}
             onJumpToConnections={() => setView("connections")}
+            dashboardStream={dashboardStream}
           />
           <Sidebar view={view} setView={setView} />
           <main className="main">{renderView()}</main>

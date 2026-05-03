@@ -871,3 +871,13 @@ export function healthStreamUrl(): string {
   }
   return `${conn.baseUrl}/v1/health/stream`;
 }
+
+/// Spec 21 — `/v1/dashboard/stream` SSE endpoint URL with the same
+/// `?api_key=…` escape hatch healthStreamUrl uses.
+export function dashboardStreamUrl(): string {
+  const conn = activeConnectionResolver();
+  if (conn.auth.kind === "bearer" && conn.auth.token) {
+    return `${conn.baseUrl}/v1/dashboard/stream?api_key=${encodeURIComponent(conn.auth.token)}`;
+  }
+  return `${conn.baseUrl}/v1/dashboard/stream`;
+}

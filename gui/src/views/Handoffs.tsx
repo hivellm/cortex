@@ -17,14 +17,15 @@ export function HandoffsView() {
   const { data, isLoading, error } = useQuery({
     queryKey: [connKey, "handoffs", repoFilter || "all"],
     queryFn: () => api.handoffs(repoFilter || undefined),
-    refetchInterval: 15_000,
+    // Spec 21 — useDashboardStream pushes on handoff.appended.
+    refetchInterval: 300_000,
     refetchIntervalInBackground: true,
   });
 
   const { data: allRows } = useQuery({
     queryKey: [connKey, "handoffs", "all"],
     queryFn: () => api.handoffs(),
-    refetchInterval: 60_000,
+    refetchInterval: 300_000,
   });
 
   const rows = useMemo(() => {

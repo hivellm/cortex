@@ -46,6 +46,8 @@ tokio-stream = "0.1"
 async-stream = "0.3"
 futures = "0.3"
 regex = { workspace = true }
+notify = { workspace = true }
+notify-debouncer-mini = { workspace = true }
 
 synap-sdk = { workspace = true }
 nexus-graph-sdk = { workspace = true }
