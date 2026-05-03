@@ -1,0 +1,155 @@
+{
+  "mode": "estimate_only",
+  "meili_url": "http://127.0.0.1:17004",
+  "per_repo": [
+    {
+      "repo_slug": "tml",
+      "sessions": 0,
+      "total_envelopes": 9788,
+      "total_body_bytes": 12370893,
+      "estimated_input_tokens": 3092723
+    },
+    {
+      "repo_slug": "vectorizer",
+      "sessions": 0,
+      "total_envelopes": 6823,
+      "total_body_bytes": 30611578,
+      "estimated_input_tokens": 7652894
+    },
+    {
+      "repo_slug": "nexus",
+      "sessions": 0,
+      "total_envelopes": 5223,
+      "total_body_bytes": 20323030,
+      "estimated_input_tokens": 5080757
+    },
+    {
+      "repo_slug": "rulebook",
+      "sessions": 0,
+      "total_envelopes": 3661,
+      "total_body_bytes": 3644996,
+      "estimated_input_tokens": 911249
+    },
+    {
+      "repo_slug": "synap",
+      "sessions": 0,
+      "total_envelopes": 1950,
+      "total_body_bytes": 3683088,
+      "estimated_input_tokens": 920772
+    },
+    {
+      "repo_slug": "cortex",
+      "sessions": 0,
+      "total_envelopes": 1410,
+      "total_body_bytes": 3323540,
+      "estimated_input_tokens": 830885
+    },
+    {
+      "repo_slug": "lexum",
+      "sessions": 0,
+      "total_envelopes": 840,
+      "total_body_bytes": 956238,
+      "estimated_input_tokens": 239059
+    },
+    {
+      "repo_slug": "transmutation",
+      "sessions": 0,
+      "total_envelopes": 740,
+      "total_body_bytes": 644628,
+      "estimated_input_tokens": 161157
+    },
+    {
+      "repo_slug": "hivegpu",
+      "sessions": 0,
+      "total_envelopes": 345,
+      "total_body_bytes": 706460,
+      "estimated_input_tokens": 176615
+    },
+    {
+      "repo_slug": "transmutationlite",
+      "sessions": 0,
+      "total_envelopes": 196,
+      "total_body_bytes": 119092,
+      "estimated_input_tokens": 29773
+    },
+    {
+      "repo_slug": "compressionprompt",
+      "sessions": 0,
+      "total_envelopes": 188,
+      "total_body_bytes": 560448,
+      "estimated_input_tokens": 140112
+    },
+    {
+      "repo_slug": "umicp",
+      "sessions": 0,
+      "total_envelopes": 135,
+      "total_body_bytes": 560280,
+      "estimated_input_tokens": 140070
+    },
+    {
+      "repo_slug": "hivehubcloud",
+      "sessions": 0,
+      "total_envelopes": 130,
+      "total_body_bytes": 389875,
+      "estimated_input_tokens": 97468
+    },
+    {
+      "repo_slug": "expert",
+      "sessions": 0,
+      "total_envelopes": 45,
+      "total_body_bytes": 3100557,
+      "estimated_input_tokens": 775139
+    },
+    {
+      "repo_slug": "tmltextmate",
+      "sessions": 0,
+      "total_envelopes": 5,
+      "total_body_bytes": 1383,
+      "estimated_input_tokens": 345
+    },
+    {
+      "repo_slug": "tmldocs",
+      "sessions": 0,
+      "total_envelopes": 4,
+      "total_body_bytes": 9916,
+      "estimated_input_tokens": 2479
+    },
+    {
+      "repo_slug": "vectorizersync",
+      "sessions": 0,
+      "total_envelopes": 2,
+      "total_body_bytes": 1120,
+      "estimated_input_tokens": 280
+    }
+  ],
+  "total_sessions": 0,
+  "total_envelopes": 31485,
+  "total_body_bytes": 81007122,
+  "passes": [
+    {
+      "grain": "session",
+      "model": "Haiku 4.5 (Shallow)",
+      "estimated_input_tokens": 20251777,
+      "estimated_output_tokens": 0,
+      "estimated_cost_usd": 0.02,
+      "notes": "one call per session; input = full session token volume"
+    },
+    {
+      "grain": "topic",
+      "model": "Haiku 4.5 (Shallow)",
+      "estimated_input_tokens": 5062944,
+      "estimated_output_tokens": 512,
+      "estimated_cost_usd": 0.0,
+      "notes": "approx (total_sessions/4) clusters; refine when topic clusterer ships"
+    },
+    {
+      "grain": "decision_trace",
+      "model": "Opus 4.7 (Deep)",
+      "estimated_input_tokens": 300000,
+      "estimated_output_tokens": 102400,
+      "estimated_cost_usd": 12.18,
+      "notes": "100 ADRs assumed (verify via /v1/dashboard/decisions count)"
+    }
+  ],
+  "total_cost_usd": 12.2
+}

@@ -10,9 +10,17 @@ description = "Phase11j — distil raw Cortex envelopes into evergreen `Kind::Co
 [lib]
 path = "src/lib.rs"
 
+# Phase11q §1 — operator-gated estimate binary. The binary keeps the
+# scope narrow (no Anthropic API calls) so it can run on any host
+# without secrets configured.
+[[bin]]
+name = "cortex-consolidator"
+path = "src/bin/cortex-consolidator.rs"
+
 [dependencies]
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
+clap = { workspace = true }
 
 # Phase11j §2.1 — proposal listed `anthropic-sdk` but Anthropic
 # does not ship an official Rust SDK. The summariser layer wires

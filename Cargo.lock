@@ -687,6 +687,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "clap",
  "cortex-core",
  "cortex-storage",
  "reqwest 0.12.28",
