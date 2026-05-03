@@ -87,7 +87,7 @@ async function probeFromDraft(d: DraftState): Promise<TestState> {
       const raw = `${auth.username}:${auth.password}`;
       headers.authorization = `Basic ${typeof btoa === "function" ? btoa(raw) : Buffer.from(raw).toString("base64")}`;
     }
-    const url = `${d.baseUrl.replace(/\/+$/, "")}/v1/dashboard/status`;
+    const url = `${d.baseUrl.replace(/\/+$/, "")}/v1/status`;
     const resp = await fetch(url, { headers });
     if (!resp.ok) {
       return {

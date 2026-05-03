@@ -7,7 +7,7 @@
  * /connections view.
  *
  * Health state per connection comes from a debounced 30-second
- * probe against `/v1/dashboard/status` for that connection's base
+ * probe against `/v1/status` for that connection's base
  * URL. The probe runs *outside* TanStack Query so the cache stays
  * keyed by the active connection — health for non-active
  * connections is a separate concern surfaced only inside the
@@ -41,7 +41,7 @@ async function probeConnection(conn: Connection): Promise<ConnectionHealth> {
       const raw = `${conn.auth.username}:${conn.auth.password}`;
       headers.authorization = `Basic ${typeof btoa === "function" ? btoa(raw) : Buffer.from(raw).toString("base64")}`;
     }
-    const resp = await fetch(`${conn.baseUrl}/v1/dashboard/status`, {
+    const resp = await fetch(`${conn.baseUrl}/v1/status`, {
       headers,
       signal: ac.signal,
     });
