@@ -514,6 +514,7 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
             if let Ok(t) = serde_json::from_value::<cortex_core::events::TopicCardPayload>(
                 event.redacted_payload.clone(),
             ) {
+                let synthesis_age_d = synthesis_age_days(&t.last_rev_at);
                 doc.ext.insert(
                     "topic_card".to_string(),
                     json!({
@@ -521,7 +522,9 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
                         "topic_slug": t.topic_slug,
                         "revision": t.revision,
                         "confidence": t.confidence,
+                        "synthesis_age_d": synthesis_age_d,
                         "contradictions_count": t.contradictions.len(),
+                        "repos": t.repos,
                         "synthesis_model": t.synthesis_model,
                         "events_since_last_rev": t.events_since_last_rev,
                     }),
@@ -584,6 +587,26 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
             // No top-level projection for these kinds — their overlay
             // contracts (if any) read from `ext.<family>.*` already.
         }
+    }
+}
+
+/// Days between `last_rev_at` (RFC 3339) and now (UTC). Returns `0`
+/// when the timestamp is unparseable or in the future — the
+/// pre-thinking renderer reads this value to drive the staleness
+/// advisory, and surfacing a negative / huge nonsense value would
+/// trip the `> stale-topic-card` line for every malformed input.
+fn synthesis_age_days(last_rev_at: &str) -> u32 {
+    let parsed = match chrono::DateTime::parse_from_rfc3339(last_rev_at) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return 0,
+    };
+    let now = chrono::Utc::now();
+    let delta = now.signed_duration_since(parsed);
+    let days = delta.num_days();
+    if days < 0 {
+        0
+    } else {
+        days as u32
     }
 }
 

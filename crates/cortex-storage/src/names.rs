@@ -101,6 +101,16 @@ pub const COLLECTION_CONSOLIDATION_FP32: &str = "cortex.consolidation.fp32";
 /// (PQ-compressed). Demotion target for Shallow consolidations
 /// older than the consolidation-tier retention window.
 pub const COLLECTION_CONSOLIDATION_PQ: &str = "cortex.consolidation.pq";
+/// phase11r — `Kind::TopicCard` synthesis bodies, hot tier
+/// (FP32 vectors, recall-tuned HNSW). The synthesis lane drives
+/// the renderer's top-priority context band, so the hot tier
+/// mirrors decisions / analyses / consolidations recall settings
+/// (m=48, ef_search=256) — the lane fans out under tight
+/// similarity gates and a missed top-1 dilutes the section.
+pub const COLLECTION_TOPIC_CARD_FP32: &str = "cortex.topic_card.fp32";
+/// phase11r — `Kind::TopicCard` warm sibling. Demotion target for
+/// older revisions when the retention sweep tiers them down.
+pub const COLLECTION_TOPIC_CARD_PQ: &str = "cortex.topic_card.pq";
 /// Cold fallback (binary-quantized).
 pub const COLLECTION_COLD_BINARY: &str = "cortex.cold.binary";
 
@@ -129,6 +139,12 @@ pub const INDEX_LEARNINGS: &str = "cortex_learnings";
 /// the dashboard's consolidations lane filters on. Per-repo scoping
 /// is handled by the `repo` filter inside the documents themselves.
 pub const INDEX_CONSOLIDATIONS: &str = "cortex_consolidations";
+/// phase11r — `Kind::TopicCard` synthesis bodies, single global
+/// index the renderer's topic-cards lane filters on. Per-repo
+/// scoping rides on the `repos` field inside the document itself
+/// so the keyword lane can answer cross-repo queries without
+/// enumerating per-repo indexes.
+pub const INDEX_TOPIC_CARDS: &str = "cortex_topic_cards";
 
 /// Every known Meilisearch index.
 pub const ALL_INDEXES: &[&str] = &[
@@ -143,6 +159,7 @@ pub const ALL_INDEXES: &[&str] = &[
     INDEX_KNOWLEDGE,
     INDEX_LEARNINGS,
     INDEX_CONSOLIDATIONS,
+    INDEX_TOPIC_CARDS,
 ];
 
 // ---------- Nexus graph ----------

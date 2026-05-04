@@ -339,6 +339,36 @@ Consolidations distill many raw events into one summary the agent can read in a 
 
 The Parquet archive is the durable source for everything below it: a tier rebuild walks the matching partition window, streams envelopes back through `cortex.events.bootstrap`, and lets the standard processing layer re-populate Vectorizer + Meili + Nexus. The pruner (phase11j §5, blocked on the upstream Vectorizer SDK gaining `move_to_collection` + `delete_vectors` — tracked by `phase11o_vectorizer_demotion_api`) is the demotion driver that walks active consolidations, resolves `source_event_id` lifetimes, and moves events between hot / warm / cold per the schedule above. Until the SDK ships, the Parquet archive carries the only complete cold-tier representation; the Vectorizer + Meili tiers grow monotonically.
 
+### 6.0a Living-synthesis tier: topic cards on top of consolidations
+
+Phase 11r layers a **living-synthesis** tier on top of consolidations. Where a consolidation is a snapshot of a window (one session, one topic burst, one decision trace), a **topic card** is a slug-keyed prose synthesis the orchestrator **rewrites in place** as new evidence accumulates. One card per `(topic_slug, repo_scope)`; the deterministic id (`topic-{24-hex}` derived from `sha256(slug ⊕ repo_scope)`) means re-emitting the same card lands on the same node and bumps `revision`.
+
+| Layer              | Granularity                          | Mutation model                  | Storage                                                                                       |
+|--------------------|--------------------------------------|---------------------------------|-----------------------------------------------------------------------------------------------|
+| Raw events         | One envelope per turn / tool call    | Append-only                     | Per-repo Vectorizer / Meili / Nexus                                                           |
+| Consolidations     | Many raw events → one summary        | Append-only (new id per window) | `cortex.consolidation.{fp32,pq}` + `cortex_consolidations`                                    |
+| **Topic cards**    | Many consolidations → one synthesis  | **Rewritten in place** per rev  | `cortex.topic_card.{fp32,pq}` (recall-tuned `m=48 / ef_search=256`) + `cortex_topic_cards`    |
+
+Three trigger heuristics fire a rewrite (any one is sufficient):
+
+1. **Burst** — `events_since_last_rev ≥ 8` (`TRIGGER_EVENTS_THRESHOLD`).
+2. **High-impact proximity** — a new event lands within `0.30` distance and is a Decision / LawViolation / high-impact-outcome event.
+3. **Stale + new evidence** — `synthesis_age_d ≥ 14` AND any new evidence cited.
+
+When none fire, the orchestrator emits `Hold { reason }` (`Cooldown` / `LowImpact` / `NotRelevant`). The synthesiser composition reuses the consolidator's `Summariser` trait — no new abstract layer; the orchestrator escalates Haiku → Opus only when (a) `force_deep` is set, (b) ≥ 3 open contradictions exist, or (c) the existing evidence already trips a `decision_supersession` per the contradiction scanner.
+
+Three contradiction detectors run on every rewrite:
+
+- **`DecisionSupersession`** — any pair where one decision's `supersedes` matches another's `decision_id`.
+- **`LawViolationMismatch`** — a violation citing a different version than the matching active Law.
+- **`OutcomeDivergence`** — two consolidations with overlapping temporal spans + different outcome majorities.
+
+Each emitted contradiction stamps `surfaced_at_rev` and `status = Open`; the producer never blocks a rewrite on contradictions — they are heuristic surface signals the agent reads.
+
+The pre-thinking renderer ([formatter.rs](../crates/cortex-pre-thinking/src/formatter.rs)) gives the topic-card section **top priority** in the section-ordering matrix (laws → topic_cards → consolidations → decisions → similar_turns → past_sessions → snippets) when the card is fresh. Staleness — `confidence < 0.6` OR (`synthesis_age_d > 30` AND `events_since_last_rev > 0`) — flips the order so consolidations render first and stamps a `> stale-topic-card: <reason>` advisory line. Section budget: 1 400 bytes (`section_caps::TOPIC_CARDS_BYTES`).
+
+The MCP tool surface adds five new tools that operate on topic cards: `cortex_topic_get`, `cortex_topic_drill`, `cortex_topic_neighbors`, `cortex_topic_diff`, `cortex_synthesize`. See [`docs/cortex/topic-cards.md`](cortex/topic-cards.md) for the operator runbook (force-rewrite, replay, dry-run cost cap, the MCP tool reference table) and [ADR-006](../.rulebook/decisions/006-topic-card-as-living-synthesis-vs-consolidation-as-snapshot.md) for the choice to layer a separate `Kind::TopicCard` over `Kind::Consolidation` rather than mutating the consolidation kind.
+
 ### 6.1 What gets indexed
 
 For each repo under `e:/HiveLLM/`:

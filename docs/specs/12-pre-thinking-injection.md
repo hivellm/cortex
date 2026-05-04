@@ -59,6 +59,22 @@ A deterministic Markdown block. Example:
 - **LAW-012** (notable) — HNSW recall benchmarks must run before merge.
 - **LAW-007** (critical) — Never pass `--no-verify` to `git commit` without explicit authorization.
 
+## Topic card
+[auth-rewrite] (rev 3, confidence 82%, age 5d, +2 ev)
+JWT validation now consolidated behind a single middleware so token rotation lands deterministically without the prior 5-minute cache lag. The new flow short-circuits expired tokens at the gateway and refreshes session state through the SessionStore the dashboard reads.
+
+### Evidence (2)
+- decision:DEC-0042 (cited@rev=3, w=0.90)
+- consolidation:cons-ses-aaa1 (cited@rev=3, w=0.75)
+
+### Open contradictions (1)
+- DecisionSupersession: DEC-0042 vs DEC-0001 (surfaced@rev=3)
+
+## Consolidated context (3)
+1. session/cons-ses-aaa1 · 2026-02-11 · ✓ · Auth refactor session — JWT cache TTL drop
+2. topic/cons-top-bbb2 · 2026-01-04 · ✓ · HNSW ef_search tuning across the 2M-vector benchmark family
+3. decision_trace/cons-dec-ccc3 · 2025-09-21 · ⚠ · Trace from DEC-0042 back through the predecessor benchmarks
+
 ## Recent decisions you should know about
 - ✓ **DEC-0042 (accepted, 2026-03-05)** — Raise HNSW ef_search default to 128.
   Rationale: recall@10 held above 0.92 up to 2M vectors in benchmarks.
@@ -68,11 +84,6 @@ A deterministic Markdown block. Example:
 1. ✓ 2026-02-11 — Claude Sonnet refactored `hnsw_search` to accept `ef` per-call.
 2. ⚠ 2025-12-03 — Gemini benchmarked ef_search=128 and concluded it was safe up to 2M.
 
-## Consolidated context (3)
-1. session/cons-ses-aaa1 · 2026-02-11 · ✓ · Auth refactor session — JWT cache TTL drop
-2. topic/cons-top-bbb2 · 2026-01-04 · ✓ · HNSW ef_search tuning across the 2M-vector benchmark family
-3. decision_trace/cons-dec-ccc3 · 2025-09-21 · ⚠ · Trace from DEC-0042 back through the predecessor benchmarks
-
 ## Relevant snippets (3)
 1. `Vectorizer/src/index/hnsw/mod.rs:hnsw_search` — current implementation with configurable `ef`.
 2. `Vectorizer/docs/perf/hnsw.md#ef_search-tuning` — section on recall/latency tradeoffs.
@@ -81,9 +92,28 @@ A deterministic Markdown block. Example:
 <!-- end cortex -->
 ```
 
-Sections are always in the same order: **laws → decisions → similar turns → consolidated context → past sessions (fallback only) → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+Sections are always in the same order — phase 11r §5.4 reordered the matrix so the topic-card synthesis lane is the **top-priority context band** when fresh: **laws → topic_cards → consolidated context → decisions → similar turns → past sessions (fallback only) → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
 
 Phase11j §4.2 — when the consolidations lane returns ≥ 1 hit, the renderer emits the **Consolidated context** section and **suppresses the legacy Past sessions block** (§4.3 fallback). When the lane returns zero hits, the renderer falls back to the original past-sessions section so cold caches degrade gracefully.
+
+Phase11r §5.4 — when the topic-card lane returns ≥ 1 hit AND the card is **not stale** (see staleness contract below), the topic-card section leads the context band, ahead of consolidations. When the card **is stale**, the order flips: consolidations render first, then the topic card section is downgraded to its old position with a `> stale-topic-card: <reason>` advisory line stamped under the heading. A card is stale when `confidence < 0.6` OR (`synthesis_age_d > 30` AND `events_since_last_rev > 0`).
+
+#### Topic card section (phase11r §5.3)
+
+```text
+## Topic card
+> stale-topic-card: <reason>            ← only when staleness fires
+[<topic_slug>] (rev N, confidence X%, age Yd, +Z ev)
+<synthesis preview clipped at section_caps::TOPIC_CARDS_BYTES / 2>
+
+### Evidence (N)
+- <kind>:<id> (cited@rev=N[, w=…])
+
+### Open contradictions (N)
+- <kind>: <evidence_a> vs <evidence_b> (surfaced@rev=N)
+```
+
+Section budget: 1 400 bytes (`section_caps::TOPIC_CARDS_BYTES`). Cap: 1 card (`section_caps::TOPIC_CARDS`) — the renderer only ever surfaces the top-priority card, falling back to the consolidation lane for additional context. Evidence is clipped to top-5 by `cited_at_rev` desc; only contradictions with `status == Open` land in the section. The advisory line is omitted when the card is fresh.
 
 #### Graph traversal sub-blocks (phase11k §6.2)
 

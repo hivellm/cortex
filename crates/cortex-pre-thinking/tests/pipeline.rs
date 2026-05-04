@@ -101,6 +101,7 @@ fn populated_response(query_id: &str) -> QueryResponse {
             }],
             past_sessions: Vec::new(),
             consolidations: Vec::new(),
+            topic_cards: Vec::new(),
         },
         laws_active: vec![LawRef {
             id: "LAW-007".into(),

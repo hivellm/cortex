@@ -20,7 +20,9 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
-use cortex_core::events::{AgentCall, ConsolidationPayload, Envelope, Kind, ToolCall, Turn};
+use cortex_core::events::{
+    AgentCall, ConsolidationPayload, Envelope, Kind, ToolCall, TopicCardPayload, Turn,
+};
 use thiserror::Error;
 
 use crate::lanes::{LaneHit, MemoryKeywordLane};
@@ -315,6 +317,22 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
                 cortex_core::events::ConsolidationGrain::DecisionTrace => "decision_trace",
             };
             (text, Some(format!("consolidation:{grain_label}")))
+        }
+        Kind::TopicCard => {
+            // phase11r §3.5 — render `[<topic_slug>] <synthesis preview>`
+            // so the keyword-lane fallback surfaces topic cards
+            // alongside raw envelopes until the live spec-08 indexer
+            // routes them to the dedicated `cortex_topic_cards` Meili
+            // index. Symbol carries the slug so the dashboard can group
+            // by topic without re-decoding the payload.
+            let tc: TopicCardPayload = serde_json::from_value(env.payload.clone()).ok()?;
+            let preview = clip(&tc.synthesis_markdown, 320);
+            let text = if tc.topic_slug.is_empty() {
+                preview.to_string()
+            } else {
+                format!("[{}] {preview}", tc.topic_slug)
+            };
+            (text, Some(format!("topic_card:{}", tc.topic_slug)))
         }
         _ => return None,
     };
@@ -704,5 +722,48 @@ mod tests {
         assert!(hit.text.starts_with("[Auth refactor session]"));
         assert!(hit.text.contains("JWT middleware"));
         assert_eq!(hit.symbol.as_deref(), Some("consolidation:session"));
+    }
+
+    #[test]
+    fn renders_topic_card_with_slug_and_synthesis_preview() {
+        // Phase11r §3.5 — keyword-lane fallback for the
+        // `Kind::TopicCard` branch. The hit text leads with
+        // `[<topic_slug>]` followed by the clipped synthesis
+        // preview; symbol carries `topic_card:<slug>` so the
+        // dashboard's per-topic grouping reads it without
+        // re-decoding the payload.
+        use cortex_core::events::TopicCardPayload;
+        let mut env = turn_envelope("ignored");
+        env.kind = Kind::TopicCard;
+        env.payload = serde_json::to_value(TopicCardPayload {
+            topic_card_id: "topic-deadbeefcafef00ddeadbeef".to_string(),
+            topic_slug: "auth-rewrite".to_string(),
+            repos: vec!["cortex".to_string()],
+            revision: 1,
+            synthesis_markdown:
+                "The auth rewrite consolidates JWT validation behind a single middleware so \
+                token rotation lands deterministically without the prior 5-minute cache lag. \
+                The new flow short-circuits expired tokens at the gateway and refreshes session \
+                state through the SessionStore the dashboard reads."
+                    .to_string(),
+            evidence: Vec::new(),
+            contradictions: Vec::new(),
+            open_questions: Vec::new(),
+            related_topic_ids: Vec::new(),
+            confidence: 0.82,
+            last_rev_at: "2026-05-03T12:00:00Z".to_string(),
+            events_since_last_rev: 3,
+            synthesis_model: "claude-haiku-4-5".to_string(),
+            synthesis_cost_cents: 80,
+        })
+        .unwrap();
+        let hit = envelope_to_hit(&env).unwrap();
+        assert!(hit.text.starts_with("[auth-rewrite]"));
+        assert!(hit.text.contains("JWT validation"));
+        assert!(
+            hit.text.len() <= 320 + "[auth-rewrite] ".len(),
+            "synthesis preview must clip at 320 bytes",
+        );
+        assert_eq!(hit.symbol.as_deref(), Some("topic_card:auth-rewrite"));
     }
 }

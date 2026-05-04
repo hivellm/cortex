@@ -9,8 +9,9 @@
 use serde_json::json;
 
 use cortex_storage::names::{
-    COLLECTION_CONSOLIDATION_FP32, COLLECTION_DECISION_FP32, COLLECTION_TURN_FP32,
-    COLLECTION_TURN_PQ, INDEX_CONSOLIDATIONS, INDEX_DECISIONS, INDEX_LAWS, INDEX_TURNS,
+    COLLECTION_CONSOLIDATION_FP32, COLLECTION_DECISION_FP32, COLLECTION_TOPIC_CARD_FP32,
+    COLLECTION_TURN_FP32, COLLECTION_TURN_PQ, INDEX_CONSOLIDATIONS, INDEX_DECISIONS, INDEX_LAWS,
+    INDEX_TOPIC_CARDS, INDEX_TURNS,
 };
 
 use crate::lanes::{GraphRequest, KeywordRequest, VectorRequest};
@@ -109,6 +110,12 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
         repo_scoped(req, "code"),
         repo_scoped(req, "docs"),
         COLLECTION_CONSOLIDATION_FP32.to_string(),
+        // Phase11r §5.2 — topic cards lead the renderer's context
+        // band; fan out to the hot-tier collection so the section
+        // surfaces when a relevant card exists. Warm / PQ tier
+        // intentionally not consulted on this lane — staleness is
+        // handled by the §5.4 advisory + downgrade.
+        COLLECTION_TOPIC_CARD_FP32.to_string(),
     ];
     let vectors = collections
         .into_iter()
@@ -124,6 +131,11 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
         repo_scoped(req, "docs"),
         repo_scoped(req, "decisions"),
         INDEX_CONSOLIDATIONS.to_string(),
+        // Phase11r §5.2 — global topic-cards index handles the
+        // literal-phrase recall path (a topic_slug, a quoted ADR
+        // id); per-repo scoping rides on the document `repos`
+        // field that the §3.3 settings.v1 pass made filterable.
+        INDEX_TOPIC_CARDS.to_string(),
     ]
     .into_iter()
     .map(|i| KeywordRequest {
@@ -188,6 +200,17 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
             k: req.k,
             scope: req.scope.clone(),
         },
+        // Phase11r §5.2 — topic cards drill into evidence (§4.2),
+        // making them a natural cross-lookup surface for
+        // `decision_lookup`: a card synthesised over an ADR is
+        // the agent's shortest path from "what was decided" to
+        // "why and what's the tension".
+        VectorRequest {
+            collection: COLLECTION_TOPIC_CARD_FP32.to_string(),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
     ];
     let keywords = vec![
         KeywordRequest {
@@ -198,6 +221,13 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
         },
         KeywordRequest {
             index: repo_scoped(req, "decisions"),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+        // Phase11r §5.2 — paired with the vector lane above.
+        KeywordRequest {
+            index: INDEX_TOPIC_CARDS.to_string(),
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
@@ -262,6 +292,16 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             k: req.k,
             scope: req.scope.clone(),
         },
+        // Phase11r §5.2 — topic cards beat raw consolidations on
+        // similar-problems recall because they fold many
+        // consolidations into a single living synthesis. Hot tier
+        // only — same reasoning as the consolidation lane.
+        VectorRequest {
+            collection: COLLECTION_TOPIC_CARD_FP32.to_string(),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        },
     ];
     let keywords = vec![
         KeywordRequest {
@@ -281,6 +321,14 @@ fn similar_problems(req: &QueryRequest) -> Plan {
         // alongside the vector lane.
         KeywordRequest {
             index: INDEX_CONSOLIDATIONS.to_string(),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        },
+        // Phase11r §5.2 — paired with the topic-card vector lane
+        // above; covers the literal-phrase recall path.
+        KeywordRequest {
+            index: INDEX_TOPIC_CARDS.to_string(),
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
@@ -639,6 +687,62 @@ mod tests {
         assert!(
             indexes.contains(&INDEX_CONSOLIDATIONS),
             "similar_problems must query cortex_consolidations: {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn pre_change_context_includes_topic_cards_lane() {
+        // Phase11r §5.2 — `pre_change_context` must fan out to the
+        // hot-tier topic-card vector + keyword stores so the
+        // renderer's top-priority section reads from the lane.
+        // Drift here means topic cards land in storage but never
+        // reach the pre-thinking bundle.
+        let plan = build_plan(&req(Intent::PreChangeContext));
+        let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
+        assert!(
+            collections.contains(&COLLECTION_TOPIC_CARD_FP32),
+            "pre_change_context must query cortex.topic_card.fp32: {collections:?}"
+        );
+        let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(
+            indexes.contains(&INDEX_TOPIC_CARDS),
+            "pre_change_context must query cortex_topic_cards: {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn decision_lookup_includes_topic_cards_lane() {
+        // Phase11r §5.2 — topic cards drill into evidence (§4.2),
+        // so `decision_lookup` must fan out to the lane to surface
+        // the synthesis attached to a queried ADR.
+        let plan = build_plan(&req(Intent::DecisionLookup));
+        let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
+        assert!(
+            collections.contains(&COLLECTION_TOPIC_CARD_FP32),
+            "decision_lookup must query cortex.topic_card.fp32: {collections:?}"
+        );
+        let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(
+            indexes.contains(&INDEX_TOPIC_CARDS),
+            "decision_lookup must query cortex_topic_cards: {indexes:?}"
+        );
+    }
+
+    #[test]
+    fn similar_problems_includes_topic_cards_lane() {
+        // Phase11r §5.2 — topic cards beat raw consolidations on
+        // similar-problems recall (a topic card folds many
+        // consolidations into a single living synthesis).
+        let plan = build_plan(&req(Intent::SimilarProblems));
+        let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
+        assert!(
+            collections.contains(&COLLECTION_TOPIC_CARD_FP32),
+            "similar_problems must query cortex.topic_card.fp32: {collections:?}"
+        );
+        let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        assert!(
+            indexes.contains(&INDEX_TOPIC_CARDS),
+            "similar_problems must query cortex_topic_cards: {indexes:?}"
         );
     }
 

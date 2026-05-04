@@ -181,6 +181,49 @@ pub fn build_envelope_with_rewrite_context(
     env
 }
 
+/// Phase11r §4.1 — build the audit envelope for a single topic-card
+/// MCP tool call. Every §4 tool publishes one envelope per
+/// invocation so the dashboard can surface the operator's drill /
+/// neighbor / synthesize traffic alongside the existing `cortex_query`
+/// audit lane. Envelope shape stays close to [`build_envelope`] —
+/// `caller`, `tool`, `scope`, plus a tool-specific `result_summary`
+/// the caller fills in (e.g. `{"hit": "auth-rewrite", "confidence":
+/// 0.82}` for `cortex_topic_get`). The `kind` discriminator is
+/// `"topic_card_mcp_audit"` so consumers can filter cleanly without
+/// re-parsing the `tool` field.
+pub fn build_topic_card_envelope(
+    caller: &str,
+    tool: &str,
+    scope_repo: Option<&str>,
+    result_summary: Value,
+) -> Value {
+    json!({
+        "kind": "topic_card_mcp_audit",
+        "caller": caller,
+        "tool": tool,
+        "scope": {
+            "repo": scope_repo.unwrap_or(""),
+        },
+        "result": result_summary,
+    })
+}
+
+/// Phase11r §4.1 — publish one topic-card audit envelope through the
+/// supplied [`AuditPublisher`]. Equivalent to the `record_call` shape
+/// the §4 brief named; the helper keeps the call site terse so each
+/// tool's `invoke_*` body adds one line at the tail rather than
+/// re-rolling the envelope shape.
+pub async fn record_topic_card_call(
+    publisher: &dyn AuditPublisher,
+    caller: &str,
+    tool: &str,
+    scope_repo: Option<&str>,
+    result_summary: Value,
+) {
+    let env = build_topic_card_envelope(caller, tool, scope_repo, result_summary);
+    publisher.publish(env).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +235,49 @@ mod tests {
         pub_.publish(json!({ "kind": "x" })).await;
         let snap = pub_.snapshot();
         assert_eq!(snap.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn record_topic_card_call_publishes_envelope_with_tool_and_scope() {
+        // Phase11r §4.1 — the topic-card audit envelope MUST carry
+        // the canonical `kind = "topic_card_mcp_audit"`, the tool
+        // name, the repo scope, and an opaque result_summary the
+        // caller fills in. Pin the shape so a future tool addition
+        // does not silently rename a top-level key.
+        let pub_ = MemoryAuditPublisher::new();
+        record_topic_card_call(
+            &pub_,
+            "claude-code",
+            "cortex_topic_get",
+            Some("cortex"),
+            json!({ "hit": "auth-rewrite", "confidence": 0.82, "via": "search" }),
+        )
+        .await;
+        let envs = pub_.snapshot();
+        assert_eq!(envs.len(), 1);
+        let env = &envs[0];
+        assert_eq!(env["kind"], "topic_card_mcp_audit");
+        assert_eq!(env["caller"], "claude-code");
+        assert_eq!(env["tool"], "cortex_topic_get");
+        assert_eq!(env["scope"]["repo"], "cortex");
+        assert_eq!(env["result"]["hit"], "auth-rewrite");
+        assert_eq!(env["result"]["via"], "search");
+    }
+
+    #[test]
+    fn build_topic_card_envelope_handles_absent_repo() {
+        // A failed call (e.g. `ScopeRepoRequired`) still emits an
+        // envelope so the dashboard can surface the rejection. The
+        // missing repo lands as an empty string rather than `null`
+        // so consumers reading `scope.repo` as a string don't trip.
+        let env = build_topic_card_envelope(
+            "claude-code",
+            "cortex_topic_get",
+            None,
+            json!({ "error": "scope_repo_required" }),
+        );
+        assert_eq!(env["scope"]["repo"], "");
+        assert_eq!(env["result"]["error"], "scope_repo_required");
     }
 
     #[test]

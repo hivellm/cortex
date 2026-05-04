@@ -180,6 +180,28 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         encoding: "pq",
         hnsw: HnswParams { m: 16, ef_search: 64 },
     },
+    // phase11r — topic card synthesis bodies. Hot tier carries every
+    // currently-active card with recall-tuned HNSW so the renderer's
+    // top-priority topic-card lane never misses a relevant card under
+    // tight similarity gates (matches decisions / analyses /
+    // consolidations recall settings). Warm tier holds older / demoted
+    // revisions after the retention sweep tiers them down.
+    CollectionSchema {
+        name: crate::names::COLLECTION_TOPIC_CARD_FP32,
+        description: "Topic card synthesis (hot, recall-tuned)",
+        tier: CollectionTier::Hot,
+        dim: EMBED_DIM,
+        encoding: "fp32",
+        hnsw: HnswParams { m: 48, ef_search: 256 },
+    },
+    CollectionSchema {
+        name: crate::names::COLLECTION_TOPIC_CARD_PQ,
+        description: "Topic card synthesis (warm, demoted revisions)",
+        tier: CollectionTier::Warm,
+        dim: EMBED_DIM,
+        encoding: "pq",
+        hnsw: HnswParams { m: 16, ef_search: 64 },
+    },
     CollectionSchema {
         name: crate::names::COLLECTION_COLD_BINARY,
         description: "Binary-quantized fallback (any kind, >365 days)",
@@ -225,5 +247,59 @@ mod tests {
         assert_eq!(hot.encoding, "fp32");
         assert_eq!(hot.hnsw.m, 48);
         assert_eq!(hot.hnsw.ef_search, 256);
+    }
+
+    #[test]
+    fn topic_card_collections_are_declared() {
+        // Phase11r §3.4 — both tiers must register so `ensure_collection`
+        // runs at boot and the topic-card lane has somewhere to land
+        // its vectors.
+        let names: Vec<&str> = COLLECTIONS.iter().map(|c| c.name).collect();
+        assert!(
+            names.contains(&crate::names::COLLECTION_TOPIC_CARD_FP32),
+            "COLLECTIONS must include cortex.topic_card.fp32",
+        );
+        assert!(
+            names.contains(&crate::names::COLLECTION_TOPIC_CARD_PQ),
+            "COLLECTIONS must include cortex.topic_card.pq",
+        );
+    }
+
+    #[test]
+    fn topic_card_hot_tier_uses_recall_tuned_hnsw() {
+        // Phase11r §3.4 — pre-thinking's topic-card lane is the
+        // top-priority context band; the hot collection mirrors
+        // decisions / analyses / consolidations recall settings
+        // (m=48, ef_search=256) so a tight similarity gate still
+        // surfaces the right card.
+        let hot = COLLECTIONS
+            .iter()
+            .find(|c| c.name == crate::names::COLLECTION_TOPIC_CARD_FP32)
+            .expect("hot topic_card collection declared");
+        assert_eq!(hot.tier, CollectionTier::Hot);
+        assert_eq!(hot.encoding, "fp32");
+        assert_eq!(hot.hnsw.m, 48);
+        assert_eq!(hot.hnsw.ef_search, 256);
+    }
+
+    #[test]
+    fn topic_card_collection_names_export_via_names_module() {
+        // Phase11r §3.4 — the bin / embedder reach the names through
+        // `cortex_storage::names::*`; pin them here so a typo in the
+        // const string surfaces as a test break instead of a runtime
+        // "collection not found" the next time the worker boots.
+        assert_eq!(
+            crate::names::COLLECTION_TOPIC_CARD_FP32,
+            "cortex.topic_card.fp32"
+        );
+        assert_eq!(
+            crate::names::COLLECTION_TOPIC_CARD_PQ,
+            "cortex.topic_card.pq"
+        );
+        assert_eq!(crate::names::INDEX_TOPIC_CARDS, "cortex_topic_cards");
+        assert!(
+            crate::names::ALL_INDEXES.contains(&crate::names::INDEX_TOPIC_CARDS),
+            "ALL_INDEXES must include INDEX_TOPIC_CARDS",
+        );
     }
 }

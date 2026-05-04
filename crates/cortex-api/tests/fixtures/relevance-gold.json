@@ -467,6 +467,94 @@
         "docs/specs/12-pre-thinking-injection.md"
       ],
       "notes": "phase11j §4.5 — Consolidated context section + §4.3 fallback rule."
+    },
+    {
+      "id": "rel-051",
+      "intent": "pre_change_context",
+      "query": "topic card synthesis trigger heuristic events threshold",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/topic_cards/trigger.rs",
+        "crates/cortex-workers/src/topic_cards"
+      ],
+      "notes": "phase11r §5.6 — trigger heuristics drive when a card rewrites."
+    },
+    {
+      "id": "rel-052",
+      "intent": "pre_change_context",
+      "query": "topic card section pre thinking renderer staleness advisory downgrade",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-pre-thinking/src/formatter.rs",
+        "docs/specs/12-pre-thinking-injection.md"
+      ],
+      "notes": "phase11r §5.6 — §5.4 staleness advisory + downgrade contract."
+    },
+    {
+      "id": "rel-053",
+      "intent": "pre_change_context",
+      "query": "topic_cards meili index v6 settings push",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/settings/settings.v1.json",
+        "crates/cortex-workers/src/fulltext/settings.rs"
+      ],
+      "notes": "phase11r §5.6 — v5→v6 settings bump + ext.topic_card.* axis fields."
+    },
+    {
+      "id": "rel-054",
+      "intent": "decision_lookup",
+      "query": "topic card drills into evidence per dimension",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-api/src/mcp_topic_card.rs",
+        "cortex_topic_drill"
+      ],
+      "notes": "phase11r §5.6 — §4.2 drill into evidence dimension."
+    },
+    {
+      "id": "rel-055",
+      "intent": "decision_lookup",
+      "query": "decision supersession contradiction surfaced topic card",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-workers/src/topic_cards/contradictions.rs",
+        "ContradictionKind"
+      ],
+      "notes": "phase11r §5.6 — DecisionSupersession contradiction detector."
+    },
+    {
+      "id": "rel-056",
+      "intent": "similar_problems",
+      "query": "topic card neighbors traversal cypher related_to evidence_of",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-api/src/mcp_topic_card.rs",
+        "cortex_topic_neighbors"
+      ],
+      "notes": "phase11r §5.6 — §4.3 neighbours traversal contract."
+    },
+    {
+      "id": "rel-057",
+      "intent": "similar_problems",
+      "query": "living synthesis distills consolidations across sessions",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "docs/cortex/topic-cards.md",
+        "crates/cortex-workers/src/topic_cards"
+      ],
+      "notes": "phase11r §5.6 — living synthesis tier on top of consolidations."
+    },
+    {
+      "id": "rel-058",
+      "intent": "free_search",
+      "query": "cortex_synthesize escape hatch budget exhausted persist false",
+      "scope": { "repo": "cortex" },
+      "expected_doc_ids": [
+        "crates/cortex-api/src/mcp_topic_card.rs",
+        "cortex_synthesize"
+      ],
+      "notes": "phase11r §5.6 — §4.5 operator escape hatch + cost budget gate."
     }
   ]
 }

@@ -36,6 +36,7 @@ mod lane_contract;
 pub mod lanes;
 pub mod loader_metrics;
 pub mod mcp;
+pub mod mcp_topic_card;
 pub mod meili_lane;
 pub mod meili_loader;
 pub mod nexus_graph_lane;
@@ -89,6 +90,17 @@ pub fn self_version_info() -> cortex_build::VersionInfo {
     cortex_build::version_info!()
 }
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
+pub use mcp_topic_card::{
+    invoke_synthesize, invoke_topic_diff, invoke_topic_drill, invoke_topic_get,
+    invoke_topic_neighbors, is_valid_topic_slug, synthesize_descriptor, topic_diff_descriptor,
+    topic_drill_descriptor, topic_get_descriptor, topic_neighbors_descriptor, DrillDimension,
+    DrillResult, HydratedEvidenceItem, NeighborEdge, NeighborGraph, NeighborNode,
+    SynthesizeRequest, SynthesizeResult, TopicCardDiff, TopicCardDiffer, TopicCardDrill,
+    TopicCardLookup, TopicCardMcpError, TopicCardNeighbors, TopicCardRevision,
+    TopicCardSynthesizer, TOOL_NAME_SYNTHESIZE, TOOL_NAME_TOPIC_DIFF, TOOL_NAME_TOPIC_DRILL,
+    TOOL_NAME_TOPIC_GET, TOOL_NAME_TOPIC_NEIGHBORS, TOPIC_GET_CONFIDENCE_FLOOR,
+    TOPIC_NEIGHBORS_DEFAULT_DEPTH, TOPIC_NEIGHBORS_NODE_CAP,
+};
 pub use orchestrator::Orchestrator;
 pub use rate_limit::{RateConfig, RateDecision, RateLimiter};
 pub use redaction::redact_response;
@@ -97,5 +109,5 @@ pub use strategies::{build_plan, BudgetSplit, Overlay, Plan};
 pub use types::{
     empty_response, BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, IncludeField, Intent,
     ConsolidationRef, LaneTimings, LawRef, Notice, PastSession, Props, QueryRequest,
-    QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet, ViolationRef,
+    QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet, TopicCardRef, ViolationRef,
 };

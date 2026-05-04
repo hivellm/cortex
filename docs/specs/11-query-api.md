@@ -185,6 +185,20 @@ Fields inside `results` are only present when requested via `include`. Missing-b
 
 Identical schema, exposed as an MCP tool (`cortex.query`) so agent hosts can call it without speaking HTTP.
 
+#### Topic-card MCP tools (phase 11r §4)
+
+Five additional MCP tools operate on the living-synthesis tier. All five emit a `topic_card_mcp_audit` envelope through the configured `AuditPublisher` so the dashboard surfaces every drill / get / synthesize call alongside the existing `cortex_query` audit lane. Failure paths (`ScopeRepoRequired`, `Invalid`, `BudgetExhausted`, `Backend`) record the rejection envelope so the dashboard's misconfig detection has a complete trail.
+
+| Tool                      | Input                                              | Output                  | Notes                                                                                             |
+|---------------------------|----------------------------------------------------|-------------------------|---------------------------------------------------------------------------------------------------|
+| `cortex_topic_get`        | `{query_or_slug, scope}`                           | `Option<TopicCardPayload>` | Slug-exact short-circuit when `query_or_slug` matches `^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$`; otherwise free-text search with the `confidence ≥ 0.6` floor on the search lane (slug-exact bypasses the floor). `scope.repo` required. |
+| `cortex_topic_drill`      | `{topic_card_id, dimension}`                       | `DrillResult`           | `dimension ∈ {evidence, contradictions, history, open_questions, related}`. Evidence path hydrates each citation with title + occurred_at via Synap reads. History walks the revision chain newest-first. Related queries Nexus for outgoing `:RELATED_TO` edges. |
+| `cortex_topic_neighbors`  | `{topic_card_id, depth?}`                          | `NeighborGraph`         | Cypher `MATCH (t:TopicCard {id: $id})-[:RELATED_TO\|EVIDENCE_OF*1..$depth]-(n) RETURN n LIMIT 64`. Depth defaults to 2; clamped into `[1, 5]`. Graph is clipped at 64 nodes with a `truncated` flag. |
+| `cortex_topic_diff`       | `{topic_card_id, since_rev}`                       | `TopicCardDiff`         | Unified-diff over the synthesis body (prefix + suffix elision keeps small edits compact) plus set diffs over evidence (`added` / `removed`) and contradictions (`added` / `resolved` — status flips from `Open` to `Reconciled` / `Deprecated`). Rejects `since_rev ≥ to.revision`. |
+| `cortex_synthesize`       | `{query, scope, force?, persist?}`                 | `SynthesizeResult`      | Operator escape hatch — runs the synthesiser ad-hoc through the orchestrator. `persist=true` emits a `Kind::TopicCard` envelope; `persist=false` returns the payload without indexing. Counts against the cost budget either way; refuses with `BudgetExhausted { used_cents, cap_cents }` when over cap. `force=true` escalates to Opus. |
+
+See [`docs/cortex/topic-cards.md`](../cortex/topic-cards.md) for the operator runbook.
+
 ## Design
 
 ### Read path on Nexus 2.1 `_id` (phase11l §9.4)

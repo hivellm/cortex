@@ -43,6 +43,22 @@ pub mod section_caps {
     /// by similarity; the consolidations replace the past-sessions
     /// section when ≥ 1 hit lands.
     pub const CONSOLIDATIONS: usize = 3;
+    /// Phase11r §5.3 — max topic-card entries the "Topic card"
+    /// section renders. Spec calls for one card (the top-priority
+    /// living synthesis); fallback to consolidations if zero match
+    /// or staleness fires.
+    pub const TOPIC_CARDS: usize = 1;
+    /// Phase11r §5.3 — section byte budget for the topic-card lane.
+    /// Drives the budget clipper; the section trims its synthesis
+    /// preview + evidence block to fit.
+    pub const TOPIC_CARDS_BYTES: usize = 1_400;
+    /// Phase11r §5.4 — staleness threshold. Cards older than this
+    /// (in days) AND with ≥ 1 fresh event since the last rewrite
+    /// trip the staleness advisory + downgrade.
+    pub const TOPIC_CARD_STALE_AGE_DAYS: u32 = 30;
+    /// Phase11r §5.4 — confidence floor below which the topic-card
+    /// section is downgraded behind consolidations.
+    pub const TOPIC_CARD_CONFIDENCE_FLOOR: f32 = 0.6;
     /// Max bytes per snippet text.
     pub const SNIPPET_BYTES: usize = 1024;
     /// Max bytes per decision body.
@@ -76,6 +92,13 @@ pub struct FormatOptions {
     pub past_session_prompt_byte_cap: usize,
     /// Maximum number of consolidations to render (phase11j §4.2).
     pub consolidations_cap: usize,
+    /// Phase11r §5.3 — maximum topic-card entries to render. Spec
+    /// pins the default at 1 (the top-priority living synthesis).
+    pub topic_cards_cap: usize,
+    /// Phase11r §5.3 — section byte budget for the topic-card
+    /// lane. Drives the synthesis preview + evidence trim inside
+    /// the section.
+    pub topic_cards_byte_cap: usize,
     /// Maximum number of snippets to render.
     pub snippets_cap: usize,
     /// Maximum number of graph neighbours to render.
@@ -97,6 +120,8 @@ impl Default for FormatOptions {
             past_sessions_cap: section_caps::PAST_SESSIONS,
             past_session_prompt_byte_cap: section_caps::PAST_SESSION_PROMPT_BYTES,
             consolidations_cap: section_caps::CONSOLIDATIONS,
+            topic_cards_cap: section_caps::TOPIC_CARDS,
+            topic_cards_byte_cap: section_caps::TOPIC_CARDS_BYTES,
             snippets_cap: section_caps::SNIPPETS,
             graph_cap: section_caps::GRAPH_NEIGHBORS,
             snippet_trim: SnippetTrim::Full,
@@ -121,6 +146,27 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
         .consolidations
         .len()
         .min(opts.consolidations_cap);
+    // Phase11r §5.3 + §5.4 — topic-card section count + staleness.
+    // The advisory + downgrade fires when confidence is below the
+    // floor OR (age > 30d AND ≥ 1 fresh event since the last
+    // rewrite). When stale, consolidations render before the topic
+    // card section; when fresh, the topic card leads.
+    let topic_cards_count = response
+        .results
+        .topic_cards
+        .len()
+        .min(opts.topic_cards_cap);
+    let topic_card_stale = topic_cards_count > 0
+        && response
+            .results
+            .topic_cards
+            .first()
+            .map(|c| {
+                c.confidence < section_caps::TOPIC_CARD_CONFIDENCE_FLOOR
+                    || (c.synthesis_age_d > section_caps::TOPIC_CARD_STALE_AGE_DAYS
+                        && c.events_since_last_rev > 0)
+            })
+            .unwrap_or(false);
     // Phase11j §4.3 — `Past sessions` falls back when zero
     // consolidations match. Computing both counts up-front so the
     // empty-bundle short-circuit accounts for either section
@@ -141,6 +187,7 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
         && decisions_count == 0
         && turns_count == 0
         && consolidations_count == 0
+        && topic_cards_count == 0
         && past_sessions_count == 0
         && snippets_count == 0
         && graph_count == 0
@@ -169,6 +216,34 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
             .ok();
         }
         out.push('\n');
+    }
+
+    // Phase11r §5.4 — topic card + consolidations ordering. The
+    // fresh path (default) leads with the topic card so the
+    // top-priority living synthesis lands first; the stale path
+    // demotes the topic card behind consolidations and stamps the
+    // advisory line above it. Both paths fall through to the
+    // decisions / similar_turns / past_sessions blocks below.
+    let cards_slice: &[cortex_api::TopicCardRef] = &response.results.topic_cards;
+    let cons_slice: &[cortex_api::ConsolidationRef] = &response.results.consolidations;
+    if topic_card_stale {
+        render_consolidations_section(&mut out, cons_slice, opts.consolidations_cap);
+        render_topic_card_section(
+            &mut out,
+            cards_slice,
+            opts.topic_cards_cap,
+            opts.topic_cards_byte_cap,
+            true,
+        );
+    } else {
+        render_topic_card_section(
+            &mut out,
+            cards_slice,
+            opts.topic_cards_cap,
+            opts.topic_cards_byte_cap,
+            false,
+        );
+        render_consolidations_section(&mut out, cons_slice, opts.consolidations_cap);
     }
 
     if decisions_count > 0 {
@@ -225,42 +300,6 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
                 date = date,
                 model = t.model,
                 summary = trim_one_line(&t.summary),
-            )
-            .ok();
-        }
-        out.push('\n');
-    }
-
-    // Phase11j §4.2 — "Consolidated context": one line per
-    // consolidation, ordered by upstream similarity. Format pins
-    // `grain/id · date · ✓|✗|⚠ · title` so the agent gets the
-    // distilled lesson without reading every turn that fed it.
-    // When ≥ 1 consolidation matches, this section replaces
-    // "Past sessions" (§4.3 fallback rule); otherwise it is
-    // skipped and "Past sessions" runs as before.
-    if consolidations_count > 0 {
-        writeln!(out, "## Consolidated context ({consolidations_count})").ok();
-        for (i, c) in response
-            .results
-            .consolidations
-            .iter()
-            .take(consolidations_count)
-            .enumerate()
-        {
-            let date = format_ts_date(c.ts);
-            writeln!(
-                out,
-                "{}. {grain}/{id} · {date_field} · {glyph} · {title}",
-                i + 1,
-                grain = c.grain,
-                id = c.consolidation_id,
-                date_field = if date.is_empty() {
-                    "—".to_string()
-                } else {
-                    date
-                },
-                glyph = outcome_glyph(c.outcome.as_deref()),
-                title = trim_one_line(&c.title),
             )
             .ok();
         }
@@ -424,6 +463,134 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
 
     out.push_str("<!-- end cortex -->\n");
     out
+}
+
+/// Phase11r §5.3 — render the "Topic card" section. Format pinned
+/// by spec:
+///
+/// ```text
+/// ## Topic card
+/// > stale-topic-card: <reason>           ← only when `stale`
+/// [<topic_slug>] (rev N, confidence X%, age Yd, +Z ev)
+/// <synthesis preview>
+///
+/// ### Evidence (N)
+/// - kind:id (cited@rev=N, w=…)
+///
+/// ### Open contradictions (N)
+/// - kind: A vs B (surfaced@rev=N)
+/// ```
+///
+/// `stale` controls whether the advisory line lands. The byte cap
+/// trims the synthesis preview + evidence block to fit.
+fn render_topic_card_section(
+    out: &mut String,
+    cards: &[cortex_api::TopicCardRef],
+    cap: usize,
+    byte_cap: usize,
+    stale: bool,
+) {
+    if cards.is_empty() || cap == 0 {
+        return;
+    }
+    out.push_str("## Topic card\n");
+    if stale {
+        out.push_str("> stale-topic-card: confidence below floor or synthesis stale with new evidence\n");
+    }
+    for c in cards.iter().take(cap) {
+        let confidence_pct = (c.confidence * 100.0).round() as i32;
+        writeln!(
+            out,
+            "[{slug}] (rev {rev}, confidence {pct}%, age {age}d, +{ev} ev)",
+            slug = c.topic_slug,
+            rev = c.revision,
+            pct = confidence_pct,
+            age = c.synthesis_age_d,
+            ev = c.events_since_last_rev,
+        )
+        .ok();
+        // Synthesis preview — clip to ~half the section budget so
+        // the evidence + contradictions blocks fit alongside.
+        let preview_cap = byte_cap / 2;
+        let preview = clip_utf8(&c.synthesis_preview, preview_cap);
+        if !preview.is_empty() {
+            writeln!(out, "{preview}").ok();
+        }
+        if !c.evidence_top5.is_empty() {
+            writeln!(out, "\n### Evidence ({n})", n = c.evidence_top5.len()).ok();
+            for e in &c.evidence_top5 {
+                let kind = format!("{:?}", e.kind).to_ascii_lowercase();
+                let weight = e
+                    .weight
+                    .map(|w| format!(", w={w:.2}"))
+                    .unwrap_or_default();
+                writeln!(
+                    out,
+                    "- {kind}:{id} (cited@rev={rev}{weight})",
+                    kind = kind,
+                    id = e.id,
+                    rev = e.cited_at_rev,
+                )
+                .ok();
+            }
+        }
+        if !c.open_contradictions.is_empty() {
+            writeln!(
+                out,
+                "\n### Open contradictions ({n})",
+                n = c.open_contradictions.len()
+            )
+            .ok();
+            for ct in &c.open_contradictions {
+                let kind = format!("{:?}", ct.kind);
+                writeln!(
+                    out,
+                    "- {kind}: {a} vs {b} (surfaced@rev={rev})",
+                    kind = kind,
+                    a = ct.evidence_a,
+                    b = ct.evidence_b,
+                    rev = ct.surfaced_at_rev,
+                )
+                .ok();
+            }
+        }
+    }
+    out.push('\n');
+}
+
+/// Phase11j §4.2 — render the "Consolidated context" section.
+/// Extracted into a helper so the §5.4 staleness reorder (consolidations
+/// before vs after the topic-card section) can call it from both
+/// branches without duplicating the body.
+fn render_consolidations_section(
+    out: &mut String,
+    consolidations: &[cortex_api::ConsolidationRef],
+    cap: usize,
+) {
+    if consolidations.is_empty() || cap == 0 {
+        return;
+    }
+    let count = consolidations.len().min(cap);
+    writeln!(out, "## Consolidated context ({count})").ok();
+    for (i, c) in consolidations.iter().take(count).enumerate() {
+        let date = format_ts_date(c.ts);
+        writeln!(
+            out,
+            "{}. {grain}/{id} · {date_field} · {glyph} · {title}",
+            i + 1,
+            grain = c.grain,
+            id = c.consolidation_id,
+            date_field = if date.is_empty() {
+                "—".to_string()
+            } else {
+                date
+            },
+            glyph = outcome_glyph(c.outcome.as_deref()),
+            title = trim_one_line(&c.title),
+        )
+        .ok();
+    }
+    out.push('\n');
 }
 
 fn render_snippet_header(s: &cortex_api::Snippet) -> String {
@@ -607,6 +774,7 @@ mod tests {
                 }],
                 past_sessions: Vec::new(),
                 consolidations: Vec::new(),
+                topic_cards: Vec::new(),
             },
             laws_active: vec![LawRef {
                 id: "LAW-012".into(),
@@ -1133,5 +1301,154 @@ mod tests {
         // the first three lines of text.
         assert!(bundle.contains("   1\n   2\n   3"));
         assert!(!bundle.contains("   4"));
+    }
+
+    // -------------------------------------------------------------
+    // Phase11r §5.3 + §5.4 — topic-card section + reorder + stale
+    // -------------------------------------------------------------
+
+    fn fresh_topic_card() -> cortex_api::TopicCardRef {
+        use cortex_core::events::{
+            Contradiction, ContradictionKind, ContradictionStatus, EvidenceKind, EvidenceRef,
+        };
+        cortex_api::TopicCardRef {
+            topic_card_id: "topic-".to_string() + &"a".repeat(24),
+            topic_slug: "auth-rewrite".to_string(),
+            revision: 3,
+            synthesis_preview:
+                "JWT validation now consolidated behind a single middleware so token \
+                rotation lands deterministically without the 5-minute cache lag."
+                    .to_string(),
+            evidence_top5: vec![EvidenceRef {
+                kind: EvidenceKind::Decision,
+                id: "DEC-0042".to_string(),
+                weight: Some(0.9),
+                cited_at_rev: 3,
+            }],
+            open_contradictions: vec![Contradiction {
+                kind: ContradictionKind::DecisionSupersession,
+                evidence_a: "DEC-0042".to_string(),
+                evidence_b: "DEC-0001".to_string(),
+                surfaced_at_rev: 3,
+                status: ContradictionStatus::Open,
+            }],
+            confidence: 0.82,
+            synthesis_age_d: 5,
+            events_since_last_rev: 2,
+            score: 0.91,
+        }
+    }
+
+    #[test]
+    fn topic_card_section_renders_when_present() {
+        let mut resp = populated_response();
+        resp.results.topic_cards = vec![fresh_topic_card()];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        // Section header + format line per spec §5.3.
+        assert!(bundle.contains("## Topic card"));
+        assert!(bundle.contains("[auth-rewrite] (rev 3, confidence 82%, age 5d, +2 ev)"));
+        // Synthesis preview lands.
+        assert!(bundle.contains("JWT validation"));
+        // Evidence + contradictions sub-blocks.
+        assert!(bundle.contains("### Evidence (1)"));
+        assert!(bundle.contains("decision:DEC-0042"));
+        assert!(bundle.contains("### Open contradictions (1)"));
+        // Fresh card → no advisory line.
+        assert!(!bundle.contains("stale-topic-card"));
+    }
+
+    #[test]
+    fn topic_cards_take_priority_over_consolidations() {
+        let mut resp = populated_response();
+        resp.results.topic_cards = vec![fresh_topic_card()];
+        resp.results.consolidations = vec![cortex_api::ConsolidationRef {
+            consolidation_id: "cons-ses-deadbeef".to_string(),
+            grain: "session".to_string(),
+            ts: 1_715_000_000_000,
+            title: "older session".to_string(),
+            outcome: Some("success".to_string()),
+            score: 0.8,
+        }];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        let topic_pos = bundle.find("## Topic card").unwrap();
+        let cons_pos = bundle.find("## Consolidated context").unwrap();
+        // Fresh card → topic card section appears BEFORE
+        // consolidations (per §5.4 default order).
+        assert!(
+            topic_pos < cons_pos,
+            "fresh topic card must render before consolidations: topic@{topic_pos} cons@{cons_pos}"
+        );
+    }
+
+    #[test]
+    fn stale_topic_card_advisory_downgrades_section() {
+        // §5.4 staleness: confidence below floor OR (age > 30 AND
+        // events_since_last_rev > 0). Trip both heuristics
+        // independently so each branch is exercised.
+        for stale_card in [
+            // Branch A: confidence floor.
+            cortex_api::TopicCardRef {
+                confidence: 0.4,
+                ..fresh_topic_card()
+            },
+            // Branch B: stale age + new events.
+            cortex_api::TopicCardRef {
+                synthesis_age_d: 45,
+                events_since_last_rev: 1,
+                ..fresh_topic_card()
+            },
+        ] {
+            let mut resp = populated_response();
+            resp.results.topic_cards = vec![stale_card];
+            resp.results.consolidations = vec![cortex_api::ConsolidationRef {
+                consolidation_id: "cons-ses-deadbeef".to_string(),
+                grain: "session".to_string(),
+                ts: 1_715_000_000_000,
+                title: "older session".to_string(),
+                outcome: Some("success".to_string()),
+                score: 0.8,
+            }];
+            let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+            let topic_pos = bundle.find("## Topic card").unwrap();
+            let cons_pos = bundle.find("## Consolidated context").unwrap();
+            // Stale card → consolidations render FIRST.
+            assert!(
+                cons_pos < topic_pos,
+                "stale topic card must render after consolidations: cons@{cons_pos} topic@{topic_pos}"
+            );
+            // Advisory line lands inside the topic card section.
+            assert!(bundle.contains("stale-topic-card"));
+        }
+    }
+
+    #[test]
+    fn topic_cards_cap_caps_section_size() {
+        let mut resp = populated_response();
+        // Two cards present, cap at 1 — only the first lands.
+        let mut second = fresh_topic_card();
+        second.topic_slug = "session-store".to_string();
+        resp.results.topic_cards = vec![fresh_topic_card(), second];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("[auth-rewrite]"));
+        assert!(!bundle.contains("[session-store]"));
+    }
+
+    #[test]
+    fn consolidations_render_when_no_topic_card_matches() {
+        // §5.4 fallback path — zero topic cards keeps the
+        // existing consolidation lane intact.
+        let mut resp = populated_response();
+        resp.results.consolidations = vec![cortex_api::ConsolidationRef {
+            consolidation_id: "cons-ses-deadbeef".to_string(),
+            grain: "session".to_string(),
+            ts: 1_715_000_000_000,
+            title: "older session".to_string(),
+            outcome: Some("success".to_string()),
+            score: 0.8,
+        }];
+        let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
+        assert!(bundle.contains("## Consolidated context"));
+        assert!(!bundle.contains("## Topic card"));
+        assert!(!bundle.contains("stale-topic-card"));
     }
 }

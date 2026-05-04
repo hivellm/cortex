@@ -29,8 +29,9 @@
 use std::collections::BTreeMap;
 
 use cortex_core::events::{
-    AgentCall as AgentCallPayload, AnalysisPayload, DecisionPayload, Kind, LawViolationPayload,
-    MemoryPayload, ToolCall as ToolCallPayload, TouchedArtifact, Turn as TurnPayload,
+    AgentCall as AgentCallPayload, AnalysisPayload, DecisionPayload, EvidenceKind, Kind,
+    LawViolationPayload, MemoryPayload, ToolCall as ToolCallPayload, TopicCardPayload,
+    TouchedArtifact, Turn as TurnPayload,
 };
 use serde_json::{json, Value};
 
@@ -133,7 +134,17 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
         // learnings. The dedicated `:Consolidation` label below
         // gives the dashboard a colour-coded slot.
         Kind::Consolidation => emit_memory(event, &session_id, &mut patch),
-        Kind::TopicCard => emit_memory(event, &session_id, &mut patch),
+        // phase11r §3.2 — TopicCard gets a dedicated emitter that lays
+        // down a `:TopicCard` node keyed by the deterministic
+        // `topic_card_id`, an `:OWNS` link from the Session for graph
+        // connectivity (matching the memory / consolidation pattern),
+        // one `:EVIDENCE_OF` edge per evidence item with the target
+        // label varying by `EvidenceKind`, and `:RELATED_TO` edges
+        // (bidirectional, deduped) for every entry in
+        // `related_topic_ids`. Heuristic sibling links — never block
+        // anything, just light up the graph view + power the
+        // `cortex_topic_neighbors` MCP walk that lands in §4.3.
+        Kind::TopicCard => emit_topic_card(event, &session_id, &mut patch),
     }
 
     // Sonnet-extracted entity/relation layer. Independent from the
@@ -707,6 +718,146 @@ fn emit_memory(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) 
         to_key: memory_id,
         props: BTreeMap::new(),
     });
+}
+
+/// phase11r §3.2 — translate a `topic_card.*` envelope into:
+///
+///   `(:Session)-[:OWNS]->(:TopicCard)`
+///   `(:TopicCard)-[:EVIDENCE_OF]->(:Decision|:Law|:Consolidation|:Turn)`
+///   `(:TopicCard)-[:RELATED_TO]->(:TopicCard)` (both directions)
+///
+/// Natural key for the `:TopicCard` node is the deterministic
+/// `topic_card_id` — re-emitting the same card across revisions
+/// upserts onto the same node and bumps `revision` in-place.
+fn emit_topic_card(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
+    let payload: Option<TopicCardPayload> =
+        serde_json::from_value(event.redacted_payload.clone()).ok();
+    let topic_card_key = payload
+        .as_ref()
+        .map(|p| p.topic_card_id.clone())
+        .unwrap_or_else(|| event.event_id.clone());
+
+    let mut props = BTreeMap::new();
+    props.insert("id".to_string(), Value::String(topic_card_key.clone()));
+    let display = payload
+        .as_ref()
+        .filter(|p| !p.topic_slug.is_empty())
+        .map(|p| format!("{} (rev {})", p.topic_slug, p.revision))
+        .unwrap_or_else(|| {
+            format!(
+                "TopicCard {}",
+                topic_card_key.chars().take(12).collect::<String>()
+            )
+        });
+    stamp_display_label(&mut props, &clip_display(&display, 96));
+    if let Some(p) = payload.as_ref() {
+        props.insert("topic_slug".to_string(), Value::String(p.topic_slug.clone()));
+        props.insert("revision".to_string(), Value::from(p.revision));
+        props.insert("confidence".to_string(), Value::from(p.confidence));
+        props.insert(
+            "synthesis_model".to_string(),
+            Value::String(p.synthesis_model.clone()),
+        );
+        props.insert(
+            "events_since_last_rev".to_string(),
+            Value::from(p.events_since_last_rev),
+        );
+        props.insert(
+            "last_rev_at".to_string(),
+            Value::String(p.last_rev_at.clone()),
+        );
+        if !p.repos.is_empty() {
+            props.insert(
+                "repos".to_string(),
+                Value::Array(p.repos.iter().cloned().map(Value::String).collect()),
+            );
+        }
+    }
+    patch.nodes.push(NodeOp {
+        label: "TopicCard".to_string(),
+        natural_key: topic_card_key.clone(),
+        external_id: Some(topic_card_key.clone()),
+        conflict_policy: ConflictPolicy::default(),
+        props,
+    });
+
+    // Session anchor — keeps the topic card reachable from the
+    // session graph the same way memories / consolidations are.
+    patch.edges.push(EdgeOp {
+        edge_type: "OWNS".to_string(),
+        from_label: "Session".to_string(),
+        from_key: session_id.to_string(),
+        to_label: "TopicCard".to_string(),
+        to_key: topic_card_key.clone(),
+        props: BTreeMap::new(),
+    });
+
+    let payload = match payload {
+        Some(p) => p,
+        None => return,
+    };
+
+    // EVIDENCE_OF edges — target node label depends on the
+    // `EvidenceKind` discriminator. The target node is created
+    // by its own emitter when the source envelope is processed;
+    // here we MERGE on (label, natural_key) so the edge stays
+    // connected even when the evidence event lands later.
+    let mut emitted_evidence: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
+    for ev in &payload.evidence {
+        let target_label = match ev.kind {
+            EvidenceKind::Consolidation => "Consolidation",
+            EvidenceKind::Decision => "Decision",
+            EvidenceKind::Law => "Law",
+            EvidenceKind::Turn => "Turn",
+        };
+        if !emitted_evidence.insert((target_label.to_string(), ev.id.clone())) {
+            continue;
+        }
+        let mut edge_props = BTreeMap::new();
+        edge_props.insert(
+            "evidence_kind".to_string(),
+            Value::String(target_label.to_ascii_lowercase()),
+        );
+        edge_props.insert("cited_at_rev".to_string(), Value::from(ev.cited_at_rev));
+        if let Some(w) = ev.weight {
+            edge_props.insert("weight".to_string(), Value::from(w));
+        }
+        patch.edges.push(EdgeOp {
+            edge_type: "EVIDENCE_OF".to_string(),
+            from_label: "TopicCard".to_string(),
+            from_key: topic_card_key.clone(),
+            to_label: target_label.to_string(),
+            to_key: ev.id.clone(),
+            props: edge_props,
+        });
+    }
+
+    // RELATED_TO edges — bidirectional + dedup. Self-references
+    // (a card listing itself in `related_topic_ids`) are dropped.
+    let mut emitted_related: std::collections::BTreeSet<(String, String)> =
+        std::collections::BTreeSet::new();
+    for related_id in &payload.related_topic_ids {
+        if related_id == &topic_card_key {
+            continue;
+        }
+        for (from, to) in [
+            (topic_card_key.clone(), related_id.clone()),
+            (related_id.clone(), topic_card_key.clone()),
+        ] {
+            if !emitted_related.insert((from.clone(), to.clone())) {
+                continue;
+            }
+            patch.edges.push(EdgeOp {
+                edge_type: "RELATED_TO".to_string(),
+                from_label: "TopicCard".to_string(),
+                from_key: from,
+                to_label: "TopicCard".to_string(),
+                to_key: to,
+                props: BTreeMap::new(),
+            });
+        }
+    }
 }
 
 fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {

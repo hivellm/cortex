@@ -1,5 +1,5 @@
 {
-  "version": "v5",
+  "version": "v6",
   "searchableAttributes": [
     "title",
     "body",
@@ -8,6 +8,8 @@
     "topics",
     "ext.tool_call.tool_name",
     "ext.consolidation.outcome_distribution",
+    "ext.topic_card.synthesis_markdown",
+    "ext.topic_card.topic_slug",
     "decision_title",
     "law_id"
   ],
@@ -31,6 +33,13 @@
     "ext.consolidation.depth",
     "ext.consolidation.model",
     "ext.consolidation.consolidation_id",
+    "ext.topic_card.topic_slug",
+    "ext.topic_card.revision",
+    "ext.topic_card.confidence",
+    "ext.topic_card.synthesis_age_d",
+    "ext.topic_card.contradictions_count",
+    "ext.topic_card.repos",
+    "ext.topic_card.synthesis_model",
     "decision_id",
     "decision_status",
     "decision_supersedes",
@@ -44,7 +53,13 @@
     "ext.consolidation.grain",
     "ext.consolidation.depth",
     "ext.consolidation.model",
-    "ext.consolidation.consolidation_id"
+    "ext.consolidation.consolidation_id",
+    "ext.topic_card.topic_slug",
+    "ext.topic_card.revision",
+    "ext.topic_card.confidence",
+    "ext.topic_card.synthesis_age_d",
+    "ext.topic_card.contradictions_count",
+    "ext.topic_card.synthesis_model"
   ],
   "displayedAttributes": ["*"],
   "rankingRules": [

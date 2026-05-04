@@ -246,6 +246,11 @@ pub const FAMILIES: &[&str] = &[
     "knowledge",
     "learnings",
     "consolidations",
+    // phase11r §3.1 — topic cards live in their own family so the
+    // synthesis lane stays independent of the per-session
+    // consolidations and the renderer can address them as
+    // top-priority context.
+    "topic_cards",
     "misc",
 ];
 
@@ -445,6 +450,7 @@ mod tests {
             Kind::Knowledge,
             Kind::Learning,
             Kind::Consolidation,
+            Kind::TopicCard,
         ] {
             assert!(
                 index_for_event_global(kind).is_none(),

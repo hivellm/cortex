@@ -24,4 +24,5 @@ async-trait = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+cortex-core = { path = "../cortex-core" }
 tempfile = { workspace = true }

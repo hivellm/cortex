@@ -530,6 +530,14 @@ pub struct ResultsBag {
     /// `past_sessions` when this is empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consolidations: Vec<ConsolidationRef>,
+    /// Phase11r §5.1 — topic-card overlay. When ≥ 1 topic card
+    /// matches the query above the staleness threshold, the
+    /// renderer's "Topic card" section takes priority over
+    /// `consolidations` (per §5.4 reorder); the section is
+    /// downgraded when staleness fires. Empty falls back through
+    /// `consolidations` → `past_sessions` → `snippets`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topic_cards: Vec<TopicCardRef>,
 }
 
 /// Phase11j §4.2 — one consolidation entry surfaced under
@@ -558,6 +566,44 @@ pub struct ConsolidationRef {
     pub outcome: Option<String>,
     /// Similarity score that placed this entry in the top-N.
     pub score: f64,
+}
+
+/// Phase11r §5.1 — one topic-card entry surfaced under
+/// `results.topic_cards`. Carries just the fields the pre-thinking
+/// renderer needs (id, slug, synthesis preview, top-5 evidence,
+/// open contradictions, confidence, age, events-since-last-rev,
+/// score). The full `TopicCardPayload` lives upstream in
+/// `cortex_topic_cards`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TopicCardRef {
+    /// Deterministic topic-card id (`topic-{24-hex}`).
+    pub topic_card_id: String,
+    /// Human-readable slug.
+    pub topic_slug: String,
+    /// Monotonic revision the renderer surfaces in the section
+    /// header line. Required by the §5.3 format
+    /// `[slug] (rev N, confidence X%, age Yd, +Z ev)`; the §5.1
+    /// brief omitted it but the §5.3 line spec needs the value.
+    pub revision: u32,
+    /// Clipped synthesis body. Spec §5.1: ≤ 600 bytes.
+    pub synthesis_preview: String,
+    /// Top-5 evidence items by `cited_at_rev` desc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_top5: Vec<cortex_core::events::EvidenceRef>,
+    /// Open (`status == Open`) contradictions only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_contradictions: Vec<cortex_core::events::Contradiction>,
+    /// Synthesis confidence, `0.0..=1.0`.
+    pub confidence: f32,
+    /// Age in days since `last_rev_at` — drives the §5.4
+    /// staleness advisory.
+    pub synthesis_age_d: u32,
+    /// Counter of new evidence events observed since the last
+    /// rewrite. Drives the staleness advisory together with
+    /// `synthesis_age_d`.
+    pub events_since_last_rev: u32,
+    /// Similarity score that placed this card in the top-N.
+    pub score: f32,
 }
 
 /// Convenience helper to build an empty response stamped with a fresh
