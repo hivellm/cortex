@@ -16,6 +16,7 @@ pub mod embedder;
 pub mod identity;
 pub mod metrics;
 pub mod routing;
+pub mod token_cache;
 pub mod vectorizer_client;
 pub mod worker;
 
@@ -28,6 +29,9 @@ pub use embedder::{EmbedError, EmbedReport, Embedder, EnrichedEvent, VectorizerE
 pub use identity::dedup_key;
 pub use metrics::Metrics;
 pub use routing::collection_for;
+pub use token_cache::{
+    parse_jwt_exp_ms, TokenCache, DEFAULT_TOKEN_TTL_SECS, REFRESH_BUFFER_SECS,
+};
 pub use vectorizer_client::{
     with_retry, CollectionSchema, LiveVectorizerClient, MemoryCall, MemoryVectorizerClient, Metric,
     UpsertReport, UpsertedChunk, VectorizerClient, VectorizerClientError,

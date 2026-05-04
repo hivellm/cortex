@@ -7,15 +7,16 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use cortex_storage::MetadataStore;
 use cortex_workers::admin_health::{
     resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_GRAPH_PORT,
 };
 use cortex_workers::graph::{
     cypher::{load_from_dir, REQUIRED_TEMPLATES},
-    worker::{LiveSynapConsumer, LiveSynapPublisher, SynapHandle},
+    worker::{LiveSynapConsumer, LiveSynapPublisher, SynapHandle, STREAM_ENRICHED},
     GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter, Worker,
 };
 use tracing_subscriber::{fmt, EnvFilter};
@@ -56,7 +57,31 @@ async fn main() -> Result<()> {
         SynapHandle::new(&config.synap_url)
             .with_context(|| format!("failed to connect to Synap at {}", config.synap_url))?,
     );
-    let consumer = Arc::new(LiveSynapConsumer::new(synap.clone()));
+    // Phase11s §2.3 — open the metadata store so the consumer's
+    // offset survives container restarts. `CORTEX_GRAPH_METADATA_DB`
+    // overrides the path; legacy default is `${CORTEX_HOME}/metadata.sqlite`.
+    let metadata_path = resolve_metadata_db_path();
+    let metadata = Arc::new(Mutex::new(
+        MetadataStore::open(&metadata_path)
+            .with_context(|| format!("open metadata store at {metadata_path:?}"))?,
+    ));
+    // Phase11s §2.3 — `consumer_id` partitions the offset ledger so
+    // multiple graph-worker replicas can share the SQLite file
+    // without colliding. Default to the env hostname / container
+    // name; fall back to "cortex-graph-0" for single-instance dev.
+    let consumer_id = std::env::var("CORTEX_GRAPH_CONSUMER_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "cortex-graph-0".to_string());
+    let consumer = Arc::new(
+        LiveSynapConsumer::with_persistent_offset(
+            synap.clone(),
+            metadata.clone(),
+            &consumer_id,
+            STREAM_ENRICHED,
+        )
+        .with_context(|| format!("build durable graph consumer ({consumer_id})"))?,
+    );
     let publisher = Arc::new(LiveSynapPublisher::new(synap));
 
     let worker = Arc::new(Worker::new(config, writer, consumer, publisher, metrics));
@@ -116,4 +141,35 @@ async fn main() -> Result<()> {
     );
 
     worker.run_pool(shutdown).await
+}
+
+/// Phase11s §2.3 — resolve the SQLite metadata path the durable
+/// consumer-offset ledger lives in. Precedence matches the
+/// classifier worker so a single-host deploy points every worker
+/// at the same DB.
+/// 1. `CORTEX_GRAPH_METADATA_DB` (graph-worker-only override).
+/// 2. `CORTEX_METADATA_DB` (shared override).
+/// 3. `${CORTEX_HOME}/metadata.sqlite` when `CORTEX_HOME` is set.
+/// 4. `<home>/.cortex/metadata.sqlite` (cross-platform default).
+fn resolve_metadata_db_path() -> PathBuf {
+    if let Ok(p) = std::env::var("CORTEX_GRAPH_METADATA_DB") {
+        return PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+        return PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("CORTEX_HOME") {
+        return PathBuf::from(home).join("metadata.sqlite");
+    }
+    home_dir().join(".cortex").join("metadata.sqlite")
+}
+
+fn home_dir() -> PathBuf {
+    if let Ok(h) = std::env::var("HOME") {
+        return PathBuf::from(h);
+    }
+    if let Ok(h) = std::env::var("USERPROFILE") {
+        return PathBuf::from(h);
+    }
+    PathBuf::from(".")
 }

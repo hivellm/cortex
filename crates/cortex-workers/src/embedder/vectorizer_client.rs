@@ -274,7 +274,11 @@ where
 /// surface.
 pub struct LiveVectorizerClient {
     config: EmbedderConfig,
-    sdk: SdkClient,
+    /// Phase11s §3.2 — wrap the SDK client so token rotation can
+    /// rebuild it (the SDK 3.0.3 takes the bearer at construction
+    /// and never refreshes; rotating the JWT in-place requires
+    /// swapping the entire SDK client behind this lock).
+    sdk: tokio::sync::RwLock<SdkClient>,
     /// Direct HTTP client used ONLY for the one surface the SDK does not
     /// expose: paginated `GET /collections/{c}/vectors`, needed by
     /// [`VectorizerClient::exists`] because the server's per-id
@@ -283,6 +287,30 @@ pub struct LiveVectorizerClient {
     /// `SdkClient::get_vector` and ADR 0001 for details.
     http: reqwest::Client,
     max_retry: u32,
+    /// Phase11s §3.2 — token cache. Empty when the client was
+    /// built directly from a static JWT (legacy path); populated
+    /// when the client was built via [`Self::with_credentials`]
+    /// and is responsible for refreshing.
+    token_cache: std::sync::Arc<super::token_cache::TokenCache>,
+    /// Phase11s §3.2 — credentials used to re-login when the
+    /// cached token nears expiry. `None` means no auto-refresh.
+    credentials: Option<VectorizerCredentials>,
+}
+
+/// Phase11s §3.2 — credentials the token-refresh path uses. The
+/// embedder bin populates these from `CORTEX_EMBEDDER_VECTORIZER_USER`
+/// + `CORTEX_EMBEDDER_VECTORIZER_PASSWORD` so a token rotation
+/// keeps using the same identity. When the original config carried
+/// a raw JWT (no username/password), this stays `None` and the
+/// client runs in legacy-no-refresh mode.
+#[derive(Debug, Clone)]
+pub struct VectorizerCredentials {
+    /// Vectorizer base URL the client logs in against.
+    pub base_url: String,
+    /// Username.
+    pub username: String,
+    /// Password.
+    pub password: String,
 }
 
 impl LiveVectorizerClient {
@@ -305,12 +333,121 @@ impl LiveVectorizerClient {
             .build()
             .map_err(|e| VectorizerClientError::Other(format!("reqwest client: {e}")))?;
         let max_retry = config.max_retry.max(1);
+        let token_cache = std::sync::Arc::new(super::token_cache::TokenCache::new());
+        // Seed the cache with whatever JWT the config supplies so
+        // `last_login_ts_ms` reads correctly before the first
+        // refresh fires. Expiry parsed from the JWT's `exp` claim
+        // when present; falls back to `now + DEFAULT_TOKEN_TTL_SECS`.
+        if let Some(token) = config.vectorizer_password.clone() {
+            let now_ms = chrono::Utc::now().timestamp_millis().max(0);
+            let expires_at_ms = super::token_cache::parse_jwt_exp_ms(&token)
+                .unwrap_or_else(|| {
+                    now_ms.saturating_add(
+                        super::token_cache::DEFAULT_TOKEN_TTL_SECS.saturating_mul(1_000),
+                    )
+                });
+            token_cache.record_refresh(token, expires_at_ms, now_ms);
+        }
         Ok(Self {
             config,
-            sdk,
+            sdk: tokio::sync::RwLock::new(sdk),
             http,
             max_retry,
+            token_cache,
+            credentials: None,
         })
+    }
+
+    /// Phase11s §3.2 — build a client that owns its credentials and
+    /// automatically refreshes the JWT before expiry. Runs `/auth/login`
+    /// once at construction so the cache holds a fresh token; from
+    /// there [`Self::ensure_token_fresh`] handles rotation.
+    pub async fn with_credentials(
+        mut config: EmbedderConfig,
+        credentials: VectorizerCredentials,
+    ) -> Result<Self, VectorizerClientError> {
+        // Initial login. The minted JWT lands on the config so the
+        // first SDK build below uses it as the bearer.
+        let jwt = Self::login(
+            &credentials.base_url,
+            &credentials.username,
+            &credentials.password,
+        )
+        .await?;
+        config.vectorizer_url = credentials.base_url.clone();
+        config.vectorizer_password = Some(jwt.access_token.clone());
+        let mut client = Self::new(config)?;
+        client.credentials = Some(credentials);
+        Ok(client)
+    }
+
+    /// Phase11s §3.2 — refresh the JWT when the cache reports
+    /// `should_refresh`. No-op when:
+    ///   - no credentials are configured (legacy static-JWT mode), or
+    ///   - the cached token is still within
+    ///     [`super::token_cache::REFRESH_BUFFER_SECS`] of expiry.
+    ///
+    /// Failures are recorded on the cache via `record_error` so
+    /// /healthz surfaces them; the live token is left intact (a
+    /// transient login failure does not invalidate a still-valid
+    /// bearer). The caller decides whether to propagate the Err
+    /// or continue with the stale token.
+    pub async fn ensure_token_fresh(&self) -> Result<(), VectorizerClientError> {
+        let credentials = match self.credentials.as_ref() {
+            Some(c) => c,
+            None => return Ok(()), // legacy mode — caller manages tokens
+        };
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0);
+        if !self.token_cache.should_refresh(now_ms) {
+            return Ok(());
+        }
+        match Self::login(
+            &credentials.base_url,
+            &credentials.username,
+            &credentials.password,
+        )
+        .await
+        {
+            Ok(jwt) => {
+                let expires_at_ms = super::token_cache::parse_jwt_exp_ms(&jwt.access_token)
+                    .unwrap_or_else(|| {
+                        now_ms.saturating_add(
+                            super::token_cache::DEFAULT_TOKEN_TTL_SECS.saturating_mul(1_000),
+                        )
+                    });
+                let token = jwt.access_token.clone();
+                self.token_cache
+                    .record_refresh(token.clone(), expires_at_ms, now_ms);
+                // Rebuild the SDK client with the fresh JWT so
+                // every subsequent SDK call rides the new bearer.
+                let sdk_config = ClientConfig {
+                    base_url: Some(credentials.base_url.clone()),
+                    api_key: Some(token),
+                    timeout_secs: Some(30),
+                    ..ClientConfig::default()
+                };
+                let new_sdk = SdkClient::new(sdk_config).map_err(sdk_error)?;
+                *self.sdk.write().await = new_sdk;
+                tracing::info!(
+                    last_login_ts_ms = self.token_cache.last_login_ts_ms(),
+                    refreshes_total = self.token_cache.refreshes_total(),
+                    "vectorizer JWT refreshed"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                self.token_cache.record_error();
+                tracing::warn!(error = %e, "vectorizer JWT refresh failed; keeping stale token");
+                Err(e)
+            }
+        }
+    }
+
+    /// Phase11s §3.2 — read-only access to the token cache so the
+    /// bin's /healthz extras + Prometheus renderer can surface the
+    /// counters.
+    pub fn token_cache(&self) -> &std::sync::Arc<super::token_cache::TokenCache> {
+        &self.token_cache
     }
 
     /// Convenience: call `POST /auth/login` via the SDK and return the
@@ -348,8 +485,13 @@ impl LiveVectorizerClient {
     /// Underlying SDK client — exposed for tests and advanced callers
     /// that need to reach surfaces not mapped through the [`VectorizerClient`]
     /// trait (e.g. `search_vectors`, `delete_collection`).
-    pub fn sdk(&self) -> &SdkClient {
-        &self.sdk
+    ///
+    /// Phase11s §3.2 — async because the SDK lives behind an
+    /// `RwLock` so [`Self::ensure_token_fresh`] can rebuild it on
+    /// JWT rotation. The returned guard is read-only; concurrent
+    /// SDK calls share it.
+    pub async fn sdk(&self) -> tokio::sync::RwLockReadGuard<'_, SdkClient> {
+        self.sdk.read().await
     }
 
     /// Fetch every stored vector's `payload.dedup_key` in `collection` by
@@ -437,8 +579,13 @@ impl VectorizerClient for LiveVectorizerClient {
         name: &str,
         schema: &CollectionSchema,
     ) -> Result<(), VectorizerClientError> {
+        // Phase11s §3.2 — refresh the JWT before any SDK call so an
+        // expiring token never races a request. No-op when the
+        // client runs in legacy static-JWT mode.
+        let _ = self.ensure_token_fresh().await;
         let lookup = with_retry(self.max_retry, || async {
-            match self.sdk.get_collection_info(name).await {
+            let sdk = self.sdk.read().await;
+            match sdk.get_collection_info(name).await {
                 Ok(info) => Ok(Some(info)),
                 Err(VectorizerError::CollectionNotFound { .. }) => Ok(None),
                 Err(err) if is_collection_not_found(&err) => Ok(None),
@@ -473,8 +620,8 @@ impl VectorizerClient for LiveVectorizerClient {
 
         let metric: SimilarityMetric = schema.metric.into();
         with_retry(self.max_retry, || async {
-            self.sdk
-                .create_collection(name, schema.dim as usize, Some(metric))
+            let sdk = self.sdk.read().await;
+            sdk.create_collection(name, schema.dim as usize, Some(metric))
                 .await
                 .map(|_| ())
                 .map_err(sdk_error)
@@ -495,6 +642,11 @@ impl VectorizerClient for LiveVectorizerClient {
         // id (`client_id`, which we set to the chunk's `dedup_key`) and
         // the server-assigned `vector_ids`. That mapping is what
         // `UpsertedChunk` carries.
+        // Phase11s §3.2 — refresh JWT before the upsert loop. The
+        // 2026-05-03 incident showed every embed call returning 401
+        // when this path ran without rotation; ensure_token_fresh
+        // is the structural fix.
+        let _ = self.ensure_token_fresh().await;
         let mut total_written = 0u32;
         let mut total_failed = 0u32;
         let mut new_entries: Vec<UpsertedChunk> = Vec::with_capacity(chunks.len());
@@ -503,8 +655,8 @@ impl VectorizerClient for LiveVectorizerClient {
             let response = with_retry(self.max_retry, || {
                 let payload = payload.clone();
                 async move {
-                    self.sdk
-                        .insert_texts(collection, payload)
+                    let sdk = self.sdk.read().await;
+                    sdk.insert_texts(collection, payload)
                         .await
                         .map_err(sdk_error)
                 }

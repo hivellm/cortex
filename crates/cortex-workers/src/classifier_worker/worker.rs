@@ -36,6 +36,23 @@ use synap_sdk::{SynapClient, SynapConfig};
 use super::config::ClassifierWorkerConfig;
 use super::kinds::kind_from_bootstrap;
 
+/// Phase11s §1.2 — default supervisor threshold for consecutive
+/// `run_once` failures before [`Worker::run_forever`] returns an
+/// error so docker `restart: unless-stopped` recovers the container.
+pub const DEFAULT_MAX_CONSUME_ERRORS: u64 = 5;
+
+/// Phase11s §1.2 — read the supervisor threshold from
+/// `CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS`. Falls back to
+/// [`DEFAULT_MAX_CONSUME_ERRORS`] when unset / unparseable. A value
+/// of `0` disables the supervisor (kept dormant for the original
+/// pre-§1.2 behaviour when an operator wants it off).
+pub fn max_consume_errors_from_env() -> u64 {
+    std::env::var("CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MAX_CONSUME_ERRORS)
+}
+
 /// Synap stream — live ingestion writes raw envelopes here.
 pub const STREAM_RAW: &str = "cortex.events.raw";
 /// Synap stream — `cortex-bootstrap` writes synthetic envelopes here.
@@ -536,6 +553,22 @@ pub struct Worker {
     pub jobs_processed_total: AtomicU64,
     /// Phase8b — Unix-epoch ms of the most recent successful job.
     pub last_job_ts_ms: AtomicU64,
+    /// Phase11s §1.3 — Unix-epoch ms of the most recent successful
+    /// `run_once` return (regardless of whether it handled events).
+    /// Distinct from [`last_job_ts_ms`] which only bumps when ≥ 1
+    /// event was handled — the consume-loop liveness probe must
+    /// see "we touched Synap" not just "we processed work".
+    pub last_consume_ts_ms: AtomicU64,
+    /// Phase11s §1.2 — consecutive `run_once` failures. Reset to 0
+    /// on every successful return. Drives the supervisor exit when
+    /// the count crosses [`Self::max_consume_errors`].
+    pub consume_errors_consecutive: AtomicU64,
+    /// Phase11s §1.2 — supervisor threshold. After N consecutive
+    /// `run_once` failures, [`Self::run_forever`] returns an error
+    /// so the bin's main propagates the non-zero exit and docker's
+    /// `restart: unless-stopped` recovers the container fresh.
+    /// Sourced from `CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS` (default 5).
+    pub max_consume_errors: u64,
 }
 
 impl Worker {
@@ -558,6 +591,9 @@ impl Worker {
             processed: Mutex::new(BTreeSet::new()),
             jobs_processed_total: AtomicU64::new(0),
             last_job_ts_ms: AtomicU64::new(0),
+            last_consume_ts_ms: AtomicU64::new(0),
+            consume_errors_consecutive: AtomicU64::new(0),
+            max_consume_errors: max_consume_errors_from_env(),
         }
     }
 
@@ -580,6 +616,23 @@ impl Worker {
     pub fn last_job_ts_ms(&self) -> u64 {
         self.last_job_ts_ms.load(Ordering::Relaxed)
     }
+    /// Phase11s §1.3 — read the most-recent successful `run_once`
+    /// timestamp. Liveness probe — distinct from `last_job_ts_ms`
+    /// which only bumps on non-zero handled batches.
+    pub fn last_consume_ts_ms(&self) -> u64 {
+        self.last_consume_ts_ms.load(Ordering::Relaxed)
+    }
+    /// Phase11s §1.2 — read the consecutive-error counter.
+    pub fn consume_errors_consecutive(&self) -> u64 {
+        self.consume_errors_consecutive.load(Ordering::Relaxed)
+    }
+    /// Phase11s §1.2 — override the supervisor threshold. Tests
+    /// use this to verify the exit-on-threshold contract without
+    /// touching the `CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS` env var.
+    pub fn with_max_consume_errors(mut self, max: u64) -> Self {
+        self.max_consume_errors = max;
+        self
+    }
     /// Phase8b — render the classifier counters in Prometheus text format.
     pub fn render_prom(&self) -> String {
         use std::fmt::Write as _;
@@ -595,6 +648,22 @@ impl Worker {
             out,
             "cortex_classifier_last_job_ts_ms {}",
             self.last_job_ts_ms()
+        );
+        // Phase11s §1.3 — `last_consume_ts_ms` powers the operator
+        // staleness probe. Distinct from `last_job_ts_ms` because
+        // the consume loop must report forward progress even when
+        // a poll returns zero events.
+        out.push_str("# TYPE cortex_classifier_last_consume_ts_ms gauge\n");
+        let _ = writeln!(
+            out,
+            "cortex_classifier_last_consume_ts_ms {}",
+            self.last_consume_ts_ms()
+        );
+        out.push_str("# TYPE cortex_classifier_consume_errors_consecutive gauge\n");
+        let _ = writeln!(
+            out,
+            "cortex_classifier_consume_errors_consecutive {}",
+            self.consume_errors_consecutive()
         );
         out
     }
@@ -641,20 +710,67 @@ impl Worker {
         Ok(handled)
     }
 
-    /// Long-running loop until `shutdown` flips.
+    /// Long-running loop until `shutdown` flips, or until the
+    /// supervisor trips on `max_consume_errors` consecutive
+    /// `run_once` failures (phase11s §1.2). On supervisor trip
+    /// the function returns an `Err` so the bin's `main` propagates
+    /// the non-zero exit and docker `restart: unless-stopped`
+    /// recovers the container fresh. The 2026-05-02 incident
+    /// where the worker stayed dormant for 26 hours after a single
+    /// `synap consume` failure is the regression this guards
+    /// against.
     pub async fn run_forever(&self, shutdown: Arc<AtomicBool>) -> Result<()> {
         tracing::info!(
             workers = self.config.workers,
             batch = self.config.batch_size,
             mode = ?self.config.mode,
             synap = %self.config.synap_url,
+            max_consume_errors = self.max_consume_errors,
             "cortex-classifier-worker started"
         );
         while !shutdown.load(Ordering::Relaxed) {
             let handled = match self.run_once().await {
-                Ok(n) => n,
+                Ok(n) => {
+                    // Phase11s §1.2 + §1.3 — successful return:
+                    // reset the consecutive-error counter and
+                    // stamp `last_consume_ts_ms` regardless of
+                    // whether the batch was empty.
+                    self.consume_errors_consecutive
+                        .store(0, Ordering::Relaxed);
+                    let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                    self.last_consume_ts_ms.store(now_ms, Ordering::Relaxed);
+                    n
+                }
                 Err(e) => {
-                    tracing::warn!(error = %e, "run_once failed; backing off");
+                    let consecutive = self
+                        .consume_errors_consecutive
+                        .fetch_add(1, Ordering::Relaxed)
+                        + 1;
+                    tracing::warn!(
+                        error = %e,
+                        consecutive,
+                        threshold = self.max_consume_errors,
+                        "run_once failed; backing off"
+                    );
+                    if self.max_consume_errors > 0 && consecutive >= self.max_consume_errors {
+                        // Phase11s §1.2 — supervisor exit. Return
+                        // an Err so the bin's main propagates the
+                        // non-zero exit; docker restarts the
+                        // container. Cleaner than process::exit(1)
+                        // because it stays unit-testable and
+                        // composes with the existing run_pool join.
+                        tracing::error!(
+                            consecutive,
+                            threshold = self.max_consume_errors,
+                            last_error = %e,
+                            "supervisor: consecutive consume errors hit threshold; \
+                             requesting restart via non-zero exit"
+                        );
+                        return Err(anyhow::anyhow!(
+                            "consume loop stuck: {consecutive} consecutive errors (threshold {})",
+                            self.max_consume_errors
+                        ));
+                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
                     continue;
                 }
@@ -935,5 +1051,194 @@ mod tests {
         let norm = NormalisedEvent::from_canonical_envelope(&env_json).expect("normalise");
         assert_eq!(norm.tool.as_deref(), Some("claude-code"));
         assert_eq!(norm.kind, Kind::Turn);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase11s §1 — supervisor + liveness probe regression tests.
+    // -----------------------------------------------------------------
+
+    /// Always-failing consumer used to drive the supervisor through
+    /// the consecutive-error threshold without touching live Synap.
+    struct AlwaysFailingConsumer;
+
+    #[async_trait]
+    impl SynapConsumer for AlwaysFailingConsumer {
+        async fn next_batch(
+            &self,
+            _room: &str,
+            _max: usize,
+        ) -> Result<Vec<ConsumedMessage>> {
+            Err(anyhow::anyhow!("synap consume: simulated transport error"))
+        }
+        async fn ack(&self, _room: &str, _offset: u64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// No-op publisher — the failing consumer short-circuits before
+    /// publish runs, so the supervisor tests never reach this code.
+    struct NoopPublisher;
+
+    #[async_trait]
+    impl SynapPublisher for NoopPublisher {
+        async fn publish(&self, _room: &str, _envelope: &Value) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// No-op classifier — never reached in supervisor tests because
+    /// the always-failing consumer aborts the batch upstream.
+    struct NoopClassifier;
+
+    #[async_trait]
+    impl Classifier for NoopClassifier {
+        async fn classify_batch(
+            &self,
+            _events: &[EnrichmentInput],
+        ) -> Result<Vec<ClassifierOutput>, crate::classifier::ClassifierError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn supervisor_worker(threshold: u64) -> Worker {
+        Worker::new(
+            ClassifierWorkerConfig::default(),
+            Arc::new(NoopClassifier),
+            Arc::new(AlwaysFailingConsumer),
+            Arc::new(NoopPublisher),
+        )
+        .with_max_consume_errors(threshold)
+        .with_input_streams(vec![STREAM_RAW.to_string()])
+    }
+
+    #[tokio::test]
+    async fn supervisor_returns_err_when_consecutive_errors_hit_threshold() {
+        // Phase11s §1.5 — the supervisor MUST return Err after N
+        // consecutive consume errors so docker `restart:
+        // unless-stopped` recovers a stuck container. Pin the
+        // contract: 3 consecutive errors at threshold=3 trip the
+        // exit, and the consume-errors-consecutive counter
+        // surfaces the exact count for /healthz.
+        let worker = supervisor_worker(3);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let result = worker.run_forever(shutdown).await;
+        let err = result.expect_err("supervisor must trip");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("consume loop stuck"),
+            "error must surface the supervisor exit reason: {msg}"
+        );
+        assert!(
+            msg.contains("threshold 3"),
+            "error must echo the configured threshold: {msg}"
+        );
+        // Counter reflects the consecutive failures up to the
+        // moment the supervisor tripped — at threshold N the
+        // counter is exactly N (incremented before the threshold
+        // check fires).
+        assert_eq!(worker.consume_errors_consecutive(), 3);
+        // last_consume_ts_ms stays 0 because every consume failed.
+        assert_eq!(worker.last_consume_ts_ms(), 0);
+    }
+
+    #[tokio::test]
+    async fn supervisor_threshold_zero_disables_exit() {
+        // Phase11s §1.2 — threshold = 0 keeps the pre-§1.2
+        // dormant-loop behaviour (operators can opt out). The
+        // worker logs the warning forever; we drive it for a
+        // bounded number of iterations via the shutdown flag and
+        // assert it never returned Err.
+        let worker = Arc::new(supervisor_worker(0));
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_for_kill = shutdown.clone();
+        let kill = tokio::spawn(async move {
+            // Real time — let the loop fail a handful of times
+            // (each iteration sleeps 500ms in run_forever's
+            // back-off branch) then signal shutdown.
+            tokio::time::sleep(Duration::from_millis(1_500)).await;
+            shutdown_for_kill.store(true, Ordering::Relaxed);
+        });
+        let result = worker.run_forever(shutdown).await;
+        let _ = kill.await;
+        result.expect("threshold=0 must keep the loop alive until shutdown");
+    }
+
+    /// Consumer that fails N times then succeeds — exercises the
+    /// reset-on-success contract.
+    struct FlakyThenStableConsumer {
+        remaining_failures: AtomicU64,
+    }
+
+    #[async_trait]
+    impl SynapConsumer for FlakyThenStableConsumer {
+        async fn next_batch(
+            &self,
+            _room: &str,
+            _max: usize,
+        ) -> Result<Vec<ConsumedMessage>> {
+            // Saturating-at-zero decrement — the naive
+            // `fetch_sub > 0` check wraps around u64 and reverts
+            // to perpetual failures, which masks the
+            // counter-reset contract under test.
+            let prior = self
+                .remaining_failures
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| {
+                    Some(v.saturating_sub(1))
+                })
+                .unwrap_or(0);
+            if prior > 0 {
+                Err(anyhow::anyhow!("transient blip"))
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        async fn ack(&self, _room: &str, _offset: u64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn consume_error_counter_resets_on_successful_return() {
+        // Phase11s §1.2 — a transient blip (2 failures, then
+        // recovery) MUST not trip the supervisor when the
+        // threshold is 5. The counter resets to 0 on the first
+        // successful return, and `last_consume_ts_ms` lands.
+        let worker = Arc::new(
+            Worker::new(
+                ClassifierWorkerConfig::default(),
+                Arc::new(NoopClassifier),
+                Arc::new(FlakyThenStableConsumer {
+                    remaining_failures: AtomicU64::new(2),
+                }),
+                Arc::new(NoopPublisher),
+            )
+            .with_max_consume_errors(5)
+            .with_input_streams(vec![STREAM_RAW.to_string()]),
+        );
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_for_kill = shutdown.clone();
+        let kill = tokio::spawn(async move {
+            // Two failures (500ms back-off each) + at least one
+            // success cycle (200ms idle when handled=0) before
+            // signalling shutdown.
+            tokio::time::sleep(Duration::from_millis(1_500)).await;
+            shutdown_for_kill.store(true, Ordering::Relaxed);
+        });
+        let result = worker.run_forever(shutdown).await;
+        let _ = kill.await;
+        result.expect("transient blip must not trip supervisor");
+        assert_eq!(worker.consume_errors_consecutive(), 0);
+        assert!(
+            worker.last_consume_ts_ms() > 0,
+            "last_consume_ts_ms must land after the first successful return"
+        );
+    }
+
+    #[test]
+    fn max_consume_errors_default_is_five() {
+        // Phase11s §1.2 — pin the default constant so a future
+        // bump surfaces here before the operator runbook gets
+        // out of sync.
+        assert_eq!(DEFAULT_MAX_CONSUME_ERRORS, 5);
     }
 }

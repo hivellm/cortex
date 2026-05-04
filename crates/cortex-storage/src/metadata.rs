@@ -603,6 +603,90 @@ impl MetadataStore {
         Ok(rows)
     }
 
+    // ---------- phase11s consumer-offset helpers ----------
+
+    /// Phase11s §2.3 — look up the persisted offset for `(consumer_id,
+    /// stream)`. Returns `None` when the consumer has never advanced
+    /// (boot defaults to offset 0 in that case so the worker walks
+    /// the whole stream from the beginning).
+    pub fn consumer_offset_lookup(
+        &self,
+        consumer_id: &str,
+        stream: &str,
+    ) -> Result<Option<ConsumerOffsetRow>, MetadataError> {
+        let row = self
+            .conn
+            .query_row(
+                "SELECT last_offset, last_event_id, updated_at FROM consumer_offsets
+                 WHERE consumer_id = ?1 AND stream = ?2",
+                params![consumer_id, stream],
+                |r| {
+                    Ok(ConsumerOffsetRow {
+                        last_offset: r.get::<_, i64>(0)?.max(0) as u64,
+                        last_event_id: r.get::<_, Option<String>>(1)?,
+                        updated_at: r.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Phase11s §2.3 — upsert the persisted offset for `(consumer_id,
+    /// stream)`. Idempotent. Callers invoke this on every successful
+    /// batch flush so a worker restart resumes from the next event
+    /// after the last persisted offset.
+    pub fn consumer_offset_upsert(
+        &self,
+        consumer_id: &str,
+        stream: &str,
+        last_offset: u64,
+        last_event_id: Option<&str>,
+    ) -> Result<(), MetadataError> {
+        let updated_at = Utc::now().to_rfc3339();
+        // Cap at i64::MAX — SQLite INTEGER is 64-bit signed; offsets
+        // beyond 2^63 would corrupt the row, but Synap streams roll
+        // over long before that.
+        let stored_offset = last_offset.min(i64::MAX as u64) as i64;
+        self.conn.execute(
+            "INSERT INTO consumer_offsets (consumer_id, stream, last_offset, last_event_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(consumer_id, stream) DO UPDATE SET
+               last_offset    = MAX(consumer_offsets.last_offset, excluded.last_offset),
+               last_event_id  = excluded.last_event_id,
+               updated_at     = excluded.updated_at",
+            params![consumer_id, stream, stored_offset, last_event_id, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Phase11s §2.4 — force the persisted offset back to `target_offset`
+    /// for the given `(consumer_id, stream)` pair. Used by the
+    /// `cortex-ops graph replay --since=<event_id>` subcommand to
+    /// rewind a consumer cursor when an operator knows a window
+    /// was lost. Unlike [`Self::consumer_offset_upsert`] this does NOT
+    /// take the MAX of stored vs. supplied — replay must be able to
+    /// move BACKWARDS in the stream.
+    pub fn consumer_offset_set(
+        &self,
+        consumer_id: &str,
+        stream: &str,
+        target_offset: u64,
+    ) -> Result<(), MetadataError> {
+        let updated_at = Utc::now().to_rfc3339();
+        let stored = target_offset.min(i64::MAX as u64) as i64;
+        self.conn.execute(
+            "INSERT INTO consumer_offsets (consumer_id, stream, last_offset, last_event_id, updated_at)
+             VALUES (?1, ?2, ?3, NULL, ?4)
+             ON CONFLICT(consumer_id, stream) DO UPDATE SET
+               last_offset    = excluded.last_offset,
+               last_event_id  = NULL,
+               updated_at     = excluded.updated_at",
+            params![consumer_id, stream, stored, updated_at],
+        )?;
+        Ok(())
+    }
+
     // ---------- phase10c bootstrap-dedup helpers ----------
 
     /// Phase10c — look up an existing `bootstrap_seen` row for
@@ -1045,6 +1129,24 @@ pub fn hour_bucket_rfc3339(ts: DateTime<Utc>) -> String {
         .and_then(|t| t.with_nanosecond(0))
         .unwrap_or(ts);
     truncated.format("%Y-%m-%dT%H:00:00Z").to_string()
+}
+
+/// Phase11s §2.3 — one row from `consumer_offsets`. The graph /
+/// fulltext / embedder workers read this on boot to resume from
+/// the last successfully-processed event instead of defaulting to
+/// "latest" (which silently dropped 12 of 20 sibling repos during
+/// the 2026-05-03 reindex).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumerOffsetRow {
+    /// Last successfully-processed Synap stream offset (monotonically
+    /// increasing per `(consumer_id, stream)` pair).
+    pub last_offset: u64,
+    /// Last successfully-processed envelope `event_id`, when known.
+    /// Stamped on every advance so a future `consume_after_event_id`
+    /// API can resume by id rather than offset.
+    pub last_event_id: Option<String>,
+    /// RFC-3339 timestamp of the last advance.
+    pub updated_at: String,
 }
 
 /// Phase10c — one row from `bootstrap_seen`. The walker reads
@@ -1613,5 +1715,87 @@ mod tests {
         let ids: Vec<String> = pending.iter().map(|(id, _)| id.clone()).collect();
         assert!(!ids.contains(&"01SESSD".to_string()));
         assert!(ids.contains(&"01SESSE".to_string()));
+    }
+
+    // ----------------------------------------------------------------
+    // Phase11s §2.3 / §2.4 — consumer_offsets ledger.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn consumer_offset_lookup_returns_none_for_unknown_partition() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let row = store
+            .consumer_offset_lookup("cortex-graph-0", "cortex.events.enriched")
+            .unwrap();
+        assert!(row.is_none(), "fresh DB must have no offset rows");
+    }
+
+    #[test]
+    fn consumer_offset_upsert_advances_monotonically() {
+        // Phase11s §2.3 — repeated upserts MUST advance the stored
+        // offset, never roll it back. This protects against an
+        // out-of-order ack landing after a higher-offset ack
+        // already persisted.
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .consumer_offset_upsert("cortex-graph-0", "cortex.events.enriched", 100, Some("01EVT"))
+            .unwrap();
+        // Smaller offset must NOT regress the stored value.
+        store
+            .consumer_offset_upsert("cortex-graph-0", "cortex.events.enriched", 50, Some("01OLD"))
+            .unwrap();
+        let row = store
+            .consumer_offset_lookup("cortex-graph-0", "cortex.events.enriched")
+            .unwrap()
+            .expect("upsert wrote a row");
+        assert_eq!(row.last_offset, 100, "MAX semantics must hold");
+    }
+
+    #[test]
+    fn consumer_offset_set_can_rewind() {
+        // Phase11s §2.4 — `cortex-ops graph replay` rewinds the
+        // cursor. `consumer_offset_set` is the rewind primitive
+        // (distinct from `_upsert` which is monotonic). Pin the
+        // contract so a future change does not silently apply
+        // MAX semantics to rewinds.
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .consumer_offset_upsert("cortex-graph-0", "cortex.events.enriched", 500, Some("01HEAD"))
+            .unwrap();
+        store
+            .consumer_offset_set("cortex-graph-0", "cortex.events.enriched", 100)
+            .unwrap();
+        let row = store
+            .consumer_offset_lookup("cortex-graph-0", "cortex.events.enriched")
+            .unwrap()
+            .expect("rewind preserves the row");
+        assert_eq!(row.last_offset, 100);
+        assert!(row.last_event_id.is_none(), "rewind clears last_event_id");
+    }
+
+    #[test]
+    fn consumer_offset_partitions_by_consumer_and_stream() {
+        // Two replicas + two streams = four independent rows.
+        let store = MetadataStore::open_in_memory().unwrap();
+        for (cid, stream, off) in [
+            ("cortex-graph-0", "cortex.events.enriched", 10u64),
+            ("cortex-graph-0", "cortex.events.bootstrap", 20),
+            ("cortex-graph-1", "cortex.events.enriched", 30),
+            ("cortex-graph-1", "cortex.events.bootstrap", 40),
+        ] {
+            store
+                .consumer_offset_upsert(cid, stream, off, None)
+                .unwrap();
+        }
+        let r = store
+            .consumer_offset_lookup("cortex-graph-1", "cortex.events.enriched")
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.last_offset, 30);
+        let r = store
+            .consumer_offset_lookup("cortex-graph-0", "cortex.events.bootstrap")
+            .unwrap()
+            .unwrap();
+        assert_eq!(r.last_offset, 20);
     }
 }

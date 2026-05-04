@@ -75,6 +75,10 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+# Phase11s §3.2 — JWT `exp`-claim parsing for the embedder's
+# Vectorizer token cache. Direct dep because base64 already lands
+# transitively (vectorizer-sdk pulls 0.21).
+base64 = "0.22"
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

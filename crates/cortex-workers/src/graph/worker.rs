@@ -34,6 +34,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use async_trait::async_trait;
 use cortex_core::events::Kind;
+use cortex_storage::MetadataStore;
 use serde_json::{json, Value};
 use synap_sdk::stream::StreamManager;
 use synap_sdk::types::Event;
@@ -109,6 +110,14 @@ impl OffsetTracker {
     /// Read the current cursor.
     pub fn current(&self) -> u64 {
         self.next.load(Ordering::Relaxed)
+    }
+
+    /// Phase11s §2.3 — seed the cursor at `offset`. Used on worker
+    /// boot to resume from a persisted [`MetadataStore::consumer_offset_lookup`]
+    /// row instead of defaulting to 0 (which would re-walk every
+    /// envelope ever published).
+    pub fn seed(&self, offset: u64) {
+        self.next.store(offset, Ordering::Relaxed);
     }
 
     /// Advance past the given offset.
@@ -219,19 +228,93 @@ impl SynapHandle {
     }
 }
 
-/// Live Synap consumer using the 0.11 pull API.
+/// Live Synap consumer.
+///
+/// Phase11s §2.1-§2.3 — Synap SDK 0.12 ships `queue::ack` but no
+/// durable consumer-group surface on the stream API the graph
+/// worker consumes from. This consumer therefore runs the §2.3
+/// fallback path: an in-process [`OffsetTracker`] is the runtime
+/// cursor, but every successful `ack` ALSO persists the offset to
+/// the SQLite `consumer_offsets` table via [`MetadataStore`]. On
+/// boot the consumer reads the persisted row and seeds the tracker
+/// — a worker restart resumes from the next event after the last
+/// flush instead of defaulting to "latest" (the regression that
+/// dropped 12 of 20 sibling repos during the 2026-05-03 reindex).
 pub struct LiveSynapConsumer {
     handle: Arc<SynapHandle>,
     tracker: Arc<OffsetTracker>,
+    /// Phase11s §2.3 — durable offset ledger. When `None`, the
+    /// consumer runs in legacy-ephemeral mode (kept for callers
+    /// that don't want SQLite, e.g. unit tests against the live SDK).
+    metadata: Option<Arc<Mutex<MetadataStore>>>,
+    /// Phase11s §2.3 — `(consumer_id, stream)` composite key the
+    /// metadata store ledgers under. Single stream per consumer
+    /// today; the proposal pins `stream = STREAM_ENRICHED` and
+    /// `consumer_id = "cortex-graph-{instance_id}"`.
+    consumer_id: String,
+    stream: String,
 }
 
 impl LiveSynapConsumer {
-    /// Build a new live consumer.
+    /// Build a new live consumer with ephemeral offset tracking.
+    /// Legacy path — kept for callers that don't ship a metadata
+    /// store. Production should use [`Self::with_persistent_offset`]
+    /// so a restart preserves the cursor.
     pub fn new(handle: Arc<SynapHandle>) -> Self {
         Self {
             handle,
             tracker: Arc::new(OffsetTracker::new()),
+            metadata: None,
+            consumer_id: String::new(),
+            stream: String::new(),
         }
+    }
+
+    /// Phase11s §2.3 — build a consumer that resumes from the
+    /// persisted offset and ledgers every advance. `consumer_id`
+    /// is the composite-key partition (e.g. `"cortex-graph-0"`).
+    /// `stream` is the Synap room name (e.g. `STREAM_ENRICHED`).
+    /// On boot the function reads `consumer_offsets` and seeds the
+    /// in-process tracker; if no row exists the tracker stays at
+    /// 0 and the worker walks the stream from the beginning.
+    pub fn with_persistent_offset(
+        handle: Arc<SynapHandle>,
+        metadata: Arc<Mutex<MetadataStore>>,
+        consumer_id: impl Into<String>,
+        stream: impl Into<String>,
+    ) -> Result<Self> {
+        let consumer_id = consumer_id.into();
+        let stream = stream.into();
+        let tracker = Arc::new(OffsetTracker::new());
+        // Boot-time seed from the ledger.
+        let seed = {
+            let guard = metadata
+                .lock()
+                .map_err(|_| anyhow::anyhow!("metadata mutex poisoned"))?;
+            guard
+                .consumer_offset_lookup(&consumer_id, &stream)
+                .map_err(|e| anyhow::anyhow!("consumer_offset_lookup: {e}"))?
+        };
+        if let Some(row) = seed {
+            // The ledger stores the LAST processed offset; resume
+            // from `last_offset + 1` so we don't reprocess it.
+            let resume_at = row.last_offset.saturating_add(1);
+            tracker.seed(resume_at);
+            tracing::info!(
+                consumer_id = %consumer_id,
+                stream = %stream,
+                resume_at,
+                last_event_id = ?row.last_event_id,
+                "graph consumer resuming from persisted offset"
+            );
+        }
+        Ok(Self {
+            handle,
+            tracker,
+            metadata: Some(metadata),
+            consumer_id,
+            stream,
+        })
     }
 
     /// Expose the offset tracker (useful for metrics / tests).
@@ -271,6 +354,40 @@ impl SynapConsumer for LiveSynapConsumer {
 
     async fn ack(&self, _room: &str, offset: u64) -> Result<()> {
         self.tracker.advance_past(offset);
+        // Phase11s §2.3 — durable advance. Failures here log but
+        // do NOT propagate — losing the persistence write does
+        // not affect runtime correctness for THIS message (it is
+        // already in the in-process tracker), only for a
+        // subsequent restart. The tradeoff is captured in
+        // [ADR-008].
+        if let Some(metadata) = self.metadata.as_ref() {
+            match metadata.lock() {
+                Ok(guard) => {
+                    if let Err(e) = guard.consumer_offset_upsert(
+                        &self.consumer_id,
+                        &self.stream,
+                        offset,
+                        None,
+                    ) {
+                        tracing::warn!(
+                            consumer_id = %self.consumer_id,
+                            stream = %self.stream,
+                            offset,
+                            error = %e,
+                            "failed to persist consumer offset; in-process tracker still advanced"
+                        );
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        consumer_id = %self.consumer_id,
+                        stream = %self.stream,
+                        offset,
+                        "metadata mutex poisoned; offset persistence skipped"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

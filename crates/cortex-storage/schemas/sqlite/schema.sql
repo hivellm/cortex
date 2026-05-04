@@ -192,3 +192,23 @@ CREATE TABLE IF NOT EXISTS bootstrap_seen (
 );
 
 CREATE INDEX IF NOT EXISTS bootstrap_seen_hash ON bootstrap_seen (repo, content_hash);
+
+-- Phase11s §2.3 — durable consumer-offset ledger. Synap SDK 0.12
+-- ships `queue::ack` but no durable consumer-group surface on
+-- the stream API the workers consume from; the §2.3 fallback path
+-- persists the last successfully-processed `(stream, consumer_id)
+-- → event_id + offset` here so a worker restart resumes from the
+-- correct point instead of defaulting to "latest" and silently
+-- dropping the rebuild window. Composite primary key lets multiple
+-- workers (`cortex-graph-workerN`, `cortex-fulltext-workerN`)
+-- share the same ledger without colliding.
+CREATE TABLE IF NOT EXISTS consumer_offsets (
+    consumer_id     TEXT NOT NULL,
+    stream          TEXT NOT NULL,
+    last_offset     INTEGER NOT NULL,
+    last_event_id   TEXT,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (consumer_id, stream)
+);
+
+CREATE INDEX IF NOT EXISTS consumer_offsets_stream ON consumer_offsets (stream);

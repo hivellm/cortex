@@ -122,7 +122,26 @@ async fn main() -> Result<()> {
         );
         let last_job_ts_ms = worker_for_health.last_job_ts_ms();
         extras.insert("last_job_ts_ms".into(), serde_json::json!(last_job_ts_ms));
-        let activity_ts = if last_job_ts_ms > 0 {
+        // Phase11s §1.3 — surface the consume-loop liveness fields
+        // so `cortex-ops doctor` can flag a stuck worker even
+        // when the process is alive but the consume loop is dead.
+        let last_consume_ts_ms = worker_for_health.last_consume_ts_ms();
+        extras.insert(
+            "last_consume_ts_ms".into(),
+            serde_json::json!(last_consume_ts_ms),
+        );
+        extras.insert(
+            "consume_errors_consecutive".into(),
+            serde_json::json!(worker_for_health.consume_errors_consecutive()),
+        );
+        // Use `last_consume_ts_ms` as the freshness signal — the
+        // 2026-05-02 incident showed `last_job_ts_ms` stays fresh
+        // when the consume loop hasn't returned a non-empty batch
+        // for hours; the consume timestamp is the load-bearing
+        // probe.
+        let activity_ts = if last_consume_ts_ms > 0 {
+            last_consume_ts_ms
+        } else if last_job_ts_ms > 0 {
             last_job_ts_ms
         } else {
             started_ms

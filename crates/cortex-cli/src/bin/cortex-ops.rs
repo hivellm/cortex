@@ -608,6 +608,36 @@ enum GraphCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Phase11s §2.4 — rewind the durable graph-worker offset to a
+    /// known starting point so the next worker boot replays the
+    /// envelopes after `--since`. Used by the §5 drainage runbook
+    /// when a known event window was lost (e.g. a worker restart
+    /// during an indexer rebuild).
+    Replay {
+        /// Synap stream offset to rewind TO. The worker will resume
+        /// from `--since + 1` on next boot. Pass `0` to replay the
+        /// whole stream from the beginning.
+        #[arg(long)]
+        since: u64,
+        /// Consumer id partition the offset ledgers under. Default
+        /// matches the graph-writer bin: `cortex-graph-0`. Override
+        /// when running multiple replicas.
+        #[arg(long, default_value = "cortex-graph-0")]
+        consumer_id: String,
+        /// Synap stream the consumer reads. Default
+        /// `cortex.events.enriched` (the graph worker's input).
+        #[arg(long, default_value = "cortex.events.enriched")]
+        stream: String,
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_GRAPH_METADATA_DB` then `$CORTEX_METADATA_DB`
+        /// then `${CORTEX_HOME}/metadata.sqlite` then
+        /// `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Print the planned rewind without writing the row.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// Phase9b — granularity selector for `cortex-ops rollup`.
@@ -894,6 +924,13 @@ fn main() -> ExitCode {
                 nexus,
                 json,
             } => graph_drop(confirm, dry_run, nexus, json),
+            GraphCommand::Replay {
+                since,
+                consumer_id,
+                stream,
+                metadata_db,
+                dry_run,
+            } => graph_replay(since, consumer_id, stream, metadata_db, dry_run),
         },
         Command::SweepEmpty {
             meili,
@@ -1447,6 +1484,94 @@ fn graph_drop(confirm: bool, dry_run: bool, nexus: Option<String>, json: bool) -
         println!("  {:<24}  {total:>10}", "TOTAL");
     }
     ExitCode::SUCCESS
+}
+
+/// Phase11s §2.4 — rewind the durable graph-worker offset to a
+/// known starting point. `since=N` makes the next worker boot
+/// resume from `N + 1` (replaying every envelope after `N`).
+/// `--dry-run` reports the planned write without mutating the row.
+///
+/// Operator runbook (§5): when a known event window was lost
+/// (e.g. a worker restart during an indexer rebuild),
+/// `cortex-ops graph replay --since=<known_good_offset>` rewinds
+/// the consumer cursor; the next `docker restart cortex-graph-worker`
+/// (or natural boot cycle) replays the missing window.
+fn graph_replay(
+    since: u64,
+    consumer_id: String,
+    stream: String,
+    metadata_db: Option<String>,
+    dry_run: bool,
+) -> ExitCode {
+    use cortex_storage::MetadataStore;
+
+    let db_path = match metadata_db {
+        Some(p) => std::path::PathBuf::from(p),
+        None => resolve_metadata_db_path(),
+    };
+    if !db_path.exists() {
+        eprintln!(
+            "ERROR: metadata DB not found at {db_path:?}. \
+             Set --metadata-db / CORTEX_METADATA_DB to point at the worker's SQLite file."
+        );
+        return ExitCode::from(1);
+    }
+
+    let store = match MetadataStore::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ERROR: open metadata DB at {db_path:?}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let prior = match store.consumer_offset_lookup(&consumer_id, &stream) {
+        Ok(row) => row,
+        Err(e) => {
+            eprintln!("ERROR: consumer_offset_lookup({consumer_id}, {stream}): {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    println!(
+        "graph replay plan: consumer_id={consumer_id} stream={stream}\n  current_offset={current}\n  rewind_to={since} (next boot resumes from {resume})\n  metadata_db={db_path:?}",
+        current = prior
+            .as_ref()
+            .map(|r| r.last_offset.to_string())
+            .unwrap_or_else(|| "<unset>".to_string()),
+        resume = since.saturating_add(1),
+    );
+
+    if dry_run {
+        println!("dry-run: no rows written");
+        return ExitCode::SUCCESS;
+    }
+
+    if let Err(e) = store.consumer_offset_set(&consumer_id, &stream, since) {
+        eprintln!("ERROR: consumer_offset_set: {e}");
+        return ExitCode::from(1);
+    }
+    println!("OK: offset rewound. Restart cortex-graph-worker to apply.");
+    ExitCode::SUCCESS
+}
+
+/// Phase11s §2.4 — match the worker's metadata-DB resolution
+/// precedence so `cortex-ops graph replay` writes to the same row
+/// the worker reads on boot.
+fn resolve_metadata_db_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("CORTEX_GRAPH_METADATA_DB") {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+        return std::path::PathBuf::from(p);
+    }
+    if let Ok(home) = std::env::var("CORTEX_HOME") {
+        return std::path::PathBuf::from(home).join("metadata.sqlite");
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".cortex").join("metadata.sqlite")
 }
 
 /// Phase10i — `cortex-ops sessions backfill-tool` dispatcher.
@@ -4326,6 +4451,73 @@ fn doctor(
         println!(
             "skip   {label:<28} (set CORTEX_API_URL to probe the daemon's /v1/health/* routes)",
             label = "api/v1/health/*"
+        );
+    }
+
+    // Phase11s §1.4 — classifier-worker liveness probe. The
+    // 2026-05-02 incident showed the worker can stay
+    // `/healthz`-green while its consume loop is dead for hours.
+    // Read the worker's `/healthz.extras.last_consume_ts_ms` and
+    // flag the worker as `degraded` when the timestamp is older
+    // than `CORTEX_CLASSIFIER_STALENESS_MS` (default 60_000).
+    if let Some(classifier) = std::env::var("CORTEX_CLASSIFIER_HEALTH_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        let staleness_ms: u64 = std::env::var("CORTEX_CLASSIFIER_STALENESS_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(60_000);
+        let url = format!("{}/healthz", classifier.trim_end_matches('/'));
+        let body = std::process::Command::new("curl")
+            .args(["-fsS", "--max-time", "3", &url])
+            .output()
+            .ok()
+            .and_then(|o| if o.status.success() { Some(o.stdout) } else { None })
+            .and_then(|b| String::from_utf8(b).ok());
+        match body {
+            Some(b) => {
+                let parsed: serde_json::Value = serde_json::from_str(&b).unwrap_or_default();
+                let last_consume_ts_ms = parsed
+                    .pointer("/extras/last_consume_ts_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let consecutive = parsed
+                    .pointer("/extras/consume_errors_consecutive")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                let age_ms = now_ms.saturating_sub(last_consume_ts_ms);
+                if last_consume_ts_ms == 0 {
+                    println!(
+                        "warn   {:<28} {url} (last_consume_ts_ms not reported — pre-§1.3 build?)",
+                        "classifier-worker"
+                    );
+                } else if age_ms > staleness_ms {
+                    println!(
+                        "fail   {:<28} {url} (degraded: classifier-worker stuck — \
+                         last consume {age_ms} ms ago, threshold {staleness_ms} ms, \
+                         consecutive_errors={consecutive})",
+                        "classifier-worker"
+                    );
+                    any_failure = true;
+                } else {
+                    println!(
+                        "ok     {:<28} {url} (last_consume_ts {age_ms} ms ago, \
+                         consecutive_errors={consecutive})",
+                        "classifier-worker"
+                    );
+                }
+            }
+            None => {
+                println!("fail   {:<28} {url} (unreachable)", "classifier-worker");
+                any_failure = true;
+            }
+        }
+    } else {
+        println!(
+            "skip   {:<28} (set CORTEX_CLASSIFIER_HEALTH_URL to probe the worker's /healthz)",
+            "classifier-worker"
         );
     }
 
