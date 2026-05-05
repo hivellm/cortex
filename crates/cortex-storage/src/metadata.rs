@@ -245,6 +245,47 @@ impl MetadataStore {
         Ok(())
     }
 
+    /// phase11v §6.2 — record a single completed sweep row in one
+    /// statement. Bypasses the `start_retention_sweep` /
+    /// `finish_retention_sweep` two-step that the legacy
+    /// `retention_sweep` and `rollup` handlers use because the
+    /// per-sweep lock those provide is already held by the
+    /// `cortex-workers::retention::scheduler` per-job semaphore at a
+    /// higher layer. New sweep callers (every `cortex-ops <sweep>`
+    /// handler that did not previously bookkeep) call this helper at
+    /// the end of their successful or failed run so the
+    /// `retention_sweeps` table — and the dashboard's
+    /// "Bytes reclaimed last 30 d" panel — finally reflect every
+    /// invocation, not just the two legacy ones.
+    #[allow(clippy::too_many_arguments)]
+    pub fn note_completed_retention_sweep(
+        &self,
+        sweep_id: &str,
+        started_at: DateTime<Utc>,
+        finished_at: DateTime<Utc>,
+        records_demoted: u64,
+        records_dropped: u64,
+        tier_transitions_json: &str,
+        status: &str,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO retention_sweeps
+                 (sweep_id, started_at, finished_at, records_demoted,
+                  records_dropped, tier_transitions_json, status)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                sweep_id,
+                started_at.to_rfc3339(),
+                finished_at.to_rfc3339(),
+                records_demoted as i64,
+                records_dropped as i64,
+                tier_transitions_json,
+                status,
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Phase9a — close a running sweep row with the final counters.
     /// `status` should be `"success"` for a clean run, `"failed"` for
     /// an error path that still completed bookkeeping.
@@ -427,6 +468,24 @@ impl MetadataStore {
             ],
         )?;
         Ok(n > 0)
+    }
+
+    /// phase11v §3.1 — reconcile a default-driven drift on an
+    /// existing row. Updates `enabled` and `command` to the values
+    /// the latest seed call carries, leaves every other column
+    /// untouched (the operator-tuned `schedule`, every run-history
+    /// column, `failure_streak`, `last_warning_at`).
+    pub fn update_cron_job_default_state(
+        &self,
+        name: &str,
+        enabled: bool,
+        command: &str,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "UPDATE cron_jobs SET enabled = ?1, command = ?2 WHERE name = ?3",
+            params![if enabled { 1_i64 } else { 0_i64 }, command, name],
+        )?;
+        Ok(())
     }
 
     /// List every cron job, sorted ascending by `name`.

@@ -94,14 +94,16 @@ async fn topic_get_end_to_end_dispatches_slug_then_search_with_confidence_floor(
     let descriptor = topic_get_descriptor();
     assert_eq!(descriptor["name"], TOOL_NAME_TOPIC_GET);
     let input_schema = &descriptor["inputSchema"];
-    assert_eq!(input_schema["required"], serde_json::json!(["query_or_slug", "scope"]));
+    assert_eq!(
+        input_schema["required"],
+        serde_json::json!(["query_or_slug", "scope"])
+    );
 
     let lookup = Arc::new(FakeLookup::default());
-    lookup
-        .by_slug
-        .lock()
-        .unwrap()
-        .insert("auth-rewrite".to_string(), card("auth-rewrite", "cortex", 0.45));
+    lookup.by_slug.lock().unwrap().insert(
+        "auth-rewrite".to_string(),
+        card("auth-rewrite", "cortex", 0.45),
+    );
     *lookup.search_hit.lock().unwrap() = Some(card("query-side", "cortex", 0.72));
     let audit = MemoryAuditPublisher::new();
 
@@ -217,10 +219,7 @@ impl TopicCardDrill for FakeDrill {
             .cloned()
             .unwrap_or_default())
     }
-    async fn related(
-        &self,
-        topic_card_id: &str,
-    ) -> Result<Vec<String>, TopicCardMcpError> {
+    async fn related(&self, topic_card_id: &str) -> Result<Vec<String>, TopicCardMcpError> {
         Ok(self
             .related
             .lock()
@@ -273,11 +272,10 @@ async fn topic_drill_end_to_end_dispatches_each_dimension() {
             synthesis_diff_hash: "0".repeat(64),
         }],
     );
-    drill
-        .related
-        .lock()
-        .unwrap()
-        .insert(card_id.clone(), vec!["topic-".to_string() + &"a".repeat(24)]);
+    drill.related.lock().unwrap().insert(
+        card_id.clone(),
+        vec!["topic-".to_string() + &"a".repeat(24)],
+    );
 
     let audit = MemoryAuditPublisher::new();
     for (dim, label) in [
@@ -287,15 +285,9 @@ async fn topic_drill_end_to_end_dispatches_each_dimension() {
         (DrillDimension::OpenQuestions, "open_questions"),
         (DrillDimension::Related, "related"),
     ] {
-        let out = invoke_topic_drill(
-            drill.clone(),
-            &audit,
-            "claude-code",
-            card_id.clone(),
-            dim,
-        )
-        .await
-        .unwrap_or_else(|e| panic!("drill {label} failed: {e}"));
+        let out = invoke_topic_drill(drill.clone(), &audit, "claude-code", card_id.clone(), dim)
+            .await
+            .unwrap_or_else(|e| panic!("drill {label} failed: {e}"));
         assert_eq!(out.dimension, dim);
         assert_eq!(out.topic_card_id, card_id);
     }
@@ -433,8 +425,7 @@ async fn topic_diff_end_to_end_renders_synthesis_and_set_diffs() {
     let card_id = derive_topic_card_id("auth-rewrite", "cortex");
     let mut from = card("auth-rewrite", "cortex", 0.7);
     from.revision = 1;
-    from.synthesis_markdown = "Intro\nMiddle old\nOutro".to_string()
-        + &" filler".repeat(40); // ≥ 200 bytes for schema parity
+    from.synthesis_markdown = "Intro\nMiddle old\nOutro".to_string() + &" filler".repeat(40); // ≥ 200 bytes for schema parity
     from.evidence = vec![EvidenceRef {
         kind: EvidenceKind::Decision,
         id: "DEC-0001".to_string(),
@@ -444,8 +435,7 @@ async fn topic_diff_end_to_end_renders_synthesis_and_set_diffs() {
 
     let mut to = card("auth-rewrite", "cortex", 0.85);
     to.revision = 3;
-    to.synthesis_markdown = "Intro\nMiddle new\nOutro".to_string()
-        + &" filler".repeat(40);
+    to.synthesis_markdown = "Intro\nMiddle new\nOutro".to_string() + &" filler".repeat(40);
     to.evidence = vec![
         EvidenceRef {
             kind: EvidenceKind::Decision,

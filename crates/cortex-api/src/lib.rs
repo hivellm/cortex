@@ -14,7 +14,6 @@
 pub mod acl;
 pub mod admin_forget;
 pub mod analyzer;
-pub mod search_proxy;
 pub mod archive_loader;
 pub mod audit;
 pub mod audit_store;
@@ -28,7 +27,6 @@ pub mod dashboard;
 pub mod dashboard_consumer;
 pub mod dashboard_series;
 pub mod dashboard_watcher;
-pub mod memory_tail;
 pub mod fusion;
 pub mod health;
 pub mod http;
@@ -41,6 +39,7 @@ pub mod mcp;
 pub mod mcp_topic_card;
 pub mod meili_lane;
 pub mod meili_loader;
+pub mod memory_tail;
 pub mod nexus_graph_lane;
 pub mod orchestrator;
 pub mod query_rewrite;
@@ -48,6 +47,7 @@ pub mod rate_limit;
 pub mod redaction;
 pub mod relevance_config;
 pub mod retention_daemon;
+pub mod search_proxy;
 pub mod service;
 pub mod silent_drop;
 pub mod storage;
@@ -109,7 +109,7 @@ pub use redaction::redact_response;
 pub use service::{ErrorBody, QueryService, ServiceOutcome};
 pub use strategies::{build_plan, BudgetSplit, Overlay, Plan};
 pub use types::{
-    empty_response, BudgetReport, DebugInfo, DecisionRef, GraphNeighbor, IncludeField, Intent,
-    ConsolidationRef, LaneTimings, LawRef, Notice, PastSession, Props, QueryRequest,
+    empty_response, BudgetReport, ConsolidationRef, DebugInfo, DecisionRef, GraphNeighbor,
+    IncludeField, Intent, LaneTimings, LawRef, Notice, PastSession, Props, QueryRequest,
     QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet, TopicCardRef, ViolationRef,
 };

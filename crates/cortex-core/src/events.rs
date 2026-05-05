@@ -366,9 +366,10 @@ pub enum ConsolidationScope {
     DecisionId(String),
 }
 
-/// Phase11j §1 — temporal span the consolidation covers. `start`
-/// + `end` are epoch ms; `duration_ms` is materialised so the
-/// dashboard can sort without re-deriving.
+/// Phase11j §1 — temporal span the consolidation covers.
+///
+/// `start` + `end` are epoch ms; `duration_ms` is materialised so
+/// the dashboard can sort without re-deriving.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct TimeSpan {
     /// Earliest envelope `occurred_at` covered (epoch ms).

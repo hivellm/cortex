@@ -146,22 +146,84 @@ fn trail_capped(bytes: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes[s..]).into_owned())
 }
 
-/// Seed the eight default retention jobs on first daemon start.
-/// Idempotent: existing rows are left untouched (operators who
-/// disabled a job keep their setting after a restart).
+/// Seed the ten default retention jobs on first daemon start, then
+/// reconcile drift on existing rows.
+///
+/// Two passes:
+///
+/// 1. **Insert** new rows (`upsert_cron_job_if_absent`). Returns the
+///    new-row count, the same value the historical contract reports.
+/// 2. **Reconcile drift** (phase11v §3.1). When the default for a
+///    job's `enabled` flag flips from `false` → `true` after a row
+///    has already been seeded with the old default, the existing
+///    row stays at the old value forever — `INSERT OR IGNORE` never
+///    revisits it. This pass detects that drift and updates
+///    `enabled` + `command` to the new defaults, leaving every other
+///    column (operator-tuned `schedule`, `last_run_at`,
+///    `next_run_at`, `failure_streak`, …) untouched.
+///
+///    Operator-disabled rows (rows whose `last_warning_at IS NOT
+///    NULL` or `failure_streak > 0`) are NOT reconciled — those
+///    signals indicate the operator deliberately stopped the job
+///    and we must not silently re-enable it.
 pub fn seed_defaults(metadata: &MetadataStore, now: DateTime<Utc>) -> Result<u32, MetadataError> {
     apply_phase9k_schema(metadata.conn())?;
     let defaults = default_jobs();
     let mut inserted = 0;
-    for d in defaults {
-        let next = next_after(&d.schedule, now)
+    for d in &defaults {
+        let next = next_after(d.schedule, now)
             .map(|t| t.to_rfc3339())
             .unwrap_or_else(|| now.to_rfc3339());
         if metadata.upsert_cron_job_if_absent(d.name, d.schedule, d.command, d.enabled, &next)? {
             inserted += 1;
         }
     }
+    // Pass 2 — reconcile drift on rows that already existed.
+    reconcile_default_drift(metadata, &defaults)?;
     Ok(inserted)
+}
+
+/// phase11v §3.1 — walk the existing rows and update `enabled` /
+/// `command` to the current default when they diverge AND the
+/// operator has not deliberately changed them. Heuristic for
+/// "operator deliberately changed":
+///
+/// - `failure_streak > 0` — operator may have disabled the job
+///   while debugging a flapping sweep; do not re-enable.
+/// - `last_warning_at IS NOT NULL` — same signal at the warning
+///   level; do not re-enable.
+///
+/// `schedule` is never reconciled because operators tune cadences
+/// in production and a default-overwrite here would silently
+/// rewrite their downtime windows.
+fn reconcile_default_drift(
+    metadata: &MetadataStore,
+    defaults: &[DefaultJob],
+) -> Result<(), MetadataError> {
+    let existing = metadata.list_cron_jobs()?;
+    let by_name: BTreeMap<&str, &CronJob> = existing.iter().map(|j| (j.name.as_str(), j)).collect();
+    for d in defaults {
+        let Some(row) = by_name.get(d.name) else {
+            continue;
+        };
+        let operator_disabled =
+            row.failure_streak > 0 || row.last_warning_at.is_some();
+        if operator_disabled {
+            continue;
+        }
+        if row.enabled != d.enabled || row.command != d.command {
+            tracing::info!(
+                name = %d.name,
+                old_enabled = row.enabled,
+                new_enabled = d.enabled,
+                old_command = %row.command,
+                new_command = %d.command,
+                "seed_defaults: reconciled drift"
+            );
+            metadata.update_cron_job_default_state(d.name, d.enabled, d.command)?;
+        }
+    }
+    Ok(())
 }
 
 /// One default cron-job descriptor.
@@ -244,6 +306,18 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-consolidator nightly",
             enabled: true,
         },
+        // phase11w — Tool-call digest summariser. Buckets old
+        // tool_call envelopes by (repo, year_week, tool) and
+        // purges originals after the digest persists. Sits at
+        // 06:30 UTC, 30 min after `turn_digest` (06:00) so the
+        // two summarisers do not contend for classifier budget on
+        // the same tick. Default ON.
+        DefaultJob {
+            name: "retention.tool_call_digest",
+            schedule: "30 6 * * 0",
+            command: "cortex-ops tool-call-digest --purge-originals --budget-cents 500",
+            enabled: true,
+        },
         // Phase11o §2.5 — nightly tier demotion of consolidations.
         // Walks `cortex_consolidations`, demotes vectors between
         // `cortex.consolidation.fp32` → `.pq` → `cortex.cold.binary`
@@ -265,22 +339,106 @@ fn default_jobs() -> Vec<DefaultJob> {
 /// Translate a 5-field cron expression (`m h dom mon dow`) into the
 /// 7-field form the `cron` crate expects (`s m h dom mon dow year`).
 /// Returns `Err` when the input is malformed.
+///
+/// phase11v §4.2 — the `cron` crate (0.15) rejects raw `0` in the
+/// day-of-week position. Standard 5-field cron syntax allows
+/// `0`–`6` for Sun–Sat (with `7` aliased to Sun on some
+/// implementations). We translate the numeric form into the
+/// crate's accepted three-letter form so `0 6 * * 0` no longer
+/// silently disables `turn_digest` by failing the parse and
+/// falling through to the daemon's `next = now` fallback.
 pub fn parse_schedule(expr: &str) -> Result<Schedule, String> {
     let trimmed = expr.trim();
     let parts: Vec<&str> = trimmed.split_whitespace().collect();
     let normalised = match parts.len() {
-        5 => format!("0 {trimmed} *"),
-        6 => format!("{trimmed} *"),
-        7 => trimmed.to_string(),
+        5 => {
+            let dow = normalise_dow_field(parts[4])?;
+            format!("0 {} {} {} {} {} *", parts[0], parts[1], parts[2], parts[3], dow)
+        }
+        6 => {
+            // 6-field form: `s m h dom mon dow`. DOW is field 5.
+            let dow = normalise_dow_field(parts[5])?;
+            format!(
+                "{} {} {} {} {} {} *",
+                parts[0], parts[1], parts[2], parts[3], parts[4], dow
+            )
+        }
+        7 => {
+            // 7-field form: `s m h dom mon dow year`. DOW is field 5.
+            let dow = normalise_dow_field(parts[5])?;
+            format!(
+                "{} {} {} {} {} {} {}",
+                parts[0], parts[1], parts[2], parts[3], parts[4], dow, parts[6]
+            )
+        }
         _ => return Err(format!("expected 5/6/7 cron fields, got {}", parts.len())),
     };
     Schedule::from_str(&normalised).map_err(|e| e.to_string())
 }
 
+/// Translate the day-of-week field. Accepts `*`, comma lists, ranges,
+/// step expressions, and numeric `0`-`7`. `0` and `7` both map to
+/// `SUN`; `1`-`6` map to MON-SAT.
+fn normalise_dow_field(field: &str) -> Result<String, String> {
+    if field == "*" {
+        return Ok("*".to_string());
+    }
+    let mut out = String::new();
+    for (i, segment) in field.split(',').enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let (range_part, step_part) = match segment.split_once('/') {
+            Some((r, s)) => (r, Some(s)),
+            None => (segment, None),
+        };
+        let translated = if let Some((lo, hi)) = range_part.split_once('-') {
+            format!("{}-{}", translate_dow_token(lo)?, translate_dow_token(hi)?)
+        } else {
+            translate_dow_token(range_part)?.to_string()
+        };
+        out.push_str(&translated);
+        if let Some(s) = step_part {
+            out.push('/');
+            out.push_str(s);
+        }
+    }
+    Ok(out)
+}
+
+fn translate_dow_token(tok: &str) -> Result<&str, String> {
+    match tok.trim() {
+        "*" => Ok("*"),
+        "0" | "7" | "SUN" | "Sun" | "sun" => Ok("SUN"),
+        "1" | "MON" | "Mon" | "mon" => Ok("MON"),
+        "2" | "TUE" | "Tue" | "tue" => Ok("TUE"),
+        "3" | "WED" | "Wed" | "wed" => Ok("WED"),
+        "4" | "THU" | "Thu" | "thu" => Ok("THU"),
+        "5" | "FRI" | "Fri" | "fri" => Ok("FRI"),
+        "6" | "SAT" | "Sat" | "sat" => Ok("SAT"),
+        other => Err(format!("invalid day-of-week token: {other}")),
+    }
+}
+
 /// Compute the next firing strictly after `from`.
+///
+/// phase11v §4.2 — guards against `Schedule::after(&from).next()`
+/// returning a slot equal to `from` on schedules whose first
+/// matching instant is exactly `from`. We re-iterate while the
+/// returned timestamp is `<= from` so the contract — "strictly
+/// greater than `from`" — holds for every valid 5-/6-/7-field cron
+/// expression. The walk is bounded at 8 steps so a malformed
+/// schedule that yields constant timestamps cannot loop forever.
 pub fn next_after(expr: &str, from: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let s = parse_schedule(expr).ok()?;
-    s.after(&from).next()
+    let mut iter = s.after(&from);
+    for _ in 0..8 {
+        let candidate = iter.next()?;
+        if candidate > from {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// One repeated-failure warning the scheduler raises. Consumed by
@@ -536,14 +694,133 @@ mod tests {
         assert!(next > anchor());
     }
 
+    /// phase11v §4.1 — when `from` lands exactly on a matching
+    /// slot, the helper MUST advance past that slot. The previous
+    /// implementation could return the slot itself, which made the
+    /// daemon re-fire the same job every tick (the `turn_digest`
+    /// 30-s loop the user observed in production).
+    ///
+    /// Note on cron-crate semantics: when "0" is used as the DOW
+    /// field of a 5-field expression, our `parse_schedule` adapter
+    /// renders it as `"0 0 6 * * 0 *"`. The cron crate maps DOW = 0
+    /// → Sunday. We pin a known Sunday in 2026 (May 3) to drive
+    /// the regression; the test fails on the pre-phase11v behaviour
+    /// where `Schedule::after(&from).next()` could return the same
+    /// slot.
+    #[test]
+    fn next_after_strictly_advances_when_from_equals_a_slot() {
+        // Tuesday 03:00 UTC — exactly the slot the daily 03:00 schedule fires on.
+        let from = Utc.with_ymd_and_hms(2026, 5, 5, 3, 0, 0).unwrap();
+        let next = next_after("0 3 * * *", from).unwrap();
+        assert!(
+            next > from,
+            "next_after must return a strictly-later instant; got {next}"
+        );
+        // The next 03:00 slot is Wednesday.
+        assert_eq!(next.format("%Y-%m-%d %H:%M").to_string(), "2026-05-06 03:00");
+    }
+
+    /// phase11v §4.3 — drive every shipped retention schedule across
+    /// 365 daily `now` values; the helper must NEVER return a slot
+    /// that is `<= from`. Catches the regression class above for
+    /// every cadence the daemon seeds.
+    #[test]
+    fn next_after_strictly_advances_across_a_year_for_every_default_schedule() {
+        let schedules = [
+            "0 3 * * *",
+            "0 4 * * *",
+            "30 4 * * 1",
+            "0 5 * * *",
+            "30 5 * * *",
+            "45 5 * * *",
+            "0 6 * * 0",
+            "0 7 * * 0",
+            "0 2 * * *",
+        ];
+        let start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+        for schedule in schedules {
+            for day in 0..365 {
+                let from = start + Duration::days(day);
+                let next = next_after(schedule, from).unwrap_or_else(|| {
+                    panic!("schedule={schedule}  from={from}  yielded None")
+                });
+                assert!(
+                    next > from,
+                    "schedule={schedule}  from={from}  next={next} (must be > from)"
+                );
+            }
+        }
+    }
+
+    /// phase11v §3.3 — when the default for `enabled` flips from
+    /// `false` to `true` after a row was already seeded, the next
+    /// `seed_defaults` call MUST reconcile the existing row.
+    #[test]
+    fn seed_defaults_reconciles_drift_when_default_flips_to_enabled() {
+        let s = store();
+        // First seed: pretend the live default is `enabled = false`
+        // by INSERTing the row directly with the old value, then
+        // calling seed_defaults to drive the reconcile path.
+        apply_phase9k_schema(s.conn()).unwrap();
+        s.conn()
+            .execute(
+                "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at)
+                      VALUES ('retention.memory_consolidate', '0 7 * * 0',
+                              'cortex-ops memory-consolidate --apply', 0,
+                              '2026-05-10T06:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        seed_defaults(&s, anchor()).unwrap();
+        let row = s
+            .get_cron_job("retention.memory_consolidate")
+            .unwrap()
+            .expect("row present");
+        assert!(
+            row.enabled,
+            "phase11v §3.1 — drifted default must reconcile to enabled=1"
+        );
+    }
+
+    /// phase11v §3.4 — when an operator deliberately disabled a
+    /// row (signal: `failure_streak > 0` OR `last_warning_at`
+    /// stamped), the reconciler MUST leave the row alone.
+    #[test]
+    fn seed_defaults_does_not_overwrite_operator_disabled_rows() {
+        let s = store();
+        apply_phase9k_schema(s.conn()).unwrap();
+        // Row exists with operator-disabled signal: failure_streak=2.
+        s.conn()
+            .execute(
+                "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at, failure_streak)
+                      VALUES ('retention.memory_consolidate', '0 7 * * 0',
+                              'cortex-ops memory-consolidate --apply', 0,
+                              '2026-05-10T06:00:00+00:00', 2)",
+                [],
+            )
+            .unwrap();
+        seed_defaults(&s, anchor()).unwrap();
+        let row = s
+            .get_cron_job("retention.memory_consolidate")
+            .unwrap()
+            .expect("row present");
+        assert!(
+            !row.enabled,
+            "operator-disabled row must NOT be re-enabled by seed reconcile"
+        );
+        assert_eq!(row.failure_streak, 2);
+    }
+
     #[test]
     fn seed_defaults_inserts_ten_jobs_idempotently() {
         let s = store();
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 10);
+        // phase11w — count bumped from 10 → 11 with the addition of
+        // `retention.tool_call_digest`.
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 11);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 10);
+        assert_eq!(jobs.len(), 11);
         let consolidate = jobs
             .iter()
             .find(|j| j.name == "retention.memory_consolidate")

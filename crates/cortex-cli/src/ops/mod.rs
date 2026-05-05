@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod log_rotate;
 pub mod memory_consolidate;
 pub mod probe;
+pub mod sweep_bookkeeping;
 
 /// Phase10k — the cron scheduler module moved into `cortex-retention`
 /// so `cortex-api` can spawn the always-on tick loop without taking

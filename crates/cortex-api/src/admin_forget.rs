@@ -81,7 +81,11 @@ pub fn resolve_target_collections(kind: Option<Kind>) -> Vec<&'static str> {
             COLLECTION_CONSOLIDATION_PQ,
             COLLECTION_COLD_BINARY,
         ],
-        Some(Kind::Turn) => vec![COLLECTION_TURN_FP32, COLLECTION_TURN_PQ, COLLECTION_COLD_BINARY],
+        Some(Kind::Turn) => vec![
+            COLLECTION_TURN_FP32,
+            COLLECTION_TURN_PQ,
+            COLLECTION_COLD_BINARY,
+        ],
         Some(Kind::ToolCall) => vec![
             COLLECTION_TOOL_CALL_FP32,
             COLLECTION_TOOL_CALL_PQ,
@@ -129,10 +133,7 @@ impl NexusPurgeOps for LiveNexusPurger {
             nexus_sdk::Value::String(event_id.to_string()),
         );
         self.client
-            .execute_cypher(
-                "MATCH (n { event_id: $id }) DETACH DELETE n",
-                Some(params),
-            )
+            .execute_cypher("MATCH (n { event_id: $id }) DETACH DELETE n", Some(params))
             .await
             .map_err(|e| NexusPurgeError::Server(e.to_string()))?;
         Ok(())
@@ -173,9 +174,8 @@ impl ArchivePurgeOps for LiveArchivePurger {
         //    a `*.parquet.tmp` + atomic rename. A mid-write crash
         //    leaves the original intact.
         for path in target_paths {
-            rewrite_partition(&path, event_id).map_err(|e| {
-                ArchivePurgeError::Io(format!("rewrite {path:?}: {e}"))
-            })?;
+            rewrite_partition(&path, event_id)
+                .map_err(|e| ArchivePurgeError::Io(format!("rewrite {path:?}: {e}")))?;
         }
         Ok(())
     }
@@ -215,10 +215,7 @@ fn walk_dir_for_target(
     Ok(())
 }
 
-fn file_contains_event_id(
-    path: &std::path::Path,
-    event_id: &str,
-) -> std::io::Result<bool> {
+fn file_contains_event_id(path: &std::path::Path, event_id: &str) -> std::io::Result<bool> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
     let decoder = match zstd::stream::read::Decoder::new(file) {
@@ -231,9 +228,7 @@ fn file_contains_event_id(
         if line.contains(event_id) {
             // String-level pre-filter so we don't decode every
             // line; a confirmed match parses next.
-            if let Ok(env) =
-                serde_json::from_str::<cortex_core::events::Envelope>(line.trim())
-            {
+            if let Ok(env) = serde_json::from_str::<cortex_core::events::Envelope>(line.trim()) {
                 if env.event_id == event_id {
                     return Ok(true);
                 }
@@ -513,9 +508,8 @@ mod tests {
             })
             .unwrap(),
             redactions: vec![],
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             parent_event_id: None,
         }
     }

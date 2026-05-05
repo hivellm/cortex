@@ -308,6 +308,23 @@ services:
       CORTEX_SYNAP_URL: http://synap:15500
       CORTEX_NEXUS_URL: http://nexus:15474
       CORTEX_VECTORIZER_URL: http://vectorizer:15002
+      # phase11v §1 — `cortex-ops consolidation-prune` reads
+      # `CORTEX_EMBEDDER_VECTORIZER_URL` (with the EMBEDDER_ prefix)
+      # before falling back to the literal `127.0.0.1:17001`, which
+      # cannot resolve inside the cortex-api container. Mirror the
+      # service URL onto the prefixed name so the prune job can log
+      # in to the live Vectorizer instead of a dead loopback.
+      CORTEX_EMBEDDER_VECTORIZER_URL: http://vectorizer:15002
+      CORTEX_EMBEDDER_VECTORIZER_USER: ${CORTEX_VECTORIZER_USER:-${CORTEX_EMBEDDER_VECTORIZER_USER:-admin}}
+      CORTEX_EMBEDDER_VECTORIZER_PASSWORD: ${CORTEX_VECTORIZER_PASSWORD:-${CORTEX_EMBEDDER_VECTORIZER_PASSWORD:-cortex-dev-admin}}
+      # phase11v §2 — `consolidation-prune` reads
+      # `CORTEX_FULLTEXT_MEILI_KEY` (no `_API_` infix) at
+      # cortex-cli/src/bin/cortex-ops.rs:4622 and falls through to
+      # `MEILI_MASTER_KEY` only when that one is unset. The compose
+      # default exports `_API_KEY` (with the infix) which is read
+      # by cortex-api's keyword lane. Mirror the value onto the
+      # underscore-key name so the daemon-driven prune authenticates.
+      CORTEX_FULLTEXT_MEILI_KEY: ${CORTEX_FULLTEXT_MEILI_API_KEY:-${MEILI_MASTER_KEY:-cortex-dev-master-key}}
       # phase11a — credentials for the vector lane's authenticated probe
       # and reactive 401 → /auth/login refresh path. Without these,
       # every search_vectors call against a JWT-required Vectorizer
@@ -362,6 +379,13 @@ services:
       # checkout); override with CORTEX_WORKSPACES_HOST in `.env` to
       # point at any other layout.
       - ${CORTEX_WORKSPACES_HOST:-..}:/workspaces:ro
+      # phase11v §2 — `cortex-ops memory-consolidate` walks
+      # `~/.claude/projects/*/memory/` to collapse Claude Code
+      # auto-memory entries. Without this mount the binary errors
+      # with `memory directory not found: /root/.claude/...` and the
+      # daemon-driven weekly consolidation never runs. Read-write
+      # because the consolidator rewrites merged entries in place.
+      - ${CORTEX_CLAUDE_HOME_HOST:-${USERPROFILE:-${HOME}}/.claude}:/root/.claude
     restart: unless-stopped
 
   # phase11i §5.1 — cortex-claude-archive ─ long-running watcher

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { DetailDrawer } from "../atoms/DetailDrawer";
 import { Icon } from "../atoms/Icon";
+import { Markdown } from "../atoms/Markdown";
 import { Tag } from "../atoms/Tag";
 import { api, type DecisionChainNode, type DecisionRow } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
@@ -38,7 +39,7 @@ export function DecisionsView() {
   const repoOptions = useMemo(() => {
     const set = new Set<string>();
     for (const d of allRows ?? []) {
-      if (d.repo) set.add(d.repo);
+      if (d.repo) set.add(d.repo.toLowerCase());
     }
     return Array.from(set).sort();
   }, [allRows]);
@@ -73,7 +74,7 @@ export function DecisionsView() {
             <option value="">All projects ({allRows?.length ?? 0})</option>
             {repoOptions.map((r) => {
               const c =
-                (allRows ?? []).filter((d) => d.repo === r).length;
+                (allRows ?? []).filter((d) => d.repo?.toLowerCase() === r).length;
               return (
                 <option key={r} value={r}>
                   {r} ({c})
@@ -264,11 +265,13 @@ function DecisionDrawer({
       ) : isLoading ? (
         <pre className="drawer__markdown muted">Loading…</pre>
       ) : (
-        <pre className="drawer__markdown">
-          {data?.body_markdown?.trim()
-            ? data.body_markdown
-            : row?.rationale ?? "(no body)"}
-        </pre>
+        <Markdown
+          source={
+            data?.body_markdown?.trim()
+              ? data.body_markdown
+              : row?.rationale ?? "(no body)"
+          }
+        />
       )}
     </DetailDrawer>
   );

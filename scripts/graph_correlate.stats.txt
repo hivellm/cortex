@@ -1,0 +1,44 @@
+# graph_correlate.py — run summary
+generated_at: 2026-05-05T02:26:34.848100+00:00
+runtime_seconds: 23.20
+root: E:\HiveLLM
+transcripts: C:\Users\Bolado\.claude\projects
+git_limit: 500
+transcript_limit: 50
+turn_limit: 2000
+
+## Totals
+nodes_total: 129749
+edges_total: 271039
+warnings: 0
+
+## Nodes by label
+  Turn: 40065
+  Artifact: 39653
+  TaskItem: 29541
+  ToolCall: 15725
+  Commit: 3430
+  Task: 990
+  Session: 137
+  Learning: 90
+  Knowledge: 69
+  Decision: 28
+  Repo: 17
+  Law: 4
+
+## Edges by relation
+  MODIFIES: 124338
+  HAS_TURN: 41460
+  IN_REPO: 40396
+  HAS_ITEM: 29541
+  TOUCHED: 17622
+  INVOKED: 15725
+  REFERENCES_TASK: 980
+  MENTIONS_TASK: 527
+  REFERENCES: 247
+  EXTRACTED_FROM_TASK: 68
+  MENTIONS: 49
+  CLOSES: 42
+  RESOLVES: 39
+  MENTIONS_LAW: 4
+  MENTIONS_COMMIT: 1

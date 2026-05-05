@@ -24,14 +24,14 @@ export function ConversationsView() {
 
   const repos = useMemo(() => {
     const s = new Set<string>();
-    for (const c of list ?? []) for (const r of c.repos) s.add(r);
+    for (const c of list ?? []) for (const r of c.repos) s.add(r.toLowerCase());
     return Array.from(s).sort();
   }, [list]);
 
   const filtered = useMemo(() => {
     const all = list ?? [];
     if (!repoFilter) return all;
-    return all.filter((c) => c.repos.includes(repoFilter));
+    return all.filter((c) => c.repos.some((r) => r.toLowerCase() === repoFilter));
   }, [list, repoFilter]);
 
   // Auto-select the most recent conversation when the list loads.
@@ -72,7 +72,9 @@ export function ConversationsView() {
           >
             <option value="">All projects ({list?.length ?? 0})</option>
             {repos.map((r) => {
-              const c = (list ?? []).filter((c) => c.repos.includes(r)).length;
+              const c = (list ?? []).filter((c) =>
+                c.repos.some((rr) => rr.toLowerCase() === r),
+              ).length;
               return (
                 <option key={r} value={r}>
                   {r} ({c})

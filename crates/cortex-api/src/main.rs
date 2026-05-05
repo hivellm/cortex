@@ -653,7 +653,8 @@ async fn main() -> Result<()> {
         .unwrap_or(true);
     let mut memory_tail_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     if watch_enabled && memory_tail_enabled {
-        let run_flag = std::sync::Arc::new(|| true) as std::sync::Arc<dyn Fn() -> bool + Send + Sync>;
+        let run_flag =
+            std::sync::Arc::new(|| true) as std::sync::Arc<dyn Fn() -> bool + Send + Sync>;
         for root in &rulebook_roots {
             let db_path = root.join("memory").join("memory.db");
             let handle = cortex_api::memory_tail::spawn_tail_loop(

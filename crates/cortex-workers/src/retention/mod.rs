@@ -33,6 +33,7 @@ pub mod metadata_reap;
 pub mod parquet_rollup;
 pub mod pii_enforce;
 pub mod scheduler;
+pub mod tool_call_digest;
 pub mod turn_digest;
 
 use std::collections::BTreeMap;

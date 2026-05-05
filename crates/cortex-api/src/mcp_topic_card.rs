@@ -392,10 +392,7 @@ pub trait TopicCardDrill: Send + Sync {
         topic_card_id: &str,
     ) -> Result<Vec<TopicCardRevision>, TopicCardMcpError>;
     /// Return outgoing `:RELATED_TO` neighbours (one hop, deduped).
-    async fn related(
-        &self,
-        topic_card_id: &str,
-    ) -> Result<Vec<String>, TopicCardMcpError>;
+    async fn related(&self, topic_card_id: &str) -> Result<Vec<String>, TopicCardMcpError>;
 }
 
 /// Build the MCP descriptor for `cortex_topic_drill`.
@@ -596,9 +593,7 @@ pub async fn invoke_topic_neighbors(
     topic_card_id: String,
     depth: Option<u8>,
 ) -> Result<NeighborGraph, TopicCardMcpError> {
-    let resolved_depth = depth
-        .unwrap_or(TOPIC_NEIGHBORS_DEFAULT_DEPTH)
-        .clamp(1, 5);
+    let resolved_depth = depth.unwrap_or(TOPIC_NEIGHBORS_DEFAULT_DEPTH).clamp(1, 5);
     let graph = neighbors.neighbors(&topic_card_id, resolved_depth).await?;
     record_topic_card_call(
         audit_publisher,
@@ -1314,10 +1309,7 @@ mod tests {
                 .cloned()
                 .unwrap_or_default())
         }
-        async fn related(
-            &self,
-            topic_card_id: &str,
-        ) -> Result<Vec<String>, TopicCardMcpError> {
+        async fn related(&self, topic_card_id: &str) -> Result<Vec<String>, TopicCardMcpError> {
             Ok(self
                 .related
                 .lock()
@@ -1366,7 +1358,10 @@ mod tests {
         drill.cards.lock().unwrap().insert(card_id.clone(), card);
         drill.evidence_titles.lock().unwrap().insert(
             "DEC-0042".to_string(),
-            ("Adopt JWT rotation".to_string(), "2026-04-01T09:00:00Z".to_string()),
+            (
+                "Adopt JWT rotation".to_string(),
+                "2026-04-01T09:00:00Z".to_string(),
+            ),
         );
         // LAW-CORTEX-001 is intentionally absent from the title map
         // — defensive: the hydrator must surface an empty title /
@@ -1387,7 +1382,7 @@ mod tests {
         assert_eq!(out.evidence[0].title, "Adopt JWT rotation");
         assert_eq!(out.evidence[1].id, "LAW-CORTEX-001");
         assert_eq!(out.evidence[1].title, ""); // missing source
-        // Audit envelope carries the count.
+                                               // Audit envelope carries the count.
         let envs = audit.snapshot();
         assert_eq!(envs[0]["tool"], TOOL_NAME_TOPIC_DRILL);
         assert_eq!(envs[0]["result"]["dimension"], "evidence");
@@ -1977,14 +1972,9 @@ mod tests {
         assert!(matches!(err, TopicCardMcpError::ScopeRepoRequired));
 
         // Empty query
-        let err = invoke_synthesize(
-            synth,
-            &audit,
-            "claude-code",
-            synth_req("   ", false, false),
-        )
-        .await
-        .expect_err("must reject");
+        let err = invoke_synthesize(synth, &audit, "claude-code", synth_req("   ", false, false))
+            .await
+            .expect_err("must reject");
         assert!(matches!(err, TopicCardMcpError::Invalid(_)));
 
         let envs = audit.snapshot();

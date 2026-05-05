@@ -42,7 +42,7 @@ export function HandoffsView() {
   const repos = useMemo(() => {
     const s = new Set<string>();
     for (const r of allRows ?? []) {
-      if (r.repo) s.add(r.repo);
+      if (r.repo) s.add(r.repo.toLowerCase());
     }
     return Array.from(s).sort();
   }, [allRows]);
@@ -71,7 +71,7 @@ export function HandoffsView() {
           >
             <option value="">All projects ({allRows?.length ?? 0})</option>
             {repos.map((r) => {
-              const c = (allRows ?? []).filter((row) => row.repo === r).length;
+              const c = (allRows ?? []).filter((row) => row.repo?.toLowerCase() === r).length;
               return (
                 <option key={r} value={r}>
                   {r} ({c})

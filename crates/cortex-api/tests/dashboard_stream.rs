@@ -29,9 +29,7 @@ fn build_router(events_bus: DashboardEventBus) -> axum::Router {
         lane: Arc::new(MemoryKeywordLane::new()),
         nexus: None,
         analyzer: Arc::new(cortex_api::analyzer::Analyzer::from_env()),
-        tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![TaskLoader::new(
-            tmp,
-        )])),
+        tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![TaskLoader::new(tmp)])),
         metadata: None,
         loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
         events_bus,
@@ -44,12 +42,7 @@ fn build_router(events_bus: DashboardEventBus) -> axum::Router {
 ///
 /// This avoids `to_bytes`, which blocks until the body completes — and
 /// the SSE stream never completes on a healthy connection.
-async fn read_until(
-    body: Body,
-    needles: &[&str],
-    max_bytes: usize,
-    deadline: Duration,
-) -> Vec<u8> {
+async fn read_until(body: Body, needles: &[&str], max_bytes: usize, deadline: Duration) -> Vec<u8> {
     let collected = timeout(deadline, async move {
         let mut acc: Vec<u8> = Vec::new();
         let mut stream = body.into_data_stream();
@@ -111,7 +104,11 @@ async fn stream_emits_hello_frame_then_published_event() {
 
     let bytes = read_until(
         body,
-        &["event: hello", "event: task.changed", "01J_TEST_TASK_CHANGED"],
+        &[
+            "event: hello",
+            "event: task.changed",
+            "01J_TEST_TASK_CHANGED",
+        ],
         16 * 1024,
         Duration::from_secs(5),
     )

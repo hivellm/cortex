@@ -733,7 +733,18 @@ export type RetentionCasTotals = {
 
 export type RetentionScheduledRun = {
   sweep: string;
+  /// RFC-3339 timestamp of the next scheduled run, or `"never"`
+  /// when the cron row is missing, or `"disabled"` when
+  /// `enabled = 0`.
   next_run: string;
+  /// RFC-3339 timestamp of the most recent run. Absent when the
+  /// sweep has never executed (phase11v §1.2).
+  last_run?: string;
+  /// `success` / `failed` / `lock_held`. Absent when the sweep has
+  /// never executed (phase11v §1.2).
+  last_status?: string;
+  /// Consecutive failure count; omitted when zero (phase11v §1.2).
+  failure_streak?: number;
 };
 
 export type RetentionStateBody = {

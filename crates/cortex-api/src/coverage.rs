@@ -233,7 +233,9 @@ pub async fn fetch_nexus_repo_names(
         .map_err(|e| format!("nexus execute_cypher: {e}"))?;
     let mut out = BTreeSet::new();
     for row in &res.rows {
-        let Some(cells) = row.as_array() else { continue };
+        let Some(cells) = row.as_array() else {
+            continue;
+        };
         if let Some(name) = cells.first().and_then(|v| v.as_str()) {
             let trimmed = name.trim();
             if !trimmed.is_empty() {
@@ -772,8 +774,7 @@ pub fn pruner_status_path() -> Option<std::path::PathBuf> {
     if let Ok(p) = std::env::var("CORTEX_PRUNER_STATUS_FILE") {
         return Some(std::path::PathBuf::from(p));
     }
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))?;
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
     let mut p = std::path::PathBuf::from(home);
     p.push(".cortex");
     p.push("pruner-status.json");
@@ -1005,9 +1006,14 @@ mod tests {
         // Phase11m §1 — Nexus uses slugs (not slug × family) as the
         // expected set. Verify the diff partitions slugs the right
         // way when fed simulated `live = nexus_repo_names` output.
-        let slugs: BTreeSet<String> =
-            ["cortex", "rulebook", "vectorizer"].into_iter().map(String::from).collect();
-        let live: BTreeSet<String> = ["cortex", "vectorizer"].into_iter().map(String::from).collect();
+        let slugs: BTreeSet<String> = ["cortex", "rulebook", "vectorizer"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let live: BTreeSet<String> = ["cortex", "vectorizer"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         let d = diff(slugs, live);
         assert_eq!(d.expected.len(), 3);
         assert_eq!(d.present.len(), 2);

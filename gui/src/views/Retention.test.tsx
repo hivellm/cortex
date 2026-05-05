@@ -65,8 +65,24 @@ vi.mock("../lib/api", () => {
         meili_indexes: [],
         cas: { rows: 5, bytes: 2048, available: true, path: "/tmp/cas.sqlite" },
         next_runs: [
-          { sweep: "tier_sweep", next_run: "never" },
+          // phase11v §1.6 — schedule lane is the source of truth for
+          // last/next-run. tier_sweep is fresh + green; consolidation_prune
+          // is failing; memory_consolidate is operator-disabled.
+          {
+            sweep: "tier_sweep",
+            next_run: new Date(Date.now() + 3_600_000).toISOString(),
+            last_run: new Date(Date.now() - 1_800_000).toISOString(),
+            last_status: "success",
+          },
           { sweep: "parquet_rollup", next_run: "never" },
+          {
+            sweep: "consolidation_prune",
+            next_run: new Date(Date.now() + 86_400_000).toISOString(),
+            last_run: new Date(Date.now() - 600_000).toISOString(),
+            last_status: "failed",
+            failure_streak: 1,
+          },
+          { sweep: "memory_consolidate", next_run: "disabled" },
         ],
       }),
     },
@@ -104,6 +120,26 @@ describe("RetentionView", () => {
     expect(screen.getByText("Turn digest")).toBeInTheDocument();
     expect(screen.getByText("Meili prune")).toBeInTheDocument();
     expect(screen.getByText("Metadata reap")).toBeInTheDocument();
+    // phase11v §1.6 — three new sweep cards appear after the
+    // schedule-lane wiring lands.
+    expect(screen.getByText("Consolidator (nightly)")).toBeInTheDocument();
+    expect(screen.getByText("Consolidation prune")).toBeInTheDocument();
+    expect(screen.getByText("Memory consolidate")).toBeInTheDocument();
+  });
+
+  it("renders the disabled pill for memory_consolidate when next_run is 'disabled'", async () => {
+    render(withQuery(<RetentionView />));
+    // Pill text only appears after the schedule lane resolves.
+    expect(await screen.findByText("disabled")).toBeInTheDocument();
+  });
+
+  it("renders the failure_streak badge on consolidation_prune", async () => {
+    render(withQuery(<RetentionView />));
+    // Status badge appears once both queries resolve. The `(×1)` is
+    // the consecutive-failure marker.
+    expect(
+      await screen.findByText((content) => /failed\s*\(×1\)/i.test(content)),
+    ).toBeInTheDocument();
   });
 
   it("shows the failure banner when a sweep type has 2 consecutive failures", async () => {

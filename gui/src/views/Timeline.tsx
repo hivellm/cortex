@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
+import { RepoMultiSelect } from "../atoms/RepoMultiSelect";
 import { Sparkline } from "../atoms/Sparkline";
 import { api, getActiveConnection, type TimelineEvent } from "../lib/api";
 import { fmtNum } from "../lib/format";
@@ -418,12 +419,6 @@ export function TimelineView() {
     queryFn: () => api.overview(),
     refetchInterval: live ? 5000 : false,
   });
-  const sessionsQ = useQuery({
-    queryKey: [connKey, "sessions"],
-    queryFn: () => api.sessions(),
-    refetchInterval: live ? 8000 : false,
-  });
-
   const events = data ?? [];
 
   // Backend now ships an `events_per_min` series in the overview
@@ -432,11 +427,7 @@ export function TimelineView() {
   // gone — server-side bucketing is more accurate and survives
   // refresh.
   const eventsPerMin = overviewQ.data?.series?.events_per_min ?? [];
-  const violationsDaily = overviewQ.data?.series?.violations_7d_daily ?? [];
   const preThinkingP95 = overviewQ.data?.series?.pre_thinking_p95_ms ?? [];
-  const classifierCost = overviewQ.data?.series?.classifier_cost_usd_today ?? [];
-  const classifierCostStub =
-    overviewQ.data?.classifier_cost_unavailable_until_spec05 ?? true;
 
   // Track previously-seen ids so we can flash newly-arriving rows.
   // First fetch primes the set without flashing every row.
@@ -531,13 +522,9 @@ export function TimelineView() {
       <TimelineStats
         eventsTotal={overviewQ.data?.events_total ?? 0}
         reposIndexed={overviewQ.data?.repos_indexed ?? 0}
-        sessionCount={sessionsQ.data?.length ?? 0}
         kindBreakdown={overviewQ.data?.kind_breakdown ?? []}
         eventsPerMin={eventsPerMin}
-        violationsDaily={violationsDaily}
         preThinkingP95={preThinkingP95}
-        classifierCost={classifierCost}
-        classifierCostStub={classifierCostStub}
       />
 
       {hasAnyFilter(filters) ? (
@@ -725,246 +712,22 @@ export function TimelineView() {
   );
 }
 
-/// Multi-repo selector. Renders as a single chip-shaped trigger that
-/// summarises the current selection ("Repo: all", "Repo: 3 of 17",
-/// "Repo: cortex") and pops a checkbox panel on click. Closing rules:
-/// outside-click, Escape, or the explicit "Done" button.
-///
-/// Designed for a many-repos future — a chip-row of toggles stops
-/// scaling past ~8 repos. The dropdown stays compact regardless of
-/// the option count and supports the natural "I want these three"
-/// gesture.
-function RepoMultiSelect({
-  options,
-  selected,
-  onChange,
-}: {
-  options: string[];
-  selected: string[];
-  onChange: (next: string[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const sel = useMemo(() => new Set(selected), [selected]);
-
-  // Close on outside-click + Escape so the panel never traps focus.
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (
-        rootRef.current &&
-        e.target instanceof Node &&
-        !rootRef.current.contains(e.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return options;
-    return options.filter((r) => r.toLowerCase().includes(q));
-  }, [options, query]);
-
-  const summary =
-    selected.length === 0
-      ? "all"
-      : selected.length === 1
-        ? selected[0]
-        : `${selected.length} of ${options.length}`;
-
-  const toggle = (repo: string) => {
-    if (sel.has(repo)) {
-      onChange(selected.filter((r) => r !== repo));
-    } else {
-      onChange([...selected, repo]);
-    }
-  };
-
-  const FILTER_HINT = "Filter repos";
-  const filterInputProps: Record<string, string> = {
-    type: "text",
-    "aria-label": FILTER_HINT,
-    [SEARCH_HINT_ATTR]: FILTER_HINT,
-  };
-
-  return (
-    <div ref={rootRef} style={{ position: "relative" }}>
-      <button
-        type="button"
-        className={`chip ${selected.length > 0 ? "is-active" : ""}`}
-        onClick={() => setOpen((o) => !o)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title="Filter by repo"
-      >
-        Repo: {summary}
-        <span aria-hidden="true" style={{ marginLeft: 4 }}>
-          {open ? "▴" : "▾"}
-        </span>
-      </button>
-      {open ? (
-        <div
-          role="listbox"
-          aria-multiselectable="true"
-          style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            zIndex: 20,
-            minWidth: 240,
-            maxWidth: 360,
-            background: "var(--bg-1)",
-            border: "1px solid var(--border-strong)",
-            borderRadius: "var(--radius-sm)",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.32)",
-            padding: 8,
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-          }}
-        >
-          <input
-            {...filterInputProps}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            style={{
-              height: 24,
-              padding: "0 8px",
-              background: "var(--bg-2)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-xs)",
-              color: "var(--fg-0)",
-              fontSize: 11.5,
-              outline: "none",
-            }}
-          />
-          <div
-            style={{
-              maxHeight: 240,
-              overflowY: "auto",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            {visible.length === 0 ? (
-              <span
-                style={{
-                  padding: "8px 6px",
-                  color: "var(--fg-3)",
-                  fontSize: 11.5,
-                  textAlign: "center",
-                }}
-              >
-                No repos match.
-              </span>
-            ) : (
-              visible.map((repo) => (
-                <label
-                  key={repo}
-                  role="option"
-                  aria-selected={sel.has(repo)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "5px 6px",
-                    fontSize: 12,
-                    color: "var(--fg-0)",
-                    cursor: "pointer",
-                    borderRadius: "var(--radius-xs)",
-                  }}
-                  onMouseDown={(e) => e.preventDefault()}
-                >
-                  <input
-                    type="checkbox"
-                    checked={sel.has(repo)}
-                    onChange={() => toggle(repo)}
-                    style={{ accentColor: "var(--accent)" }}
-                  />
-                  <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {repo}
-                  </span>
-                </label>
-              ))
-            )}
-          </div>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              gap: 6,
-              borderTop: "1px solid var(--border-soft)",
-              paddingTop: 6,
-            }}
-          >
-            <button
-              type="button"
-              className="btn btn--sm btn--ghost"
-              onClick={() => onChange([])}
-              disabled={selected.length === 0}
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              className="btn btn--sm btn--ghost"
-              onClick={() => onChange([...options])}
-              disabled={selected.length === options.length}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              className="btn btn--sm"
-              onClick={() => setOpen(false)}
-              style={{ marginLeft: "auto" }}
-            >
-              Done
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 function TimelineStats({
   eventsTotal,
   reposIndexed,
-  sessionCount,
   kindBreakdown,
   eventsPerMin,
-  violationsDaily,
   preThinkingP95,
-  classifierCost,
-  classifierCostStub,
 }: {
   eventsTotal: number;
   reposIndexed: number;
-  sessionCount: number;
   kindBreakdown: { kind: string; count: number }[];
   eventsPerMin: number[];
-  violationsDaily: number[];
   preThinkingP95: (number | null)[];
-  classifierCost: number[];
-  classifierCostStub: boolean;
 }) {
   const turnCount = kindBreakdown.find((k) => k.kind === "turn")?.count ?? 0;
   const toolCount = kindBreakdown.find((k) => k.kind === "tool_call")?.count ?? 0;
   const lastMinute = eventsPerMin[eventsPerMin.length - 1] ?? 0;
-  const violations7d = violationsDaily.reduce((s, v) => s + v, 0);
   // Latest non-null bucket — the "current" P95 reading. Walks
   // backwards so a gap in the most-recent bucket falls back to the
   // last real sample without hiding the fact that the freshest
@@ -976,7 +739,6 @@ function TimelineStats({
     }
     return null;
   })();
-  const costToday = classifierCost.reduce((s, v) => s + v, 0);
   return (
     <div className="stats-grid" style={{ marginBottom: 14 }}>
       <div className="stat">
@@ -1020,32 +782,6 @@ function TimelineStats({
         <div className="stat__delta">
           {turnCount > 0 ? (toolCount / turnCount).toFixed(1) : "0"} per turn
         </div>
-      </div>
-      <div className="stat">
-        <div className="stat__label">Classifier spend · 24h</div>
-        <div className="stat__value tabular">
-          {classifierCostStub ? "—" : `$${costToday.toFixed(2)}`}
-        </div>
-        <div className="stat__delta">
-          {classifierCostStub
-            ? "unavailable until spec-05 classifier worker"
-            : "rolling 24h, hourly buckets"}
-        </div>
-        {!classifierCostStub && classifierCost.some((v) => v > 0) ? (
-          <div className="stat__spark">
-            <Sparkline data={classifierCost} color="var(--warn)" />
-          </div>
-        ) : null}
-      </div>
-      <div className="stat">
-        <div className="stat__label">Violations · 7d</div>
-        <div className="stat__value tabular">{fmtNum(violations7d)}</div>
-        <div className="stat__delta">{fmtNum(sessionCount)} sessions captured</div>
-        {violationsDaily.some((v) => v > 0) ? (
-          <div className="stat__spark">
-            <Sparkline data={violationsDaily} color="var(--critical)" />
-          </div>
-        ) : null}
       </div>
     </div>
   );

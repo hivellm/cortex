@@ -1,8 +1,102 @@
 # Spec 19 — Retention Sweep
 
-**Status:** 🟢 phase9a core + phase11o consolidation pruner shipped
-against the live Vectorizer SDK 3.3.0 (`move_to_collection`,
-`delete_vectors`) and Meilisearch.
+**Status:** 🟢 phase9a core + phase11o consolidation pruner +
+phase11v daemon recovery shipped against the live Vectorizer SDK
+3.3.0 (`move_to_collection`, `delete_vectors`) and Meilisearch.
+
+## Phase11w — Tool-call digest summariser (Implemented)
+
+`turn_digest` (phase9e) summarises `Turn` envelopes; `tool_call`
+events were left out and grew to dominate the lane (28 141 of 38 866
+in the 2026-05-05 snapshot, 72 % of `events_total`). Most are short
+`Bash` / `Read` / `Edit` / `Grep` invocations whose individual
+payloads carry no long-term value but whose AGGREGATE shape
+(which tools were busy in which weeks under which repo) is the
+actual retrieval signal.
+
+Phase11w adds the missing summariser:
+
+- **Library**: `cortex_workers::retention::tool_call_digest`
+  (`ToolCall`, `Bucket`, `bucketize`, `ToolCallDigestBackend`,
+  `run_tool_call_digest`).
+- **Bucket key**: `(repo, ISO_year_week, tool)` — tool name (`Bash`,
+  `Read`, `Edit`, `Grep`, …) replaces `top_topic` from the turn
+  digest.
+- **Threshold**: `digest_after_days = 30 d`, `min_bucket_size = 5`,
+  `max_usd_cents_per_run = 500`.
+- **Output**: one `:Memory{memory_type=tool_call_digest}` per
+  bucket, embedded into `cortex.memory.fp32`, linked in Nexus via
+  `(:Memory)-[:SUMMARIZES]->(:ToolCall)` for every source event id.
+- **Hard purge**: when `purge_originals = true` the orchestrator
+  calls `delete_source_tool_calls` after the digest persists; the
+  source rows are removed from Meili (`cortex_tool_calls`),
+  Vectorizer (`cortex.tool_call.fp32` / `.pq` / `.cold.binary`),
+  and the matching Parquet partitions. **First-class headline
+  counter** `records_purged` lands on the
+  `retention_sweeps.tier_transitions_json.tool_call_digest`
+  payload so the dashboard's `Bytes reclaimed last 30 d` panel
+  reflects the actual shrinkage.
+- **Cron**: `retention.tool_call_digest`, `30 6 * * 0` (Sunday
+  06:30 UTC, 30 minutes after `turn_digest`'s 06:00 slot — the
+  two summarisers do not contend for classifier budget on the
+  same tick), `cortex-ops tool-call-digest --purge-originals
+  --budget-cents 500`, default `enabled = true`.
+- **CLI**: `cortex-ops tool-call-digest [--time-travel RFC3339]
+  [--dry-run] [--rebuild] [--budget-cents N]
+  [--purge-originals] [--json]`. Default mode is preview: no
+  classifier call, no deletes — pair `--purge-originals` with
+  the implicit non-dry-run to flip deletes on.
+- **Dashboard slug**: `tool_call_digest` joins the canonical
+  retention sweep slug list; the GUI renders a "Tool-call digest"
+  card with `last_run` / `next_run` / `records_purged`.
+
+Typical compression: a repo emitting 200 `Bash` calls per week
+yields 1 digest per week. After 52 weeks that is **52 Memory
+entries instead of 10 400 ToolCall envelopes** — the same
+∼50–100× reduction the turn digest delivers on conversational
+turns.
+
+## Phase11v — Daemon recovery (Implemented)
+
+Six independent gaps left the retention pipeline visibly broken on
+the dashboard while sweeps were silently running with stale state.
+Phase11v closes them:
+
+1. **Dashboard live-read of `cron_jobs`.** `GET /v1/retention/state`
+   now projects every retention cron row's `next_run_at`,
+   `last_run_at`, `last_status`, and `failure_streak` into the
+   response body. Disabled rows surface as `next_run: "disabled"`;
+   missing rows degrade to `"never"` so cold-dev boots still work.
+2. **`consolidation-prune` env precedence.** The bin reads three
+   env-name shapes for the Vectorizer + Meili creds and the URL,
+   in this order:
+
+   | resource          | priority order                                                                                       |
+   |-------------------|------------------------------------------------------------------------------------------------------|
+   | Vectorizer URL    | `--vectorizer-url` flag → `CORTEX_VECTORIZER_URL` → `CORTEX_EMBEDDER_VECTORIZER_URL` → `http://127.0.0.1:17001` |
+   | Vectorizer user   | `CORTEX_VECTORIZER_USER` → `CORTEX_EMBEDDER_VECTORIZER_USER` → `admin`                               |
+   | Vectorizer pwd    | `CORTEX_VECTORIZER_PASSWORD` → `CORTEX_EMBEDDER_VECTORIZER_PASSWORD` → `cortex-dev-admin`            |
+   | Meili URL         | `--meili-url` flag → `CORTEX_FULLTEXT_MEILI_URL` → `http://127.0.0.1:7700`                            |
+   | Meili API key     | `--meili-key` flag → `CORTEX_FULLTEXT_MEILI_API_KEY` → `CORTEX_FULLTEXT_MEILI_KEY` → `MEILI_MASTER_KEY` → `None` |
+
+   The compose-driven `cortex-api` boot exports the unprefixed
+   triplet (`CORTEX_VECTORIZER_*`) and the `_API_` infix Meili key,
+   so the daemon-spawned prune authenticates against the live
+   Vectorizer + Meili services without operator intervention.
+
+3. **`seed_defaults` UPSERT-aware.** A flipped `enabled` default
+   (e.g., `retention.memory_consolidate` going `false → true`)
+   reconciles into existing `cron_jobs` rows on the next boot
+   without overwriting operator-disabled rows.
+4. **`next_after()` strictly advances.** Schedules whose most
+   recent slot equals `now` skip past the current slot; the
+   `turn_digest` 30-s loop is no longer reachable.
+5. **`cortex_consolidations` schema.** `MetadataStore::open` now
+   applies the phase11p schema on every open; the prune walks a
+   real table instead of `no such table: cortex_consolidations`.
+6. **`retention_sweeps` bookkeeping.** Every `cortex-ops <sweep>`
+   binary emits one `retention_sweeps` row per invocation so the
+   dashboard's `Bytes reclaimed last 30 d` panel reflects reality.
 
 ## Phase11p — Consolidator live read path (Implemented)
 

@@ -31,11 +31,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration as StdDuration;
 
 use chrono::{DateTime, Utc};
+use cortex_storage::{CronJob, MetadataStore};
 use cortex_workers::retention::scheduler::{
     next_after, seed_defaults, ProcessRunner, RunOutcome, Runner, Scheduler, TickReport,
     DEFAULT_TICK_INTERVAL_SECS,
 };
-use cortex_storage::{CronJob, MetadataStore};
 
 /// Env var honoured at boot: `disabled` (case-insensitive) keeps
 /// the daemon idle so an operator can drive sweeps externally.
@@ -297,7 +297,11 @@ mod tests {
         // Re-open to inspect the seeded rows.
         let store = MetadataStore::open(&path).expect("metadata reopens");
         let jobs = store.list_cron_jobs().expect("metadata store readable");
-        assert_eq!(jobs.len(), 10, "default cron rows should be seeded");
+        assert_eq!(
+            jobs.len(),
+            11,
+            "default cron rows should be seeded (phase11w bump 10 → 11)"
+        );
         // Stop the loop so the test runtime can shut down cleanly.
         handle.abort();
         if let Some(v) = prev {

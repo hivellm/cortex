@@ -202,17 +202,14 @@ fn open_ro(path: &Path) -> rusqlite::Result<Connection> {
 }
 
 fn seed_max_rowid(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COALESCE(MAX(rowid), 0) FROM memories",
-        [],
-        |row| row.get::<_, i64>(0),
-    )
+    conn.query_row("SELECT COALESCE(MAX(rowid), 0) FROM memories", [], |row| {
+        row.get::<_, i64>(0)
+    })
 }
 
 fn poll_new_rows(conn: &Connection, last_rowid: i64) -> rusqlite::Result<Vec<MemoryRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT rowid, id, name FROM memories WHERE rowid > ?1 ORDER BY rowid",
-    )?;
+    let mut stmt = conn
+        .prepare_cached("SELECT rowid, id, name FROM memories WHERE rowid > ?1 ORDER BY rowid")?;
     let mut out: Vec<MemoryRow> = Vec::new();
     let rows = stmt.query_map([last_rowid], |row| {
         Ok(MemoryRow {

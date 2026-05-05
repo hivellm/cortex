@@ -771,5 +771,4 @@ mod tests {
         );
         assert_eq!(hit.symbol.as_deref(), Some("topic_card:auth-rewrite"));
     }
-
 }

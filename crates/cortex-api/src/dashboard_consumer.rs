@@ -175,7 +175,7 @@ mod tests {
         assert!(consumer.ingest_event(make_event("01_A", "a")));
         assert!(consumer.ingest_event(make_event("01_B", "b")));
         assert!(consumer.ingest_event(make_event("01_C", "c"))); // evicts A
-        // A should re-ingest because it fell out of the window.
+                                                                 // A should re-ingest because it fell out of the window.
         assert!(consumer.ingest_event(make_event("01_A", "a")));
         assert_eq!(consumer.metrics().forwarded, 4);
         assert_eq!(consumer.metrics().deduped, 0);

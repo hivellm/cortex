@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { DetailDrawer } from "../atoms/DetailDrawer";
+import { Markdown } from "../atoms/Markdown";
 import { Tag } from "../atoms/Tag";
 import { api, type AnalysisRow } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
@@ -28,7 +29,7 @@ export function AnalysisView() {
   const repoOptions = useMemo(() => {
     const set = new Set<string>();
     for (const a of allRows ?? []) {
-      if (a.repo) set.add(a.repo);
+      if (a.repo) set.add(a.repo.toLowerCase());
     }
     return Array.from(set).sort();
   }, [allRows]);
@@ -77,7 +78,7 @@ export function AnalysisView() {
           >
             <option value="">All projects ({allRows?.length ?? 0})</option>
             {repoOptions.map((r) => {
-              const c = (allRows ?? []).filter((a) => a.repo === r).length;
+              const c = (allRows ?? []).filter((a) => a.repo?.toLowerCase() === r).length;
               return (
                 <option key={r} value={r}>
                   {r} ({c})
@@ -266,13 +267,15 @@ function AnalysisDrawer({
           ) : isLoading ? (
             <pre className="drawer__markdown muted">Loading…</pre>
           ) : (
-            <pre className="drawer__markdown">
-              {data?.body_markdown?.trim()
-                ? data.body_markdown
-                : row.verdict?.trim()
-                  ? row.verdict
-                  : "(no body captured)"}
-            </pre>
+            <Markdown
+              source={
+                data?.body_markdown?.trim()
+                  ? data.body_markdown
+                  : row.verdict?.trim()
+                    ? row.verdict
+                    : "(no body captured)"
+              }
+            />
           )}
         </>
       ) : null}

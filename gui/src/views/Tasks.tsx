@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { DetailDrawer } from "../atoms/DetailDrawer";
 import { Icon } from "../atoms/Icon";
+import { Markdown } from "../atoms/Markdown";
 import { Tag } from "../atoms/Tag";
 import {
   api,
@@ -151,7 +152,7 @@ export function TasksView() {
 
   const repoOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const r of allRows) if (r.repo) set.add(r.repo);
+    for (const r of allRows) if (r.repo) set.add(r.repo.toLowerCase());
     return Array.from(set).sort();
   }, [allRows]);
 
@@ -163,7 +164,7 @@ export function TasksView() {
     if (!filters.repo) return [];
     const set = new Set<string>();
     for (const r of allRows) {
-      if (!r.repo || r.repo !== filters.repo) continue;
+      if (!r.repo || r.repo.toLowerCase() !== filters.repo) continue;
       if (r.phase) set.add(phaseGroupKey(r.phase));
     }
     return Array.from(set).sort((a, b) => phaseSortKey(a).localeCompare(phaseSortKey(b)));
@@ -175,7 +176,7 @@ export function TasksView() {
       if (filters.status.size > 0 && !filters.status.has(r.status)) return false;
       if (filters.phase.size > 0 && !filters.phase.has(phaseGroupKey(r.phase))) return false;
       if (filters.repo !== null) {
-        if (r.repo !== filters.repo) return false;
+        if (r.repo?.toLowerCase() !== filters.repo) return false;
       }
       if (filters.query.trim().length > 0) {
         const q = filters.query.toLowerCase();
@@ -758,9 +759,7 @@ function TaskDrawer({
           >
             Proposal
           </h3>
-          <pre className="drawer__markdown">
-            {detail.proposal_md.trim() || "(no proposal text)"}
-          </pre>
+          <Markdown source={detail.proposal_md.trim() || "(no proposal text)"} />
 
           <h3
             style={{

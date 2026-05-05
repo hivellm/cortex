@@ -24,6 +24,7 @@ import { Icon } from "../atoms/Icon";
 import { Sparkline } from "../atoms/Sparkline";
 import {
   api,
+  type RetentionScheduledRun,
   type RetentionSweepRow,
   type RetentionStateBody,
 } from "../lib/api";
@@ -56,9 +57,13 @@ const SWEEP_TYPES: Array<{ id: string; label: string }> = [
   { id: "turn_digest", label: "Turn digest" },
   { id: "meili_prune", label: "Meili prune" },
   { id: "metadata_reap", label: "Metadata reap" },
+  { id: "tool_call_digest", label: "Tool-call digest" },
+  { id: "consolidator_nightly", label: "Consolidator (nightly)" },
+  { id: "consolidation_prune", label: "Consolidation prune" },
+  { id: "memory_consolidate", label: "Memory consolidate" },
 ];
 
-type SweepHealth = "ok" | "degraded" | "failed" | "never";
+type SweepHealth = "ok" | "degraded" | "failed" | "never" | "disabled";
 
 type SweepCardData = {
   id: string;
@@ -68,13 +73,26 @@ type SweepCardData = {
   last_error: string | null;
   /// Number of consecutive `failed` runs at the top of the history.
   consecutive_failures: number;
+  /// phase11v §1.5 — live `cron_jobs` snapshot for this sweep slug.
+  /// Tells the truth about `last_run` / `next_run` / `last_status`
+  /// even when `retention_sweeps` is empty (which it is until
+  /// phase11v §6 lands).
+  schedule: RetentionScheduledRun | null;
 };
 
-/// Project the raw sweep history into one card per sweep type. A
-/// row is associated with a sweep type by inspecting the keys of
-/// its `stages` object — the dashboard's bookkeeping convention is
-/// that every sweep stamps its name as a top-level key.
-function projectCards(rows: RetentionSweepRow[]): SweepCardData[] {
+/// Project the raw sweep history + the live cron schedule into one
+/// card per sweep type. The schedule lane (phase11v §1) is the
+/// source of truth for `last_run` / `last_status` / `next_run`; the
+/// sweep history lane (`retention_sweeps`) supplies bytes-reclaimed
+/// counters when present. Either lane being empty does not stop the
+/// other from rendering.
+function projectCards(
+  rows: RetentionSweepRow[],
+  schedules: RetentionScheduledRun[],
+): SweepCardData[] {
+  const scheduleBySlug = new Map<string, RetentionScheduledRun>(
+    schedules.map((s) => [s.sweep, s]),
+  );
   return SWEEP_TYPES.map(({ id, label }) => {
     const matches = rows.filter((r) =>
       Object.prototype.hasOwnProperty.call(r.stages ?? {}, id),
@@ -85,21 +103,28 @@ function projectCards(rows: RetentionSweepRow[]): SweepCardData[] {
       if (r.status === "failed") consecutive_failures += 1;
       else break;
     }
+    const schedule = scheduleBySlug.get(id) ?? null;
+    // phase11v §1.5 — the schedule lane drives state when the sweep
+    // history lane is empty (which is the steady state until §6 lands).
     let state: SweepHealth;
-    if (last_run === null) {
-      state = "never";
-    } else if (last_run.status === "failed") {
+    if (schedule?.next_run === "disabled") {
+      state = "disabled";
+    } else if ((schedule?.failure_streak ?? 0) > 0 || schedule?.last_status === "failed") {
       state = "failed";
-    } else if (last_run.status === "abandoned") {
-      state = "degraded";
-    } else {
+    } else if (last_run !== null) {
+      if (last_run.status === "failed") state = "failed";
+      else if (last_run.status === "abandoned") state = "degraded";
+      else state = "ok";
+    } else if (schedule?.last_status === "success") {
       state = "ok";
+    } else {
+      state = "never";
     }
     const last_error =
       consecutive_failures > 0 && last_run !== null
         ? extractErrorString(last_run.stages, id)
         : null;
-    return { id, label, state, last_run, last_error, consecutive_failures };
+    return { id, label, state, last_run, last_error, consecutive_failures, schedule };
   });
 }
 
@@ -157,7 +182,11 @@ export function RetentionView() {
     refetchInterval: 10_000,
   });
   const sweeps = sweepsQ.data ?? [];
-  const cards = useMemo(() => projectCards(sweeps), [sweeps]);
+  const schedules = stateQ.data?.next_runs ?? [];
+  const cards = useMemo(
+    () => projectCards(sweeps, schedules),
+    [sweeps, schedules],
+  );
 
   // Time-series for "bytes reclaimed per day, last 30 d". We bucket
   // every sweep that carries a numeric `bytes_reclaimed` field into
@@ -386,8 +415,18 @@ function SweepCard({ card }: { card: SweepCardData }) {
       ? "var(--warn, #d49a00)"
       : card.state === "failed"
       ? "var(--alert, #c0392b)"
+      : card.state === "disabled"
+      ? "var(--fg-3)"
       : "var(--fg-3)";
   const reclaimed = card.last_run ? sweepBytesReclaimed(card.last_run, card.id) : 0;
+  // phase11v §1.5 — prefer the live schedule lane for last/next-run
+  // strings; fall back to the sweep history lane only when the
+  // schedule didn't carry timestamps.
+  const lastRunStr =
+    card.schedule?.last_run ?? card.last_run?.started_at ?? null;
+  const nextRunStr = card.schedule?.next_run ?? null;
+  const lastStatus = card.schedule?.last_status ?? card.last_run?.status ?? null;
+  const failureStreak = card.schedule?.failure_streak ?? 0;
   return (
     <div className="retention-card">
       <div className="retention-card__head">
@@ -397,10 +436,42 @@ function SweepCard({ card }: { card: SweepCardData }) {
           aria-label={`state ${card.state}`}
         />
         <span className="retention-card__label">{card.label}</span>
+        {card.state === "disabled" ? (
+          <span className="muted" style={{ marginLeft: "auto", fontSize: 11 }}>
+            disabled
+          </span>
+        ) : null}
       </div>
       <div className="retention-card__meta">
         <span className="muted">last run</span>
-        <span>{relativeTime(card.last_run?.started_at ?? null)}</span>
+        <span>{relativeTime(lastRunStr)}</span>
+      </div>
+      <div className="retention-card__meta">
+        <span className="muted">next run</span>
+        <span>
+          {nextRunStr === null || nextRunStr === "never"
+            ? "—"
+            : nextRunStr === "disabled"
+            ? "(disabled)"
+            : relativeNextRun(nextRunStr)}
+        </span>
+      </div>
+      <div className="retention-card__meta">
+        <span className="muted">status</span>
+        <span
+          className="mono"
+          style={{
+            color:
+              lastStatus === "success"
+                ? "var(--ok)"
+                : lastStatus === "failed"
+                ? "var(--alert, #c0392b)"
+                : "var(--fg-3)",
+          }}
+        >
+          {lastStatus ?? "—"}
+          {failureStreak > 0 ? ` (×${failureStreak})` : ""}
+        </span>
       </div>
       <div className="retention-card__meta">
         <span className="muted">reclaimed</span>
@@ -418,6 +489,20 @@ function SweepCard({ card }: { card: SweepCardData }) {
       ) : null}
     </div>
   );
+}
+
+/// phase11v §1.5 — render an RFC-3339 next_run timestamp as
+/// "in 4h", "in 2d", "due now". Falls back to an em-dash on
+/// unparseable input rather than silently swallowing the error.
+function relativeNextRun(ts: string): string {
+  const t = Date.parse(ts);
+  if (!Number.isFinite(t)) return "—";
+  const delta = t - Date.now();
+  if (delta <= 0) return "due now";
+  if (delta < 60_000) return `in ${Math.floor(delta / 1000)}s`;
+  if (delta < 3_600_000) return `in ${Math.floor(delta / 60_000)}m`;
+  if (delta < 86_400_000) return `in ${Math.floor(delta / 3_600_000)}h`;
+  return `in ${Math.floor(delta / 86_400_000)}d`;
 }
 
 /// Pluck `bytes_reclaimed` (or per-stage equivalents) from a sweep

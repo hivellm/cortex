@@ -58,12 +58,7 @@ fn build_service() -> (Arc<QueryService>, Arc<MemoryKeywordLane>) {
     (Arc::new(svc), k)
 }
 
-fn lane_hit_for_decision(
-    decision_id: &str,
-    title: &str,
-    status: &str,
-    repo: &str,
-) -> LaneHit {
+fn lane_hit_for_decision(decision_id: &str, title: &str, status: &str, repo: &str) -> LaneHit {
     let mut extras = std::collections::BTreeMap::new();
     // The lane projection contract reads decision_id / decision_title
     // / decision_status / supersedes out of `extras`. Phase11k §1

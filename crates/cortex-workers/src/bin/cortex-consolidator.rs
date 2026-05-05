@@ -954,7 +954,10 @@ mod tests {
         let cli =
             Cli::try_parse_from(["cortex-consolidator", "nightly"]).expect("parse");
         match cli.command {
-            Command::Nightly { dry_run } => assert!(dry_run),
+            Command::Nightly { dry_run, all } => {
+                assert!(dry_run);
+                assert!(!all);
+            }
             other => panic!("wrong subcommand: {other:?}"),
         }
     }
@@ -984,6 +987,8 @@ mod tests {
             verbose: false,
             api_key: None,
             api_url: None,
+            claude_bin: None,
+            ingest_url: None,
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
@@ -999,6 +1004,8 @@ mod tests {
             verbose: false,
             api_key: Some("sk-test-12345".into()),
             api_url: None,
+            claude_bin: None,
+            ingest_url: None,
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
@@ -1054,6 +1061,8 @@ mod tests {
             verbose: false,
             api_key: None,
             api_url: None,
+            claude_bin: None,
+            ingest_url: None,
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
@@ -1069,6 +1078,8 @@ mod tests {
             verbose: false,
             api_key: None,
             api_url: None,
+            claude_bin: None,
+            ingest_url: None,
             monthly_cents_cap: 100_000,
             archive_root: Some(PathBuf::from("D:/explicit")),
             metadata_db: None,

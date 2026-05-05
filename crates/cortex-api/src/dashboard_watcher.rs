@@ -103,9 +103,7 @@ pub fn spawn_watcher(root: PathBuf, bus: DashboardEventBus) -> notify::Result<Wa
     for sub in WATCH_SUBDIRS {
         let path = root.join(sub);
         if path.exists() {
-            debouncer
-                .watcher()
-                .watch(&path, RecursiveMode::Recursive)?;
+            debouncer.watcher().watch(&path, RecursiveMode::Recursive)?;
             watched_any = true;
         }
     }
