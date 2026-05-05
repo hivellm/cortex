@@ -731,10 +731,23 @@ pub async fn fetch_old_tool_calls_via_admin(
         {
             continue;
         }
-        let occurred_at = match chrono::DateTime::parse_from_rfc3339(&r.occurred_at) {
-            Ok(t) => t.with_timezone(&Utc),
-            Err(_) => continue,
+        // Recover real timestamp from the ULID when the lane stamped
+        // `1970-01-01` on the row (boot-time `ts = 0` shape).
+        let occurred_at = chrono::DateTime::parse_from_rfc3339(&r.occurred_at)
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
+            .filter(|_| !r.occurred_at.starts_with("1970"))
+            .or_else(|| {
+                super::turn_digest_live::ulid_timestamp_ms(&r.event_id)
+                    .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+            });
+        let occurred_at = match occurred_at {
+            Some(t) => t,
+            None => continue,
         };
+        if occurred_at >= cutoff_ts {
+            continue;
+        }
         let repo = r.repo.unwrap_or_else(|| "other".to_string());
         let tool = r.tool.unwrap_or_else(|| "other".to_string());
         out.push(ToolCall {

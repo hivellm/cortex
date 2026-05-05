@@ -410,10 +410,25 @@ pub async fn fetch_old_turns_via_admin(
         if r.summarized_by.as_deref().is_some_and(|s| !s.is_empty()) {
             continue;
         }
-        let occurred_at = match chrono::DateTime::parse_from_rfc3339(&r.occurred_at) {
-            Ok(t) => t.with_timezone(&Utc),
-            Err(_) => continue,
+        // The admin enumerator surfaces the lane's stamped
+        // `occurred_at` which is `1970-01-01` for rows the loader
+        // boot-seeded with `ts = 0`. Fall through to ULID timestamp
+        // recovery so those rows still land in their real ISO week.
+        let occurred_at = chrono::DateTime::parse_from_rfc3339(&r.occurred_at)
+            .ok()
+            .map(|t| t.with_timezone(&Utc))
+            .filter(|t| !r.occurred_at.starts_with("1970"))
+            .or_else(|| {
+                ulid_timestamp_ms(&r.event_id)
+                    .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
+            });
+        let occurred_at = match occurred_at {
+            Some(t) => t,
+            None => continue,
         };
+        if occurred_at >= cutoff_ts {
+            continue;
+        }
         let repo = r.repo.unwrap_or_else(|| "other".to_string());
         let top_topic = r
             .topic
@@ -644,6 +659,86 @@ fn index_uid_to_repo(uid: &str) -> &str {
     uid.strip_prefix("cortex-")
         .and_then(|s| s.strip_suffix("-turns"))
         .unwrap_or("other")
+}
+
+/// Decode the timestamp encoded in the first 10 chars of a ULID
+/// `event_id`. ULIDs encode 48 bits of millis-since-epoch in
+/// Crockford base32 (`0-9` + `A-Z` minus `I`, `L`, `O`, `U`),
+/// stored big-endian in the first 10 characters of the textual
+/// form. This is the only authoritative timestamp source while
+/// the Meili docs carry `ts: 0` and lack `occurred_at` — recovering
+/// it from the ULID lets the digest enumerator bucket events by
+/// their actual ISO week instead of folding everything into
+/// 1970-W01.
+pub(crate) fn ulid_timestamp_ms(id: &str) -> Option<i64> {
+    let s = id.as_bytes();
+    if s.len() < 10 {
+        return None;
+    }
+    let mut out: u64 = 0;
+    for &c in &s[..10] {
+        let v = match c {
+            b'0'..=b'9' => c - b'0',
+            b'A'..=b'H' => c - b'A' + 10,
+            b'J' | b'K' => c - b'A' + 9, // 'I' skipped
+            b'M' | b'N' => c - b'A' + 8, // 'L' skipped
+            b'P'..=b'T' => c - b'A' + 7, // 'O' skipped
+            b'V'..=b'Z' => c - b'A' + 6, // 'U' skipped
+            b'a'..=b'h' => c - b'a' + 10,
+            b'j' | b'k' => c - b'a' + 9,
+            b'm' | b'n' => c - b'a' + 8,
+            b'p'..=b't' => c - b'a' + 7,
+            b'v'..=b'z' => c - b'a' + 6,
+            _ => return None,
+        };
+        out = (out << 5) | v as u64;
+    }
+    // ULID timestamp is 48 bits.
+    if out > (1u64 << 48) {
+        return None;
+    }
+    Some(out as i64)
+}
+
+/// Resolve a digest source row's `occurred_at` honoring the
+/// authoritative-timestamp order: explicit `occurred_at` field,
+/// then `payload.occurred_at`, then a non-zero `ts`, and finally
+/// the timestamp encoded in the ULID `event_id`. Returns `None`
+/// only when every source disagrees and the ULID itself fails to
+/// decode (defensive — every Cortex envelope ID is a ULID).
+pub(crate) fn resolve_occurred_at(
+    v: &serde_json::Value,
+    event_id: &str,
+) -> Option<DateTime<Utc>> {
+    let from_str = |s: Option<&str>| {
+        s.filter(|s| !s.is_empty() && !s.starts_with("1970"))
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.with_timezone(&Utc))
+    };
+    if let Some(t) = from_str(v.get("occurred_at").and_then(|x| x.as_str())) {
+        return Some(t);
+    }
+    if let Some(t) = from_str(
+        v.get("payload")
+            .and_then(|p| p.get("occurred_at"))
+            .and_then(|x| x.as_str()),
+    ) {
+        return Some(t);
+    }
+    let ts_num = v.get("ts").and_then(|x| x.as_i64());
+    if let Some(ms) = ts_num {
+        if ms > 0 {
+            if let Some(t) = chrono::DateTime::<Utc>::from_timestamp_millis(ms) {
+                return Some(t);
+            }
+        }
+    }
+    if let Some(ms) = ulid_timestamp_ms(event_id) {
+        if let Some(t) = chrono::DateTime::<Utc>::from_timestamp_millis(ms) {
+            return Some(t);
+        }
+    }
+    None
 }
 
 /// Make a value safe to embed in an event id: ASCII alphanumerics +
