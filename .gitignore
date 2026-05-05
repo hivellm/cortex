@@ -44,3 +44,20 @@ target
 .claude/scheduled_tasks.lock
 
 .rulebook/telemetry/
+
+# Operator workarounds + diagnostic dumps under /scripts.
+# Temporary files per AGENTS.md must not enter git history.
+scripts/backup/
+scripts/*.cypher
+scripts/*.errors.txt
+scripts/*.stats.txt
+scripts/probe_*.py
+scripts/cypher_load.py
+scripts/graph_correlate.py
+
+# SQLite databases + backups
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite.bak
+*.sqlite.bak.*
