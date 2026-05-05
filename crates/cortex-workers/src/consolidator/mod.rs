@@ -41,8 +41,11 @@
 pub mod cost_telemetry;
 pub mod orchestrator;
 pub mod producer;
+pub mod source;
 pub mod summariser;
 pub mod templates;
+
+pub use source::{LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError};
 
 /// One-stop import set for callers wiring the consolidator into
 /// the daemon or test harnesses.

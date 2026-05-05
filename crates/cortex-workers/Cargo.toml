@@ -97,6 +97,7 @@ clap = { workspace = true }
 zstd = { workspace = true }
 
 vectorizer-sdk = { workspace = true }
+hdbscan = { workspace = true }
 
 # Phase11k §1.1 — graph correlation static analyzer.
 # `pulldown-cmark` powers the markdown extraction pass under

@@ -141,6 +141,7 @@ pub fn build_router_with_auth(
         .route("/healthz", get(handle_healthz))
         .route("/v1/health", get(handle_v1_health))
         .route("/v1/health/coverage", get(handle_health_coverage))
+        .route("/v1/admin/forget", post(handle_admin_forget))
         .with_state(state);
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
@@ -642,6 +643,130 @@ async fn handle_query(
                 }),
             )
                 .into_response()
+        }
+    }
+}
+
+/// Phase11t §1.4 — `POST /v1/admin/forget` handler. Builds the
+/// live backend ops on-demand (rare admin endpoint — per-request
+/// instantiation is fine) and forwards to
+/// [`crate::admin_forget::handle_forget`].
+async fn handle_admin_forget(
+    State(state): State<ApiState>,
+    Json(req): Json<crate::admin_forget::ForgetRequest>,
+) -> Response {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    // Resolve config from the same env vars the rest of cortex-api
+    // honours. Missing knobs land 500 with a structured reason so
+    // the operator can fix the deployment instead of guessing.
+    let archive_root: PathBuf = match std::env::var("CORTEX_ARCHIVE_ROOT").ok() {
+        Some(s) if !s.is_empty() => PathBuf::from(s),
+        _ => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "reason": "missing_config",
+                    "message": "CORTEX_ARCHIVE_ROOT is not set",
+                })),
+            )
+                .into_response()
+        }
+    };
+
+    let nexus = match state.nexus.as_ref() {
+        Some(n) => n.clone(),
+        None => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "reason": "missing_config",
+                    "message": "Nexus client not configured on this cortex-api instance",
+                })),
+            )
+                .into_response()
+        }
+    };
+
+    // Vectorizer client: build inline using the embedder config
+    // env vars. Failure here is a transient deployment issue, not
+    // a cascade error — surface as 500 with a clear reason.
+    let mut embed_cfg = cortex_workers::embedder::EmbedderConfig::default();
+    if let Ok(url) = std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL") {
+        if !url.is_empty() {
+            embed_cfg.vectorizer_url = url;
+        }
+    }
+    if let Ok(pw) = std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD") {
+        if !pw.is_empty() {
+            embed_cfg.vectorizer_password = Some(pw);
+        }
+    }
+    let vec_client =
+        match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "reason": "vectorizer_client",
+                        "message": e.to_string(),
+                    })),
+                )
+                    .into_response()
+            }
+        };
+
+    // Meili client: same shape — pull URL + key from env, build
+    // the LiveMeiliClient (which carries the §1.3 MeiliPruneOps
+    // impl).
+    let mut meili_cfg = cortex_workers::fulltext::FulltextConfig::default();
+    if let Ok(url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
+        if !url.is_empty() {
+            meili_cfg.meili_url = url;
+        }
+    }
+    if let Ok(key) = std::env::var("CORTEX_FULLTEXT_MEILI_KEY") {
+        if !key.is_empty() {
+            meili_cfg.meili_api_key = Some(key);
+        }
+    }
+    let meili_client =
+        match cortex_workers::fulltext::meili_client::LiveMeiliClient::new(&meili_cfg) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "reason": "meili_client",
+                        "message": e.to_string(),
+                    })),
+                )
+                    .into_response()
+            }
+        };
+
+    let nexus_purger = crate::admin_forget::LiveNexusPurger::new(nexus);
+    let archive_purger = crate::admin_forget::LiveArchivePurger::new(&archive_root);
+
+    let outcome = crate::admin_forget::handle_forget(
+        &req,
+        &archive_root,
+        vec_client.as_ref(),
+        &meili_client,
+        &nexus_purger,
+        &archive_purger,
+        cortex_storage::names::INDEX_CONSOLIDATIONS,
+    )
+    .await;
+
+    match outcome {
+        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Err(err) => {
+            let (code, body) = crate::admin_forget::forget_error_response(&err);
+            let status = StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            (status, Json(body)).into_response()
         }
     }
 }

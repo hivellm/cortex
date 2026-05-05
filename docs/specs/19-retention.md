@@ -1,7 +1,54 @@
 # Spec 19 — Retention Sweep
 
-**Status:** 🟡 phase9a core shipped (in-memory ops); live Vectorizer
-adapter follows in phase9b–9k.
+**Status:** 🟢 phase9a core + phase11o consolidation pruner shipped
+against the live Vectorizer SDK 3.3.0 (`move_to_collection`,
+`delete_vectors`) and Meilisearch.
+
+## Phase11p — Consolidator live read path (Implemented)
+
+The pruner side (phase11o, below) demotes consolidations once they
+exist; phase11p closes the producer side so consolidations actually
+land in `cortex_consolidations` every night.
+
+### Cron timeline
+
+| time (UTC)  | cron name                          | command                            |
+|-------------|------------------------------------|------------------------------------|
+| 02:00       | `retention.consolidator_nightly`   | `cortex-consolidator nightly`      |
+| 03:00       | `retention.consolidation_prune`    | `cortex-ops consolidation-prune`   |
+| 03:00       | `retention.sweep`                  | `cortex-ops retention-sweep`       |
+
+Sequence: consolidator runs first (02:00) so the pruner at 03:00
+sweeps over freshly-minted rows.
+
+The auto-memory consolidator (`retention.memory_consolidate`) was
+also flipped from `enabled: false` → `enabled: true` so the Claude
+Code memory dir consolidator (phase9h) actually fires on the
+weekly slot.
+
+Live read path code:
+`crates/cortex-workers/src/consolidator/source/{session,topic,decision_trace}.rs`
++ `crates/cortex-workers/src/bin/cortex-consolidator.rs`.
+
+## Phase11o — Consolidation pruner (Implemented)
+
+The consolidation tier (`Kind::Consolidation`, phase11j) demotes its
+own vectors on a separate cron from the per-kind retention sweep:
+
+| from | to | age_days | sink |
+|------|----|----------|------|
+| `cortex.consolidation.fp32` | `cortex.consolidation.pq` | ≥ 7 | `vectorizer-sdk::move_to_collection` |
+| `cortex.consolidation.pq` | `cortex.cold.binary` | ≥ 90 | `vectorizer-sdk::move_to_collection` + meili field strip |
+| `cortex.cold.binary` | (purge) | ≥ 365 | meili `delete-batch` (vector hard-purge owned by `/cortex forget`) |
+
+Cron seed: `retention.consolidation_prune` (`0 3 * * *`,
+`cortex-ops consolidation-prune`). Status surfaces under
+`/v1/health/coverage` in the new `pruner` block; the cron-side
+handler writes `<home>/.cortex/pruner-status.json` after every
+non-dry-run sweep.
+
+Code: `crates/cortex-workers/src/pruner/{mod,vectorizer_sink,meili_sink,purge,engine}.rs`
++ `crates/cortex-cli/src/bin/cortex-ops.rs::consolidation_prune`.
 
 ## Why
 

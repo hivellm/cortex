@@ -360,6 +360,10 @@ export type DecisionDetail = DecisionRow & {
   body_markdown: string;
 };
 
+export type AnalysisDetail = AnalysisRow & {
+  body_markdown: string;
+};
+
 /// Per-session summary the Conversations list view renders. Each row
 /// is one chat thread the user can drill into via `api.conversation`.
 export type ConversationSummary = {
@@ -541,6 +545,8 @@ export const api = {
   trust: () => getJson<TrustMatrix>("/v1/dashboard/trust"),
   decisionDetail: (id: string) =>
     getJson<DecisionDetail>(`/v1/dashboard/decisions/${encodeURIComponent(id)}`),
+  analysisDetail: (id: string) =>
+    getJson<AnalysisDetail>(`/v1/dashboard/analyses/${encodeURIComponent(id)}`),
   /// Pull the graph panorama. `repos` narrows the canvas to the
   /// listed projects' artifacts (sessions / decisions / memories
   /// stay regardless so the cross-project knowledge spine remains

@@ -190,6 +190,7 @@ impl ToolRegistry {
                 Arc::new(AuditTool::new()),
                 Arc::new(CaptureMemoryTool::new()),
                 Arc::new(SessionReplayTool::new()),
+                Arc::new(ForgetTool::new()),
             ],
         }
     }
@@ -1100,14 +1101,118 @@ fn urlencode(input: &str) -> String {
     out
 }
 
+// ---------------------------------------------------------------------
+// Phase11t §2 — cortex_forget
+// ---------------------------------------------------------------------
+
+/// Wraps `POST <api_url>/v1/admin/forget` (phase11t §1.4) so an MCP
+/// host can drive the irreversible cascade across Vectorizer +
+/// Meili + Nexus + Parquet for one event id. Requires the caller
+/// to echo the canonical confirmation token from
+/// [`cortex_workers::pruner::purge::REQUIRED_CONFIRMATION_TOKEN`].
+pub struct ForgetTool;
+
+impl ForgetTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ForgetTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ForgetTool {
+    fn name(&self) -> &'static str {
+        "cortex_forget"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_forget",
+            "description": "Hard-purge one event id across Vectorizer + Meili + Nexus + Parquet archive. Irreversible. Requires the caller to echo the canonical confirmation token (see REQUIRED_CONFIRMATION_TOKEN) — a missing or wrong token returns invalid_input. Pass dry_run=true to preview the cascade without invoking it.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["event_id", "confirmation_token"],
+                "properties": {
+                    "event_id": {
+                        "type": "string",
+                        "description": "Canonical 26-char ULID of the event to forget."
+                    },
+                    "confirmation_token": {
+                        "type": "string",
+                        "description": "Must match REQUIRED_CONFIRMATION_TOKEN verbatim."
+                    },
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "When true, returns the projected cascade plan without invoking it. Defaults to false.",
+                        "default": false
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let url = format!("{}/v1/admin/forget", ctx.api_url.trim_end_matches('/'));
+        let resp = match ctx
+            .http
+            .post(&url)
+            .header(cortex_api::CALLER_HEADER, CALLER)
+            .json(&args)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                return Ok(ToolResult::soft_error(
+                    reasons::API_UNREACHABLE,
+                    &format!("cortex-api unreachable at {url}: {e}"),
+                    json!({ "url": url }),
+                ));
+            }
+        };
+        let status = resp.status();
+        let body_bytes = resp.bytes().await.unwrap_or_default();
+        if status.is_success() {
+            let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+            return Ok(ToolResult::ok(payload));
+        }
+        // Map the cortex-api 400 (missing/wrong confirmation token)
+        // to a `ToolError::invalid_input` so the MCP host surfaces
+        // the irreversibility advisory at the same layer it would
+        // reject any other malformed call.
+        if status.as_u16() == 400 {
+            let err: Value =
+                serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+            let msg = err
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("missing or wrong confirmation_token");
+            return Err(ToolError::invalid_input(msg.to_string()));
+        }
+        // Any other non-success surfaces as a soft-error so the
+        // MCP host renders it without aborting the session.
+        Ok(ToolResult::soft_error(
+            "purge_cascade_failed",
+            &format!("cortex-api {url} returned HTTP {status}"),
+            serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({})),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_six_tools_with_unique_names() {
+    fn registry_returns_seven_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
-        assert_eq!(reg.len(), 6, "phase10j adds audit/capture/replay");
+        assert_eq!(reg.len(), 7, "phase11t adds cortex_forget");
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
             "cortex_query",
@@ -1116,6 +1221,7 @@ mod tests {
             "cortex_audit",
             "cortex_capture_memory",
             "cortex_session_replay",
+            "cortex_forget",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1343,5 +1449,88 @@ mod tests {
         let bad = ToolResult::soft_error("x", "y", json!({}));
         let v = serde_json::to_value(&bad).unwrap();
         assert_eq!(v["isError"], true);
+    }
+
+    // ---------------------------------------------------------------
+    // Phase11t §3 — ForgetTool
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn forget_tool_rejects_missing_confirmation_token() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/forget"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "reason": "missing_confirmation_token",
+                "message": "missing or wrong confirmation_token (expected \"I-UNDERSTAND-FORGET-IS-IRREVERSIBLE\")",
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = ForgetTool::new();
+        let err = tool
+            .call(
+                &ctx,
+                json!({
+                    "event_id": "EVT",
+                    "confirmation_token": "wrong",
+                }),
+            )
+            .await
+            .expect_err("must reject");
+        assert!(
+            err.message.contains("confirmation_token"),
+            "expected token-mismatch message; got {:?}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn forget_tool_dry_run_round_trips_projection() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/admin/forget"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "event_id": "EVT",
+                "vectorizer_collections": [
+                    "cortex.consolidation.fp32",
+                    "cortex.consolidation.pq",
+                    "cortex.cold.binary",
+                ],
+                "dry_run": true,
+                "vectors_removed": 0,
+                "meili_deleted": false,
+                "nexus_deleted": false,
+                "archive_rewritten": false,
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = ForgetTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({
+                    "event_id": "EVT",
+                    "confirmation_token": "I-UNDERSTAND-FORGET-IS-IRREVERSIBLE",
+                    "dry_run": true,
+                }),
+            )
+            .await
+            .expect("dry-run must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["dry_run"], true);
+        assert_eq!(payload["meili_deleted"], false);
+        assert_eq!(payload["nexus_deleted"], false);
+        assert_eq!(payload["archive_rewritten"], false);
     }
 }

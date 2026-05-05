@@ -243,13 +243,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_six_descriptors() {
+    async fn tools_list_returns_seven_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
         let v: Value = serde_json::from_slice(&raw).unwrap();
         let arr = v["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(arr.len(), 6, "phase10j adds audit/capture/replay");
+        assert_eq!(arr.len(), 7, "phase11t adds cortex_forget");
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "cortex_query",
@@ -258,6 +258,7 @@ mod tests {
             "cortex_audit",
             "cortex_capture_memory",
             "cortex_session_replay",
+            "cortex_forget",
         ] {
             assert!(
                 names.contains(&expected),

@@ -434,6 +434,11 @@ fn clip(s: &str, max: usize) -> &str {
     }
 }
 
+// Phase11p §0 — envelope retrieval helpers live in
+// `cortex_storage::archive::{walk_envelopes, scan_envelopes_by_session,
+// scan_envelope_by_event_id}` so `cortex-workers::consolidator::source`
+// can call them without the cortex-api → cortex-workers cycle.
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -766,4 +771,5 @@ mod tests {
         );
         assert_eq!(hit.symbol.as_deref(), Some("topic_card:auth-rewrite"));
     }
+
 }

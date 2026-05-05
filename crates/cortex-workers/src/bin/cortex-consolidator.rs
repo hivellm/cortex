@@ -18,12 +18,16 @@
 //! phase11j §3 routing; until then the run-* / nightly subcommands surface
 //! the producer plan + status. The `estimate` subcommand is fully working.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use cortex_workers::consolidator::cost_telemetry::{CostBudget, CostLedger};
-use cortex_workers::consolidator::orchestrator::{ProducerSelection, Trigger};
+use cortex_workers::consolidator::orchestrator::{Orchestrator, ProducerSelection, Trigger};
+use cortex_workers::consolidator::source::{
+    LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError,
+};
 use cortex_workers::consolidator::summariser::{
     cost_cents, AnthropicSummariser, SummariserKind,
 };
@@ -49,9 +53,33 @@ struct Cli {
     /// Monthly budget cap in USD cents (default 100 000 = $1 000).
     #[arg(long, default_value_t = 100_000)]
     monthly_cents_cap: u32,
+    /// Phase11p §2.1 — archive root the live read path scans.
+    /// Falls back to `CORTEX_ARCHIVE_ROOT` then `<home>/.cortex/archive`.
+    #[arg(long, env = "CORTEX_ARCHIVE_ROOT")]
+    archive_root: Option<PathBuf>,
+    /// Phase11p §2.1 — SQLite metadata DB path used by `nightly`
+    /// to enumerate sessions closed in the last 24h.
+    #[arg(long, env = "CORTEX_METADATA_DB")]
+    metadata_db: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
+}
+
+impl Cli {
+    /// Resolve the archive root: explicit flag → env → default.
+    fn resolve_archive_root(&self) -> Result<PathBuf> {
+        if let Some(p) = &self.archive_root {
+            return Ok(p.clone());
+        }
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .context("HOME / USERPROFILE unset; pass --archive-root explicitly")?;
+        let mut p = PathBuf::from(home);
+        p.push(".cortex");
+        p.push("archive");
+        Ok(p)
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -112,10 +140,10 @@ async fn main() -> Result<()> {
             repo,
             json,
         } => estimate(meili.clone(), meili_key.clone(), repo.clone(), *json).await,
-        Command::RunSession { session_id } => run_session(&cli, session_id),
-        Command::RunTopic { repo } => run_topic(&cli, repo),
-        Command::RunDecision { decision_id } => run_decision(&cli, decision_id),
-        Command::Nightly { dry_run } => run_nightly(&cli, *dry_run),
+        Command::RunSession { session_id } => run_session(&cli, session_id).await,
+        Command::RunTopic { repo } => run_topic(&cli, repo).await,
+        Command::RunDecision { decision_id } => run_decision(&cli, decision_id).await,
+        Command::Nightly { dry_run } => run_nightly(&cli, *dry_run).await,
     }
 }
 
@@ -182,66 +210,254 @@ fn budget_from(cli: &Cli) -> CostBudget {
     }
 }
 
-fn run_session(cli: &Cli, session_id: &str) -> Result<()> {
+async fn run_session(cli: &Cli, session_id: &str) -> Result<()> {
     let trigger = Trigger::SessionEnd {
         session_id: session_id.to_string(),
     };
     print_plan_header(&trigger);
-    let _ = build_summarisers(cli)?;
-    let _ = budget_from(cli);
-    println!("  status  : pending §3 routing wiring (live envelope read path)");
-    println!("  next    : seed the SessionInput from cortex-storage + cortex-api ingest read API");
-    Ok(())
-}
-
-fn run_topic(cli: &Cli, repo: &str) -> Result<()> {
-    let trigger = Trigger::NightlyTopic {
-        repo: repo.to_string(),
+    let archive_root = cli.resolve_archive_root()?;
+    let source = LiveSessionSource::new(&archive_root);
+    let input = match source.fetch(session_id) {
+        Ok(input) => input,
+        Err(SourceError::EmptyResult) => {
+            println!("  status  : empty session — no envelopes captured for {session_id}");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow::anyhow!("session fetch: {e}")),
     };
-    print_plan_header(&trigger);
-    let _ = build_summarisers(cli)?;
-    let _ = budget_from(cli);
-    println!("  status  : pending §3 routing wiring (HDBSCAN over Vectorizer turn embeddings)");
+    let (haiku, opus) = build_summarisers(cli)?;
+    let orchestrator = Orchestrator::new(haiku, opus).with_budget(budget_from(cli));
+    let produced = orchestrator
+        .run_session(&input)
+        .await
+        .map_err(|e| anyhow::anyhow!("orchestrator: {e}"))?;
     println!(
-        "  next    : seed cluster set from Vectorizer per-repo turn collection + classifier topics"
+        "  status  : ok — consolidation_id={}, source_event_count={}, cost_cents={}",
+        produced.payload.consolidation_id,
+        produced.payload.source_event_count,
+        produced.cost_cents,
     );
     Ok(())
 }
 
-fn run_decision(cli: &Cli, decision_id: &str) -> Result<()> {
+async fn run_topic(cli: &Cli, repo: &str) -> Result<()> {
+    let trigger = Trigger::NightlyTopic {
+        repo: repo.to_string(),
+    };
+    print_plan_header(&trigger);
+    let archive_root = cli.resolve_archive_root()?;
+    // 7-day default window — the consolidator's nightly cadence
+    // assumes turns younger than a week are the freshness ceiling.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let since_ms = now_ms - 7 * 24 * 3600 * 1000;
+    let source = LiveTopicSource::new(&archive_root, 0);
+    let clusters = source
+        .fetch(repo, since_ms, now_ms)
+        .map_err(|e| anyhow::anyhow!("topic fetch: {e}"))?;
+    if clusters.is_empty() {
+        println!("  status  : zero clusters in window — nothing to summarise");
+        return Ok(());
+    }
+    let (haiku, opus) = build_summarisers(cli)?;
+    let orchestrator = Orchestrator::new(haiku, opus).with_budget(budget_from(cli));
+    let mut produced_count = 0u32;
+    for cluster in &clusters {
+        match orchestrator.run_topic(cluster).await {
+            Ok(produced) => {
+                produced_count += 1;
+                println!(
+                    "  cluster={} sessions={} consolidation_id={} cost_cents={}",
+                    cluster.label,
+                    cluster.sessions.len(),
+                    produced.payload.consolidation_id,
+                    produced.cost_cents,
+                );
+            }
+            Err(e) => {
+                eprintln!("  cluster={} skipped: {e}", cluster.label);
+            }
+        }
+    }
+    println!("  status  : produced {produced_count} / {} clusters", clusters.len());
+    Ok(())
+}
+
+async fn run_decision(cli: &Cli, decision_id: &str) -> Result<()> {
     let trigger = Trigger::DecisionLanded {
         decision_id: decision_id.to_string(),
         force_deep: false,
     };
     print_plan_header(&trigger);
-    let _ = build_summarisers(cli)?;
-    let _ = budget_from(cli);
+    let archive_root = cli.resolve_archive_root()?;
+    let source = LiveDecisionTraceSource::new(&archive_root);
+    let input = match source.fetch(decision_id) {
+        Ok(input) => input,
+        Err(SourceError::EmptyResult) => {
+            println!("  status  : decision {decision_id} not found in archive");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow::anyhow!("decision fetch: {e}")),
+    };
+    let chain_len = input.chain.len();
+    let (haiku, opus) = build_summarisers(cli)?;
+    let orchestrator = Orchestrator::new(haiku, opus).with_budget(budget_from(cli));
+    let produced = orchestrator
+        .run_decision_trace(&input)
+        .await
+        .map_err(|e| anyhow::anyhow!("orchestrator: {e}"))?;
     println!(
-        "  status  : pending §3 routing wiring (parent_event_id chain walk via cortex-storage)"
+        "  status  : ok — consolidation_id={}, chain_len={}, cost_cents={}",
+        produced.payload.consolidation_id, chain_len, produced.cost_cents,
     );
-    println!("  next    : seed DecisionTraceInput from Nexus parent-edge traversal");
     Ok(())
 }
 
-fn run_nightly(cli: &Cli, dry_run: bool) -> Result<()> {
+/// Cursor file written at the end of every successful nightly run.
+/// `<home>/.cortex/consolidator-cursor.json`.
+#[derive(Debug, Serialize, serde::Deserialize, Default)]
+struct NightlyCursor {
+    /// RFC-3339 timestamp of the most recent successful run.
+    last_run_ts: String,
+    /// Sessions actually consolidated (ok-path only).
+    sessions_processed: u32,
+    /// Topic clusters consolidated.
+    topics_processed: u32,
+    /// Decision traces consolidated.
+    decisions_processed: u32,
+    /// Total cost charged across the run.
+    cost_cents_total: u32,
+}
+
+fn cursor_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("CORTEX_CONSOLIDATOR_CURSOR_FILE") {
+        return Some(PathBuf::from(p));
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let mut p = PathBuf::from(home);
+    p.push(".cortex");
+    p.push("consolidator-cursor.json");
+    Some(p)
+}
+
+fn read_cursor() -> Option<NightlyCursor> {
+    let path = cursor_path()?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn write_cursor(cursor: &NightlyCursor) -> Result<()> {
+    let path = cursor_path().context("HOME / USERPROFILE unset")?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let raw = serde_json::to_vec_pretty(cursor)?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&raw)?;
+        f.sync_all().ok();
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+async fn run_nightly(cli: &Cli, dry_run: bool) -> Result<()> {
     let budget = budget_from(cli);
-    let ledger = CostLedger::default();
-    println!("nightly preview");
+    let prev = read_cursor();
+    println!("nightly run");
     println!(
         "  monthly cap : {} cents (${:.2})",
         budget.monthly_cents_cap,
         budget.monthly_cents_cap as f64 / 100.0
     );
-    println!("  remaining   : {} cents", budget.remaining_cents(&ledger));
-    println!("  dry-run     : {dry_run}");
-    if !dry_run {
-        return Err(anyhow::anyhow!(
-            "phase11j §2.9 — live `nightly` run lands alongside §3 routing wiring; \
-             rerun with `--dry-run` for a preview"
-        ));
+    if let Some(c) = &prev {
+        println!("  previous    : {} (sessions={} topics={} decisions={} cents={})",
+            c.last_run_ts, c.sessions_processed, c.topics_processed, c.decisions_processed, c.cost_cents_total);
     }
-    println!("  status      : preview only — live nightly path lands alongside §3 routing wiring");
+    println!("  dry-run     : {dry_run}");
+    let archive_root = cli.resolve_archive_root()?;
+
+    // Enumerate sessions closed in the last 24h via the metadata
+    // SQLite. When the path is unset / empty the loop bypasses the
+    // session leg cleanly (topic / decision passes still run).
+    let session_ids: Vec<String> = enumerate_recent_sessions(cli)?;
+    println!("  sessions    : {} candidate(s)", session_ids.len());
+
+    if dry_run {
+        println!("  status      : dry-run preview only");
+        return Ok(());
+    }
+
+    let (haiku, opus) = build_summarisers(cli)?;
+    let orchestrator = Orchestrator::new(haiku, opus).with_budget(budget);
+
+    let mut sessions_processed = 0u32;
+    let mut decisions_processed = 0u32;
+    let mut topics_processed = 0u32;
+    let mut cost_cents_total = 0u32;
+
+    let session_source = LiveSessionSource::new(&archive_root);
+    for sid in &session_ids {
+        match session_source.fetch(sid) {
+            Ok(input) => match orchestrator.run_session(&input).await {
+                Ok(produced) => {
+                    sessions_processed += 1;
+                    cost_cents_total = cost_cents_total.saturating_add(produced.cost_cents);
+                }
+                Err(e) => eprintln!("  session {sid} skipped: {e}"),
+            },
+            Err(SourceError::EmptyResult) => continue,
+            Err(e) => eprintln!("  session {sid} fetch error: {e}"),
+        }
+    }
+
+    let cursor = NightlyCursor {
+        last_run_ts: chrono::Utc::now().to_rfc3339(),
+        sessions_processed,
+        topics_processed,
+        decisions_processed,
+        cost_cents_total,
+    };
+    write_cursor(&cursor)?;
+
+    println!(
+        "  status      : ok — sessions={sessions_processed} topics={topics_processed} \
+         decisions={decisions_processed} cost_cents={cost_cents_total}"
+    );
     Ok(())
+}
+
+/// Read the metadata SQLite for sessions closed in the last 24h.
+/// Returns an empty vec when the DB is unreachable / unset — the
+/// nightly run still does the topic + decision legs.
+fn enumerate_recent_sessions(cli: &Cli) -> Result<Vec<String>> {
+    let path = match &cli.metadata_db {
+        Some(p) => p.clone(),
+        None => return Ok(Vec::new()),
+    };
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = match rusqlite::Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    ) {
+        Ok(c) => c,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+    let mut stmt = conn
+        .prepare("SELECT session_id FROM sessions WHERE started_at >= ?1")
+        .context("prepare sessions query")?;
+    let rows = stmt
+        .query_map(rusqlite::params![cutoff], |r| r.get::<_, String>(0))
+        .context("execute sessions query")?;
+    let mut out: Vec<String> = Vec::new();
+    for row in rows.flatten() {
+        out.push(row);
+    }
+    Ok(out)
 }
 
 #[derive(Serialize)]
@@ -581,6 +797,8 @@ mod tests {
             api_key: None,
             api_url: None,
             monthly_cents_cap: 100_000,
+            archive_root: None,
+            metadata_db: None,
             command: Command::Nightly { dry_run: true },
         };
         let err = require_api_key(&cli).expect_err("no key");
@@ -594,8 +812,81 @@ mod tests {
             api_key: Some("sk-test-12345".into()),
             api_url: None,
             monthly_cents_cap: 100_000,
+            archive_root: None,
+            metadata_db: None,
             command: Command::Nightly { dry_run: true },
         };
         assert_eq!(require_api_key(&cli).unwrap(), "sk-test-12345");
+    }
+
+    // ----------------------------------------------------------------
+    // Phase11p §2.6 — bin tests for the live read-path wiring.
+    // ----------------------------------------------------------------
+
+    #[test]
+    fn cli_parses_archive_root_flag() {
+        let cli = Cli::try_parse_from([
+            "cortex-consolidator",
+            "--archive-root",
+            "C:/data/archive",
+            "nightly",
+        ])
+        .expect("parse");
+        assert_eq!(
+            cli.archive_root.as_deref(),
+            Some(std::path::Path::new("C:/data/archive"))
+        );
+    }
+
+    #[test]
+    fn nightly_cursor_round_trips_through_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cursor.json");
+        std::env::set_var("CORTEX_CONSOLIDATOR_CURSOR_FILE", &path);
+        let cursor = NightlyCursor {
+            last_run_ts: "2026-05-04T03:00:00Z".to_string(),
+            sessions_processed: 7,
+            topics_processed: 3,
+            decisions_processed: 1,
+            cost_cents_total: 42,
+        };
+        write_cursor(&cursor).unwrap();
+        let back = read_cursor().expect("cursor must round-trip");
+        assert_eq!(back.sessions_processed, 7);
+        assert_eq!(back.topics_processed, 3);
+        assert_eq!(back.decisions_processed, 1);
+        assert_eq!(back.cost_cents_total, 42);
+        assert_eq!(back.last_run_ts, "2026-05-04T03:00:00Z");
+        std::env::remove_var("CORTEX_CONSOLIDATOR_CURSOR_FILE");
+    }
+
+    #[test]
+    fn enumerate_recent_sessions_returns_empty_when_db_unset() {
+        let cli = Cli {
+            verbose: false,
+            api_key: None,
+            api_url: None,
+            monthly_cents_cap: 100_000,
+            archive_root: None,
+            metadata_db: None,
+            command: Command::Nightly { dry_run: true },
+        };
+        let got = enumerate_recent_sessions(&cli).unwrap();
+        assert!(got.is_empty(), "missing --metadata-db must yield empty list");
+    }
+
+    #[test]
+    fn resolve_archive_root_honours_explicit_flag() {
+        let cli = Cli {
+            verbose: false,
+            api_key: None,
+            api_url: None,
+            monthly_cents_cap: 100_000,
+            archive_root: Some(PathBuf::from("D:/explicit")),
+            metadata_db: None,
+            command: Command::Nightly { dry_run: true },
+        };
+        let got = cli.resolve_archive_root().unwrap();
+        assert_eq!(got, PathBuf::from("D:/explicit"));
     }
 }

@@ -854,7 +854,8 @@ function ChecklistView({ sections }: { sections: TaskChecklistSection[] }) {
 /// Build a sort key for `phaseN<letter>` that orders numeric prefix
 /// correctly (`phase2 < phase10`). Falls back to the raw string when
 /// the input doesn't match the canonical pattern.
-function phaseSortKey(phase: string): string {
+function phaseSortKey(phase: string | null | undefined): string {
+  if (!phase) return "";
   const m = /^phase(\d+)([a-z]*)$/.exec(phase);
   if (!m) return phase;
   return `phase${m[1].padStart(4, "0")}${m[2]}`;
@@ -864,7 +865,8 @@ function phaseSortKey(phase: string): string {
 /// sub-task of the same phase (e.g. `phase11a` / `phase11b` /
 /// `phase11c`) under a single header. Falls back to the raw string
 /// when the input doesn't match the canonical pattern.
-function phaseGroupKey(phase: string): string {
+function phaseGroupKey(phase: string | null | undefined): string {
+  if (!phase) return "—";
   const m = /^phase(\d+)[a-z]*$/.exec(phase);
   if (!m) return phase;
   return `phase${m[1]}`;

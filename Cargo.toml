@@ -51,9 +51,10 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 notify = "8.2"
 notify-debouncer-mini = "0.7"
+hdbscan = "0.10"
 
 synap-sdk = "0.12"
-vectorizer-sdk = "3.2.0"
+vectorizer-sdk = "3.3.0"
 nexus-graph-sdk = "2.1"
 
 # Pin rustls-webpki >= 0.103.13 to close RUSTSEC-2026-0104 (panic in CRL parsing).

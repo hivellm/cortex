@@ -39,6 +39,7 @@ the rest are READ.
 | `cortex_audit`              | `query_id`                    | `GET /v1/audit/{query_id}`                       | spec 11 §audit / spec 20 | read  |
 | `cortex_capture_memory`     | `kind`, `body`, `repo`        | `POST /v1/ingest`                                | spec 12 §capture / spec 20 | **write** |
 | `cortex_session_replay`     | `session_id`                  | `GET /v1/dashboard/conversations/{session_id}`   | spec 16 / spec 20 | read  |
+| `cortex_forget`             | `event_id`, `confirmation_token`, `dry_run` | `POST /v1/admin/forget`                          | spec 19 / phase11t | **write (irreversible)** |
 
 The MCP server's runtime registry is the binding contract: every name
 listed above MUST be returned by `tools/list`, and every tool MUST

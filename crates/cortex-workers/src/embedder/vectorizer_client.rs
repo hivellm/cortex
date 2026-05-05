@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 use vectorizer_sdk::client::core::JwtToken;
 use vectorizer_sdk::error::VectorizerError;
-use vectorizer_sdk::models::{BatchTextRequest, SimilarityMetric};
+use vectorizer_sdk::models::{
+    BatchTextRequest, DeleteReport, MoveReport, SimilarityMetric, VectorOpResult,
+};
 use vectorizer_sdk::{ClientConfig, VectorizerClient as SdkClient};
 
 use super::chunker::Chunk;
@@ -229,6 +231,30 @@ pub trait VectorizerClient: Send + Sync + 'static {
         collection: &str,
         dedup_keys: &[String],
     ) -> Result<BTreeSet<String>, VectorizerClientError>;
+
+    /// Phase11o §2 — batch-delete every id in `ids` from `collection`.
+    /// Used by the consolidation pruner's hard-purge sink. Per-id
+    /// failures (missing vectors) are surfaced via [`DeleteReport`]
+    /// without aborting the batch; transport / auth errors return
+    /// the canonical [`VectorizerClientError`].
+    async fn delete_vectors(
+        &self,
+        collection: &str,
+        ids: &[String],
+    ) -> Result<DeleteReport, VectorizerClientError>;
+
+    /// Phase11o §2 — move `ids` from `src` to `dst` atomically per
+    /// vector (insert into `dst` BEFORE deleting from `src`). Used by
+    /// the tier-demotion sink: `cortex.consolidation.fp32` →
+    /// `cortex.consolidation.pq` → `cortex.cold.binary`. Per-id
+    /// failures (missing in src, dim mismatch on dst, etc.) populate
+    /// [`MoveReport.results`] without aborting the batch.
+    async fn move_vectors(
+        &self,
+        src: &str,
+        dst: &str,
+        ids: &[String],
+    ) -> Result<MoveReport, VectorizerClientError>;
 }
 
 /// Chunks per `insert_texts` request. Hard-capped at 64 per the Vectorizer
@@ -738,6 +764,70 @@ impl VectorizerClient for LiveVectorizerClient {
             .cloned()
             .collect())
     }
+
+    async fn delete_vectors(
+        &self,
+        collection: &str,
+        ids: &[String],
+    ) -> Result<DeleteReport, VectorizerClientError> {
+        if ids.is_empty() {
+            return Ok(DeleteReport {
+                collection: collection.to_string(),
+                count: 0,
+                deleted: 0,
+                failed: 0,
+                results: Vec::new(),
+            });
+        }
+        let _ = self.ensure_token_fresh().await;
+        let collection = collection.to_string();
+        let ids = ids.to_vec();
+        with_retry(self.max_retry, || {
+            let collection = collection.clone();
+            let ids = ids.clone();
+            async move {
+                let sdk = self.sdk.read().await;
+                sdk.delete_vectors(&collection, &ids)
+                    .await
+                    .map_err(sdk_error)
+            }
+        })
+        .await
+    }
+
+    async fn move_vectors(
+        &self,
+        src: &str,
+        dst: &str,
+        ids: &[String],
+    ) -> Result<MoveReport, VectorizerClientError> {
+        if ids.is_empty() {
+            return Ok(MoveReport {
+                src: src.to_string(),
+                dst: dst.to_string(),
+                requested: 0,
+                moved: 0,
+                failed: 0,
+                results: Vec::new(),
+            });
+        }
+        let _ = self.ensure_token_fresh().await;
+        let src = src.to_string();
+        let dst = dst.to_string();
+        let ids = ids.to_vec();
+        with_retry(self.max_retry, || {
+            let src = src.clone();
+            let dst = dst.clone();
+            let ids = ids.clone();
+            async move {
+                let sdk = self.sdk.read().await;
+                sdk.move_to_collection(&src, &dst, &ids)
+                    .await
+                    .map_err(sdk_error)
+            }
+        })
+        .await
+    }
 }
 
 /// Translate a [`Chunk`] into the SDK's `BatchTextRequest`, flattening
@@ -828,6 +918,10 @@ pub enum MemoryCall {
     Upsert(String, Vec<Chunk>),
     /// `exists_by_dedup_key(collection, dedup_keys)`.
     ExistsByDedupKey(String, Vec<String>),
+    /// `delete_vectors(collection, ids)`.
+    DeleteVectors(String, Vec<String>),
+    /// `move_vectors(src, dst, ids)`.
+    MoveVectors(String, String, Vec<String>),
 }
 
 /// In-memory Vectorizer client for tests.
@@ -951,5 +1045,150 @@ impl VectorizerClient for MemoryVectorizerClient {
             .filter(|k| map.contains_key(*k))
             .cloned()
             .collect())
+    }
+
+    async fn delete_vectors(
+        &self,
+        collection: &str,
+        ids: &[String],
+    ) -> Result<DeleteReport, VectorizerClientError> {
+        self.calls
+            .lock()
+            .map_err(|_| VectorizerClientError::Other("memory client mutex poisoned".into()))?
+            .push(MemoryCall::DeleteVectors(
+                collection.to_string(),
+                ids.to_vec(),
+            ));
+        let mut stored = self
+            .dedup_keys_per_collection
+            .lock()
+            .map_err(|_| VectorizerClientError::Other("memory client mutex poisoned".into()))?;
+        let map = stored.entry(collection.to_string()).or_default();
+        let mut deleted = 0usize;
+        let mut failed = 0usize;
+        let mut results: Vec<VectorOpResult> = Vec::with_capacity(ids.len());
+        for (idx, id) in ids.iter().enumerate() {
+            // The Memory client stores by `dedup_key` and round-trips a
+            // synthetic `server_id` on upsert. Match either to keep
+            // tests symmetric with whatever id the caller threads back
+            // through the demotion path.
+            let removed = if map.remove(id).is_some() {
+                true
+            } else {
+                let by_server: Option<String> = map
+                    .iter()
+                    .find(|(_, sid)| sid.as_str() == id)
+                    .map(|(k, _)| k.clone());
+                if let Some(k) = by_server {
+                    map.remove(&k);
+                    true
+                } else {
+                    false
+                }
+            };
+            if removed {
+                deleted += 1;
+                results.push(VectorOpResult {
+                    id: Some(id.clone()),
+                    status: "ok".into(),
+                    error: None,
+                    index: Some(idx),
+                });
+            } else {
+                failed += 1;
+                results.push(VectorOpResult {
+                    id: Some(id.clone()),
+                    status: "missing_in_src".into(),
+                    error: None,
+                    index: Some(idx),
+                });
+            }
+        }
+        Ok(DeleteReport {
+            collection: collection.to_string(),
+            count: ids.len(),
+            deleted,
+            failed,
+            results,
+        })
+    }
+
+    async fn move_vectors(
+        &self,
+        src: &str,
+        dst: &str,
+        ids: &[String],
+    ) -> Result<MoveReport, VectorizerClientError> {
+        self.calls
+            .lock()
+            .map_err(|_| VectorizerClientError::Other("memory client mutex poisoned".into()))?
+            .push(MemoryCall::MoveVectors(
+                src.to_string(),
+                dst.to_string(),
+                ids.to_vec(),
+            ));
+        let mut stored = self
+            .dedup_keys_per_collection
+            .lock()
+            .map_err(|_| VectorizerClientError::Other("memory client mutex poisoned".into()))?;
+        // Pre-create dst so insert-before-delete can land even when no
+        // upsert has touched it yet.
+        stored.entry(dst.to_string()).or_default();
+        let mut moved = 0usize;
+        let mut failed = 0usize;
+        let mut results: Vec<VectorOpResult> = Vec::with_capacity(ids.len());
+        for id in ids {
+            // Look up the (dedup_key, server_id) pair in src by either
+            // side of the mapping — the live SDK addresses by server id,
+            // tests address by dedup key; the trait abstraction has to
+            // tolerate both.
+            let pair = {
+                let src_map = stored.get(src);
+                src_map.and_then(|m| {
+                    if let Some(sid) = m.get(id) {
+                        Some((id.clone(), sid.clone()))
+                    } else {
+                        m.iter()
+                            .find(|(_, sid)| sid.as_str() == id.as_str())
+                            .map(|(k, sid)| (k.clone(), sid.clone()))
+                    }
+                })
+            };
+            match pair {
+                Some((dedup_key, server_id)) => {
+                    // Insert into dst FIRST (mirrors the server invariant).
+                    let dst_map = stored.entry(dst.to_string()).or_default();
+                    dst_map.insert(dedup_key.clone(), server_id.clone());
+                    // Then delete from src.
+                    if let Some(src_map) = stored.get_mut(src) {
+                        src_map.remove(&dedup_key);
+                    }
+                    moved += 1;
+                    results.push(VectorOpResult {
+                        id: Some(id.clone()),
+                        status: "ok".into(),
+                        error: None,
+                        index: None,
+                    });
+                }
+                None => {
+                    failed += 1;
+                    results.push(VectorOpResult {
+                        id: Some(id.clone()),
+                        status: "missing_in_src".into(),
+                        error: None,
+                        index: None,
+                    });
+                }
+            }
+        }
+        Ok(MoveReport {
+            src: src.to_string(),
+            dst: dst.to_string(),
+            requested: ids.len(),
+            moved,
+            failed,
+            results,
+        })
     }
 }

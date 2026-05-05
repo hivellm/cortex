@@ -28,7 +28,9 @@ pub use rpc::{
     MCP_PROTOCOL_VERSION,
 };
 pub use server::{Server, ServerInfo, SERVER_NAME, SERVER_VERSION};
-pub use tools::{PreThinkingTool, QueryTool, StatusTool, Tool, ToolContext, ToolRegistry};
+pub use tools::{
+    ForgetTool, PreThinkingTool, QueryTool, StatusTool, Tool, ToolContext, ToolRegistry,
+};
 pub use validate::{validate_plugin, ValidationReport};
 
 /// Default Cortex API URL — matches the env var fall-back used by

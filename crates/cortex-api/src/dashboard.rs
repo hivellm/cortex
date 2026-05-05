@@ -86,6 +86,7 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/laws", get(laws))
         .route("/v1/dashboard/violations", get(violations))
         .route("/v1/dashboard/analyses", get(analyses))
+        .route("/v1/dashboard/analyses/{id}", get(analysis_detail))
         .route("/v1/dashboard/tools/stats", get(tools_stats))
         .route("/v1/dashboard/graph", get(graph))
         .route("/v1/dashboard/sessions", get(sessions))
@@ -1506,6 +1507,82 @@ pub struct AnalysesQuery {
     pub repos: Vec<String>,
 }
 
+/// Detail body for `/v1/dashboard/analyses/{id}` — the list row plus
+/// the un-clipped Markdown body. Mirrors [`DecisionDetail`] so the GUI's
+/// drawer can render a full audit instead of the 800-char list excerpt.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalysisDetail {
+    /// Spread of [`AnalysisRow`]. The `verdict` here is the same clipped
+    /// excerpt the list endpoint serves; `body_markdown` carries the
+    /// full document.
+    #[serde(flatten)]
+    pub row: AnalysisRow,
+    /// Full envelope body (markdown). Sourced from
+    /// `extras.body_markdown` when the meili_loader populated it,
+    /// falling back to the raw lane text.
+    pub body_markdown: String,
+}
+
+/// Build a single analysis row from a lane hit. Returns the row and the
+/// un-clipped body so callers can either drop it (list endpoint) or
+/// surface it (detail endpoint) without re-parsing the envelope twice.
+fn build_analysis_row(h: &crate::lanes::LaneHit) -> (AnalysisRow, String) {
+    let title = h
+        .extras
+        .get("title")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| clip(h.text.lines().next().unwrap_or(""), 120));
+    let status = h
+        .extras
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            let token: String = s
+                .chars()
+                .skip_while(|c| !c.is_ascii_alphabetic())
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect();
+            token.to_ascii_lowercase()
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "draft".to_string());
+    let source_path = h
+        .extras
+        .get("source_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .or_else(|| h.path.clone());
+    let body_markdown = h
+        .extras
+        .get("body_markdown")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| h.text.clone());
+    let row = AnalysisRow {
+        id: h
+            .doc_id
+            .strip_prefix("archive|")
+            .unwrap_or(&h.doc_id)
+            .to_string(),
+        title,
+        status,
+        panel: Vec::new(),
+        judge: String::new(),
+        rounds: 0,
+        duration_s: 0,
+        verdict: clip(&body_markdown, 800),
+        decision_id: None,
+        occurred_at: ts_to_relative(h.ts),
+        repo: h.repo.clone(),
+        source_path,
+    };
+    (row, body_markdown)
+}
+
 async fn analyses(
     State(state): State<DashboardState>,
     Query(params): Query<AnalysesQuery>,
@@ -1527,64 +1604,29 @@ async fn analyses(
                 .map(|r| allow.contains(r))
                 .unwrap_or(false)
         })
-        .map(|h| {
-            // Prefer the parsed extras the meili_loader stamped over
-            // best-effort string-munging on `h.text`. The first non-
-            // empty body line is the fallback when extras are absent
-            // (in-memory archive lane path).
-            let title = h
-                .extras
-                .get("title")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| clip(h.text.lines().next().unwrap_or(""), 120));
-            // Older bootstrap runs (pre-`derive_status` fix) wrote the
-            // whole markdown sentence into `status`. Sanitize to the
-            // first ASCII word here so consumers always see a clean
-            // badge token regardless of what's in the index.
-            let status = h
-                .extras
-                .get("status")
-                .and_then(|v| v.as_str())
-                .map(|s| {
-                    let token: String = s
-                        .chars()
-                        .skip_while(|c| !c.is_ascii_alphabetic())
-                        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-                        .collect();
-                    token.to_ascii_lowercase()
-                })
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "draft".to_string());
-            let source_path = h
-                .extras
-                .get("source_path")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string())
-                .or_else(|| h.path.clone());
-            AnalysisRow {
-                id: h
-                    .doc_id
-                    .strip_prefix("archive|")
-                    .unwrap_or(&h.doc_id)
-                    .to_string(),
-                title,
-                status,
-                panel: Vec::new(),
-                judge: String::new(),
-                rounds: 0,
-                duration_s: 0,
-                verdict: clip(&h.text, 800),
-                decision_id: None,
-                occurred_at: ts_to_relative(h.ts),
-                repo: h.repo.clone(),
-                source_path,
-            }
-        })
+        .map(|h| build_analysis_row(&h).0)
         .collect();
     (StatusCode::OK, Json(rows)).into_response()
+}
+
+async fn analysis_detail(State(state): State<DashboardState>, Path(id): Path<String>) -> Response {
+    let hits = collect_lane_hits(&state.lane);
+    let detail = hits
+        .iter()
+        .filter(|h| h.symbol.as_deref() == Some("analysis"))
+        .find(|h| h.doc_id.strip_prefix("archive|").unwrap_or(&h.doc_id) == id)
+        .map(|h| {
+            let (row, body_markdown) = build_analysis_row(h);
+            AnalysisDetail { row, body_markdown }
+        });
+    match detail {
+        Some(d) => (StatusCode::OK, Json(d)).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "reason": "analysis_not_found" })),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------

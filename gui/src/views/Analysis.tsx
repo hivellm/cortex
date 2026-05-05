@@ -201,50 +201,82 @@ export function AnalysisView() {
         })
       )}
 
-      <DetailDrawer
-        open={!!openRow}
-        onClose={() => setOpenRow(null)}
-        title={
-          <span>
-            <span className="mono" style={{ color: "var(--accent)", marginRight: 8 }}>
-              {openRow?.id}
-            </span>
-            {openRow?.title ?? ""}
-          </span>
-        }
-        subtitle={
-          openRow ? (
-            <span>
-              {openRow.repo ? `${openRow.repo} · ` : ""}
-              {openRow.status}
-              {openRow.source_path ? ` · ${openRow.source_path}` : ""}
-              {openRow.occurred_at ? ` · ${openRow.occurred_at}` : ""}
-            </span>
-          ) : null
-        }
-      >
-        {openRow ? (
-          <>
-            {!openRow.source_path ? (
-              <div className="drawer__meta">
-                <span>rounds: <strong>{openRow.rounds}</strong></span>
-                <span>duration: <strong>{openRow.duration_s}s</strong></span>
-                <span>judge: <strong>{openRow.judge || "—"}</strong></span>
-                {openRow.decision_id ? (
-                  <span>→ <strong>{openRow.decision_id}</strong></span>
-                ) : null}
-                {openRow.panel.length > 0 ? (
-                  <span>panel: <strong>{openRow.panel.join(", ")}</strong></span>
-                ) : null}
-              </div>
-            ) : null}
-            <pre className="drawer__markdown">
-              {openRow.verdict?.trim() ? openRow.verdict : "(no body captured)"}
-            </pre>
-          </>
-        ) : null}
-      </DetailDrawer>
+      <AnalysisDrawer row={openRow} onClose={() => setOpenRow(null)} />
     </div>
+  );
+}
+
+function AnalysisDrawer({
+  row,
+  onClose,
+}: {
+  row: AnalysisRow | null;
+  onClose: () => void;
+}) {
+  const connKey = useConnKey();
+  const id = row?.id ?? null;
+  const { data, isLoading, error } = useQuery({
+    queryKey: [connKey, "analysis-detail", id ?? ""],
+    queryFn: () => api.analysisDetail(id as string),
+    enabled: !!id,
+  });
+
+  return (
+    <DetailDrawer
+      open={!!row}
+      onClose={onClose}
+      title={
+        <span>
+          <span className="mono" style={{ color: "var(--accent)", marginRight: 8 }}>
+            {row?.id}
+          </span>
+          {row?.title ?? ""}
+        </span>
+      }
+      subtitle={
+        row ? (
+          <span>
+            {row.repo ? `${row.repo} · ` : ""}
+            {row.status}
+            {row.source_path ? ` · ${row.source_path}` : ""}
+            {row.occurred_at ? ` · ${row.occurred_at}` : ""}
+          </span>
+        ) : null
+      }
+    >
+      {row ? (
+        <>
+          {!row.source_path ? (
+            <div className="drawer__meta">
+              <span>rounds: <strong>{row.rounds}</strong></span>
+              <span>duration: <strong>{row.duration_s}s</strong></span>
+              <span>judge: <strong>{row.judge || "—"}</strong></span>
+              {row.decision_id ? (
+                <span>→ <strong>{row.decision_id}</strong></span>
+              ) : null}
+              {row.panel.length > 0 ? (
+                <span>panel: <strong>{row.panel.join(", ")}</strong></span>
+              ) : null}
+            </div>
+          ) : null}
+          {error ? (
+            <pre className="drawer__markdown" style={{ color: "var(--err, #f88)" }}>
+              Failed to load analysis body.
+            </pre>
+          ) : isLoading ? (
+            <pre className="drawer__markdown muted">Loading…</pre>
+          ) : (
+            <pre className="drawer__markdown">
+              {data?.body_markdown?.trim()
+                ? data.body_markdown
+                : row.verdict?.trim()
+                  ? row.verdict
+                  : "(no body captured)"}
+            </pre>
+          )}
+        </>
+      ) : null}
+    </DetailDrawer>
   );
 }
 

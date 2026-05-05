@@ -1,6 +1,6 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:3.2.0
+    image: hivehub/vectorizer:3.3.0
     container_name: cortex-vectorizer
     user: "0:0"
     working_dir: /data
@@ -18,13 +18,17 @@ services:
     restart: unless-stopped
 
   nexus:
-    image: hivehub/nexus:2.1.0
+    image: hivehub/nexus:2.2.0
     container_name: cortex-nexus
     networks: [cortex-net]
     ports:
       - "${NEXUS_HOST_PORT:-17002}:15474"
     volumes:
-      - nexus-data:/data
+      # Nexus 2.x uses /app/data (Dockerfile WORKDIR=/app). The
+      # earlier `/data` mount was a no-op — every recreate dropped
+      # the in-container /app/data tree. Fixed in phase post-2026-05-04
+      # cpu incident.
+      - nexus-data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:15474/health >/dev/null || exit 1"]
       interval: 5s

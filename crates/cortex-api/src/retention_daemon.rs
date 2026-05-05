@@ -297,7 +297,7 @@ mod tests {
         // Re-open to inspect the seeded rows.
         let store = MetadataStore::open(&path).expect("metadata reopens");
         let jobs = store.list_cron_jobs().expect("metadata store readable");
-        assert_eq!(jobs.len(), 8, "default cron rows should be seeded");
+        assert_eq!(jobs.len(), 10, "default cron rows should be seeded");
         // Stop the loop so the test runtime can shut down cleanly.
         handle.abort();
         if let Some(v) = prev {

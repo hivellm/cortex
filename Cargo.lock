@@ -738,6 +738,7 @@ dependencies = [
  "cortex-health",
  "cortex-storage",
  "cron",
+ "hdbscan",
  "ignore",
  "indicatif",
  "nexus-graph-sdk",
@@ -1316,6 +1317,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hdbscan"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4317842ec54a54ca44aa9bd7f599f5b723c07eaeb4a98875909724500c9cf1a"
+dependencies = [
+ "kdtree",
+ "num-traits",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1798,6 +1809,16 @@ dependencies = [
  "serde_json",
  "unicode-general-category",
  "uuid-simd",
+]
+
+[[package]]
+name = "kdtree"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f0a0e9f770b65bac9aad00f97a67ab5c5319effed07f6da385da3c2115e47ba"
+dependencies = [
+ "num-traits",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -4066,9 +4087,9 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vectorizer-protocol"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cedef0bd174295908ec27547d54a2e9466355174d1c9e9851b98f33c167934d3"
+checksum = "84f6a7ff958eba5da6bc24a5b7667db2efa5f9b56117242cdbe93ac806cfaadd"
 dependencies = [
  "prost",
  "prost-types",
@@ -4086,9 +4107,9 @@ dependencies = [
 
 [[package]]
 name = "vectorizer-sdk"
-version = "3.2.0"
+version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4682f21ca7c298e0b3828951d46437ee371ad26a1ba41213cdb558a9f05e969b"
+checksum = "65fa6a47954060c6772a66d2ae457e009e306a14507d4164eb91ad337739020e"
 dependencies = [
  "anyhow",
  "async-trait",

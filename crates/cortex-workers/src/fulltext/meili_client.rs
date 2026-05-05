@@ -473,6 +473,65 @@ impl MeiliClient for LiveMeiliClient {
     }
 }
 
+// Phase11o §2.3 — Meili side of the consolidation pruner.
+//
+// Implements the narrow [`crate::pruner::meili_sink::MeiliPruneOps`]
+// trait against the live `reqwest`-backed transport so the pruner
+// can drop high-cost fields on cold-tier rows and hard-purge
+// expired ones without a parallel HTTP layer.
+#[async_trait]
+impl crate::pruner::meili_sink::MeiliPruneOps for LiveMeiliClient {
+    async fn update_documents(
+        &self,
+        index: &str,
+        docs: &[Value],
+    ) -> Result<(), crate::pruner::meili_sink::MeiliPruneError> {
+        // POST /indexes/{uid}/documents merges fields by primary key
+        // (Meili 1.x semantics): present keys overwrite, absent keys
+        // stay, `null` clears the field — exactly the contract the
+        // pruner needs for `body`/`summary`/`outcome_distribution`
+        // stripping on cold-tier rows.
+        let url = self.url(&format!("/indexes/{index}/documents"));
+        let resp = self.http.post(&url).json(&docs).send().await.map_err(|e| {
+            crate::pruner::meili_sink::MeiliPruneError::Transport(e.to_string())
+        })?;
+        let status = resp.status();
+        if status.is_success() || status == StatusCode::ACCEPTED {
+            return Ok(());
+        }
+        let detail = resp.text().await.unwrap_or_default();
+        Err(crate::pruner::meili_sink::MeiliPruneError::Server(format!(
+            "POST {url}: HTTP {status} — {detail}"
+        )))
+    }
+
+    async fn delete_documents(
+        &self,
+        index: &str,
+        ids: &[String],
+    ) -> Result<(), crate::pruner::meili_sink::MeiliPruneError> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        // Meili 1.x: POST /indexes/{uid}/documents/delete-batch with
+        // a JSON array of primary-key strings is the canonical batch
+        // delete. Idempotent; missing ids are not surfaced as errors
+        // by the server.
+        let url = self.url(&format!("/indexes/{index}/documents/delete-batch"));
+        let resp = self.http.post(&url).json(&ids).send().await.map_err(|e| {
+            crate::pruner::meili_sink::MeiliPruneError::Transport(e.to_string())
+        })?;
+        let status = resp.status();
+        if status.is_success() || status == StatusCode::ACCEPTED {
+            return Ok(());
+        }
+        let detail = resp.text().await.unwrap_or_default();
+        Err(crate::pruner::meili_sink::MeiliPruneError::Server(format!(
+            "POST {url}: HTTP {status} — {detail}"
+        )))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct TaskAccepted {
     #[serde(rename = "taskUid")]

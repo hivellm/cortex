@@ -338,6 +338,7 @@ async fn schema_drift_fails_fast() {
     // embedder's default (768) disagrees.
     client
         .sdk()
+        .await
         .create_collection(&name, 512, Some(SimilarityMetric::Cosine))
         .await
         .expect("pre-create collection at dim=512");

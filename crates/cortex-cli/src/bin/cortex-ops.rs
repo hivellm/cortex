@@ -311,6 +311,40 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase11o §2.5 — consolidation pruner. Walks the
+    /// `cortex_consolidations` Meili index, demotes vectors between
+    /// `cortex.consolidation.fp32` → `cortex.consolidation.pq` →
+    /// `cortex.cold.binary` per the 0-7d / 7-90d / 90-365d schedule,
+    /// and hard-purges the >365 d tail (vector + meili rows). The
+    /// retention daemon fires this nightly at 03:00 via the
+    /// `retention.consolidation_prune` cron row.
+    ConsolidationPrune {
+        /// Override "now" so the tier boundaries are deterministic
+        /// for tests + scheduled CI runs.
+        #[arg(long, value_name = "RFC3339")]
+        time_travel: Option<String>,
+        /// Print the plan + per-tier counts without mutating any
+        /// backend.
+        #[arg(long)]
+        dry_run: bool,
+        /// Vectorizer base URL. Defaults to
+        /// `CORTEX_EMBEDDER_VECTORIZER_URL` then `http://127.0.0.1:17001`.
+        #[arg(long)]
+        vectorizer_url: Option<String>,
+        /// Meili base URL. Defaults to `CORTEX_FULLTEXT_MEILI_URL`
+        /// then `http://127.0.0.1:7700`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meili master key. Defaults to `CORTEX_FULLTEXT_MEILI_KEY`.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Cap on consolidations pulled per Meili page. Default 1000.
+        #[arg(long, default_value_t = 1000)]
+        page_size: u32,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase8e — list active silent-drop alerts. Walks
     /// `~/.cortex/alerts/*.json` produced by the cortex-api
     /// silent-drop watcher and renders one row per pair. Exit `0`
@@ -863,6 +897,23 @@ fn main() -> ExitCode {
             metadata_db,
             json,
         } => retention_sweep(time_travel, dry_run, batch_size, metadata_db, json),
+        Command::ConsolidationPrune {
+            time_travel,
+            dry_run,
+            vectorizer_url,
+            meili_url,
+            meili_key,
+            page_size,
+            json,
+        } => consolidation_prune(
+            time_travel,
+            dry_run,
+            vectorizer_url,
+            meili_url,
+            meili_key,
+            page_size,
+            json,
+        ),
         Command::Canary {
             hook,
             ipc,
@@ -4526,4 +4577,370 @@ fn doctor(
     } else {
         ExitCode::SUCCESS
     }
+}
+
+// ----------------------------------------------------------------------
+// Phase11o §2.5 — `cortex-ops consolidation-prune` handler.
+// ----------------------------------------------------------------------
+
+/// Run the consolidation pruner once. Lists every doc in
+/// `cortex_consolidations` (paginated by `page_size`), bucketises
+/// each into a tier, and runs the
+/// [`cortex_workers::pruner::engine::run_sweep`] cascade against
+/// the live Vectorizer + Meili.
+fn consolidation_prune(
+    time_travel: Option<String>,
+    dry_run: bool,
+    vectorizer_url: Option<String>,
+    meili_url: Option<String>,
+    meili_key: Option<String>,
+    page_size: u32,
+    json: bool,
+) -> ExitCode {
+    let now = match time_travel {
+        Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
+            Ok(t) => t.with_timezone(&chrono::Utc),
+            Err(e) => {
+                eprintln!("consolidation-prune: invalid --time-travel: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        None => chrono::Utc::now(),
+    };
+
+    let vec_url = vectorizer_url
+        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17001".to_string());
+    let vec_user = std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER")
+        .unwrap_or_else(|_| "admin".to_string());
+    let vec_password = std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD")
+        .unwrap_or_else(|_| "cortex-dev-admin".to_string());
+
+    let meili_url_v = meili_url
+        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
+    let meili_key_v = meili_key.or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_KEY").ok());
+
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("consolidation-prune: tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let outcome = rt.block_on(async move {
+        // Build the Vectorizer client. JWT minted via `login` so the
+        // SDK 3.3 calls (`move_vectors`, `delete_vectors`) ride on
+        // the real bearer token, not the dev fallback password.
+        let token = match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::login(
+            &vec_url,
+            &vec_user,
+            &vec_password,
+        )
+        .await
+        {
+            Ok(t) => t.access_token,
+            Err(e) => return Err(format!("vectorizer login: {e}")),
+        };
+        let mut embed_cfg = cortex_workers::embedder::EmbedderConfig::default();
+        embed_cfg.vectorizer_url = vec_url.clone();
+        embed_cfg.vectorizer_password = Some(token);
+        let live_vec =
+            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(
+                embed_cfg,
+            ) {
+                Ok(c) => c,
+                Err(e) => return Err(format!("vectorizer client: {e}")),
+            };
+
+        // Build the Meili client through the existing fulltext
+        // worker config — the `MeiliPruneOps` impl on
+        // `LiveMeiliClient` (phase11o §2.3) is what the engine
+        // needs.
+        let mut meili_cfg = cortex_workers::fulltext::FulltextConfig::default();
+        meili_cfg.meili_url = meili_url_v.clone();
+        meili_cfg.meili_api_key = meili_key_v.clone();
+        let live_meili =
+            match cortex_workers::fulltext::meili_client::LiveMeiliClient::new(&meili_cfg) {
+                Ok(c) => c,
+                Err(e) => return Err(format!("meili client: {e}")),
+            };
+
+        // Pull every consolidation doc. Meili's `GET /indexes/{uid}/documents?limit=N&offset=K`
+        // returns `{results: [...], offset, limit, total}`. We paginate
+        // until we've seen everything.
+        let docs = match fetch_all_consolidations(&meili_url_v, meili_key_v.as_deref(), page_size)
+            .await
+        {
+            Ok(d) => d,
+            Err(e) => return Err(format!("meili list: {e}")),
+        };
+
+        if dry_run {
+            // Bucket without touching either backend.
+            let mut counts: std::collections::BTreeMap<String, u64> =
+                std::collections::BTreeMap::new();
+            for d in &docs {
+                let action = cortex_workers::pruner::plan_demotion(
+                    d.event_id.clone(),
+                    d.occurred_at,
+                    now,
+                    d.vector_ids.clone(),
+                );
+                let key = match action.as_ref() {
+                    None => "hot".to_string(),
+                    Some(a) => cortex_workers::pruner::tier_pair_key(a.from, a.to),
+                };
+                *counts.entry(key).or_insert(0) += 1;
+            }
+            return Ok(SweepOutcome {
+                consolidations_seen: docs.len() as u64,
+                events_demoted_per_tier: counts,
+                events_purged: 0,
+                last_run_duration_ms: 0,
+                last_error: None,
+                events_failed: 0,
+                dry_run: true,
+            });
+        }
+
+        let report = match cortex_workers::pruner::engine::run_sweep(
+            &docs,
+            now,
+            &live_vec,
+            &live_meili,
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return Err(format!("sweep: {e}")),
+        };
+        Ok(SweepOutcome {
+            consolidations_seen: report.consolidations_seen,
+            events_demoted_per_tier: report.events_demoted_per_tier,
+            events_purged: report.events_purged,
+            last_run_duration_ms: report.last_run_duration_ms,
+            last_error: report.last_error,
+            events_failed: report.events_failed,
+            dry_run: false,
+        })
+    });
+
+    match outcome {
+        Ok(report) => {
+            // Phase11o §3.1 — persist the run summary so
+            // `/v1/health/coverage` can surface it on the next probe.
+            // Skipped on dry-run (the file would mask the live run).
+            if !report.dry_run {
+                if let Err(e) = persist_pruner_status(&report) {
+                    eprintln!("consolidation-prune: persist status: {e}");
+                }
+            }
+            if json {
+                let body = serde_json::json!({
+                    "consolidations_seen": report.consolidations_seen,
+                    "events_demoted_per_tier": report.events_demoted_per_tier,
+                    "events_purged": report.events_purged,
+                    "last_run_duration_ms": report.last_run_duration_ms,
+                    "events_failed": report.events_failed,
+                    "dry_run": report.dry_run,
+                });
+                println!("{}", serde_json::to_string_pretty(&body).unwrap());
+            } else {
+                println!(
+                    "consolidation-prune: seen={} purged={} failed={} duration_ms={} dry_run={}",
+                    report.consolidations_seen,
+                    report.events_purged,
+                    report.events_failed,
+                    report.last_run_duration_ms,
+                    report.dry_run,
+                );
+                for (k, v) in &report.events_demoted_per_tier {
+                    println!("  {k:<24} {v}");
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("consolidation-prune: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Phase11o §3.1 — write the pruner-status JSON to the path
+/// `cortex-api`'s coverage handler reads on every probe.
+fn persist_pruner_status(report: &SweepOutcome) -> std::io::Result<()> {
+    use std::io::Write;
+    let path = match cortex_api::coverage::pruner_status_path() {
+        Some(p) => p,
+        None => {
+            // No HOME / USERPROFILE — skip persistence rather than
+            // failing the whole run.
+            return Ok(());
+        }
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let last_run_ts = chrono::Utc::now().timestamp_millis();
+    let body = cortex_api::coverage::PrunerStatus {
+        last_run_ts,
+        events_demoted_per_tier: report.events_demoted_per_tier.clone(),
+        events_purged: report.events_purged,
+        last_run_duration_ms: report.last_run_duration_ms,
+        last_error: report.last_error.clone(),
+    };
+    let raw = serde_json::to_vec_pretty(&body)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let tmp = path.with_extension("json.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&raw)?;
+        f.sync_all().ok();
+    }
+    std::fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct SweepOutcome {
+    consolidations_seen: u64,
+    events_demoted_per_tier: std::collections::BTreeMap<String, u64>,
+    events_purged: u64,
+    last_run_duration_ms: u64,
+    #[allow(dead_code)]
+    last_error: Option<String>,
+    events_failed: u64,
+    dry_run: bool,
+}
+
+/// Walk Meili's `cortex_consolidations` index, paginated, building
+/// a [`cortex_workers::pruner::engine::ConsolidationDoc`] per row.
+/// Every doc's `event_id` is also threaded through as the matching
+/// Vectorizer primary key (the consolidator writes the vector under
+/// the same id, see `crates/cortex-workers/src/consolidator/`).
+async fn fetch_all_consolidations(
+    meili_url: &str,
+    meili_key: Option<&str>,
+    page_size: u32,
+) -> anyhow::Result<Vec<cortex_workers::pruner::engine::ConsolidationDoc>> {
+    use anyhow::Context;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("reqwest client")?;
+    let mut out: Vec<cortex_workers::pruner::engine::ConsolidationDoc> = Vec::new();
+    let mut offset: u32 = 0;
+    let limit = page_size.max(1);
+    let base = meili_url.trim_end_matches('/');
+    loop {
+        let url = format!(
+            "{base}/indexes/{}/documents?limit={limit}&offset={offset}",
+            cortex_storage::names::INDEX_CONSOLIDATIONS
+        );
+        let mut req = client.get(&url);
+        if let Some(k) = meili_key {
+            req = req.bearer_auth(k);
+        }
+        let resp = req.send().await.with_context(|| format!("GET {url}"))?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            // Index does not exist yet — nothing to prune.
+            return Ok(Vec::new());
+        }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GET {url}: {status} — {body}");
+        }
+        #[derive(serde::Deserialize)]
+        struct Page {
+            results: Vec<serde_json::Value>,
+            #[allow(dead_code)]
+            offset: u32,
+            #[allow(dead_code)]
+            limit: u32,
+            total: u32,
+        }
+        let page: Page = resp.json().await.context("decode meili page")?;
+        let count = page.results.len() as u32;
+        for v in page.results {
+            // The doc shape matches the consolidator's writer: at
+            // minimum a `event_id` (primary key) + an
+            // `occurred_at` RFC3339 timestamp. `source_event_ids`
+            // is an array of raw-event ids; we resolve them to the
+            // canonical Vectorizer primary key by treating each
+            // entry as the dedup key (the embedder writes
+            // `metadata.dedup_key = event_id` so the round-trip
+            // stays stable). Missing fields cause the row to be
+            // skipped with a stderr note rather than aborting the
+            // whole run.
+            let event_id = match v.get("event_id").and_then(|x| x.as_str()) {
+                Some(s) => s.to_string(),
+                None => {
+                    eprintln!("consolidation-prune: skip doc without event_id");
+                    continue;
+                }
+            };
+            let occurred_at_str = match v
+                .get("occurred_at")
+                .and_then(|x| x.as_str())
+                .or_else(|| v.get("ts").and_then(|x| x.as_str()))
+            {
+                Some(s) => s,
+                None => {
+                    eprintln!(
+                        "consolidation-prune: skip {event_id} without occurred_at/ts"
+                    );
+                    continue;
+                }
+            };
+            let occurred_at = match chrono::DateTime::parse_from_rfc3339(occurred_at_str) {
+                Ok(t) => t.with_timezone(&chrono::Utc),
+                Err(_) => {
+                    eprintln!(
+                        "consolidation-prune: skip {event_id} — bad occurred_at {occurred_at_str:?}"
+                    );
+                    continue;
+                }
+            };
+            let mut vector_ids: Vec<String> = Vec::new();
+            // Prefer an explicit `vector_ids` list when present;
+            // fall back to `source_event_ids` (the canonical writer
+            // shape) so we still operate on older docs.
+            if let Some(arr) = v.get("vector_ids").and_then(|x| x.as_array()) {
+                for entry in arr {
+                    if let Some(s) = entry.as_str() {
+                        vector_ids.push(s.to_string());
+                    }
+                }
+            } else if let Some(arr) = v.get("source_event_ids").and_then(|x| x.as_array()) {
+                for entry in arr {
+                    if let Some(s) = entry.as_str() {
+                        vector_ids.push(s.to_string());
+                    }
+                }
+            } else {
+                // No source list — operate on the consolidation's
+                // own vector (consolidator writes one fp32 vector
+                // per consolidation, primary key = event_id).
+                vector_ids.push(event_id.clone());
+            }
+            out.push(cortex_workers::pruner::engine::ConsolidationDoc {
+                event_id,
+                occurred_at,
+                vector_ids,
+            });
+        }
+        offset += count;
+        if offset >= page.total || count == 0 {
+            break;
+        }
+    }
+    Ok(out)
 }

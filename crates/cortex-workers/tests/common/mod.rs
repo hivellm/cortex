@@ -115,7 +115,7 @@ pub async fn live_client() -> LiveVectorizerClient {
 /// Delete a collection best-effort. Dev volume is disposable; failures are
 /// logged to stderr and not propagated — per spec (round-5 brief).
 pub async fn drop_collection(client: &LiveVectorizerClient, name: &str) {
-    if let Err(e) = client.sdk().delete_collection(name).await {
+    if let Err(e) = client.sdk().await.delete_collection(name).await {
         eprintln!("warning: failed to delete IT collection '{name}': {e}");
     }
 }

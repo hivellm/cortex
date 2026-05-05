@@ -192,6 +192,21 @@ impl VectorizerClient for RateLimitedClient {
     ) -> std::result::Result<BTreeSet<String>, VectorizerClientError> {
         self.inner.exists_by_dedup_key(collection, dedup_keys).await
     }
+    async fn delete_vectors(
+        &self,
+        collection: &str,
+        ids: &[String],
+    ) -> std::result::Result<vectorizer_sdk::models::DeleteReport, VectorizerClientError> {
+        self.inner.delete_vectors(collection, ids).await
+    }
+    async fn move_vectors(
+        &self,
+        src: &str,
+        dst: &str,
+        ids: &[String],
+    ) -> std::result::Result<vectorizer_sdk::models::MoveReport, VectorizerClientError> {
+        self.inner.move_vectors(src, dst, ids).await
+    }
 }
 
 #[tokio::test]

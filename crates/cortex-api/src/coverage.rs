@@ -377,6 +377,38 @@ pub struct CoverageResponse {
     /// `CORTEX_ARCHIVE_WATCHER_URLS` are configured.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archive_watchers: Vec<ArchiveWatcherSummary>,
+    /// Phase11o §3.1 — last consolidation-pruner run. Populated by
+    /// the `cortex-ops consolidation-prune` command on every nightly
+    /// invocation. `None` until the first sweep completes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruner: Option<PrunerStatus>,
+}
+
+/// Phase11o §3.1 — the `pruner` block surfaced under
+/// `/v1/health/coverage`. Mirrors
+/// [`cortex_workers::pruner::PruneReport`] one-for-one so the wire
+/// shape stays decoupled from the worker crate's internal struct.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq)]
+pub struct PrunerStatus {
+    /// Epoch ms of the most recent run's completion. `0` when no
+    /// run has finished yet.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub last_run_ts: i64,
+    /// Per-tier-pair demotion counts. Keys are
+    /// [`cortex_workers::pruner::tier_pair_key`] outputs (e.g.
+    /// `"hot->warm"`, `"warm->cold"`, `"warm->cold:meili"`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub events_demoted_per_tier: std::collections::BTreeMap<String, u64>,
+    /// Total consolidations hard-purged this run (`Cold→Expired`).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub events_purged: u64,
+    /// Wall-clock duration of the run.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub last_run_duration_ms: u64,
+    /// Last error string, populated when the run aborted before
+    /// completion. `None` on a clean run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 /// Phase11i §5.2 — one entry under
@@ -718,7 +750,41 @@ pub async fn run_coverage_audit_full(
         backends,
         overall_severity: severity_label(overall),
         archive_watchers,
+        pruner: read_pruner_status_from_default_path(),
     }
+}
+
+/// Phase11o §3.1 — read the most recent pruner sweep summary from
+/// `<home>/.cortex/pruner-status.json`. The cron-side handler
+/// (`cortex-ops consolidation-prune`) writes the file at the end
+/// of every run; the coverage handler reads it on every probe.
+/// Returns `None` when the file is missing, unreadable, or has the
+/// wrong shape — the coverage block degrades to "no recent run"
+/// rather than failing the whole probe.
+pub fn read_pruner_status_from_default_path() -> Option<PrunerStatus> {
+    let path = pruner_status_path()?;
+    read_pruner_status(&path)
+}
+
+/// Resolve the pruner-status file path: honours `CORTEX_PRUNER_STATUS_FILE`
+/// when set, otherwise `<home>/.cortex/pruner-status.json`.
+pub fn pruner_status_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("CORTEX_PRUNER_STATUS_FILE") {
+        return Some(std::path::PathBuf::from(p));
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))?;
+    let mut p = std::path::PathBuf::from(home);
+    p.push(".cortex");
+    p.push("pruner-status.json");
+    Some(p)
+}
+
+/// Read + decode the pruner status file. Tolerant: any IO or
+/// decode failure returns `None`.
+pub fn read_pruner_status(path: &std::path::Path) -> Option<PrunerStatus> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str::<PrunerStatus>(&raw).ok()
 }
 
 /// Split a canonical `cortex-{slug}-{family}` name into its slug and
@@ -809,9 +875,28 @@ mod tests {
             backends: vec![],
             overall_severity: "ok",
             archive_watchers: Vec::new(),
+            pruner: None,
         };
         let v = serde_json::to_value(&resp).unwrap();
         assert!(!v.as_object().unwrap().contains_key("archive_watchers"));
+        assert!(!v.as_object().unwrap().contains_key("pruner"));
+    }
+
+    #[test]
+    fn pruner_status_round_trips_through_serde() {
+        let mut counts = std::collections::BTreeMap::new();
+        counts.insert("hot->warm".into(), 12);
+        counts.insert("warm->cold".into(), 3);
+        let s = PrunerStatus {
+            last_run_ts: 1_700_000_000_000,
+            events_demoted_per_tier: counts,
+            events_purged: 7,
+            last_run_duration_ms: 1234,
+            last_error: None,
+        };
+        let raw = serde_json::to_string(&s).unwrap();
+        let back: PrunerStatus = serde_json::from_str(&raw).unwrap();
+        assert_eq!(back, s);
     }
 
     #[test]

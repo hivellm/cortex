@@ -219,11 +219,45 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-ops metadata-reap",
             enabled: true,
         },
+        // Phase11p §3.2 — flipped from `enabled: false` to `enabled:
+        // true` so the auto-memory consolidator (Claude Code memory
+        // dir; phase9h, fully implemented in
+        // `crates/cortex-cli/src/ops/memory_consolidate.rs`)
+        // actually fires on the nightly slot. The pre-phase11p
+        // default kept this job dormant which left the user
+        // observing unbounded memory growth despite the
+        // implementation having shipped.
         DefaultJob {
             name: "retention.memory_consolidate",
             schedule: "0 7 * * 0",
             command: "cortex-ops memory-consolidate --apply",
-            enabled: false,
+            enabled: true,
+        },
+        // Phase11p §3.1 — nightly envelope consolidator. Sits at
+        // 02:00, one hour before `retention.consolidation_prune`
+        // (03:00) so the pruner sweeps over fresh consolidation
+        // rows. Without this seed the pruner walks an empty
+        // `cortex_consolidations` index every night.
+        DefaultJob {
+            name: "retention.consolidator_nightly",
+            schedule: "0 2 * * *",
+            command: "cortex-consolidator nightly",
+            enabled: true,
+        },
+        // Phase11o §2.5 — nightly tier demotion of consolidations.
+        // Walks `cortex_consolidations`, demotes vectors between
+        // `cortex.consolidation.fp32` → `.pq` → `cortex.cold.binary`
+        // per the 0-7d / 7-90d / 90-365d schedule, hard-purges the
+        // >365d tail. Default 03:00 to match the spec-19 retention
+        // sweep window; operators tune via
+        // `[cortex.consolidation] prune_at` in `cortex.toml`, which
+        // the bin path translates to a 5-field cron expression
+        // before seeding.
+        DefaultJob {
+            name: "retention.consolidation_prune",
+            schedule: "0 3 * * *",
+            command: "cortex-ops consolidation-prune",
+            enabled: true,
         },
     ]
 }
@@ -503,20 +537,70 @@ mod tests {
     }
 
     #[test]
-    fn seed_defaults_inserts_eight_jobs_idempotently() {
+    fn seed_defaults_inserts_ten_jobs_idempotently() {
         let s = store();
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 8);
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 10);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 8);
+        assert_eq!(jobs.len(), 10);
         let consolidate = jobs
             .iter()
             .find(|j| j.name == "retention.memory_consolidate")
             .unwrap();
-        assert!(!consolidate.enabled, "memory_consolidate must default disabled");
+        assert!(consolidate.enabled, "phase11p §3.2 — memory_consolidate defaults enabled");
         let sweep = jobs.iter().find(|j| j.name == "retention.sweep").unwrap();
         assert!(sweep.enabled);
+        let prune = jobs
+            .iter()
+            .find(|j| j.name == "retention.consolidation_prune")
+            .expect("phase11o consolidation_prune must seed");
+        assert!(prune.enabled, "consolidation_prune defaults enabled");
+        assert_eq!(prune.schedule, "0 3 * * *");
+        assert_eq!(prune.command, "cortex-ops consolidation-prune");
+        let nightly = jobs
+            .iter()
+            .find(|j| j.name == "retention.consolidator_nightly")
+            .expect("phase11p §3.1 — consolidator_nightly must seed");
+        assert!(nightly.enabled, "consolidator_nightly defaults enabled");
+        assert_eq!(nightly.schedule, "0 2 * * *");
+        assert_eq!(nightly.command, "cortex-consolidator nightly");
+    }
+
+    #[test]
+    fn consolidator_nightly_runs_before_consolidation_prune() {
+        // Phase11p §3.1 — the prune sweep at 03:00 must observe the
+        // consolidator's 02:00 output. Pin the slot ordering so a
+        // future schedule edit can't silently invert them.
+        let jobs = default_jobs();
+        let nightly = jobs
+            .iter()
+            .find(|j| j.name == "retention.consolidator_nightly")
+            .expect("seeded above");
+        let prune = jobs
+            .iter()
+            .find(|j| j.name == "retention.consolidation_prune")
+            .expect("seeded above");
+        // Both schedules use the same `m h * * *` shape; compare
+        // (hour, minute) pairs directly.
+        let nightly_hh: u32 = nightly
+            .schedule
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let prune_hh: u32 = prune
+            .schedule
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            nightly_hh < prune_hh,
+            "consolidator_nightly hour ({nightly_hh}) must precede consolidation_prune hour ({prune_hh})"
+        );
     }
 
     #[tokio::test]
