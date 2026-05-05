@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use cortex_workers::consolidator::cost_telemetry::{CostBudget, CostLedger};
+use cortex_workers::consolidator::cost_telemetry::CostBudget;
 use cortex_workers::consolidator::orchestrator::{Orchestrator, ProducerSelection, Trigger};
 use cortex_workers::consolidator::source::{
     LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError,
@@ -393,8 +393,8 @@ async fn run_nightly(cli: &Cli, dry_run: bool) -> Result<()> {
     let orchestrator = Orchestrator::new(haiku, opus).with_budget(budget);
 
     let mut sessions_processed = 0u32;
-    let mut decisions_processed = 0u32;
-    let mut topics_processed = 0u32;
+    let decisions_processed = 0u32;
+    let topics_processed = 0u32;
     let mut cost_cents_total = 0u32;
 
     let session_source = LiveSessionSource::new(&archive_root);
