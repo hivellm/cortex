@@ -89,7 +89,7 @@ impl Orchestrator {
     /// Phase11i §3.6 — clone the current fusion snapshot. Cheap
     /// (single read lock) and used by every per-request fuse call
     /// + the audit envelope builder so the stamped values reflect
-    /// whatever was loaded most recently.
+    ///   whatever was loaded most recently.
     pub fn current_fusion(&self) -> FusionConfig {
         self.fusion.read().expect("fusion lock poisoned").clone()
     }

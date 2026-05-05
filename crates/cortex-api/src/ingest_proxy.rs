@@ -79,7 +79,7 @@ pub async fn handle_ingest(
     Json(req): Json<IngestRequest>,
 ) -> Response {
     // 1. Validate body.
-    let body_len = req.body.as_bytes().len();
+    let body_len = req.body.len();
     if body_len == 0 {
         return (
             StatusCode::BAD_REQUEST,

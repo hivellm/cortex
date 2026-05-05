@@ -118,6 +118,7 @@ fn json_err(status: StatusCode, reason: &str, detail: impl Into<String>) -> Resp
         .into_response()
 }
 
+#[allow(clippy::manual_clamp)]
 fn clamp_limit(req: &KeywordSearchRequest) -> u32 {
     req.limit
         .unwrap_or(KEYWORD_LIMIT_DEFAULT)
@@ -138,7 +139,11 @@ pub async fn handle_keyword_search(
         return json_err(StatusCode::BAD_REQUEST, "bad_input", "`index` is required");
     }
     let limit = clamp_limit(&req);
-    let url = format!("{}/indexes/{}/search", meili_base_url().trim_end_matches('/'), index);
+    let url = format!(
+        "{}/indexes/{}/search",
+        meili_base_url().trim_end_matches('/'),
+        index
+    );
 
     let mut body = json!({
         "q": req.q,
@@ -266,6 +271,7 @@ pub struct VectorSearchResponse {
     pub upstream_latency_ms: u64,
 }
 
+#[allow(clippy::manual_clamp)]
 fn clamp_k(req: &VectorSearchRequest) -> u32 {
     req.k.unwrap_or(VECTOR_K_DEFAULT).min(VECTOR_K_MAX).max(1)
 }
@@ -280,7 +286,11 @@ pub async fn handle_vector_search(
 
     let collection = req.collection.trim();
     if collection.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "bad_input", "`collection` is required");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "bad_input",
+            "`collection` is required",
+        );
     }
     if req.query_vector.is_some() == req.query_text.is_some() {
         return json_err(
@@ -298,7 +308,11 @@ pub async fn handle_vector_search(
     }
     let vector = req.query_vector.as_ref().expect("validated above");
     if vector.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "bad_input", "`query_vector` is empty");
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "bad_input",
+            "`query_vector` is empty",
+        );
     }
     let k = clamp_k(&req);
 
@@ -470,7 +484,11 @@ pub async fn handle_graph_query(
             }
             let id_trim = node_id.trim();
             if id_trim.is_empty() {
-                return json_err(StatusCode::BAD_REQUEST, "bad_input", "`node_id` is required");
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "bad_input",
+                    "`node_id` is required",
+                );
             }
             let cypher = match &edge_kinds {
                 Some(kinds) if !kinds.is_empty() => {
@@ -481,8 +499,9 @@ pub async fn handle_graph_query(
                         .join("|");
                     format!(
                         "MATCH (s {{ event_id: $id }})-[r{}*1..{depth}]-(n) \
-                         RETURN s, r, n LIMIT 200"
-                    , list)
+                         RETURN s, r, n LIMIT 200",
+                        list
+                    )
                 }
                 _ => format!(
                     "MATCH (s {{ event_id: $id }})-[r*1..{depth}]-(n) RETURN s, r, n LIMIT 200"
@@ -490,7 +509,10 @@ pub async fn handle_graph_query(
             };
             let started = std::time::Instant::now();
             let mut params = std::collections::HashMap::new();
-            params.insert("id".to_string(), nexus_sdk::Value::String(id_trim.to_string()));
+            params.insert(
+                "id".to_string(),
+                nexus_sdk::Value::String(id_trim.to_string()),
+            );
             let res = nexus.execute_cypher(&cypher, Some(params)).await;
             let latency_ms = started.elapsed().as_millis() as u64;
             match res {
@@ -504,11 +526,7 @@ pub async fn handle_graph_query(
                     }),
                 )
                     .into_response(),
-                Err(e) => json_err(
-                    StatusCode::BAD_GATEWAY,
-                    "nexus_error",
-                    format!("{e}"),
-                ),
+                Err(e) => json_err(StatusCode::BAD_GATEWAY, "nexus_error", format!("{e}")),
             }
         }
         GraphQueryRequest::Cypher {
@@ -524,7 +542,11 @@ pub async fn handle_graph_query(
             }
             let stmt = statement.trim();
             if stmt.is_empty() {
-                return json_err(StatusCode::BAD_REQUEST, "bad_input", "`statement` is required");
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "bad_input",
+                    "`statement` is required",
+                );
             }
             let params = match parameters {
                 Value::Object(map) => map
@@ -547,11 +569,7 @@ pub async fn handle_graph_query(
                     }),
                 )
                     .into_response(),
-                Err(e) => json_err(
-                    StatusCode::BAD_GATEWAY,
-                    "nexus_error",
-                    format!("{e}"),
-                ),
+                Err(e) => json_err(StatusCode::BAD_GATEWAY, "nexus_error", format!("{e}")),
             }
         }
     }
@@ -616,7 +634,10 @@ mod tests {
         assert_eq!(req.q, "auth");
         assert_eq!(req.limit, Some(5));
         assert_eq!(req.filter.as_deref(), Some("repo = \"cortex\""));
-        assert_eq!(req.sort.as_deref().map(<[String]>::to_vec).unwrap().len(), 1);
+        assert_eq!(
+            req.sort.as_deref().map(<[String]>::to_vec).unwrap().len(),
+            1
+        );
         assert_eq!(req.attributes_to_retrieve.unwrap(), vec!["id", "title"]);
     }
 

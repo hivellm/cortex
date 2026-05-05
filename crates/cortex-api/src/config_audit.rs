@@ -291,7 +291,7 @@ pub fn run_audit_with(paths: &AuditPaths, opts: AuditOptions) -> ConfigAudit {
             if missing.is_empty() {
                 audit.push(Finding::ok(
                     "hooks.json",
-                    format!("all 7 canonical hooks registered"),
+                    "all 7 canonical hooks registered".to_string(),
                 ));
             } else {
                 let names: Vec<String> = missing.iter().map(|s| (*s).to_string()).collect();
