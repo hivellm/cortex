@@ -702,33 +702,89 @@ async fn handle_admin_forget(
     };
 
     // Vectorizer client: build inline using the embedder config
-    // env vars. Failure here is a transient deployment issue, not
-    // a cascade error — surface as 500 with a clear reason.
+    // env vars. Resolves URL via `CORTEX_VECTORIZER_URL` /
+    // `CORTEX_EMBEDDER_VECTORIZER_URL` (priority order matches the
+    // boot path). When user+password are present, calls
+    // `with_credentials` so the client mints a JWT via
+    // `/auth/login` instead of presenting the password as a raw
+    // bearer (the SDK forwards `vectorizer_password` as `api_key`,
+    // which the server rejects with 401 unless it's a real JWT).
+    // Failure here is a transient deployment issue, not a cascade
+    // error — surface as 500 with a clear reason.
     let mut embed_cfg = cortex_workers::embedder::EmbedderConfig::default();
-    if let Ok(url) = std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL") {
-        if !url.is_empty() {
-            embed_cfg.vectorizer_url = url;
-        }
+    let vectorizer_url = std::env::var("CORTEX_VECTORIZER_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| std::env::var("VECTORIZER_URL").ok().filter(|s| !s.is_empty()));
+    if let Some(url) = vectorizer_url.clone() {
+        embed_cfg.vectorizer_url = url;
     }
-    if let Ok(pw) = std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD") {
-        if !pw.is_empty() {
-            embed_cfg.vectorizer_password = Some(pw);
-        }
-    }
-    let vec_client =
-        match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg) {
-            Ok(c) => Arc::new(c),
-            Err(e) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({
-                        "reason": "vectorizer_client",
-                        "message": e.to_string(),
-                    })),
-                )
-                    .into_response()
+    let vectorizer_user = std::env::var("CORTEX_VECTORIZER_USER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER")
+                .ok()
+                .filter(|s| !s.is_empty())
+        });
+    let vectorizer_pw = std::env::var("CORTEX_VECTORIZER_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD")
+                .ok()
+                .filter(|s| !s.is_empty())
+        });
+    let vec_client = match (vectorizer_user, vectorizer_pw, vectorizer_url) {
+        (Some(user), Some(pw), Some(url)) => {
+            // Login path — mint a JWT then build the client.
+            let creds = cortex_workers::embedder::vectorizer_client::VectorizerCredentials {
+                base_url: url,
+                username: user,
+                password: pw,
+            };
+            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::with_credentials(
+                embed_cfg, creds,
+            )
+            .await
+            {
+                Ok(c) => Arc::new(c),
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "reason": "vectorizer_client",
+                            "message": format!("with_credentials login failed: {e}"),
+                        })),
+                    )
+                        .into_response()
+                }
             }
-        };
+        }
+        _ => {
+            // Legacy / dev path: no creds, build the unauthenticated
+            // client. Cascade calls that need auth will surface 401
+            // and the caller's safety-gated retry kicks in.
+            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg) {
+                Ok(c) => Arc::new(c),
+                Err(e) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({
+                            "reason": "vectorizer_client",
+                            "message": e.to_string(),
+                        })),
+                    )
+                        .into_response()
+                }
+            }
+        }
+    };
 
     // Meili client: same shape — pull URL + key from env, build
     // the LiveMeiliClient (which carries the §1.3 MeiliPruneOps

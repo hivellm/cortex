@@ -168,17 +168,21 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         year_week: &str,
         tool: &str,
     ) -> Result<Option<String>, String> {
-        // Query Meili `cortex_memories` for an entry whose
-        // `extras.tool_call_digest_key` matches the bucket's
-        // `(repo, year_week, tool)` triple. The persist path stamps
-        // that exact key so a re-run of the same plan finds the
-        // prior digest and short-circuits without burning a second
-        // classifier round-trip.
+        // Query the per-repo consolidations index for an entry whose
+        // body carries the bucket key. The persist path stamps the
+        // key on `payload.scope.value` and on `tags` so a full-text
+        // search recovers it deterministically. Falls back to
+        // `cortex_memories` (legacy unified index) when the per-repo
+        // shape returns 404 — the loader may not have created the
+        // index yet on a cold dev boot.
         let bucket_key = format!("{repo}|{year_week}|{tool}");
-        let url = format!("{}/indexes/{MEILI_INDEX_MEMORIES}/search", self.meili_base);
+        let index_uid = format!(
+            "cortex-{}-consolidations",
+            cortex_storage::names::slug_for_repo(repo)
+        );
+        let url = format!("{}/indexes/{index_uid}/search", self.meili_base);
         let body = serde_json::json!({
-            "q": "",
-            "filter": format!("memory_type = \"tool_call_digest\" AND tool_call_digest_key = \"{bucket_key}\""),
+            "q": &bucket_key,
             "limit": 1,
         });
         let mut req = self.http.post(&url).json(&body);
@@ -235,8 +239,10 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         let mut ids: Vec<String> = bucket.event_ids.iter().cloned().collect();
         ids.sort();
         ids.dedup();
+        let bucket_key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.tool);
         let body = format!(
             "# Tool-call digest — `{repo}` · {week} · `{tool}`\n\n\
+             Bucket: `{bucket_key}`\n\n\
              Aggregates {count} `{tool}` calls observed in repo \
              `{repo}` during ISO week {week}. Original envelopes are \
              listed below for forensic round-trip; the summarisation \
@@ -355,22 +361,26 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
 
         let envelope = serde_json::json!({
             "event_id": event_id,
-            "schema_version": "1.0.0",
+            "schema_version": "1",
             "occurred_at": occurred_iso,
             "session_id": session_id,
-            "stream": "cortex.events.enriched",
-            "tool": "cortex-ops:tool-call-digest",
+            "stream": "live",
+            "tool": "cortex-cli",
             "kind": "consolidation",
-            "context": { "repo": bucket.repo },
+            "context": {
+                "repo": bucket.repo,
+                "platform": platform_string(),
+            },
             "payload": payload,
             "content_hash": content_hash,
         });
+        // `/v1/events` is the single-envelope endpoint — accepts a
+        // bare envelope, not the batch `{events: [...]}` wrapper.
         let url = format!("{}/v1/events", self.ingestion_base);
-        let body = serde_json::json!({ "events": [envelope] });
         let resp = self
             .http
             .post(&url)
-            .json(&body)
+            .json(&envelope)
             .send()
             .await
             .map_err(|e| format!("ingestion transport: {e}"))?;
@@ -439,6 +449,18 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         // pode remover os dados da memoria apos validar que foram
         // sumarizados ou consolidados".
         Ok(0)
+    }
+}
+
+/// Resolve the platform string the envelope schema requires
+/// (`win32` / `darwin` / `linux`) from `cfg!(target_os = …)`.
+fn platform_string() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
     }
 }
 

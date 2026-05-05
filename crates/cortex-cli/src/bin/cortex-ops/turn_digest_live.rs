@@ -172,15 +172,19 @@ impl DigestBackend for LiveTurnDigestBackend {
         year_week: &str,
         top_topic: &str,
     ) -> Result<Option<String>, String> {
-        // Query Meili `cortex_memories` for an entry whose
-        // `extras.turn_digest_key` matches the bucket's
-        // `(repo, year_week, top_topic)` triple. Same idempotency
-        // pattern `tool_call_digest_live` uses.
+        // Query the per-repo consolidations index full-text for
+        // `<repo>|<year_week>|<top_topic>` — the persist path stamps
+        // that exact key on `payload.scope.value` and into the
+        // `summary_markdown` body so Meili surfaces it on a vanilla
+        // search query.
         let bucket_key = format!("{repo}|{year_week}|{top_topic}");
-        let url = format!("{}/indexes/{MEILI_INDEX_MEMORIES}/search", self.meili_base);
+        let index_uid = format!(
+            "cortex-{}-consolidations",
+            cortex_storage::names::slug_for_repo(repo)
+        );
+        let url = format!("{}/indexes/{index_uid}/search", self.meili_base);
         let body = serde_json::json!({
-            "q": "",
-            "filter": format!("memory_type = \"turn_digest\" AND turn_digest_key = \"{bucket_key}\""),
+            "q": &bucket_key,
             "limit": 1,
         });
         let mut req = self.http.post(&url).json(&body);
@@ -232,8 +236,10 @@ impl DigestBackend for LiveTurnDigestBackend {
         let mut ids: Vec<String> = bucket.event_ids.iter().cloned().collect();
         ids.sort();
         ids.dedup();
+        let bucket_key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.top_topic);
         let body = format!(
             "# Turn digest — `{repo}` · {week} · `{topic}`\n\n\
+             Bucket: `{bucket_key}`\n\n\
              Aggregates {count} turns observed in repo \
              `{repo}` during ISO week {week} under topic \
              `{topic}`. Original envelopes are listed below for \
@@ -270,45 +276,91 @@ impl DigestBackend for LiveTurnDigestBackend {
         bucket: &Bucket,
         digest: &DigestResult,
     ) -> Result<String, String> {
-        let event_id = format!(
-            "01TD-{repo}-{week}-{topic}-{ts}",
-            repo = sanitize_id_token(&bucket.repo),
-            week = bucket.year_week,
-            topic = sanitize_id_token(&bucket.top_topic),
-            ts = Utc::now().timestamp_millis(),
-        );
+        // Mirror `LiveToolCallDigestBackend::persist_digest` —
+        // `kind=consolidation` with `grain=topic` is the schema the
+        // ingestion validator accepts. The legacy memory_type=turn_digest
+        // shape would have to land under `kind=memory` whose schema
+        // restricts `memory_type` to user/feedback/project/reference.
+        let event_id = ulid::Ulid::new().to_string();
+        let consolidation_id = ulid::Ulid::new().to_string();
+        let session_id = ulid::Ulid::new().to_string();
+        let now = Utc::now();
+        let occurred_iso = now.to_rfc3339();
         let bucket_key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.top_topic);
+        let title_short = {
+            let raw = format!(
+                "{} turns — {} · {} · {}",
+                bucket.event_ids.len(),
+                bucket.repo,
+                bucket.year_week,
+                bucket.top_topic,
+            );
+            let mut t: String = raw.chars().take(80).collect();
+            if t.is_empty() {
+                t = format!("digest:{bucket_key}");
+            }
+            t
+        };
+        let mut summary = digest.body.clone();
+        if summary.len() < 200 {
+            let pad =
+                "\n\n---\nThis digest aggregates the listed source turn events; \
+                 expand the `source_event_ids` array for the full Parquet \
+                 round-trip view.";
+            summary.push_str(pad);
+            while summary.len() < 200 {
+                summary.push(' ');
+            }
+        }
+        if summary.len() > 2000 {
+            summary.truncate(2000);
+        }
+        let payload = serde_json::json!({
+            "consolidation_id": consolidation_id,
+            "grain": "topic",
+            "scope": { "kind": "topic", "value": bucket_key },
+            "title": title_short,
+            "summary_markdown": summary,
+            "source_event_ids": bucket.event_ids,
+            "source_event_count": bucket.event_ids.len(),
+            "model": "cortex-ops:turn-digest",
+            "depth": "shallow",
+            "temporal_span": {
+                "start_ms": 0,
+                "end_ms": now.timestamp_millis(),
+                "duration_ms": now.timestamp_millis(),
+            },
+            "repos": [bucket.repo.clone()],
+            "tags": ["turn_digest", bucket.top_topic.clone()],
+        });
+        let payload_bytes = serde_json::to_vec(&payload)
+            .map_err(|e| format!("encode payload: {e}"))?;
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&payload_bytes);
+        let content_hash = format!("sha256:{:x}", hasher.finalize());
         let envelope = serde_json::json!({
             "event_id": event_id,
-            "kind": "memory",
-            "occurred_at": Utc::now().to_rfc3339(),
-            "context": { "repo": bucket.repo },
-            "payload": {
-                "memory_type": "turn_digest",
-                "title": format!(
-                    "{} turns — {}/{} ({})",
-                    bucket.event_ids.len(),
-                    bucket.repo,
-                    bucket.year_week,
-                    bucket.top_topic,
-                ),
-                "body": digest.body,
-                "topic": bucket.top_topic,
+            "schema_version": "1",
+            "occurred_at": occurred_iso,
+            "session_id": session_id,
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "consolidation",
+            "context": {
                 "repo": bucket.repo,
-                "year_week": bucket.year_week,
-                "source_event_ids": bucket.event_ids,
+                "platform": platform_string(),
             },
-            "extras": {
-                "turn_digest_key": bucket_key,
-                "source_event_count": bucket.event_ids.len(),
-            },
+            "payload": payload,
+            "content_hash": content_hash,
         });
+        // `/v1/events` is the single-envelope endpoint — accepts a
+        // bare envelope, not the batch `{events: [...]}` wrapper.
         let url = format!("{}/v1/events", self.ingestion_base);
-        let body = serde_json::json!({ "events": [envelope] });
         let resp = self
             .http
             .post(&url)
-            .json(&body)
+            .json(&envelope)
             .send()
             .await
             .map_err(|e| format!("ingestion transport: {e}"))?;
@@ -741,8 +793,21 @@ pub(crate) fn resolve_occurred_at(
     None
 }
 
+/// Resolve the platform string the envelope schema requires
+/// (`win32` / `darwin` / `linux`) from `cfg!(target_os = …)`.
+fn platform_string() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    }
+}
+
 /// Make a value safe to embed in an event id: ASCII alphanumerics +
 /// `_` survive, every other byte collapses to `_`.
+#[allow(dead_code)]
 fn sanitize_id_token(raw: &str) -> String {
     raw.chars()
         .map(|c| {
