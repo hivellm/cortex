@@ -48,12 +48,12 @@ target
 # Operator workarounds + diagnostic dumps under /scripts.
 # Temporary files per AGENTS.md must not enter git history.
 scripts/backup/
-scripts/*.cypher
-scripts/*.errors.txt
-scripts/*.stats.txt
-scripts/probe_*.py
-scripts/cypher_load.py
-scripts/graph_correlate.py
+scripts/graph/*.cypher
+scripts/graph/*.errors.txt
+scripts/graph/*.stats.txt
+scripts/probes/probe_*.py
+scripts/graph/cypher_load.py
+scripts/graph/graph_correlate.py
 
 # SQLite databases + backups
 *.sqlite

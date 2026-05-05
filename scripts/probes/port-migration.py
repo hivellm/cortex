@@ -25,7 +25,7 @@ MAPPING = [
 ]
 
 SKIPS = ["target/", "node_modules/", "/dist/", ".git/", "/.cortex/",
-         "pnpm-lock.yaml", "Cargo.lock", "scripts/port-migration.py"]
+         "pnpm-lock.yaml", "Cargo.lock", "scripts/probes/port-migration.py"]
 
 
 def main(root="."):

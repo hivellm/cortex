@@ -132,7 +132,7 @@ Both aggregator endpoints colour-code rows the GUI consumes:
 
 ### Operator workflow
 
-1. `scripts/health.sh` (or `.bat`) for the alive/dead picture (phase8a).
+1. `scripts/doctor/health.sh` (or `.bat`) for the alive/dead picture (phase8a).
 2. `curl http://127.0.0.1:17000/v1/health/freshness | jq` for "where did the data stop moving?".
 3. `curl http://127.0.0.1:17000/v1/health/divergence | jq` for "which boundary is silently dropping?".
 

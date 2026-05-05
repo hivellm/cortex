@@ -77,9 +77,9 @@ so a single dead worker doesn't take down the whole report.
 
 ```sh
 # Bash / WSL
-scripts/health.sh
+scripts/doctor/health.sh
 # Windows
-scripts\health.bat
+scripts\doctor\health.bat
 ```
 
 Both pretty-print the report and exit `0` (ok) / `1` (degraded) /

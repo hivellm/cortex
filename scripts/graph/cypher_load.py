@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limit", type=int, default=-1, help="Stop after N statements (debug)")
     p.add_argument("--skip", type=int, default=0, help="Skip the first N statements (resume)")
     p.add_argument("--fail-fast", action="store_true", help="Abort on first error")
-    p.add_argument("--errors-out", type=Path, default=Path("./scripts/cypher_load.errors.txt"))
+    p.add_argument("--errors-out", type=Path, default=Path("./scripts/graph/cypher_load.errors.txt"))
     p.add_argument("--probe-only", action="store_true", help="Send only the first statement, then exit")
     args = p.parse_args(argv)
 

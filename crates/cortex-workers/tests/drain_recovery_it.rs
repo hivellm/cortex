@@ -75,18 +75,19 @@ async fn drain_recovery_end_to_end_against_live_stack() {
     //
     // The full orchestration (docker compose up, bootstrap fixture
     // repo, kill+restart workers, assert counts) is captured in
-    // `scripts/check-pipeline-coverage.sh` (added by §5.2). This
+    // `scripts/doctor/check-pipeline-coverage.sh` (added by §5.2). This
     // IT runs that script under the active env and asserts a
     // zero exit.
     let script = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("scripts")
+        .join("doctor")
         .join("check-pipeline-coverage.sh");
     if !script.exists() {
         panic!(
             "drain_recovery_it: §5.2 verification script missing at {script:?} — \
-             implement scripts/check-pipeline-coverage.sh before running this gate"
+             implement scripts/doctor/check-pipeline-coverage.sh before running this gate"
         );
     }
 

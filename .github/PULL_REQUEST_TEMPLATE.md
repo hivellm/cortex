@@ -23,14 +23,14 @@ Phase8h soft signal — tick whichever local checks ran clean. The
 [`health-smoke` workflow](./.github/workflows/health-smoke.yml) is
 the enforced gate; these checkboxes raise author awareness.
 
-- [ ] `scripts/health.{bat,sh}` returned exit code 0 or 1
+- [ ] `scripts/doctor/health.{bat,sh}` returned exit code 0 or 1
       (`ok` / `degraded` accepted; `down` / unreachable need a
       narrative).
-- [ ] `scripts/doctor-versions.{bat,sh}` returned exit code 0
+- [ ] `scripts/doctor/doctor-versions.{bat,sh}` returned exit code 0
       (no version drift between running binaries and HEAD).
-- [ ] `scripts/doctor-config.{bat,sh}` returned exit code 0 or 1
+- [ ] `scripts/doctor/doctor-config.{bat,sh}` returned exit code 0 or 1
       (no critical findings).
-- [ ] `scripts/canary.{bat,sh}` returned exit code 0 (synthetic
+- [ ] `scripts/doctor/canary.{bat,sh}` returned exit code 0 (synthetic
       end-to-end frame round-tripped within the deadline) — N/A
       when the change does not touch the adapter / ingestion path.
 

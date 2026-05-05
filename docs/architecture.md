@@ -621,7 +621,7 @@ operator → /v1/health on cortex-api (port 17000)
 Per-probe budget is 1.5 s. A failed probe marks the row `Down`
 with a `last_error` reason but never fails the aggregator call,
 so a single dead worker can't take down the whole report. The
-operator scripts `scripts/health.sh` / `scripts/health.bat` print
+operator scripts `scripts/doctor/health.sh` / `scripts/doctor/health.bat` print
 the report and exit `0`/`1`/`2`/`3` for `ok`/`degraded`/`down`/
 `unreachable` — wire into CI smoke jobs to catch silent stack
 degradation in <2 s.
@@ -707,7 +707,7 @@ HEAD captured once at boot, and returns:
 }
 ```
 
-`scripts/doctor-versions.{bat,sh}` curls the endpoint, prints a
+`scripts/doctor/doctor-versions.{bat,sh}` curls the endpoint, prints a
 table, and exits non-zero when `all_in_sync == false`. Wire into
 operator workflows ("did I forget to restart cortex-adapter after
 the last `cargo build`?") and CI smoke jobs.
@@ -753,7 +753,7 @@ Severity rules:
 - `severity: ok` — everything aligns.
 
 CLI exit codes (`cortex-ops doctor-config`,
-`scripts/doctor-config.{bat,sh}`): `0` ok, `1` warn, `2` critical.
+`scripts/doctor/doctor-config.{bat,sh}`): `0` ok, `1` warn, `2` critical.
 Suitable for CI gates and operator quick-check.
 
 Closes the 2026-04-28 incident's *first* wrong turn: the adapter
@@ -822,7 +822,7 @@ Components:
   `run_canary_loop` (the background runner).
 - **CLI** — `cortex-ops canary --hook=PostToolUse` invokes the
   same library function and exits 0/1/2 per the outcome bucket.
-  `scripts/canary.{bat,sh}` thin wrappers.
+  `scripts/doctor/canary.{bat,sh}` thin wrappers.
 - **Background runner** — opt-in via
   `CORTEX_CANARY_ENABLED=1` env var (off by default to keep cold
   dev quiet). When on, ticks every `CORTEX_CANARY_INTERVAL_SECS`
@@ -833,7 +833,7 @@ Components:
 - **History** — `canary-history.jsonl` is append-only; a `tail -f`
   is the operator's view of recent canary outcomes.
 
-CLI exit codes (`cortex-ops canary`, `scripts/canary.{bat,sh}`):
+CLI exit codes (`cortex-ops canary`, `scripts/doctor/canary.{bat,sh}`):
 `0` round-trip success, `1` transport / connect error, `2`
 deadline elapsed without observing the marker.
 
@@ -907,11 +907,11 @@ Components:
   matrix legs don't collide on a shared `~/.cortex`.
 
 Doctor checks gate the PR (each must exit clean):
-1. `scripts/health.{bat,sh}` (phase8a) — overall ≤ degraded.
-2. `scripts/doctor-versions.{bat,sh}` (phase8c) — no drift between
+1. `scripts/doctor/health.{bat,sh}` (phase8a) — overall ≤ degraded.
+2. `scripts/doctor/doctor-versions.{bat,sh}` (phase8c) — no drift between
    running binaries and HEAD (CI just built them, drift means a
    stale cargo cache).
-3. `scripts/doctor-config.{bat,sh}` (phase8d) — no critical
+3. `scripts/doctor/doctor-config.{bat,sh}` (phase8d) — no critical
    findings (warns allowed; e.g. missing adapter.toml in a fresh
    CI checkout).
 4. `cortex-ops canary --hook=PostToolUse --deadline-secs=15`

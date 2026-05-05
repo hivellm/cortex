@@ -33,8 +33,8 @@ from typing import Iterable, Iterator
 
 DEFAULT_ROOT = Path("E:/HiveLLM")
 DEFAULT_TRANSCRIPTS = Path("C:/Users/Bolado/.claude/projects")
-DEFAULT_OUT = Path("E:/HiveLLM/Cortex/scripts/graph_correlate.cypher")
-DEFAULT_STATS = Path("E:/HiveLLM/Cortex/scripts/graph_correlate.stats.txt")
+DEFAULT_OUT = Path("E:/HiveLLM/Cortex/scripts/graph/graph_correlate.cypher")
+DEFAULT_STATS = Path("E:/HiveLLM/Cortex/scripts/graph/graph_correlate.stats.txt")
 
 # Per-source caps — protect output size on huge repos. -1 = unlimited.
 DEFAULT_GIT_LIMIT = 2000          # commits per repo

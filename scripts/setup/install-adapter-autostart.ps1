@@ -1,6 +1,6 @@
 # Install a Windows scheduled task that starts cortex-adapter-claude
 # at user logon and restarts it if it dies. Run this once per host
-# (right-click → "Run with PowerShell" or `pwsh -ExecutionPolicy Bypass -File scripts\install-adapter-autostart.ps1`).
+# (right-click → "Run with PowerShell" or `pwsh -ExecutionPolicy Bypass -File scripts\setup\install-adapter-autostart.ps1`).
 #
 # Why not docker: the adapter listens on a Windows named pipe
 # (`\\.\pipe\cortex-adapter-claude`) that Claude Code's hooks write

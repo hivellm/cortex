@@ -1,6 +1,6 @@
 # Graph symbol backfill (phase4e runbook)
 
-[`scripts/backfill-graph-symbols.sh`](../../scripts/backfill-graph-symbols.sh)
+[`scripts/graph/backfill-graph-symbols.sh`](../../scripts/graph/backfill-graph-symbols.sh)
 replays the archived event stream through the live `cortex-graph-worker`
 so the existing Nexus instance gains the `Symbol` nodes and `DEFINES`
 edges that
@@ -40,7 +40,7 @@ expected steady state is "no changes to row counts."
 # Live run — idempotent.
 CORTEX_NEXUS_URL=https://nexus.local:7474 \
 CORTEX_ARCHIVE_ROOT=/var/lib/cortex/archive \
-  bash scripts/backfill-graph-symbols.sh
+  bash scripts/graph/backfill-graph-symbols.sh
 ```
 
 The script executes four steps in order, fails fast on the first
@@ -89,7 +89,7 @@ phase4e backfill complete.
 ## Dry-run mode
 
 ```sh
-bash scripts/backfill-graph-symbols.sh --dry-run
+bash scripts/graph/backfill-graph-symbols.sh --dry-run
 ```
 
 Prints the four steps with the exact Cypher each one would send,

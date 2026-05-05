@@ -83,10 +83,10 @@ jobs:
           # gracefully). 2/3 fail the PR.
           set +e
           if [ "$RUNNER_OS" = "Windows" ]; then
-            scripts/health.bat
+            scripts/doctor/health.bat
           else
-            chmod +x scripts/health.sh
-            scripts/health.sh
+            chmod +x scripts/doctor/health.sh
+            scripts/doctor/health.sh
           fi
           rc=$?
           if [ "$rc" -gt 1 ]; then exit 1; fi
@@ -99,10 +99,10 @@ jobs:
         run: |
           set +e
           if [ "$RUNNER_OS" = "Windows" ]; then
-            scripts/doctor-versions.bat
+            scripts/doctor/doctor-versions.bat
           else
-            chmod +x scripts/doctor-versions.sh
-            scripts/doctor-versions.sh
+            chmod +x scripts/doctor/doctor-versions.sh
+            scripts/doctor/doctor-versions.sh
           fi
           rc=$?
           # Exit 0 ok, 1 drift, 2 unreachable. CI treats drift as

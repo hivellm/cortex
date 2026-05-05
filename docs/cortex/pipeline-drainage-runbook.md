@@ -89,13 +89,13 @@ When per-repo Meili / Vectorizer / Nexus counts still diverge by
 
 ```bash
 # Read per-repo coverage table.
-scripts/check-pipeline-coverage.sh
+scripts/doctor/check-pipeline-coverage.sh
 
 # Re-emit the laggard repos through the canonical bootstrap path.
 cortex-bootstrap walk --repo=<slug>
 ```
 
-`scripts/check-pipeline-coverage.sh` (§5.2) prints the per-repo
+`scripts/doctor/check-pipeline-coverage.sh` (§5.2) prints the per-repo
 counts and flags any repo whose Nexus or Vectorizer count is < 50 %
 of the Meili count.
 

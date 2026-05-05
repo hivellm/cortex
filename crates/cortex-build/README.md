@@ -63,6 +63,6 @@ fall back to `"unknown"` for git fields without failing the build.
 binary's `/healthz`, parses `extras.version`, and emits a drift table
 keyed by `<binary>` carrying `running_sha → expected_sha →
 behind_by_commits → severity`. Pair with the
-[`scripts/doctor-versions.bat`](../../scripts/doctor-versions.bat) /
-[`scripts/doctor-versions.sh`](../../scripts/doctor-versions.sh)
+[`scripts/doctor/doctor-versions.bat`](../../scripts/doctor/doctor-versions.bat) /
+[`scripts/doctor/doctor-versions.sh`](../../scripts/doctor/doctor-versions.sh)
 helper for a one-line CI gate.

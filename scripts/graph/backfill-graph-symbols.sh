@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/backfill-graph-symbols.sh
+# scripts/graph/backfill-graph-symbols.sh
 #
 # Phase4e operations runbook: replay the archived event stream through
 # the live `cortex-graph-worker` so the existing Nexus instance gains

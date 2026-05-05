@@ -45,7 +45,7 @@ impl HealthState {
         }
     }
 
-    /// Exit code mapping for `scripts/health.sh` / `scripts/health.bat`.
+    /// Exit code mapping for `scripts/doctor/health.sh` / `scripts/doctor/health.bat`.
     pub fn exit_code(self) -> i32 {
         match self {
             HealthState::Ok => 0,

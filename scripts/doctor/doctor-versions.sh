@@ -5,8 +5,8 @@
 # after the last `cargo build`?") + CI smoke jobs.
 #
 # Usage:
-#   scripts/doctor-versions.sh                 # default endpoint
-#   scripts/doctor-versions.sh -u http://...   # custom endpoint
+#   scripts/doctor/doctor-versions.sh                 # default endpoint
+#   scripts/doctor/doctor-versions.sh -u http://...   # custom endpoint
 #
 # Exit codes:
 #   0 — all_in_sync = true

@@ -6,8 +6,8 @@
 #   2 — at least one critical (e.g. adapter.toml.endpoint != .env)
 #
 # Usage:
-#   scripts/doctor-config.sh             text table
-#   scripts/doctor-config.sh --json      machine-readable JSON
+#   scripts/doctor/doctor-config.sh             text table
+#   scripts/doctor/doctor-config.sh --json      machine-readable JSON
 #
 # Pass extra args (--workspace, --adapter-toml) verbatim through to
 # cortex-ops.

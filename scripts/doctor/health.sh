@@ -4,8 +4,8 @@
 # stack healthy?" probe for operators + CI smoke jobs.
 #
 # Usage:
-#   scripts/health.sh                 # default endpoint
-#   scripts/health.sh -u http://...   # custom endpoint
+#   scripts/doctor/health.sh                 # default endpoint
+#   scripts/doctor/health.sh -u http://...   # custom endpoint
 #
 # Exit codes match `cortex_health::HealthState::exit_code`:
 #   0 — overall=ok
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
 done
 
 if ! command -v curl >/dev/null 2>&1; then
-  echo "curl not found on PATH; install curl to use scripts/health.sh" >&2
+  echo "curl not found on PATH; install curl to use scripts/doctor/health.sh" >&2
   exit 3
 fi
 
