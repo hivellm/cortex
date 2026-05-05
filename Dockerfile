@@ -72,6 +72,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         --bin cortex-fulltext-worker \
         --bin cortex-graph-worker \
         --bin cortex-ops \
+        --bin cortex-consolidator \
         --bin cortex-mcp-server \
  && cargo build --release \
         --features cortex-workers/claude-archive \
@@ -86,6 +87,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
        target/release/cortex-fulltext-worker \
        target/release/cortex-graph-worker \
        target/release/cortex-ops \
+       target/release/cortex-consolidator \
        target/release/cortex-mcp-server \
        target/release/cortex-claude-archive \
        /out/
@@ -108,6 +110,11 @@ WORKDIR /opt/cortex
 FROM runtime-base AS cortex-api
 COPY --from=builder /out/cortex-api /usr/local/bin/cortex-api
 COPY --from=builder /out/cortex-ops /usr/local/bin/cortex-ops
+# phase11x — bundle `cortex-consolidator` so the cron's
+# `retention.consolidator_nightly` (`cortex-consolidator nightly`)
+# actually finds the binary on `$PATH`. Pre-fix the cron failed
+# with `sh: line 1: cortex-consolidator: command not found`.
+COPY --from=builder /out/cortex-consolidator /usr/local/bin/cortex-consolidator
 EXPOSE 17000
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=6 \
     CMD curl -fsS http://127.0.0.1:17000/healthz >/dev/null || exit 1

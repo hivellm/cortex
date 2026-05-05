@@ -13,6 +13,7 @@
 
 pub mod acl;
 pub mod admin_forget;
+pub mod admin_list_events;
 pub mod analyzer;
 pub mod archive_loader;
 pub mod audit;

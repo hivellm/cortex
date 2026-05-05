@@ -263,10 +263,16 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-ops pii-enforce",
             enabled: true,
         },
+        // phase11x — turn-digest production wiring. `--apply` switches
+        // from the in-memory preview to the live admin enumerator +
+        // cortex-ingestion path; `--purge-originals` clears the
+        // source rows once the digest persists. Sunday 06:00 UTC
+        // sits 30 min before tool_call_digest (06:30) so the two
+        // summarisers do not contend for classifier budget.
         DefaultJob {
             name: "retention.turn_digest",
             schedule: "0 6 * * 0",
-            command: "cortex-ops turn-digest --budget-cents 500",
+            command: "cortex-ops turn-digest --apply --purge-originals --budget-cents 500",
             enabled: true,
         },
         DefaultJob {

@@ -158,6 +158,14 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/tasks/{id}", get(tasks_detail))
         .route("/v1/retention/sweeps", get(retention_sweeps))
         .route("/v1/retention/state", get(retention_state))
+        // phase11w — admin lane projection used by
+        // `cortex-ops tool-call-digest --apply` (and any other
+        // operator binary that needs to walk the keyword lane's
+        // event view without re-parsing parquet).
+        .route(
+            "/v1/admin/list-events",
+            get(crate::admin_list_events::handle_list_events),
+        )
         .with_state(state)
 }
 

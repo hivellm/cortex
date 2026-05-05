@@ -530,39 +530,89 @@ async fn run_nightly(cli: &Cli, dry_run: bool, all: bool) -> Result<()> {
 
     let mut sessions_processed = 0u32;
     let decisions_processed = 0u32;
-    let topics_processed = 0u32;
+    let mut topics_processed = 0u32;
     let mut cost_cents_total = 0u32;
+    let mut repos_seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     let session_source = LiveSessionSource::new(&archive_root);
     for (idx, sid) in session_ids.iter().enumerate() {
         match session_source.fetch(sid) {
-            Ok(input) => match orchestrator.run_session(&input).await {
-                Ok(produced) => {
-                    if let Err(e) = publish_consolidation(
-                        cli,
-                        &produced.payload,
-                        &input.session_id,
-                        input.repo.as_deref(),
-                    )
-                    .await
-                    {
-                        eprintln!("  session {sid} publish error: {e}");
-                        continue;
-                    }
-                    sessions_processed += 1;
-                    cost_cents_total = cost_cents_total.saturating_add(produced.cost_cents);
-                    if (idx + 1) % 10 == 0 {
-                        eprintln!(
-                            "  progress: {}/{} sessions, cost_cents={cost_cents_total}",
-                            idx + 1,
-                            session_ids.len()
-                        );
-                    }
+            Ok(input) => {
+                if let Some(r) = input.repo.as_deref() {
+                    repos_seen.insert(r.to_string());
                 }
-                Err(e) => eprintln!("  session {sid} skipped: {e}"),
-            },
+                match orchestrator.run_session(&input).await {
+                    Ok(produced) => {
+                        if let Err(e) = publish_consolidation(
+                            cli,
+                            &produced.payload,
+                            &input.session_id,
+                            input.repo.as_deref(),
+                        )
+                        .await
+                        {
+                            eprintln!("  session {sid} publish error: {e}");
+                            continue;
+                        }
+                        sessions_processed += 1;
+                        cost_cents_total = cost_cents_total.saturating_add(produced.cost_cents);
+                        if (idx + 1) % 10 == 0 {
+                            eprintln!(
+                                "  progress: {}/{} sessions, cost_cents={cost_cents_total}",
+                                idx + 1,
+                                session_ids.len()
+                            );
+                        }
+                    }
+                    Err(e) => eprintln!("  session {sid} skipped: {e}"),
+                }
+            }
             Err(SourceError::EmptyResult) => continue,
             Err(e) => eprintln!("  session {sid} fetch error: {e}"),
+        }
+    }
+
+    // phase11x — topic consolidations across every repo touched by
+    // tonight's session batch. Each repo's recent (7-day) turn
+    // history feeds `LiveTopicSource` which clusters via HDBSCAN
+    // and yields one consolidation per cluster ≥ min_cluster_size.
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let topic_window_ms = 7i64 * 24 * 3600 * 1000;
+    let since_ms = now_ms - topic_window_ms;
+    let topic_source = LiveTopicSource::new(&archive_root, 0);
+    println!(
+        "  topic legs  : {} repo(s) — {}",
+        repos_seen.len(),
+        repos_seen.iter().cloned().collect::<Vec<_>>().join(", ")
+    );
+    for repo in &repos_seen {
+        match topic_source.fetch(repo, since_ms, now_ms) {
+            Ok(clusters) => {
+                if clusters.is_empty() {
+                    continue;
+                }
+                for cluster in &clusters {
+                    match orchestrator.run_topic(cluster).await {
+                        Ok(produced) => {
+                            if let Err(e) = publish_consolidation(
+                                cli,
+                                &produced.payload,
+                                &cluster.label,
+                                Some(repo),
+                            )
+                            .await
+                            {
+                                eprintln!("  topic {repo}/{lbl} publish error: {e}", lbl = cluster.label);
+                                continue;
+                            }
+                            topics_processed += 1;
+                            cost_cents_total = cost_cents_total.saturating_add(produced.cost_cents);
+                        }
+                        Err(e) => eprintln!("  topic {repo}/{lbl} skipped: {e}", lbl = cluster.label),
+                    }
+                }
+            }
+            Err(e) => eprintln!("  topic {repo} fetch error: {e}"),
         }
     }
 

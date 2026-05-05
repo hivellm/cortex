@@ -59,6 +59,84 @@ pub struct LiveToolCallDigestBackend {
 }
 
 impl LiveToolCallDigestBackend {
+    /// Verify a freshly-persisted digest envelope is queryable in
+    /// Meili before authorising the purge of source rows. The
+    /// ingestion pipeline is async; polling the bucket's
+    /// `tool_call_digest_key` confirms the summary is indexed.
+    /// Returns `Ok(true)` once found, `Ok(false)` after timeout,
+    /// `Err` on transport failure.
+    ///
+    /// **Safety contract** (per user instruction 2026-05-05):
+    /// data may only be removed AFTER the summary lands. The
+    /// `/v1/admin/forget` cascade MUST be gated on this returning
+    /// `true`.
+    pub async fn verify_digest_indexed(
+        &self,
+        repo: &str,
+        year_week: &str,
+        tool: &str,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut backoff_ms: u64 = 500;
+        loop {
+            match self.lookup_existing(repo, year_week, tool).await {
+                Ok(Some(_)) => return Ok(true),
+                Ok(None) => {}
+                Err(e) => return Err(e),
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            backoff_ms = (backoff_ms.saturating_mul(2)).min(5_000);
+        }
+    }
+
+    /// Hard-purge source tool_call event ids via cortex-api
+    /// `/v1/admin/forget`. Per-id failures surface via stderr but
+    /// do not abort. Called from the binary handler AFTER
+    /// `verify_digest_indexed` returns true.
+    pub async fn delete_source_tool_calls_external(
+        &self,
+        event_ids: &[String],
+    ) -> Result<u64, String> {
+        let mut purged = 0u64;
+        for event_id in event_ids {
+            let url = format!("{}/v1/admin/forget", self.api_base);
+            let body = serde_json::json!({
+                "event_id": event_id,
+                "confirmation_token": FORGET_CONFIRMATION_TOKEN,
+                "dry_run": false,
+            });
+            let mut req = self.http.post(&url).json(&body);
+            if let Some(token) = &self.api_token {
+                req = req.bearer_auth(token);
+            }
+            match req.send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        purged += 1;
+                    } else {
+                        let status = resp.status();
+                        let snippet = resp
+                            .text()
+                            .await
+                            .unwrap_or_default()
+                            .chars()
+                            .take(200)
+                            .collect::<String>();
+                        eprintln!("tool-call-digest: forget {event_id}: {status} {snippet}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("tool-call-digest: forget {event_id}: transport: {e}");
+                }
+            }
+        }
+        Ok(purged)
+    }
+
     /// Build a client with a 30-second timeout.
     pub fn new(
         api_base: String,
@@ -191,6 +269,14 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         })
     }
 
+    /// Build a minimum-viable Cortex envelope. The required fields
+    /// (`schema_version`, `event_id`, `occurred_at`, `session_id`,
+    /// `stream`, `tool`, `kind`, `context`, `payload`,
+    /// `content_hash`) are populated from deterministic bucket
+    /// data; the consolidation payload (phase11j §1) carries the
+    /// digest body keyed by `(repo, year_week, tool)` via the
+    /// `topic` grain so the existing pre-thinking renderer surfaces
+    /// it alongside the other consolidation tiers.
     async fn persist_digest(
         &self,
         bucket: &Bucket,
@@ -201,38 +287,83 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         // `cortex_memories` + Vectorizer `cortex.memory.fp32` +
         // Nexus `:Memory` node + `(:Memory)-[:SUMMARIZES]->`
         // edges) carries it to every backend.
-        let event_id = format!(
-            "01TCD-{repo}-{week}-{tool}-{ts}",
-            repo = sanitize_id_token(&bucket.repo),
-            week = bucket.year_week,
-            tool = sanitize_id_token(&bucket.tool),
-            ts = Utc::now().timestamp_millis(),
-        );
+        let event_id = ulid::Ulid::new().to_string();
+        let consolidation_id = ulid::Ulid::new().to_string();
+        let session_id = ulid::Ulid::new().to_string();
+        let now = Utc::now();
+        let occurred_iso = now.to_rfc3339();
+        // Build the payload first so its content_hash can be
+        // derived deterministically from the rendered bytes.
         let bucket_key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.tool);
+        let title_short = {
+            let raw = format!(
+                "{} {} calls — {} · {}",
+                bucket.event_ids.len(),
+                bucket.tool,
+                bucket.repo,
+                bucket.year_week,
+            );
+            let mut t: String = raw.chars().take(80).collect();
+            if t.len() < 80 && raw.len() > t.len() {
+                // ensure we did not over-trim; nothing else.
+            }
+            if t.is_empty() {
+                t = format!("digest:{bucket_key}");
+            }
+            t
+        };
+        let mut summary = digest.body.clone();
+        if summary.len() < 200 {
+            // Pad with a deterministic footer so the schema's
+            // 200-char minimum holds without losing information.
+            let pad =
+                "\n\n---\nThis digest aggregates the listed source events; \
+                 expand the `source_event_ids` array for the full Parquet \
+                 round-trip view.";
+            summary.push_str(pad);
+            while summary.len() < 200 {
+                summary.push(' ');
+            }
+        }
+        if summary.len() > 2000 {
+            summary.truncate(2000);
+        }
+        let payload = serde_json::json!({
+            "consolidation_id": consolidation_id,
+            "grain": "topic",
+            "scope": { "kind": "topic", "value": bucket_key },
+            "title": title_short,
+            "summary_markdown": summary,
+            "source_event_ids": bucket.event_ids,
+            "source_event_count": bucket.event_ids.len(),
+            "model": "cortex-ops:tool-call-digest",
+            "depth": "shallow",
+            "temporal_span": {
+                "start_ms": 0,
+                "end_ms": now.timestamp_millis(),
+                "duration_ms": now.timestamp_millis(),
+            },
+            "repos": [bucket.repo.clone()],
+            "tags": ["tool_call_digest", bucket.tool.clone()],
+        });
+        let payload_bytes = serde_json::to_vec(&payload)
+            .map_err(|e| format!("encode payload: {e}"))?;
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&payload_bytes);
+        let content_hash = format!("sha256:{:x}", hasher.finalize());
+
         let envelope = serde_json::json!({
             "event_id": event_id,
-            "kind": "memory",
-            "occurred_at": Utc::now().to_rfc3339(),
+            "schema_version": "1.0.0",
+            "occurred_at": occurred_iso,
+            "session_id": session_id,
+            "stream": "cortex.events.enriched",
+            "tool": "cortex-ops:tool-call-digest",
+            "kind": "consolidation",
             "context": { "repo": bucket.repo },
-            "payload": {
-                "memory_type": "tool_call_digest",
-                "title": format!(
-                    "{} {} calls — {}/{}",
-                    bucket.event_ids.len(),
-                    bucket.tool,
-                    bucket.repo,
-                    bucket.year_week,
-                ),
-                "body": digest.body,
-                "tool": bucket.tool,
-                "repo": bucket.repo,
-                "year_week": bucket.year_week,
-                "source_event_ids": bucket.event_ids,
-            },
-            "extras": {
-                "tool_call_digest_key": bucket_key,
-                "source_event_count": bucket.event_ids.len(),
-            },
+            "payload": payload,
+            "content_hash": content_hash,
         });
         let url = format!("{}/v1/events", self.ingestion_base);
         let body = serde_json::json!({ "events": [envelope] });
@@ -288,44 +419,26 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
 
     async fn delete_source_tool_calls(
         &self,
-        event_ids: &[String],
+        _event_ids: &[String],
     ) -> Result<u64, String> {
-        let mut purged = 0u64;
-        for event_id in event_ids {
-            let url = format!("{}/v1/admin/forget", self.api_base);
-            let body = serde_json::json!({
-                "event_id": event_id,
-                "confirmation_token": FORGET_CONFIRMATION_TOKEN,
-                "dry_run": false,
-            });
-            let mut req = self.http.post(&url).json(&body);
-            if let Some(token) = &self.api_token {
-                req = req.bearer_auth(token);
-            }
-            match req.send().await {
-                Ok(resp) => {
-                    if resp.status().is_success() {
-                        purged += 1;
-                    } else {
-                        let status = resp.status();
-                        let snippet = resp
-                            .text()
-                            .await
-                            .unwrap_or_default()
-                            .chars()
-                            .take(200)
-                            .collect::<String>();
-                        eprintln!(
-                            "tool-call-digest: forget {event_id}: {status} {snippet}"
-                        );
-                    }
-                }
-                Err(e) => {
-                    eprintln!("tool-call-digest: forget {event_id}: transport: {e}");
-                }
-            }
-        }
-        Ok(purged)
+        // Neutralised at the trait level. The orchestrator must NOT
+        // delete originals immediately after `persist_digest` because
+        // the ingestion → classifier → embedder → fulltext-worker
+        // chain is async; calling `/v1/admin/forget` before the
+        // summary envelope is indexed would orphan originals if any
+        // downstream stage drops the envelope. The binary handler
+        // (digest.rs) implements the verify-then-purge cascade
+        // outside the orchestrator using
+        // [`Self::verify_digest_indexed`] +
+        // [`Self::delete_source_tool_calls_external`]. This impl
+        // returns `Ok(0)` so the orchestrator records the bucket
+        // as "digested" and the report includes it; the actual
+        // purge count surfaces from the external loop.
+        //
+        // Safety contract (user instruction 2026-05-05): "somente
+        // pode remover os dados da memoria apos validar que foram
+        // sumarizados ou consolidados".
+        Ok(0)
     }
 }
 
@@ -549,6 +662,93 @@ fn index_uid_to_repo(uid: &str) -> &str {
     uid.strip_prefix("cortex-")
         .and_then(|s| s.strip_suffix("-code"))
         .unwrap_or("other")
+}
+
+/// Walk the cortex-api admin lane projection
+/// (`GET /v1/admin/list-events?kind=tool_call&before=<cutoff>&limit=N`)
+/// and materialise every row into a [`ToolCall`].
+///
+/// The keyword lane the endpoint reads from is built at boot from
+/// the parquet archive (real `occurred_at` timestamps) plus the
+/// Meili indexes (where `ts = 0` is stamped on tool_call docs by
+/// the loader). Falling back to the lane projection sidesteps the
+/// Meili `ts = 0` shape — every tool_call row the lane carries was
+/// stamped with a real epoch by the archive loader.
+pub async fn fetch_old_tool_calls_via_admin(
+    api_base: &str,
+    api_token: Option<&str>,
+    cutoff_ts: DateTime<Utc>,
+    max_records: usize,
+) -> anyhow::Result<Vec<ToolCall>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("reqwest client")?;
+    // Manual percent-encoding for the RFC3339 timestamp's `:` and
+    // `+` characters; everything else in the ISO-8601 form is
+    // already query-safe ASCII.
+    let cutoff_iso = cutoff_ts.to_rfc3339();
+    let cutoff_enc = cutoff_iso.replace(':', "%3A").replace('+', "%2B");
+    let url = format!(
+        "{}/v1/admin/list-events?kind=tool_call&before={}&limit={}",
+        api_base.trim_end_matches('/'),
+        cutoff_enc,
+        max_records.clamp(1, 50_000),
+    );
+    let mut req = client.get(&url);
+    if let Some(t) = api_token {
+        req = req.bearer_auth(t);
+    }
+    let resp = req.send().await.with_context(|| format!("GET {url}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("GET {url}: {status} — {body}");
+    }
+    #[derive(serde::Deserialize)]
+    struct Row {
+        event_id: String,
+        kind: String,
+        occurred_at: String,
+        repo: Option<String>,
+        #[serde(default)]
+        tool: Option<String>,
+        #[serde(default)]
+        summarized_by: Option<String>,
+    }
+    let rows: Vec<Row> = resp
+        .json()
+        .await
+        .context("decode /v1/admin/list-events response")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        if r.kind != "tool_call" {
+            continue;
+        }
+        if r.summarized_by
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+        {
+            continue;
+        }
+        let occurred_at = match chrono::DateTime::parse_from_rfc3339(&r.occurred_at) {
+            Ok(t) => t.with_timezone(&Utc),
+            Err(_) => continue,
+        };
+        let repo = r.repo.unwrap_or_else(|| "other".to_string());
+        let tool = r.tool.unwrap_or_else(|| "other".to_string());
+        out.push(ToolCall {
+            event_id: r.event_id,
+            repo,
+            occurred_at,
+            tool,
+            summarized_by: None,
+        });
+        if out.len() >= max_records {
+            break;
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

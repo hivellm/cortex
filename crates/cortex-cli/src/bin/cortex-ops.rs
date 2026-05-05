@@ -29,6 +29,8 @@ mod meili;
 mod digest;
 #[path = "cortex-ops/tool_call_digest_live.rs"]
 mod tool_call_digest_live;
+#[path = "cortex-ops/turn_digest_live.rs"]
+mod turn_digest_live;
 #[path = "cortex-ops/pii.rs"]
 mod pii;
 #[path = "cortex-ops/cas.rs"]
@@ -115,30 +117,46 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Phase9e — LLM turn digest summarizer. Bucketizes turns
+    /// Phase9e — LLM turn digest summarizer. Buckets `turn` envelopes
     /// older than 30 d by `(repo, ISO_year_week, top_topic)` and
-    /// produces one Sonnet-driven `:Memory{memory_type="turn_digest"}`
-    /// per non-empty bucket whose size ≥ 5. Idempotent (already-
-    /// digested buckets are no-ops; `--rebuild` re-summarizes in
-    /// place); cost-aware via the per-run budget ceiling.
-    ///
-    /// Today's CLI is a synthetic-suite preview against the
-    /// in-memory backend; the production walker (Parquet + classifier
-    /// + embedder + Nexus + Parquet rewriter) lands with phase9k.
+    /// emits one `:Memory{memory_type="turn_digest"}` per non-empty
+    /// bucket with size ≥ 5. With `--purge-originals` set, hard-
+    /// deletes the source rows from Meili (`cortex-<repo>-turns`),
+    /// Vectorizer (`cortex.turn.fp32` / `.pq` / `.cold.binary`), and
+    /// the matching Parquet partitions after the digest persists.
+    /// Default mode is a synthetic preview against an in-process
+    /// backend; pass `--apply` to switch to the live Meili +
+    /// cortex-ingestion + cortex-api wiring (phase11x).
     TurnDigest {
         /// Override "now" for tests + scheduled runs.
         #[arg(long, value_name = "RFC3339")]
         time_travel: Option<String>,
-        /// Print the bucket plan + per-bucket outcomes without
-        /// classifier mutation.
+        /// Skip every backend mutation; surface buckets as pending.
         #[arg(long)]
         dry_run: bool,
-        /// Re-summarize buckets that already have a digest.
+        /// Re-summarise buckets that already have a digest.
         #[arg(long)]
         rebuild: bool,
         /// Per-run budget ceiling in US cents.
         #[arg(long, default_value_t = 500)]
         budget_cents: u64,
+        /// Use the live Meili enumerator + cortex-ingestion +
+        /// cortex-api backend. Without this flag, the handler runs
+        /// the synthetic preview against the in-process backend.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// **Destructive flag.** When set AND `--dry-run` is off
+        /// AND `--apply` is on, hard-purges every source turn row
+        /// after the digest persists. Default `false`.
+        #[arg(long, default_value_t = false)]
+        purge_originals: bool,
+        /// Maximum rows to digest per run. Bounds memory + cron
+        /// runtime when the backlog is huge.
+        #[arg(long, default_value_t = 50_000)]
+        max_records: usize,
+        /// Page size for the Meili enumerator.
+        #[arg(long, default_value_t = 1_000)]
+        page_size: u32,
         /// Emit JSON instead of plain-text summary.
         #[arg(long)]
         json: bool,
@@ -916,8 +934,22 @@ fn main() -> ExitCode {
             dry_run,
             rebuild,
             budget_cents,
+            apply,
+            purge_originals,
+            max_records,
+            page_size,
             json,
-        } => digest::turn_digest(time_travel, dry_run, rebuild, budget_cents, json),
+        } => digest::turn_digest(
+            time_travel,
+            dry_run,
+            rebuild,
+            budget_cents,
+            apply,
+            purge_originals,
+            max_records,
+            page_size,
+            json,
+        ),
         Command::ToolCallDigest {
             time_travel,
             dry_run,

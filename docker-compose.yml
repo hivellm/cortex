@@ -367,6 +367,16 @@ services:
       # the in-compose service; multi-watcher operators add additional
       # entries via the env file.
       CORTEX_ARCHIVE_WATCHER_URLS: ${CORTEX_ARCHIVE_WATCHER_URLS:-http://cortex-claude-archive:17030}
+      # phase11x — `cortex-ops memory-consolidate` resolves the
+      # Claude Code memory dir from `~/.claude/projects/<slug>/memory/`.
+      # Inside the container the cwd is `/opt/cortex` which would
+      # produce slug `-opt-cortex` — but the host's actual project
+      # slug is the slugified host path (e.g. `e--HiveLLM-Cortex` on
+      # Windows). This env override pins the slug so the cron
+      # finds the right dir on the mounted volume. Defaults to the
+      # value the operator's host produces; if unset, the binary's
+      # graceful no-op kicks in (success with `files_in=0`).
+      CORTEX_AUTO_MEMORY_PROJECT: ${CORTEX_AUTO_MEMORY_PROJECT:-}
     volumes:
       # Same host bind-mount as cortex-ingestion — the daemon reads
       # the archive at boot to seed the keyword lane (drives the
