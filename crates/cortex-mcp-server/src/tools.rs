@@ -191,6 +191,9 @@ impl ToolRegistry {
                 Arc::new(CaptureMemoryTool::new()),
                 Arc::new(SessionReplayTool::new()),
                 Arc::new(ForgetTool::new()),
+                Arc::new(KeywordSearchTool::new()),
+                Arc::new(VectorSearchTool::new()),
+                Arc::new(GraphQueryTool::new()),
             ],
         }
     }
@@ -1205,14 +1208,211 @@ impl Tool for ForgetTool {
     }
 }
 
+// ----------------------------------------------------------------------
+// Phase11v — fine-grained per-backend search tools.
+// ----------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/search/keyword`. Forwards the
+/// body verbatim and returns the raw cortex-api response payload.
+pub struct KeywordSearchTool;
+
+impl KeywordSearchTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for KeywordSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for KeywordSearchTool {
+    fn name(&self) -> &'static str {
+        "cortex_keyword_search"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_keyword_search",
+            "description": "Raw Meilisearch keyword search against a named index. Bypasses the cortex_query fusion lane — returns the literal Meili hits with `processing_time_ms` and `estimated_total_hits`. Useful for inspecting what a specific index actually contains, debugging recall, or grepping decisions/consolidations/turns directly.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["index"],
+                "properties": {
+                    "index": {
+                        "type": "string",
+                        "description": "Meili index uid, e.g. `cortex_consolidations`, `cortex_decisions`, `cortex-cortex-turns`."
+                    },
+                    "q": {"type": "string", "description": "Free-text query. Empty string returns the first `limit` documents."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10},
+                    "filter": {"type": "string", "description": "Raw Meili filter expression (e.g. `repo = \"cortex\"`)."},
+                    "sort": {"type": "array", "items": {"type": "string"}, "description": "Meili sort expression list."},
+                    "attributes_to_retrieve": {"type": "array", "items": {"type": "string"}, "description": "When set, restrict per-hit fields to this list."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        proxy_search(ctx, "/v1/search/keyword", args).await
+    }
+}
+
+/// MCP wrapper for `POST <api_url>/v1/search/vector`.
+pub struct VectorSearchTool;
+
+impl VectorSearchTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for VectorSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for VectorSearchTool {
+    fn name(&self) -> &'static str {
+        "cortex_vector_search"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_vector_search",
+            "description": "Raw Vectorizer cosine search against a named collection. Bypasses the cortex_query fusion lane — returns the upstream hits as Vectorizer surfaces them. v1 accepts `query_vector` (caller-supplied embedding); server-side embedding via `query_text` lands in a follow-up.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["collection", "query_vector"],
+                "properties": {
+                    "collection": {
+                        "type": "string",
+                        "description": "Vectorizer collection name, e.g. `cortex.consolidation.fp32`, `cortex-cortex-turns`."
+                    },
+                    "query_vector": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "Raw f32 embedding."
+                    },
+                    "k": {"type": "integer", "minimum": 1, "maximum": 200, "default": 10},
+                    "score_threshold": {"type": "number", "description": "Optional cosine-score floor — drops hits below this value."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        proxy_search(ctx, "/v1/search/vector", args).await
+    }
+}
+
+/// MCP wrapper for `POST <api_url>/v1/search/graph`.
+pub struct GraphQueryTool;
+
+impl GraphQueryTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for GraphQueryTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for GraphQueryTool {
+    fn name(&self) -> &'static str {
+        "cortex_graph_query"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_graph_query",
+            "description": "Direct Nexus graph query. Two modes: `neighbors` walks 1..5 hops from a seed node id with optional edge-kind filter; `cypher` runs a raw Cypher statement (gated on `CORTEX_GRAPH_CYPHER_ENABLED=1` server-side). Returns nodes + edges as JSON. Use this to inspect relationships and graph topology that the fused cortex_query hides.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["mode"],
+                "properties": {
+                    "mode": {"type": "string", "enum": ["neighbors", "cypher"]},
+                    "node_id": {"type": "string", "description": "Required for `neighbors` mode."},
+                    "depth": {"type": "integer", "minimum": 1, "maximum": 5, "default": 1, "description": "neighbors hop limit."},
+                    "edge_kinds": {"type": "array", "items": {"type": "string"}, "description": "Optional edge-kind filter for `neighbors` (e.g. [\"EMITTED\"])."},
+                    "statement": {"type": "string", "description": "Required for `cypher` mode."},
+                    "parameters": {"type": "object", "description": "Optional Cypher bind parameters."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        proxy_search(ctx, "/v1/search/graph", args).await
+    }
+}
+
+/// Shared helper — POST `<api_url><path>` with the args body, fold
+/// the cortex-api response into a `ToolResult`. 2xx → ok with the
+/// JSON body; 400/403/404 → soft-error keyed on the upstream `reason`;
+/// other failures → `ToolResult::soft_error`.
+async fn proxy_search(
+    ctx: &ToolContext,
+    path: &str,
+    args: Value,
+) -> Result<ToolResult, ToolError> {
+    let url = format!("{}{}", ctx.api_url.trim_end_matches('/'), path);
+    let resp = match ctx
+        .http
+        .post(&url)
+        .header(cortex_api::CALLER_HEADER, CALLER)
+        .json(&args)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(ToolResult::soft_error(
+                reasons::API_UNREACHABLE,
+                &format!("cortex-api unreachable at {url}: {e}"),
+                json!({ "url": url }),
+            ));
+        }
+    };
+    let status = resp.status();
+    let body_bytes = resp.bytes().await.unwrap_or_default();
+    if status.is_success() {
+        let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+        return Ok(ToolResult::ok(payload));
+    }
+    let err: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+    let reason = err
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or(reasons::API_HTTP_ERROR)
+        .to_string();
+    Ok(ToolResult::soft_error(
+        &reason,
+        &format!("cortex-api {url} returned HTTP {status}"),
+        err,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_seven_tools_with_unique_names() {
+    fn registry_returns_ten_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
-        assert_eq!(reg.len(), 7, "phase11t adds cortex_forget");
+        assert_eq!(reg.len(), 10, "phase11v adds 3 search tools (7 -> 10)");
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
             "cortex_query",
@@ -1222,6 +1422,9 @@ mod tests {
             "cortex_capture_memory",
             "cortex_session_replay",
             "cortex_forget",
+            "cortex_keyword_search",
+            "cortex_vector_search",
+            "cortex_graph_query",
         ] {
             assert!(
                 names.contains(&expected),

@@ -29,9 +29,11 @@ use cortex_workers::consolidator::source::{
     LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError,
 };
 use cortex_workers::consolidator::summariser::{
-    cost_cents, AnthropicSummariser, SummariserKind,
+    cost_cents, AnthropicSummariser, Summariser, SummariserKind,
 };
+use cortex_workers::consolidator::summariser_cli::ClaudeCliSummariser;
 use serde::Serialize;
+use serde_json::json;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -61,6 +63,20 @@ struct Cli {
     /// to enumerate sessions closed in the last 24h.
     #[arg(long, env = "CORTEX_METADATA_DB")]
     metadata_db: Option<PathBuf>,
+    /// Path to the `claude` binary (used when `--api-key` is empty;
+    /// falls back to PATH lookup of `claude`). The CLI summariser
+    /// pipes the rendered prompt through `claude -p - --bare` so
+    /// operators without an Anthropic API key can still consolidate
+    /// using their logged-in Claude Code session.
+    #[arg(long, env = "CLAUDE_CODE_BIN")]
+    claude_bin: Option<PathBuf>,
+    /// cortex-ingestion base URL the produced consolidation envelopes
+    /// are POSTed to (`/v1/events`). Falls back to
+    /// `CORTEX_INGESTION_URL` then `http://127.0.0.1:17010`. Set to
+    /// the empty string (`--ingest-url=`) to skip publish — useful
+    /// for dry-run verification.
+    #[arg(long, env = "CORTEX_INGESTION_URL")]
+    ingest_url: Option<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -124,8 +140,13 @@ enum Command {
     Nightly {
         /// Skip the live API call — print the producer plan + cost estimate.
         /// Default `true` so a stray invocation never burns operator budget.
-        #[arg(long, default_value_t = true)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         dry_run: bool,
+        /// Override the 24h enumeration window: when set, every
+        /// session in the metadata DB is enumerated (used for the
+        /// initial corpus back-fill pass).
+        #[arg(long, default_value_t = false)]
+        all: bool,
     },
 }
 
@@ -143,7 +164,7 @@ async fn main() -> Result<()> {
         Command::RunSession { session_id } => run_session(&cli, session_id).await,
         Command::RunTopic { repo } => run_topic(&cli, repo).await,
         Command::RunDecision { decision_id } => run_decision(&cli, decision_id).await,
-        Command::Nightly { dry_run } => run_nightly(&cli, *dry_run).await,
+        Command::Nightly { dry_run, all } => run_nightly(&cli, *dry_run, *all).await,
     }
 }
 
@@ -183,25 +204,123 @@ fn require_api_key(cli: &Cli) -> Result<String> {
         .context("ANTHROPIC_API_KEY (or --api-key) required for live runs")
 }
 
+fn has_api_key(cli: &Cli) -> bool {
+    cli.api_key
+        .as_deref()
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
+}
+
 fn build_summarisers(
     cli: &Cli,
 ) -> Result<(
-    std::sync::Arc<AnthropicSummariser>,
-    std::sync::Arc<AnthropicSummariser>,
+    std::sync::Arc<dyn Summariser>,
+    std::sync::Arc<dyn Summariser>,
 )> {
-    let api_key = require_api_key(cli)?;
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
-        .build()
-        .context("build reqwest client")?;
-    let mut haiku =
-        AnthropicSummariser::new(client.clone(), api_key.clone(), SummariserKind::Haiku45);
-    let mut opus = AnthropicSummariser::new(client, api_key, SummariserKind::Opus47);
-    if let Some(url) = cli.api_url.as_deref().filter(|s| !s.trim().is_empty()) {
-        haiku = haiku.with_api_url(url);
-        opus = opus.with_api_url(url);
+    if has_api_key(cli) {
+        let api_key = require_api_key(cli)?;
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .context("build reqwest client")?;
+        let mut haiku =
+            AnthropicSummariser::new(client.clone(), api_key.clone(), SummariserKind::Haiku45);
+        let mut opus = AnthropicSummariser::new(client, api_key, SummariserKind::Opus47);
+        if let Some(url) = cli.api_url.as_deref().filter(|s| !s.trim().is_empty()) {
+            haiku = haiku.with_api_url(url);
+            opus = opus.with_api_url(url);
+        }
+        Ok((std::sync::Arc::new(haiku), std::sync::Arc::new(opus)))
+    } else {
+        let bin = cli
+            .claude_bin
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("claude"));
+        let haiku = ClaudeCliSummariser::new(bin.clone(), SummariserKind::Haiku45);
+        let opus = ClaudeCliSummariser::new(bin, SummariserKind::Opus47);
+        eprintln!(
+            "[cortex-consolidator] no ANTHROPIC_API_KEY; routing through claude CLI subprocess"
+        );
+        Ok((std::sync::Arc::new(haiku), std::sync::Arc::new(opus)))
     }
-    Ok((std::sync::Arc::new(haiku), std::sync::Arc::new(opus)))
+}
+
+fn resolve_ingest_url(cli: &Cli) -> Option<String> {
+    let raw = cli
+        .ingest_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:17010".into());
+    if raw.trim().is_empty() {
+        None
+    } else {
+        Some(raw.trim_end_matches('/').to_string())
+    }
+}
+
+async fn publish_consolidation(
+    cli: &Cli,
+    payload: &cortex_core::events::ConsolidationPayload,
+    session_id: &str,
+    repo_hint: Option<&str>,
+) -> Result<()> {
+    let Some(base) = resolve_ingest_url(cli) else {
+        eprintln!("  publish : skipped (--ingest-url empty)");
+        return Ok(());
+    };
+    use sha2::Digest as _;
+    let payload_json = serde_json::to_value(payload).context("serialise payload")?;
+    let canonical = serde_json::to_string(&payload_json).context("canonical payload")?;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(canonical.as_bytes());
+    let content_hash_hex: String = hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let content_hash = format!("sha256:{content_hash_hex}");
+    let event_id = ulid::Ulid::new().to_string();
+    let now = chrono::Utc::now().to_rfc3339();
+    let repo = repo_hint
+        .map(|s| s.to_string())
+        .or_else(|| payload.repos.first().cloned());
+    let envelope = json!({
+        "event_id": event_id,
+        "schema_version": "1",
+        "occurred_at": now,
+        "session_id": session_id,
+        "stream": "live",
+        "tool": "cortex-cli",
+        "kind": "consolidation",
+        "context": {
+            "repo": repo,
+            "platform": match std::env::consts::OS {
+                "windows" => "win32",
+                "macos" => "darwin",
+                other => other,
+            },
+        },
+        "payload": payload_json,
+        "content_hash": content_hash,
+    });
+    let url = format!("{base}/v1/events");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .context("build publish client")?;
+    let resp = client
+        .post(&url)
+        .header("content-type", "application/json")
+        .json(&envelope)
+        .send()
+        .await
+        .with_context(|| format!("POST {url}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("publish rejected: {status} {body}");
+    }
+    eprintln!("  publish : ok event_id={event_id}");
+    Ok(())
 }
 
 fn budget_from(cli: &Cli) -> CostBudget {
@@ -231,6 +350,14 @@ async fn run_session(cli: &Cli, session_id: &str) -> Result<()> {
         .run_session(&input)
         .await
         .map_err(|e| anyhow::anyhow!("orchestrator: {e}"))?;
+    publish_consolidation(
+        cli,
+        &produced.payload,
+        &input.session_id,
+        input.repo.as_deref(),
+    )
+    .await
+    .with_context(|| format!("publish session={}", input.session_id))?;
     println!(
         "  status  : ok — consolidation_id={}, source_event_count={}, cost_cents={}",
         produced.payload.consolidation_id,
@@ -362,7 +489,7 @@ fn write_cursor(cursor: &NightlyCursor) -> Result<()> {
     Ok(())
 }
 
-async fn run_nightly(cli: &Cli, dry_run: bool) -> Result<()> {
+async fn run_nightly(cli: &Cli, dry_run: bool, all: bool) -> Result<()> {
     let budget = budget_from(cli);
     let prev = read_cursor();
     println!("nightly run");
@@ -378,11 +505,20 @@ async fn run_nightly(cli: &Cli, dry_run: bool) -> Result<()> {
     println!("  dry-run     : {dry_run}");
     let archive_root = cli.resolve_archive_root()?;
 
-    // Enumerate sessions closed in the last 24h via the metadata
-    // SQLite. When the path is unset / empty the loop bypasses the
-    // session leg cleanly (topic / decision passes still run).
-    let session_ids: Vec<String> = enumerate_recent_sessions(cli)?;
-    println!("  sessions    : {} candidate(s)", session_ids.len());
+    // Enumerate sessions: 24h window by default; `--all` switches
+    // to a corpus-wide back-fill enumeration. When the metadata DB
+    // is unset / unreachable the loop bypasses the session leg
+    // cleanly.
+    let session_ids: Vec<String> = if all {
+        enumerate_all_sessions(cli)?
+    } else {
+        enumerate_recent_sessions(cli)?
+    };
+    println!(
+        "  sessions    : {} candidate(s){}",
+        session_ids.len(),
+        if all { " (--all)" } else { "" }
+    );
 
     if dry_run {
         println!("  status      : dry-run preview only");
@@ -398,12 +534,30 @@ async fn run_nightly(cli: &Cli, dry_run: bool) -> Result<()> {
     let mut cost_cents_total = 0u32;
 
     let session_source = LiveSessionSource::new(&archive_root);
-    for sid in &session_ids {
+    for (idx, sid) in session_ids.iter().enumerate() {
         match session_source.fetch(sid) {
             Ok(input) => match orchestrator.run_session(&input).await {
                 Ok(produced) => {
+                    if let Err(e) = publish_consolidation(
+                        cli,
+                        &produced.payload,
+                        &input.session_id,
+                        input.repo.as_deref(),
+                    )
+                    .await
+                    {
+                        eprintln!("  session {sid} publish error: {e}");
+                        continue;
+                    }
                     sessions_processed += 1;
                     cost_cents_total = cost_cents_total.saturating_add(produced.cost_cents);
+                    if (idx + 1) % 10 == 0 {
+                        eprintln!(
+                            "  progress: {}/{} sessions, cost_cents={cost_cents_total}",
+                            idx + 1,
+                            session_ids.len()
+                        );
+                    }
                 }
                 Err(e) => eprintln!("  session {sid} skipped: {e}"),
             },
@@ -458,6 +612,40 @@ fn enumerate_recent_sessions(cli: &Cli) -> Result<Vec<String>> {
         out.push(row);
     }
     Ok(out)
+}
+
+/// Enumerate every session id known to the project. Tries the
+/// metadata DB first; if it has no rows (legacy installs do not
+/// populate `sessions`), falls back to scanning the parquet archive
+/// for distinct envelope `session_id` values.
+fn enumerate_all_sessions(cli: &Cli) -> Result<Vec<String>> {
+    let mut from_db: Vec<String> = Vec::new();
+    if let Some(path) = &cli.metadata_db {
+        if path.exists() {
+            if let Ok(conn) = rusqlite::Connection::open_with_flags(
+                path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            ) {
+                if let Ok(mut stmt) =
+                    conn.prepare("SELECT session_id FROM sessions ORDER BY started_at ASC")
+                {
+                    if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+                        for row in rows.flatten() {
+                            from_db.push(row);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !from_db.is_empty() {
+        return Ok(from_db);
+    }
+    // Fallback: scan archive partitions for distinct envelope session ids.
+    let archive_root = cli.resolve_archive_root()?;
+    let ids = cortex_storage::archive::enumerate_session_ids(&archive_root)
+        .context("scan archive for session ids")?;
+    Ok(ids)
 }
 
 #[derive(Serialize)]
@@ -799,7 +987,7 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
-            command: Command::Nightly { dry_run: true },
+            command: Command::Nightly { dry_run: true, all: false },
         };
         let err = require_api_key(&cli).expect_err("no key");
         assert!(format!("{err:#}").contains("ANTHROPIC_API_KEY"));
@@ -814,7 +1002,7 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
-            command: Command::Nightly { dry_run: true },
+            command: Command::Nightly { dry_run: true, all: false },
         };
         assert_eq!(require_api_key(&cli).unwrap(), "sk-test-12345");
     }
@@ -869,7 +1057,7 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
-            command: Command::Nightly { dry_run: true },
+            command: Command::Nightly { dry_run: true, all: false },
         };
         let got = enumerate_recent_sessions(&cli).unwrap();
         assert!(got.is_empty(), "missing --metadata-db must yield empty list");
@@ -884,7 +1072,7 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: Some(PathBuf::from("D:/explicit")),
             metadata_db: None,
-            command: Command::Nightly { dry_run: true },
+            command: Command::Nightly { dry_run: true, all: false },
         };
         let got = cli.resolve_archive_root().unwrap();
         assert_eq!(got, PathBuf::from("D:/explicit"));

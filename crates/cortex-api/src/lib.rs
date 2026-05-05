@@ -14,6 +14,7 @@
 pub mod acl;
 pub mod admin_forget;
 pub mod analyzer;
+pub mod search_proxy;
 pub mod archive_loader;
 pub mod audit;
 pub mod audit_store;

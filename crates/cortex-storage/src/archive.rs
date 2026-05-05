@@ -162,6 +162,24 @@ pub fn scan_envelopes_by_session(
     walk_envelopes(archive_root, |env| env.session_id == session_id)
 }
 
+/// Phase11p ad-hoc — collect every distinct `session_id` present in
+/// the archive (skipping envelopes that carry an empty session id).
+/// Used by the consolidator's corpus back-fill pass when the metadata
+/// SQLite has no `sessions` rows but the archive on disk has years of
+/// envelopes from older runs.
+pub fn enumerate_session_ids(archive_root: &Path) -> Result<Vec<String>, ScanError> {
+    use std::collections::BTreeSet;
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    walk_envelopes(archive_root, |env| {
+        let sid = env.session_id.trim();
+        if !sid.is_empty() {
+            seen.insert(sid.to_string());
+        }
+        false
+    })?;
+    Ok(seen.into_iter().collect())
+}
+
 /// Phase11p §0.2 — find the single envelope whose `event_id`
 /// matches. Envelope ids are globally unique ULIDs so the first
 /// match is the only match; the walk short-circuits on hit.

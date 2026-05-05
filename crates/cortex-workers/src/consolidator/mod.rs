@@ -43,6 +43,7 @@ pub mod orchestrator;
 pub mod producer;
 pub mod source;
 pub mod summariser;
+pub mod summariser_cli;
 pub mod templates;
 
 pub use source::{LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError};

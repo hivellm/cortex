@@ -142,6 +142,18 @@ pub fn build_router_with_auth(
         .route("/v1/health", get(handle_v1_health))
         .route("/v1/health/coverage", get(handle_health_coverage))
         .route("/v1/admin/forget", post(handle_admin_forget))
+        .route(
+            "/v1/search/keyword",
+            post(crate::search_proxy::handle_keyword_search),
+        )
+        .route(
+            "/v1/search/vector",
+            post(crate::search_proxy::handle_vector_search),
+        )
+        .route(
+            "/v1/search/graph",
+            post(crate::search_proxy::handle_graph_query),
+        )
         .with_state(state);
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
