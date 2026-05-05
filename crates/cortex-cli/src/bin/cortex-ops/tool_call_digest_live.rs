@@ -34,7 +34,6 @@ use cortex_workers::retention::tool_call_digest::{
 };
 
 const FORGET_CONFIRMATION_TOKEN: &str = "I-UNDERSTAND-FORGET-IS-IRREVERSIBLE";
-const MEILI_INDEX_TOOL_CALLS: &str = "cortex_tool_calls";
 const MEILI_INDEX_MEMORIES: &str = "cortex_memories";
 
 /// Live backend wiring Meili + cortex-api + cortex-ingestion.
@@ -345,10 +344,18 @@ fn sanitize_id_token(raw: &str) -> String {
         .collect()
 }
 
-/// Walk Meili's `cortex_tool_calls` index page-by-page, projecting
-/// every doc whose `occurred_at < cutoff_ts` into a [`ToolCall`].
-/// Already-summarised rows (`payload.summarized_by` present) are
-/// excluded so re-runs converge.
+/// Walk every per-repo `cortex-<repo>-code` index page-by-page,
+/// filtering by `kind = "tool_call"`, projecting every doc whose
+/// `occurred_at < cutoff_ts` into a [`ToolCall`]. Already-summarised
+/// rows (`summarized_by` present) are excluded so re-runs converge.
+///
+/// The unified `cortex_tool_calls` index from `cortex_storage::names`
+/// is declared but never actually populated by the live indexer
+/// (`cortex_workers::fulltext::routing::family_for(Kind::ToolCall)`
+/// returns `"code"`, so tool-call events land in
+/// `cortex-<repo>-code` alongside source-code chunks). This helper
+/// adapts to the deployed reality by enumerating every `*-code`
+/// index and filtering server-side.
 pub async fn fetch_old_tool_calls(
     meili_url: &str,
     meili_key: Option<&str>,
@@ -361,43 +368,118 @@ pub async fn fetch_old_tool_calls(
         .build()
         .context("reqwest client")?;
     let base = meili_url.trim_end_matches('/');
-    let limit = page_size.max(1);
+    let indexes = list_code_indexes(&client, base, meili_key).await?;
     let mut out: Vec<ToolCall> = Vec::new();
+    for index_uid in indexes {
+        if out.len() >= max_records {
+            break;
+        }
+        let remaining = max_records - out.len();
+        let mut hits = fetch_tool_calls_from_index(
+            &client, base, meili_key, &index_uid, cutoff_ts, page_size, remaining,
+        )
+        .await
+        .with_context(|| format!("fetch tool_calls from {index_uid}"))?;
+        out.append(&mut hits);
+    }
+    Ok(out)
+}
+
+async fn list_code_indexes(
+    client: &reqwest::Client,
+    base: &str,
+    meili_key: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
     let mut offset: u32 = 0;
+    let limit: u32 = 200;
+    let mut out: Vec<String> = Vec::new();
     loop {
-        let url = format!(
-            "{base}/indexes/{MEILI_INDEX_TOOL_CALLS}/documents?limit={limit}&offset={offset}"
-        );
+        let url = format!("{base}/indexes?limit={limit}&offset={offset}");
         let mut req = client.get(&url);
         if let Some(k) = meili_key {
             req = req.bearer_auth(k);
         }
         let resp = req.send().await.with_context(|| format!("GET {url}"))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("GET {url}: {status} — {body}");
+        }
+        #[derive(serde::Deserialize)]
+        struct IndexRow {
+            uid: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Page {
+            results: Vec<IndexRow>,
+            total: u32,
+        }
+        let page: Page = resp.json().await.context("decode meili indexes page")?;
+        let count = page.results.len() as u32;
+        for r in page.results {
+            if r.uid.starts_with("cortex-") && r.uid.ends_with("-code") {
+                out.push(r.uid);
+            }
+        }
+        offset += count;
+        if offset >= page.total || count == 0 {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+async fn fetch_tool_calls_from_index(
+    client: &reqwest::Client,
+    base: &str,
+    meili_key: Option<&str>,
+    index_uid: &str,
+    cutoff_ts: DateTime<Utc>,
+    page_size: u32,
+    max_records: usize,
+) -> anyhow::Result<Vec<ToolCall>> {
+    let limit = page_size.max(1) as usize;
+    let mut out: Vec<ToolCall> = Vec::new();
+    let mut offset: usize = 0;
+    loop {
+        if out.len() >= max_records {
+            break;
+        }
+        let url = format!("{base}/indexes/{index_uid}/search");
+        let mut req = client.post(&url).json(&serde_json::json!({
+            "q": "",
+            "filter": "kind = \"tool_call\"",
+            "limit": limit,
+            "offset": offset,
+        }));
+        if let Some(k) = meili_key {
+            req = req.bearer_auth(k);
+        }
+        let resp = req.send().await.with_context(|| format!("POST {url}"))?;
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(Vec::new());
         }
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("GET {url}: {status} — {body}");
+            anyhow::bail!("POST {url}: {status} — {body}");
         }
         #[derive(serde::Deserialize)]
         struct Page {
-            results: Vec<serde_json::Value>,
-            #[allow(dead_code)]
-            offset: u32,
-            #[allow(dead_code)]
-            limit: u32,
-            total: u32,
+            hits: Vec<serde_json::Value>,
+            #[serde(rename = "estimatedTotalHits", default)]
+            estimated_total_hits: u32,
         }
-        let page: Page = resp.json().await.context("decode meili page")?;
-        let count = page.results.len() as u32;
-        for v in page.results {
+        let page: Page = resp.json().await.context("decode meili search page")?;
+        let count = page.hits.len();
+        if count == 0 {
+            break;
+        }
+        for v in page.hits {
             let event_id = match v.get("event_id").and_then(|x| x.as_str()) {
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            // Already-summarised → skip.
             if v.get("summarized_by")
                 .and_then(|x| x.as_str())
                 .is_some_and(|s| !s.is_empty())
@@ -439,7 +521,7 @@ pub async fn fetch_old_tool_calls(
                 .and_then(|c| c.get("repo"))
                 .and_then(|x| x.as_str())
                 .or_else(|| v.get("repo").and_then(|x| x.as_str()))
-                .unwrap_or("other")
+                .unwrap_or_else(|| index_uid_to_repo(index_uid))
                 .to_string();
             out.push(ToolCall {
                 event_id,
@@ -453,11 +535,20 @@ pub async fn fetch_old_tool_calls(
             }
         }
         offset += count;
-        if offset >= page.total || count == 0 {
+        if offset as u32 >= page.estimated_total_hits {
             break;
         }
     }
     Ok(out)
+}
+
+/// Recover the repo slug from an index uid of shape
+/// `cortex-<repo>-code`. Returns `"other"` if the pattern does not
+/// match (defensive — every caller already filters on the prefix).
+fn index_uid_to_repo(uid: &str) -> &str {
+    uid.strip_prefix("cortex-")
+        .and_then(|s| s.strip_suffix("-code"))
+        .unwrap_or("other")
 }
 
 #[cfg(test)]
