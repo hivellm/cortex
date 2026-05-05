@@ -124,7 +124,7 @@ pub fn topic_for_path(path: &str) -> Option<&'static str> {
     Some(match ext.as_str() {
         "rs" | "ts" | "tsx" | "js" | "jsx" | "py" | "go" | "java" | "c" | "cc" | "cpp" | "h"
         | "hpp" | "rb" | "kt" | "swift" | "scala" | "cs" | "php" | "sh" | "bash" | "zsh"
-        | "fish" | "ps1" | "sql" | "proto" => "code",
+        | "fish" | "ps1" | "sql" | "proto" | "tml" => "code",
         "md" | "mdx" | "rst" | "adoc" | "asciidoc" | "txt" | "tex" | "org" => "docs",
         "toml" | "yaml" | "yml" | "json" | "ini" | "cfg" | "conf" => "config",
         _ => return None,

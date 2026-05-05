@@ -73,6 +73,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         --bin cortex-graph-worker \
         --bin cortex-ops \
         --bin cortex-mcp-server \
+ && cargo build --release \
+        --features cortex-workers/claude-archive \
+        -p cortex-workers \
         --bin cortex-claude-archive \
  && mkdir -p /out \
  && cp target/release/cortex-api \

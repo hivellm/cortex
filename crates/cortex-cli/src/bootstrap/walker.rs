@@ -408,7 +408,14 @@ pub fn classify_path(rel_path: &str, cfg: &CortexSection) -> FileClass {
         "md" | "mdx" | "rst" | "txt" | "adoc" => FileClass::Doc,
         "rs" | "ts" | "tsx" | "js" | "jsx" | "vue" | "py" | "go" | "java" | "c" | "cc" | "cpp"
         | "h" | "hpp" | "rb" | "ex" | "exs" | "kt" | "swift" | "scala" | "cs" | "php" | "json"
-        | "yaml" | "yml" | "toml" | "sh" | "bash" | "zsh" | "fish" | "ps1" => FileClass::Code,
+        | "yaml" | "yml" | "toml" | "sh" | "bash" | "zsh" | "fish" | "ps1"
+        // TML — HiveLLM's typed metaprogramming language. Repo:
+        // https://github.com/hivellm/tml. Indexed as Code: tree-sitter
+        // grammar lives at `Tml/docs/grammar/tree-sitter-tml/grammar.js`
+        // (JS source) and is not yet packaged as a Rust crate, so the
+        // Cortex chunker falls back to whole-file text chunks until
+        // a Rust binding lands. See `chunker_code.rs::detect_language_from_path`.
+        | "tml" => FileClass::Code,
         _ => FileClass::Other,
     }
 }
