@@ -215,6 +215,20 @@ fn walk_dir_for_target(
     Ok(())
 }
 
+/// Classify an `io::Error` chain as the well-known "live file"
+/// shape `cortex-ingestion` produces on the current-hour partition:
+/// the loader holds the file open while writing, so the trailing
+/// bytes are a half-flushed zstd frame. The decoder surfaces this
+/// as `InvalidData` carrying `incomplete frame` or `Unknown frame
+/// descriptor`. Mirrors the tolerance archive_loader already
+/// applies on boot.
+fn is_live_partial_frame(err: &std::io::Error) -> bool {
+    let msg = err.to_string();
+    msg.contains("incomplete frame")
+        || msg.contains("Unknown frame")
+        || msg.contains("frame descriptor")
+}
+
 fn file_contains_event_id(path: &std::path::Path, event_id: &str) -> std::io::Result<bool> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
@@ -224,7 +238,16 @@ fn file_contains_event_id(path: &std::path::Path, event_id: &str) -> std::io::Re
     };
     let reader = std::io::BufReader::new(decoder);
     for line in reader.lines() {
-        let line = line?;
+        let line = match line {
+            Ok(l) => l,
+            // Live current-hour file with a half-flushed frame at
+            // the tail — treat as end-of-stream and use whatever we
+            // already inspected. Aborting here would skip the
+            // file entirely and leave the target id stranded across
+            // every subsequent purge run.
+            Err(e) if is_live_partial_frame(&e) => return Ok(false),
+            Err(e) => return Err(e),
+        };
         if line.contains(event_id) {
             // String-level pre-filter so we don't decode every
             // line; a confirmed match parses next.
@@ -248,9 +271,28 @@ fn rewrite_partition(path: &std::path::Path, event_id: &str) -> std::io::Result<
     let tmp = path.with_extension("parquet.tmp");
     let out_file = std::fs::File::create(&tmp)?;
     let mut enc = zstd::stream::write::Encoder::new(out_file, 6)?;
+    let mut hit_partial_frame = false;
 
     for line in reader.lines() {
-        let line = line?;
+        let line = match line {
+            Ok(l) => l,
+            // Live current-hour file with a half-flushed frame —
+            // abort the rewrite so the original stays intact. The
+            // target event_id may be on either side of the broken
+            // frame; rewriting through the partial-read tail would
+            // truncate every line the loader has appended since we
+            // started reading. Subsequent purge attempts retry
+            // after the file rotates (next hour) and the frame is
+            // sealed.
+            Err(e) if is_live_partial_frame(&e) => {
+                hit_partial_frame = true;
+                break;
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+        };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -263,6 +305,17 @@ fn rewrite_partition(path: &std::path::Path, event_id: &str) -> std::io::Result<
         }
         enc.write_all(line.as_bytes())?;
         enc.write_all(b"\n")?;
+    }
+    if hit_partial_frame {
+        // Don't promote the partial rewrite over the live original.
+        let _ = enc.finish();
+        let _ = std::fs::remove_file(&tmp);
+        tracing::debug!(
+            path = %path.display(),
+            "admin_forget: skipped rewrite — current-hour zstd frame still being written; \
+             retry next sweep after the partition rotates"
+        );
+        return Ok(());
     }
     enc.finish()?;
     std::fs::rename(&tmp, path)?;
