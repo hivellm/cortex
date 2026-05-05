@@ -17,42 +17,42 @@
 // default search for `mod <name>;` in a bin file is `src/bin/<name>.rs`
 // (sibling to the bin), so we point each module at the correct path
 // explicitly. Keeps the bin's submodule layout self-contained.
-#[path = "cortex-ops/helpers.rs"]
-mod helpers;
-#[path = "cortex-ops/plan.rs"]
-mod plan;
-#[path = "cortex-ops/doctor.rs"]
-mod doctor;
-#[path = "cortex-ops/meili.rs"]
-mod meili;
+#[path = "cortex-ops/bootstrap.rs"]
+mod bootstrap;
+#[path = "cortex-ops/canary.rs"]
+mod canary;
+#[path = "cortex-ops/cas.rs"]
+mod cas;
+#[path = "cortex-ops/consolidation.rs"]
+mod consolidation;
 #[path = "cortex-ops/digest.rs"]
 mod digest;
+#[path = "cortex-ops/doctor.rs"]
+mod doctor;
+#[path = "cortex-ops/graph_cmd.rs"]
+mod graph_cmd;
+#[path = "cortex-ops/helpers.rs"]
+mod helpers;
+#[path = "cortex-ops/meili.rs"]
+mod meili;
+#[path = "cortex-ops/memory_consolidate_cmd.rs"]
+mod memory_consolidate_cmd;
+#[path = "cortex-ops/metadata.rs"]
+mod metadata;
+#[path = "cortex-ops/pii.rs"]
+mod pii;
+#[path = "cortex-ops/plan.rs"]
+mod plan;
+#[path = "cortex-ops/retention.rs"]
+mod retention;
+#[path = "cortex-ops/rollup.rs"]
+mod rollup;
+#[path = "cortex-ops/schedule_cmd.rs"]
+mod schedule_cmd;
 #[path = "cortex-ops/tool_call_digest_live.rs"]
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
 mod turn_digest_live;
-#[path = "cortex-ops/pii.rs"]
-mod pii;
-#[path = "cortex-ops/cas.rs"]
-mod cas;
-#[path = "cortex-ops/rollup.rs"]
-mod rollup;
-#[path = "cortex-ops/retention.rs"]
-mod retention;
-#[path = "cortex-ops/metadata.rs"]
-mod metadata;
-#[path = "cortex-ops/bootstrap.rs"]
-mod bootstrap;
-#[path = "cortex-ops/graph_cmd.rs"]
-mod graph_cmd;
-#[path = "cortex-ops/schedule_cmd.rs"]
-mod schedule_cmd;
-#[path = "cortex-ops/consolidation.rs"]
-mod consolidation;
-#[path = "cortex-ops/memory_consolidate_cmd.rs"]
-mod memory_consolidate_cmd;
-#[path = "cortex-ops/canary.rs"]
-mod canary;
 
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
@@ -201,6 +201,15 @@ enum Command {
         /// Vectorizer-style page size for the Meili enumerator.
         #[arg(long, default_value_t = 1_000)]
         page_size: u32,
+        /// Override `digest_after_days` (default 30). Operator-only
+        /// escape hatch for one-shot manual purges; cron continues
+        /// to honour the spec default.
+        #[arg(long)]
+        age_days: Option<i64>,
+        /// Override `min_bucket_size` (default 5). Set to 1 to force
+        /// every bucket through the classifier regardless of size.
+        #[arg(long)]
+        min_bucket_size: Option<usize>,
         /// Emit JSON instead of plain-text summary.
         #[arg(long)]
         json: bool,
@@ -959,6 +968,8 @@ fn main() -> ExitCode {
             purge_originals,
             max_records,
             page_size,
+            age_days,
+            min_bucket_size,
             json,
         } => digest::tool_call_digest(
             time_travel,
@@ -969,6 +980,8 @@ fn main() -> ExitCode {
             purge_originals,
             max_records,
             page_size,
+            age_days,
+            min_bucket_size,
             json,
         ),
         Command::PiiEnforce {

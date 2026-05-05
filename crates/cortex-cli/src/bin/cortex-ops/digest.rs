@@ -52,8 +52,8 @@ pub(super) fn turn_digest(
         }
     };
 
-    let api_base = std::env::var("CORTEX_API_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:17000".to_string());
+    let api_base =
+        std::env::var("CORTEX_API_URL").unwrap_or_else(|_| "http://127.0.0.1:17000".to_string());
     let api_token = std::env::var("CORTEX_API_TOKEN").ok();
     let ingestion_base = std::env::var("CORTEX_INGESTION_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string());
@@ -141,7 +141,10 @@ pub(super) fn turn_digest(
                 cortex_workers::retention::turn_digest::iso_year_week(t.occurred_at),
                 t.top_topic,
             );
-            bucket_event_ids.entry(key).or_default().push(t.event_id.clone());
+            bucket_event_ids
+                .entry(key)
+                .or_default()
+                .push(t.event_id.clone());
         }
     }
 
@@ -333,6 +336,8 @@ pub(super) fn tool_call_digest(
     purge_originals: bool,
     max_records: usize,
     page_size: u32,
+    age_days: Option<i64>,
+    min_bucket_size: Option<usize>,
     json: bool,
 ) -> ExitCode {
     use cortex_workers::retention::tool_call_digest::{
@@ -358,6 +363,12 @@ pub(super) fn tool_call_digest(
     plan.rebuild = rebuild;
     plan.max_usd_cents_per_run = budget_cents;
     plan.purge_originals = purge_originals;
+    if let Some(d) = age_days {
+        plan.digest_after_days = d;
+    }
+    if let Some(m) = min_bucket_size {
+        plan.min_bucket_size = m;
+    }
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -448,7 +459,11 @@ pub(super) fn tool_call_digest(
                     summarized_by: None,
                 });
             }
-            (synthetic, Box::new(MemoryToolCallDigestBackend::new()), "preview")
+            (
+                synthetic,
+                Box::new(MemoryToolCallDigestBackend::new()),
+                "preview",
+            )
         };
 
     let fetched_count = tool_calls.len();
@@ -465,7 +480,10 @@ pub(super) fn tool_call_digest(
                 cortex_workers::retention::tool_call_digest::iso_year_week(t.occurred_at),
                 t.tool,
             );
-            bucket_event_ids.entry(key).or_default().push(t.event_id.clone());
+            bucket_event_ids
+                .entry(key)
+                .or_default()
+                .push(t.event_id.clone());
         }
     }
 
@@ -531,7 +549,14 @@ pub(super) fn tool_call_digest(
     if let Some(live) = live_for_purge.as_ref() {
         const VERIFY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
         for outcome in &report.outcomes {
-            if !outcome.digested {
+            // A bucket is purge-eligible if its digest exists — either
+            // produced in this run (`digested`) or already present from
+            // a prior run (`already_digested`). The latter covers the
+            // case where an earlier digest landed but the purge cascade
+            // never completed (e.g. `--purge-originals` was off, or
+            // verify timed out). The verify gate below still requires
+            // the digest to be queryable in Meili before forget fires.
+            if !outcome.digested && !outcome.already_digested {
                 continue;
             }
             let parts: Vec<&str> = outcome.key.splitn(3, '|').collect();
@@ -551,10 +576,7 @@ pub(super) fn tool_call_digest(
                         match runtime.block_on(live.delete_source_tool_calls_external(ids)) {
                             Ok(n) => records_purged += n,
                             Err(e) => {
-                                eprintln!(
-                                    "tool-call-digest: purge {key}: {e}",
-                                    key = outcome.key
-                                );
+                                eprintln!("tool-call-digest: purge {key}: {e}", key = outcome.key);
                             }
                         }
                     }
