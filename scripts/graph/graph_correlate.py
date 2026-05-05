@@ -67,6 +67,65 @@ RX_COMMIT_TASK_FOOTER = re.compile(
 )
 
 # ---------------------------------------------------------------------------
+# Secret redaction — applied to every user-prose field before it lands in the
+# Cypher dump. Mirrors the pattern catalog in `cortex-core::redact`. Adding
+# defense-in-depth here is mandatory because transcripts/commits frequently
+# carry pasted tokens that the operator typed into a prompt.
+# Real incident reference: PyPI/NuGet/Vectorizer keys leaked in v1 of this
+# script (commit 1ec6a8a) — see SECURITY.md / `git log scripts/graph/`.
+# ---------------------------------------------------------------------------
+
+SECRET_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("pypi_token", re.compile(r"pypi-[A-Za-z0-9_-]{16,}")),
+    ("nuget_api_key", re.compile(r"\boy2[a-z0-9]{40,60}\b", re.IGNORECASE)),
+    ("github_pat", re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b")),
+    ("github_fine_grained_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{60,}\b")),
+    ("anthropic_key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}\b")),
+    ("openai_key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b")),
+    ("aws_access_key", re.compile(r"\b(?:AKIA|ASIA|AGPA|AROA|AIPA|ANPA|ANVA|ASCA)[0-9A-Z]{16}\b")),
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("hf_token", re.compile(r"\bhf_[A-Za-z0-9]{30,}\b")),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
+    (
+        "pem_private_key",
+        re.compile(
+            r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"
+        ),
+    ),
+    ("bearer", re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{20,}\b", re.IGNORECASE)),
+]
+
+# Catches "token <X>", "api_key=<X>", "password: <X>" — the most common shape
+# in transcript prose where users paste a literal credential after a label.
+SECRET_CONTEXT = re.compile(
+    r"(?i)(\b(?:token|key|secret|password|passwd|pwd|api[_-]?key|api[_-]?token|bearer)\b)"
+    r"\s*[:=]?\s*([\"'`]?)([A-Za-z0-9._/+=\-]{16,})\2"
+)
+
+# High-entropy fallback: mixed-case alphanumeric runs of length ≥ 28 that
+# contain at least one upper, one lower, one digit. Hex SHAs are all
+# lowercase so they don't trip this; ULIDs are uppercase-only so they don't
+# either. Targets standalone API-key shapes like the Vectorizer one
+# (`wAToQ6CpmbhXXMGHaLAf3osAsGomJJcm`) that the contextual rule misses
+# when prose words separate the label from the value.
+HIGH_ENTROPY_TOKEN = re.compile(
+    r"\b(?=[A-Za-z0-9]*[A-Z])(?=[A-Za-z0-9]*[a-z])(?=[A-Za-z0-9]*[0-9])"
+    r"[A-Za-z0-9]{28,}\b"
+)
+
+
+def redact(text: str | None) -> str:
+    if text is None:
+        return ""
+    s = str(text)
+    for cls, rx in SECRET_PATTERNS:
+        s = rx.sub(f"[REDACTED:{cls}]", s)
+    s = SECRET_CONTEXT.sub(lambda m: f"{m.group(1)} [REDACTED:contextual_secret]", s)
+    s = HIGH_ENTROPY_TOKEN.sub("[REDACTED:high_entropy_token]", s)
+    return s
+
+# ---------------------------------------------------------------------------
 # Cypher escape helpers
 # ---------------------------------------------------------------------------
 
@@ -305,7 +364,7 @@ def ingest_task_dir(g: Graph, repo: Path, task_dir: Path, archived: bool) -> Non
             item_id,
             task=task_id,
             seq=seq,
-            title=title[:200],
+            title=redact(title)[:200],
             done=done,
         )
         g.add_edge("HAS_ITEM", "Task", full_id, "TaskItem", item_id, seq=seq)
@@ -339,7 +398,7 @@ def ingest_decisions(g: Graph, repo: Path) -> None:
             repo=repo.name,
             decision_id=data.get("id"),
             slug=slug,
-            title=data.get("title"),
+            title=redact(data.get("title")),
             status=data.get("status"),
             date=data.get("date"),
         )
@@ -376,7 +435,7 @@ def ingest_learnings(g: Graph, repo: Path) -> None:
             "Learning",
             learn_id,
             repo=repo.name,
-            title=data.get("title"),
+            title=redact(data.get("title")),
             source=data.get("source"),
             tags=data.get("tags"),
             createdAt=data.get("createdAt"),
@@ -403,7 +462,7 @@ def ingest_knowledge(g: Graph, repo: Path) -> None:
                 repo=repo.name,
                 kind=kind,
                 slug=md.stem,
-                title=title_match.group(1) if title_match else md.stem,
+                title=redact(title_match.group(1) if title_match else md.stem),
             )
             g.add_edge("IN_REPO", "Knowledge", kid, "Repo", project_id(repo))
             for ref_task in set(RX_TASK_ID.findall(body)):
@@ -428,7 +487,7 @@ def ingest_laws(g: Graph, repo: Path) -> None:
             "Law",
             f"law:{law_id}",
             law_id=law_id,
-            title=m.group(2).strip(),
+            title=redact(m.group(2).strip()),
             repo=repo.name,
         )
         g.add_edge("IN_REPO", "Law", f"law:{law_id}", "Repo", project_id(repo))
@@ -514,7 +573,7 @@ def ingest_git(g: Graph, repo: Path, limit: int) -> None:
             author=an,
             email=ae,
             date=aiso,
-            subject=subject[:200],
+            subject=redact(subject)[:200],
         )
         g.add_edge("IN_REPO", "Commit", commit_id, "Repo", project_id(repo))
 
@@ -681,7 +740,7 @@ def ingest_transcripts(
                         session=session_id,
                         role=role,
                         ts=ts,
-                        text_excerpt=text[:300],
+                        text_excerpt=redact(text)[:300],
                     )
                     g.add_edge("HAS_TURN", "Session", full_session, "Turn", turn_id)
                     turn_count += 1

@@ -48,12 +48,18 @@ target
 # Operator workarounds + diagnostic dumps under /scripts.
 # Temporary files per AGENTS.md must not enter git history.
 scripts/backup/
-scripts/graph/*.cypher
 scripts/graph/*.errors.txt
 scripts/graph/*.stats.txt
 scripts/probes/probe_*.py
 scripts/graph/cypher_load.py
 scripts/graph/graph_correlate.py
+
+# Cypher dumps — generated graph exports often embed transcript text
+# and have leaked credentials in the past (see SECURITY note in
+# scripts/graph/graph_correlate.py). Block globally; whitelist the
+# hand-written query templates under cortex-workers/cypher/.
+*.cypher
+!crates/cortex-workers/cypher/*.cypher
 
 # SQLite databases + backups
 *.sqlite
