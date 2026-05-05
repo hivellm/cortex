@@ -315,7 +315,7 @@ fn default_jobs() -> Vec<DefaultJob> {
         DefaultJob {
             name: "retention.tool_call_digest",
             schedule: "30 6 * * 0",
-            command: "cortex-ops tool-call-digest --purge-originals --budget-cents 500",
+            command: "cortex-ops tool-call-digest --apply --purge-originals --budget-cents 500",
             enabled: true,
         },
         // Phase11o §2.5 — nightly tier demotion of consolidations.

@@ -27,6 +27,8 @@ mod doctor;
 mod meili;
 #[path = "cortex-ops/digest.rs"]
 mod digest;
+#[path = "cortex-ops/tool_call_digest_live.rs"]
+mod tool_call_digest_live;
 #[path = "cortex-ops/pii.rs"]
 mod pii;
 #[path = "cortex-ops/cas.rs"]
@@ -148,7 +150,9 @@ enum Command {
     /// source rows from Meili (`cortex_tool_calls`), Vectorizer
     /// (`cortex.tool_call.fp32` / `.pq` / `.cold.binary`), and the
     /// matching Parquet partitions after the digest persists.
-    /// Default mode is preview — no classifier call, no deletes.
+    /// Default mode is a synthetic preview against an in-process
+    /// backend; pass `--apply` to switch to the live Meili +
+    /// cortex-ingestion + cortex-api wiring.
     ToolCallDigest {
         /// Override "now" for tests + scheduled runs.
         #[arg(long, value_name = "RFC3339")]
@@ -162,11 +166,23 @@ enum Command {
         /// Per-run budget ceiling in US cents.
         #[arg(long, default_value_t = 500)]
         budget_cents: u64,
-        /// **Destructive flag.** When set AND `--dry-run` is off,
-        /// hard-purges every source tool_call row after the digest
-        /// persists. Default `false`.
+        /// Use the live Meili enumerator + cortex-ingestion +
+        /// cortex-api backend. Without this flag, the handler runs
+        /// the synthetic preview against the in-process backend.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// **Destructive flag.** When set AND `--dry-run` is off
+        /// AND `--apply` is on, hard-purges every source tool_call
+        /// row after the digest persists. Default `false`.
         #[arg(long, default_value_t = false)]
         purge_originals: bool,
+        /// Maximum rows to digest per run. Bounds memory + cron
+        /// runtime when the backlog is huge.
+        #[arg(long, default_value_t = 50_000)]
+        max_records: usize,
+        /// Vectorizer-style page size for the Meili enumerator.
+        #[arg(long, default_value_t = 1_000)]
+        page_size: u32,
         /// Emit JSON instead of plain-text summary.
         #[arg(long)]
         json: bool,
@@ -907,14 +923,20 @@ fn main() -> ExitCode {
             dry_run,
             rebuild,
             budget_cents,
+            apply,
             purge_originals,
+            max_records,
+            page_size,
             json,
         } => digest::tool_call_digest(
             time_travel,
             dry_run,
             rebuild,
             budget_cents,
+            apply,
             purge_originals,
+            max_records,
+            page_size,
             json,
         ),
         Command::PiiEnforce {

@@ -378,12 +378,19 @@ async fn digest_one(
     let digest = backend.summarize(bucket).await?;
     let usd = digest.usd_cents;
     let event_id = backend.persist_digest(bucket, &digest).await?;
-    backend
-        .tag_source_tool_calls(&event_id, &bucket.event_ids)
-        .await?;
+    // When `purge_originals` is on, the source rows disappear at
+    // the next call so the idempotence tag they would carry is
+    // wasted I/O; skip tagging in that branch. When the operator
+    // wants to KEEP the originals (purge off), the tag path is
+    // mandatory because the next bucketize pass uses
+    // `payload.summarized_by` to short-circuit already-digested
+    // buckets.
     let purged = if plan.purge_originals {
         backend.delete_source_tool_calls(&bucket.event_ids).await?
     } else {
+        backend
+            .tag_source_tool_calls(&event_id, &bucket.event_ids)
+            .await?;
         0
     };
     Ok((usd, purged))
@@ -592,6 +599,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_tool_call_digest_calls_summarize_persist_tag_per_bucket() {
+        // purge_originals=false → tag pass is mandatory (idempotence
+        // marker on the source rows the operator chose to keep).
         let plan = DigestPlan::default_for(now());
         let backend = MemoryToolCallDigestBackend::new();
         let mut tcs = old("cortex", "Bash", 6);
@@ -608,6 +617,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_tool_call_digest_purges_originals_when_flag_on() {
+        // purge_originals=true → orchestrator skips the tag pass
+        // because the source rows are about to disappear.
         let mut plan = DigestPlan::default_for(now());
         plan.purge_originals = true;
         let backend = MemoryToolCallDigestBackend::new();
@@ -618,6 +629,11 @@ mod tests {
         let calls = backend.delete_calls().await;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].len(), 6);
+        // tag pass MUST be skipped when originals are being purged.
+        assert!(
+            backend.tag_calls().await.is_empty(),
+            "tag pass is wasted I/O when originals are about to be purged"
+        );
     }
 
     #[tokio::test]

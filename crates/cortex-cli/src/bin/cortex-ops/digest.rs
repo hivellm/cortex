@@ -119,24 +119,33 @@ pub(super) fn turn_digest(
     ExitCode::SUCCESS
 }
 
-/// phase11w — `cortex-ops tool-call-digest`. Synthetic preview of
-/// the bucketise + summarise + (optional) hard-purge pipeline for
-/// `tool_call` envelopes. Today drives the in-memory backend so
-/// operators can verify the `(repo, year_week, tool)` shape before
-/// the live Sonnet + Meili `delete-batch` + Vectorizer
-/// `delete_vectors` + Parquet rewriter wiring lands. Default mode
-/// is preview (no classifier call, no deletes); `--purge-originals`
-/// (paired with the implicit non-dry-run) flips the deletes ON.
+/// phase11w — `cortex-ops tool-call-digest`. Two execution modes:
+///
+/// 1. **Synthetic preview** (default, `--apply` off) — drives an
+///    in-process backend with a deterministic suite (6 Bash + 5 Read
+///    + 4 Edit, all 60 d old). Lets operators verify the
+///    `(repo, year_week, tool)` bucketisation contract without
+///    touching live state.
+/// 2. **Live** (`--apply` on) — paginates Meili's `cortex_tool_calls`
+///    index for everything older than the cutoff, runs each bucket
+///    through the live `cortex-ingestion` + (when paired with
+///    `--purge-originals`) `cortex-api /v1/admin/forget` cascade.
+///    The cron schedule (`retention.tool_call_digest`) ships this
+///    flag set.
 pub(super) fn tool_call_digest(
     time_travel: Option<String>,
     dry_run: bool,
     rebuild: bool,
     budget_cents: u64,
+    apply: bool,
     purge_originals: bool,
+    max_records: usize,
+    page_size: u32,
     json: bool,
 ) -> ExitCode {
     use cortex_workers::retention::tool_call_digest::{
         run_tool_call_digest, DigestPlan, MemoryToolCallDigestBackend, ToolCall,
+        ToolCallDigestBackend,
     };
 
     let started_at = chrono::Utc::now();
@@ -158,33 +167,6 @@ pub(super) fn tool_call_digest(
     plan.max_usd_cents_per_run = budget_cents;
     plan.purge_originals = purge_originals;
 
-    // Synthetic preview suite: 6 Bash + 5 Read at 60 d old in repo
-    // `alpha` → 2 buckets above `min_bucket_size=5`. 4 Edit calls
-    // (below threshold) verify the drop path.
-    let mut tool_calls = Vec::new();
-    for tool in ["Bash", "Read"] {
-        let count = if tool == "Bash" { 6 } else { 5 };
-        for i in 0..count {
-            tool_calls.push(ToolCall {
-                event_id: format!("01PREVIEW-{tool}-{i}"),
-                repo: "alpha".to_string(),
-                occurred_at: now - chrono::Duration::days(60),
-                tool: tool.to_string(),
-                summarized_by: None,
-            });
-        }
-    }
-    for i in 0..4 {
-        tool_calls.push(ToolCall {
-            event_id: format!("01PREVIEW-Edit-{i}"),
-            repo: "alpha".to_string(),
-            occurred_at: now - chrono::Duration::days(60),
-            tool: "Edit".to_string(),
-            summarized_by: None,
-        });
-    }
-
-    let backend = MemoryToolCallDigestBackend::new();
     let runtime = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -195,7 +177,89 @@ pub(super) fn tool_call_digest(
             return ExitCode::FAILURE;
         }
     };
-    let report = match runtime.block_on(run_tool_call_digest(&plan, &backend, tool_calls)) {
+
+    // Build the source list + backend either as the synthetic
+    // preview pair or as the live Meili → cortex-api pair.
+    let (tool_calls, backend, mode_label): (Vec<ToolCall>, Box<dyn ToolCallDigestBackend>, &str) =
+        if apply {
+            let api_base = std::env::var("CORTEX_API_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:17000".to_string());
+            let api_token = std::env::var("CORTEX_API_TOKEN").ok();
+            let ingestion_base = std::env::var("CORTEX_INGESTION_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string());
+            let meili_base = std::env::var("CORTEX_FULLTEXT_MEILI_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:7700".to_string());
+            let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
+                .ok()
+                .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_KEY").ok())
+                .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+            let cutoff = now - chrono::Duration::days(plan.digest_after_days);
+            let live = match super::tool_call_digest_live::LiveToolCallDigestBackend::new(
+                api_base,
+                api_token,
+                ingestion_base,
+                meili_base.clone(),
+                meili_key.clone(),
+            ) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("tool-call-digest: live backend init: {e:#}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let fetched = match runtime.block_on(super::tool_call_digest_live::fetch_old_tool_calls(
+                &meili_base,
+                meili_key.as_deref(),
+                cutoff,
+                page_size,
+                max_records,
+            )) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    eprintln!("tool-call-digest: meili enumerator: {e:#}");
+                    super::record_sweep_run(
+                        "tool_call_digest",
+                        started_at,
+                        "failed",
+                        cortex_cli::ops::sweep_bookkeeping::SweepStageStats {
+                            last_error: Some(
+                                format!("meili enumerator: {e}").chars().take(256).collect(),
+                            ),
+                            ..Default::default()
+                        },
+                    );
+                    return ExitCode::FAILURE;
+                }
+            };
+            (fetched, Box::new(live), "live")
+        } else {
+            let mut synthetic = Vec::new();
+            for tool in ["Bash", "Read"] {
+                let count = if tool == "Bash" { 6 } else { 5 };
+                for i in 0..count {
+                    synthetic.push(ToolCall {
+                        event_id: format!("01PREVIEW-{tool}-{i}"),
+                        repo: "alpha".to_string(),
+                        occurred_at: now - chrono::Duration::days(60),
+                        tool: tool.to_string(),
+                        summarized_by: None,
+                    });
+                }
+            }
+            for i in 0..4 {
+                synthetic.push(ToolCall {
+                    event_id: format!("01PREVIEW-Edit-{i}"),
+                    repo: "alpha".to_string(),
+                    occurred_at: now - chrono::Duration::days(60),
+                    tool: "Edit".to_string(),
+                    summarized_by: None,
+                });
+            }
+            (synthetic, Box::new(MemoryToolCallDigestBackend::new()), "preview")
+        };
+
+    let fetched_count = tool_calls.len();
+    let report = match runtime.block_on(run_tool_call_digest(&plan, backend.as_ref(), tool_calls)) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("tool-call-digest: {e}");
@@ -221,12 +285,13 @@ pub(super) fn tool_call_digest(
             }
         }
     } else {
-        println!("cortex-ops tool-call-digest (preview)");
+        println!("cortex-ops tool-call-digest ({mode_label})");
         println!("now:                  {}", now.to_rfc3339());
         println!("dry_run:              {dry_run}");
         println!("rebuild:              {rebuild}");
         println!("purge_originals:      {purge_originals}");
         println!("budget_cents:         {budget_cents}");
+        println!("source_rows:          {fetched_count}");
         println!("examined:             {}", report.examined);
         println!("buckets_done:         {}", report.buckets_done);
         println!("already_digested:     {}", report.already_digested);
@@ -244,9 +309,14 @@ pub(super) fn tool_call_digest(
                 "PENDING "
             };
             println!("  {label}  {}  purged={}", o.key, o.purged);
+            if let Some(err) = &o.error {
+                println!("    error: {err}");
+            }
         }
     }
     let mut extras = serde_json::Map::new();
+    extras.insert("mode".into(), mode_label.into());
+    extras.insert("source_rows".into(), fetched_count.into());
     extras.insert("examined".into(), report.examined.into());
     extras.insert("buckets_done".into(), report.buckets_done.into());
     extras.insert("already_digested".into(), report.already_digested.into());
