@@ -10,6 +10,14 @@ vi.mock("../atoms/Icon", () => ({
   Icon: ({ name }: { name: string }) => <span data-testid={`icon-${name}`} />,
 }));
 
+vi.mock("../atoms/Sparkline", () => ({
+  Sparkline: () => <span data-testid="sparkline" />,
+}));
+
+vi.mock("../lib/useSSE", () => ({
+  useSSE: () => ({ connected: false, lastHeartbeatAt: 0, reconnects: 0 }),
+}));
+
 vi.mock("../lib/api", () => {
   return {
     api: {
@@ -109,6 +117,21 @@ vi.mock("../lib/api", () => {
           },
         ],
         overall_severity: "warn" as const,
+      }),
+      retentionSweeps: vi.fn().mockResolvedValue([]),
+      retentionState: vi.fn().mockResolvedValue({
+        collections: [],
+        archive_bytes: {
+          le_30d: 0,
+          "30d_to_365d": 0,
+          gt_365d: 0,
+          total: 0,
+          root: "",
+          available: false,
+        },
+        meili_indexes: [],
+        cas: { rows: 0, bytes: 0, available: false, path: "" },
+        next_runs: [],
       }),
     },
   };

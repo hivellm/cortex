@@ -11,7 +11,6 @@ import { ApiKeyPromptHost } from "./shell/ApiKeyPrompt";
 import { ConnectionsView } from "./views/Connections";
 import { TimelineView } from "./views/Timeline";
 import { MemoryView } from "./views/Memory";
-import { RetentionView } from "./views/Retention";
 import { DecisionsView } from "./views/Decisions";
 import { LawsView } from "./views/Laws";
 import { AnalysisView } from "./views/Analysis";
@@ -78,8 +77,6 @@ function AppShell() {
         return <ConversationsView />;
       case "memory":
         return <MemoryView />;
-      case "retention":
-        return <RetentionView />;
       case "decisions":
         return <DecisionsView />;
       case "handoffs":

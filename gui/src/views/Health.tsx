@@ -15,6 +15,7 @@ import {
 } from "../lib/api";
 import { fmtNum } from "../lib/format";
 import { useConnKey } from "../lib/connections/useConnKey";
+import { RetentionView } from "./Retention";
 
 /// Phase8g — Health view. Surfaces the phase8a–8f health system in
 /// the existing dashboard so the user notices stack-wide issues
@@ -75,6 +76,7 @@ export function HealthView() {
       <DivergenceTable rows={divergence} />
       <VersionDriftSection versions={versions} />
       <ConfigAuditSection findings={audit?.findings ?? []} />
+      <RetentionView />
     </div>
   );
 }

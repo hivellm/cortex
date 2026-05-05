@@ -107,7 +107,7 @@ describe("RetentionView", () => {
   it("renders the title", async () => {
     render(withQuery(<RetentionView />));
     expect(
-      await screen.findByRole("heading", { level: 1, name: /Retention/i }),
+      await screen.findByRole("heading", { level: 2, name: /Retention sweeps/i }),
     ).toBeInTheDocument();
   });
 

@@ -236,33 +236,20 @@ export function RetentionView() {
   });
 
   return (
-    <div className="view">
-      <div className="view__head">
-        <div>
-          <h1 className="view__title">Retention</h1>
-          <p className="view__subtitle">
-            Phase 9 sweep observability — every nightly cleanup, in one
-            place.
-          </p>
+    <>
+      <section className="health-section">
+        <h2>Retention sweeps</h2>
+        {failures.length > 0 ? (
+          <FailureBanner failures={failures} />
+        ) : null}
+        <div className="retention-cards">
+          {cards.map((c) => (
+            <SweepCard key={c.id} card={c} />
+          ))}
         </div>
-        <div className="view__actions">
-          <button className="btn" type="button" disabled>
-            <Icon name="external" size={13} /> Run sweep
-          </button>
-        </div>
-      </div>
+      </section>
 
-      {failures.length > 0 ? (
-        <FailureBanner failures={failures} />
-      ) : null}
-
-      <div className="retention-cards">
-        {cards.map((c) => (
-          <SweepCard key={c.id} card={c} />
-        ))}
-      </div>
-
-      <section className="retention-section">
+      <section className="health-section">
         <h2 className="retention-section__title">
           <Icon name="spark" size={14} /> Bytes reclaimed · last 30 d
         </h2>
@@ -277,7 +264,7 @@ export function RetentionView() {
         )}
       </section>
 
-      <section className="retention-section">
+      <section className="health-section">
         <h2 className="retention-section__title">
           <Icon name="archive" size={14} /> Storage breakdown
         </h2>
@@ -337,7 +324,7 @@ export function RetentionView() {
         </table>
       </section>
 
-      <section className="retention-section">
+      <section className="health-section">
         <h2 className="retention-section__title">
           <Icon name="timeline" size={14} /> Live log
           <span
@@ -370,7 +357,7 @@ export function RetentionView() {
           </ul>
         )}
       </section>
-    </div>
+    </>
   );
 }
 
