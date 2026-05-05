@@ -12,17 +12,27 @@ pub(super) fn schedule(command: ScheduleCommand) -> ExitCode {
     use cortex_storage::MetadataStore;
 
     fn resolve_db(arg: Option<String>) -> std::path::PathBuf {
-        arg.map(std::path::PathBuf::from)
-            .or_else(|| {
-                std::env::var("CORTEX_METADATA_DB")
-                    .ok()
-                    .map(std::path::PathBuf::from)
-            })
-            .unwrap_or_else(|| {
-                home_dir()
-                    .map(|h| h.join(".cortex").join("metadata.sqlite"))
-                    .unwrap_or_else(|| std::path::PathBuf::from(".cortex/metadata.sqlite"))
-            })
+        if let Some(p) = arg {
+            return std::path::PathBuf::from(p);
+        }
+        if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+            if !p.is_empty() {
+                return std::path::PathBuf::from(p);
+            }
+        }
+        // phase11x — honour `CORTEX_HOME` so cortex-ops sees the
+        // same DB the daemon uses when run inside the docker stack
+        // (`CORTEX_HOME=/var/lib/cortex`). Without this fallback
+        // schedule list/run-now silently target an empty
+        // `<HOME>/.cortex/metadata.sqlite` and return `unknown job`.
+        if let Ok(home) = std::env::var("CORTEX_HOME") {
+            if !home.is_empty() {
+                return std::path::PathBuf::from(home).join("metadata.sqlite");
+            }
+        }
+        home_dir()
+            .map(|h| h.join(".cortex").join("metadata.sqlite"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".cortex/metadata.sqlite"))
     }
     fn open(arg: Option<String>) -> Result<MetadataStore, ExitCode> {
         let path = resolve_db(arg);

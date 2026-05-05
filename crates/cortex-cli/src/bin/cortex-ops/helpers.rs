@@ -28,6 +28,17 @@ pub(super) fn resolve_metadata_db(arg: Option<String>) -> Option<std::path::Path
             return Some(std::path::PathBuf::from(p));
         }
     }
+    // phase11x — honour `CORTEX_HOME` so `cortex-ops` sees the same
+    // metadata DB the daemon writes to. Inside the docker stack the
+    // daemon runs with `CORTEX_HOME=/var/lib/cortex`; without this
+    // fallback `cortex-ops schedule list` resolves to
+    // `<HOME>/.cortex/metadata.sqlite` (HOME default) and prints an
+    // empty registry instead of the real one.
+    if let Ok(home) = std::env::var("CORTEX_HOME") {
+        if !home.is_empty() {
+            return Some(std::path::PathBuf::from(home).join("metadata.sqlite"));
+        }
+    }
     if let Some(home) = home_dir() {
         return Some(home.join(".cortex").join("metadata.sqlite"));
     }
