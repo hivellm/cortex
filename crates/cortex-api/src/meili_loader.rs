@@ -45,6 +45,7 @@ const LANE_INDEX_DECISIONS: &str = "cortex-meili-decisions";
 const LANE_INDEX_GOVERNANCE: &str = "cortex-meili-governance";
 const LANE_INDEX_MISC: &str = "cortex-meili-misc";
 const LANE_INDEX_TURNS: &str = "cortex-meili-turns";
+const LANE_INDEX_CONSOLIDATIONS: &str = "cortex-meili-consolidations";
 
 /// Per-Meili-index hard cap. Pull more than this and we either time
 /// out the boot seeding or blow up the in-memory lane. Operators on
@@ -80,6 +81,8 @@ pub struct MeiliLoadReport {
     pub analyses_seeded: usize,
     /// Turn envelopes seeded into the lane (used by the timeline).
     pub turns_seeded: usize,
+    /// Consolidation envelopes seeded into the lane.
+    pub consolidations_seeded: usize,
     /// Documents the loader could not project into a `LaneHit`.
     pub hits_skipped: usize,
 }
@@ -92,6 +95,7 @@ impl MeiliLoadReport {
             + self.memories_seeded
             + self.analyses_seeded
             + self.turns_seeded
+            + self.consolidations_seeded
     }
 }
 
@@ -125,6 +129,10 @@ pub async fn load_meili_into_keyword_lane_with_metrics(
         m.add_meili_docs_seeded("memories", report.memories_seeded as u64);
         m.add_meili_docs_seeded("analyses", report.analyses_seeded as u64);
         m.add_meili_docs_seeded("turns", report.turns_seeded as u64);
+        m.add_meili_docs_seeded(
+            "consolidations",
+            report.consolidations_seeded as u64,
+        );
         m.record_meili_refresh_now();
     }
     Ok(report)
@@ -148,6 +156,7 @@ async fn run_load_meili(
     let mut memory_hits: Vec<LaneHit> = Vec::new();
     let mut analysis_hits: Vec<LaneHit> = Vec::new();
     let mut turn_hits: Vec<LaneHit> = Vec::new();
+    let mut consolidation_hits: Vec<LaneHit> = Vec::new();
 
     for uid in indexes {
         let family = match family_of(&uid) {
@@ -187,6 +196,10 @@ async fn run_load_meili(
                         report.turns_seeded += 1;
                         turn_hits.push(hit);
                     }
+                    "consolidation" => {
+                        report.consolidations_seeded += 1;
+                        consolidation_hits.push(hit);
+                    }
                     _ => report.hits_skipped += 1,
                 },
                 None => report.hits_skipped += 1,
@@ -211,6 +224,9 @@ async fn run_load_meili(
     if !turn_hits.is_empty() {
         lane.seed(LANE_INDEX_TURNS, turn_hits);
     }
+    if !consolidation_hits.is_empty() {
+        lane.seed(LANE_INDEX_CONSOLIDATIONS, consolidation_hits);
+    }
 
     Ok(report)
 }
@@ -231,6 +247,8 @@ fn family_of(uid: &str) -> Option<&'static str> {
         Some("misc")
     } else if uid.ends_with("-turns") {
         Some("turns")
+    } else if uid.ends_with("-consolidations") {
+        Some("consolidations")
     } else {
         None
     }
@@ -525,6 +543,46 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
                 extras.insert("source_path".to_string(), Value::String(p));
             }
             extras.insert("body_markdown".to_string(), Value::String(body_md.clone()));
+            text = body_md;
+        }
+        ("consolidations", "consolidation") => {
+            // Consolidation envelopes carry the summary directly in
+            // `body` (top-level, not JSON-encoded payload). Stamp the
+            // grain/depth/model triple from `ext.consolidation` on
+            // extras so the GUI can group/filter without re-fetching.
+            symbol = "consolidation";
+            let title = doc
+                .get("title")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or(event_id)
+                .to_string();
+            let body_md = body_raw.to_string();
+            extras.insert("title".to_string(), Value::String(title));
+            extras.insert("body_markdown".to_string(), Value::String(body_md.clone()));
+            if let Some(cons) = doc.get("ext").and_then(|v| v.get("consolidation")) {
+                if let Some(grain) = cons.get("grain").and_then(|v| v.as_str()) {
+                    extras.insert("grain".to_string(), Value::String(grain.to_string()));
+                }
+                if let Some(depth) = cons.get("depth").and_then(|v| v.as_str()) {
+                    extras.insert("depth".to_string(), Value::String(depth.to_string()));
+                }
+                if let Some(model) = cons.get("model").and_then(|v| v.as_str()) {
+                    extras.insert("model".to_string(), Value::String(model.to_string()));
+                }
+                if let Some(cid) = cons.get("consolidation_id").and_then(|v| v.as_str()) {
+                    extras.insert(
+                        "consolidation_id".to_string(),
+                        Value::String(cid.to_string()),
+                    );
+                }
+                if let Some(cnt) = cons.get("source_event_count").and_then(|v| v.as_u64()) {
+                    extras.insert(
+                        "source_event_count".to_string(),
+                        Value::Number(cnt.into()),
+                    );
+                }
+            }
             text = body_md;
         }
         ("turns", "turn") => {

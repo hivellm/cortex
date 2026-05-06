@@ -14,6 +14,7 @@ import { MemoryView } from "./views/Memory";
 import { DecisionsView } from "./views/Decisions";
 import { LawsView } from "./views/Laws";
 import { AnalysisView } from "./views/Analysis";
+import { ConsolidationsView } from "./views/Consolidations";
 import { TasksView } from "./views/Tasks";
 import { ToolsView } from "./views/Tools";
 import { GraphView } from "./views/Graph";
@@ -87,6 +88,8 @@ function AppShell() {
         return <LawsView />;
       case "analysis":
         return <AnalysisView />;
+      case "consolidations":
+        return <ConsolidationsView />;
       case "tasks":
         return <TasksView />;
       case "tools":

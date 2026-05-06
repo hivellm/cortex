@@ -16,6 +16,7 @@ export type ViewId =
   | "classifications"
   | "laws"
   | "analysis"
+  | "consolidations"
   | "tasks"
   | "tools"
   | "graph"
@@ -28,6 +29,7 @@ type CountKey =
   | "decisions"
   | "laws"
   | "analyses"
+  | "consolidations"
   | "tools"
   | "sessions"
   | "conversations"
@@ -44,6 +46,7 @@ const NAV: NavItem[] = [
   { id: "classifications", label: "Classifications", icon: "analysis", countSource: "classifications" },
   { id: "laws", label: "Laws", icon: "law", countSource: "laws" },
   { id: "analysis", label: "Analysis", icon: "analysis", countSource: "analyses" },
+  { id: "consolidations", label: "Consolidations", icon: "memory", countSource: "consolidations" },
   { id: "tasks", label: "Tasks", icon: "decision", countSource: "tasks" },
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
@@ -97,6 +100,11 @@ export function Sidebar({ view, setView }: SidebarProps) {
     queryFn: () => api.analyses(),
     refetchInterval: 30_000,
   });
+  const consolidationsQ = useQuery({
+    queryKey: [connKey, "consolidations", "sidebar"],
+    queryFn: () => api.consolidations(),
+    refetchInterval: 60_000,
+  });
   const toolsQ = useQuery({
     queryKey: [connKey, "tools-stats"],
     queryFn: () => api.toolsStats(),
@@ -128,6 +136,7 @@ export function Sidebar({ view, setView }: SidebarProps) {
     decisions: decisionsQ.data?.length,
     laws: lawsQ.data?.length,
     analyses: analysesQ.data?.length,
+    consolidations: consolidationsQ.data?.length,
     tools: toolsQ.data?.tools.length,
     sessions: sessions.length,
     conversations: conversationsQ.data?.length,

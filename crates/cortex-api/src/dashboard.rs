@@ -117,6 +117,9 @@ use self::tasks::{tasks_detail, tasks_list, tasks_summary};
 mod retention;
 use self::retention::{retention_state, retention_sweeps};
 
+mod consolidations;
+use self::consolidations::{consolidation_detail, consolidations};
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -137,6 +140,8 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/violations", get(violations))
         .route("/v1/dashboard/analyses", get(analyses))
         .route("/v1/dashboard/analyses/{id}", get(analysis_detail))
+        .route("/v1/dashboard/consolidations", get(consolidations))
+        .route("/v1/dashboard/consolidations/{id}", get(consolidation_detail))
         .route("/v1/dashboard/tools/stats", get(tools_stats))
         .route("/v1/dashboard/graph", get(graph))
         .route("/v1/dashboard/sessions", get(sessions))
@@ -215,6 +220,7 @@ pub(super) fn symbol_to_kind(symbol: Option<&str>) -> &'static str {
         // learnings}/**` — without this branch they collapsed into
         // "turn" and the Handoffs endpoint never matched them.
         Some("memory") => "memory",
+        Some("consolidation") => "consolidation",
         Some("turn") | None => "turn",
         Some(_) => "turn",
     }

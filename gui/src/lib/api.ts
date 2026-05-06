@@ -364,6 +364,26 @@ export type AnalysisDetail = AnalysisRow & {
   body_markdown: string;
 };
 
+export type ConsolidationRow = {
+  id: string;
+  consolidation_id?: string;
+  title: string;
+  /** `session` | `topic` | `decision_trace` | `""` for legacy. */
+  grain: string;
+  /** `shallow` | `deep` | `""` for legacy. */
+  depth: string;
+  model?: string;
+  source_event_count: number;
+  repo?: string;
+  topics: string[];
+  excerpt: string;
+  occurred_at: string;
+};
+
+export type ConsolidationDetail = ConsolidationRow & {
+  body_markdown: string;
+};
+
 /// Per-session summary the Conversations list view renders. Each row
 /// is one chat thread the user can drill into via `api.conversation`.
 export type ConversationSummary = {
@@ -547,6 +567,19 @@ export const api = {
     getJson<DecisionDetail>(`/v1/dashboard/decisions/${encodeURIComponent(id)}`),
   analysisDetail: (id: string) =>
     getJson<AnalysisDetail>(`/v1/dashboard/analyses/${encodeURIComponent(id)}`),
+  consolidations: (params?: { repo?: string; grain?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.repo) qs.set("repo", params.repo);
+    if (params?.grain) qs.set("grain", params.grain);
+    const q = qs.toString();
+    return getJson<ConsolidationRow[]>(
+      `/v1/dashboard/consolidations${q ? `?${q}` : ""}`,
+    );
+  },
+  consolidationDetail: (id: string) =>
+    getJson<ConsolidationDetail>(
+      `/v1/dashboard/consolidations/${encodeURIComponent(id)}`,
+    ),
   /// Pull the graph panorama. `repos` narrows the canvas to the
   /// listed projects' artifacts (sessions / decisions / memories
   /// stay regardless so the cross-project knowledge spine remains
