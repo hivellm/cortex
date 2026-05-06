@@ -7,6 +7,21 @@ and the project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **`cortex-hook` native shim** (phase 11x). New release-mode binary
+  replaces the per-event `.sh` / `.ps1` shims as the default Claude
+  Code hook command. Cold start ~51 ms p50 on Windows vs the ~545 ms
+  `pwsh -NoProfile` floor the legacy PowerShell shims paid. Daemon
+  round-trip (synchronous, with pre-thinking) ~68 ms vs the prior
+  ~730 ms total, freeing ~9 s of wall-clock per typical 14-hook turn.
+  Settings.json now registers `cortex-hook <Event> [--fire-forget]`
+  per `install`. `--fire-forget` is the default for `SessionStart`,
+  `PostToolUse`, `Stop`, `SubagentStop`, `Notification`; the bin
+  flushes the frame and disconnects without waiting for a response.
+  `UserPromptSubmit` and `PreToolUse` stay synchronous because they
+  consume `additionalContext` / `permissionDecision`.
+- `hook_log` module on the daemon side. The dispatcher now writes
+  `~/.cortex/hook-invocations.log` and rotates at 10 MB, replacing
+  the per-shim writes the legacy scripts paid on every invocation.
 - `Stop` hook captures `assistantMessage` and emits a `Turn` envelope
   closing the user-prompt → assistant-reply asymmetry that previously
   left replies unrecorded.

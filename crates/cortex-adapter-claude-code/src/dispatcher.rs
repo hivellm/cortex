@@ -92,11 +92,11 @@ pub struct Dispatcher {
     sync: Arc<SyncClient>,
     pid: u32,
     /// Phase8b — optional metrics registry. The dispatcher stamps
-    /// `frames_parsed_total{hook}` + `envelopes_built_total{kind}`
-    /// + `last_frame_ts{hook}` + `last_envelope_ts{kind}` here so
-    /// the freshness aggregator can pivot per stage. Tests construct
-    /// the dispatcher without metrics — the increments are no-ops in
-    /// that case.
+    /// `frames_parsed_total{hook}` + `envelopes_built_total{kind}` +
+    /// `last_frame_ts{hook}` + `last_envelope_ts{kind}` here so the
+    /// freshness aggregator can pivot per stage. Tests construct the
+    /// dispatcher without metrics — the increments are no-ops in that
+    /// case.
     metrics: Option<Arc<Metrics>>,
 }
 
@@ -136,6 +136,13 @@ impl Dispatcher {
     /// Handle one hook frame end-to-end. Always returns a response —
     /// internal errors degrade to [`HookResponse::empty`].
     pub async fn dispatch(&self, frame: HookFrame) -> HookResponse {
+        // Phase11x — record an invocation line in
+        // `~/.cortex/hook-invocations.log`. The legacy `.sh` / `.ps1`
+        // shims used to do this themselves; now that `cortex-hook` is
+        // a thin native binary that does no I/O beyond the IPC round-
+        // trip, the dispatcher owns hook-side logging.
+        crate::hook_log::record_invocation(&frame, self.pid);
+
         // Phase8b — bump `frames_parsed_total{hook}` + stamp the per-
         // hook freshness ts. The IPC handler bumped
         // `frames_received_total{hook}` upstream when the JSON

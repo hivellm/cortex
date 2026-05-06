@@ -1,0 +1,100 @@
+# Hook latency baseline — 2026-05-06
+
+Captured on Windows 10 Pro 19045, Git Bash (msys2). Times are warm
+runs, realistic stdin payload (~150 bytes). Each row reports
+shell+hook only — no model latency.
+
+## §1.1 PowerShell cold-start floor
+
+`pwsh -NoProfile -Command "exit 0"` (no script body):
+
+    run 1: 535 ms
+    run 2: 544 ms
+    run 3: 545 ms
+    floor: ~545 ms
+
+Every PowerShell-backed hook pays this minimum, irrespective of
+script body or daemon work. This is the structural reason the
+Windows hooks are slow.
+
+## §1.1 Hook script body cost (no daemon)
+
+`cortex-user-prompt.ps1` invoked with `CORTEX_ADAPTER_DISABLE=1`:
+
+    run 1: 642 ms
+    run 2: 617 ms
+    run 3: 664 ms
+    avg:   ~641 ms
+    delta vs floor: ~96 ms (log appends, JSON build, env parsing)
+
+## §1.1 Hook full path (live daemon)
+
+`cortex-user-prompt.ps1` with daemon up, real named-pipe round-trip,
+real `cortex-api /v1/query` call inside the daemon:
+
+    run 1: 882 ms
+    run 2: 666 ms
+    run 3: 643 ms
+    avg:   ~730 ms
+    delta vs body-only: ~89 ms (named-pipe + daemon work)
+
+## Conclusion
+
+| Component                              | ms    |
+|----------------------------------------|-------|
+| `pwsh -NoProfile` cold start           | 545   |
+| script body (log append, JSON build)   |  95   |
+| named-pipe round-trip + daemon work    |  90   |
+| **total per hook**                     | ~730  |
+
+Daemon work is **12 % of the per-hook cost on Windows**. Replacing
+the PowerShell shim with a native Rust binary (`cortex-hook`) cuts
+~545 ms out of every invocation. The criterion bench at
+`benches/hook_cold_start.rs` will lock the bin's cold-start budget
+at ≤50 ms (Windows) / ≤20 ms (Linux), with a regression gate in CI.
+
+## Per-turn impact
+
+Typical turn: 1 SessionStart + 1 UserPromptSubmit + 5 PreToolUse +
+5 PostToolUse + 1 SubagentStop + 1 Stop = 14 hook invocations.
+
+    14 × 545 ms = 7.6 s of pwsh cold start (recoverable)
+    14 ×  95 ms = 1.3 s of script body (mostly recoverable)
+    14 ×  90 ms = 1.3 s of daemon work (kept)
+                = ~10.2 s adapter overhead per turn
+
+After phase11x ships:
+
+    14 ×  ~30 ms = 0.4 s bin cold start (Windows)
+                + ~0.0 s logging (moved into daemon)
+    14 ×   90 ms = 1.3 s daemon work (kept)
+                = ~1.7 s adapter overhead per turn
+
+Expected savings: ~8.5 s per turn on a 5-tool-call turn.
+
+## Measured `cortex-hook` (Windows, release, 2026-05-06)
+
+| Scenario                                | p50    | Target   |
+|-----------------------------------------|--------|----------|
+| `--help` cold start                     | 51 ms  | <50 ms   |
+| `CORTEX_ADAPTER_DISABLE=1` fast-path    | 50 ms  | —        |
+| Daemon down, fail-open at 200 ms cap    | 60 ms  | <200 ms  |
+| Live daemon, synchronous round-trip     | 68 ms  | <250 ms  |
+| Live daemon, `--fire-forget`            | 65 ms  | <100 ms  |
+
+Binary size (release, stripped by default profile): 555 KB.
+
+### Per-turn delta (predicted)
+
+A 14-hook turn (1 SessionStart + 1 UserPromptSubmit + 5 PreToolUse +
+5 PostToolUse + 1 SubagentStop + 1 Stop) with the new bin:
+
+    2 synchronous × 68 ms +  12 fire-forget × 65 ms = 916 ms
+
+Versus the legacy shim at ~730 ms × 14 = ~10.2 s — saving ~9.3 s per
+turn. Conservative target was 7–8 s; measured is better because the
+fire-forget path avoids the read-side delay too.
+
+## Linux baseline
+
+Pending — capture on the CI runner during §5.2 once the bin lands.

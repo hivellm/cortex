@@ -54,20 +54,35 @@ The most relevant hooks today:
 
 ## Configuration
 
-Set in `~/.claude/settings.json` (or per-project) so Claude Code
-launches the daemon hooks. Example:
+`cortex-adapter-claude install` patches `~/.claude/settings.json` to
+launch the **`cortex-hook`** native binary on every Claude Code hook
+event. The bin connects directly to the daemon's named pipe (Windows)
+or Unix domain socket (Linux/macOS) and prints the daemon's reply on
+stdout. Synchronous events (`UserPromptSubmit`, `PreToolUse`) wait
+for the response so the bundle / verdict reaches Claude Code; the
+remaining five events default to `--fire-forget` and disconnect after
+the write so they don't pay the read-side latency.
+
+Generated entries look like:
 
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [{ "command": "cortex-adapter-claude hook user-prompt-submit" }],
-    "PreToolUse":      [{ "command": "cortex-adapter-claude hook pre-tool-use" }],
-    "PostToolUse":     [{ "command": "cortex-adapter-claude hook post-tool-use" }],
-    "SubagentStop":    [{ "command": "cortex-adapter-claude hook subagent-stop" }],
-    "Stop":            [{ "command": "cortex-adapter-claude hook stop" }]
+    "UserPromptSubmit": [{ "type": "command", "command": "cortex-hook UserPromptSubmit",  "owner": "cortex" }],
+    "PreToolUse":       [{ "type": "command", "command": "cortex-hook PreToolUse",        "owner": "cortex" }],
+    "PostToolUse":      [{ "type": "command", "command": "cortex-hook PostToolUse --fire-forget",   "owner": "cortex" }],
+    "SubagentStop":     [{ "type": "command", "command": "cortex-hook SubagentStop --fire-forget",  "owner": "cortex" }],
+    "Stop":             [{ "type": "command", "command": "cortex-hook Stop --fire-forget",          "owner": "cortex" }],
+    "SessionStart":     [{ "type": "command", "command": "cortex-hook SessionStart --fire-forget",  "owner": "cortex" }],
+    "Notification":     [{ "type": "command", "command": "cortex-hook Notification --fire-forget",  "owner": "cortex" }]
   }
 }
 ```
+
+The legacy `.sh` shims under `crates/cortex-adapter-claude-code/hooks/`
+remain in tree as a Linux/macOS fallback for environments that do
+not have `cortex-hook` on PATH. They are not registered by `install`
+unless an operator restores them by hand.
 
 Daemon-side env vars:
 

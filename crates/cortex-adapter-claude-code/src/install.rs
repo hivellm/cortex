@@ -26,6 +26,12 @@ pub struct HookShim {
     pub sh_source: &'static str,
     /// PowerShell shim source baked at build time.
     pub ps1_source: &'static str,
+    /// Phase 11x — when `true` the generated settings entry appends
+    /// `--fire-forget` so the bin disconnects without waiting for a
+    /// daemon response. Set for hooks that do not consume
+    /// `additionalContext` or `permissionDecision`: PostToolUse,
+    /// SubagentStop, Stop, SessionStart, Notification.
+    pub fire_forget: bool,
 }
 
 /// Every hook the adapter wires up.
@@ -36,6 +42,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-session-start.ps1",
         sh_source: include_str!("../hooks/cortex-session-start.sh"),
         ps1_source: include_str!("../hooks/cortex-session-start.ps1"),
+        fire_forget: true,
     },
     HookShim {
         hook_name: "UserPromptSubmit",
@@ -43,6 +50,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-user-prompt.ps1",
         sh_source: include_str!("../hooks/cortex-user-prompt.sh"),
         ps1_source: include_str!("../hooks/cortex-user-prompt.ps1"),
+        fire_forget: false,
     },
     HookShim {
         hook_name: "PreToolUse",
@@ -50,6 +58,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-pre-tool.ps1",
         sh_source: include_str!("../hooks/cortex-pre-tool.sh"),
         ps1_source: include_str!("../hooks/cortex-pre-tool.ps1"),
+        fire_forget: false,
     },
     HookShim {
         hook_name: "PostToolUse",
@@ -57,6 +66,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-post-tool.ps1",
         sh_source: include_str!("../hooks/cortex-post-tool.sh"),
         ps1_source: include_str!("../hooks/cortex-post-tool.ps1"),
+        fire_forget: true,
     },
     HookShim {
         hook_name: "Stop",
@@ -64,6 +74,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-stop.ps1",
         sh_source: include_str!("../hooks/cortex-stop.sh"),
         ps1_source: include_str!("../hooks/cortex-stop.ps1"),
+        fire_forget: true,
     },
     HookShim {
         hook_name: "SubagentStop",
@@ -71,6 +82,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-subagent-stop.ps1",
         sh_source: include_str!("../hooks/cortex-subagent-stop.sh"),
         ps1_source: include_str!("../hooks/cortex-subagent-stop.ps1"),
+        fire_forget: true,
     },
     HookShim {
         hook_name: "Notification",
@@ -78,6 +90,7 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         ps1_filename: "cortex-notification.ps1",
         sh_source: include_str!("../hooks/cortex-notification.sh"),
         ps1_source: include_str!("../hooks/cortex-notification.ps1"),
+        fire_forget: true,
     },
 ];
 
@@ -291,10 +304,20 @@ fn unpatch_settings(path: &Path) -> Result<bool, InstallError> {
 }
 
 fn build_hook_entry(shim: &HookShim) -> Value {
+    // Phase 11x — settings.json points at the native `cortex-hook` bin
+    // instead of a per-event shell shim. The bin runs in ~50 ms cold
+    // start on Windows versus the ~545 ms `pwsh` floor the legacy
+    // .ps1 shims paid. Fire-forget hooks append the flag so the bin
+    // disconnects without waiting for a daemon response.
+    let command = if shim.fire_forget {
+        format!("cortex-hook {} --fire-forget", shim.hook_name)
+    } else {
+        format!("cortex-hook {}", shim.hook_name)
+    };
     json!({
         "type": "command",
-        "command": format!("cortex-{}", shim.hook_name.to_ascii_lowercase()),
-        "owner": "cortex"
+        "command": command,
+        "owner": "cortex",
     })
 }
 
@@ -369,6 +392,40 @@ mod tests {
         let report = install_with(&layout, InstallOptions::default()).expect("install");
         assert!(!report.hooks_omitted);
         assert_eq!(report.hooks_written.len(), HOOK_SHIMS.len());
+    }
+
+    #[test]
+    fn settings_register_cortex_hook_bin_with_fire_forget_per_event() {
+        let (_tmp, layout) = fixture_layout();
+        install(&layout).expect("install");
+        let body = fs::read_to_string(&layout.settings_path).unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        let hooks = parsed["hooks"].as_object().unwrap();
+
+        // Synchronous hooks: command exactly `cortex-hook <Event>`.
+        for hook in ["UserPromptSubmit", "PreToolUse"] {
+            let cmd = hooks[hook]["command"].as_str().unwrap();
+            assert_eq!(
+                cmd,
+                format!("cortex-hook {hook}"),
+                "synchronous hook {hook} should not carry --fire-forget"
+            );
+        }
+        // Fire-and-forget hooks: command ends with `--fire-forget`.
+        for hook in [
+            "SessionStart",
+            "PostToolUse",
+            "Stop",
+            "SubagentStop",
+            "Notification",
+        ] {
+            let cmd = hooks[hook]["command"].as_str().unwrap();
+            assert_eq!(
+                cmd,
+                format!("cortex-hook {hook} --fire-forget"),
+                "fire-forget hook {hook} should append the flag"
+            );
+        }
     }
 
     #[test]

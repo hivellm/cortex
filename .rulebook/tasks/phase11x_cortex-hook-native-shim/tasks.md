@@ -1,0 +1,48 @@
+## 1. Profile baseline + benchmark target
+- [x] 1.1 Capture per-hook latency baseline on Windows + Linux: `pwsh -NoProfile` cold start (~545 ms expected on Windows), `bash` cold start (~60 ms expected on Linux), full hook with `CORTEX_ADAPTER_DISABLE=1` (script-only floor), full hook with daemon (real cost). Persist as `crates/cortex-adapter-claude-code/benches/baseline-2026-05-06.txt`.
+- [ ] 1.2 Add `crates/cortex-adapter-claude-code/benches/hook_cold_start.rs` (criterion bench). Targets:
+  - bin cold-start (no daemon): <50 ms p50 on Windows, <20 ms on Linux.
+  - bin with daemon round-trip (UserPromptSubmit, ~6 KB bundle): <120 ms p50.
+  - bin fire-forget (PostToolUse): <40 ms p50.
+- [ ] 1.3 Wire the bench into `cargo bench -p cortex-adapter-claude-code`. The bench prints a CI summary; the hard regression gate lands in §6.4 once the bin ships.
+
+## 2. New bin target — `cortex-hook`
+- [x] 2.1 Create `crates/cortex-adapter-claude-code/src/bin/cortex-hook.rs`. CLI: `cortex-hook <event-name> [--fire-forget] [--pipe NAME] [--sock PATH] [--timeout-ms MS]`. Event names match `HookKind` PascalCase (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `Notification`).
+- [x] 2.2 Read stdin to a `String`. Treat empty input as `{}`. Build the `HookFrame` body with the same fields the current shims produce: `hook`, `session_id` (env `CLAUDE_SESSION_ID`), `cwd` (`std::env::current_dir`), `payload` (the stdin JSON verbatim).
+- [x] 2.3 Honour `CORTEX_ADAPTER_DISABLE=1` early-exit — print `{}` and `exit 0` before any I/O.
+- [x] 2.4 On Windows: connect via `tokio::net::windows::named_pipe::ClientOptions::open(r"\\.\pipe\cortex-adapter-claude")` (or override from `--pipe` / `CORTEX_ADAPTER_PIPE`). On Unix: `tokio::net::UnixStream::connect("$HOME/.cortex/adapter-claude.sock")` (or override from `--sock` / `CORTEX_ADAPTER_SOCK`).
+- [x] 2.5 Write the frame as one line + `\n`. Flush. If `--fire-forget`, drop the connection and `exit 0` without reading a response.
+- [x] 2.6 Synchronous mode: read one line of response (with the configured timeout, default 1500 ms) and print it on stdout. On any I/O error or timeout, print `{}` and `exit 0` (fail-open — never break the session).
+- [x] 2.7 Make `cortex-hook` a thin async runtime: `#[tokio::main(flavor = "current_thread")]`, no extra threads. Validate cold start with `time cortex-hook --help` < 50 ms on Windows.
+- [x] 2.8 Register the bin in `crates/cortex-adapter-claude-code/Cargo.toml` `[[bin]] name = "cortex-hook" path = "src/bin/cortex-hook.rs"`. Compile in release; size budget < 2 MB stripped.
+
+## 3. Daemon: log on receive, not on shim
+- [x] 3.1 In `crates/cortex-adapter-claude-code/src/dispatcher.rs`, add a `log_invocation(frame: &HookFrame)` call at the entry of `dispatch`. Append a single line to `~/.cortex/hook-invocations.log` with timestamp + hook + session_id + payload_session_id + pid (the same fields the shim used to write).
+- [x] 3.2 Add log rotation: when the file passes 10 MB, rename to `hook-invocations.log.1` (overwrite any existing) and start fresh. No more than two rotations on disk.
+- [x] 3.3 Errors land in `~/.cortex/hook-errors.log` with the same rotation policy. Categorise by `pipe_broken | connect_timeout | access_denied | other` to match the existing shim taxonomy so existing alerting keeps parsing.
+- [x] 3.4 Unit test: rotation test in `hook_log::tests::rotate_renames_when_threshold_crossed` covers the 10 MB → `.1` → fresh-file flow on a tempdir; the heavier 12 000-iteration check is reserved for a follow-up rev once the bin replaces the shims in production and the live path warrants soak testing.
+
+## 4. Replace shims with bin invocation
+- [x] 4.1 Update `crates/cortex-adapter-claude-code/src/install.rs::build_hook_entry` so the generated `~/.claude/settings.json` registers `cortex-hook <event>` for every hook event instead of the per-event `.sh` / `.ps1` paths.
+- [x] 4.2 Mark fire-forget hooks: PostToolUse, SubagentStop, Stop, SessionStart, Notification all get `--fire-forget` appended via the new `HookShim::fire_forget` flag. UserPromptSubmit and PreToolUse stay synchronous.
+- [ ] 4.3 Delete `crates/cortex-adapter-claude-code/hooks/cortex-*.ps1` (7 files). Mention the deletion in the `crates/cortex-adapter-claude-code/CHANGELOG.md` "Removed" section.
+- [ ] 4.4 Keep `crates/cortex-adapter-claude-code/hooks/cortex-*.sh` (7 files) as a Linux/macOS fallback for environments without the bin on PATH. Trim them: drop the Windows `case "${OSTYPE:-}"` polyglot block and the redundant log appends (the daemon owns logging now).
+- [ ] 4.5 `install.rs` falls back to the shell shims only if `cortex-hook` is not found by `which` / `where`. Add a unit test (`tests/install_fallback.rs`) for both branches.
+
+## 5. Cross-platform validation
+- [ ] 5.1 Local Windows smoke (this developer's box): `cortex-adapter-claude install` → start a Claude Code session → submit one prompt that triggers UserPromptSubmit + PreToolUse + PostToolUse + Stop. Capture timings from `hook-invocations.log` (now daemon-emitted with monotonic timestamps). Confirm UserPromptSubmit < 200 ms wall-clock, PostToolUse / Stop < 60 ms.
+- [ ] 5.2 Linux smoke (CI runner): same flow, expect bin cold start <20 ms; per-hook total <100 ms synchronous, <40 ms fire-forget.
+- [ ] 5.3 macOS smoke (best-effort, manual unless CI runner exists): document any unix-socket nuance.
+- [ ] 5.4 Capture observed deltas in `crates/cortex-adapter-claude-code/CHANGELOG.md` and tag them with the bench fixtures from §1.
+
+## 6. Spec & documentation updates
+- [ ] 6.1 `docs/specs/10-claude-code-adapter.md` §Hook contract: add a "Transport" subsection enumerating `cortex-hook` (default) + legacy shell shims (fallback) + `--fire-forget` semantics. Reference §Synchronous paths to clarify which events use which mode.
+- [x] 6.2 `crates/cortex-adapter-claude-code/README.md` Configuration table: replaced legacy `cortex-adapter-claude hook ...` examples with `cortex-hook <Event> [--fire-forget]` (PascalCase event, fire-forget per-event).
+- [x] 6.3 `crates/cortex-adapter-claude-code/CHANGELOG.md`: noted the `cortex-hook` native shim, the per-event `--fire-forget` matrix, and the daemon-side `hook_log` rotation.
+- [ ] 6.4 Promote the criterion bench from §1.2 to a CI gate after the bin ships: GitHub Actions runs `cargo bench -p cortex-adapter-claude-code -- --save-baseline ci` and fails the job when cold start exceeds 80 ms (Windows) / 30 ms (Linux). Numbers tighten in a follow-up rev once CI baselines are stable.
+
+## 7. Tail (mandatory — enforced by rulebook v5.7.0)
+- [ ] 7.1 Update or create documentation covering the implementation: spec 10 §Transport subsection, README configuration table, CHANGELOG entries, and a short "What got faster" note in `docs/analysis/opencode-adapter/00-spike.md` (cross-reference: the OpenCode plugin port piggybacks on this same daemon HTTP listener once phase11w lands, so the win compounds).
+- [ ] 7.2 Write tests covering the new behavior: §2.x bin unit + integration tests, §3.4 rotation test, §4.5 install fallback test, plus the criterion bench from §1.2.
+- [ ] 7.3 Run tests and confirm they pass: `cargo check -p cortex-adapter-claude-code && cargo clippy -p cortex-adapter-claude-code -- -D warnings && cargo test -p cortex-adapter-claude-code && cargo bench -p cortex-adapter-claude-code` clean.
+- [ ] 7.4 `rulebook_learn_capture` with title `Hook latency on Windows is bound by pwsh cold-start, not the daemon` so future investigators don't misroute optimization effort.

@@ -13,6 +13,7 @@
 pub mod config;
 pub mod dispatcher;
 pub mod events;
+pub mod hook_log;
 pub mod install;
 pub mod ipc;
 pub mod metrics;
