@@ -44,3 +44,8 @@
 - [x] 8.1 Update `docs/specs/19-retention.md`, `docs/specs/02-quantization.md`, and `CHANGELOG.md` covering all six fixes with file refs and commit hashes.
 - [x] 8.2 Tests for §1.4, §2.2, §3.3, §3.4, §4.1, §4.3, §5.4, §6.3 land green.
 - [x] 8.3 `cargo check && cargo clippy -- -D warnings && cargo test --workspace` clean before archive.
+
+## 9. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 9.1 Update or create documentation covering the implementation
+- [ ] 9.2 Write tests covering the new behavior
+- [ ] 9.3 Run tests and confirm they pass

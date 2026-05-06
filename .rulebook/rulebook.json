@@ -1,14 +1,13 @@
 {
-  "version": "5.5.0",
-  "installedAt": "2026-05-01T03:26:27.010Z",
-  "updatedAt": "2026-05-01T03:26:27.010Z",
+  "version": "5.7.0",
+  "installedAt": "2026-05-06T11:24:19.305Z",
+  "updatedAt": "2026-05-06T11:24:19.305Z",
   "projectId": "Cortex",
   "mode": "full",
   "features": {
     "watcher": false,
     "agent": false,
     "logging": true,
-    "telemetry": false,
     "notifications": false,
     "dryRun": false,
     "gitHooks": false,
@@ -36,31 +35,6 @@
     "maxSizeBytes": 524288000,
     "autoCapture": false,
     "vectorDimensions": 256
-  },
-  "ralph": {
-    "enabled": true,
-    "maxIterations": 10,
-    "tool": "claude",
-    "maxContextLoss": 3,
-    "securityGate": {
-      "enabled": true,
-      "failOn": "high",
-      "tool": "auto"
-    },
-    "contextCompression": {
-      "enabled": true,
-      "recentCount": 3,
-      "threshold": 5
-    },
-    "parallel": {
-      "enabled": false,
-      "maxWorkers": 3
-    },
-    "planCheckpoint": {
-      "enabled": false,
-      "autoApproveAfterSeconds": 0,
-      "requireApprovalForStories": "all"
-    }
   },
   "skills": {
     "enabled": [
