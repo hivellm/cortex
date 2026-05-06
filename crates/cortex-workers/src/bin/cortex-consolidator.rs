@@ -422,8 +422,17 @@ fn fallback_path() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".cortex").join("consolidations.jsonl"))
 }
 
+/// Soft cap on the live `consolidations.jsonl` file. Past this size
+/// the file rotates to `<path>.1` (overwriting any prior rotation)
+/// and a fresh empty file replaces it. Override with
+/// `CORTEX_CONSOLIDATIONS_FALLBACK_ROTATE_BYTES`. Default 100 MB.
+const FALLBACK_ROTATE_AT_BYTES: u64 = 100 * 1024 * 1024;
+
 /// Append the envelope to the fallback JSONL with a reason wrapper so
-/// the operator's replay tool can decide what to retry.
+/// the operator's replay tool can decide what to retry. Rotates the
+/// live file when it crosses the size threshold so an operator who
+/// leaves the daemon running with `CORTEX_INGESTION_URL` unset for a
+/// month does not silently fill the disk.
 fn append_publish_fallback(envelope: &serde_json::Value, reason: &str) -> Result<()> {
     let Some(path) = fallback_path() else {
         tracing::error!(
@@ -432,9 +441,25 @@ fn append_publish_fallback(envelope: &serde_json::Value, reason: &str) -> Result
         );
         return Ok(());
     };
+    let threshold = fallback_rotate_threshold();
+    append_publish_fallback_to(&path, threshold, envelope, reason)
+}
+
+/// Pure-path variant the tests drive directly so concurrent test
+/// runs do not stomp on each other's `CORTEX_CONSOLIDATIONS_FALLBACK_FILE`.
+/// Takes both the destination file and the rotation threshold
+/// explicitly. The production wrapper above resolves both from env.
+fn append_publish_fallback_to(
+    path: &std::path::Path,
+    rotate_at_bytes: u64,
+    envelope: &serde_json::Value,
+    reason: &str,
+) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).ok();
     }
+    rotate_fallback_at(path, rotate_at_bytes);
+
     let line = serde_json::json!({
         "fallback_at": chrono::Utc::now().to_rfc3339(),
         "reason": reason,
@@ -449,7 +474,7 @@ fn append_publish_fallback(envelope: &serde_json::Value, reason: &str) -> Result
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&path)
+        .open(path)
         .with_context(|| format!("open fallback {}", path.display()))?;
     file.write_all(serialised.as_bytes())
         .with_context(|| format!("append fallback {}", path.display()))?;
@@ -459,6 +484,43 @@ fn append_publish_fallback(envelope: &serde_json::Value, reason: &str) -> Result
         "consolidator envelope persisted to fallback JSONL — replay with `cortex-ops consolidations-replay`"
     );
     Ok(())
+}
+
+/// Resolve the rotation threshold from env, falling back to
+/// [`FALLBACK_ROTATE_AT_BYTES`].
+fn fallback_rotate_threshold() -> u64 {
+    std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_ROTATE_BYTES")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(FALLBACK_ROTATE_AT_BYTES)
+}
+
+/// Move `<path>` to `<path>.1` when the live file has crossed
+/// `threshold` bytes. Threshold is passed explicitly so tests can
+/// drive a tiny value without env var contention. Best-effort: every
+/// error is swallowed so the hot path keeps appending.
+fn rotate_fallback_at(path: &std::path::Path, threshold: u64) {
+    let live_len = match std::fs::metadata(path) {
+        Ok(m) => m.len(),
+        Err(_) => return,
+    };
+    if live_len < threshold {
+        return;
+    }
+    let mut rotated = path.as_os_str().to_os_string();
+    rotated.push(".1");
+    let rotated = PathBuf::from(rotated);
+    let _ = std::fs::remove_file(&rotated);
+    if std::fs::rename(path, &rotated).is_ok() {
+        tracing::info!(
+            from = %path.display(),
+            to = %rotated.display(),
+            live_len_bytes = live_len,
+            threshold_bytes = threshold,
+            "consolidator fallback rotated"
+        );
+    }
 }
 
 fn budget_from(cli: &Cli) -> CostBudget {
@@ -1311,32 +1373,79 @@ mod tests {
     }
 
     #[test]
+    fn append_publish_fallback_rotates_when_threshold_crossed() {
+        // Explicit-path variant: no env var contention with parallel
+        // tests. The production code path resolves the same
+        // arguments from `fallback_path()` + `fallback_rotate_threshold()`.
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("consolidations.jsonl");
+
+        // Pre-seed the live file just past the test threshold.
+        std::fs::write(&target, vec![b'x'; 300]).unwrap();
+
+        let envelope = serde_json::json!({
+            "event_id": "01ULID0000000000000099",
+            "kind": "consolidation",
+        });
+        append_publish_fallback_to(&target, 256, &envelope, "non_2xx").unwrap();
+
+        // Live file rotated → only the new line lives in `target`.
+        let live = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(live.matches('\n').count(), 1, "live file holds one line");
+        assert!(live.contains("01ULID0000000000000099"));
+        let live_len = live.len() as u64;
+        assert!(
+            live_len < 300,
+            "live file must be smaller than the 300-byte pre-rotation seed, got {live_len}"
+        );
+
+        // Rotated tail lives at `<target>.1`.
+        let mut rotated = target.clone().into_os_string();
+        rotated.push(".1");
+        let rotated = PathBuf::from(rotated);
+        assert!(rotated.exists(), ".1 rotation produced");
+        let rotated_len = std::fs::metadata(&rotated).unwrap().len();
+        assert_eq!(rotated_len, 300, ".1 holds the pre-rotation seed bytes");
+    }
+
+    #[test]
+    fn append_publish_fallback_does_not_rotate_below_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("consolidations.jsonl");
+        let envelope = serde_json::json!({
+            "event_id": "01ULID0000000000000010",
+            "kind": "consolidation",
+        });
+        // Threshold huge → no rotation possible.
+        append_publish_fallback_to(&target, u64::MAX, &envelope, "env_unset").unwrap();
+        append_publish_fallback_to(&target, u64::MAX, &envelope, "env_unset").unwrap();
+
+        let live = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(live.matches('\n').count(), 2, "both lines retained in live file");
+
+        let mut rotated = target.clone().into_os_string();
+        rotated.push(".1");
+        let rotated = PathBuf::from(rotated);
+        assert!(!rotated.exists(), "no .1 rotation when below threshold");
+    }
+
+    #[test]
     fn append_publish_fallback_writes_one_jsonl_line_per_call() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("consolidations.jsonl");
-        let saved = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
-        std::env::set_var(
-            "CORTEX_CONSOLIDATIONS_FALLBACK_FILE",
-            target.to_string_lossy().to_string(),
-        );
 
         let envelope = serde_json::json!({
             "event_id": "01TESTULID0000000000000001",
             "kind": "consolidation",
             "payload": {"summary": "first"},
         });
-        append_publish_fallback(&envelope, "env_unset").unwrap();
+        append_publish_fallback_to(&target, u64::MAX, &envelope, "env_unset").unwrap();
         let envelope2 = serde_json::json!({
             "event_id": "01TESTULID0000000000000002",
             "kind": "consolidation",
             "payload": {"summary": "second"},
         });
-        append_publish_fallback(&envelope2, "non_2xx").unwrap();
-
-        match saved {
-            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
-            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
-        }
+        append_publish_fallback_to(&target, u64::MAX, &envelope2, "non_2xx").unwrap();
 
         let content = std::fs::read_to_string(&target).unwrap();
         let lines: Vec<&str> = content.lines().collect();

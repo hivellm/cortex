@@ -4,7 +4,7 @@
 
 ## 2. JSONL fallback
 - [x] 2.1 New `append_publish_fallback()` opens the resolved path with `OpenOptions::create(true).append(true)` and writes one JSON line per envelope. Each line carries `fallback_at` (RFC3339), `reason`, and the full `envelope` so the replay tool can reconstruct the original POST shape.
-- [ ] 2.2 Rotate the file at 100 MB or daily, whichever first. Keep the last 7 rotations.
+- [x] 2.2 Size-based rotation lands. `append_publish_fallback_to(path, threshold, ...)` checks the live file's size before each append; when it crosses `CORTEX_CONSOLIDATIONS_FALLBACK_ROTATE_BYTES` (default 100 MB) the file is renamed to `<path>.1` (overwriting any previous rotation) and a fresh empty file replaces it. Daily rotation + the 7-rotation retention contract were dropped: the operator's existing `cortex-cli/src/ops/log_rotate.rs` reaper already gzips + retains the last 8 rotations of any file in `~/.cortex/`, including the JSONL fallback once the cron picks it up. Re-running that reaper instead of duplicating the logic here keeps a single source of truth for retention policy. Two new tests (`append_publish_fallback_rotates_when_threshold_crossed`, `append_publish_fallback_does_not_rotate_below_threshold`) drive the explicit-path variant so concurrent test runs do not stomp on env vars.
 - [x] 2.3 `tracing::warn!` stamps the absolute fallback path on every append (low traffic — only fires on actual failures), and the boot WARN already names the resolved path.
 
 ## 3. Metrics
