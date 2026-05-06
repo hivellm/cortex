@@ -197,6 +197,74 @@ mod tests {
     }
 
     #[test]
+    fn record_invocation_soak_rotates_under_load_and_caps_live_size() {
+        // §3.4 — drive `record_invocation` until the live file
+        // would cross 10 MB. Verifies that the rotation invariant
+        // ("live file stays under cap, prior content moves to .1")
+        // holds when the trigger is real append traffic, not the
+        // pre-seed of `rotate_renames_when_threshold_crossed`.
+        //
+        // The seed below puts the file 1 KB under the cap so we
+        // only need a handful of real appends to trip rotation.
+        // That keeps the test under one second on a slow CI runner
+        // while still exercising the full `record_invocation` path
+        // (timestamp formatting, env-resolved paths, lock guard,
+        // metadata read, append, conditional rename).
+        let dir = TempDir::new().unwrap();
+        let saved_home = std::env::var("HOME").ok();
+        let saved_userprofile = std::env::var("USERPROFILE").ok();
+        std::env::set_var("HOME", dir.path());
+        std::env::set_var("USERPROFILE", dir.path());
+
+        let log_path = dir.path().join(".cortex").join("hook-invocations.log");
+        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        std::fs::write(&log_path, vec![b'x'; (ROTATE_AT_BYTES - 1024) as usize]).unwrap();
+
+        let f = frame("PreToolUse", "soak-env", "soak-payload");
+        // Each `record_invocation` line is ~80 bytes, so ~14
+        // appends push the live file past the 10 MB threshold and
+        // trigger one rotation. We do 64 to be safe and to confirm
+        // the live file does NOT keep growing past the cap after
+        // the first rotation.
+        for _ in 0..64 {
+            record_invocation(&f, 1234);
+        }
+
+        match saved_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match saved_userprofile {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
+        }
+
+        let live_size = std::fs::metadata(&log_path).unwrap().len();
+        assert!(
+            live_size < ROTATE_AT_BYTES,
+            "live file must stay under cap after rotation, got {live_size}"
+        );
+        // Live file should be small because rotation reset it; the
+        // 64 appended lines fit easily under 1 MB.
+        assert!(
+            live_size < 1024 * 1024,
+            "live file should be small after rotation, got {live_size}"
+        );
+
+        let rotated_path = {
+            let mut p = log_path.clone().into_os_string();
+            p.push(".1");
+            std::path::PathBuf::from(p)
+        };
+        assert!(rotated_path.exists(), ".1 rotation produced under load");
+        let rotated_size = std::fs::metadata(&rotated_path).unwrap().len();
+        assert!(
+            rotated_size >= ROTATE_AT_BYTES,
+            ".1 must hold the pre-rotation tail (>= cap), got {rotated_size}"
+        );
+    }
+
+    #[test]
     fn record_error_collapses_multiline_messages() {
         let dir = TempDir::new().unwrap();
         std::env::set_var("HOME", dir.path());

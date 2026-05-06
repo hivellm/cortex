@@ -1,0 +1,105 @@
+name: Hook cold start
+
+# Phase 11x — runs the criterion bench at
+# `crates/cortex-adapter-claude-code/benches/hook_cold_start.rs` on
+# every PR / push to main. The bench measures cortex-hook process-
+# spawn latency in four scenarios: `cold_start_help`,
+# `cold_start_disabled`, `daemon_down_fail_open`, `fire_forget`.
+#
+# This workflow surfaces the numbers in the run summary and as a
+# downloadable artefact so reviewers can spot regressions. A hard
+# fail-the-PR-on-regression gate will land in a follow-up rev once
+# the runner has produced enough baselines that the budget reflects
+# the GitHub-hosted runner shape (it is materially slower than a
+# local dev box on Windows). Until then this is observability-only.
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - 'crates/cortex-adapter-claude-code/**'
+      - 'crates/cortex-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/hook-cold-start.yml'
+  push:
+    branches: [main, master, develop]
+    paths:
+      - 'crates/cortex-adapter-claude-code/**'
+      - 'crates/cortex-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/hook-cold-start.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hook-cold-start-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Bench (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: hook-cold-start-${{ matrix.os }}
+          workspaces: |
+            .
+
+      - name: Build cortex-hook (release)
+        shell: bash
+        run: cargo build --release -p cortex-adapter-claude-code --bin cortex-hook
+
+      - name: Run hook_cold_start bench
+        shell: bash
+        env:
+          # The bench spawns the prebuilt bin and records timings.
+          # Force `criterion`'s plain text output so the summary
+          # parses cleanly in shell; suppress the HTML report it
+          # would otherwise drop into target/criterion/.
+          CRITERION_HOME: ./target/criterion
+        run: |
+          cargo bench -p cortex-adapter-claude-code --bench hook_cold_start -- \
+            --output-format bencher \
+            | tee bench-output.txt
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          echo "## Hook cold-start bench (${{ matrix.os }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f bench-output.txt ]; then
+            cat bench-output.txt >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "(bench-output.txt missing — see job log)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload criterion report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hook-cold-start-${{ matrix.os }}
+          path: |
+            bench-output.txt
+            target/criterion/
+          if-no-files-found: warn
+          retention-days: 14
