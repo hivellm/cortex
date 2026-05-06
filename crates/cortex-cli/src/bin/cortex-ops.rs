@@ -55,6 +55,7 @@ mod tool_call_digest_live;
 mod turn_digest_live;
 
 use clap::{Parser, Subcommand};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
@@ -452,6 +453,32 @@ enum Command {
         #[arg(long, default_value_t = 1000)]
         page_size: u32,
         /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase 12a §4 — replay envelopes that the consolidator
+    /// persisted to the JSONL fallback because cortex-ingestion was
+    /// unreachable when they were produced. POSTs each line to the
+    /// resolved ingestion URL and reports per-line outcomes.
+    ConsolidationsReplay {
+        /// JSONL file produced by `publish_consolidation`'s fallback
+        /// path. Defaults to `${CORTEX_CONSOLIDATIONS_FALLBACK_FILE}`,
+        /// then `${CORTEX_HOME}/consolidations.jsonl`, then
+        /// `<HOME|USERPROFILE>/.cortex/consolidations.jsonl`.
+        #[arg(long)]
+        from: Option<PathBuf>,
+        /// cortex-ingestion base URL. Defaults to
+        /// `CORTEX_INGESTION_URL`, then `http://127.0.0.1:17010`.
+        #[arg(long)]
+        ingest_url: Option<String>,
+        /// Print the planned replays without sending any HTTP request.
+        #[arg(long)]
+        dry_run: bool,
+        /// Maximum lines to replay in this run. Default: every line.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Emit a single JSON object on stdout instead of the plain
+        /// summary so cron jobs can parse the outcome.
         #[arg(long)]
         json: bool,
     },
@@ -1063,6 +1090,13 @@ fn main() -> ExitCode {
             page_size,
             json,
         ),
+        Command::ConsolidationsReplay {
+            from,
+            ingest_url,
+            dry_run,
+            limit,
+            json,
+        } => consolidation::consolidations_replay(from, ingest_url, dry_run, limit, json),
         Command::Canary {
             hook,
             ipc,

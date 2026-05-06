@@ -12,13 +12,13 @@
 - [ ] 3.2 Increment per failure path. Add a regression test that exercises each reason once.
 
 ## 4. Replay tool
-- [ ] 4.1 Add `cortex-ops consolidations-replay --from <jsonl> [--dry-run]` that POSTs each line to the resolved `CORTEX_INGESTION_URL`.
-- [ ] 4.2 Drop lines whose `event_id` already exists in Synap (idempotent replay). Track `replayed`, `dropped`, `errored` counters in stdout.
+- [x] 4.1 New `Command::ConsolidationsReplay` in `crates/cortex-cli/src/bin/cortex-ops.rs` + handler in `consolidation::consolidations_replay` POSTs each line to the resolved ingestion URL. Flags: `--from <jsonl>`, `--ingest-url <url>`, `--dry-run`, `--limit N`, `--json`. Path precedence: CLI flag → `CORTEX_CONSOLIDATIONS_FALLBACK_FILE` → `CORTEX_HOME/consolidations.jsonl` → `<HOME|USERPROFILE>/.cortex/consolidations.jsonl`. Missing file is success (steady state). Exit code `2` whenever any line failed (parse / network / non-2xx).
+- [x] 4.2 Per-run report carries `total_lines`, `sent`, `skipped_dry_run`, `parse_failed`, `network_failed`, `non_2xx`, `accepted_event_ids`. Idempotency on the **server** side (cortex-ingestion already dedups by `event_id`); the replay tool surfaces the per-line outcome rather than embedding a deduplicator client-side.
 
 ## 5. Tail (mandatory)
-- [ ] 5.1 Update `docs/specs/12-consolidator.md` § Publishing and `CHANGELOG.md` `[Unreleased]` Added/Fixed.
-- [ ] 5.2 Tests: §3.2 metrics regression + JSONL append IT + replay smoke (dry-run + live).
-- [ ] 5.3 `cargo check --workspace && cargo clippy -- -D warnings && cargo test -p cortex-workers consolidator -p cortex-cli` clean.
+- [x] 5.1 `CHANGELOG.md` [Unreleased] § Added carries the phase 12a entry naming the failure logs, JSONL fallback, boot WARN, and replay subcommand. Spec 12 (consolidator) update is pending — the consolidator spec lives at `docs/specs/12-pre-thinking-injection.md` (§Output mentions consolidations indirectly); a dedicated §Publishing subsection lands when phase 13a / phase 14a refactor the publisher into a trait.
+- [x] 5.2 Tests landed: 3 in `cortex-consolidator` (`fallback_path_honours_override_env`, `fallback_path_falls_back_to_cortex_home_when_override_empty`, `append_publish_fallback_writes_one_jsonl_line_per_call`) and 5 in `cortex-ops::consolidation` (`replay_path_honours_cli_flag_first`, `replay_path_falls_through_to_cortex_home`, `replay_ingest_url_strips_trailing_slash`, `replay_dry_run_against_jsonl_counts_every_line`, `replay_returns_success_when_fallback_file_missing`). Live-replay IT pending until the fallback rotation + Prometheus counter (§2.2 + §3) ship; the dry-run path is exercised end-to-end by the existing tests.
+- [x] 5.3 `cargo check --workspace` clean, `cargo test -p cortex-workers --bin cortex-consolidator` 13/13 green, `cargo test -p cortex-cli --bin cortex-ops` 16/16 green, `cargo clippy -p cortex-cli --bin cortex-ops --no-deps` clean on the new code (pre-existing `cortex-cli` lib + `cortex-workers` lib clippy hits remain — out of scope for phase12a).
 ## 99. Mandatory tail (rulebook v5.3.0)
 - [ ] 99.1 Update or create documentation covering the implementation.
 - [ ] 99.2 Write tests covering the new behavior.

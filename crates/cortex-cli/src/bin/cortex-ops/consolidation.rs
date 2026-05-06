@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Run the consolidation pruner once. Lists every doc in
@@ -478,6 +479,214 @@ pub(super) fn consolidation_prune_meili_key(
         .or(env.meili_master_key)
 }
 
+// ===========================================================================
+// Phase 12a §4 — consolidations-replay
+// ===========================================================================
+
+/// Resolve the JSONL fallback path the consolidator wrote to.
+/// Mirrors the precedence in `crates/cortex-workers/src/bin/cortex-consolidator.rs::fallback_path`.
+pub(super) fn consolidations_replay_path(cli_from: Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(p) = cli_from {
+        return Some(p);
+    }
+    if let Ok(p) = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE") {
+        if !p.trim().is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    if let Ok(p) = std::env::var("CORTEX_HOME") {
+        if !p.trim().is_empty() {
+            return Some(PathBuf::from(p).join("consolidations.jsonl"));
+        }
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(
+        PathBuf::from(home)
+            .join(".cortex")
+            .join("consolidations.jsonl"),
+    )
+}
+
+/// CLI flag → `CORTEX_INGESTION_URL` → loopback default. Returns the
+/// URL trimmed of trailing slash so callers can append `/v1/events`.
+pub(super) fn consolidations_replay_ingest_url(cli: Option<String>) -> String {
+    let raw = cli
+        .or_else(|| std::env::var("CORTEX_INGESTION_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17010".to_string());
+    raw.trim().trim_end_matches('/').to_string()
+}
+
+/// One outcome row per JSONL line.
+#[derive(Debug, Default, serde::Serialize)]
+struct ReplayOutcome {
+    total_lines: usize,
+    sent: usize,
+    skipped_dry_run: usize,
+    parse_failed: usize,
+    network_failed: usize,
+    non_2xx: usize,
+    accepted_event_ids: Vec<String>,
+}
+
+/// Run the replay. The function is callable by tests with a custom
+/// path / URL; the CLI handler below is a thin wrapper that resolves
+/// args from env + flags, builds an HTTP client, and prints the
+/// outcome.
+pub(super) fn consolidations_replay(
+    from: Option<PathBuf>,
+    ingest_url: Option<String>,
+    dry_run: bool,
+    limit: Option<usize>,
+    json: bool,
+) -> ExitCode {
+    let path = match consolidations_replay_path(from) {
+        Some(p) => p,
+        None => {
+            eprintln!(
+                "consolidations-replay: no fallback path resolvable (set CORTEX_CONSOLIDATIONS_FALLBACK_FILE, CORTEX_HOME, or HOME/USERPROFILE)"
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let body = match std::fs::read_to_string(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // No fallback file means nothing to replay — that is the
+            // healthy steady state, not a failure.
+            let outcome = ReplayOutcome::default();
+            print_replay(&outcome, &path, json);
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("consolidations-replay: read {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let base = consolidations_replay_ingest_url(ingest_url);
+    let url = format!("{base}/v1/events");
+
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("consolidations-replay: tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("consolidations-replay: client build: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let outcome = rt.block_on(async {
+        let mut outcome = ReplayOutcome::default();
+        for line in body.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            outcome.total_lines += 1;
+            if let Some(cap) = limit {
+                if outcome.sent + outcome.skipped_dry_run >= cap {
+                    break;
+                }
+            }
+            let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
+                Ok(v) => v,
+                Err(_) => {
+                    outcome.parse_failed += 1;
+                    continue;
+                }
+            };
+            let envelope = match parsed.get("envelope") {
+                Some(e) => e,
+                None => {
+                    outcome.parse_failed += 1;
+                    continue;
+                }
+            };
+            let event_id = envelope
+                .get("event_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if dry_run {
+                outcome.skipped_dry_run += 1;
+                if !event_id.is_empty() {
+                    outcome.accepted_event_ids.push(event_id);
+                }
+                continue;
+            }
+
+            match client
+                .post(&url)
+                .header("content-type", "application/json")
+                .json(envelope)
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    outcome.sent += 1;
+                    if !event_id.is_empty() {
+                        outcome.accepted_event_ids.push(event_id);
+                    }
+                }
+                Ok(_) => {
+                    outcome.non_2xx += 1;
+                }
+                Err(_) => {
+                    outcome.network_failed += 1;
+                }
+            }
+        }
+        outcome
+    });
+
+    print_replay(&outcome, &path, json);
+
+    if outcome.network_failed + outcome.non_2xx + outcome.parse_failed > 0 {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn print_replay(outcome: &ReplayOutcome, path: &std::path::Path, json: bool) {
+    if json {
+        let body = serde_json::json!({
+            "fallback_file": path.display().to_string(),
+            "total_lines": outcome.total_lines,
+            "sent": outcome.sent,
+            "skipped_dry_run": outcome.skipped_dry_run,
+            "parse_failed": outcome.parse_failed,
+            "network_failed": outcome.network_failed,
+            "non_2xx": outcome.non_2xx,
+            "accepted_event_ids": outcome.accepted_event_ids,
+        });
+        println!("{}", body);
+    } else {
+        println!("consolidations-replay file={}", path.display());
+        println!("  total_lines     : {}", outcome.total_lines);
+        println!("  sent            : {}", outcome.sent);
+        println!("  skipped_dry_run : {}", outcome.skipped_dry_run);
+        println!("  parse_failed    : {}", outcome.parse_failed);
+        println!("  network_failed  : {}", outcome.network_failed);
+        println!("  non_2xx         : {}", outcome.non_2xx);
+    }
+}
+
 #[cfg(test)]
 mod consolidation_prune_env_tests {
     use super::*;
@@ -596,5 +805,85 @@ mod consolidation_prune_env_tests {
             consolidation_prune_meili_key(Some("cli".into()), env),
             Some("cli".to_string())
         );
+    }
+
+    // -- Phase 12a §4 — consolidations-replay -------------------------
+
+    #[test]
+    fn replay_path_honours_cli_flag_first() {
+        let saved = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        std::env::set_var(
+            "CORTEX_CONSOLIDATIONS_FALLBACK_FILE",
+            "D:/from-env/fallback.jsonl",
+        );
+        let p = consolidations_replay_path(Some(PathBuf::from("D:/explicit/x.jsonl")));
+        match saved {
+            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
+            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
+        }
+        assert_eq!(p, Some(PathBuf::from("D:/explicit/x.jsonl")));
+    }
+
+    #[test]
+    fn replay_path_falls_through_to_cortex_home() {
+        let saved_override = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        let saved_home = std::env::var("CORTEX_HOME").ok();
+        std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
+        std::env::set_var("CORTEX_HOME", "D:/cortex-root");
+        let p = consolidations_replay_path(None);
+        match saved_override {
+            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
+            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
+        }
+        match saved_home {
+            Some(v) => std::env::set_var("CORTEX_HOME", v),
+            None => std::env::remove_var("CORTEX_HOME"),
+        }
+        assert_eq!(p, Some(PathBuf::from("D:/cortex-root/consolidations.jsonl")));
+    }
+
+    #[test]
+    fn replay_ingest_url_strips_trailing_slash() {
+        let saved = std::env::var("CORTEX_INGESTION_URL").ok();
+        std::env::remove_var("CORTEX_INGESTION_URL");
+        assert_eq!(
+            consolidations_replay_ingest_url(Some("http://localhost:9999/".to_string())),
+            "http://localhost:9999"
+        );
+        assert_eq!(
+            consolidations_replay_ingest_url(None),
+            "http://127.0.0.1:17010"
+        );
+        match saved {
+            Some(v) => std::env::set_var("CORTEX_INGESTION_URL", v),
+            None => std::env::remove_var("CORTEX_INGESTION_URL"),
+        }
+    }
+
+    #[test]
+    fn replay_dry_run_against_jsonl_counts_every_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("consolidations.jsonl");
+        // Two well-formed lines + one parse-failure line so the
+        // outcome counters surface every branch.
+        std::fs::write(
+            &path,
+            r#"{"reason":"env_unset","envelope":{"event_id":"01ULID0000000000000001","kind":"consolidation"}}
+{"reason":"non_2xx","envelope":{"event_id":"01ULID0000000000000002","kind":"consolidation"}}
+not-json-and-not-empty
+"#,
+        )
+        .unwrap();
+        let exit = consolidations_replay(Some(path), None, true, None, true);
+        // Parse failure ⇒ exit 2.
+        assert_eq!(exit, ExitCode::from(2));
+    }
+
+    #[test]
+    fn replay_returns_success_when_fallback_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent.jsonl");
+        let exit = consolidations_replay(Some(missing), None, true, None, true);
+        assert_eq!(exit, ExitCode::SUCCESS);
     }
 }
