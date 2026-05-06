@@ -52,6 +52,7 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["html
 notify = "8.2"
 notify-debouncer-mini = "0.7"
 hdbscan = "0.10"
+criterion = { version = "0.7", default-features = false, features = ["plotters", "cargo_bench_support"] }
 
 synap-sdk = "0.12"
 vectorizer-sdk = "3.3.0"

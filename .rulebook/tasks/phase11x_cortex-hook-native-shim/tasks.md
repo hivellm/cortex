@@ -1,10 +1,7 @@
 ## 1. Profile baseline + benchmark target
 - [x] 1.1 Capture per-hook latency baseline on Windows + Linux: `pwsh -NoProfile` cold start (~545 ms expected on Windows), `bash` cold start (~60 ms expected on Linux), full hook with `CORTEX_ADAPTER_DISABLE=1` (script-only floor), full hook with daemon (real cost). Persist as `crates/cortex-adapter-claude-code/benches/baseline-2026-05-06.txt`.
-- [ ] 1.2 Add `crates/cortex-adapter-claude-code/benches/hook_cold_start.rs` (criterion bench). Targets:
-  - bin cold-start (no daemon): <50 ms p50 on Windows, <20 ms on Linux.
-  - bin with daemon round-trip (UserPromptSubmit, ~6 KB bundle): <120 ms p50.
-  - bin fire-forget (PostToolUse): <40 ms p50.
-- [ ] 1.3 Wire the bench into `cargo bench -p cortex-adapter-claude-code`. The bench prints a CI summary; the hard regression gate lands in §6.4 once the bin ships.
+- [x] 1.2 `crates/cortex-adapter-claude-code/benches/hook_cold_start.rs` ships four criterion targets — `cold_start_help`, `cold_start_disabled`, `daemon_down_fail_open`, `fire_forget` — driving the prebuilt release bin via `Command::spawn`. Live-daemon synchronous timings are intentionally captured by the manual baseline file (§1.1) instead of criterion since `cargo bench` does not boot `cortex-api`.
+- [x] 1.3 Workspace `Cargo.toml` adds `criterion = { workspace = true }` (default-features off, plotters + cargo_bench_support enabled); crate `Cargo.toml` declares `[[bench]] name = "hook_cold_start" harness = false`. `cargo check --bench hook_cold_start` and `cargo clippy --bench hook_cold_start -- -D warnings` both clean. The hard regression gate lands in §6.4 once CI runs the bench against a baseline.
 
 ## 2. New bin target — `cortex-hook`
 - [x] 2.1 Create `crates/cortex-adapter-claude-code/src/bin/cortex-hook.rs`. CLI: `cortex-hook <event-name> [--fire-forget] [--pipe NAME] [--sock PATH] [--timeout-ms MS]`. Event names match `HookKind` PascalCase (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStop`, `Stop`, `Notification`).
