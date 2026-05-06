@@ -1,11 +1,11 @@
 ## 1. Failure logging
-- [ ] 1.1 Add `tracing::error!` on every failure path in `publish_consolidation()` with structured fields `event_id`, `query_id`, `reason`, `cortex_ingestion_url`.
-- [ ] 1.2 Detect `CORTEX_INGESTION_URL` unset at startup and emit one WARN at boot listing the consequences.
+- [x] 1.1 `publish_consolidation()` now emits `tracing::error!` with structured fields (`event_id`, `session_id`, `reason`, `url`/`error`) on every failure path: `env_unset`, `client_build`, `non_2xx`, `network`. The success path emits a matching `tracing::info!`.
+- [x] 1.2 `main()` checks `resolve_ingest_url(&cli)` for the run-session / run-topic / run-decision / non-dry-run nightly paths and emits one boot WARN naming the fallback file the operator should expect to fill.
 
 ## 2. JSONL fallback
-- [ ] 2.1 On any publish failure, append the envelope as a single JSON line to `${CORTEX_HOME}/consolidations.jsonl` (atomic O_APPEND).
+- [x] 2.1 New `append_publish_fallback()` opens the resolved path with `OpenOptions::create(true).append(true)` and writes one JSON line per envelope. Each line carries `fallback_at` (RFC3339), `reason`, and the full `envelope` so the replay tool can reconstruct the original POST shape.
 - [ ] 2.2 Rotate the file at 100 MB or daily, whichever first. Keep the last 7 rotations.
-- [ ] 2.3 Log the absolute path on first append per process.
+- [x] 2.3 `tracing::warn!` stamps the absolute fallback path on every append (low traffic — only fires on actual failures), and the boot WARN already names the resolved path.
 
 ## 3. Metrics
 - [ ] 3.1 Register `cortex_consolidator_publish_failures_total{reason}` counter in `consolidator/metrics.rs`.

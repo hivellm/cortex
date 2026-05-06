@@ -154,6 +154,29 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
+
+    // Phase 12a §1.2 — at boot, warn loudly when no ingestion URL is
+    // resolvable for the upcoming run. Without this, the operator
+    // discovers the silent envelope drop only post-hoc by inspecting
+    // the fallback JSONL. The warning lets them set the env var (or
+    // pass `--ingest-url`) before the first run wastes Anthropic
+    // budget on summaries that go straight to the fallback file.
+    if matches!(
+        cli.command,
+        Command::RunSession { .. }
+            | Command::RunTopic { .. }
+            | Command::RunDecision { .. }
+            | Command::Nightly { dry_run: false, .. }
+    ) && resolve_ingest_url(&cli).is_none()
+    {
+        tracing::warn!(
+            "CORTEX_INGESTION_URL unset and --ingest-url empty: every consolidation will land in {} (replay with `cortex-ops consolidations-replay`)",
+            fallback_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "<unresolved>".to_string())
+        );
+    }
+
     match &cli.command {
         Command::Estimate {
             meili,
@@ -263,10 +286,6 @@ async fn publish_consolidation(
     session_id: &str,
     repo_hint: Option<&str>,
 ) -> Result<()> {
-    let Some(base) = resolve_ingest_url(cli) else {
-        eprintln!("  publish : skipped (--ingest-url empty)");
-        return Ok(());
-    };
     use sha2::Digest as _;
     let payload_json = serde_json::to_value(payload).context("serialise payload")?;
     let canonical = serde_json::to_string(&payload_json).context("canonical payload")?;
@@ -302,24 +321,143 @@ async fn publish_consolidation(
         "payload": payload_json,
         "content_hash": content_hash,
     });
+
+    // Phase 12a — silent envelope drops are a documented P0 source of
+    // data loss. Every failure path now: (a) emits a structured ERROR
+    // log carrying `event_id`, `session_id`, and a `reason` label and
+    // (b) appends the envelope to `${CORTEX_HOME}/consolidations.jsonl`
+    // so the operator can replay it once the ingestion URL is healthy.
+    let Some(base) = resolve_ingest_url(cli) else {
+        tracing::error!(
+            event_id = %event_id,
+            session_id = %session_id,
+            reason = "env_unset",
+            "consolidator publish skipped — CORTEX_INGESTION_URL unset and --ingest-url empty; envelope appended to fallback JSONL"
+        );
+        append_publish_fallback(&envelope, "env_unset")?;
+        return Ok(());
+    };
+
     let url = format!("{base}/v1/events");
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
-        .context("build publish client")?;
-    let resp = client
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(
+                event_id = %event_id,
+                session_id = %session_id,
+                reason = "client_build",
+                error = %e,
+                "consolidator publish skipped — reqwest client build failed; envelope appended to fallback JSONL"
+            );
+            append_publish_fallback(&envelope, "client_build")?;
+            return Ok(());
+        }
+    };
+
+    match client
         .post(&url)
         .header("content-type", "application/json")
         .json(&envelope)
         .send()
         .await
-        .with_context(|| format!("POST {url}"))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("publish rejected: {status} {body}");
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                tracing::info!(
+                    event_id = %event_id,
+                    session_id = %session_id,
+                    url = %url,
+                    "consolidator publish ok"
+                );
+                eprintln!("  publish : ok event_id={event_id}");
+                Ok(())
+            } else {
+                let body = resp.text().await.unwrap_or_default();
+                tracing::error!(
+                    event_id = %event_id,
+                    session_id = %session_id,
+                    reason = "non_2xx",
+                    status = %status,
+                    body = %body,
+                    "consolidator publish rejected; envelope appended to fallback JSONL"
+                );
+                append_publish_fallback(&envelope, "non_2xx")?;
+                Ok(())
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                event_id = %event_id,
+                session_id = %session_id,
+                reason = "network",
+                url = %url,
+                error = %e,
+                "consolidator publish failed; envelope appended to fallback JSONL"
+            );
+            append_publish_fallback(&envelope, "network")?;
+            Ok(())
+        }
     }
-    eprintln!("  publish : ok event_id={event_id}");
+}
+
+/// Resolve the JSONL fallback path:
+/// `${CORTEX_CONSOLIDATIONS_FALLBACK_FILE}` → `${CORTEX_HOME}/consolidations.jsonl`
+/// → `<HOME|USERPROFILE>/.cortex/consolidations.jsonl`.
+fn fallback_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE") {
+        if !p.trim().is_empty() {
+            return Some(PathBuf::from(p));
+        }
+    }
+    if let Ok(p) = std::env::var("CORTEX_HOME") {
+        if !p.trim().is_empty() {
+            return Some(PathBuf::from(p).join("consolidations.jsonl"));
+        }
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join(".cortex").join("consolidations.jsonl"))
+}
+
+/// Append the envelope to the fallback JSONL with a reason wrapper so
+/// the operator's replay tool can decide what to retry.
+fn append_publish_fallback(envelope: &serde_json::Value, reason: &str) -> Result<()> {
+    let Some(path) = fallback_path() else {
+        tracing::error!(
+            reason = %reason,
+            "fallback path unresolved (HOME / USERPROFILE / CORTEX_HOME all unset); envelope NOT persisted"
+        );
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let line = serde_json::json!({
+        "fallback_at": chrono::Utc::now().to_rfc3339(),
+        "reason": reason,
+        "envelope": envelope,
+    });
+    let mut serialised =
+        serde_json::to_string(&line).context("serialise fallback envelope")?;
+    serialised.push('\n');
+
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .with_context(|| format!("open fallback {}", path.display()))?;
+    file.write_all(serialised.as_bytes())
+        .with_context(|| format!("append fallback {}", path.display()))?;
+    tracing::warn!(
+        path = %path.display(),
+        reason = %reason,
+        "consolidator envelope persisted to fallback JSONL — replay with `cortex-ops consolidations-replay`"
+    );
     Ok(())
 }
 
@@ -1137,5 +1275,80 @@ mod tests {
         };
         let got = cli.resolve_archive_root().unwrap();
         assert_eq!(got, PathBuf::from("D:/explicit"));
+    }
+
+    #[test]
+    fn fallback_path_honours_override_env() {
+        let saved = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        std::env::set_var(
+            "CORTEX_CONSOLIDATIONS_FALLBACK_FILE",
+            "D:/explicit/fallback.jsonl",
+        );
+        let p = fallback_path().expect("fallback path resolved");
+        match saved {
+            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
+            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
+        }
+        assert_eq!(p, PathBuf::from("D:/explicit/fallback.jsonl"));
+    }
+
+    #[test]
+    fn fallback_path_falls_back_to_cortex_home_when_override_empty() {
+        let saved_override = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        let saved_home = std::env::var("CORTEX_HOME").ok();
+        std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", "");
+        std::env::set_var("CORTEX_HOME", "D:/cortex-root");
+        let p = fallback_path().expect("fallback path resolved");
+        match saved_override {
+            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
+            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
+        }
+        match saved_home {
+            Some(v) => std::env::set_var("CORTEX_HOME", v),
+            None => std::env::remove_var("CORTEX_HOME"),
+        }
+        assert_eq!(p, PathBuf::from("D:/cortex-root/consolidations.jsonl"));
+    }
+
+    #[test]
+    fn append_publish_fallback_writes_one_jsonl_line_per_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("consolidations.jsonl");
+        let saved = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        std::env::set_var(
+            "CORTEX_CONSOLIDATIONS_FALLBACK_FILE",
+            target.to_string_lossy().to_string(),
+        );
+
+        let envelope = serde_json::json!({
+            "event_id": "01TESTULID0000000000000001",
+            "kind": "consolidation",
+            "payload": {"summary": "first"},
+        });
+        append_publish_fallback(&envelope, "env_unset").unwrap();
+        let envelope2 = serde_json::json!({
+            "event_id": "01TESTULID0000000000000002",
+            "kind": "consolidation",
+            "payload": {"summary": "second"},
+        });
+        append_publish_fallback(&envelope2, "non_2xx").unwrap();
+
+        match saved {
+            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
+            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
+        }
+
+        let content = std::fs::read_to_string(&target).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "exactly one JSON line per call");
+        let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["reason"].as_str(), Some("env_unset"));
+        assert_eq!(
+            first["envelope"]["event_id"].as_str(),
+            Some("01TESTULID0000000000000001")
+        );
+        assert!(first["fallback_at"].is_string());
+        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["reason"].as_str(), Some("non_2xx"));
     }
 }
