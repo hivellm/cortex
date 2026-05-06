@@ -1690,6 +1690,323 @@ mod tests {
         );
     }
 
+    // -- Phase 11v: fine-grained search MCP wrappers ---------------
+
+    #[tokio::test]
+    async fn keyword_search_tool_round_trips_meili_payload() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/keyword"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "index": "cortex_consolidations",
+                "hits": [
+                    { "id": "01H1", "title": "consolidation a" },
+                    { "id": "01H2", "title": "consolidation b" }
+                ],
+                "processing_time_ms": 4,
+                "estimated_total_hits": 12
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = KeywordSearchTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({ "index": "cortex_consolidations", "q": "phase11v", "limit": 5 }),
+            )
+            .await
+            .expect("happy-path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["index"], "cortex_consolidations");
+        assert_eq!(payload["hits"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["processing_time_ms"], 4);
+        assert_eq!(payload["estimated_total_hits"], 12);
+    }
+
+    #[tokio::test]
+    async fn keyword_search_tool_surfaces_index_not_found_as_soft_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/keyword"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "reason": "index_not_found",
+                "message": "index `cortex_missing` not found in Meili",
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = KeywordSearchTool::new();
+        let res = tool
+            .call(&ctx, json!({ "index": "cortex_missing", "q": "x" }))
+            .await
+            .expect("404 must arrive as soft-error, not panic");
+        assert!(res.is_error, "non-2xx must be a soft-error");
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["reason"], "index_not_found");
+    }
+
+    #[tokio::test]
+    async fn keyword_search_tool_returns_api_unreachable_when_no_listener() {
+        // No server: bind to a port that has nothing listening so
+        // reqwest fails connect and the tool produces the canonical
+        // `cortex-api unreachable` soft-error envelope.
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let tool = KeywordSearchTool::new();
+        let res = tool
+            .call(&ctx, json!({ "index": "cortex_consolidations", "q": "x" }))
+            .await
+            .expect("transport failure must arrive as soft-error, not panic");
+        assert!(res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["reason"], reasons::API_UNREACHABLE);
+    }
+
+    #[tokio::test]
+    async fn vector_search_tool_round_trips_vectorizer_payload() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/vector"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "collection": "cortex.consolidation.fp32",
+                "hits": [
+                    { "id": "01V1", "score": 0.91, "payload": {"kind":"consolidation"} }
+                ],
+                "upstream_latency_ms": 23
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = VectorSearchTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({
+                    "collection": "cortex.consolidation.fp32",
+                    "query_vector": [0.1, 0.2, 0.3],
+                    "k": 5
+                }),
+            )
+            .await
+            .expect("happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["collection"], "cortex.consolidation.fp32");
+        assert_eq!(payload["hits"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["upstream_latency_ms"], 23);
+    }
+
+    #[tokio::test]
+    async fn vector_search_tool_surfaces_bad_input_as_soft_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/vector"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "reason": "bad_input",
+                "message": "exactly one of `query_vector` or `query_text` is required",
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = VectorSearchTool::new();
+        let res = tool
+            .call(&ctx, json!({ "collection": "cortex.consolidation.fp32" }))
+            .await
+            .expect("400 must arrive as soft-error");
+        assert!(res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["reason"], "bad_input");
+    }
+
+    #[tokio::test]
+    async fn vector_search_tool_surfaces_budget_exceeded_envelope() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        // The cortex-api `ok_capped` helper returns HTTP 413 with an
+        // `error` field rather than a `reason` field. The MCP wrapper
+        // surfaces the envelope as a soft-error keyed on the
+        // upstream HTTP status (no `reason` → fallback label).
+        Mock::given(method("POST"))
+            .and(path("/v1/search/vector"))
+            .respond_with(ResponseTemplate::new(413).set_body_json(json!({
+                "error": "budget_exceeded",
+                "payload_bytes": 41201,
+                "transport_cap_bytes": 30720,
+                "suggested_limit": "reduce `k`"
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = VectorSearchTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({
+                    "collection": "cortex.consolidation.fp32",
+                    "query_vector": [0.1, 0.2],
+                    "k": 200
+                }),
+            )
+            .await
+            .expect("413 must arrive as soft-error");
+        assert!(res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        // soft_error wraps the upstream body under `details`; the
+        // MCP wrapper falls back to `API_HTTP_ERROR` for the soft-
+        // error `reason` because the cortex-api 413 envelope uses
+        // `error` instead of `reason`.
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["reason"], reasons::API_HTTP_ERROR);
+        assert_eq!(payload["details"]["error"], "budget_exceeded");
+        assert_eq!(payload["details"]["payload_bytes"], 41201);
+    }
+
+    #[tokio::test]
+    async fn graph_query_tool_round_trips_neighbors_payload() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/graph"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "mode": "neighbors",
+                "nodes": [
+                    { "node_id": "N1", "labels": ["Turn"], "properties": {} },
+                    { "node_id": "N2", "labels": ["Decision"], "properties": {} }
+                ],
+                "edges": [
+                    { "from": "N1", "to": "N2", "kind": "REMEMBERS", "properties": {} }
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphQueryTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({ "mode": "neighbors", "node_id": "N1", "depth": 2 }),
+            )
+            .await
+            .expect("neighbors happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["mode"], "neighbors");
+        assert_eq!(payload["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["edges"].as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn graph_query_tool_surfaces_cypher_disabled_as_soft_error() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/graph"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(json!({
+                "reason": "cypher_disabled",
+                "message": "raw Cypher mode requires `CORTEX_GRAPH_CYPHER_ENABLED=1`",
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphQueryTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({
+                    "mode": "cypher",
+                    "statement": "MATCH (n) RETURN n LIMIT 1"
+                }),
+            )
+            .await
+            .expect("403 must arrive as soft-error");
+        assert!(res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["reason"], "cypher_disabled");
+    }
+
+    #[tokio::test]
+    async fn graph_query_tool_round_trips_cypher_payload_when_enabled_upstream() {
+        // The MCP wrapper does NOT inspect the env var — it simply
+        // forwards the request and surfaces whatever cortex-api
+        // returns. This test pins that contract by mocking a
+        // successful Cypher-mode response.
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/search/graph"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "mode": "cypher",
+                "nodes": [],
+                "edges": []
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphQueryTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({
+                    "mode": "cypher",
+                    "statement": "MATCH (n:Decision) RETURN n LIMIT 1"
+                }),
+            )
+            .await
+            .expect("cypher happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0]
+            .get("text")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["mode"], "cypher");
+        assert!(payload["nodes"].as_array().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn forget_tool_dry_run_round_trips_projection() {
         use wiremock::matchers::{method, path};
