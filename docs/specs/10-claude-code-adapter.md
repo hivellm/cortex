@@ -206,7 +206,70 @@ Mirrors `cortex-core`'s pattern catalog. Redaction happens **before** anything l
 - **Unix:** UDS at `~/.cortex/adapter-claude.sock`, perms 0600.
 - **Windows:** named pipe `\\.\pipe\cortex-adapter-claude`, ACL restricted to current user.
 
-Hook shim detects OS and uses `nc -U` / `socat` (Unix) or PowerShell `NamedPipeClientStream` (Windows). The `.sh` shim is polyglot: a leading `case "${OSTYPE:-}"` block re-execs the sibling `.ps1` via `pwsh -NoProfile -File` on `msys*` / `cygwin*` / `win32*`, then falls through to the Unix-socket path on `linux-gnu` / `darwin*`. That lets the spec-18 plugin's `hooks/hooks.json` invoke a single `bash <event>.sh` command across every platform without per-OS dispatch in the descriptor. The shim scripts live in `hooks/` and are copied into `~/.claude/hooks/` by `cortex-adapters install` (or mirrored into `cortex-plugin/hooks/` when the spec-18 plugin owns the install). On Windows the `.ps1` shim `.Trim()`s its stdin before embedding it as the JSON payload — a stray trailing newline used to break the daemon parser, which is now fixed at the source.
+The native `cortex-hook` bin (see §Transport below) cfg-gates the
+backend per platform: on Windows it opens the named pipe via
+`tokio::net::windows::named_pipe::ClientOptions`, on Unix it connects
+the UDS via `tokio::net::UnixStream`. Operators override either path
+with `--pipe NAME` / `CORTEX_ADAPTER_PIPE` or `--sock PATH` /
+`CORTEX_ADAPTER_SOCK`. The wire shape on either transport is one
+JSON line per round-trip: a `HookFrame` request and either a
+`HookResponse` reply (synchronous) or no reply at all (`--fire-forget`).
+
+### Transport (phase 11x)
+
+The default Claude Code hook command is the native binary
+**`cortex-hook`** (release-mode Rust, ~50 ms cold start on Windows).
+`install.rs` writes the following entries into
+`~/.claude/settings.json`:
+
+| Hook              | Settings command                                  | Mode           |
+|-------------------|---------------------------------------------------|----------------|
+| `UserPromptSubmit`| `cortex-hook UserPromptSubmit`                    | synchronous    |
+| `PreToolUse`      | `cortex-hook PreToolUse`                          | synchronous    |
+| `PostToolUse`     | `cortex-hook PostToolUse --fire-forget`           | publish-only   |
+| `SubagentStop`    | `cortex-hook SubagentStop --fire-forget`          | publish-only   |
+| `Stop`            | `cortex-hook Stop --fire-forget`                  | publish-only   |
+| `SessionStart`    | `cortex-hook SessionStart --fire-forget`          | publish-only   |
+| `Notification`    | `cortex-hook Notification --fire-forget`          | publish-only   |
+
+Synchronous hooks block on a one-line response from the daemon
+because Claude Code consumes the reply (`additionalContext` for
+`UserPromptSubmit`, `permissionDecision` for `PreToolUse`).
+Fire-and-forget hooks flush the frame and disconnect; the daemon
+still publishes envelopes asynchronously, so no event is lost. This
+matrix matches §Synchronous paths above — fire-forget covers exactly
+the events with no daemon return value.
+
+Bin behaviour:
+
+- Reads stdin to a string. Treats empty / non-JSON input as `{}` and
+  builds the canonical `HookFrame` (fields: `hook` PascalCase,
+  `session_id` from `CLAUDE_SESSION_ID`, `cwd`, `payload` raw).
+- Honours `CORTEX_ADAPTER_DISABLE=1` — print `{}` and `exit 0` before
+  any I/O.
+- Default response timeout 1500 ms (`--timeout-ms`). On any error —
+  pipe / socket missing, peer dropped mid-write, malformed reply,
+  timeout — the bin prints `{}` and exits 0. **Never breaks the
+  Claude Code session.**
+- Single-thread tokio runtime
+  (`#[tokio::main(flavor = "current_thread")]`); no extra threads or
+  background work.
+
+Legacy fallback: the `.sh` shims under
+`crates/cortex-adapter-claude-code/hooks/` are retained for
+Linux/macOS environments where `cortex-hook` is not on PATH. They
+speak the same wire shape via `nc -U` / `socat` against the UDS and
+honour the same `CORTEX_ADAPTER_DISABLE` kill-switch. The `.ps1`
+shims are retired (phase 11x) and removed from the binary's
+embedded source; `cortex-adapter-claude install` opportunistically
+deletes a stale `.ps1` left by older installs.
+
+Pre-phase-11x measurements on Windows showed `pwsh -NoProfile` cold
+start dominating per-hook latency (~545 ms), with named-pipe
+round-trip + daemon work only contributing ~90 ms. The native bin
+collapses cold start to ~30–50 ms and a 14-hook turn from ~10.2 s
+to ~0.9 s of adapter overhead. Baseline numbers and rerun procedure
+in `crates/cortex-adapter-claude-code/benches/baseline-2026-05-06.txt`.
 
 ### Install / uninstall
 

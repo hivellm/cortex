@@ -18,14 +18,19 @@ use thiserror::Error;
 pub struct HookShim {
     /// Hook discriminator name as Claude Code labels it.
     pub hook_name: &'static str,
-    /// Bash shim file name (Linux/macOS).
+    /// Bash shim file name (Linux/macOS fallback). Kept on disk for
+    /// environments where `cortex-hook` is not on PATH; settings.json
+    /// no longer registers these directly — see `build_hook_entry`.
     pub sh_filename: &'static str,
-    /// PowerShell shim file name (Windows).
+    /// PowerShell shim file name (Windows). Phase 11x retired the
+    /// `.ps1` shims entirely (the `cortex-hook` bin replaces them).
+    /// The filename is retained so `uninstall(--purge)` can sweep
+    /// stale `.ps1` files left behind by previous installs.
     pub ps1_filename: &'static str,
-    /// Bash shim source baked at build time.
+    /// Bash shim source baked at build time. Written to `<hooks_dir>`
+    /// during `install` so operators on Linux/macOS who fall off the
+    /// `cortex-hook` bin path still have a working shell shim.
     pub sh_source: &'static str,
-    /// PowerShell shim source baked at build time.
-    pub ps1_source: &'static str,
     /// Phase 11x — when `true` the generated settings entry appends
     /// `--fire-forget` so the bin disconnects without waiting for a
     /// daemon response. Set for hooks that do not consume
@@ -41,7 +46,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-session-start.sh",
         ps1_filename: "cortex-session-start.ps1",
         sh_source: include_str!("../hooks/cortex-session-start.sh"),
-        ps1_source: include_str!("../hooks/cortex-session-start.ps1"),
         fire_forget: true,
     },
     HookShim {
@@ -49,7 +53,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-user-prompt.sh",
         ps1_filename: "cortex-user-prompt.ps1",
         sh_source: include_str!("../hooks/cortex-user-prompt.sh"),
-        ps1_source: include_str!("../hooks/cortex-user-prompt.ps1"),
         fire_forget: false,
     },
     HookShim {
@@ -57,7 +60,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-pre-tool.sh",
         ps1_filename: "cortex-pre-tool.ps1",
         sh_source: include_str!("../hooks/cortex-pre-tool.sh"),
-        ps1_source: include_str!("../hooks/cortex-pre-tool.ps1"),
         fire_forget: false,
     },
     HookShim {
@@ -65,7 +67,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-post-tool.sh",
         ps1_filename: "cortex-post-tool.ps1",
         sh_source: include_str!("../hooks/cortex-post-tool.sh"),
-        ps1_source: include_str!("../hooks/cortex-post-tool.ps1"),
         fire_forget: true,
     },
     HookShim {
@@ -73,7 +74,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-stop.sh",
         ps1_filename: "cortex-stop.ps1",
         sh_source: include_str!("../hooks/cortex-stop.sh"),
-        ps1_source: include_str!("../hooks/cortex-stop.ps1"),
         fire_forget: true,
     },
     HookShim {
@@ -81,7 +81,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-subagent-stop.sh",
         ps1_filename: "cortex-subagent-stop.ps1",
         sh_source: include_str!("../hooks/cortex-subagent-stop.sh"),
-        ps1_source: include_str!("../hooks/cortex-subagent-stop.ps1"),
         fire_forget: true,
     },
     HookShim {
@@ -89,7 +88,6 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-notification.sh",
         ps1_filename: "cortex-notification.ps1",
         sh_source: include_str!("../hooks/cortex-notification.sh"),
-        ps1_source: include_str!("../hooks/cortex-notification.ps1"),
         fire_forget: true,
     },
 ];
@@ -179,10 +177,17 @@ pub fn install_with(
     fs::create_dir_all(&layout.hooks_dir)?;
     let mut hooks_written: Vec<String> = Vec::new();
     for shim in HOOK_SHIMS {
+        // Phase 11x retired the `.ps1` shims; settings.json points
+        // straight at the `cortex-hook` bin on every platform.
+        // Linux/macOS still drop the `.sh` fallback to disk so an
+        // operator without `cortex-hook` on PATH has a working shim
+        // they can wire up by hand. We also opportunistically delete
+        // a stale `.ps1` from the previous install so the directory
+        // doesn't hold a misleading file.
         let sh_path = layout.hooks_dir.join(shim.sh_filename);
         fs::write(&sh_path, shim.sh_source)?;
-        let ps1_path = layout.hooks_dir.join(shim.ps1_filename);
-        fs::write(&ps1_path, shim.ps1_source)?;
+        let stale_ps1 = layout.hooks_dir.join(shim.ps1_filename);
+        let _ = fs::remove_file(&stale_ps1);
         hooks_written.push(shim.hook_name.to_string());
         // chmod +x on Unix so Claude Code can execute the shim.
         #[cfg(unix)]
@@ -347,7 +352,12 @@ mod tests {
         assert!(report.settings_modified);
         for shim in HOOK_SHIMS {
             assert!(layout.hooks_dir.join(shim.sh_filename).exists());
-            assert!(layout.hooks_dir.join(shim.ps1_filename).exists());
+            // Phase 11x: install no longer writes `.ps1` shims. The
+            // settings.json points at the `cortex-hook` bin instead.
+            assert!(
+                !layout.hooks_dir.join(shim.ps1_filename).exists(),
+                ".ps1 shim must NOT be written by install"
+            );
         }
         let body = fs::read_to_string(&layout.settings_path).unwrap();
         let parsed: Value = serde_json::from_str(&body).unwrap();

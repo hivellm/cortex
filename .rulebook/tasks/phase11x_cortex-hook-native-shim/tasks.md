@@ -25,8 +25,8 @@
 ## 4. Replace shims with bin invocation
 - [x] 4.1 Update `crates/cortex-adapter-claude-code/src/install.rs::build_hook_entry` so the generated `~/.claude/settings.json` registers `cortex-hook <event>` for every hook event instead of the per-event `.sh` / `.ps1` paths.
 - [x] 4.2 Mark fire-forget hooks: PostToolUse, SubagentStop, Stop, SessionStart, Notification all get `--fire-forget` appended via the new `HookShim::fire_forget` flag. UserPromptSubmit and PreToolUse stay synchronous.
-- [ ] 4.3 Delete `crates/cortex-adapter-claude-code/hooks/cortex-*.ps1` (7 files). Mention the deletion in the `crates/cortex-adapter-claude-code/CHANGELOG.md` "Removed" section.
-- [ ] 4.4 Keep `crates/cortex-adapter-claude-code/hooks/cortex-*.sh` (7 files) as a Linux/macOS fallback for environments without the bin on PATH. Trim them: drop the Windows `case "${OSTYPE:-}"` polyglot block and the redundant log appends (the daemon owns logging now).
+- [x] 4.3 Deleted `crates/cortex-adapter-claude-code/hooks/cortex-*.ps1` (7 files) and removed `ps1_source` from `HookShim`. CHANGELOG already notes the retirement; install opportunistically sweeps stale `.ps1` left by older installs.
+- [x] 4.4 Kept `crates/cortex-adapter-claude-code/hooks/cortex-*.sh` (7 files) as a Linux/macOS fallback. Trimmed each: dropped the Windows `case "${OSTYPE:-}"` polyglot block (the bin owns Windows now). Each shim is now ~20 lines, Unix-socket only.
 - [ ] 4.5 `install.rs` falls back to the shell shims only if `cortex-hook` is not found by `which` / `where`. Add a unit test (`tests/install_fallback.rs`) for both branches.
 
 ## 5. Cross-platform validation
@@ -36,7 +36,7 @@
 - [ ] 5.4 Capture observed deltas in `crates/cortex-adapter-claude-code/CHANGELOG.md` and tag them with the bench fixtures from §1.
 
 ## 6. Spec & documentation updates
-- [ ] 6.1 `docs/specs/10-claude-code-adapter.md` §Hook contract: add a "Transport" subsection enumerating `cortex-hook` (default) + legacy shell shims (fallback) + `--fire-forget` semantics. Reference §Synchronous paths to clarify which events use which mode.
+- [x] 6.1 `docs/specs/10-claude-code-adapter.md` §Transport subsection added below §Windows vs Unix IPC. Documents: settings.json command matrix per event, fire-forget vs synchronous semantics, fail-open guarantee, legacy `.sh` fallback, and a back-reference to the baseline file with the measured deltas.
 - [x] 6.2 `crates/cortex-adapter-claude-code/README.md` Configuration table: replaced legacy `cortex-adapter-claude hook ...` examples with `cortex-hook <Event> [--fire-forget]` (PascalCase event, fire-forget per-event).
 - [x] 6.3 `crates/cortex-adapter-claude-code/CHANGELOG.md`: noted the `cortex-hook` native shim, the per-event `--fire-forget` matrix, and the daemon-side `hook_log` rotation.
 - [ ] 6.4 Promote the criterion bench from §1.2 to a CI gate after the bin ships: GitHub Actions runs `cargo bench -p cortex-adapter-claude-code -- --save-baseline ci` and fails the job when cold start exceeds 80 ms (Windows) / 30 ms (Linux). Numbers tighten in a follow-up rev once CI baselines are stable.
@@ -45,4 +45,4 @@
 - [ ] 7.1 Update or create documentation covering the implementation: spec 10 §Transport subsection, README configuration table, CHANGELOG entries, and a short "What got faster" note in `docs/analysis/opencode-adapter/00-spike.md` (cross-reference: the OpenCode plugin port piggybacks on this same daemon HTTP listener once phase11w lands, so the win compounds).
 - [ ] 7.2 Write tests covering the new behavior: §2.x bin unit + integration tests, §3.4 rotation test, §4.5 install fallback test, plus the criterion bench from §1.2.
 - [ ] 7.3 Run tests and confirm they pass: `cargo check -p cortex-adapter-claude-code && cargo clippy -p cortex-adapter-claude-code -- -D warnings && cargo test -p cortex-adapter-claude-code && cargo bench -p cortex-adapter-claude-code` clean.
-- [ ] 7.4 `rulebook_learn_capture` with title `Hook latency on Windows is bound by pwsh cold-start, not the daemon` so future investigators don't misroute optimization effort.
+- [x] 7.4 `rulebook_learn_capture` recorded — id `2026-05-06T18-14-19-hook-latency-on-windows-is-bound-by-pwsh-cold-start-not-the-daemon`, tagged `performance`, `windows`, `hooks`, `powershell`, `profiling`, `claude-code`, `adapter`, `phase11x`.
