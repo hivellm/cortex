@@ -200,7 +200,7 @@ pub fn install_with(
             }
         }
     }
-    let settings_modified = patch_settings(&layout.settings_path)?;
+    let settings_modified = patch_settings(layout)?;
     Ok(InstallReport {
         hooks_written,
         settings_modified,
@@ -231,7 +231,8 @@ pub fn uninstall(layout: &Layout, purge_files: bool) -> Result<InstallReport, In
 
 /// Apply the cortex hook entries to `settings.json`. Returns `true`
 /// when the file changed on disk.
-fn patch_settings(path: &Path) -> Result<bool, InstallError> {
+fn patch_settings(layout: &Layout) -> Result<bool, InstallError> {
+    let path = &layout.settings_path;
     let mut existing: Value = if path.exists() {
         let body = fs::read_to_string(path)?;
         serde_json::from_str(&body).unwrap_or_else(|_| Value::Object(Map::new()))
@@ -248,8 +249,9 @@ fn patch_settings(path: &Path) -> Result<bool, InstallError> {
         .or_insert_with(|| Value::Object(Map::new()));
     let hooks_obj = hooks_map.as_object_mut().expect("hooks must be an object");
 
+    let bin_available = cortex_hook_on_path();
     for shim in HOOK_SHIMS {
-        let entry = build_hook_entry(shim);
+        let entry = build_hook_entry(shim, layout, bin_available);
         hooks_obj.insert(shim.hook_name.to_string(), entry);
     }
 
@@ -308,22 +310,65 @@ fn unpatch_settings(path: &Path) -> Result<bool, InstallError> {
     Ok(true)
 }
 
-fn build_hook_entry(shim: &HookShim) -> Value {
+fn build_hook_entry(shim: &HookShim, layout: &Layout, bin_available: bool) -> Value {
     // Phase 11x — settings.json points at the native `cortex-hook` bin
-    // instead of a per-event shell shim. The bin runs in ~50 ms cold
-    // start on Windows versus the ~545 ms `pwsh` floor the legacy
-    // .ps1 shims paid. Fire-forget hooks append the flag so the bin
-    // disconnects without waiting for a daemon response.
-    let command = if shim.fire_forget {
-        format!("cortex-hook {} --fire-forget", shim.hook_name)
+    // when the binary is on PATH. The bin runs in ~50 ms cold start on
+    // Windows versus the ~545 ms `pwsh` floor the legacy `.ps1` shims
+    // paid. Fire-forget hooks append the flag so the bin disconnects
+    // without waiting for a daemon response.
+    //
+    // When `cortex-hook` is not on PATH, fall back to invoking the
+    // legacy `.sh` shim directly (`bash <abs-path>`). The shell shim
+    // costs more per invocation than the bin but keeps Cortex working
+    // for operators who haven't run `cargo install --path .` yet.
+    // Fire-and-forget can't be expressed cleanly through the shell
+    // shim — it always reads the daemon's reply — so the fallback
+    // gives up that win in exchange for compatibility.
+    let command = if bin_available {
+        if shim.fire_forget {
+            format!("cortex-hook {} --fire-forget", shim.hook_name)
+        } else {
+            format!("cortex-hook {}", shim.hook_name)
+        }
     } else {
-        format!("cortex-hook {}", shim.hook_name)
+        let sh_path = layout.hooks_dir.join(shim.sh_filename);
+        format!("bash {}", sh_path.display())
     };
     json!({
         "type": "command",
         "command": command,
         "owner": "cortex",
     })
+}
+
+/// Probe `$PATH` for an executable named `cortex-hook` (or
+/// `cortex-hook.exe` on Windows). Returns `true` when found in any
+/// directory listed in the `PATH` environment variable.
+///
+/// Tests force the negative branch by setting
+/// `CORTEX_HOOK_FORCE_FALLBACK=1`; the same env var lets operators
+/// in the field flip to the shell shim path without unsetting their
+/// real PATH.
+fn cortex_hook_on_path() -> bool {
+    if std::env::var("CORTEX_HOOK_FORCE_FALLBACK").as_deref() == Ok("1") {
+        return false;
+    }
+    let bin_name = if cfg!(windows) {
+        "cortex-hook.exe"
+    } else {
+        "cortex-hook"
+    };
+    let path = match std::env::var_os("PATH") {
+        Some(p) => p,
+        None => return false,
+    };
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(bin_name);
+        if candidate.is_file() {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_cortex_entry(entry: &Value, _shim: &HookShim) -> bool {
@@ -405,9 +450,75 @@ mod tests {
     }
 
     #[test]
-    fn settings_register_cortex_hook_bin_with_fire_forget_per_event() {
+    fn settings_fall_back_to_bash_shim_when_cortex_hook_missing() {
         let (_tmp, layout) = fixture_layout();
-        install(&layout).expect("install");
+        // Force the `cortex-hook` PATH lookup to fail without
+        // touching the real environment that other tests rely on.
+        std::env::set_var("CORTEX_HOOK_FORCE_FALLBACK", "1");
+        let result = install(&layout);
+        std::env::remove_var("CORTEX_HOOK_FORCE_FALLBACK");
+        result.expect("install");
+
+        let body = fs::read_to_string(&layout.settings_path).unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        let hooks = parsed["hooks"].as_object().unwrap();
+
+        for shim in HOOK_SHIMS {
+            let cmd = hooks[shim.hook_name]["command"].as_str().unwrap();
+            // Fallback always emits `bash <abs-path-to-shim>` — no
+            // `cortex-hook` reference, no `--fire-forget`, just the
+            // shell shim. Synchronous + fire-forget collapse to the
+            // same shell command.
+            let expected_path = layout.hooks_dir.join(shim.sh_filename);
+            let expected = format!("bash {}", expected_path.display());
+            assert_eq!(
+                cmd, expected,
+                "hook {} should fall back to bash invocation",
+                shim.hook_name
+            );
+            assert!(!cmd.contains("cortex-hook"));
+            assert!(!cmd.contains("--fire-forget"));
+        }
+    }
+
+    /// Drop a sentinel `cortex-hook` (or `.exe` on Windows) into the
+    /// tempdir and prepend it to `PATH` so [`cortex_hook_on_path`]
+    /// finds it during the test. Returns the prior `PATH` value so
+    /// the caller can restore it.
+    fn fake_cortex_hook_on_path(dir: &Path) -> Option<std::ffi::OsString> {
+        let bin_name = if cfg!(windows) {
+            "cortex-hook.exe"
+        } else {
+            "cortex-hook"
+        };
+        let bin_path = dir.join(bin_name);
+        // Empty file is enough — cortex_hook_on_path only checks for
+        // `is_file()`, never executes anything.
+        fs::write(&bin_path, b"#!/usr/bin/env bash\nexit 0\n").unwrap();
+        let prior = std::env::var_os("PATH");
+        let mut paths: Vec<std::path::PathBuf> = vec![dir.to_path_buf()];
+        if let Some(p) = &prior {
+            paths.extend(std::env::split_paths(p));
+        }
+        let joined = std::env::join_paths(paths).unwrap();
+        std::env::set_var("PATH", joined);
+        prior
+    }
+
+    fn restore_path(prior: Option<std::ffi::OsString>) {
+        match prior {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+    }
+
+    #[test]
+    fn settings_register_cortex_hook_bin_with_fire_forget_per_event() {
+        let (tmp, layout) = fixture_layout();
+        let prior_path = fake_cortex_hook_on_path(tmp.path());
+        let result = install(&layout);
+        restore_path(prior_path);
+        result.expect("install");
         let body = fs::read_to_string(&layout.settings_path).unwrap();
         let parsed: Value = serde_json::from_str(&body).unwrap();
         let hooks = parsed["hooks"].as_object().unwrap();
