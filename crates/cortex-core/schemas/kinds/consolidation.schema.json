@@ -35,11 +35,11 @@
       },
       "description": "Discriminator must match `grain` (validated in Rust — JSON Schema cannot express the cross-field rule cleanly)."
     },
-    "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
     "summary_markdown": {
       "type": "string",
       "minLength": 200,
-      "maxLength": 2000
+      "maxLength": 4000
     },
     "takeaways": {
       "type": "array",

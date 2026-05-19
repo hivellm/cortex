@@ -24,6 +24,10 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use cortex_workers::consolidator::cost_telemetry::CostBudget;
+use cortex_workers::consolidator::metrics::{
+    metrics as consolidator_metrics, REASON_CLIENT_BUILD, REASON_ENV_UNSET, REASON_NETWORK,
+    REASON_NON_2XX,
+};
 use cortex_workers::consolidator::orchestrator::{Orchestrator, ProducerSelection, Trigger};
 use cortex_workers::consolidator::source::{
     LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError,
@@ -334,6 +338,7 @@ async fn publish_consolidation(
             reason = "env_unset",
             "consolidator publish skipped — CORTEX_INGESTION_URL unset and --ingest-url empty; envelope appended to fallback JSONL"
         );
+        consolidator_metrics().record_publish_failure(REASON_ENV_UNSET);
         append_publish_fallback(&envelope, "env_unset")?;
         return Ok(());
     };
@@ -352,6 +357,7 @@ async fn publish_consolidation(
                 error = %e,
                 "consolidator publish skipped — reqwest client build failed; envelope appended to fallback JSONL"
             );
+            consolidator_metrics().record_publish_failure(REASON_CLIENT_BUILD);
             append_publish_fallback(&envelope, "client_build")?;
             return Ok(());
         }
@@ -373,6 +379,7 @@ async fn publish_consolidation(
                     url = %url,
                     "consolidator publish ok"
                 );
+                consolidator_metrics().record_publish_ok();
                 eprintln!("  publish : ok event_id={event_id}");
                 Ok(())
             } else {
@@ -385,6 +392,7 @@ async fn publish_consolidation(
                     body = %body,
                     "consolidator publish rejected; envelope appended to fallback JSONL"
                 );
+                consolidator_metrics().record_publish_failure(REASON_NON_2XX);
                 append_publish_fallback(&envelope, "non_2xx")?;
                 Ok(())
             }
@@ -398,6 +406,7 @@ async fn publish_consolidation(
                 error = %e,
                 "consolidator publish failed; envelope appended to fallback JSONL"
             );
+            consolidator_metrics().record_publish_failure(REASON_NETWORK);
             append_publish_fallback(&envelope, "network")?;
             Ok(())
         }
@@ -1459,5 +1468,33 @@ mod tests {
         assert!(first["fallback_at"].is_string());
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["reason"].as_str(), Some("non_2xx"));
+    }
+
+    #[test]
+    fn metrics_each_reason_increments_its_dedicated_counter() {
+        // Phase12a §3.2 — exercise every documented reason path against
+        // the live publish-metrics registry and assert the counter for
+        // that reason advances exactly once. The registry is process-
+        // wide, so we read the baseline first and assert the delta to
+        // stay independent of test ordering.
+        use cortex_workers::consolidator::metrics::{
+            metrics, REASON_CLIENT_BUILD, REASON_ENV_UNSET, REASON_NETWORK, REASON_NON_2XX,
+        };
+        let baseline = metrics().snapshot();
+        metrics().record_publish_failure(REASON_ENV_UNSET);
+        metrics().record_publish_failure(REASON_CLIENT_BUILD);
+        metrics().record_publish_failure(REASON_NON_2XX);
+        metrics().record_publish_failure(REASON_NETWORK);
+        metrics().record_publish_ok();
+        let after = metrics().snapshot();
+        assert_eq!(after.env_unset - baseline.env_unset, 1, "env_unset");
+        assert_eq!(
+            after.client_build - baseline.client_build,
+            1,
+            "client_build"
+        );
+        assert_eq!(after.non_2xx - baseline.non_2xx, 1, "non_2xx");
+        assert_eq!(after.network - baseline.network, 1, "network");
+        assert_eq!(after.ok - baseline.ok, 1, "ok");
     }
 }

@@ -93,6 +93,18 @@ impl Summariser for ClaudeCliSummariser {
             .max_output_tokens
             .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS);
 
+        // 2026-05-19 — `claude -p` does not expose a `--max-tokens`
+        // flag. Default effort emits ~1k-token responses, which
+        // truncates the consolidation `summary_markdown` mid-sentence
+        // (the producer's wire-format target is ~200..2000 bytes
+        // for Session, ~200..4000 for TopicCard). `--effort high`
+        // raises the thinking + output budget so the JSON wrap
+        // closes cleanly and the rendered markdown is a complete
+        // paragraph.
+        let effort = match self.kind {
+            SummariserKind::Haiku45 => "high",
+            SummariserKind::Opus47 => "max",
+        };
         let mut cmd = Command::new(&self.claude_bin);
         cmd.args([
             "-p",
@@ -101,6 +113,8 @@ impl Summariser for ClaudeCliSummariser {
             self.kind.model_id(),
             "--output-format",
             "json",
+            "--effort",
+            effort,
             "--dangerously-skip-permissions",
         ]);
         // Match the classifier's CLI subprocess hygiene: disable the

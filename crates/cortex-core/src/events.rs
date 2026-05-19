@@ -106,6 +106,12 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Phase12e — total number of [`Kind`] variants. Pinned by the
+    /// compile-time assertion next to [`crate::vocab::KIND_IDS`] so
+    /// adding a variant without updating the vocab fails `cargo
+    /// check`. Bump together with the enum.
+    pub const COUNT: usize = 12;
+
     /// Filename stem for the matching per-kind schema file.
     pub fn schema_stem(self) -> &'static str {
         match self {
@@ -391,8 +397,8 @@ pub struct TimeSpan {
 /// raw fragments only when it needs the receipts.
 ///
 /// Field-level invariants enforced by the §1.5 validator:
-/// - `title.len() <= 80` chars
-/// - `200 <= summary_markdown.len() <= 2000` bytes
+/// - `title.len() <= 200` chars
+/// - `200 <= summary_markdown.len() <= 4000` bytes
 /// - `scope` discriminator matches `grain`
 /// - `source_event_count >= source_event_ids.len()` (count holds
 ///   the *full* count even when the ids vector is clipped)
@@ -452,11 +458,11 @@ pub struct ConsolidationPayload {
 pub const CONSOLIDATION_SOURCE_IDS_INLINE_CAP: usize = 256;
 
 /// Title cap (chars) — see §1.5 validator.
-pub const CONSOLIDATION_TITLE_MAX_CHARS: usize = 80;
+pub const CONSOLIDATION_TITLE_MAX_CHARS: usize = 200;
 /// Summary lower bound (bytes) — see §1.5 validator.
 pub const CONSOLIDATION_SUMMARY_MIN_BYTES: usize = 200;
 /// Summary upper bound (bytes) — see §1.5 validator.
-pub const CONSOLIDATION_SUMMARY_MAX_BYTES: usize = 2_000;
+pub const CONSOLIDATION_SUMMARY_MAX_BYTES: usize = 4_000;
 
 /// Phase11r §1 — payload for [`Kind::TopicCard`].
 ///
