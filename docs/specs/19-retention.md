@@ -1,8 +1,92 @@
 # Spec 19 — Retention Sweep
 
 **Status:** 🟢 phase9a core + phase11o consolidation pruner +
-phase11v daemon recovery shipped against the live Vectorizer SDK
-3.3.0 (`move_to_collection`, `delete_vectors`) and Meilisearch.
+phase11v daemon recovery + phase13a `Sweep` trait shipped against
+the live Vectorizer SDK 3.3.0 (`move_to_collection`,
+`delete_vectors`) and Meilisearch.
+
+## Phase13a — `Sweep` trait + uniform supervisor (Implemented)
+
+ADR-009 codifies the single contract every retention / digest /
+pruning sweep implements:
+
+```rust
+#[async_trait]
+pub trait Sweep: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn schedule(&self) -> Schedule;
+    async fn run(&self, ctx: &SweepCtx) -> anyhow::Result<SweepReport>;
+    fn report_view(&self, report: &SweepReport) -> SweepReportView;
+}
+```
+
+Layout (in `crates/cortex-workers/src/sweep/`):
+
+- `trait.rs` — the `Sweep` contract above.
+- `ctx.rs` — `SweepCtx` carrying `MetadataHandle`
+  (`Arc<Mutex<MetadataStore>>`), reference clock, shared
+  `SweepConfig` (abandon-grace seconds, default batch size,
+  dry-run toggle), and a logger target. Per-backend handles
+  (Vectorizer, Meili, Nexus) live on each `impl Sweep` struct;
+  the ctx is an environment, not a service locator.
+- `report.rs` — `SweepReport { name, started_at, finished_at,
+  status, bytes_reclaimed, rows_processed, tier_transitions,
+  error_message }` and the dashboard-facing `SweepReportView`
+  projection. `SweepStatus` mirrors the existing
+  `retention_sweeps.status` taxonomy (`running` / `success` /
+  `failed` / `abandoned`). Long error messages truncate on UTF-8
+  char boundary at 256 bytes.
+- `registry.rs` — `SweepRegistry { Vec<Box<dyn Sweep>> }` and the
+  in-process supervisor (`run_all`). For every sweep it mints a
+  ULID, calls `start_retention_sweep` (advisory lock honoured),
+  invokes `Sweep::run`, then writes the terminal row via
+  `finish_retention_sweep` with the full `SweepReport`
+  serialised as JSON into `tier_transitions_json`. Sweep-internal
+  failures land as `status = failed` rows with `error_message`
+  in the payload; persistence failures short-circuit and return
+  `RegistryError`.
+
+Migrated sweeps (all in
+`crates/cortex-workers/src/retention/<slug>_sweep.rs`):
+
+| Slug | Schedule | Wraps |
+|---|---|---|
+| `tier_sweep` | `0 3 * * *` | `retention::run_sweep` over `Arc<dyn VectorizerOps>` |
+| `parquet_rollup` | `0 4 * * *` | `parquet_rollup::{quarantine_pre_existing, enumerate_compactable, compact_partition, apply_three_year_drop}` (offloaded via `spawn_blocking`) |
+| `cas_vacuum` | `30 4 * * 1` | `cas_vacuum::run` (opens `CasStore` inside `spawn_blocking`) |
+| `pii_enforce` | `0 5 * * *` | `pii_enforce::run_enforcement` over `Arc<dyn PiiBackend>` + `Arc<dyn PiiTargetProvider>` |
+| `meili_prune` | `30 5 * * *` | `meili_prune::run_meili_prune` over `Arc<dyn MeiliBackend>` |
+| `metadata_reap` | `45 5 * * *` | `metadata_reap::run` reusing the ctx's `MetadataHandle` |
+| `consolidation_prune` | `0 3 * * *` | `pruner::engine::run_sweep` over `Arc<dyn VectorizerClient>` + `Arc<dyn MeiliPruneOps>` + `Arc<dyn ConsolidationDocProvider>` |
+
+The seven sweeps are wired into a production-shaped registry via
+`canonical_registry(tier, parquet, cas, pii, meili, metadata_reap,
+consolidation)`. An integration test
+(`crates/cortex-workers/tests/sweep_registry_canonical_it.rs`)
+walks the canonical set against in-memory backends and asserts
+exactly 7 `retention_sweeps` rows materialise with parseable
+`SweepReport` payloads — the load-bearing gate of ADR-009.
+
+### Dashboard reader (ADR-014, §4.3)
+
+The `GET /v1/retention/state` handler is now a pure reader: it
+joins the cron-jobs schedule projection with the most-recent
+`retention_sweeps` row per sweep name (parsed from the JSON
+payload's `name` field). Missing cron rows surface as wire-level
+`null` for `next_run` (not a handler-side missing-state string
+sentinel). The legacy literals are gone; the CI workflow
+`.github/workflows/dashboard-grep-gate.yml` greps
+`crates/cortex-api/src/dashboard/**` for `"never"|"n/a"|"unknown"`
+on every push and fails the build on any match.
+
+### Schema deltas
+
+Phase13a does NOT alter the `retention_sweeps` SQLite schema.
+The full `SweepReport` lives in `tier_transitions_json`;
+`records_demoted` reuses the trait-level `rows_processed`. Phase
+B adds `name`, `bytes_reclaimed`, `rows_processed`, and
+`error_message` columns so the supervisor stops folding through
+the JSON blob.
 
 ## Phase11w — Tool-call digest summariser (Implemented)
 

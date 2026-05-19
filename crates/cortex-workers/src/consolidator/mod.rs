@@ -39,8 +39,10 @@
 #![warn(missing_docs)]
 
 pub mod cost_telemetry;
+pub mod metrics;
 pub mod orchestrator;
 pub mod producer;
+pub mod producer_trait;
 pub mod source;
 pub mod summariser;
 pub mod summariser_cli;

@@ -28,11 +28,18 @@
 #![warn(missing_docs)]
 
 pub mod cas_vacuum;
+pub mod cas_vacuum_sweep;
+pub mod consolidation_prune_sweep;
 pub mod meili_prune;
+pub mod meili_prune_sweep;
 pub mod metadata_reap;
+pub mod metadata_reap_sweep;
 pub mod parquet_rollup;
+pub mod parquet_rollup_sweep;
 pub mod pii_enforce;
+pub mod pii_enforce_sweep;
 pub mod scheduler;
+pub mod tier_sweep;
 pub mod tool_call_digest;
 pub mod turn_digest;
 

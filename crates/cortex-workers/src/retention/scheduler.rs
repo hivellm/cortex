@@ -306,10 +306,20 @@ fn default_jobs() -> Vec<DefaultJob> {
         // (03:00) so the pruner sweeps over fresh consolidation
         // rows. Without this seed the pruner walks an empty
         // `cortex_consolidations` index every night.
+        //
+        // 2026-05-19 fix: the `cortex-consolidator nightly`
+        // subcommand defaults `--dry-run=true` (see the bin's
+        // clap definition) so a stray operator invocation never
+        // burns budget. The cron seed MUST explicitly disable
+        // dry-run, otherwise every nightly tick is a no-op and
+        // the dashboard `cortex_consolidations` panel stays at
+        // zero forever. Pre-2026-05-19 deployments shipped without
+        // the flag; `reconcile_default_drift` advances the row on
+        // next daemon boot.
         DefaultJob {
             name: "retention.consolidator_nightly",
             schedule: "0 2 * * *",
-            command: "cortex-consolidator nightly",
+            command: "cortex-consolidator nightly --dry-run=false",
             enabled: true,
         },
         // phase11w — Tool-call digest summariser. Buckets old
@@ -337,6 +347,29 @@ fn default_jobs() -> Vec<DefaultJob> {
             name: "retention.consolidation_prune",
             schedule: "0 3 * * *",
             command: "cortex-ops consolidation-prune",
+            enabled: true,
+        },
+        // Phase12b — bulk Parquet archive purge. Walks
+        // `${CORTEX_HOME}/events/**/*.parquet`, deletes every file
+        // whose newest envelope is older than the 365-day retention
+        // window. Replaces the per-event `/v1/admin/forget` path
+        // operators were avoiding by reaching for `rm -rf`. Default
+        // 03:15 UTC — 15 minutes after `retention.consolidation_prune`
+        // so the consolidation tier is already demoted when the bulk
+        // purge runs, and there is no minute-level contention with
+        // the other 03:00 sweep. Operators tune cadence + retention
+        // via the existing cron-edit surface; the §3 seed_defaults
+        // reconciler preserves operator-tuned schedules.
+        //
+        // The shipped command embeds the 365-day cutoff in
+        // `--before` at run time. The cron-side handler resolves
+        // `now - 365d` immediately before invoking the binary; the
+        // command literal stays static so the reconciler's
+        // drift-detection works without false positives every day.
+        DefaultJob {
+            name: "retention.archive_purge",
+            schedule: "15 3 * * *",
+            command: "cortex-ops retention-archive-purge --before 365d",
             enabled: true,
         },
     ]
@@ -788,6 +821,70 @@ mod tests {
         );
     }
 
+    /// phase12c §1.3 — pre-flip `tool_call_digest` rows must
+    /// reconcile their `command` to include `--purge-originals` when
+    /// the operator has not deliberately edited them.
+    #[test]
+    fn seed_defaults_reconciles_tool_call_digest_command_drift() {
+        let s = store();
+        apply_phase9k_schema(s.conn()).unwrap();
+        // Pretend the row was seeded with the pre-flip command (the
+        // shape that shipped before phase12c — no `--purge-originals`).
+        s.conn()
+            .execute(
+                "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at)
+                      VALUES ('retention.tool_call_digest', '30 6 * * 0',
+                              'cortex-ops tool-call-digest --apply --budget-cents 500', 1,
+                              '2026-05-10T06:30:00+00:00')",
+                [],
+            )
+            .unwrap();
+        seed_defaults(&s, anchor()).unwrap();
+        let row = s
+            .get_cron_job("retention.tool_call_digest")
+            .unwrap()
+            .expect("row present");
+        assert!(
+            row.command.contains("--purge-originals"),
+            "phase12c §1.2 — drifted command must reconcile to include --purge-originals, got `{}`",
+            row.command
+        );
+        assert!(row.enabled, "row must stay enabled");
+    }
+
+    /// 2026-05-19 — pre-fix deployments shipped
+    /// `retention.consolidator_nightly` with the bare
+    /// `cortex-consolidator nightly` command. The bin defaults
+    /// `--dry-run=true` so every tick was a no-op and the
+    /// dashboard `cortex_consolidations` panel stayed at zero.
+    /// The reconciler MUST advance the row to the post-fix
+    /// `--dry-run=false` command.
+    #[test]
+    fn seed_defaults_reconciles_consolidator_nightly_command_drift() {
+        let s = store();
+        apply_phase9k_schema(s.conn()).unwrap();
+        s.conn()
+            .execute(
+                "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at)
+                      VALUES ('retention.consolidator_nightly', '0 2 * * *',
+                              'cortex-consolidator nightly', 1,
+                              '2026-05-20T02:00:00+00:00')",
+                [],
+            )
+            .unwrap();
+        seed_defaults(&s, anchor()).unwrap();
+        let row = s
+            .get_cron_job("retention.consolidator_nightly")
+            .unwrap()
+            .expect("row present");
+        assert!(
+            row.command.contains("--dry-run=false"),
+            "consolidator_nightly cron MUST carry --dry-run=false, got `{}`",
+            row.command
+        );
+        assert!(row.enabled, "row must stay enabled after reconcile");
+    }
+
     /// phase11v §3.4 — when an operator deliberately disabled a
     /// row (signal: `failure_streak > 0` OR `last_warning_at`
     /// stamped), the reconciler MUST leave the row alone.
@@ -822,11 +919,12 @@ mod tests {
         let s = store();
         // phase11w — count bumped from 10 → 11 with the addition of
         // `retention.tool_call_digest`.
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 11);
+        // phase12b — 11 → 12 with the addition of `retention.archive_purge`.
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 12);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 11);
+        assert_eq!(jobs.len(), 12);
         let consolidate = jobs
             .iter()
             .find(|j| j.name == "retention.memory_consolidate")

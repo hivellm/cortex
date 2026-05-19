@@ -37,6 +37,7 @@ pub mod checkpoint;
 pub mod emitter;
 pub mod governance_watcher;
 pub mod mapper;
+pub mod producer_trait;
 pub mod reader;
 pub mod tail;
 pub mod types;

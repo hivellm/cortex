@@ -14,6 +14,7 @@ pub mod estimate;
 pub mod git;
 pub mod graph_static;
 pub mod metrics;
+pub mod producer;
 pub mod publisher;
 pub mod runner;
 pub mod walker;

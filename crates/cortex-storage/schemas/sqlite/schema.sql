@@ -212,3 +212,21 @@ CREATE TABLE IF NOT EXISTS consumer_offsets (
 );
 
 CREATE INDEX IF NOT EXISTS consumer_offsets_stream ON consumer_offsets (stream);
+
+-- Phase13b — producer checkpoint ledger (ADR-010). Append-only:
+-- every emit batch from every `impl EnvelopeProducer` writes one
+-- row; resume picks the row with the maximum `accumulated_at` for
+-- the (producer_name, scope) pair. The composite primary key
+-- includes `accumulated_at` so two concurrent invocations cannot
+-- collide.
+CREATE TABLE IF NOT EXISTS producer_checkpoints (
+    producer_name    TEXT NOT NULL,
+    scope            TEXT NOT NULL,
+    last_event_id    TEXT NOT NULL,
+    last_occurred_at TEXT NOT NULL,
+    accumulated_at   TEXT NOT NULL,
+    PRIMARY KEY (producer_name, scope, accumulated_at)
+);
+
+CREATE INDEX IF NOT EXISTS producer_checkpoints_latest
+    ON producer_checkpoints (producer_name, scope, accumulated_at DESC);

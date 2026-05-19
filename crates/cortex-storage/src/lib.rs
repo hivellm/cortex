@@ -17,6 +17,7 @@
 #![warn(missing_docs)]
 
 pub mod archive;
+pub mod archive_purge;
 pub mod cas;
 pub mod collections;
 pub mod external_repos;
@@ -27,13 +28,14 @@ pub mod names;
 pub mod streams;
 
 pub use archive::{archive_filename, archive_partition, ArchiveLayout, ArchiveRotation};
+pub use archive_purge::is_live_partial_frame;
 pub use cas::{CasBlob, CasContentType, CasError, CasStore};
 pub use collections::{CollectionSchema, CollectionTier, COLLECTIONS};
 pub use metadata::{
-    apply_phase10c_schema, apply_phase9g_schema, apply_phase9k_schema, hour_bucket_rfc3339,
-    union_read_bootstrap_jobs, union_read_classifier_spend, union_read_sessions,
-    BootstrapDailyRow, BootstrapSeenDuplicate, BootstrapSeenRow, ClassifierSpend,
-    ClassifierSpendMonthlyRow, CronJob, HourlySpendRow, MetadataError, MetadataStore,
-    SessionsMonthlyRow,
+    apply_phase10c_schema, apply_phase13b_schema, apply_phase9g_schema, apply_phase9k_schema,
+    hour_bucket_rfc3339, union_read_bootstrap_jobs, union_read_classifier_spend,
+    union_read_sessions, BootstrapDailyRow, BootstrapSeenDuplicate, BootstrapSeenRow,
+    ClassifierSpend, ClassifierSpendMonthlyRow, CronJob, HourlySpendRow, MetadataError,
+    MetadataStore, ProducerCheckpointRow, SessionsMonthlyRow,
 };
 pub use names::*;

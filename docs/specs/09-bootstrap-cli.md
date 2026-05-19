@@ -1,6 +1,20 @@
 # 09 — Bootstrap CLI (`cortex-bootstrap`)
 
-> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 04, 05, 06, 07, 08
+> **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 04, 05, 06, 07, 08, 24
+
+## Phase13b — `BootstrapProducer` migration
+
+The bootstrap runner is wrapped behind the `EnvelopeProducer`
+trait (spec 24 / ADR-010) by
+[`crates/cortex-cli/src/bootstrap/producer.rs`]. One
+`producer_checkpoints` row lands per `produce` invocation with
+scope `repo_id` (lowercase) and cursor token = the final
+`last_file` path. `BootstrapProducer::resume_from` reads the
+latest row from SQLite; future bootstrap callers can pass the
+returned cursor straight into `run_repo_with_dedup`'s
+`last_file` parameter so multi-repo state accumulates across
+invocations without the legacy `.cortex-bootstrap.state.json`
+singleton being load-bearing.
 
 ## Goal
 

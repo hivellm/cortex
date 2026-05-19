@@ -68,11 +68,20 @@ struct CasTotals {
     path: String,
 }
 
-/// One scheduled run row. phase11v §1 wires this to the live
-/// `cron_jobs` table so the dashboard finally tells the truth.
-/// `next_run` is `"never"` only when the row is genuinely missing
-/// from `cron_jobs`; `"disabled"` when the row exists with
-/// `enabled = 0`. Otherwise it carries the RFC-3339 timestamp.
+/// One scheduled run row. Phase13a §4.3 reshape (ADR-014):
+///
+/// - `next_run` is the schedule projection. `None` when the cron
+///   row is missing from the metadata store, `Some("disabled")`
+///   when the row exists with `enabled = 0`, otherwise the
+///   RFC-3339 timestamp of the next fire. The wire-level `null`
+///   replaces the legacy handler-side missing-state string so
+///   the dashboard never claims a state it has no evidence for.
+/// - `last_run` / `last_status` are sourced from
+///   `retention_sweeps` (the trait-level write that ADR-009
+///   guarantees), not from `cron_jobs.last_run_at` /
+///   `last_status` (the child-process scheduler's bookkeeping).
+///   The former is authoritative for what a sweep actually did;
+///   the latter only records that the CLI exited 0.
 #[derive(Debug, Clone, Serialize)]
 struct ScheduledRun {
     /// Sweep type (`tier_sweep`, `parquet_rollup`, `cas_vacuum`,
@@ -80,27 +89,49 @@ struct ScheduledRun {
     /// `metadata_reap`, `consolidator_nightly`,
     /// `consolidation_prune`, `memory_consolidate`).
     sweep: String,
-    /// RFC-3339 timestamp of the next scheduled run, or `"never"`
-    /// when the cron row is missing, or `"disabled"` when the row
-    /// exists but `enabled = 0`.
-    next_run: String,
+    /// RFC-3339 timestamp of the next scheduled run, `"disabled"`
+    /// when the row exists but `enabled = 0`, or `null` when the
+    /// cron row is missing from the metadata store. The GUI
+    /// surfaces `null` as an empty cell rather than inventing a
+    /// string the handler could not justify.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_run: Option<String>,
     /// RFC-3339 timestamp of the most recent run, or `null` when
-    /// the sweep has never executed.
+    /// the sweep has never executed. Sourced from
+    /// `retention_sweeps.finished_at` (most-recent row per sweep
+    /// name) per ADR-009 §4.3.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_run: Option<String>,
     /// Status of the most recent run (`success`, `failed`,
-    /// `lock_held`), or `null` when the sweep has never executed.
+    /// `abandoned`), or `null` when the sweep has never executed.
+    /// Sourced from `retention_sweeps.status` per ADR-009 §4.3.
     #[serde(skip_serializing_if = "Option::is_none")]
     last_status: Option<String>,
     /// Consecutive failure count from the last successful run.
     /// Zero is the steady state; values > 0 surface in the GUI as a
-    /// failing-streak warning pill.
+    /// failing-streak warning pill. Still sourced from `cron_jobs`
+    /// because retention_sweeps does not track streaks today; this
+    /// migrates to a sweep-level counter in Phase B.
     #[serde(skip_serializing_if = "is_zero_u32")]
     failure_streak: u32,
 }
 
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
+}
+
+/// Phase13a §4.3 — extract the sweep `name` from a serialised
+/// `SweepReport` payload. The supervisor writes the full report
+/// JSON into `retention_sweeps.tier_transitions_json`; this helper
+/// pulls the `name` field so the dashboard can key by sweep slug
+/// without re-parsing the entire report.
+fn parse_sweep_name(json: Option<&str>) -> Option<String> {
+    let raw = json?;
+    let value: serde_json::Value = serde_json::from_str(raw).ok()?;
+    value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// `/v1/retention/state` body.
@@ -117,10 +148,11 @@ struct RetentionStateBody {
     meili_indexes: Vec<serde_json::Value>,
     /// CAS store totals (rows + bytes).
     cas: CasTotals,
-    /// Per-sweep schedule + last-run snapshot. phase11v §1 reads
-    /// the live `cron_jobs` table when a `MetadataStore` is
-    /// available; otherwise every row reports `"never"` so the
-    /// GUI's empty-state branch keeps working in cold dev boots.
+    /// Per-sweep schedule + last-run snapshot. Phase13a §4.3
+    /// reads cron-row schedule from `cron_jobs` and the last-run
+    /// truth from `retention_sweeps`. Missing rows surface as
+    /// wire-level `null` per ADR-014 — the dashboard refuses to
+    /// invent state literals.
     next_runs: Vec<ScheduledRun>,
 }
 
@@ -255,55 +287,84 @@ pub(super) async fn retention_state(State(state): State<DashboardState>) -> Resp
     });
     let cas = scan_cas_totals(std::path::Path::new(&cas_path));
 
-    // phase11v §1.1 — live-read of `cron_jobs`. Build a slug → row
-    // map from the metadata store, then project onto the canonical
-    // sweep list so missing rows degrade to `"never"` and disabled
-    // rows surface as `"disabled"`. Without a metadata handle the
-    // shape stays the legacy all-`"never"` envelope.
-    let cron_rows: std::collections::HashMap<&'static str, cortex_storage::CronJob> =
-        match &state.metadata {
-            Some(handle) => {
-                let guard = match handle.lock() {
-                    Ok(g) => g,
-                    Err(p) => p.into_inner(),
-                };
-                match guard.list_cron_jobs() {
-                    Ok(rows) => rows
-                        .into_iter()
-                        .filter_map(|j| cron_name_to_sweep_slug(&j.name).map(|s| (s, j)))
-                        .collect(),
-                    Err(err) => {
-                        tracing::warn!(error = %err, "retention/state: list_cron_jobs failed");
-                        std::collections::HashMap::new()
-                    }
+    // Phase13a §4.3 — live-read of `cron_jobs` for schedule
+    // projection, `retention_sweeps` for last-run / last-status
+    // truth. Missing cron rows surface as wire-level `null`
+    // (`Option::None`); disabled rows surface as
+    // `Some("disabled")`. Handler-side missing-state literals are
+    // gone — see ADR-014 + the CI grep gate.
+    let (cron_rows, last_per_sweep): (
+        std::collections::HashMap<&'static str, cortex_storage::CronJob>,
+        std::collections::HashMap<String, (Option<String>, String)>,
+    ) = match &state.metadata {
+        Some(handle) => {
+            let guard = match handle.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let cron = match guard.list_cron_jobs() {
+                Ok(rows) => rows
+                    .into_iter()
+                    .filter_map(|j| cron_name_to_sweep_slug(&j.name).map(|s| (s, j)))
+                    .collect(),
+                Err(err) => {
+                    tracing::warn!(error = %err, "retention/state: list_cron_jobs failed");
+                    std::collections::HashMap::new()
                 }
-            }
-            None => std::collections::HashMap::new(),
-        };
+            };
+            let last = match guard.list_recent_sweeps(500) {
+                Ok(rows) => {
+                    let mut out: std::collections::HashMap<String, (Option<String>, String)> =
+                        std::collections::HashMap::new();
+                    // Rows arrive newest-first; first hit per name wins.
+                    for row in rows {
+                        let name = parse_sweep_name(row.tier_transitions_json.as_deref())
+                            .unwrap_or_else(|| row.sweep_id.clone());
+                        out.entry(name)
+                            .or_insert_with(|| (row.finished_at.clone(), row.status.clone()));
+                    }
+                    out
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "retention/state: list_recent_sweeps failed");
+                    std::collections::HashMap::new()
+                }
+            };
+            (cron, last)
+        }
+        None => (
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+        ),
+    };
 
     let next_runs: Vec<ScheduledRun> = RETENTION_SWEEP_SLUGS
         .iter()
-        .map(|slug| match cron_rows.get(*slug) {
-            Some(job) => ScheduledRun {
-                sweep: (*slug).to_string(),
-                next_run: if !job.enabled {
-                    "disabled".to_string()
-                } else {
-                    job.next_run_at
-                        .clone()
-                        .unwrap_or_else(|| "never".to_string())
+        .map(|slug| {
+            let (last_run, last_status) = last_per_sweep
+                .get(*slug)
+                .map(|(run, status)| (run.clone(), Some(status.clone())))
+                .unwrap_or_else(|| (None, None));
+            match cron_rows.get(*slug) {
+                Some(job) => ScheduledRun {
+                    sweep: (*slug).to_string(),
+                    next_run: if !job.enabled {
+                        Some("disabled".to_string())
+                    } else {
+                        job.next_run_at.clone()
+                    },
+                    last_run: last_run.or_else(|| job.last_run_at.clone()),
+                    last_status: last_status.or_else(|| job.last_status.clone()),
+                    failure_streak: job.failure_streak,
                 },
-                last_run: job.last_run_at.clone(),
-                last_status: job.last_status.clone(),
-                failure_streak: job.failure_streak,
-            },
-            None => ScheduledRun {
-                sweep: (*slug).to_string(),
-                next_run: "never".to_string(),
-                last_run: None,
-                last_status: None,
-                failure_streak: 0,
-            },
+                None => ScheduledRun {
+                    sweep: (*slug).to_string(),
+                    next_run: None,
+                    last_run,
+                    last_status,
+                    failure_streak: 0,
+                },
+            }
         })
         .collect();
 
@@ -602,7 +663,10 @@ mod tests {
         assert_eq!(v["archive_bytes"]["gt_365d"].as_u64().unwrap(), 0);
         let next = v["next_runs"].as_array().unwrap();
         assert_eq!(next.len(), RETENTION_SWEEP_SLUGS.len());
-        assert!(next.iter().all(|r| r["next_run"] == "never"));
+        // Phase13a §4.3: missing cron rows surface as wire-level
+        // `null` (`Option::None` → skip-serialize). The legacy
+        // string sentinel is gone; the GUI renders the empty cell.
+        assert!(next.iter().all(|r| r.get("next_run").is_none()));
         assert!(next.iter().all(|r| r.get("last_run").is_none()));
         assert!(next.iter().any(|r| r["sweep"] == "consolidator_nightly"));
     }
@@ -670,7 +734,8 @@ mod tests {
         assert_eq!(mem["next_run"], "disabled");
 
         let nightly = by_slug["consolidator_nightly"];
-        assert_eq!(nightly["next_run"], "never");
+        // Phase13a §4.3: missing cron row → wire-level `null`.
+        assert!(nightly.get("next_run").is_none());
         assert!(nightly.get("last_run").is_none());
     }
 }

@@ -30,6 +30,8 @@ pub mod embedder;
 pub mod fulltext;
 pub mod graph;
 pub mod ingestion;
+pub mod producer;
 pub mod pruner;
 pub mod retention;
+pub mod sweep;
 pub mod topic_cards;

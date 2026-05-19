@@ -244,6 +244,28 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
     // reach it via `extras["duration_ms"]` without re-decoding the
     // payload — phase2g §1.3 (`pre_thinking_p95_ms` series).
     let mut duration_ms_payload: Option<u64> = None;
+    // 2026-05-19 — Consolidation extras stamped after the match so
+    // the symbol stays canonical (`"consolidation"`, matching the
+    // meili_loader projection) while the grain reaches the
+    // dashboard via `extras["grain"]`. Without this, archive +
+    // meili loaders disagreed on the symbol; the dedup in
+    // `collect_lane_hits` kept the archive-side hit
+    // (`"consolidation:<grain>"`), which failed the
+    // `/v1/dashboard/consolidations` filter expecting plain
+    // `"consolidation"`.
+    let mut consolidation_grain: Option<&'static str> = None;
+    let mut consolidation_id: Option<String> = None;
+    let mut consolidation_title: Option<String> = None;
+    let mut consolidation_source_event_count: Option<u64> = None;
+    let mut consolidation_model: Option<String> = None;
+    let mut consolidation_depth: Option<&'static str> = None;
+    // 2026-05-19 — the full `summary_markdown` payload, captured
+    // before the `text` field clips it to 320 chars for the lane
+    // preview. The dashboard handler reads back the full body via
+    // `extras["body_markdown"]`; without this round-trip the
+    // detail drawer was rendering the 320-char preview as the
+    // entire body and operators saw mid-sentence cutoffs.
+    let mut consolidation_body_markdown: Option<String> = None;
 
     let (text, symbol) = match env.kind {
         Kind::Turn => {
@@ -297,13 +319,13 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
             (text, Some(format!("agent_call:{}", ac.agent_type)))
         }
         Kind::Consolidation => {
-            // Phase11j §3.8 — render `title + summary preview` so the
-            // keyword-lane fallback surfaces consolidations alongside
-            // raw envelopes until the live spec-08 indexer routes
-            // them to the dedicated `cortex_consolidations` Meili
-            // index. Symbol carries the grain so the dashboard can
-            // group consolidations by Session / Topic / DecisionTrace
-            // without re-decoding the payload.
+            // Phase11j §3.8 — render `title + summary preview` so
+            // the keyword-lane fallback surfaces consolidations
+            // alongside raw envelopes. 2026-05-19: symbol now matches
+            // the meili_loader projection (plain `"consolidation"`)
+            // so the dedup in `collect_lane_hits` does not collapse
+            // both into a hit the dashboard filter cannot read.
+            // Grain / consolidation_id / title land in extras below.
             let cp: ConsolidationPayload = serde_json::from_value(env.payload.clone()).ok()?;
             let preview = clip(&cp.summary_markdown, 320);
             let text = if cp.title.is_empty() {
@@ -311,12 +333,23 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
             } else {
                 format!("[{}] {preview}", cp.title)
             };
-            let grain_label = match cp.grain {
+            consolidation_grain = Some(match cp.grain {
                 cortex_core::events::ConsolidationGrain::Session => "session",
                 cortex_core::events::ConsolidationGrain::Topic => "topic",
                 cortex_core::events::ConsolidationGrain::DecisionTrace => "decision_trace",
-            };
-            (text, Some(format!("consolidation:{grain_label}")))
+            });
+            consolidation_depth = Some(match cp.depth {
+                cortex_core::events::ConsolidationDepth::Shallow => "shallow",
+                cortex_core::events::ConsolidationDepth::Deep => "deep",
+            });
+            consolidation_id = Some(cp.consolidation_id.clone());
+            consolidation_source_event_count = Some(cp.source_event_count as u64);
+            consolidation_model = Some(cp.model.clone());
+            if !cp.title.is_empty() {
+                consolidation_title = Some(cp.title.clone());
+            }
+            consolidation_body_markdown = Some(cp.summary_markdown.clone());
+            (text, Some("consolidation".to_string()))
         }
         Kind::TopicCard => {
             // phase11r §3.5 — render `[<topic_slug>] <synthesis preview>`
@@ -391,6 +424,43 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         extras.insert(
             "duration_ms".to_string(),
             serde_json::Value::Number(serde_json::Number::from(d)),
+        );
+    }
+    // 2026-05-19 — Consolidation extras (grain / consolidation_id /
+    // title). The dashboard's `/v1/dashboard/consolidations`
+    // handler reads these via `h.extras.get("grain")` etc., same
+    // as the meili_loader projection.
+    if let Some(grain) = consolidation_grain {
+        extras.insert(
+            "grain".to_string(),
+            serde_json::Value::String(grain.to_string()),
+        );
+    }
+    if let Some(cid) = consolidation_id {
+        extras.insert(
+            "consolidation_id".to_string(),
+            serde_json::Value::String(cid),
+        );
+    }
+    if let Some(title) = consolidation_title {
+        extras.insert("title".to_string(), serde_json::Value::String(title));
+    }
+    if let Some(c) = consolidation_source_event_count {
+        extras.insert(
+            "source_event_count".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(c)),
+        );
+    }
+    if let Some(m) = consolidation_model {
+        extras.insert("model".to_string(), serde_json::Value::String(m));
+    }
+    if let Some(d) = consolidation_depth {
+        extras.insert("depth".to_string(), serde_json::Value::String(d.to_string()));
+    }
+    if let Some(body) = consolidation_body_markdown {
+        extras.insert(
+            "body_markdown".to_string(),
+            serde_json::Value::String(body),
         );
     }
 
@@ -726,7 +796,47 @@ mod tests {
         let hit = envelope_to_hit(&env).unwrap();
         assert!(hit.text.starts_with("[Auth refactor session]"));
         assert!(hit.text.contains("JWT middleware"));
-        assert_eq!(hit.symbol.as_deref(), Some("consolidation:session"));
+        // 2026-05-19 — symbol is canonical (`"consolidation"`), grain
+        // travels via extras["grain"]. Matches the meili_loader
+        // projection so the dedup in `collect_lane_hits` does not
+        // discard the dashboard-visible hit.
+        assert_eq!(hit.symbol.as_deref(), Some("consolidation"));
+        assert_eq!(
+            hit.extras.get("grain").and_then(|v| v.as_str()),
+            Some("session")
+        );
+        assert_eq!(
+            hit.extras.get("consolidation_id").and_then(|v| v.as_str()),
+            Some("cons-ses-deadbeefcafe")
+        );
+        assert_eq!(
+            hit.extras.get("title").and_then(|v| v.as_str()),
+            Some("Auth refactor session")
+        );
+        // 2026-05-19 — source_event_count + model + depth also
+        // land on extras so the dashboard reports them.
+        assert_eq!(
+            hit.extras.get("source_event_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            hit.extras.get("model").and_then(|v| v.as_str()),
+            Some("claude-haiku-4-5")
+        );
+        assert_eq!(
+            hit.extras.get("depth").and_then(|v| v.as_str()),
+            Some("shallow")
+        );
+        // 2026-05-19 — full `summary_markdown` stamped into
+        // extras["body_markdown"] so the dashboard detail drawer
+        // never sees the 320-char preview as the full body.
+        let body_md = hit
+            .extras
+            .get("body_markdown")
+            .and_then(|v| v.as_str())
+            .expect("body_markdown stamped");
+        assert!(body_md.contains("JWT middleware"));
+        assert!(body_md.len() > 100);
     }
 
     #[test]

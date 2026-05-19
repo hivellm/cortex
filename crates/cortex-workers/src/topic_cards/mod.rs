@@ -44,6 +44,7 @@
 pub mod contradictions;
 pub mod orchestrator;
 pub mod producer;
+pub mod producer_trait;
 pub mod synthesiser;
 pub mod templates;
 pub mod trigger;

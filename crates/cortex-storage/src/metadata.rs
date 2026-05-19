@@ -349,6 +349,92 @@ impl MetadataStore {
         Ok(rows?)
     }
 
+    /// Phase13b — append one row to `producer_checkpoints`. ADR-010
+    /// requires the table be append-only so a kill-resume cycle
+    /// never loses the prior cursor.
+    pub fn record_producer_checkpoint(
+        &self,
+        producer_name: &str,
+        scope: &str,
+        last_event_id: &str,
+        last_occurred_at: DateTime<Utc>,
+        accumulated_at: DateTime<Utc>,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO producer_checkpoints
+                (producer_name, scope, last_event_id, last_occurred_at, accumulated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                producer_name,
+                scope,
+                last_event_id,
+                last_occurred_at.to_rfc3339(),
+                accumulated_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Phase13b — return the most recent producer-checkpoint row
+    /// for the supplied `(producer_name, scope)`. The producer
+    /// reads this on resume. `None` when no checkpoint has been
+    /// written yet (fresh-corpus walk).
+    pub fn latest_producer_checkpoint(
+        &self,
+        producer_name: &str,
+        scope: &str,
+    ) -> Result<Option<ProducerCheckpointRow>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT producer_name, scope, last_event_id, last_occurred_at, accumulated_at
+               FROM producer_checkpoints
+              WHERE producer_name = ?1 AND scope = ?2
+              ORDER BY accumulated_at DESC
+              LIMIT 1",
+        )?;
+        let mut rows = stmt.query(params![producer_name, scope])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(ProducerCheckpointRow {
+                producer_name: row.get(0)?,
+                scope: row.get(1)?,
+                last_event_id: row.get(2)?,
+                last_occurred_at: row.get(3)?,
+                accumulated_at: row.get(4)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Phase13b — list every checkpoint row for one producer
+    /// across all scopes, newest first. Used by the dashboard's
+    /// per-producer audit view + the resume-after-kill IT to
+    /// verify the accumulation contract.
+    pub fn list_producer_checkpoints_for(
+        &self,
+        producer_name: &str,
+        limit: usize,
+    ) -> Result<Vec<ProducerCheckpointRow>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT producer_name, scope, last_event_id, last_occurred_at, accumulated_at
+               FROM producer_checkpoints
+              WHERE producer_name = ?1
+              ORDER BY accumulated_at DESC
+              LIMIT ?2",
+        )?;
+        let rows: Result<Vec<_>, _> = stmt
+            .query_map(params![producer_name, limit as i64], |row| {
+                Ok(ProducerCheckpointRow {
+                    producer_name: row.get(0)?,
+                    scope: row.get(1)?,
+                    last_event_id: row.get(2)?,
+                    last_occurred_at: row.get(3)?,
+                    accumulated_at: row.get(4)?,
+                })
+            })?
+            .collect();
+        Ok(rows?)
+    }
+
     /// Mark a session ended.
     pub fn close_session(
         &self,
@@ -562,18 +648,17 @@ impl MetadataStore {
         last_error: Option<&str>,
         next_run_at: &str,
     ) -> Result<u32, MetadataError> {
-        // Read current streak first.
-        let streak: i64 = self
-            .conn
-            .query_row(
-                "SELECT failure_streak FROM cron_jobs WHERE name = ?1",
-                params![name],
-                |r| r.get(0),
-            )
-            .optional()?
-            .unwrap_or(0);
-        let new_streak = if status == "failed" { streak + 1 } else { 0 };
-        self.conn.execute(
+        // Phase12f §1 — single atomic UPDATE with CASE so concurrent
+        // writers cannot race on a read-modify-write of
+        // `failure_streak`. Two cron supervisors hitting the same job
+        // (multi-replica deploy or restart-overlap) used to read the
+        // same streak, both compute streak+1, both UPDATE — net
+        // effect: counter advances by 1 instead of 2. Collapsing to
+        // one UPDATE delegates serialisation to SQLite's write lock
+        // (WAL mode with the workspace's `busy_timeout`); RETURNING
+        // hands back the post-update value in the same statement so
+        // callers see the authoritative streak.
+        let new_streak: i64 = self.conn.query_row(
             "UPDATE cron_jobs SET
                 last_run_at    = ?1,
                 last_status    = ?2,
@@ -581,8 +666,11 @@ impl MetadataStore {
                 last_stderr    = ?4,
                 last_error     = ?5,
                 next_run_at    = ?6,
-                failure_streak = ?7
-              WHERE name = ?8",
+                failure_streak = CASE WHEN ?2 = 'failed'
+                                      THEN failure_streak + 1
+                                      ELSE 0 END
+              WHERE name = ?7
+              RETURNING failure_streak",
             params![
                 last_run_at.to_rfc3339(),
                 status,
@@ -590,9 +678,9 @@ impl MetadataStore {
                 stderr_tail,
                 last_error,
                 next_run_at,
-                new_streak,
                 name,
             ],
+            |r| r.get(0),
         )?;
         Ok(new_streak.max(0) as u32)
     }
@@ -877,6 +965,29 @@ pub fn apply_phase10c_schema(conn: &Connection) -> Result<(), MetadataError> {
             PRIMARY KEY (repo, path)
         );
         CREATE INDEX IF NOT EXISTS bootstrap_seen_hash ON bootstrap_seen (repo, content_hash);",
+    )?;
+    Ok(())
+}
+
+/// Phase13b — assert the producer-checkpoint table exists on
+/// `conn`. New in ADR-010. Append-only: every emit batch from
+/// every producer writes one row, keyed by
+/// `(producer_name, scope, accumulated_at)` so two invocations
+/// never collide. `latest_producer_checkpoint(name, scope)`
+/// returns the row with the maximum `accumulated_at` to resume
+/// after kill.
+pub fn apply_phase13b_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS producer_checkpoints (
+            producer_name    TEXT NOT NULL,
+            scope            TEXT NOT NULL,
+            last_event_id    TEXT NOT NULL,
+            last_occurred_at TEXT NOT NULL,
+            accumulated_at   TEXT NOT NULL,
+            PRIMARY KEY (producer_name, scope, accumulated_at)
+        );
+        CREATE INDEX IF NOT EXISTS producer_checkpoints_latest
+            ON producer_checkpoints (producer_name, scope, accumulated_at DESC);",
     )?;
     Ok(())
 }
@@ -1258,6 +1369,28 @@ pub struct RetentionSweepRow {
     pub tier_transitions_json: Option<String>,
 }
 
+/// Phase13b — one row from `producer_checkpoints`. New under
+/// ADR-010. Append-only: every emit batch from every producer
+/// writes one row; the latest row per `(producer_name, scope)`
+/// is what the producer reads on resume.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProducerCheckpointRow {
+    /// Canonical producer name (`bootstrap`, `claude_archive`,
+    /// `topic_cards`, `consolidator`, plus future adapters).
+    pub producer_name: String,
+    /// Per-(producer, sub-source) scope. Bootstrap uses the
+    /// repo slug; consolidator uses the grain
+    /// (`session`/`topic`/`decision`); claude-archive uses the
+    /// project path; topic-cards uses the topic slug.
+    pub scope: String,
+    /// `event_id` of the last envelope this batch emitted.
+    pub last_event_id: String,
+    /// RFC-3339 `occurred_at` of the last envelope.
+    pub last_occurred_at: String,
+    /// RFC-3339 timestamp the row landed.
+    pub accumulated_at: String,
+}
+
 /// Row from the `classifier_spend` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassifierSpend {
@@ -1506,6 +1639,100 @@ mod tests {
         }
         assert_eq!(store.list_recent_sweeps(2).unwrap().len(), 2);
         assert_eq!(store.list_recent_sweeps(100).unwrap().len(), 5);
+    }
+
+    // ----- Phase13b §2.5 — producer_checkpoints helpers ---------
+
+    #[test]
+    fn producer_checkpoint_returns_none_when_table_empty() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let latest = store
+            .latest_producer_checkpoint("bootstrap", "cortex")
+            .unwrap();
+        assert!(latest.is_none());
+    }
+
+    #[test]
+    fn producer_checkpoint_round_trips_a_single_write() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let occurred = now();
+        let accumulated = occurred + chrono::Duration::seconds(1);
+        store
+            .record_producer_checkpoint("bootstrap", "cortex", "01ENV", occurred, accumulated)
+            .unwrap();
+        let latest = store
+            .latest_producer_checkpoint("bootstrap", "cortex")
+            .unwrap()
+            .expect("row");
+        assert_eq!(latest.producer_name, "bootstrap");
+        assert_eq!(latest.scope, "cortex");
+        assert_eq!(latest.last_event_id, "01ENV");
+    }
+
+    #[test]
+    fn producer_checkpoint_returns_newest_row_when_multiple_per_scope() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let base = DateTime::parse_from_rfc3339("2026-05-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for (i, id) in ["01OLD", "01MID", "01NEW"].iter().enumerate() {
+            let accumulated = base + chrono::Duration::seconds(i as i64);
+            store
+                .record_producer_checkpoint("bootstrap", "cortex", id, base, accumulated)
+                .unwrap();
+        }
+        let latest = store
+            .latest_producer_checkpoint("bootstrap", "cortex")
+            .unwrap()
+            .expect("row");
+        assert_eq!(latest.last_event_id, "01NEW");
+    }
+
+    #[test]
+    fn producer_checkpoint_lists_all_rows_per_producer_across_scopes() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let base = DateTime::parse_from_rfc3339("2026-05-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for (i, scope) in ["repo_a", "repo_b", "repo_c"].iter().enumerate() {
+            let accumulated = base + chrono::Duration::seconds(i as i64);
+            store
+                .record_producer_checkpoint("bootstrap", scope, "01ENV", base, accumulated)
+                .unwrap();
+        }
+        let rows = store.list_producer_checkpoints_for("bootstrap", 50).unwrap();
+        assert_eq!(rows.len(), 3);
+        // Newest first per the ORDER BY.
+        assert_eq!(rows[0].scope, "repo_c");
+        assert_eq!(rows[2].scope, "repo_a");
+    }
+
+    #[test]
+    fn producer_checkpoint_scope_discriminates_between_sources() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let base = now();
+        store
+            .record_producer_checkpoint("bootstrap", "cortex", "01CORTEX", base, base)
+            .unwrap();
+        store
+            .record_producer_checkpoint(
+                "bootstrap",
+                "vectorizer",
+                "01VEC",
+                base,
+                base + chrono::Duration::seconds(1),
+            )
+            .unwrap();
+        let cortex = store
+            .latest_producer_checkpoint("bootstrap", "cortex")
+            .unwrap()
+            .expect("cortex row");
+        let vec = store
+            .latest_producer_checkpoint("bootstrap", "vectorizer")
+            .unwrap()
+            .expect("vec row");
+        assert_eq!(cortex.last_event_id, "01CORTEX");
+        assert_eq!(vec.last_event_id, "01VEC");
     }
 
     #[test]
@@ -1830,6 +2057,220 @@ mod tests {
             .expect("rewind preserves the row");
         assert_eq!(row.last_offset, 100);
         assert!(row.last_event_id.is_none(), "rewind clears last_event_id");
+    }
+
+    // ---------------------------------------------------------
+    // Phase12f — record_cron_run TOCTOU regression suite
+    // ---------------------------------------------------------
+
+    #[test]
+    fn record_cron_run_failed_increments_failure_streak() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        store
+            .upsert_cron_job_if_absent(
+                "test.sweep",
+                "0 3 * * *",
+                "cortex-ops sweep",
+                true,
+                "2026-05-08T03:00:00+00:00",
+            )
+            .unwrap();
+        let s1 = store
+            .record_cron_run(
+                "test.sweep",
+                Utc::now(),
+                "failed",
+                None,
+                None,
+                Some("first failure"),
+                "2026-05-09T03:00:00+00:00",
+            )
+            .unwrap();
+        assert_eq!(s1, 1);
+        let s2 = store
+            .record_cron_run(
+                "test.sweep",
+                Utc::now(),
+                "failed",
+                None,
+                None,
+                Some("second failure"),
+                "2026-05-10T03:00:00+00:00",
+            )
+            .unwrap();
+        assert_eq!(s2, 2);
+        let s3 = store
+            .record_cron_run(
+                "test.sweep",
+                Utc::now(),
+                "success",
+                None,
+                None,
+                None,
+                "2026-05-11T03:00:00+00:00",
+            )
+            .unwrap();
+        assert_eq!(s3, 0, "success resets the streak");
+    }
+
+    #[test]
+    fn record_cron_run_concurrent() {
+        // Phase12f §2 — drive 4 OS threads × 250 calls each on the
+        // same job, all backed by independent `MetadataStore` handles
+        // pointing at the same SQLite file. The bug the new
+        // single-statement UPDATE fixes is the read-modify-write race
+        // on `failure_streak`: with the old SELECT-then-UPDATE path,
+        // two concurrent supervisors would both read the same streak,
+        // both compute streak+1, both UPDATE — net advance of 1
+        // instead of 2. With the CASE-based atomic UPDATE every
+        // failure increments exactly once.
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("cron_concurrency.sqlite");
+
+        // Seed the row through one connection so all worker threads
+        // observe a starting point.
+        {
+            let store = MetadataStore::open(&db_path).unwrap();
+            store
+                .upsert_cron_job_if_absent(
+                    "concurrent.sweep",
+                    "0 4 * * *",
+                    "cortex-ops concurrent",
+                    true,
+                    "2026-05-08T04:00:00+00:00",
+                )
+                .unwrap();
+        }
+
+        // Pre-tick the failure streak to the value we expect after
+        // every-failure-counted: 4 threads × 250 calls = 1000 writes.
+        // With the old race the observed streak was lower than 1000;
+        // with the new path it equals 1000 exactly because every call
+        // here uses `status="failed"`.
+        let total_threads = 4;
+        let calls_per_thread = 250;
+        let total_calls = total_threads * calls_per_thread;
+        let db_path = Arc::new(db_path);
+
+        let mut handles = Vec::with_capacity(total_threads);
+        for thread_idx in 0..total_threads {
+            let path = db_path.clone();
+            handles.push(thread::spawn(move || {
+                let store = MetadataStore::open(&*path).unwrap();
+                for call_idx in 0..calls_per_thread {
+                    store
+                        .record_cron_run(
+                            "concurrent.sweep",
+                            Utc::now(),
+                            "failed",
+                            Some(&format!("t{thread_idx}c{call_idx}")),
+                            None,
+                            Some("synthetic failure"),
+                            "2026-05-08T04:00:00+00:00",
+                        )
+                        .expect("concurrent record_cron_run");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().expect("worker thread");
+        }
+
+        let store = MetadataStore::open(&*db_path).unwrap();
+        let row = store
+            .get_cron_job("concurrent.sweep")
+            .unwrap()
+            .expect("seeded row exists");
+        assert_eq!(
+            row.failure_streak, total_calls as u32,
+            "every failure must advance the streak — observed {}, expected {} \
+             (the old TOCTOU race produces a lower number under contention)",
+            row.failure_streak, total_calls
+        );
+        assert_eq!(
+            row.last_status.as_deref(),
+            Some("failed"),
+            "last_status reflects the last committing writer"
+        );
+    }
+
+    #[test]
+    fn record_cron_run_concurrent_with_success_resets() {
+        // Mixed-status drive: each thread alternates failed/success.
+        // Final state depends on which thread committed last; what we
+        // pin is the invariant that the row exists, last_status is
+        // one of the two valid values, and failure_streak is bounded
+        // by the number of trailing `failed` writes from the last
+        // committing thread (we cannot predict that exactly, so we
+        // assert the bounds).
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = Arc::new(dir.path().join("cron_mixed.sqlite"));
+        {
+            let store = MetadataStore::open(&*db_path).unwrap();
+            store
+                .upsert_cron_job_if_absent(
+                    "mixed.sweep",
+                    "0 5 * * *",
+                    "cortex-ops mixed",
+                    true,
+                    "2026-05-08T05:00:00+00:00",
+                )
+                .unwrap();
+        }
+
+        let total_threads = 4;
+        let calls_per_thread = 100;
+        let mut handles = Vec::with_capacity(total_threads);
+        for thread_idx in 0..total_threads {
+            let path = db_path.clone();
+            handles.push(thread::spawn(move || {
+                let store = MetadataStore::open(&*path).unwrap();
+                for call_idx in 0..calls_per_thread {
+                    let status = if (thread_idx + call_idx) % 2 == 0 {
+                        "failed"
+                    } else {
+                        "success"
+                    };
+                    store
+                        .record_cron_run(
+                            "mixed.sweep",
+                            Utc::now(),
+                            status,
+                            None,
+                            None,
+                            None,
+                            "2026-05-08T05:00:00+00:00",
+                        )
+                        .expect("mixed record_cron_run");
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let store = MetadataStore::open(&*db_path).unwrap();
+        let row = store.get_cron_job("mixed.sweep").unwrap().unwrap();
+        let last = row.last_status.as_deref();
+        assert!(
+            last == Some("failed") || last == Some("success"),
+            "last_status must be one of the two values written, got {last:?}"
+        );
+        // failure_streak is bounded by the per-thread `calls_per_thread`
+        // — no thread ever issues that many trailing failures in this
+        // mix because the alternation forces a reset. So the streak
+        // post-execution is always strictly less than calls_per_thread.
+        assert!(
+            (row.failure_streak as usize) < calls_per_thread,
+            "alternating mix should keep streak below per-thread call count, got {}",
+            row.failure_streak
+        );
     }
 
     #[test]
