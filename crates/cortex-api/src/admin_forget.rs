@@ -215,19 +215,12 @@ fn walk_dir_for_target(
     Ok(())
 }
 
-/// Classify an `io::Error` chain as the well-known "live file"
-/// shape `cortex-ingestion` produces on the current-hour partition:
-/// the loader holds the file open while writing, so the trailing
-/// bytes are a half-flushed zstd frame. The decoder surfaces this
-/// as `InvalidData` carrying `incomplete frame` or `Unknown frame
-/// descriptor`. Mirrors the tolerance archive_loader already
-/// applies on boot.
-fn is_live_partial_frame(err: &std::io::Error) -> bool {
-    let msg = err.to_string();
-    msg.contains("incomplete frame")
-        || msg.contains("Unknown frame")
-        || msg.contains("frame descriptor")
-}
+// Phase12c §2 — the partial-frame predicate now lives in
+// `cortex_storage::archive_purge::is_live_partial_frame`. Re-imported
+// here so the call-site shape stays the same and a single source of
+// truth catches drift across every purger / walker that has to
+// tolerate the live current-hour file.
+use cortex_storage::is_live_partial_frame;
 
 fn file_contains_event_id(path: &std::path::Path, event_id: &str) -> std::io::Result<bool> {
     use std::io::BufRead;

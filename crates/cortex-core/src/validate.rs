@@ -43,6 +43,8 @@ const LAW_VIOLATION_SCHEMA: &str = include_str!("../schemas/kinds/law_violation.
 const ARTIFACT_SCHEMA: &str = include_str!("../schemas/kinds/artifact.schema.json");
 const CONSOLIDATION_SCHEMA: &str = include_str!("../schemas/kinds/consolidation.schema.json");
 const TOPIC_CARD_SCHEMA: &str = include_str!("../schemas/kinds/topic_card.schema.json");
+const KNOWLEDGE_SCHEMA: &str = include_str!("../schemas/kinds/knowledge.schema.json");
+const LEARNING_SCHEMA: &str = include_str!("../schemas/kinds/learning.schema.json");
 
 static VALIDATOR: Lazy<Validator> =
     Lazy::new(|| Validator::new().expect("embedded schemas must always compile"));
@@ -90,6 +92,8 @@ impl Validator {
             ("artifact", compile(ARTIFACT_SCHEMA)?),
             ("consolidation", compile(CONSOLIDATION_SCHEMA)?),
             ("topic_card", compile(TOPIC_CARD_SCHEMA)?),
+            ("knowledge", compile(KNOWLEDGE_SCHEMA)?),
+            ("learning", compile(LEARNING_SCHEMA)?),
         ]
         .into_iter()
         .collect();
@@ -707,6 +711,207 @@ mod consolidation_validate_tests {
                 |e| matches!(e, ValidationError::Schema { path, .. } if path.contains("grain"))
             ),
             "expected grain error, got {err:?}"
+        );
+    }
+
+    // -------------------------------------------------------------
+    // Phase12d — knowledge + learning kinds (silent-drop fix)
+    // -------------------------------------------------------------
+
+    #[test]
+    fn knowledge_payload_minimal_validates() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000001",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "knowledge",
+            "session_id": "01HXSESS00000000000000000B",
+            "content_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "context": { "platform": "linux" },
+            "payload": {
+                "knowledge_id": "use-instead-of-arc-mutex",
+                "title": "Prefer parking_lot::Mutex over std::sync::Mutex",
+                "category": "pattern",
+                "body": "When holding the guard across await points causes contention..."
+            }
+        });
+        validate_event(&envelope).expect("minimal knowledge payload validates");
+    }
+
+    #[test]
+    fn knowledge_payload_rejects_missing_required_field() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000002",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "knowledge",
+            "session_id": "01HXSESS00000000000000000B",
+            "content_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+            "context": { "platform": "linux" },
+            "payload": {
+                "knowledge_id": "missing-body",
+                "title": "Anti-pattern with no body",
+                "category": "anti-pattern"
+            }
+        });
+        let err = validate_event(&envelope).expect_err("missing body");
+        assert!(
+            err.iter().any(|e| matches!(e, ValidationError::Schema { message, .. } if message.contains("body"))),
+            "expected body error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn knowledge_payload_rejects_unknown_category() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000003",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "knowledge",
+            "session_id": "01HXSESS00000000000000000B",
+            "content_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+            "context": { "platform": "linux" },
+            "payload": {
+                "knowledge_id": "bad-cat",
+                "title": "Unknown category",
+                "category": "rule-of-thumb",
+                "body": "..."
+            }
+        });
+        let err = validate_event(&envelope).expect_err("unknown category");
+        assert!(
+            err.iter().any(|e| matches!(e, ValidationError::Schema { path, .. } if path.contains("category"))),
+            "expected category error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn knowledge_payload_rejects_extra_fields() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000004",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "knowledge",
+            "session_id": "01HXSESS00000000000000000B",
+            "content_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+            "context": { "platform": "linux" },
+            "payload": {
+                "knowledge_id": "ok",
+                "title": "ok",
+                "category": "pattern",
+                "body": "ok",
+                "unexpected_field": "should be rejected"
+            }
+        });
+        let err = validate_event(&envelope).expect_err("extra fields");
+        assert!(
+            err.iter().any(|e| matches!(e, ValidationError::Schema { .. })),
+            "expected schema error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn learning_payload_minimal_validates() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000005",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "learning",
+            "session_id": "01HXSESS00000000000000000C",
+            "content_hash": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+            "context": { "platform": "linux" },
+            "payload": {
+                "learning_id": "01LEARN0000000000000000000",
+                "title": "Diagnostic-first saves cycles",
+                "body": "Running tsc --noEmit before npm test catches type errors in 5s..."
+            }
+        });
+        validate_event(&envelope).expect("minimal learning payload validates");
+    }
+
+    #[test]
+    fn learning_payload_with_optional_related_task_validates() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000006",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "learning",
+            "session_id": "01HXSESS00000000000000000C",
+            "content_hash": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+            "context": { "platform": "linux" },
+            "payload": {
+                "learning_id": "01LEARN0000000000000000001",
+                "title": "PowerShell cold start dominates Windows hook cost",
+                "body": "Measured 545ms floor on pwsh -NoProfile, daemon work only ~90ms.",
+                "related_task": "phase11x_cortex-hook-native-shim",
+                "tags": ["performance", "windows"]
+            }
+        });
+        validate_event(&envelope).expect("learning with related_task + tags");
+    }
+
+    #[test]
+    fn learning_payload_rejects_missing_event_id() {
+        // The proposal calls out missing `event_id` as the canonical
+        // rejection signal for both kinds. This test exercises the
+        // envelope-level required field, which gates per-kind compile.
+        let envelope = serde_json::json!({
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "learning",
+            "session_id": "01HXSESS00000000000000000C",
+            "content_hash": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            "context": { "platform": "linux" },
+            "payload": {
+                "learning_id": "01LEARN0000000000000000002",
+                "title": "ok",
+                "body": "ok"
+            }
+        });
+        let err = validate_event(&envelope).expect_err("missing event_id");
+        assert!(
+            err.iter().any(|e| matches!(e, ValidationError::Schema { message, .. } if message.contains("event_id"))),
+            "expected event_id error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn learning_payload_rejects_extra_fields() {
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000008",
+            "schema_version": "1",
+            "occurred_at": "2026-05-07T19:00:00.000Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "learning",
+            "session_id": "01HXSESS00000000000000000C",
+            "content_hash": "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+            "context": { "platform": "linux" },
+            "payload": {
+                "learning_id": "01LEARN0000000000000000003",
+                "title": "ok",
+                "body": "ok",
+                "rogue": "should be rejected"
+            }
+        });
+        let err = validate_event(&envelope).expect_err("extra fields");
+        assert!(
+            err.iter().any(|e| matches!(e, ValidationError::Schema { .. })),
+            "expected schema error, got {err:?}"
         );
     }
 }

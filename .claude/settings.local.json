@@ -6,7 +6,15 @@
       "Bash(claude plugin *)",
       "Bash(rm -rf C:/Users/Bolado/.claude/plugins/cache/hivellm-cortex)",
       "Bash(rm C:/Users/Bolado/.claude/plugins/cache/hivellm-cortex/cortex/0.1.0/hooks.json)",
-      "Read(//c/Users/Bolado/.claude/plugins/cache/hivellm-cortex/cortex/0.1.0/**)"
+      "Read(//c/Users/Bolado/.claude/plugins/cache/hivellm-cortex/cortex/0.1.0/**)",
+      "mcp__rulebook__rulebook_task_create",
+      "mcp__rulebook__rulebook_learn_capture",
+      "PowerShell(Get-Command cortex-hook -ErrorAction SilentlyContinue | Format-List Name,Source; Get-ChildItem \"$env:USERPROFILE\\\\.cortex\\\\\" -ErrorAction SilentlyContinue | Select-Object Name,Length,LastWriteTime)",
+      "PowerShell($h=$env:USERPROFILE; Write-Output \"USERPROFILE=$h\"; Test-Path \"$h\\\\.cortex\"; Test-Path \"$h\\\\.claude\\\\settings.json\"; Get-Command cortex-hook 2>$null)",
+      "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\.cortex\" | Select-Object Name,Length,LastWriteTime | Format-Table -AutoSize)",
+      "Read(//c/Users/Bolado/.claude/**)",
+      "PowerShell(where.exe cortex-hook 2>&1 ; \"---\" ; Get-ChildItem \"$env:USERPROFILE\\\\.cortex\" -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTime ; \"---\" ; Test-Path \"$env:USERPROFILE\\\\.claude\\\\settings.json\")",
+      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.claude\" ; Test-Path \"E:\\\\HiveLLM\\\\Cortex\\\\target\\\\release\" ; \\(Get-ChildItem \"E:\\\\HiveLLM\\\\Cortex\\\\target\" -ErrorAction SilentlyContinue\\).Name)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

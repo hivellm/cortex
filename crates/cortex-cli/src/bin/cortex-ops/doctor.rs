@@ -885,6 +885,382 @@ impl cortex_cli::ops::QueryProbe for LiveNexusQueryProbe {
     }
 }
 
+/// Phase12d §3 — Meili index settings drift checker. Compares the
+/// declared `searchableAttributes` / `filterableAttributes` /
+/// `sortableAttributes` from `cortex_storage::fulltext::INDEXES`
+/// against the live Meili settings for every index.
+///
+/// Exit codes:
+/// - `0` — all indexes match the declared settings.
+/// - `2` — any drift OR any HTTP failure (network, auth, missing
+///   index, unparseable response). `--json` always emits the
+///   structured report regardless of exit code.
+pub(super) fn doctor_meili_indexes(
+    meili_url: Option<String>,
+    master_key: Option<String>,
+    json: bool,
+) -> ExitCode {
+    use cortex_storage::fulltext::INDEXES;
+
+    let url = meili_url
+        .or_else(|| std::env::var("MEILI_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
+    let key = master_key
+        .or_else(|| std::env::var("MEILI_MASTER_KEY").ok())
+        .filter(|s| !s.is_empty());
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("doctor-meili-indexes: tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let report = rt.block_on(async {
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                return MeiliDriftReport::transport_error(&url, format!("client build: {e}"));
+            }
+        };
+        let mut entries: Vec<MeiliIndexCheck> = Vec::with_capacity(INDEXES.len());
+        for idx in INDEXES {
+            let declared: serde_json::Value = match serde_json::from_str(idx.settings_json) {
+                Ok(v) => v,
+                Err(e) => {
+                    entries.push(MeiliIndexCheck::error(
+                        idx.name,
+                        format!("declared settings parse: {e}"),
+                    ));
+                    continue;
+                }
+            };
+            let endpoint = format!("{}/indexes/{}/settings", url.trim_end_matches('/'), idx.name);
+            let mut req = client.get(&endpoint);
+            if let Some(k) = key.as_deref() {
+                req = req.bearer_auth(k);
+            }
+            let resp = match req.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    entries.push(MeiliIndexCheck::error(idx.name, format!("network: {e}")));
+                    continue;
+                }
+            };
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                let reason = if status.as_u16() == 404 {
+                    "missing".to_string()
+                } else {
+                    format!(
+                        "HTTP {} {}",
+                        status.as_u16(),
+                        body.chars().take(120).collect::<String>()
+                    )
+                };
+                entries.push(MeiliIndexCheck::error(idx.name, reason));
+                continue;
+            }
+            let live: serde_json::Value = match resp.json().await {
+                Ok(v) => v,
+                Err(e) => {
+                    entries.push(MeiliIndexCheck::error(idx.name, format!("parse: {e}")));
+                    continue;
+                }
+            };
+            entries.push(MeiliIndexCheck::diff(idx.name, &declared, &live));
+        }
+        MeiliDriftReport {
+            meili_url: url.clone(),
+            entries,
+            transport_error: None,
+        }
+    });
+
+    if json {
+        match serde_json::to_string_pretty(&report) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("doctor-meili-indexes: serialize: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    } else {
+        report.render_text();
+    }
+    if report.has_drift() {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MeiliDriftReport {
+    meili_url: String,
+    entries: Vec<MeiliIndexCheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport_error: Option<String>,
+}
+
+impl MeiliDriftReport {
+    fn transport_error(meili_url: &str, reason: String) -> Self {
+        Self {
+            meili_url: meili_url.to_string(),
+            entries: Vec::new(),
+            transport_error: Some(reason),
+        }
+    }
+
+    fn has_drift(&self) -> bool {
+        if self.transport_error.is_some() {
+            return true;
+        }
+        self.entries.iter().any(|e| e.status != "ok")
+    }
+
+    fn render_text(&self) {
+        println!("cortex-ops doctor-meili-indexes");
+        println!("meili_url: {}", self.meili_url);
+        if let Some(err) = &self.transport_error {
+            println!("transport_error: {err}");
+            return;
+        }
+        println!();
+        for entry in &self.entries {
+            println!(
+                "{:<6} {:<24} {}",
+                entry.status, entry.index, entry.detail
+            );
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MeiliIndexCheck {
+    index: &'static str,
+    /// `ok` (no drift) | `drift` (live diverges from declared) |
+    /// `missing` (404 from Meili) | `error` (network, parse, etc.).
+    status: &'static str,
+    detail: String,
+    /// Per-attribute diff, populated only when `status = "drift"`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    diffs: Vec<MeiliAttrDiff>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MeiliAttrDiff {
+    attribute: &'static str,
+    declared: Vec<String>,
+    live: Vec<String>,
+}
+
+impl MeiliIndexCheck {
+    fn error(index: &'static str, reason: String) -> Self {
+        let status = if reason == "missing" { "missing" } else { "error" };
+        Self {
+            index,
+            status,
+            detail: reason,
+            diffs: Vec::new(),
+        }
+    }
+
+    fn diff(index: &'static str, declared: &serde_json::Value, live: &serde_json::Value) -> Self {
+        let mut diffs = Vec::new();
+        for attr in [
+            "searchableAttributes",
+            "filterableAttributes",
+            "sortableAttributes",
+        ] {
+            let dec = string_array(declared.get(attr));
+            let liv = string_array(live.get(attr));
+            // Compare as sorted sets — Meili does not preserve the
+            // declared order on read, and the order does not affect
+            // ranking for these three keys.
+            let mut dec_sorted = dec.clone();
+            dec_sorted.sort();
+            let mut liv_sorted = liv.clone();
+            liv_sorted.sort();
+            if dec_sorted != liv_sorted {
+                diffs.push(MeiliAttrDiff {
+                    attribute: attr,
+                    declared: dec,
+                    live: liv,
+                });
+            }
+        }
+        if diffs.is_empty() {
+            Self {
+                index,
+                status: "ok",
+                detail: "settings match".to_string(),
+                diffs,
+            }
+        } else {
+            let names: Vec<&str> = diffs.iter().map(|d| d.attribute).collect();
+            Self {
+                index,
+                status: "drift",
+                detail: format!("drift on: {}", names.join(", ")),
+                diffs,
+            }
+        }
+    }
+}
+
+fn string_array(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod meili_drift_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn diff_reports_ok_when_attributes_match_in_any_order() {
+        let declared = json!({
+            "searchableAttributes": ["title", "body"],
+            "filterableAttributes": ["repo", "tags"],
+            "sortableAttributes": ["occurred_at"]
+        });
+        let live = json!({
+            // Order swapped — Meili-side is allowed to permute these.
+            "searchableAttributes": ["body", "title"],
+            "filterableAttributes": ["tags", "repo"],
+            "sortableAttributes": ["occurred_at"]
+        });
+        let check = MeiliIndexCheck::diff("cortex_test", &declared, &live);
+        assert_eq!(check.status, "ok");
+        assert!(check.diffs.is_empty());
+    }
+
+    #[test]
+    fn diff_flags_drift_on_missing_searchable_attribute() {
+        let declared = json!({
+            "searchableAttributes": ["title", "body", "topics"],
+            "filterableAttributes": ["repo"],
+            "sortableAttributes": ["occurred_at"]
+        });
+        let live = json!({
+            "searchableAttributes": ["title", "body"],
+            "filterableAttributes": ["repo"],
+            "sortableAttributes": ["occurred_at"]
+        });
+        let check = MeiliIndexCheck::diff("cortex_test", &declared, &live);
+        assert_eq!(check.status, "drift");
+        assert_eq!(check.diffs.len(), 1);
+        assert_eq!(check.diffs[0].attribute, "searchableAttributes");
+        assert!(check.diffs[0].declared.contains(&"topics".to_string()));
+        assert!(!check.diffs[0].live.contains(&"topics".to_string()));
+    }
+
+    #[test]
+    fn diff_flags_drift_across_multiple_attributes() {
+        let declared = json!({
+            "searchableAttributes": ["title"],
+            "filterableAttributes": ["repo", "topics"],
+            "sortableAttributes": ["occurred_at"]
+        });
+        let live = json!({
+            "searchableAttributes": ["title"],
+            "filterableAttributes": ["repo"],
+            "sortableAttributes": []
+        });
+        let check = MeiliIndexCheck::diff("cortex_test", &declared, &live);
+        assert_eq!(check.status, "drift");
+        assert_eq!(check.diffs.len(), 2);
+    }
+
+    #[test]
+    fn missing_attribute_in_declared_but_present_live_is_drift() {
+        let declared = json!({
+            "searchableAttributes": ["title"]
+            // No filterableAttributes / sortableAttributes declared.
+        });
+        let live = json!({
+            "searchableAttributes": ["title"],
+            "filterableAttributes": ["repo"],
+            "sortableAttributes": []
+        });
+        let check = MeiliIndexCheck::diff("cortex_test", &declared, &live);
+        // Declared has no filterableAttributes → empty set; live has
+        // ["repo"] → drift.
+        assert_eq!(check.status, "drift");
+        assert!(check.diffs.iter().any(|d| d.attribute == "filterableAttributes"));
+    }
+
+    #[test]
+    fn error_constructor_classifies_missing_vs_error() {
+        let m = MeiliIndexCheck::error("cortex_test", "missing".to_string());
+        assert_eq!(m.status, "missing");
+        let e = MeiliIndexCheck::error("cortex_test", "HTTP 502 ...".to_string());
+        assert_eq!(e.status, "error");
+    }
+
+    #[test]
+    fn report_has_drift_returns_true_when_any_entry_is_not_ok() {
+        let report = MeiliDriftReport {
+            meili_url: "http://localhost:7700".to_string(),
+            entries: vec![
+                MeiliIndexCheck {
+                    index: "cortex_a",
+                    status: "ok",
+                    detail: "match".into(),
+                    diffs: Vec::new(),
+                },
+                MeiliIndexCheck {
+                    index: "cortex_b",
+                    status: "drift",
+                    detail: "drift".into(),
+                    diffs: Vec::new(),
+                },
+            ],
+            transport_error: None,
+        };
+        assert!(report.has_drift());
+    }
+
+    #[test]
+    fn report_has_drift_returns_false_when_all_ok() {
+        let report = MeiliDriftReport {
+            meili_url: "http://localhost:7700".to_string(),
+            entries: vec![
+                MeiliIndexCheck {
+                    index: "cortex_a",
+                    status: "ok",
+                    detail: "match".into(),
+                    diffs: Vec::new(),
+                },
+                MeiliIndexCheck {
+                    index: "cortex_b",
+                    status: "ok",
+                    detail: "match".into(),
+                    diffs: Vec::new(),
+                },
+            ],
+            transport_error: None,
+        };
+        assert!(!report.has_drift());
+    }
+}
+
 async fn build_live_nexus_query_probe(
     nexus_url: Option<String>,
 ) -> anyhow::Result<LiveNexusQueryProbe> {

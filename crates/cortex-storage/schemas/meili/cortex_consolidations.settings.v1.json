@@ -1,0 +1,17 @@
+{
+  "searchableAttributes": ["title", "summary_markdown", "topics", "repo"],
+  "filterableAttributes": ["grain", "depth", "scope_kind", "scope_value", "repo", "topics", "occurred_at", "model"],
+  "sortableAttributes": ["occurred_at", "source_event_count"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness", "occurred_at:desc"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "consolidation": ["summary", "rollup", "digest"],
+    "session": ["turn-window", "conversation"],
+    "decisiontrace": ["decision trace", "decision-chain", "adr-chain"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

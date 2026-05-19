@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/learning.schema.json",
+  "title": "LearningPayload",
+  "description": "Implementation-insight entry mirroring the Rulebook MCP `rulebook_learn_capture` shape (phase10e). Validated at ingest so silent kind drops stop happening — see phase12d.",
+  "type": "object",
+  "required": ["learning_id", "title", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "learning_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280
+    },
+    "body": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "related_task": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "source_path": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

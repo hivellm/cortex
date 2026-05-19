@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/knowledge.schema.json",
+  "title": "KnowledgePayload",
+  "description": "Pattern / anti-pattern entry mirroring the Rulebook MCP `rulebook_knowledge_add` shape (phase10e). Validated at ingest so silent kind drops stop happening — see phase12d.",
+  "type": "object",
+  "required": ["knowledge_id", "title", "category", "body"],
+  "additionalProperties": false,
+  "properties": {
+    "knowledge_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 280
+    },
+    "category": {
+      "type": "string",
+      "enum": ["pattern", "anti-pattern"]
+    },
+    "body": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "source_path": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

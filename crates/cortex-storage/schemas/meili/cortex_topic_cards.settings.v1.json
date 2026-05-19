@@ -1,0 +1,16 @@
+{
+  "searchableAttributes": ["title", "body", "synthesis_markdown", "topics", "repo"],
+  "filterableAttributes": ["topic_id", "repo", "topics", "contradiction_kind", "updated_at", "occurred_at"],
+  "sortableAttributes": ["updated_at", "occurred_at"],
+  "displayedAttributes": ["*"],
+  "rankingRules": ["words", "typo", "proximity", "attribute", "sort", "exactness", "updated_at:desc"],
+  "stopWords": ["a", "an", "the", "of", "in", "to", "and", "or"],
+  "synonyms": {
+    "topic": ["theme", "cluster"],
+    "contradiction": ["conflict", "disagreement"]
+  },
+  "typoTolerance": {
+    "enabled": true,
+    "minWordSizeForTypos": { "oneTypo": 4, "twoTypos": 8 }
+  }
+}

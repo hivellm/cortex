@@ -24,6 +24,16 @@ const SETTINGS_KNOWLEDGE: &str =
     include_str!("../schemas/meili/cortex_knowledge.settings.v1.json");
 const SETTINGS_LEARNINGS: &str =
     include_str!("../schemas/meili/cortex_learnings.settings.v1.json");
+// phase12d — consolidation + topic_card indexes were created lazily
+// by Meili on first write but had no `searchableAttributes` /
+// `filterableAttributes` configured, so every query against them
+// ranked by document id (useless for retrieval). The bootstrap path
+// now ships explicit settings so first-write reconciles to the
+// expected attribute set.
+const SETTINGS_CONSOLIDATIONS: &str =
+    include_str!("../schemas/meili/cortex_consolidations.settings.v1.json");
+const SETTINGS_TOPIC_CARDS: &str =
+    include_str!("../schemas/meili/cortex_topic_cards.settings.v1.json");
 
 /// Every Meilisearch index Cortex expects to exist.
 pub const INDEXES: &[IndexDescriptor] = &[
@@ -79,6 +89,18 @@ pub const INDEXES: &[IndexDescriptor] = &[
         name: crate::names::INDEX_LEARNINGS,
         primary_key: "learning_id",
         settings_json: SETTINGS_LEARNINGS,
+    },
+    // phase12d — ship explicit settings so the consolidator + topic-
+    // card writers don't depend on Meili's lazy default ranking.
+    IndexDescriptor {
+        name: crate::names::INDEX_CONSOLIDATIONS,
+        primary_key: "event_id",
+        settings_json: SETTINGS_CONSOLIDATIONS,
+    },
+    IndexDescriptor {
+        name: crate::names::INDEX_TOPIC_CARDS,
+        primary_key: "event_id",
+        settings_json: SETTINGS_TOPIC_CARDS,
     },
 ];
 

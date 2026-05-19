@@ -5,6 +5,7 @@
 
 #![warn(missing_docs)]
 
+pub mod audit;
 pub mod body;
 pub mod boot_replay;
 pub mod builders;

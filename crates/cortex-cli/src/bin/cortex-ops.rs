@@ -43,8 +43,12 @@ mod metadata;
 mod pii;
 #[path = "cortex-ops/plan.rs"]
 mod plan;
+#[path = "cortex-ops/meili_audit.rs"]
+mod meili_audit;
 #[path = "cortex-ops/retention.rs"]
 mod retention;
+#[path = "cortex-ops/retention_archive_purge.rs"]
+mod retention_archive_purge;
 #[path = "cortex-ops/rollup.rs"]
 mod rollup;
 #[path = "cortex-ops/schedule_cmd.rs"]
@@ -91,6 +95,72 @@ enum Command {
         #[arg(long)]
         meili: Option<String>,
     },
+    /// Phase12g §1 — Meilisearch index audit. For every index in
+    /// `cortex_storage::fulltext::INDEXES`, fetches the live
+    /// `numberOfDocuments` from Meili `/stats` and classifies each
+    /// row as `populated` / `empty` / `missing` / `orphan`. Catches
+    /// the operational shape that bit phase12g (rulebook + vectorizer
+    /// indexes shipping configured-but-empty so every query against
+    /// those repos returned zero hits). Pairs with the existing
+    /// `doctor-meili-indexes` (settings drift) — together they cover
+    /// the two "is the index healthy?" axes. Exit `0` when every row
+    /// is `populated`; `2` on any drift or transport failure.
+    MeiliAudit {
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase12g §2 — Meilisearch reindex. Wraps the production
+    /// worker's boot-time replay path
+    /// (`cortex-workers::fulltext::boot_replay::replay_missing_partitions`),
+    /// which walks the parquet archive for every `(slug, family)`
+    /// partition not already present in Meili and routes each
+    /// envelope through the standard indexer pipeline. Idempotent —
+    /// re-running upserts via Meili `addDocuments` semantics, so
+    /// recovery from a partial run is safe. Returns the
+    /// `ReplayReport` (examined archives, missing partitions,
+    /// replayed events, latency).
+    MeiliReindex {
+        /// Override the archive root. Defaults to
+        /// `$CORTEX_ARCHIVE_ROOT` → `$CORTEX_HOME/archive` →
+        /// `<HOME|USERPROFILE>/.cortex/archive`.
+        #[arg(long)]
+        archive_root: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Phase12b — bulk Parquet archive purge. Walks
+    /// `${CORTEX_HOME}/events/**/*.parquet`, deletes every file whose
+    /// newest envelope's `occurred_at` is strictly older than
+    /// `--before`. Replaces the per-event `/v1/admin/forget` path
+    /// operators were avoiding by reaching for `rm -rf`. Honours the
+    /// live-frame guard so a half-flushed current-hour file is never
+    /// deleted; `--repo <slug>` pins files to the named repo (a
+    /// mixed-repo file is preserved even if every other envelope is
+    /// old). Exit code: `0` when every classifiable file was either
+    /// kept or deleted cleanly; `2` when at least one file was
+    /// unreadable or a per-file delete failed (the report counts both
+    /// in `files_unreadable`).
+    RetentionArchivePurge {
+        /// RFC-3339 cutoff. Files whose newest envelope is `< before`
+        /// are deleted. Required.
+        #[arg(long, value_name = "RFC3339")]
+        before: String,
+        /// Print the report without removing any file.
+        #[arg(long)]
+        dry_run: bool,
+        /// Restrict deletion to envelopes whose `context.repo`
+        /// matches. Files mixing this repo with others are kept.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Override the archive home directory. Defaults to
+        /// `$CORTEX_HOME` then `<HOME|USERPROFILE>/.cortex`.
+        #[arg(long)]
+        home: Option<String>,
+    },
+
     /// Phase9f — Meilisearch archival pruner. Blanks turn /
     /// tool_call body fields older than 90 d, caps `summary` at
     /// 4 KiB with an ellipsis marker, and stamps `pruned: true` +
@@ -506,6 +576,30 @@ enum Command {
         /// then `http://127.0.0.1:17000`.
         #[arg(long)]
         api_url: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase12d §3 — Meili index settings drift checker. For every
+    /// index in `cortex_storage::fulltext::INDEXES`, fetches the live
+    /// `<meili>/indexes/{name}/settings` and compares the declared
+    /// `searchableAttributes` / `filterableAttributes` /
+    /// `sortableAttributes` against the live values. Surfaces drift,
+    /// missing indexes, and unreachable backends. Exit codes: `0` all
+    /// match, `2` any drift OR any HTTP failure. Pairs with the
+    /// bootstrap PATCH (`bin/cortex-init.sh` § "seed: Meilisearch
+    /// indexes") which is the reconcile path — running this doctor
+    /// after a deploy confirms reconcile succeeded.
+    DoctorMeiliIndexes {
+        /// Meili base URL. Defaults to `$MEILI_URL`, then
+        /// `http://127.0.0.1:17004`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meili master key. Defaults to `$MEILI_MASTER_KEY`. Empty
+        /// means the doctor sends no `Authorization` header (works
+        /// for unauthenticated dev stacks).
+        #[arg(long)]
+        master_key: Option<String>,
         /// Emit JSON instead of the plain-text table.
         #[arg(long)]
         json: bool,
@@ -958,6 +1052,21 @@ fn main() -> ExitCode {
         } => doctor::doctor_config(workspace, adapter_toml, json),
         Command::DoctorAlerts { state_dir, json } => doctor::doctor_alerts(state_dir, json),
         Command::DoctorCoverage { api_url, json } => doctor::doctor_coverage(api_url, json),
+        Command::DoctorMeiliIndexes {
+            meili_url,
+            master_key,
+            json,
+        } => doctor::doctor_meili_indexes(meili_url, master_key, json),
+        Command::RetentionArchivePurge {
+            before,
+            dry_run,
+            repo,
+            home,
+        } => retention_archive_purge::run(before, dry_run, repo, home),
+        Command::MeiliAudit { json } => meili_audit::meili_audit(json),
+        Command::MeiliReindex { archive_root, json } => {
+            meili_audit::meili_reindex(archive_root, json)
+        }
         Command::MeiliPrune {
             time_travel,
             dry_run,
