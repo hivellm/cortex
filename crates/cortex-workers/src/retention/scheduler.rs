@@ -98,6 +98,19 @@ impl Runner for ProcessRunner {
             c.arg("-c").arg(command);
             c
         };
+        // 2026-05-19 — the cron rows reference sibling bins by bare
+        // name (`cortex-consolidator nightly`, `cortex-ops X`, …).
+        // When the daemon is started from a release / debug target
+        // dir that is NOT on the operator's PATH (the common dev
+        // layout), `cmd /C cortex-consolidator …` fails with
+        // "command not recognised" before any sweep bookkeeping
+        // runs — the cron row records `failed` but no
+        // `retention_sweeps` row exists. Prepend the daemon's own
+        // bin directory so every sibling bin shipped alongside
+        // `cortex-ops` resolves regardless of PATH layout.
+        if let Some(path) = sibling_bin_path() {
+            cmd.env("PATH", path);
+        }
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         let output = cmd
@@ -131,6 +144,29 @@ impl Runner for ProcessRunner {
             last_error,
         })
     }
+}
+
+/// Resolve a PATH value with the running daemon's bin directory
+/// prepended to whatever PATH the parent already has. Returns `None`
+/// when `current_exe()` is unavailable; callers then leave PATH
+/// untouched.
+///
+/// The prepend (not append) is intentional: when an operator both
+/// installs `cortex-ops` system-wide AND runs a freshly-built copy
+/// out of `target/release`, the running copy's siblings must win —
+/// otherwise the daemon would mix bins across versions.
+fn sibling_bin_path() -> Option<std::ffi::OsString> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let separator = if cfg!(windows) { ";" } else { ":" };
+    let mut out = std::ffi::OsString::from(dir);
+    if let Some(existing) = std::env::var_os("PATH") {
+        if !existing.is_empty() {
+            out.push(separator);
+            out.push(existing);
+        }
+    }
+    Some(out)
 }
 
 fn trail_capped(bytes: &[u8]) -> Option<String> {
@@ -717,6 +753,32 @@ mod tests {
     }
 
     #[test]
+    fn sibling_bin_path_prepends_current_exe_dir() {
+        let path = sibling_bin_path().expect("current_exe must resolve under cargo test");
+        let exe_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let path_str = path.to_string_lossy();
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        let first = path_str.split(separator).next().unwrap();
+        assert_eq!(
+            std::path::Path::new(first),
+            exe_dir,
+            "sibling_bin_path must prepend the running exe's dir, got `{path_str}`"
+        );
+        if let Some(existing) = std::env::var_os("PATH") {
+            if !existing.is_empty() {
+                assert!(
+                    path_str.contains(&*existing.to_string_lossy()),
+                    "sibling_bin_path must preserve the parent PATH tail"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn parse_schedule_accepts_five_six_and_seven_field_forms() {
         assert!(parse_schedule("0 3 * * *").is_ok());
         assert!(parse_schedule("0 0 3 * * *").is_ok());
@@ -945,7 +1007,7 @@ mod tests {
             .expect("phase11p §3.1 — consolidator_nightly must seed");
         assert!(nightly.enabled, "consolidator_nightly defaults enabled");
         assert_eq!(nightly.schedule, "0 2 * * *");
-        assert_eq!(nightly.command, "cortex-consolidator nightly");
+        assert_eq!(nightly.command, "cortex-consolidator nightly --dry-run=false");
     }
 
     #[test]
