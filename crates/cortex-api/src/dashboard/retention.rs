@@ -173,6 +173,7 @@ fn cron_name_to_sweep_slug(name: &str) -> Option<&'static str> {
         "retention.consolidation_prune" => Some("consolidation_prune"),
         "retention.memory_consolidate" => Some("memory_consolidate"),
         "retention.tool_call_digest" => Some("tool_call_digest"),
+        "retention.sessions_backfill" => Some("sessions_backfill"),
         _ => None,
     }
 }
@@ -192,6 +193,7 @@ pub(super) const RETENTION_SWEEP_SLUGS: &[&str] = &[
     "consolidator_nightly",
     "consolidation_prune",
     "memory_consolidate",
+    "sessions_backfill",
 ];
 
 /// `GET /v1/retention/sweeps` — recent retention sweeps + per-stage
