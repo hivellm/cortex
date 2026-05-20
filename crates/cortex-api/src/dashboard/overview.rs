@@ -172,6 +172,7 @@ mod tests {
             ts,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 
@@ -187,6 +188,7 @@ mod tests {
             ts,
             severity: None,
             extras: std::collections::BTreeMap::new(),
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 
@@ -276,6 +278,7 @@ mod tests {
                 ts: now - 30_000,
                 severity: None,
                 extras,
+                overlay: crate::lanes::Overlay::default(),
             });
         }
         let state = make_state(hits);

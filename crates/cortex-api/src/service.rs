@@ -575,6 +575,7 @@ mod tests {
                 ts: 100,
                 severity: None,
                 extras: Default::default(),
+                overlay: crate::lanes::Overlay::default(),
             }],
         );
         Orchestrator::new(v, k, g)
@@ -822,6 +823,7 @@ mod tests {
                 ts: 0,
                 severity: None,
                 extras: Default::default(),
+                overlay: crate::lanes::Overlay::default(),
             }],
         );
         let svc = QueryService::with_memory_defaults(build_orchestrator()).with_indexed_repos(lane);
@@ -862,6 +864,7 @@ mod tests {
                 ts: 0,
                 severity: None,
                 extras: Default::default(),
+                overlay: crate::lanes::Overlay::default(),
             }],
         );
         let svc = QueryService::with_memory_defaults(build_orchestrator()).with_indexed_repos(lane);
@@ -907,6 +910,7 @@ mod tests {
                 ts: 0,
                 severity: None,
                 extras: Default::default(),
+                overlay: crate::lanes::Overlay::default(),
             });
         }
         v.seed("cortex-cortex-code", hits);

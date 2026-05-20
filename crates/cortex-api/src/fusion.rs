@@ -437,6 +437,7 @@ mod tests {
             ts,
             severity: severity.map(String::from),
             extras: Default::default(),
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 

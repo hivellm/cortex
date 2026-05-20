@@ -436,6 +436,14 @@ pub fn alert_lane_hit(
         ts: ts_ms,
         severity: Some(severity_str.to_string()),
         extras,
+        // ADR-011 — silent-drop violations route through the
+        // keyword lane (they land in `cortex_laws` / governance
+        // indexes). Severity carries the alert level.
+        overlay: crate::lanes::Overlay {
+            severity: Some(severity_str.to_string()),
+            source: crate::lanes::LaneSource::Keyword,
+            ..crate::lanes::Overlay::default()
+        },
     }
 }
 

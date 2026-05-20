@@ -464,6 +464,13 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         );
     }
 
+    // ADR-011 — overlay starts from the source envelope so kind +
+    // model are stamped uniformly. Lane-specific overlay fields
+    // (decision_status, edge_from, …) are filled by each live
+    // lane once it parses the per-kind payload.
+    let mut overlay = cortex_api_overlay_from_env(env);
+    overlay.source = crate::lanes::LaneSource::Keyword;
+
     Some(LaneHit {
         doc_id: format!("archive|{}", env.event_id),
         text,
@@ -478,7 +485,15 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         ts: parse_rfc3339_to_ms(&env.occurred_at).unwrap_or(0),
         severity: None,
         extras,
+        overlay,
     })
+}
+
+/// ADR-011 — local alias so the loader does not have to know the
+/// full path to the `From<&Envelope>` impl. Centralised here so a
+/// future change to the conversion only touches one site.
+fn cortex_api_overlay_from_env(env: &cortex_core::events::Envelope) -> crate::lanes::Overlay {
+    crate::lanes::Overlay::from(env)
 }
 
 fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {

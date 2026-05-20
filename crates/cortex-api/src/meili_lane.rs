@@ -605,6 +605,48 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
             );
         }
     }
+    // ADR-011 — populate the typed overlay alongside extras during
+    // the staged migration. The orchestrator's overlay derivers
+    // continue reading from extras until §4 cuts the cord; the
+    // typed fields here let the new code path verify parity
+    // before the cut.
+    let overlay = crate::lanes::Overlay {
+        decision_id: extras
+            .get("decision_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        decision_status: extras
+            .get("decision_status")
+            .and_then(|v| v.as_str())
+            .and_then(parse_decision_status),
+        superseded_by: extras
+            .get("supersedes")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        turn_id: extras
+            .get("turn_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        model: extras
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        summary: extras
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        law_id: extras
+            .get("law_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        violation_id: extras
+            .get("violation_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        severity: doc.severity.clone(),
+        source: crate::lanes::LaneSource::Keyword,
+        ..crate::lanes::Overlay::default()
+    };
     LaneHit {
         doc_id,
         text,
@@ -616,6 +658,18 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
         ts: doc.ts.unwrap_or(0),
         severity: doc.severity,
         extras,
+        overlay,
+    }
+}
+
+fn parse_decision_status(s: &str) -> Option<crate::lanes::DecisionStatus> {
+    match s {
+        "proposed" => Some(crate::lanes::DecisionStatus::Proposed),
+        "accepted" => Some(crate::lanes::DecisionStatus::Accepted),
+        "superseded" => Some(crate::lanes::DecisionStatus::Superseded),
+        "deprecated" => Some(crate::lanes::DecisionStatus::Deprecated),
+        "rejected" => Some(crate::lanes::DecisionStatus::Rejected),
+        _ => None,
     }
 }
 

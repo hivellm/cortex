@@ -416,6 +416,7 @@ mod tests {
             ts,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 

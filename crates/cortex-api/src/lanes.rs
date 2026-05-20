@@ -105,6 +105,7 @@ pub fn collection_missing_marker(collection: impl Into<String>) -> LaneHit {
         ts: 0,
         severity: None,
         extras,
+        overlay: Overlay::default(),
     }
 }
 
@@ -344,7 +345,7 @@ pub trait Lane: Send + Sync {
 
 /// One hit returned by any lane. The orchestrator coerces lane
 /// outputs into this shape before fusion.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct LaneHit {
     /// Globally unique id for fusion (e.g. `<repo>|<path>|<chunk_hash>`).
     pub doc_id: String,
@@ -367,14 +368,21 @@ pub struct LaneHit {
     /// Free-form lane metadata round-tripped to debug.
     ///
     /// **Deprecated in ADR-011** — being replaced by the typed
-    /// [`Overlay`] field added on `LaneHit` in §3 of the phase13c
-    /// task. Until that migration lands lane impls continue
-    /// stamping the `LANE_EXTRAS_KEYS` strings here and the
-    /// orchestrator's overlay derivers continue reading from
-    /// `extras`. Once §3 + §4 complete, this field is removed
-    /// and the typed `overlay` field becomes the only path.
+    /// [`LaneHit::overlay`] field. Both fields coexist during the
+    /// migration: lane impls populate `overlay` directly; the few
+    /// extras keys that have not yet migrated (per-lane debug
+    /// counters) stay here. Once §4 completes, this field is
+    /// removed and the typed `overlay` field becomes the only
+    /// path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Props,
+    /// ADR-011 — typed overlay. Replaces the stringly-typed
+    /// `extras` map. Lane impls populate the fields their
+    /// upstream document carries; absent fields stay at their
+    /// default (`None` / `false` / `LaneSource::Unknown`). The
+    /// orchestrator's overlay derivers read these directly.
+    #[serde(default, skip_serializing_if = "Overlay::is_empty")]
+    pub overlay: Overlay,
 }
 
 impl Overlay {

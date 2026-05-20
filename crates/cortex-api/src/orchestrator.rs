@@ -736,6 +736,7 @@ mod tests {
             ts: 0,
             severity: None,
             extras: crate::types::Props::new(),
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 

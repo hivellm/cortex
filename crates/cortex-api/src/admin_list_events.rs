@@ -205,6 +205,7 @@ mod tests {
             ts: ts_ms,
             severity: None,
             extras: BTreeMap::new(),
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 

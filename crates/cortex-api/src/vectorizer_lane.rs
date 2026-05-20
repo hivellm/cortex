@@ -708,6 +708,26 @@ fn project(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
             );
         }
     }
+    // ADR-011 — typed overlay alongside extras. Vector lane owns
+    // turn_id / model / summary; the rest are decision / governance
+    // signals filled by other lanes.
+    let overlay = crate::lanes::Overlay {
+        turn_id: extras
+            .get("turn_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        model: extras
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        summary: extras
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        severity: get_str("severity"),
+        source: crate::lanes::LaneSource::Vector,
+        ..crate::lanes::Overlay::default()
+    };
     LaneHit {
         doc_id: format!("vec|{}|{}", req.collection, r.id),
         text,
@@ -719,6 +739,7 @@ fn project(r: WireSearchHit, req: &VectorRequest) -> LaneHit {
         ts: get_i64("ts").unwrap_or(0),
         severity: get_str("severity"),
         extras,
+        overlay,
     }
 }
 
@@ -894,6 +915,7 @@ mod tests {
             ts,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 

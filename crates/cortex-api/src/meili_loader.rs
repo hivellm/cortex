@@ -680,6 +680,37 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
         "meili_loader: projected hit"
     );
 
+    // ADR-011 — populate typed overlay from the just-stamped extras
+    // map so the new code path mirrors the legacy one byte-for-byte.
+    let overlay = crate::lanes::Overlay {
+        decision_id: extras
+            .get("decision_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        turn_id: extras
+            .get("turn_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        model: extras
+            .get("model")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        summary: extras
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        law_id: extras
+            .get("law_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        violation_id: extras
+            .get("violation_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        severity: severity.clone(),
+        source: crate::lanes::LaneSource::Keyword,
+        ..crate::lanes::Overlay::default()
+    };
     Some((
         symbol,
         LaneHit {
@@ -693,6 +724,7 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
             ts,
             severity,
             extras,
+            overlay,
         },
     ))
 }

@@ -232,6 +232,7 @@ mod tests {
             ts,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 
@@ -247,6 +248,7 @@ mod tests {
             ts,
             severity: None,
             extras: BTreeMap::new(),
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 
@@ -262,6 +264,7 @@ mod tests {
             ts,
             severity: None,
             extras: BTreeMap::new(),
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 

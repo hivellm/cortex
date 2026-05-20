@@ -394,6 +394,7 @@ mod tests {
             ts,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 
@@ -414,6 +415,7 @@ mod tests {
             ts,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         }
     }
 
@@ -453,6 +455,7 @@ mod tests {
             ts: 0,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         };
         assert!(is_internal_cortex_turn(&hit_classifier));
 
@@ -474,6 +477,7 @@ mod tests {
             ts: 0,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         };
         assert!(is_internal_cortex_turn(&hit_analyzer));
 
@@ -497,6 +501,7 @@ mod tests {
             ts: 0,
             severity: None,
             extras,
+            overlay: crate::lanes::Overlay::default(),
         };
         assert!(!is_internal_cortex_turn(&hit_real));
     }

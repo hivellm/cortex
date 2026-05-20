@@ -177,6 +177,16 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
     extras.insert("hops".to_string(), Value::Number(hops.into()));
     extras.insert("template".to_string(), Value::String(template.to_string()));
 
+    // ADR-011 — typed overlay alongside extras. Graph lane owns
+    // edge_from / edge_to / hops; the rest stay None.
+    let overlay = crate::lanes::Overlay {
+        edge_from: Some(edge_from.clone()),
+        edge_to: Some(edge_to.clone()),
+        hops: u8::try_from(hops).ok(),
+        source: crate::lanes::LaneSource::Graph,
+        ..crate::lanes::Overlay::default()
+    };
+
     Some(LaneHit {
         // Doc-id keys per (template, from, to) so RRF buckets stay
         // distinct across templates that surface the same node pair.
@@ -195,6 +205,7 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
         ts: 0,
         severity: None,
         extras,
+        overlay,
     })
 }
 
