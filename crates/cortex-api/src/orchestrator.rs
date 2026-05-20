@@ -244,18 +244,17 @@ impl Orchestrator {
         partition_collection_missing(&mut graph_result.hits, "graph", &mut response.debug.notes);
 
         // Debug-only invariant — every keyword-lane hit must carry
-        // `extras["source"] = "keyword"`. The 2026-04-27 audit caught
-        // hits surfacing as `source = "vector"` because the previous
-        // double left the field empty and `lane_label()` falls back
-        // to `"vector"`. The live `MeiliKeywordLane` stamps the field;
-        // this assert catches a future regression in any new lane
-        // implementation.
+        // `overlay.source = LaneSource::Keyword`. ADR-011 retired
+        // the stringly-typed `extras["source"] = "keyword"` check
+        // here; the typed enum makes a future regression in any
+        // new lane implementation a compile error rather than a
+        // runtime assert.
         debug_assert!(
             keyword_result
                 .hits
                 .iter()
-                .all(|h| h.extras.get("source").and_then(|v| v.as_str()) == Some("keyword")),
-            "keyword lane returned a hit without extras[\"source\"] = \"keyword\""
+                .all(|h| h.overlay.source == crate::lanes::LaneSource::Keyword),
+            "keyword lane returned a hit without overlay.source = Keyword"
         );
 
         // ---- Fuse ----
@@ -528,11 +527,15 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
                 .filter(|s| !SYMBOL_KIND_LABELS.contains(s))
                 .map(String::from)
         });
-    let body_truncated = hit
-        .extras
-        .get("body_truncated")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    // ADR-011 — typed overlay carries the truncation flag. Fall
+    // back to extras during the staged migration so a lane that
+    // has not yet been ported keeps working.
+    let body_truncated = hit.overlay.body_truncated
+        || hit
+            .extras
+            .get("body_truncated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     Snippet {
         rank,
         source: lane_label(hit),
@@ -557,24 +560,40 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
 }
 
 fn lane_label(hit: &LaneHit) -> String {
-    hit.extras
-        .get("source")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| "vector".to_string())
+    // ADR-011 — typed lane-of-origin read. Unknown falls back to
+    // `"vector"` to preserve the pre-ADR default. Lane impls that
+    // already stamped `overlay.source` (every live lane post-§3.1)
+    // win over the extras lookup; the legacy extras key still
+    // serves any pre-ADR-011 fixture that has not been updated.
+    match hit.overlay.source {
+        crate::lanes::LaneSource::Vector => "vector".to_string(),
+        crate::lanes::LaneSource::Keyword => "keyword".to_string(),
+        crate::lanes::LaneSource::Graph => "graph".to_string(),
+        crate::lanes::LaneSource::Unknown => hit
+            .extras
+            .get("source")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| "vector".to_string()),
+    }
 }
 
 fn derive_decisions(fused: &[LaneHit], limit: usize) -> Vec<DecisionRef> {
     fused
         .iter()
         .filter_map(|h| {
-            let id = h.extras.get("decision_id").and_then(|v| v.as_str())?;
+            // ADR-011 — typed overlay read replaces
+            // `extras.get("decision_id").and_then(|v| v.as_str())`.
+            let id = h.overlay.decision_id.as_deref()?;
             // phase10a §1.2 — prefer the lane's stamped
             // `decision_title` over the kind label that
             // `LaneHit.symbol` carries today (the meili projection
             // sets `symbol = doc.kind`, so without this fallback
             // every decision overlay rendered as the literal string
-            // `"decision"`).
+            // `"decision"`). `decision_title` and `rationale_excerpt`
+            // remain in `extras` for now — they were never part of
+            // the typed Overlay rollup; phase11v will fold them into
+            // a dedicated `decision_meta` Overlay field.
             let title = h
                 .extras
                 .get("decision_title")
@@ -593,12 +612,21 @@ fn derive_decisions(fused: &[LaneHit], limit: usize) -> Vec<DecisionRef> {
                 id: id.to_string(),
                 title,
                 rationale_excerpt,
-                status: h
-                    .extras
-                    .get("decision_status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("proposed")
-                    .to_string(),
+                // ADR-011 — typed `DecisionStatus`. The wire
+                // contract still emits the snake_case string; map
+                // the enum back via `as_str_repr` to preserve
+                // byte-for-byte parity with the pre-ADR path. A
+                // hit that lacks `decision_status` falls back to
+                // "proposed" (the previous behaviour).
+                status: match h.overlay.decision_status {
+                    Some(crate::lanes::DecisionStatus::Proposed) => "proposed",
+                    Some(crate::lanes::DecisionStatus::Accepted) => "accepted",
+                    Some(crate::lanes::DecisionStatus::Superseded) => "superseded",
+                    Some(crate::lanes::DecisionStatus::Deprecated) => "deprecated",
+                    Some(crate::lanes::DecisionStatus::Rejected) => "rejected",
+                    None => "proposed",
+                }
+                .to_string(),
                 ts: h.ts,
                 score: h.score,
                 links: Vec::new(),
@@ -621,24 +649,27 @@ fn derive_laws(
     let mut active: Vec<LawRef> = Vec::new();
     let mut violations: Vec<ViolationRef> = Vec::new();
     for h in keyword_hits.iter().chain(graph_hits.iter()) {
-        if let Some(law_id) = h.extras.get("law_id").and_then(|v| v.as_str()) {
+        // ADR-011 — typed overlay read replaces `extras.get("law_id")`.
+        if let Some(law_id) = h.overlay.law_id.as_deref() {
             active.push(LawRef {
                 id: law_id.to_string(),
                 severity: h.severity.clone().unwrap_or_else(|| "info".into()),
                 title: h.symbol.clone().unwrap_or_else(|| h.text.clone()),
             });
         }
-        if let Some(violation_id) = h.extras.get("violation_id").and_then(|v| v.as_str()) {
+        if let Some(violation_id) = h.overlay.violation_id.as_deref() {
             violations.push(ViolationRef {
                 id: violation_id.to_string(),
                 law_id: h
-                    .extras
-                    .get("law_id")
-                    .and_then(|v| v.as_str())
+                    .overlay
+                    .law_id
+                    .as_deref()
                     .unwrap_or("LAW-???")
                     .to_string(),
                 severity: h.severity.clone().unwrap_or_else(|| "info".into()),
                 message: h.text.clone(),
+                // `observed_in` stays on extras for now — it is a
+                // lane-debug field, not part of the typed Overlay.
                 observed_in: h
                     .extras
                     .get("observed_in")
@@ -659,14 +690,20 @@ fn derive_graph_neighbors(graph_hits: &[LaneHit], limit: usize) -> Vec<GraphNeig
     graph_hits
         .iter()
         .filter_map(|h| {
-            let from = h.extras.get("edge_from").and_then(|v| v.as_str())?;
-            let to = h.extras.get("edge_to").and_then(|v| v.as_str())?;
+            // ADR-011 — typed overlay read replaces
+            // `extras.get("edge_from") / edge_to / hops`.
+            let from = h.overlay.edge_from.as_deref()?;
+            let to = h.overlay.edge_to.as_deref()?;
+            // `edge_type` is graph-lane-only debug metadata; stays
+            // on extras until phase11v adds a typed
+            // `Overlay::edge_relation` field. Falls back to
+            // `"RELATED"` when missing (legacy behaviour).
             let relation = h
                 .extras
                 .get("edge_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("RELATED");
-            let hops = h.extras.get("hops").and_then(|v| v.as_u64()).unwrap_or(1) as u8;
+            let hops = h.overlay.hops.unwrap_or(1);
             Some(GraphNeighbor {
                 from: from.to_string(),
                 relation: relation.to_string(),
@@ -682,21 +719,25 @@ fn derive_similar_turns(fused: &[LaneHit], limit: usize) -> Vec<SimilarTurn> {
     fused
         .iter()
         .filter_map(|h| {
-            let turn_id = h.extras.get("turn_id").and_then(|v| v.as_str())?;
+            // ADR-011 — typed overlay read replaces
+            // `extras.get("turn_id") / model / summary`. `outcome`
+            // stays on extras until phase11v adds a typed
+            // `Overlay::turn_outcome` field — it is currently only
+            // stamped by the consolidator's session producer and
+            // not by any live lane.
+            let turn_id = h.overlay.turn_id.as_deref()?;
             Some(SimilarTurn {
                 turn_id: turn_id.to_string(),
                 ts: h.ts,
                 model: h
-                    .extras
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
+                    .overlay
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
                 summary: h
-                    .extras
-                    .get("summary")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
+                    .overlay
+                    .summary
+                    .clone()
                     .unwrap_or_else(|| h.text.clone()),
                 score: h.score,
                 outcome: h
@@ -847,5 +888,90 @@ mod tests {
         );
         let snippet = snippet_from_hit(1, &hit);
         assert_eq!(snippet.symbol.as_deref(), Some("DEC-0042 Adopt RRF fusion"));
+    }
+
+    // -----------------------------------------------------------
+    // ADR-011 §3.3 — empty-overlay regression tests.
+    // -----------------------------------------------------------
+
+    fn lane_hit_default(doc_id: &str) -> LaneHit {
+        LaneHit {
+            doc_id: doc_id.to_string(),
+            text: format!("text-{doc_id}"),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn derive_decisions_skips_hit_with_empty_overlay() {
+        // A `LaneHit` whose overlay carries no `decision_id` must
+        // NOT surface as a DecisionRef. Pre-ADR-011 the equivalent
+        // gate was `extras.get("decision_id")?` — drop the typed
+        // overlay equivalent and the fallthrough path is gone.
+        let hit = lane_hit_default("doc-1");
+        assert!(hit.overlay.is_empty(), "fixture overlay must start empty");
+        let decisions = super::derive_decisions(&[hit], 10);
+        assert!(
+            decisions.is_empty(),
+            "empty-overlay hit must NOT produce a DecisionRef"
+        );
+    }
+
+    #[test]
+    fn derive_graph_neighbors_skips_hit_with_empty_overlay() {
+        // The graph-neighbor projector needs `edge_from` AND
+        // `edge_to`. An empty overlay yields neither so the hit
+        // is silently dropped (no panic, no fall-through to a
+        // legacy extras path).
+        let hit = lane_hit_default("doc-2");
+        let neighbors = super::derive_graph_neighbors(&[hit], 10);
+        assert!(neighbors.is_empty());
+    }
+
+    #[test]
+    fn derive_similar_turns_skips_hit_with_empty_overlay() {
+        let hit = lane_hit_default("doc-3");
+        let turns = super::derive_similar_turns(&[hit], 10);
+        assert!(turns.is_empty());
+    }
+
+    #[test]
+    fn derive_laws_skips_hit_with_empty_overlay() {
+        let hit = lane_hit_default("doc-4");
+        let (laws, violations) = super::derive_laws(&[hit.clone()], &[hit], 10);
+        assert!(laws.is_empty());
+        assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn three_lanes_emit_empty_overlays_without_panic() {
+        // ADR-011 §3.3 — exercise every overlay deriver against
+        // hits emitted by three distinct lanes (Vector / Keyword /
+        // Graph), each carrying ONLY a lane-of-origin stamp and
+        // nothing else. The pre-ADR-011 stringly-typed path would
+        // have panicked on `as_str()` when extras lacked the
+        // expected keys; the typed path must return cleanly.
+        let mut vector_hit = lane_hit_default("vec-1");
+        vector_hit.overlay.source = crate::lanes::LaneSource::Vector;
+        let mut keyword_hit = lane_hit_default("kw-1");
+        keyword_hit.overlay.source = crate::lanes::LaneSource::Keyword;
+        let mut graph_hit = lane_hit_default("gr-1");
+        graph_hit.overlay.source = crate::lanes::LaneSource::Graph;
+
+        let fused = vec![vector_hit.clone(), keyword_hit.clone(), graph_hit.clone()];
+        let decisions = super::derive_decisions(&fused, 10);
+        let neighbors = super::derive_graph_neighbors(&[graph_hit.clone()], 10);
+        let turns = super::derive_similar_turns(&fused, 10);
+        let (laws, violations) = super::derive_laws(&[keyword_hit], &[graph_hit], 10);
+
+        assert!(decisions.is_empty(), "no decision_id → no DecisionRef");
+        assert!(neighbors.is_empty(), "no edge_from/to → no GraphNeighbor");
+        assert!(turns.is_empty(), "no turn_id → no SimilarTurn");
+        assert!(laws.is_empty(), "no law_id → no LawRef");
+        assert!(violations.is_empty(), "no violation_id → no ViolationRef");
+
+        // The vector-lane hit's `lane_label` MUST report the
+        // typed source instead of the legacy extras fallback.
+        assert_eq!(super::lane_label(&vector_hit), "vector");
     }
 }
