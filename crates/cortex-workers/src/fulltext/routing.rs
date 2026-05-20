@@ -5,10 +5,70 @@
 //! `cortex-{repo_slug}-{family}` — and queries can scope deterministically
 //! to a single project.
 
-use cortex_core::events::Kind;
+use cortex_core::events::{Kind, ToolCall};
 use cortex_storage::names::{slug_for_repo, UNKNOWN_REPO_SLUG};
 
 use crate::embedder::EnrichedEvent;
+
+/// Tool names whose `Kind::ToolCall` envelopes carry near-zero
+/// retrieval value compared to their indexing cost. A single Claude
+/// Code session frequently emits hundreds of `Bash` / `Read` / `Grep`
+/// events; each one becomes a Meili document that dominates BM25
+/// matches for anything code-shaped without ever being the *answer*
+/// to a user query.
+///
+/// Membership criterion: the tool is a file / shell / search /
+/// presentation primitive whose body is either (a) recoverable from
+/// the file system or (b) already represented by a higher-signal
+/// envelope (`Turn`, `AgentCall`, `Decision`). Higher-signal tools
+/// such as `Task` (agent dispatch), `WebFetch` / `WebSearch`,
+/// `TodoWrite`, and any non-Anthropic MCP tool are deliberately
+/// absent so they continue to index.
+///
+/// The full set lives in [`is_low_signal_tool_name`] so a single
+/// regex-equivalent membership test serves both the indexer skip
+/// path and any future pruner CLI.
+pub const LOW_SIGNAL_TOOL_NAMES: &[&str] = &[
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "LS",
+    "MultiEdit",
+    "NotebookEdit",
+    "PowerShell",
+    "Read",
+    "ToolSearch",
+    "Write",
+];
+
+/// True when `name` is one of [`LOW_SIGNAL_TOOL_NAMES`]. Case
+/// sensitive — Claude Code's tool names are canonical case.
+pub fn is_low_signal_tool_name(name: &str) -> bool {
+    LOW_SIGNAL_TOOL_NAMES.binary_search(&name).is_ok()
+}
+
+/// True when `event` is a tool-call whose tool is on the low-signal
+/// list. Failed deserialisation falls through to `false` so a
+/// malformed payload is still indexed (better to keep a stray noisy
+/// document than silently drop a real one). Honour
+/// `CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS=1` as an operator opt-out so
+/// audit / debugging runs can re-enable the full firehose without a
+/// rebuild.
+pub fn is_low_signal_tool_call_event(event: &EnrichedEvent) -> bool {
+    if !matches!(event.kind, Kind::ToolCall) {
+        return false;
+    }
+    if std::env::var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    serde_json::from_value::<ToolCall>(event.redacted_payload.clone())
+        .map(|tc| is_low_signal_tool_name(&tc.tool_name))
+        .unwrap_or(false)
+}
 
 /// Path extensions that route an artifact to the `code` family.
 /// Source-code formats only — extensions whose contents are typically
@@ -257,6 +317,145 @@ pub const FAMILIES: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+    use serde_json::json;
+
+    fn classifier_fixture(event_id: &str) -> ClassifierOutput {
+        ClassifierOutput {
+            event_id: event_id.to_string(),
+            kind_refinement: None,
+            topics: Vec::new(),
+            severity: Severity::Info,
+            pii_risk: PiiRisk::Low,
+            redaction_suggestions: Vec::new(),
+            summary: None,
+            entities: Vec::new(),
+            relations: Vec::new(),
+            source: ClassifierSource::StaticFallback,
+            prompt_version: "v1".into(),
+            model: "static-v1".into(),
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+        }
+    }
+
+    fn tool_call_event(tool_name: &str) -> EnrichedEvent {
+        EnrichedEvent {
+            event_id: format!("evt-{tool_name}"),
+            kind: Kind::ToolCall,
+            content_hash: format!("h-{tool_name}"),
+            redacted_payload: json!({
+                "tool_name": tool_name,
+                "input": {"command": "ls"},
+                "outcome": "success",
+            }),
+            classifier: classifier_fixture(&format!("evt-{tool_name}")),
+            context_repo: None,
+            context_path: None,
+            parent_event_id: None,
+            session_id: None,
+        }
+    }
+
+    #[test]
+    fn low_signal_tool_names_list_is_sorted_for_binary_search() {
+        let mut sorted = LOW_SIGNAL_TOOL_NAMES.to_vec();
+        sorted.sort();
+        assert_eq!(
+            sorted.as_slice(),
+            LOW_SIGNAL_TOOL_NAMES,
+            "LOW_SIGNAL_TOOL_NAMES must stay ASCII-sorted — binary_search relies on it"
+        );
+    }
+
+    #[test]
+    fn is_low_signal_tool_name_matches_known_noisy_tools() {
+        for tool in ["Bash", "Read", "Grep", "Edit", "Write", "Glob"] {
+            assert!(
+                is_low_signal_tool_name(tool),
+                "expected {tool} on the deny list"
+            );
+        }
+    }
+
+    #[test]
+    fn is_low_signal_tool_name_lets_high_signal_tools_through() {
+        for tool in ["Task", "WebFetch", "WebSearch", "TodoWrite", "AskUserQuestion"] {
+            assert!(
+                !is_low_signal_tool_name(tool),
+                "{tool} must NOT be on the deny list — it carries real retrieval signal"
+            );
+        }
+    }
+
+    // `CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS` is process-global; every
+    // test that calls `is_low_signal_tool_call_event` must serialise
+    // through this mutex so the opt-out test does not race the
+    // baseline skip / keep tests under `cargo test`'s default
+    // parallel runner.
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        match LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        }
+    }
+
+    #[test]
+    fn is_low_signal_tool_call_event_skips_bash() {
+        let _g = env_guard();
+        std::env::remove_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS");
+        assert!(is_low_signal_tool_call_event(&tool_call_event("Bash")));
+    }
+
+    #[test]
+    fn is_low_signal_tool_call_event_keeps_task() {
+        let _g = env_guard();
+        std::env::remove_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS");
+        assert!(!is_low_signal_tool_call_event(&tool_call_event("Task")));
+    }
+
+    #[test]
+    fn is_low_signal_tool_call_event_ignores_non_tool_call_kinds() {
+        let _g = env_guard();
+        std::env::remove_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS");
+        let mut evt = tool_call_event("Bash");
+        evt.kind = Kind::Turn;
+        assert!(
+            !is_low_signal_tool_call_event(&evt),
+            "filter must only fire on Kind::ToolCall — Turn / AgentCall / Decision / … always index"
+        );
+    }
+
+    #[test]
+    fn is_low_signal_tool_call_event_handles_malformed_payload() {
+        let _g = env_guard();
+        std::env::remove_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS");
+        let mut evt = tool_call_event("Bash");
+        // Replace payload with one missing `tool_name` so
+        // `from_value::<ToolCall>` fails. Filter must fall through
+        // to `false` — better to keep a stray event than silently
+        // drop everything when a serialiser drifts.
+        evt.redacted_payload = json!({"input": {"command": "ls"}});
+        assert!(!is_low_signal_tool_call_event(&evt));
+    }
+
+    #[test]
+    fn is_low_signal_tool_call_event_honours_operator_opt_out() {
+        let _g = env_guard();
+        let saved = std::env::var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS").ok();
+        std::env::set_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS", "1");
+        let result = is_low_signal_tool_call_event(&tool_call_event("Bash"));
+        match saved {
+            Some(v) => std::env::set_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS", v),
+            None => std::env::remove_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS"),
+        }
+        assert!(
+            !result,
+            "operator opt-out must disable the filter — audit / debug runs need the firehose"
+        );
+    }
 
     #[test]
     fn index_for_artifact_kind_only_lands_in_misc() {

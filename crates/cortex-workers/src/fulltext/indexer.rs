@@ -28,7 +28,7 @@ use super::config::FulltextConfig;
 use super::document::Document;
 use super::meili_client::{MeiliClient, MeiliError};
 use super::metrics::Metrics;
-use super::routing::{index_for_event, index_for_event_global};
+use super::routing::{index_for_event, index_for_event_global, is_low_signal_tool_call_event};
 use super::settings::settings_v1_json;
 use crate::embedder::EnrichedEvent;
 
@@ -152,6 +152,22 @@ impl FulltextIndexer for MeiliFulltextIndexer {
 
         // 1. Build per-event documents and group by target index.
         for event in events {
+            // 2026-05-20 — drop low-signal tool_call envelopes
+            // (Bash / Read / Grep / Edit / Write / Glob / …) before
+            // they reach the builder. A single Claude Code session
+            // emits hundreds of these; without the filter the per-
+            // repo `cortex-{slug}-code` index ends up dominated by
+            // shell payloads that out-rank real source documents in
+            // BM25 matches. Higher-signal tool calls (Task /
+            // WebFetch / TodoWrite / non-Anthropic MCP) still index
+            // because `is_low_signal_tool_call_event` only matches
+            // names in the deny list. Operators can re-enable
+            // indexing via `CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS=1`.
+            if is_low_signal_tool_call_event(event) {
+                skipped = skipped.saturating_add(1);
+                self.metrics.incr_skipped_empty();
+                continue;
+            }
             let outcome = build_doc(
                 event,
                 /* bootstrap */ false,
