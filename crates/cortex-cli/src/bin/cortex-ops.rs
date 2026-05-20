@@ -47,6 +47,8 @@ mod plan;
 mod meili_audit;
 #[path = "cortex-ops/retention.rs"]
 mod retention;
+#[path = "cortex-ops/sessions_backfill.rs"]
+mod sessions_backfill;
 #[path = "cortex-ops/retention_archive_purge.rs"]
 mod retention_archive_purge;
 #[path = "cortex-ops/rollup.rs"]
@@ -344,6 +346,33 @@ enum Command {
     Schedule {
         #[command(subcommand)]
         command: ScheduleCommand,
+    },
+    /// 2026-05-20 — populate the `sessions` SQLite table from the
+    /// parquet archive. The ingestion router never wrote here, which
+    /// left the consolidator nightly's 24h window enumeration always
+    /// returning zero rows — daily consolidations never fired in
+    /// production. This subcommand walks the archive, aggregates
+    /// envelopes by `session_id`, and `upsert_session`s each one with
+    /// its earliest `occurred_at` as `started_at`. Idempotent;
+    /// scheduled hourly so new sessions appear within an hour of
+    /// their first envelope landing.
+    SessionsBackfill {
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` / `<CORTEX_HOME>/metadata.sqlite` /
+        /// `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Parquet archive root. Defaults to `$CORTEX_ARCHIVE_ROOT`
+        /// / `<CORTEX_HOME>/archive` / `<home>/.cortex/archive`.
+        #[arg(long)]
+        archive_root: Option<String>,
+        /// Walk the archive and report what would be upserted,
+        /// without touching SQLite.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
     },
     /// Phase9h — Claude Code auto-memory consolidator. Embeds every
     /// `*.md` under `~/.claude/projects/<slug>/memory/`, clusters
@@ -1141,6 +1170,12 @@ fn main() -> ExitCode {
             json,
         } => rollup::rollup(time_travel, dry_run, granularity, archive_root, json),
         Command::Schedule { command } => schedule_cmd::schedule(command),
+        Command::SessionsBackfill {
+            metadata_db,
+            archive_root,
+            dry_run,
+            json,
+        } => sessions_backfill::sessions_backfill(metadata_db, archive_root, dry_run, json),
         Command::MemoryConsolidate {
             project,
             threshold,

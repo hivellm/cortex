@@ -358,6 +358,21 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-consolidator nightly --dry-run=false",
             enabled: true,
         },
+        // 2026-05-20 — populate `sessions` from the parquet archive.
+        // The ingestion router writes envelopes but never inserted a
+        // session row, so the 24h enumeration in
+        // `cortex-consolidator nightly` returned zero and the daily
+        // consolidator produced zero summaries. Hourly cadence keeps
+        // freshness tight enough that the 02:00 UTC nightly always
+        // sees yesterday's sessions; the upsert is idempotent so a
+        // re-run on the same archive does nothing once the row's
+        // identity fields are populated.
+        DefaultJob {
+            name: "retention.sessions_backfill",
+            schedule: "0 * * * *",
+            command: "cortex-ops sessions-backfill",
+            enabled: true,
+        },
         // phase11w — Tool-call digest summariser. Buckets old
         // tool_call envelopes by (repo, year_week, tool) and
         // purges originals after the digest persists. Sits at
@@ -982,11 +997,19 @@ mod tests {
         // phase11w — count bumped from 10 → 11 with the addition of
         // `retention.tool_call_digest`.
         // phase12b — 11 → 12 with the addition of `retention.archive_purge`.
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 12);
+        // 2026-05-20 — 12 → 13 with `retention.sessions_backfill`.
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 13);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 12);
+        assert_eq!(jobs.len(), 13);
+        let backfill = jobs
+            .iter()
+            .find(|j| j.name == "retention.sessions_backfill")
+            .expect("sessions_backfill must seed");
+        assert!(backfill.enabled, "sessions_backfill defaults enabled");
+        assert_eq!(backfill.schedule, "0 * * * *");
+        assert_eq!(backfill.command, "cortex-ops sessions-backfill");
         let consolidate = jobs
             .iter()
             .find(|j| j.name == "retention.memory_consolidate")
