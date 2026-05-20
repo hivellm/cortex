@@ -354,29 +354,40 @@ hardens both fields:
 Wire-shape change: `body_truncated: bool` defaults to `false` and
 skip-serialises, so existing consumers keep working unchanged.
 
-### Lane projection contract (phase6b)
+### Lane projection contract (phase6b, typed in phase13c / ADR-011)
 
-Every overlay derivation reads its inputs out of `LaneHit.extras`. Live lane impls (`MeiliKeywordLane`, `VectorizerLane`) MUST stamp the contract keys below into `extras` whenever the upstream document carries them; missing keys round-trip as absent and the overlay deriver skips that row.
+Every overlay derivation reads its inputs out of `LaneHit.overlay` (typed struct, ADR-011) with a fall-through to `LaneHit.extras` (deprecated string map) for fields that have no typed Overlay home yet. Live lane impls (`MeiliKeywordLane`, `VectorizerLane`, `NexusGraphLane`) stamp both surfaces during the migration so the typed read path stays byte-for-byte consistent with the legacy stringly-typed one.
 
-The constant `cortex_api::lanes::LANE_EXTRAS_KEYS` is the source of truth and the regression guard at `crates/cortex-api/src/lane_contract.rs` pins it.
+`cortex_api::lanes::Overlay` is the typed source of truth. The pre-ADR `LANE_EXTRAS_KEYS` const remains as a parity check for the deprecated `extras` surface; it goes away when phase13c-followup hard-cuts extras.
 
-| Key | Upstream source | Consumed by |
-|-----|-----------------|-------------|
-| `decision_id` | Meili top-level `decision_id` (or `_meta.decision_id` during fulltext-worker rollouts) / Vectorizer `metadata.decision_id` (or `metadata.payload.decision_id` for legacy embedder builds) | `derive_decisions` |
-| `decision_status` | upstream `status` for decision rows | decisions overlay status badge |
-| `supersedes` | upstream `supersedes[]` array | decision detail link chain |
-| `turn_id` | upstream `turn_id` | `derive_similar_turns` |
-| `model` | upstream `model` (turn rows) | similar_turns overlay |
-| `summary` | upstream `summary` (turn rows; also used as snippet text fallback when `body` is empty) | similar_turns overlay |
-| `law_id` | upstream `law_id` | `derive_laws` |
-| `severity` | upstream `severity` (also projected onto the top-level `LaneHit.severity` field for the violations overlay tie-break) | `derive_laws` / violations overlay |
+| Overlay field         | Type                       | Lane ownership          | Consumed by |
+|-----------------------|----------------------------|-------------------------|-------------|
+| `decision_id`         | `Option<String>`           | Keyword (governance) + Graph | `derive_decisions` |
+| `decision_status`     | `Option<DecisionStatus>` (enum: `proposed` / `accepted` / `superseded` / `deprecated` / `rejected`) | Keyword + Graph | decisions overlay status badge |
+| `superseded_by`       | `Option<String>`           | Keyword + Graph         | decision detail link chain |
+| `turn_id`             | `Option<String>`           | Vector + Keyword (turns) + Graph | `derive_similar_turns` |
+| `model`               | `Option<String>`           | Vector + Keyword (turns) | similar_turns overlay |
+| `summary`             | `Option<String>`           | Vector (consolidations) + Keyword (turns) | similar_turns overlay |
+| `law_id`              | `Option<String>`           | Keyword (governance) + Graph | `derive_laws` |
+| `violation_id`        | `Option<String>`           | Keyword (governance)    | `derive_laws` violations |
+| `severity`            | `Option<String>`           | Keyword (governance)    | `derive_laws` / violations overlay |
+| `edge_from`/`edge_to` | `Option<String>`           | Graph                   | `derive_graph_neighbors` |
+| `hops`                | `Option<u8>`               | Graph                   | `derive_graph_neighbors` |
+| `body_truncated`      | `bool` (default `false`)   | Every lane (snippet projector) | `snippet_from_hit` |
+| `contradiction_flag`  | `Option<ContradictionKind>` (enum: `decision_supersession` / `law_violation_mismatch` / `outcome_divergence`) | Keyword + Graph | future contradictions overlay |
+| `consolidation_grain` | `Option<ConsolidationGrain>` (enum: `session` / `topic` / `decision_trace`) | Vector + Keyword (consolidations) | future consolidation overlay |
+| `topic_id`            | `Option<String>`           | Keyword (topic cards) + Graph | future topic overlay |
+| `kind`                | `Option<Kind>`             | Every lane (via `From<&Envelope>`) | branch dispatch in derivers |
+| `source`              | `LaneSource` (enum: `vector` / `keyword` / `graph` / `unknown`) | Every lane (mandatory) | `lane_label` + the keyword-source debug assert |
 
-Lookup precedence in each lane:
+Lookup precedence inside each lane (unchanged from phase6b — the typed overlay is populated from the same upstream paths):
 
-- **Meili keyword lane**: `_meta.<key>` (canonical post-migration nesting) → top-level `<key>` → typed slot (only for `summary` / `severity`, which `MeiliDoc` parses into a named field).
+- **Meili keyword lane**: `_meta.<key>` (canonical post-migration nesting) → top-level `<key>` → typed slot (`summary` / `severity`, which `MeiliDoc` parses into a named field).
 - **Vectorizer lane**: `metadata.<key>` (current SDK ≥ 3.0.3) → `metadata.payload.<key>` (legacy embedder-worker shape).
 
 A `kind = "decision"` document landing without a `decision_id` is a worker-side projection bug: the keyword lane emits `tracing::debug!` when this happens so the gap is visible without flooding production at INFO/WARN.
+
+Lane-debug fields that lack a typed Overlay home today — `decision_title`, `rationale_excerpt`, `observed_in`, `edge_type`, `outcome`, `collection` — continue to ride on `LaneHit.extras`. They fold into a typed Overlay extension as part of phase13c-followup, alongside the hard-cut of `extras` as a publicly readable surface.
 
 Closes [F-007 in `docs/analysis/relevance/01-findings.md`](../analysis/relevance/01-findings.md).
 
