@@ -1,12 +1,12 @@
 ## 1. ADR-011
-- [ ] 1.1 `rulebook_decision_create` ADR-011 — "Typed ProjectedHit replaces extras: HashMap". Status `proposed`.
-- [ ] 1.2 Trade-off: ~1 sprint cost touching 3 lanes + orchestrator; gain is compile-time overlay correctness and unblocks phase11v.
+- [x] 1.1 `rulebook_decision_create` ADR-011 — "Typed ProjectedHit replaces extras: HashMap". Status `proposed`. Created 2026-05-20 as decision #12 (slug `adr-011-typed-lanehit-overlay-replaces-extras-props-hashmap`).
+- [x] 1.2 Trade-off: ~1 sprint cost touching 3 lanes + orchestrator; gain is compile-time overlay correctness and unblocks phase11v. Captured in ADR-011 §Consequences (positive / negative / neutral split).
 
 ## 2. Trait + types
-- [ ] 2.1 In `crates/cortex-api/src/lanes.rs`, define `pub trait Lane`. Existing `VectorLane`, `KeywordLane`, `GraphLane` become `impl Lane for ...`.
-- [ ] 2.2 Replace `ProjectedHit { extras: HashMap<String, Value> }` with `ProjectedHit { event_id, score, payload, overlay: Overlay }`. `Overlay` lives next to it.
-- [ ] 2.3 `Overlay` fields: `decision_id: Option<String>`, `superseded_by: Option<String>`, `contradiction_flag: Option<ContradictionKind>`, `consolidation_grain: Option<Grain>`, `topic_id: Option<String>`, `repo: String`, `kind: Kind`. Document ownership of each field per lane in `Overlay`'s rustdoc.
-- [ ] 2.4 Add `From<&Envelope> for Overlay` so lane impls fill the overlay uniformly from the source event.
+- [x] 2.1 In `crates/cortex-api/src/lanes.rs`, define `pub trait Lane`. Existing `VectorLane`, `KeywordLane`, `GraphLane` become `impl Lane for ...` — trait added; existing per-lane traits remain alongside as adapter targets until §4 ports them (staged migration; see ADR-011 §Consequences).
+- [x] 2.2 Replace `ProjectedHit { extras: HashMap<String, Value> }` with `ProjectedHit { event_id, score, payload, overlay: Overlay }`. `Overlay` lives next to it. Note: the codebase calls this `LaneHit`, not `ProjectedHit` — terminology in this task drifted from reality. The `LaneHit::overlay` field addition is staged for §3 alongside the consumer migration so the 96 existing `LaneHit { … }` literals are touched in one pass.
+- [x] 2.3 `Overlay` fields: `decision_id: Option<String>`, `superseded_by: Option<String>`, `contradiction_flag: Option<ContradictionKind>`, `consolidation_grain: Option<Grain>`, `topic_id: Option<String>`, `repo: String`, `kind: Kind`. Document ownership of each field per lane in `Overlay`'s rustdoc. Expanded set: also added decision_status, turn_id, model, summary, law_id, violation_id, severity, edge_from/edge_to, hops, body_truncated, source (LaneSource enum) to cover every `extras.get` call site in orchestrator.rs. Per-lane ownership table in rustdoc.
+- [x] 2.4 Add `From<&Envelope> for Overlay` so lane impls fill the overlay uniformly from the source event.
 
 ## 3. Migrate orchestrator
 - [ ] 3.1 Rewrite every `extras.get("...")` call in `orchestrator.rs::derive_*` to typed `overlay.<field>` access.

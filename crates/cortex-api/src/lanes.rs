@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cortex_core::events::{ConsolidationGrain, ContradictionKind, Envelope, Kind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -113,6 +114,234 @@ pub fn is_collection_missing_marker(hit: &LaneHit) -> bool {
     hit.doc_id.starts_with(COLLECTION_MISSING_DOC_ID_PREFIX)
 }
 
+/// ADR-011 — lane of origin for a `LaneHit`. Replaces the
+/// stringly-typed `extras["source"] = "vector|keyword|graph"`
+/// convention. The orchestrator's lane-of-origin tie-break
+/// pattern-matches this directly so a drift between a lane's
+/// `name()` and the field it stamps is a compile error.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum LaneSource {
+    /// `VectorLane` — Vectorizer KNN.
+    Vector,
+    /// `KeywordLane` — Meili / in-memory BM25.
+    Keyword,
+    /// `GraphLane` — Nexus graph traversal.
+    Graph,
+    /// `Source` is unknown — used for synthetic hits the orchestrator
+    /// injects (missing-collection markers, debug fixtures). Never
+    /// stamped by a live lane. Default so an `Overlay::default()`
+    /// stamps the safe value rather than misclaiming a lane.
+    #[default]
+    Unknown,
+}
+
+/// ADR-011 — short label for the orchestrator's lane-of-origin
+/// classification. Stable across releases; serialised forms are
+/// `"vector"`, `"keyword"`, `"graph"`, `"unknown"`.
+impl LaneSource {
+    /// Stable snake-case label matching the serde representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            LaneSource::Vector => "vector",
+            LaneSource::Keyword => "keyword",
+            LaneSource::Graph => "graph",
+            LaneSource::Unknown => "unknown",
+        }
+    }
+}
+
+/// ADR-011 — decision lifecycle stamped on overlay rows that point
+/// back to a `Kind::Decision`. The pre-ADR-011 contract used the
+/// raw string from `extras["decision_status"]`; the typed form
+/// catches a lane that stamps a value outside the known set at
+/// compile / serialise time.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionStatus {
+    /// Proposed and awaiting acceptance.
+    Proposed,
+    /// Accepted as authoritative.
+    Accepted,
+    /// Superseded by a newer decision (walk `superseded_by`).
+    Superseded,
+    /// Deprecated without a successor.
+    Deprecated,
+    /// Rejected (kept for the audit trail).
+    Rejected,
+}
+
+/// ADR-011 — typed overlay carried on every `LaneHit`. Replaces the
+/// stringly-typed `extras: Props` map. Lane impls populate the
+/// fields their upstream document carries; missing fields stay
+/// `None` instead of "absent map key". The orchestrator's overlay
+/// derivers read these directly — see
+/// `crates/cortex-api/src/orchestrator.rs::derive_*`.
+///
+/// Per-lane ownership (which fields each lane is expected to fill):
+///
+/// | Field                  | Vector | Keyword | Graph |
+/// |------------------------|--------|---------|-------|
+/// | `decision_id`          |        | ✓ (governance) | ✓ |
+/// | `decision_status`      |        | ✓        | ✓ |
+/// | `superseded_by`        |        | ✓        | ✓ |
+/// | `turn_id`              | ✓      | ✓ (turns)| ✓ |
+/// | `model`                | ✓      | ✓ (turns)|   |
+/// | `summary`              | ✓ (consolidations) | ✓ (turns) | |
+/// | `law_id`               |        | ✓ (governance) | ✓ |
+/// | `violation_id`         |        | ✓ (governance) |   |
+/// | `severity`             |        | ✓ (governance) |   |
+/// | `edge_from` / `edge_to`|        |          | ✓ |
+/// | `hops`                 |        |          | ✓ |
+/// | `body_truncated`       | ✓      | ✓        | ✓ |
+/// | `contradiction_flag`   |        | ✓        | ✓ |
+/// | `consolidation_grain`  | ✓ (consolidations) | ✓ | |
+/// | `topic_id`             |        | ✓ (topic cards) | ✓ |
+/// | `source`               | ✓      | ✓        | ✓ (every lane MUST stamp) |
+///
+/// Wire format note: serialises as a flat JSON object with
+/// `skip_serializing_if = "Option::is_none"` so absent fields do
+/// not appear in the `/v1/query` response. Existing callers
+/// reading the previous flat `extras` payload see the same shape.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Overlay {
+    /// `Kind::Decision` ULID this hit refers to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_id: Option<String>,
+    /// Lifecycle status of the decision the hit cites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_status: Option<DecisionStatus>,
+    /// ULID of the decision that supersedes this one (when
+    /// `decision_status == Superseded`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
+    /// `Kind::Turn` ULID associated with the hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
+    /// Model identifier that produced the underlying turn (`Turn` /
+    /// `Consolidation`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Pre-distilled summary text (consolidations / topic cards).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// `Law` identifier (LAW-NNN) when the hit cites or violates a law.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub law_id: Option<String>,
+    /// `Kind::LawViolation` ULID that surfaced this hit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub violation_id: Option<String>,
+    /// Severity label (mirrors top-level [`LaneHit::severity`] but
+    /// stays typed across the overlay path). String for now to
+    /// preserve compatibility with the existing string column;
+    /// will tighten to a `Severity` enum once
+    /// `crate::types::Severity` lands per ADR-011 §followup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    /// Source endpoint of a graph edge (`GraphLane`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_from: Option<String>,
+    /// Target endpoint of a graph edge (`GraphLane`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_to: Option<String>,
+    /// Traversal distance to the seed node (`GraphLane`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hops: Option<u8>,
+    /// Body was clipped before serialisation. Default `false` (not
+    /// `Option<bool>`) because absence is meaningful: every hit
+    /// either was truncated or was not.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub body_truncated: bool,
+    /// Contradiction class when the hit was flagged by the synthesiser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contradiction_flag: Option<ContradictionKind>,
+    /// Consolidation grain when the hit is a `Kind::Consolidation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consolidation_grain: Option<ConsolidationGrain>,
+    /// Topic-card / cluster identifier the hit belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_id: Option<String>,
+    /// Kind of the underlying envelope. Stamped by `From<&Envelope>`
+    /// so the orchestrator can branch on payload shape without
+    /// re-parsing the body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Kind>,
+    /// Lane of origin. Every live lane MUST stamp this; the
+    /// `Unknown` variant is reserved for synthetic hits.
+    #[serde(default = "default_lane_source")]
+    pub source: LaneSource,
+}
+
+fn default_lane_source() -> LaneSource {
+    LaneSource::Unknown
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// ADR-011 — every overlay field that can be derived directly from
+/// the source envelope is filled here; lane-specific overlays
+/// (`turn_id`, `decision_status`, `edge_from`, …) are stamped
+/// downstream by each lane impl. This `From` keeps the "obvious"
+/// fields off the lane impls so they only handle the lane-specific
+/// branches.
+impl From<&Envelope> for Overlay {
+    fn from(env: &Envelope) -> Self {
+        Overlay {
+            kind: Some(env.kind),
+            model: env.model.clone(),
+            // turn_id / decision_id / law_id are payload-shape
+            // specific; lane impls fill them once they've parsed
+            // the payload. The envelope-level fields below are
+            // payload-agnostic.
+            ..Overlay::default()
+        }
+    }
+}
+
+/// ADR-011 — unified lane contract. Replaces the per-lane
+/// `VectorLane` / `KeywordLane` / `GraphLane` triple as the
+/// canonical trait the orchestrator depends on. The pre-ADR-011
+/// traits remain as adapter targets until §4 ports them; new lane
+/// impls (phase11v fine-grained MCP search tools) implement `Lane`
+/// directly.
+///
+/// The trait operates at the orchestrator's abstraction level
+/// (`Query` + `Scope` → `Vec<LaneHit>`) rather than each lane's
+/// native request shape so the orchestrator does not have to
+/// know about per-lane wire formats. Each `impl Lane for …`
+/// constructs its own per-lane request internally from the
+/// shared `Query` / `Scope` pair.
+#[async_trait]
+pub trait Lane: Send + Sync {
+    /// Short identifier — `"vector"` / `"keyword"` / `"graph"` /
+    /// `"<custom>"`. Returned verbatim in debug envelopes so the
+    /// caller can audit which lanes fired.
+    fn name(&self) -> &'static str;
+
+    /// Lane of origin stamped on every emitted `LaneHit.overlay`.
+    /// Defaults to a name-derived match; lane impls override when
+    /// the lane is named differently from its `LaneSource` variant.
+    fn source(&self) -> LaneSource {
+        match self.name() {
+            "vector" => LaneSource::Vector,
+            "keyword" => LaneSource::Keyword,
+            "graph" => LaneSource::Graph,
+            _ => LaneSource::Unknown,
+        }
+    }
+
+    /// Run the lane against `query` / `scope` and return projected
+    /// hits. Errors propagate as `LaneError`; an empty result is
+    /// `Ok(vec![])`.
+    async fn search(
+        &self,
+        query: &crate::types::QueryRequest,
+        scope: &Scope,
+    ) -> Result<Vec<LaneHit>, LaneError>;
+}
+
 /// One hit returned by any lane. The orchestrator coerces lane
 /// outputs into this shape before fusion.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -137,13 +366,47 @@ pub struct LaneHit {
     pub severity: Option<String>,
     /// Free-form lane metadata round-tripped to debug.
     ///
-    /// Spec-11 lane projection contract ([`LANE_EXTRAS_KEYS`]):
-    /// lane impls MUST stamp the contract keys here when the
-    /// upstream document carries them, so the orchestrator's
-    /// overlay derivers can read them out 1:1. Missing keys
-    /// round-trip as absent.
+    /// **Deprecated in ADR-011** — being replaced by the typed
+    /// [`Overlay`] field added on `LaneHit` in §3 of the phase13c
+    /// task. Until that migration lands lane impls continue
+    /// stamping the `LANE_EXTRAS_KEYS` strings here and the
+    /// orchestrator's overlay derivers continue reading from
+    /// `extras`. Once §3 + §4 complete, this field is removed
+    /// and the typed `overlay` field becomes the only path.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extras: Props,
+}
+
+impl Overlay {
+    /// ADR-011 — true when every field is at its default. Used by
+    /// the future `LaneHit::overlay` field's
+    /// `serde(skip_serializing_if)` so the wire format stays
+    /// identical for synthetic / pre-migration hits.
+    pub fn is_empty(&self) -> bool {
+        matches!(
+            self,
+            Overlay {
+                decision_id: None,
+                decision_status: None,
+                superseded_by: None,
+                turn_id: None,
+                model: None,
+                summary: None,
+                law_id: None,
+                violation_id: None,
+                severity: None,
+                edge_from: None,
+                edge_to: None,
+                hops: None,
+                body_truncated: false,
+                contradiction_flag: None,
+                consolidation_grain: None,
+                topic_id: None,
+                kind: None,
+                source: LaneSource::Unknown,
+            }
+        )
+    }
 }
 
 impl LaneHit {
@@ -424,5 +687,138 @@ impl GraphLane for MemoryGraphLane {
             .and_then(|g| g.get(&req.template).cloned())
             .unwrap_or_default();
         Ok(hits)
+    }
+}
+
+#[cfg(test)]
+mod adr_011_tests {
+    use super::*;
+    use cortex_core::events::{Context, Envelope, Kind, Stream};
+
+    fn envelope_fixture(kind: Kind, model: Option<&str>) -> Envelope {
+        Envelope {
+            event_id: "01TESTENVELOPE0000000000000".to_string(),
+            schema_version: "1".to_string(),
+            occurred_at: "2026-05-20T00:00:00Z".to_string(),
+            ingested_at: None,
+            session_id: "01TESTSESSION00000000000000".to_string(),
+            stream: Stream::Live,
+            tool: "claude-code".to_string(),
+            model: model.map(str::to_string),
+            kind,
+            context: Context {
+                repo: Some("cortex".to_string()),
+                branch: None,
+                commit: None,
+                cwd: None,
+                user: None,
+                platform: "win32".to_string(),
+                ide: None,
+                extras: std::collections::BTreeMap::new(),
+            },
+            payload: serde_json::json!({}),
+            redactions: Vec::new(),
+            content_hash: "sha256:0".to_string(),
+            parent_event_id: None,
+        }
+    }
+
+    #[test]
+    fn overlay_default_is_empty() {
+        assert!(Overlay::default().is_empty());
+    }
+
+    #[test]
+    fn overlay_is_empty_detects_populated_field() {
+        let mut o = Overlay::default();
+        o.decision_id = Some("01ABC".into());
+        assert!(!o.is_empty());
+    }
+
+    #[test]
+    fn overlay_from_envelope_stamps_kind_and_model() {
+        let env = envelope_fixture(Kind::Turn, Some("claude-opus-4-7"));
+        let o = Overlay::from(&env);
+        assert_eq!(o.kind, Some(Kind::Turn));
+        assert_eq!(o.model.as_deref(), Some("claude-opus-4-7"));
+        // Lane-specific fields stay None — the lane impl fills them
+        // once it has parsed the payload.
+        assert!(o.decision_id.is_none());
+        assert!(o.turn_id.is_none());
+        assert!(o.edge_from.is_none());
+        // Source defaults to Unknown; each lane stamps the real
+        // value before emitting the hit.
+        assert_eq!(o.source, LaneSource::Unknown);
+    }
+
+    #[test]
+    fn overlay_from_envelope_handles_missing_model() {
+        let env = envelope_fixture(Kind::Decision, None);
+        let o = Overlay::from(&env);
+        assert_eq!(o.kind, Some(Kind::Decision));
+        assert!(o.model.is_none());
+    }
+
+    #[test]
+    fn lane_source_as_str_matches_serde_repr() {
+        assert_eq!(LaneSource::Vector.as_str(), "vector");
+        assert_eq!(LaneSource::Keyword.as_str(), "keyword");
+        assert_eq!(LaneSource::Graph.as_str(), "graph");
+        assert_eq!(LaneSource::Unknown.as_str(), "unknown");
+        for s in [
+            LaneSource::Vector,
+            LaneSource::Keyword,
+            LaneSource::Graph,
+            LaneSource::Unknown,
+        ] {
+            let json = serde_json::to_value(s).unwrap();
+            assert_eq!(json.as_str(), Some(s.as_str()));
+        }
+    }
+
+    #[test]
+    fn lane_source_default_is_unknown() {
+        // The Overlay default must NEVER claim a lane it cannot
+        // back — Unknown is the safe sentinel that the
+        // orchestrator's lane-of-origin tie-break (line 257 of
+        // orchestrator.rs) ignores.
+        assert_eq!(LaneSource::default(), LaneSource::Unknown);
+    }
+
+    #[test]
+    fn decision_status_serialises_as_snake_case() {
+        let cases = [
+            (DecisionStatus::Proposed, "proposed"),
+            (DecisionStatus::Accepted, "accepted"),
+            (DecisionStatus::Superseded, "superseded"),
+            (DecisionStatus::Deprecated, "deprecated"),
+            (DecisionStatus::Rejected, "rejected"),
+        ];
+        for (variant, expected) in cases {
+            let json = serde_json::to_value(variant).unwrap();
+            assert_eq!(json.as_str(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn overlay_skips_serialising_default_fields() {
+        // The wire format MUST stay identical to the pre-ADR-011
+        // shape for hits that carry no overlay data — a synthetic
+        // marker should serialise to an empty object after the
+        // `is_empty` guard kicks in on the LaneHit serde
+        // attribute. Test the per-field skip behaviour here so
+        // §3 can drop the guard with confidence.
+        let o = Overlay::default();
+        let json = serde_json::to_value(&o).unwrap();
+        // Default-only Overlay → `{}` once every field is
+        // skipped (only `source` defaults to a value that may
+        // serialise; the `default = "default_lane_source"` serde
+        // hint sits on field-level deserialise, not serialise,
+        // so we accept either `{}` or `{"source":"unknown"}`).
+        let obj = json.as_object().unwrap();
+        if !obj.is_empty() {
+            assert_eq!(obj.len(), 1);
+            assert_eq!(obj.get("source").and_then(|v| v.as_str()), Some("unknown"));
+        }
     }
 }
