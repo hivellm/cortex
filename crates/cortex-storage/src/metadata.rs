@@ -63,6 +63,13 @@ impl MetadataStore {
 
     fn migrate(conn: &Connection) -> Result<(), MetadataError> {
         conn.execute_batch(SCHEMA_SQL)?;
+        // Phase13d — assert the event_identity table exists. ADR-012
+        // owns the schema in `crate::identity`; calling the helper
+        // here at MetadataStore open time means every consumer that
+        // grabs `metadata.conn()` to build an `IdentityIndex` sees
+        // the migrated table without coordinating its own migration.
+        crate::identity::apply_phase13d_schema(conn)
+            .map_err(|e| MetadataError::Internal(format!("phase13d schema: {e}")))?;
         // Phase9a — idempotent column-add for `retention_sweeps.status`.
         // Existing pre-phase9a databases lack the column; the
         // `CREATE TABLE IF NOT EXISTS` above is a no-op for them, so
