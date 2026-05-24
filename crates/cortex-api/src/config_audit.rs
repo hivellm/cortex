@@ -157,7 +157,7 @@ impl AuditPaths {
 /// and `cargo tree -d` runs against the operator's machine; tests
 /// drive the pure-static path with `AuditOptions::file_only()` so
 /// fixtures don't depend on the host's listening sockets.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AuditOptions {
     /// When `true`, run `netstat`/`ss` and report unreachable
     /// loopback `*_URL` ports as critical findings.
@@ -165,6 +165,13 @@ pub struct AuditOptions {
     /// When `true`, run `cargo tree -d` and report duplicate
     /// workspace deps as warn findings.
     pub scan_duplicate_deps: bool,
+    /// Phase13e §3.3 (ADR-016) — when `Some(path)`, run
+    /// [`cortex_config::audit`] against the workspace at `path` and
+    /// surface any remaining `std::env::var("CORTEX_*")` call sites
+    /// outside the `cortex-config` crate as warn findings. `None`
+    /// disables the scan (fixture tests don't ship the workspace
+    /// source tree).
+    pub cortex_config_audit_root: Option<PathBuf>,
 }
 
 impl AuditOptions {
@@ -173,13 +180,34 @@ impl AuditOptions {
     pub fn file_only() -> Self {
         Self::default()
     }
-    /// Static + live-port + duplicate-deps. The CLI and the
-    /// `/v1/health/config` endpoint pick this so the 2026-04-28
-    /// "stale daemon holding old endpoint" case surfaces.
+    /// Static + live-port + duplicate-deps + cortex_config code
+    /// scanner. The CLI and the `/v1/health/config` endpoint pick
+    /// this so the 2026-04-28 "stale daemon holding old endpoint"
+    /// case surfaces and ADR-016 migration drift is visible from
+    /// the dashboard.
     pub fn full() -> Self {
         Self {
             scan_live_ports: true,
             scan_duplicate_deps: true,
+            cortex_config_audit_root: Some(default_workspace_crates_root()),
+        }
+    }
+}
+
+/// Phase13e §3.3 — locate `<workspace>/crates` for the cortex_config
+/// audit scan. Honours the same lookup the audit's binary uses: walk
+/// up from cwd until a `crates/` sibling appears; fall back to
+/// `./crates`.
+fn default_workspace_crates_root() -> PathBuf {
+    let mut cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    loop {
+        let candidate = cur.join("crates");
+        if candidate.is_dir() {
+            return candidate;
+        }
+        match cur.parent() {
+            Some(parent) => cur = parent.to_path_buf(),
+            None => return PathBuf::from("crates"),
         }
     }
 }
@@ -455,6 +483,30 @@ pub fn run_audit_with(paths: &AuditPaths, opts: AuditOptions) -> ConfigAudit {
                     ));
                 }
             }
+        }
+    }
+
+    // ---- cortex_config code scanner (ADR-016 §3.3) ---------------------
+    // When the workspace `crates/` path is configured, surface every
+    // remaining ad-hoc `std::env::var("CORTEX_*")` call site outside
+    // the `cortex-config` crate as a warn finding. After §3.6 the
+    // §3 CI grep gate keeps this list empty; until then the dashboard
+    // shows operators which subsystems still bypass the typed Config.
+    if let Some(root) = opts.cortex_config_audit_root.as_deref() {
+        let usages = cortex_config::audit(root);
+        if usages.is_empty() {
+            audit.push(Finding::ok(
+                "cortex_config",
+                "no ad-hoc CORTEX_* env reads outside cortex-config crate".to_string(),
+            ));
+        } else {
+            audit.push(Finding::warn(
+                "cortex_config",
+                format!(
+                    "{} ad-hoc CORTEX_* env read(s) remain outside cortex-config (ADR-016 §3 migration)",
+                    usages.len()
+                ),
+            ));
         }
     }
 
@@ -1097,9 +1149,112 @@ api_endpoint = "http://127.0.0.1:17000"
         let opts = AuditOptions::full();
         assert!(opts.scan_live_ports);
         assert!(opts.scan_duplicate_deps);
+        assert!(opts.cortex_config_audit_root.is_some());
         let opts = AuditOptions::file_only();
         assert!(!opts.scan_live_ports);
         assert!(!opts.scan_duplicate_deps);
+        assert!(opts.cortex_config_audit_root.is_none());
+    }
+
+    #[test]
+    fn run_audit_with_cortex_config_scan_emits_ok_on_empty_workspace() {
+        // Phase13e §3.3 — when the configured `crates/` root holds no
+        // CORTEX_* call sites, the cortex_config scan must surface a
+        // single OK finding (not silence). Synthetic workspace with no
+        // .rs files satisfies that.
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        write_file(&env_path, "");
+        let adapter_path = tmp.path().join("adapter.toml");
+        write_file(
+            &adapter_path,
+            r#"
+[adapter]
+endpoint = "http://127.0.0.1:17010"
+api_endpoint = "http://127.0.0.1:17000"
+"#,
+        );
+        let mcp_path = tmp.path().join(".mcp.json");
+        write_file(
+            &mcp_path,
+            r#"{"mcpServers":{"cortex":{"env":{"CORTEX_API_URL":"http://127.0.0.1:17000"}}}}"#,
+        );
+        let hooks_path = tmp.path().join("hooks.json");
+        write_file(&hooks_path, r#"{"hooks":{}}"#);
+        let crates_root = tmp.path().join("crates");
+        std::fs::create_dir_all(&crates_root).unwrap();
+        let paths = AuditPaths {
+            env_file: env_path,
+            adapter_toml: adapter_path,
+            mcp_json: mcp_path,
+            hooks_json: hooks_path,
+        };
+        let opts = AuditOptions {
+            cortex_config_audit_root: Some(crates_root),
+            ..AuditOptions::default()
+        };
+        let audit = run_audit_with(&paths, opts);
+        let cortex_config_findings: Vec<&Finding> = audit
+            .findings
+            .iter()
+            .filter(|f| f.source == "cortex_config")
+            .collect();
+        assert_eq!(cortex_config_findings.len(), 1);
+        assert_eq!(cortex_config_findings[0].severity, Severity::Ok);
+    }
+
+    #[test]
+    fn run_audit_with_cortex_config_scan_emits_warn_on_unmigrated_call() {
+        // Phase13e §3.3 — when a workspace .rs file still calls
+        // `std::env::var("CORTEX_X")`, the cortex_config scan must
+        // surface a warn finding so the dashboard flags ADR-016 drift.
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".env");
+        write_file(&env_path, "");
+        let adapter_path = tmp.path().join("adapter.toml");
+        write_file(
+            &adapter_path,
+            r#"
+[adapter]
+endpoint = "http://127.0.0.1:17010"
+api_endpoint = "http://127.0.0.1:17000"
+"#,
+        );
+        let mcp_path = tmp.path().join(".mcp.json");
+        write_file(
+            &mcp_path,
+            r#"{"mcpServers":{"cortex":{"env":{"CORTEX_API_URL":"http://127.0.0.1:17000"}}}}"#,
+        );
+        let hooks_path = tmp.path().join("hooks.json");
+        write_file(&hooks_path, r#"{"hooks":{}}"#);
+        let crates_root = tmp.path().join("crates");
+        let bad_crate = crates_root.join("synthetic").join("src");
+        write_file(
+            &bad_crate.join("lib.rs"),
+            "fn x() { let _ = std::env::var(\"CORTEX_UNMIGRATED_KNOB\"); }\n",
+        );
+        let paths = AuditPaths {
+            env_file: env_path,
+            adapter_toml: adapter_path,
+            mcp_json: mcp_path,
+            hooks_json: hooks_path,
+        };
+        let opts = AuditOptions {
+            cortex_config_audit_root: Some(crates_root),
+            ..AuditOptions::default()
+        };
+        let audit = run_audit_with(&paths, opts);
+        let warn = audit
+            .findings
+            .iter()
+            .find(|f| f.source == "cortex_config")
+            .expect("cortex_config finding present");
+        assert_eq!(warn.severity, Severity::Warn);
+        assert!(
+            warn.message.contains("ad-hoc CORTEX_* env read"),
+            "got: {}",
+            warn.message
+        );
     }
 
     #[test]
