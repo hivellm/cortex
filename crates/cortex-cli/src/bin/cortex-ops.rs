@@ -33,6 +33,8 @@ mod doctor;
 mod graph_cmd;
 #[path = "cortex-ops/helpers.rs"]
 mod helpers;
+#[path = "cortex-ops/identity_coverage.rs"]
+mod identity_coverage;
 #[path = "cortex-ops/meili.rs"]
 mod meili;
 #[path = "cortex-ops/memory_consolidate_cmd.rs"]
@@ -619,6 +621,34 @@ enum Command {
     /// bootstrap PATCH (`bin/cortex-init.sh` § "seed: Meilisearch
     /// indexes") which is the reconcile path — running this doctor
     /// after a deploy confirms reconcile succeeded.
+    /// ADR-012 §4.1 — `event_identity` coverage probe. Walks the
+    /// SQLite `event_identity` table once and reports the per-
+    /// backend coverage gap: for every row, which of `nexus_id` /
+    /// `vec_id` / `meili_id` / `archive_partition` is NULL. A
+    /// projection that forgot to stamp its backend (or that
+    /// failed mid-batch and never retried) surfaces here as a
+    /// non-zero `<backend>_missing` counter. Budget: indexed scan
+    /// of 100k rows finishes in under 10 s on the running stack
+    /// (vs. minutes for the legacy per-backend doctor fan-out).
+    /// Exit code `2` when ANY coverage gap is found so cron
+    /// wrappers escalate visibly.
+    DoctorIdentityCoverage {
+        /// SQLite metadata DB path. Defaults to
+        /// `$CORTEX_METADATA_DB` / `<CORTEX_HOME>/metadata.sqlite`
+        /// / `<home>/.cortex/metadata.sqlite`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Cap the number of orphan event ids surfaced in the
+        /// report. Defaults to 50 so the operator can paginate
+        /// through large gaps with successive runs scoped to a
+        /// `--since`/`--repo` slice (those filters land in §4.2
+        /// alongside the budget bench).
+        #[arg(long, default_value_t = 50)]
+        sample_limit: usize,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     DoctorMeiliIndexes {
         /// Meili base URL. Defaults to `$MEILI_URL`, then
         /// `http://127.0.0.1:17004`.
@@ -1086,6 +1116,11 @@ fn main() -> ExitCode {
             master_key,
             json,
         } => doctor::doctor_meili_indexes(meili_url, master_key, json),
+        Command::DoctorIdentityCoverage {
+            metadata_db,
+            sample_limit,
+            json,
+        } => identity_coverage::doctor_identity_coverage(metadata_db, sample_limit, json),
         Command::RetentionArchivePurge {
             before,
             dry_run,
