@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::sub::{
-    DashboardConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
-    RetentionConfig,
+    CanaryConfig, DashboardConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig,
+    PreThinkingConfig, RetentionConfig, RulebookConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -47,6 +47,12 @@ pub struct Config {
     /// Pre-thinking bundle knobs.
     #[serde(default)]
     pub pre_thinking: PreThinkingConfig,
+    /// Rulebook task-loader knobs (single vs. multi-project roots).
+    #[serde(default)]
+    pub rulebook: RulebookConfig,
+    /// Opt-in synthetic canary runner knobs.
+    #[serde(default)]
+    pub canary: CanaryConfig,
 }
 
 fn default_schema_version() -> String {
@@ -64,6 +70,8 @@ impl Default for Config {
             ingestion: IngestionConfig::default(),
             dashboard: DashboardConfig::default(),
             pre_thinking: PreThinkingConfig::default(),
+            rulebook: RulebookConfig::default(),
+            canary: CanaryConfig::default(),
         }
     }
 }

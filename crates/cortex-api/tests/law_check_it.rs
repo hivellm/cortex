@@ -63,6 +63,7 @@ fn law_lane_hit(law_id: &str, message: &str, severity: &str) -> LaneHit {
         // for law_violation kinds).
         severity: Some(severity.to_string()),
         extras,
+        overlay: Default::default(),
     }
 }
 

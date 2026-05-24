@@ -21,6 +21,7 @@
 /// the sort).
 pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_API_BIND", "/dashboard/api_bind"),
+    ("CORTEX_API_KEYS_DB", "/dashboard/api_keys_db"),
     ("CORTEX_API_SYNAP_URL", "/dashboard/synap_url"),
     (
         "CORTEX_ARCHIVE_REFRESH_SECS",
@@ -28,6 +29,12 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ),
     ("CORTEX_ARCHIVE_ROOT", "/ingestion/archive_root"),
     ("CORTEX_ARCHIVE_ZSTD", "/ingestion/archive_zstd_level"),
+    ("CORTEX_CANARY_DEADLINE_SECS", "/canary/deadline_secs"),
+    ("CORTEX_CANARY_ENABLED", "/canary/enabled"),
+    ("CORTEX_CANARY_INTERVAL_SECS", "/canary/interval_secs"),
+    ("CORTEX_COVERAGE_SLUGS", "/dashboard/coverage_slugs"),
+    ("CORTEX_DASHBOARD_MEMORY_TAIL", "/dashboard/memory_tail"),
+    ("CORTEX_DASHBOARD_WATCH", "/dashboard/watch"),
     (
         "CORTEX_EMBEDDER_CHUNKER_CONCURRENCY",
         "/embedder/chunker_concurrency",
@@ -75,12 +82,15 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_GRAPH_SYNAP_URL", "/nexus/synap_url"),
     ("CORTEX_GRAPH_TRANSPORT", "/nexus/transport"),
     ("CORTEX_GRAPH_WORKERS", "/nexus/workers"),
+    ("CORTEX_HOME", "/ingestion/home"),
     ("CORTEX_INGESTION_BIND", "/ingestion/bind"),
     ("CORTEX_MEILI_REFRESH_SECS", "/dashboard/meili_refresh_secs"),
     ("CORTEX_METADATA_DB", "/ingestion/metadata_db"),
+    ("CORTEX_NEXUS_API_KEY", "/nexus/nexus_api_key"),
     ("CORTEX_NEXUS_URL", "/nexus/nexus_url"),
     ("CORTEX_PRE_THINKING_KB", "/pre_thinking/bundle_kb"),
     ("CORTEX_PRE_THINKING_TIMEOUT_MS", "/pre_thinking/timeout_ms"),
+    ("CORTEX_QUERY_REWRITER", "/dashboard/query_rewriter"),
     ("CORTEX_RETENTION_BATCH_SIZE", "/retention/batch_size"),
     (
         "CORTEX_RETENTION_FP32_TO_PQ_DAYS",
@@ -91,7 +101,22 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "CORTEX_RETENTION_PQ_TO_BINARY_DAYS",
         "/retention/pq_to_binary_days",
     ),
+    ("CORTEX_RRF_ALPHA", "/dashboard/rrf_alpha"),
+    ("CORTEX_RRF_K", "/dashboard/rrf_k"),
+    ("CORTEX_RULEBOOK_ROOT", "/rulebook/root"),
+    ("CORTEX_RULEBOOK_ROOTS", "/rulebook/roots"),
     ("CORTEX_SYNAP_URL", "/ingestion/synap_url"),
+    ("CORTEX_VECTORIZER_API_KEY", "/embedder/vectorizer_api_key"),
+    (
+        "CORTEX_VECTORIZER_JWT_WARMUP_SECS",
+        "/embedder/jwt_warmup_secs",
+    ),
+    (
+        "CORTEX_VECTORIZER_PASSWORD",
+        "/embedder/vectorizer_password",
+    ),
+    ("CORTEX_VECTORIZER_URL", "/embedder/vectorizer_url"),
+    ("CORTEX_VECTORIZER_USER", "/embedder/vectorizer_user"),
 ];
 
 /// Reverse lookup: given an env name, return the JSON pointer

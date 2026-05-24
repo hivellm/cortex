@@ -56,7 +56,9 @@ impl FulltextConfig {
 
     fn from_typed(t: cortex_config::MeiliConfig) -> Self {
         Self {
-            meili_url: t.meili_url,
+            meili_url: t
+                .meili_url
+                .unwrap_or_else(|| "http://127.0.0.1:7700".to_string()),
             meili_api_key: t.meili_api_key,
             synap_url: t.synap_url,
             synap_group: t.synap_group,

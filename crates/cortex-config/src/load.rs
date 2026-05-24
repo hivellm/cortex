@@ -222,7 +222,10 @@ mod tests {
             "http://test:9999",
         )]));
         let cfg = Config::load_from(Path::new("__nonexistent.toml"), env).unwrap();
-        assert_eq!(cfg.embedder.vectorizer_url, "http://test:9999");
+        assert_eq!(
+            cfg.embedder.vectorizer_url.as_deref(),
+            Some("http://test:9999")
+        );
         // Other fields keep their default values.
         assert_eq!(cfg.meili.meili_url, MeiliConfigDefault::meili_url());
     }
@@ -251,8 +254,14 @@ mod tests {
 
         // No env → toml wins over default.
         let cfg = Config::load_from(&toml_path, |_| None).unwrap();
-        assert_eq!(cfg.embedder.vectorizer_url, "http://from-toml:1");
-        assert_eq!(cfg.meili.meili_url, "http://meili-from-toml:1");
+        assert_eq!(
+            cfg.embedder.vectorizer_url.as_deref(),
+            Some("http://from-toml:1")
+        );
+        assert_eq!(
+            cfg.meili.meili_url.as_deref(),
+            Some("http://meili-from-toml:1")
+        );
 
         // Env on top → env wins over toml for the field it sets.
         let env = env_from(HashMap::from([(
@@ -260,9 +269,15 @@ mod tests {
             "http://from-env:2",
         )]));
         let cfg = Config::load_from(&toml_path, env).unwrap();
-        assert_eq!(cfg.embedder.vectorizer_url, "http://from-env:2");
+        assert_eq!(
+            cfg.embedder.vectorizer_url.as_deref(),
+            Some("http://from-env:2")
+        );
         // Meili kept the toml value because env did not override it.
-        assert_eq!(cfg.meili.meili_url, "http://meili-from-toml:1");
+        assert_eq!(
+            cfg.meili.meili_url.as_deref(),
+            Some("http://meili-from-toml:1")
+        );
     }
 
     #[test]
@@ -275,7 +290,10 @@ mod tests {
             "embedder": { "vectorizer_url": "http://from-cli:42" }
         });
         let cfg = Config::load_with_cli(Path::new("__nonexistent.toml"), env, cli).unwrap();
-        assert_eq!(cfg.embedder.vectorizer_url, "http://from-cli:42");
+        assert_eq!(
+            cfg.embedder.vectorizer_url.as_deref(),
+            Some("http://from-cli:42")
+        );
     }
 
     #[test]
@@ -303,7 +321,10 @@ mod tests {
         .unwrap();
         let cli = serde_json::json!({});
         let cfg = Config::load_with_cli(&toml_path, |_| None, cli).unwrap();
-        assert_eq!(cfg.embedder.vectorizer_url, "http://from-toml-cli:1");
+        assert_eq!(
+            cfg.embedder.vectorizer_url.as_deref(),
+            Some("http://from-toml-cli:1")
+        );
     }
 
     #[test]
@@ -324,7 +345,7 @@ mod tests {
         )]));
         // Null CLI overlay leaves env winner intact.
         let cfg = Config::load_with_cli(&toml_path, env, Value::Null).unwrap();
-        assert_eq!(cfg.embedder.vectorizer_url, "http://env:2");
+        assert_eq!(cfg.embedder.vectorizer_url.as_deref(), Some("http://env:2"));
     }
 
     #[test]
@@ -385,14 +406,14 @@ mod tests {
 
     struct MeiliConfigDefault;
     impl MeiliConfigDefault {
-        fn meili_url() -> String {
+        fn meili_url() -> Option<String> {
             crate::MeiliConfig::default().meili_url
         }
     }
 
     struct EmbedderConfigDefault;
     impl EmbedderConfigDefault {
-        fn vectorizer_url() -> String {
+        fn vectorizer_url() -> Option<String> {
             crate::EmbedderConfig::default().vectorizer_url
         }
     }

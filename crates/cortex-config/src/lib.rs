@@ -50,6 +50,6 @@ pub use config::{Config, ConfigError, SCHEMA_VERSION};
 pub use env_map::{env_name_for, KNOWN_ENV_NAMES};
 pub use load::default_toml_path;
 pub use sub::{
-    DashboardConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
-    RetentionConfig,
+    CanaryConfig, DashboardConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig,
+    PreThinkingConfig, RetentionConfig, RulebookConfig,
 };

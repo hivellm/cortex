@@ -75,7 +75,9 @@ impl GraphConfig {
 
     fn from_typed(t: cortex_config::NexusConfig) -> Self {
         Self {
-            nexus_url: t.nexus_url,
+            nexus_url: t
+                .nexus_url
+                .unwrap_or_else(|| "http://127.0.0.1:17002".to_string()),
             transport: GraphTransport::parse(&t.transport).unwrap_or(GraphTransport::Auto),
             synap_url: t.synap_url,
             synap_group: t.synap_group,

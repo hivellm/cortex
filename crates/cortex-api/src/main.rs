@@ -79,12 +79,12 @@ enum AdminOp {
 }
 
 /// Resolve the path of the `api_keys.sqlite` file. Honours the
-/// `CORTEX_API_KEYS_DB` env override; otherwise falls back to
+/// `CORTEX_API_KEYS_DB` config field; otherwise falls back to
 /// `~/.cortex/api_keys.sqlite` (or `/tmp/cortex-api-keys.sqlite`
 /// when `HOME` is unset, which only happens in the rare daemon-as-
 /// root config the dev-stack does not exercise).
-fn api_keys_db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("CORTEX_API_KEYS_DB") {
+fn api_keys_db_path(cfg: &cortex_config::Config) -> PathBuf {
+    if let Some(p) = cfg.dashboard.api_keys_db.as_deref() {
         return PathBuf::from(p);
     }
     let home = std::env::var("HOME")
@@ -96,7 +96,8 @@ fn api_keys_db_path() -> PathBuf {
 }
 
 fn run_admin_op(op: AdminOp) -> Result<()> {
-    let path = api_keys_db_path();
+    let admin_cfg = cortex_config::Config::load().unwrap_or_default();
+    let path = api_keys_db_path(&admin_cfg);
     let store = cortex_api::storage::api_keys::ApiKeyStore::open(&path)
         .map_err(|e| anyhow::anyhow!("open api_keys store at {}: {e}", path.display()))?;
     match op {
@@ -167,6 +168,10 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow::anyhow!("admin task join: {e}"))?;
     }
 
+    let cfg = std::sync::Arc::new(
+        cortex_config::Config::load().map_err(|e| anyhow::anyhow!("config load: {e}"))?,
+    );
+
     let vector_memory = Arc::new(MemoryVectorLane::new());
     let keyword_memory = Arc::new(MemoryKeywordLane::new());
     let graph_memory = Arc::new(MemoryGraphLane::new());
@@ -188,23 +193,28 @@ async fn main() -> Result<()> {
     // server unreachable, build error) keeps cold-stack dev working;
     // failures log WARN with the URL + reason so misconfigurations
     // are spotted at boot.
-    let vector: StdArc<dyn VectorLane> = if let Ok(vectorizer_url) =
-        std::env::var("CORTEX_VECTORIZER_URL").or_else(|_| std::env::var("VECTORIZER_URL"))
+    let vector: StdArc<dyn VectorLane> = if let Some(vectorizer_url) = cfg
+        .embedder
+        .vectorizer_url
+        .clone()
+        .or_else(|| std::env::var("VECTORIZER_URL").ok())
     {
         // Auth selection mirrors the embedder-worker boot flow:
         // - explicit JWT / api-key wins (`*_API_KEY` env)
         // - otherwise, if user+password are both set, run /auth/login
         //   once and use the minted JWT
         // - otherwise, no auth (dev-stack default)
-        let api_key = std::env::var("CORTEX_VECTORIZER_API_KEY")
-            .or_else(|_| std::env::var("VECTORIZER_API_KEY"))
-            .ok();
-        let username = std::env::var("CORTEX_VECTORIZER_USER")
-            .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER"))
-            .ok();
-        let password = std::env::var("CORTEX_VECTORIZER_PASSWORD")
-            .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
-            .ok();
+        let api_key = cfg
+            .embedder
+            .vectorizer_api_key
+            .clone()
+            .or_else(|| std::env::var("VECTORIZER_API_KEY").ok());
+        let username = if cfg.embedder.vectorizer_user.is_empty() {
+            None
+        } else {
+            Some(cfg.embedder.vectorizer_user.clone())
+        };
+        let password = cfg.embedder.vectorizer_password.clone();
         let has_login_creds = username.is_some() && password.is_some();
         let creds_configured = api_key.is_some() || has_login_creds;
         // Phase11a — when the URL is reachable but no credentials are
@@ -265,10 +275,7 @@ async fn main() -> Result<()> {
                         // measurable tail latency. Disabled by
                         // default (0 / unset).
                         if has_login_creds {
-                            let warmup_secs = std::env::var("CORTEX_VECTORIZER_JWT_WARMUP_SECS")
-                                .ok()
-                                .and_then(|s| s.trim().parse::<u64>().ok())
-                                .unwrap_or(0);
+                            let warmup_secs = cfg.embedder.jwt_warmup_secs;
                             if warmup_secs > 0 {
                                 let lane = live.clone();
                                 let url_for_log = vectorizer_url.clone();
@@ -349,10 +356,8 @@ async fn main() -> Result<()> {
     // fall back to the in-memory lane so cold-stack dev keeps
     // working without a Meili dependency. Failure logs WARN with
     // the URL + reason so the operator can spot the misconfiguration.
-    let keyword: StdArc<dyn KeywordLane> = if let Ok(meili_url) =
-        std::env::var("CORTEX_FULLTEXT_MEILI_URL")
-    {
-        let api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok();
+    let keyword: StdArc<dyn KeywordLane> = if let Some(meili_url) = cfg.meili.meili_url.clone() {
+        let api_key = cfg.meili.meili_api_key.clone();
         match MeiliKeywordLane::new(&meili_url, api_key) {
             Ok(live) => match live.probe().await {
                 Ok(()) => {
@@ -393,7 +398,7 @@ async fn main() -> Result<()> {
     // freshly-captured prompt becomes queryable without a daemon
     // restart. Closes the "captured events are queryable" gap until
     // the live spec-06 / spec-07 / spec-08 indexers ship.
-    if let Ok(root) = std::env::var("CORTEX_ARCHIVE_ROOT") {
+    if let Some(root) = cfg.ingestion.archive_root.clone() {
         let archive_root = PathBuf::from(&root);
         let initial = cortex_api::archive_loader::load_into_keyword_lane_with_metrics(
             &archive_root,
@@ -409,11 +414,7 @@ async fn main() -> Result<()> {
             "archive loader: keyword lane seeded (boot)"
         );
 
-        let refresh_secs = std::env::var("CORTEX_ARCHIVE_REFRESH_SECS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(30)
-            .max(1);
+        let refresh_secs = cfg.dashboard.archive_refresh_secs.max(1);
         let lane = keyword_memory.clone();
         let metrics_for_loop = loader_metrics.clone();
         tokio::spawn(async move {
@@ -445,8 +446,8 @@ async fn main() -> Result<()> {
     // /v1/dashboard/decisions, /violations, /memory and /analyses
     // endpoints stop returning empty. Skips silently when the env
     // var is absent — cold-stack dev keeps working.
-    if let Ok(meili_url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
-        let meili_api_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok();
+    if let Some(meili_url) = cfg.meili.meili_url.clone() {
+        let meili_api_key = cfg.meili.meili_api_key.clone();
         match cortex_api::meili_loader::load_meili_into_keyword_lane_with_metrics(
             &meili_url,
             meili_api_key.as_deref(),
@@ -477,11 +478,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        let refresh_secs = std::env::var("CORTEX_MEILI_REFRESH_SECS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(60)
-            .max(5);
+        let refresh_secs = cfg.dashboard.meili_refresh_secs.max(5);
         let lane = keyword_memory.clone();
         let url = meili_url.clone();
         let key = meili_api_key.clone();
@@ -511,7 +508,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    let nexus_client = build_nexus_client().await;
+    let nexus_client = build_nexus_client(&cfg).await;
     // Live graph lane: when the Nexus client is reachable, share
     // the same `Arc<NexusClient>` between `DashboardState` and the
     // orchestrator's `GraphLane`. Single TCP session, two consumers.
@@ -545,8 +542,8 @@ async fn main() -> Result<()> {
     // Falls back to `<cwd>/.rulebook` so `cargo run` from the repo
     // root just works on a single-project deployment.
     let mut rulebook_roots: Vec<PathBuf> = Vec::new();
-    let task_loaders: Vec<cortex_api::TaskLoader> = if let Ok(roots) =
-        std::env::var("CORTEX_RULEBOOK_ROOTS")
+    let task_loaders: Vec<cortex_api::TaskLoader> = if let Some(roots) =
+        cfg.rulebook.roots.as_deref()
     {
         let mut out = Vec::new();
         for raw in roots.split(|c: char| c == ',' || c == ';') {
@@ -581,9 +578,12 @@ async fn main() -> Result<()> {
         Vec::new()
     };
     let task_loaders = if task_loaders.is_empty() {
-        let rulebook_root: PathBuf = std::env::var("CORTEX_RULEBOOK_ROOT")
+        let rulebook_root: PathBuf = cfg
+            .rulebook
+            .root
+            .as_deref()
             .map(PathBuf::from)
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|| {
                 std::env::current_dir()
                     .map(|p| p.join(".rulebook"))
                     .unwrap_or_else(|_| PathBuf::from(".rulebook"))
@@ -615,9 +615,7 @@ async fn main() -> Result<()> {
     // (default `1`) so cold-stack tests can opt out without unsetting the
     // root env vars.
     let dashboard_bus = cortex_api::dashboard_watcher::DashboardEventBus::new();
-    let watch_enabled = std::env::var("CORTEX_DASHBOARD_WATCH")
-        .map(|v| v != "0")
-        .unwrap_or(true);
+    let watch_enabled = cfg.dashboard.watch;
     let mut watcher_handles: Vec<cortex_api::dashboard_watcher::WatcherHandle> = Vec::new();
     if watch_enabled {
         for root in &rulebook_roots {
@@ -640,7 +638,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        tracing::info!("dashboard watcher: disabled by CORTEX_DASHBOARD_WATCH=0");
+        tracing::info!("dashboard watcher: disabled by CORTEX_DASHBOARD_WATCH=false");
     }
 
     // Phase11n §2.5 — SQLite tail loop for `.rulebook/memory/memory.db`.
@@ -648,9 +646,7 @@ async fn main() -> Result<()> {
     // mtime jitter; this loop polls the database read-only at the same
     // 250 ms cadence and emits one `MemoryAppended` per genuinely-new
     // row. Gated by `CORTEX_DASHBOARD_MEMORY_TAIL` (default `1`).
-    let memory_tail_enabled = std::env::var("CORTEX_DASHBOARD_MEMORY_TAIL")
-        .map(|v| v != "0")
-        .unwrap_or(true);
+    let memory_tail_enabled = cfg.dashboard.memory_tail;
     let mut memory_tail_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     if watch_enabled && memory_tail_enabled {
         let run_flag =
@@ -670,7 +666,7 @@ async fn main() -> Result<()> {
             memory_tail_handles.push(handle);
         }
     } else if !memory_tail_enabled {
-        tracing::info!("dashboard memory tail: disabled by CORTEX_DASHBOARD_MEMORY_TAIL=0");
+        tracing::info!("dashboard memory tail: disabled by CORTEX_DASHBOARD_MEMORY_TAIL=false");
     }
     // Keep watchers alive for the daemon lifetime. Leaking is the right
     // shape here — the process owns them until it exits, and any other
@@ -682,7 +678,7 @@ async fn main() -> Result<()> {
     // Opened best-effort — when the file is unreachable (first boot
     // before `cortex-classifier-worker` ran, permission issues, etc.)
     // the dashboard ribbon stays "—" until the worker creates the DB.
-    let metadata_path = resolve_metadata_db_path();
+    let metadata_path = resolve_metadata_db_path(&cfg);
     let metadata = match cortex_storage::MetadataStore::open(&metadata_path) {
         Ok(store) => {
             tracing::info!(
@@ -809,25 +805,14 @@ async fn main() -> Result<()> {
     // On failure, emit a `law_violation` envelope via the same
     // path phase8e uses. Off by default — operators flip the env
     // var when they want quiet-hours regression coverage.
-    if std::env::var("CORTEX_CANARY_ENABLED")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
-    {
+    if cfg.canary.enabled {
         let mut canary_cfg = cortex_api::canary::CanaryConfig::default();
         canary_cfg.enabled = true;
-        if let Ok(secs) = std::env::var("CORTEX_CANARY_INTERVAL_SECS").map(|s| s.parse::<u64>()) {
-            if let Ok(s) = secs {
-                canary_cfg.interval_secs = s.max(10);
-            }
-        }
-        if let Ok(secs) = std::env::var("CORTEX_CANARY_DEADLINE_SECS").map(|s| s.parse::<u64>()) {
-            if let Ok(s) = secs {
-                canary_cfg.deadline_secs = s.max(1);
-            }
-        }
+        canary_cfg.interval_secs = cfg.canary.interval_secs.max(10);
+        canary_cfg.deadline_secs = cfg.canary.deadline_secs.max(1);
         tokio::spawn(cortex_api::canary::run_canary_loop(canary_cfg));
     } else {
-        tracing::info!("canary runner disabled (set CORTEX_CANARY_ENABLED=1 to enable)");
+        tracing::info!("canary runner disabled (set CORTEX_CANARY_ENABLED=true to enable)");
     }
 
     // Phase11e — boot-time collection / index inventory diff. Logs
@@ -843,7 +828,7 @@ async fn main() -> Result<()> {
     // `coverage_snapshot` so `/v1/status` and `cortex_status` MCP
     // can report honest per-backend coverage without re-running the
     // diff on every call.
-    if let Some(snapshot) = audit_coverage_at_boot(&keyword_memory).await {
+    if let Some(snapshot) = audit_coverage_at_boot(&keyword_memory, &cfg).await {
         let mut guard = coverage_snapshot.write().await;
         *guard = Some(snapshot);
     }
@@ -853,7 +838,7 @@ async fn main() -> Result<()> {
     // store is still opened (so admin subcommands can mint keys
     // ahead of enabling the gate) but the middleware short-circuits
     // and adds zero per-request overhead.
-    let api_keys_path = api_keys_db_path();
+    let api_keys_path = api_keys_db_path(&cfg);
     let api_keys_store: Option<Arc<cortex_api::storage::api_keys::ApiKeyStore>> =
         match cortex_api::storage::api_keys::ApiKeyStore::open(&api_keys_path) {
             Ok(s) => {
@@ -897,6 +882,7 @@ async fn main() -> Result<()> {
 /// expected set is empty (e.g. unit-test environment).
 async fn audit_coverage_at_boot(
     keyword_memory: &Arc<cortex_api::MemoryKeywordLane>,
+    cfg: &cortex_config::Config,
 ) -> Option<cortex_api::coverage::CoverageResponse> {
     use std::collections::BTreeSet;
     use std::time::Duration;
@@ -907,9 +893,7 @@ async fn audit_coverage_at_boot(
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
-    let env_slugs = cortex_api::coverage::slugs_from_env(
-        std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref(),
-    );
+    let env_slugs = cortex_api::coverage::slugs_from_env(cfg.dashboard.coverage_slugs.as_deref());
     slugs.extend(env_slugs);
     if slugs.is_empty() {
         // Default to the cortex slug so the diff has something to
@@ -934,16 +918,20 @@ async fn audit_coverage_at_boot(
         }
     };
 
-    let vectorizer_url = std::env::var("CORTEX_VECTORIZER_URL")
-        .or_else(|_| std::env::var("VECTORIZER_URL"))
-        .ok();
+    let vectorizer_url = cfg
+        .embedder
+        .vectorizer_url
+        .clone()
+        .or_else(|| std::env::var("VECTORIZER_URL").ok());
     let bearer = match vectorizer_url.as_deref() {
-        Some(url) => resolve_vectorizer_bearer(&http, url).await,
+        Some(url) => resolve_vectorizer_bearer(&http, url, cfg).await,
         None => None,
     };
-    let meili_url = std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok();
-    let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
-        .ok()
+    let meili_url = cfg.meili.meili_url.clone();
+    let meili_key = cfg
+        .meili
+        .meili_api_key
+        .clone()
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     if vectorizer_url.is_none() && meili_url.is_none() {
@@ -1002,20 +990,26 @@ async fn audit_coverage_at_boot(
 /// Mirrors the boot-time auth precedence in the vector-lane wiring
 /// (api_key wins, otherwise user+password → /auth/login). Returns
 /// `None` when no credentials are configured (anonymous dev stack).
-async fn resolve_vectorizer_bearer(http: &reqwest::Client, base_url: &str) -> Option<String> {
-    if let Ok(key) =
-        std::env::var("CORTEX_VECTORIZER_API_KEY").or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+async fn resolve_vectorizer_bearer(
+    http: &reqwest::Client,
+    base_url: &str,
+    cfg: &cortex_config::Config,
+) -> Option<String> {
+    if let Some(key) = cfg
+        .embedder
+        .vectorizer_api_key
+        .clone()
+        .or_else(|| std::env::var("VECTORIZER_API_KEY").ok())
     {
         if !key.is_empty() {
             return Some(key);
         }
     }
-    let user = std::env::var("CORTEX_VECTORIZER_USER")
-        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER"))
-        .ok()?;
-    let pass = std::env::var("CORTEX_VECTORIZER_PASSWORD")
-        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
-        .ok()?;
+    if cfg.embedder.vectorizer_user.is_empty() {
+        return None;
+    }
+    let user = cfg.embedder.vectorizer_user.clone();
+    let pass = cfg.embedder.vectorizer_password.clone()?;
     let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
     let body = serde_json::json!({ "username": user, "password": pass });
     match http
@@ -1056,11 +1050,11 @@ async fn resolve_vectorizer_bearer(http: &reqwest::Client, base_url: &str) -> Op
 ///
 /// Centralised so the API and the classifier-worker resolve the same
 /// file — they share the database (worker writes, API reads).
-fn resolve_metadata_db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+fn resolve_metadata_db_path(cfg: &cortex_config::Config) -> PathBuf {
+    if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         return PathBuf::from(home).join("metadata.sqlite");
     }
     home_dir().join(".cortex").join("metadata.sqlite")
@@ -1080,16 +1074,18 @@ fn home_dir() -> PathBuf {
 /// fallback) when set. Returns `None` when neither variable is set
 /// or when the URL is unreachable — the dashboard graph endpoint
 /// then degrades to the synthetic-from-lane fallback.
-async fn build_nexus_client() -> Option<Arc<nexus_sdk::NexusClient>> {
-    let url = std::env::var("CORTEX_NEXUS_URL")
-        .or_else(|_| std::env::var("NEXUS_URL"))
-        .ok()?;
-    let cfg = nexus_sdk::ClientConfig {
+async fn build_nexus_client(cfg: &cortex_config::Config) -> Option<Arc<nexus_sdk::NexusClient>> {
+    let url = cfg
+        .nexus
+        .nexus_url
+        .clone()
+        .or_else(|| std::env::var("NEXUS_URL").ok())?;
+    let client_cfg = nexus_sdk::ClientConfig {
         base_url: url.clone(),
-        api_key: std::env::var("CORTEX_NEXUS_API_KEY").ok(),
+        api_key: cfg.nexus.nexus_api_key.clone(),
         ..Default::default()
     };
-    match nexus_sdk::NexusClient::with_config(cfg) {
+    match nexus_sdk::NexusClient::with_config(client_cfg) {
         Ok(client) => {
             tracing::info!(url = %url, "nexus client connected");
             Some(Arc::new(client))
@@ -1131,41 +1127,25 @@ fn resolve_fusion_config_from_env_with_base(
     base: cortex_api::fusion::FusionConfig,
 ) -> cortex_api::fusion::FusionConfig {
     let default = base.clone();
-    let alpha = match std::env::var("CORTEX_RRF_ALPHA") {
-        Ok(raw) => match raw.trim().parse::<f32>() {
-            Ok(v) if (0.0..=1.0).contains(&v) => v,
-            Ok(v) => {
-                tracing::warn!(
-                    raw = %raw,
-                    parsed = v,
-                    "CORTEX_RRF_ALPHA out of [0.0, 1.0]; using default"
-                );
-                default.alpha
-            }
-            Err(e) => {
-                tracing::warn!(
-                    raw = %raw,
-                    error = %e,
-                    "CORTEX_RRF_ALPHA not a float; using default"
-                );
-                default.alpha
-            }
-        },
-        Err(_) => default.alpha,
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let alpha = match cfg.dashboard.rrf_alpha {
+        Some(v) if (0.0..=1.0).contains(&v) => v,
+        Some(v) => {
+            tracing::warn!(
+                parsed = v,
+                "CORTEX_RRF_ALPHA out of [0.0, 1.0]; using default"
+            );
+            default.alpha
+        }
+        None => default.alpha,
     };
-    let k = match std::env::var("CORTEX_RRF_K") {
-        Ok(raw) => match raw.trim().parse::<u32>() {
-            Ok(v) if v >= 1 => v,
-            Ok(v) => {
-                tracing::warn!(raw = %raw, parsed = v, "CORTEX_RRF_K must be >= 1; using default");
-                default.k
-            }
-            Err(e) => {
-                tracing::warn!(raw = %raw, error = %e, "CORTEX_RRF_K not a u32; using default");
-                default.k
-            }
-        },
-        Err(_) => default.k,
+    let k = match cfg.dashboard.rrf_k {
+        Some(v) if v >= 1 => v,
+        Some(v) => {
+            tracing::warn!(parsed = v, "CORTEX_RRF_K must be >= 1; using default");
+            default.k
+        }
+        None => default.k,
     };
     cortex_api::fusion::FusionConfig {
         alpha: alpha.clamp(0.0, 1.0),
@@ -1269,8 +1249,11 @@ fn spawn_relevance_reload_task(_orchestrator: Orchestrator, _path: PathBuf) {
 /// Unknown values log a `WARN` and fall back to `noun_phrase`.
 fn resolve_query_rewriter_from_env() -> Arc<dyn cortex_api::query_rewrite::QueryRewriter> {
     use cortex_api::query_rewrite::{NounPhraseRewriter, PassthroughRewriter, SonnetRewriter};
-    let raw = std::env::var("CORTEX_QUERY_REWRITER")
-        .ok()
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let raw = cfg
+        .dashboard
+        .query_rewriter
+        .as_deref()
         .map(|s| s.trim().to_lowercase())
         .filter(|s| !s.is_empty());
     let strategy = match raw.as_deref() {

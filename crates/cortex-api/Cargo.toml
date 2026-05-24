@@ -18,6 +18,7 @@ path = "src/main.rs"
 cortex-build = { path = "../cortex-build" }
 
 [dependencies]
+cortex-config = { path = "../cortex-config" }
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-health = { path = "../cortex-health", features = ["client"] }

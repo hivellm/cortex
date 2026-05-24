@@ -49,6 +49,7 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
             ts: 1,
             severity: None,
             extras: keyword_extras,
+            overlay: Default::default(),
         }],
     );
 
@@ -90,6 +91,7 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
             ts: 0,
             severity: None,
             extras: graph_extras,
+            overlay: Default::default(),
         }],
     );
 

@@ -90,9 +90,13 @@ pub struct EmbedderConfig {
     /// Env: `CORTEX_EMBEDDER_MAX_RETRY`.
     #[serde(default = "default_embedder_max_retry")]
     pub max_retry: u32,
-    /// Vectorizer base URL. Env: `CORTEX_EMBEDDER_VECTORIZER_URL`.
-    #[serde(default = "default_vectorizer_url")]
-    pub vectorizer_url: String,
+    /// Vectorizer base URL. `None` means "not configured" — the API
+    /// live-lane gate stays on MemoryVectorLane when absent. Workers
+    /// that require a URL fall back to a hardcoded default.
+    /// Env: `CORTEX_EMBEDDER_VECTORIZER_URL` (also
+    /// `CORTEX_VECTORIZER_URL` legacy alias).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectorizer_url: Option<String>,
     /// Synap base URL the embedder consumes from.
     /// Env: `CORTEX_EMBEDDER_SYNAP_URL`.
     #[serde(default = "default_embedder_synap_url")]
@@ -105,6 +109,18 @@ pub struct EmbedderConfig {
     /// Env: `CORTEX_EMBEDDER_VECTORIZER_PASSWORD`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vectorizer_password: Option<String>,
+    /// Vectorizer API key (bearer token). Takes precedence over
+    /// `vectorizer_user` + `vectorizer_password` when set.
+    /// Env: `CORTEX_VECTORIZER_API_KEY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectorizer_api_key: Option<String>,
+    /// Proactive JWT warmup interval in seconds (0 = disabled).
+    /// When login credentials are configured and `warmup_secs > 0`,
+    /// the API spawns a background loop that calls `/auth/refresh`
+    /// every N seconds to keep the cached token fresh.
+    /// Env: `CORTEX_VECTORIZER_JWT_WARMUP_SECS`.
+    #[serde(default)]
+    pub jwt_warmup_secs: u64,
     /// Collection prefix (deployment namespace).
     /// Env: `CORTEX_EMBEDDER_COLLECTION_PREFIX`.
     #[serde(default = "default_collection_prefix")]
@@ -115,9 +131,6 @@ pub struct EmbedderConfig {
     pub vector_dim: u32,
 }
 
-fn default_vectorizer_url() -> String {
-    "http://127.0.0.1:17001".to_string()
-}
 fn default_embedder_synap_url() -> String {
     "http://127.0.0.1:17003".to_string()
 }
@@ -150,10 +163,12 @@ impl Default for EmbedderConfig {
             chunker_concurrency: default_embedder_chunker_concurrency(),
             upsert_batch: default_embedder_upsert_batch(),
             max_retry: default_embedder_max_retry(),
-            vectorizer_url: default_vectorizer_url(),
+            vectorizer_url: None,
             synap_url: default_embedder_synap_url(),
             vectorizer_user: default_embedder_vectorizer_user(),
             vectorizer_password: None,
+            vectorizer_api_key: None,
+            jwt_warmup_secs: 0,
             collection_prefix: default_collection_prefix(),
             vector_dim: default_embedder_vector_dim(),
         }
@@ -167,9 +182,12 @@ impl Default for EmbedderConfig {
 /// Meilisearch full-text indexer knobs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MeiliConfig {
-    /// Meili base URL. Env: `CORTEX_FULLTEXT_MEILI_URL`.
-    #[serde(default = "default_meili_url")]
-    pub meili_url: String,
+    /// Meili base URL. `None` means "not configured" — the API
+    /// live keyword-lane gate stays on MemoryKeywordLane when absent.
+    /// Workers that require a URL fall back to `http://127.0.0.1:7700`.
+    /// Env: `CORTEX_FULLTEXT_MEILI_URL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meili_url: Option<String>,
     /// Meili master / API key. Env: `CORTEX_FULLTEXT_MEILI_API_KEY`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meili_api_key: Option<String>,
@@ -211,9 +229,6 @@ pub struct MeiliConfig {
     pub max_body_bytes: usize,
 }
 
-fn default_meili_url() -> String {
-    "http://127.0.0.1:7700".to_string()
-}
 fn default_fulltext_synap_url() -> String {
     "http://127.0.0.1:17003".to_string()
 }
@@ -242,7 +257,7 @@ fn default_fulltext_max_body_bytes() -> usize {
 impl Default for MeiliConfig {
     fn default() -> Self {
         Self {
-            meili_url: default_meili_url(),
+            meili_url: None,
             meili_api_key: None,
             synap_url: default_fulltext_synap_url(),
             synap_group: default_fulltext_synap_group(),
@@ -264,11 +279,12 @@ impl Default for MeiliConfig {
 /// Nexus graph store knobs + graph-worker tuning.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NexusConfig {
-    /// Nexus base URL. Env: `CORTEX_NEXUS_URL` (also accepts
-    /// `CORTEX_GRAPH_NEXUS_URL` for the graph worker's legacy
-    /// per-subsystem override).
-    #[serde(default = "default_nexus_url")]
-    pub nexus_url: String,
+    /// Nexus base URL. `None` means "not configured" — the API graph
+    /// lane and dashboard graph endpoint degrade to synthetic fallback.
+    /// Workers fall back to `http://127.0.0.1:17002`. Env:
+    /// `CORTEX_NEXUS_URL` (also `CORTEX_GRAPH_NEXUS_URL` legacy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nexus_url: Option<String>,
     /// Transport selector — string form `"auto"` / `"rpc"` /
     /// `"http"` / aliases (`"bolt"`, `"nexus"`, `"https"`).
     /// Workers parse to their typed `GraphTransport` enum.
@@ -305,6 +321,11 @@ pub struct NexusConfig {
     /// Nexus auth password. Env: `CORTEX_GRAPH_NEXUS_PASSWORD`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nexus_password: Option<String>,
+    /// Nexus API key (bearer token). Distinct from `nexus_password` —
+    /// used by the cortex-api dashboard graph endpoint rather than
+    /// the graph-writer worker. Env: `CORTEX_NEXUS_API_KEY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nexus_api_key: Option<String>,
     /// Out-of-order tolerance window (seconds) for buffering a
     /// `tool_call` waiting for its `turn.start` before
     /// fabricating an orphan Turn.
@@ -313,9 +334,6 @@ pub struct NexusConfig {
     pub out_of_order_buffer_secs: u64,
 }
 
-fn default_nexus_url() -> String {
-    "http://127.0.0.1:17002".to_string()
-}
 fn default_graph_transport() -> String {
     "auto".to_string()
 }
@@ -344,7 +362,7 @@ fn default_graph_out_of_order_secs() -> u64 {
 impl Default for NexusConfig {
     fn default() -> Self {
         Self {
-            nexus_url: default_nexus_url(),
+            nexus_url: None,
             transport: default_graph_transport(),
             synap_url: default_graph_synap_url(),
             synap_group: default_graph_synap_group(),
@@ -354,6 +372,7 @@ impl Default for NexusConfig {
             max_retry: default_graph_max_retry(),
             nexus_user: None,
             nexus_password: None,
+            nexus_api_key: None,
             out_of_order_buffer_secs: default_graph_out_of_order_secs(),
         }
     }
@@ -386,6 +405,11 @@ pub struct IngestionConfig {
     /// Env: `CORTEX_METADATA_DB` (also `CORTEX_HOME` + "/metadata.sqlite").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_db: Option<String>,
+    /// Cortex home directory override. When set, `archive_root` and
+    /// `metadata_db` use it as a base when they are not individually
+    /// overridden. Env: `CORTEX_HOME`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<String>,
 }
 
 fn default_ingestion_bind() -> String {
@@ -403,6 +427,7 @@ impl Default for IngestionConfig {
             synap_url: None,
             archive_zstd_level: default_zstd(),
             metadata_db: None,
+            home: None,
         }
     }
 }
@@ -429,6 +454,40 @@ pub struct DashboardConfig {
     /// Env: `CORTEX_MEILI_REFRESH_SECS`.
     #[serde(default = "default_refresh_secs")]
     pub meili_refresh_secs: u64,
+    /// Path to the `api_keys.sqlite` file. When `None`, the daemon
+    /// falls back to `~/.cortex/api_keys.sqlite`.
+    /// Env: `CORTEX_API_KEYS_DB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_keys_db: Option<String>,
+    /// Enable the dashboard filesystem watcher (default `true`).
+    /// Set to `false` to disable SSE push events for cold-stack tests.
+    /// Env: `CORTEX_DASHBOARD_WATCH`.
+    #[serde(default = "default_true")]
+    pub watch: bool,
+    /// Enable the SQLite memory tail loop (default `true`).
+    /// Gated independently from `watch` so operators can disable
+    /// only the DB polling without disabling FS watchers.
+    /// Env: `CORTEX_DASHBOARD_MEMORY_TAIL`.
+    #[serde(default = "default_true")]
+    pub memory_tail: bool,
+    /// Comma-separated repo slugs to include in the boot-time
+    /// coverage audit. `None` falls back to slugs the keyword
+    /// lane has already learned. Env: `CORTEX_COVERAGE_SLUGS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_slugs: Option<String>,
+    /// RRF alpha blend weight (`0.0`–`1.0`). `None` uses the
+    /// `relevance.toml`-derived default. Env: `CORTEX_RRF_ALPHA`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rrf_alpha: Option<f32>,
+    /// RRF stabilisation constant (`>= 1`). `None` uses the
+    /// `relevance.toml`-derived default. Env: `CORTEX_RRF_K`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rrf_k: Option<u32>,
+    /// Query rewriter strategy. One of `noun_phrase` (default),
+    /// `sonnet`, or `passthrough`. Unknown values fall back to
+    /// `noun_phrase` with a WARN log. Env: `CORTEX_QUERY_REWRITER`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query_rewriter: Option<String>,
 }
 
 fn default_api_bind() -> String {
@@ -436,6 +495,9 @@ fn default_api_bind() -> String {
 }
 fn default_refresh_secs() -> u64 {
     30
+}
+fn default_true() -> bool {
+    true
 }
 
 impl Default for DashboardConfig {
@@ -445,6 +507,81 @@ impl Default for DashboardConfig {
             synap_url: None,
             archive_refresh_secs: default_refresh_secs(),
             meili_refresh_secs: default_refresh_secs(),
+            api_keys_db: None,
+            watch: true,
+            memory_tail: true,
+            coverage_slugs: None,
+            rrf_alpha: None,
+            rrf_k: None,
+            query_rewriter: None,
+        }
+    }
+}
+
+// -------------------------------------------------------------
+// Rulebook
+// -------------------------------------------------------------
+
+/// Rulebook task-loader knobs.
+///
+/// Drives the multi-project rulebook roots feature:
+/// - `roots` takes a comma- or semicolon-separated list of
+///   `.rulebook/` directories; one `TaskLoader` per entry,
+///   slug derived from each directory's parent name.
+/// - `root` is the legacy single-project path.
+/// - Falls back to `<cwd>/.rulebook` when both are `None`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct RulebookConfig {
+    /// Comma- or semicolon-separated `.rulebook/` directories
+    /// for multi-project deployments. Wins over `root` when set.
+    /// Env: `CORTEX_RULEBOOK_ROOTS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roots: Option<String>,
+    /// Single `.rulebook/` directory (legacy single-project path).
+    /// Env: `CORTEX_RULEBOOK_ROOT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+// -------------------------------------------------------------
+// Canary
+// -------------------------------------------------------------
+
+/// Opt-in synthetic canary runner knobs.
+///
+/// When `enabled = true`, the API fires a fake hook frame through
+/// the real IPC pipe every `interval_secs` and asserts it lands
+/// in the archive within `deadline_secs`. On failure a
+/// `law_violation` envelope is emitted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CanaryConfig {
+    /// Enable the canary runner. Default `false`.
+    /// Env: `CORTEX_CANARY_ENABLED`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Fire interval in seconds (minimum 10).
+    /// Env: `CORTEX_CANARY_INTERVAL_SECS`.
+    #[serde(default = "default_canary_interval")]
+    pub interval_secs: u64,
+    /// Archive-landing deadline in seconds (minimum 1).
+    /// Env: `CORTEX_CANARY_DEADLINE_SECS`.
+    #[serde(default = "default_canary_deadline")]
+    pub deadline_secs: u64,
+}
+
+fn default_canary_interval() -> u64 {
+    300
+}
+fn default_canary_deadline() -> u64 {
+    10
+}
+
+impl Default for CanaryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: default_canary_interval(),
+            deadline_secs: default_canary_deadline(),
         }
     }
 }

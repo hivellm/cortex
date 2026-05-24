@@ -600,6 +600,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-build",
+ "cortex-config",
  "cortex-core",
  "cortex-health",
  "cortex-storage",

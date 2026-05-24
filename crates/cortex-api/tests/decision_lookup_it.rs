@@ -80,6 +80,7 @@ fn lane_hit_for_decision(decision_id: &str, title: &str, status: &str, repo: &st
         ts: 1714200000000,
         severity: None,
         extras,
+        overlay: Default::default(),
     }
 }
 

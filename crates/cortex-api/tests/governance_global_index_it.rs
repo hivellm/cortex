@@ -59,6 +59,7 @@ fn decision_lane_hit(decision_id: &str, title: &str, repo: &str) -> LaneHit {
         ts: 1714200000000,
         severity: None,
         extras,
+        overlay: Default::default(),
     }
 }
 

@@ -67,18 +67,12 @@ pub fn audit(crates_root: &Path) -> Vec<EnvVarUsage> {
             continue;
         }
         // Skip the audit's own crate.
-        if path
-            .components()
-            .any(|c| c.as_os_str() == "cortex-config")
-        {
+        if path.components().any(|c| c.as_os_str() == "cortex-config") {
             continue;
         }
         // Skip integration test directories — test fixtures may
         // legitimately probe env vars to drive setup.
-        if path
-            .components()
-            .any(|c| c.as_os_str() == "tests")
-        {
+        if path.components().any(|c| c.as_os_str() == "tests") {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(path) else {

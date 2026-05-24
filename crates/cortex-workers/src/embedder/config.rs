@@ -66,7 +66,9 @@ impl EmbedderConfig {
             chunker_concurrency: t.chunker_concurrency,
             upsert_batch: t.upsert_batch,
             max_retry: t.max_retry,
-            vectorizer_url: t.vectorizer_url,
+            vectorizer_url: t
+                .vectorizer_url
+                .unwrap_or_else(|| "http://127.0.0.1:17001".to_string()),
             synap_url: t.synap_url,
             vectorizer_user: t.vectorizer_user,
             vectorizer_password: t.vectorizer_password,
