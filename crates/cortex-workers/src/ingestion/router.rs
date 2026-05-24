@@ -35,6 +35,13 @@ pub struct AppState {
     pub started_at: Arc<std::time::Instant>,
     /// Archive root path (best-effort writability probe in `/healthz`).
     pub archive_root: Arc<std::path::PathBuf>,
+    /// ADR-012 — optional `MetadataStore` handle used to stamp
+    /// `event_identity.archive_partition` after every successful
+    /// archive write. `None` keeps the legacy ingestion path
+    /// (pre-phase13d) running unchanged for callers that have not
+    /// wired the metadata DB yet (test harnesses, the in-memory
+    /// double).
+    pub metadata: Option<Arc<std::sync::Mutex<cortex_storage::MetadataStore>>>,
 }
 
 impl AppState {
@@ -50,6 +57,7 @@ impl AppState {
             metrics,
             started_at: Arc::new(std::time::Instant::now()),
             archive_root: Arc::new(std::path::PathBuf::new()),
+            metadata: None,
         }
     }
 
@@ -58,6 +66,23 @@ impl AppState {
     /// chains `with_archive_root(cfg.archive_root)` after `new()`.
     pub fn with_archive_root(mut self, root: std::path::PathBuf) -> Self {
         self.archive_root = Arc::new(root);
+        self
+    }
+
+    /// ADR-012 — wire the `MetadataStore` handle for
+    /// `event_identity` write-back. The boot path in `cortex-
+    /// ingestion`'s main builds the store from the resolved DB
+    /// path (env precedence `CORTEX_METADATA_DB` →
+    /// `<CORTEX_HOME>/metadata.sqlite` → `<home>/.cortex/
+    /// metadata.sqlite`) and chains `with_metadata(store)` after
+    /// `with_archive_root`. Tests that do not exercise the
+    /// identity path omit the call and the write-back becomes a
+    /// silent no-op.
+    pub fn with_metadata(
+        mut self,
+        metadata: Arc<std::sync::Mutex<cortex_storage::MetadataStore>>,
+    ) -> Self {
+        self.metadata = Some(metadata);
         self
     }
 }
@@ -456,10 +481,51 @@ async fn process_event(
     state.metrics.incr_events_received_kind(&kind_label);
 
     // Archive first (durability contract), then publish.
-    state
+    let partition_path = state
         .archive
         .write(stream.tag(), envelope)
         .map_err(|e| IngestError::ArchiveFailure(e.to_string()))?;
+
+    // ADR-012 — stamp `event_identity.archive_partition` so the
+    // doctor + forget paths can resolve `event_id → partition_path`
+    // via one indexed lookup instead of an archive walk. Best-effort:
+    // a failed upsert logs at WARN but does NOT undo the archive
+    // write (durability stays the headline contract). Skipped when
+    // the metadata handle is `None` (tests / pre-phase13d boots).
+    if let Some(metadata) = state.metadata.as_ref() {
+        if let Some(event_id) = envelope
+            .get("event_id")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            let partition_str = partition_path.display().to_string();
+            match metadata.lock() {
+                Ok(guard) => {
+                    use cortex_storage::IdentityIndex as _;
+                    let idx = cortex_storage::SqliteIdentityIndex::new(guard.conn());
+                    if let Err(e) = idx.upsert_identity(
+                        event_id,
+                        cortex_storage::Backend::Archive,
+                        &partition_str,
+                    ) {
+                        tracing::warn!(
+                            event_id = %event_id,
+                            partition = %partition_str,
+                            error = %e,
+                            "identity index: archive partition upsert failed (post-archive)"
+                        );
+                    }
+                }
+                Err(poisoned) => {
+                    tracing::warn!(
+                        event_id = %event_id,
+                        error = %poisoned,
+                        "identity index: metadata mutex poisoned; skipping archive partition upsert"
+                    );
+                }
+            }
+        }
+    }
 
     // Bump the durability counter as soon as the archive accepts the
     // envelope. The publisher (synap) call below is best-effort: a

@@ -222,3 +222,91 @@ async fn metrics_endpoint_returns_prometheus_text() {
     let text = String::from_utf8(bytes.to_vec()).unwrap();
     assert!(text.contains("cortex_events_received"));
 }
+
+// -----------------------------------------------------------
+// ADR-012 §3.4 — archive write-back stamps event_identity.
+// -----------------------------------------------------------
+
+#[tokio::test]
+async fn archive_write_back_stamps_event_identity_partition() {
+    use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
+
+    // Build an in-memory metadata store. `MetadataStore::open_in_memory`
+    // calls `migrate` which now chains `apply_phase13d_schema` (phase13d
+    // §2.2) so the `event_identity` table is ready.
+    let store = MetadataStore::open_in_memory().expect("metadata opens");
+    let metadata = Arc::new(std::sync::Mutex::new(store));
+
+    let archive: Arc<InMemoryArchive> = Arc::new(InMemoryArchive::default());
+    let publisher: Arc<MemoryPublisher> = Arc::new(MemoryPublisher::default());
+    let metrics = Arc::new(Metrics::default());
+    let archive_dyn: Arc<dyn ArchiveWriter> = archive.clone();
+    let pub_dyn: Arc<dyn cortex_workers::ingestion::Publisher> = publisher.clone();
+    let state = AppState::new(archive_dyn, pub_dyn, metrics.clone())
+        .with_metadata(metadata.clone());
+    let app = build_router(state);
+
+    let body = serde_json::to_vec(&good_envelope()).unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/events")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+    // The router's archive write-back path stamps
+    // event_identity.archive_partition for the ingested event_id.
+    let guard = metadata.lock().expect("metadata mutex");
+    let idx = SqliteIdentityIndex::new(guard.conn());
+    let row = idx
+        .lookup("01HXYZABCDEF0123456789ABCD")
+        .expect("lookup ok")
+        .expect("identity row present after archive write");
+    let partition = row.archive_partition.expect("archive_partition set");
+    // InMemoryArchive returns `mem://<stream_tag>` so the test pins
+    // the round-trip without coupling to NdJsonZstd's on-disk layout.
+    // InMemoryArchive returns `mem://<stream_tag>` — the router
+    // picks `live → "raw"` for an envelope with `stream: "live"`.
+    assert_eq!(
+        partition, "mem://raw",
+        "archive_partition must match the writer's returned path"
+    );
+    // Reverse lookup by native id also resolves.
+    let by_native = idx
+        .lookup_by_native(Backend::Archive, &partition)
+        .expect("reverse lookup ok")
+        .expect("identity row found by native id");
+    assert_eq!(by_native.event_id, "01HXYZABCDEF0123456789ABCD");
+    // Sibling columns stay None — the embedder / fulltext / graph
+    // workers stamp those in their own projection paths.
+    assert!(row.nexus_id.is_none());
+    assert!(row.vec_id.is_none());
+    assert!(row.meili_id.is_none());
+}
+
+#[tokio::test]
+async fn archive_write_back_is_skipped_when_metadata_is_absent() {
+    // Default AppState (no .with_metadata(...)) → write-back is a
+    // silent no-op. Verifies the pre-phase13d code path keeps
+    // working for callers that have not wired the metadata DB.
+    let (app, _, _, _) = build_app();
+    let body = serde_json::to_vec(&good_envelope()).unwrap();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/events")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
+}

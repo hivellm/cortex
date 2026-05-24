@@ -37,7 +37,13 @@ pub trait ArchiveWriter: Send + Sync + 'static {
     /// Persist a single event envelope. Must not return until the bytes
     /// are guaranteed durable (flushed + fsynced in production; flushed
     /// in dev).
-    fn write(&self, stream_tag: &str, envelope: &Value) -> Result<(), ArchiveError>;
+    ///
+    /// ADR-012 — returns the partition path the envelope was written
+    /// to so the ingestion router can stamp `event_identity.archive_partition`
+    /// without re-deriving the path. In-memory test impls return a
+    /// synthetic `PathBuf` keyed by `stream_tag` so identity-index
+    /// integration tests can still assert the round-trip.
+    fn write(&self, stream_tag: &str, envelope: &Value) -> Result<PathBuf, ArchiveError>;
 }
 
 /// Zstd-compressed NDJSON archive. Rotates hourly per stream tag.
@@ -167,7 +173,7 @@ fn next_free_sequence(dir: &Path, stream_tag: &str) -> Result<u32, ArchiveError>
 }
 
 impl ArchiveWriter for NdJsonZstdArchive {
-    fn write(&self, stream_tag: &str, envelope: &Value) -> Result<(), ArchiveError> {
+    fn write(&self, stream_tag: &str, envelope: &Value) -> Result<PathBuf, ArchiveError> {
         let occurred_at = envelope
             .get("occurred_at")
             .and_then(|s| s.as_str())
@@ -198,7 +204,9 @@ impl ArchiveWriter for NdJsonZstdArchive {
         af.encoder.write_all(line.as_bytes())?;
         af.encoder.write_all(b"\n")?;
         af.encoder.flush()?;
-        Ok(())
+        // ADR-012 — surface the partition path so the router can
+        // stamp `event_identity.archive_partition` on the upsert.
+        Ok(af.path.clone())
     }
 }
 
@@ -216,12 +224,17 @@ impl InMemoryArchive {
 }
 
 impl ArchiveWriter for InMemoryArchive {
-    fn write(&self, stream_tag: &str, envelope: &Value) -> Result<(), ArchiveError> {
+    fn write(&self, stream_tag: &str, envelope: &Value) -> Result<PathBuf, ArchiveError> {
         self.rows
             .lock()
             .map_err(|_| ArchiveError::Internal("archive mutex poisoned".into()))?
             .push((stream_tag.to_string(), envelope.clone()));
-        Ok(())
+        // ADR-012 — synthetic partition path keyed by stream tag.
+        // Real callers expect a `PathBuf`; the in-memory archive
+        // has no on-disk file so the deterministic `mem://<tag>`
+        // form lets identity-index integration tests assert the
+        // upsert without colliding with NdJsonZstd paths.
+        Ok(PathBuf::from(format!("mem://{stream_tag}")))
     }
 }
 
