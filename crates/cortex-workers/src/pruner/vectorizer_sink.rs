@@ -47,8 +47,7 @@ pub async fn demote(
             let ids: Vec<String> = chunk.to_vec();
             let move_report: MoveReport = client.move_vectors(src, dst, &ids).await?;
             let key = tier_pair_key(action.from, action.to);
-            *report.events_demoted_per_tier.entry(key).or_insert(0) +=
-                move_report.moved as u64;
+            *report.events_demoted_per_tier.entry(key).or_insert(0) += move_report.moved as u64;
             report.events_failed += move_report.failed as u64;
         }
     }
@@ -85,7 +84,9 @@ mod tests {
             to: PruneTier::Cold,
             vector_ids: vec!["k1".into(), "k2".into()],
         };
-        let report = demote(&client, std::slice::from_ref(&action)).await.unwrap();
+        let report = demote(&client, std::slice::from_ref(&action))
+            .await
+            .unwrap();
         assert_eq!(
             report
                 .events_demoted_per_tier
@@ -115,14 +116,18 @@ mod tests {
             to: PruneTier::Warm,
             vector_ids: vec!["missing-1".into(), "missing-2".into()],
         };
-        let report = demote(&client, std::slice::from_ref(&action)).await.unwrap();
+        let report = demote(&client, std::slice::from_ref(&action))
+            .await
+            .unwrap();
         assert_eq!(report.events_failed, 2);
-        assert!(report
-            .events_demoted_per_tier
-            .get("hot->warm")
-            .copied()
-            .unwrap_or(0)
-            == 0);
+        assert!(
+            report
+                .events_demoted_per_tier
+                .get("hot->warm")
+                .copied()
+                .unwrap_or(0)
+                == 0
+        );
     }
 
     #[tokio::test]
@@ -134,7 +139,9 @@ mod tests {
             to: PruneTier::Expired,
             vector_ids: vec!["k1".into()],
         };
-        let report = demote(&client, std::slice::from_ref(&action)).await.unwrap();
+        let report = demote(&client, std::slice::from_ref(&action))
+            .await
+            .unwrap();
         // No move call should have been issued.
         assert!(report.events_demoted_per_tier.is_empty());
     }

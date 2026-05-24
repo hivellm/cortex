@@ -420,6 +420,9 @@ mod tests {
             ),
         ];
         let cs = scan(&hydrated, 4);
-        assert!(cs.is_empty(), "adjacent but non-overlapping spans must not trigger");
+        assert!(
+            cs.is_empty(),
+            "adjacent but non-overlapping spans must not trigger"
+        );
     }
 }

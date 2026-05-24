@@ -194,8 +194,8 @@ impl FulltextIndexer for MeiliFulltextIndexer {
                     // document instance is shared by `Arc`-cloning the
                     // boxed payload — both lanes write the same row,
                     // so dedupe by `doc.id` is automatic.
-                    let global_target = index_for_event_global(event.kind)
-                        .map(|name| name.to_string());
+                    let global_target =
+                        index_for_event_global(event.kind).map(|name| name.to_string());
                     let doc_unboxed = *doc;
                     if let Some(global) = global_target {
                         self.metrics.incr_routed(&global);

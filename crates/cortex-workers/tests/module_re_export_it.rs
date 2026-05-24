@@ -11,16 +11,16 @@
 // §1 — classifier (lib content; was crate cortex-classifier)
 use cortex_workers::classifier::{
     build_offline_stack, BudgetTracker, Classifier, ClassifierError, ClassifierOutput,
-    ClassifierSource, EnrichmentInput, HaikuCliClassifier, HaikuCliConfig, InMemoryCache,
-    PiiRisk, PricingTable, Severity, StaticClassifier,
+    ClassifierSource, EnrichmentInput, HaikuCliClassifier, HaikuCliConfig, InMemoryCache, PiiRisk,
+    PricingTable, Severity, StaticClassifier,
 };
 
 // §1 — classifier_worker (daemon glue; was the existing
 // cortex-workers/src/classifier/ before the namespace was freed for the lib)
 use cortex_workers::classifier_worker::{
-    ClassifierMode as DaemonMode, ClassifierWorkerConfig, ConsumedMessage,
-    LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer, MemorySynapPublisher,
-    Worker, STREAM_BOOTSTRAP, STREAM_ENRICHED, STREAM_RAW,
+    ClassifierMode as DaemonMode, ClassifierWorkerConfig, ConsumedMessage, LiveSynapConsumer,
+    LiveSynapPublisher, MemorySynapConsumer, MemorySynapPublisher, Worker, STREAM_BOOTSTRAP,
+    STREAM_ENRICHED, STREAM_RAW,
 };
 
 // §2 — ingestion (was crate cortex-ingestion)
@@ -45,16 +45,16 @@ use cortex_workers::consolidator::summariser::{
 };
 
 // §5 — retention (was crate cortex-retention)
-use cortex_workers::retention::{
-    new_sweep_id, run_sweep, MemoryVectorizerOps, RecordRef, SweepError, SweepKind,
-    SweepPlan, SweepReport, Tier, TierPair, TierTransition, VectorizerOps,
-};
 use cortex_workers::retention::cas_vacuum::{run as cas_run, VacuumOpts};
 use cortex_workers::retention::meili_prune::{run_meili_prune, MeiliBackend, MeiliDoc};
 use cortex_workers::retention::metadata_reap::{run as reap_run, ReapPlan};
 use cortex_workers::retention::pii_enforce::{run_enforcement, EnforcementPlan, PiiTarget};
 use cortex_workers::retention::scheduler::tick;
 use cortex_workers::retention::turn_digest::{run_turn_digest, DigestPlan, Turn};
+use cortex_workers::retention::{
+    new_sweep_id, run_sweep, MemoryVectorizerOps, RecordRef, SweepError, SweepKind, SweepPlan,
+    SweepReport, Tier, TierPair, TierTransition, VectorizerOps,
+};
 
 #[test]
 fn re_export_compile_check() {

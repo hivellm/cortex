@@ -31,8 +31,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use cron::Schedule;
 use cortex_storage::{apply_phase9k_schema, CronJob, MetadataError, MetadataStore};
+use cron::Schedule;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Mutex, Semaphore};
@@ -125,15 +125,15 @@ impl Runner for ProcessRunner {
             _ => "failed",
         };
         let last_error = if status != "success" {
-            stderr_tail
-                .as_ref()
-                .and_then(|s| s.lines().next().map(|l| {
+            stderr_tail.as_ref().and_then(|s| {
+                s.lines().next().map(|l| {
                     let mut s = l.to_string();
                     if s.len() > 256 {
                         s.truncate(256);
                     }
                     s
-                }))
+                })
+            })
         } else {
             None
         };
@@ -242,8 +242,7 @@ fn reconcile_default_drift(
         let Some(row) = by_name.get(d.name) else {
             continue;
         };
-        let operator_disabled =
-            row.failure_streak > 0 || row.last_warning_at.is_some();
+        let operator_disabled = row.failure_streak > 0 || row.last_warning_at.is_some();
         if operator_disabled {
             continue;
         }
@@ -443,7 +442,10 @@ pub fn parse_schedule(expr: &str) -> Result<Schedule, String> {
     let normalised = match parts.len() {
         5 => {
             let dow = normalise_dow_field(parts[4])?;
-            format!("0 {} {} {} {} {} *", parts[0], parts[1], parts[2], parts[3], dow)
+            format!(
+                "0 {} {} {} {} {} *",
+                parts[0], parts[1], parts[2], parts[3], dow
+            )
         }
         6 => {
             // 6-field form: `s m h dom mon dow`. DOW is field 5.
@@ -833,7 +835,10 @@ mod tests {
             "next_after must return a strictly-later instant; got {next}"
         );
         // The next 03:00 slot is Wednesday.
-        assert_eq!(next.format("%Y-%m-%d %H:%M").to_string(), "2026-05-06 03:00");
+        assert_eq!(
+            next.format("%Y-%m-%d %H:%M").to_string(),
+            "2026-05-06 03:00"
+        );
     }
 
     /// phase11v §4.3 — drive every shipped retention schedule across
@@ -857,9 +862,8 @@ mod tests {
         for schedule in schedules {
             for day in 0..365 {
                 let from = start + Duration::days(day);
-                let next = next_after(schedule, from).unwrap_or_else(|| {
-                    panic!("schedule={schedule}  from={from}  yielded None")
-                });
+                let next = next_after(schedule, from)
+                    .unwrap_or_else(|| panic!("schedule={schedule}  from={from}  yielded None"));
                 assert!(
                     next > from,
                     "schedule={schedule}  from={from}  next={next} (must be > from)"
@@ -1014,7 +1018,10 @@ mod tests {
             .iter()
             .find(|j| j.name == "retention.memory_consolidate")
             .unwrap();
-        assert!(consolidate.enabled, "phase11p §3.2 — memory_consolidate defaults enabled");
+        assert!(
+            consolidate.enabled,
+            "phase11p §3.2 — memory_consolidate defaults enabled"
+        );
         let sweep = jobs.iter().find(|j| j.name == "retention.sweep").unwrap();
         assert!(sweep.enabled);
         let prune = jobs
@@ -1030,7 +1037,10 @@ mod tests {
             .expect("phase11p §3.1 — consolidator_nightly must seed");
         assert!(nightly.enabled, "consolidator_nightly defaults enabled");
         assert_eq!(nightly.schedule, "0 2 * * *");
-        assert_eq!(nightly.command, "cortex-consolidator nightly --dry-run=false");
+        assert_eq!(
+            nightly.command,
+            "cortex-consolidator nightly --dry-run=false"
+        );
     }
 
     #[test]
@@ -1093,7 +1103,10 @@ mod tests {
         assert_eq!(job.last_status.as_deref(), Some("success"));
         assert!(job.next_run_at.is_some());
         let next = job.next_run_at.unwrap();
-        assert!(next > anchor().to_rfc3339(), "next_run_at must advance: got {next}");
+        assert!(
+            next > anchor().to_rfc3339(),
+            "next_run_at must advance: got {next}"
+        );
     }
 
     #[tokio::test]
@@ -1101,13 +1114,7 @@ mod tests {
         let store = store();
         let past = (anchor() - Duration::seconds(5)).to_rfc3339();
         store
-            .upsert_cron_job_if_absent(
-                "retention.disabled",
-                "0 3 * * *",
-                "echo hi",
-                false,
-                &past,
-            )
+            .upsert_cron_job_if_absent("retention.disabled", "0 3 * * *", "echo hi", false, &past)
             .unwrap();
         let runner = MemoryRunner::new();
         let scheduler = Scheduler::new();
@@ -1201,7 +1208,9 @@ mod tests {
             )
             .unwrap();
         // Run 2 — fails. Streak = 2, warning should fire.
-        tick(&scheduler, &runner, &store, anchor() + Duration::seconds(1)).await.unwrap();
+        tick(&scheduler, &runner, &store, anchor() + Duration::seconds(1))
+            .await
+            .unwrap();
         let warnings = scheduler.drain_warnings().await;
         assert_eq!(warnings.len(), 1, "expected one repeated-failure warning");
         assert_eq!(warnings[0].name, "retention.sweep");
@@ -1230,7 +1239,9 @@ mod tests {
                     &(anchor() - Duration::seconds(5)).to_rfc3339(),
                 )
                 .unwrap();
-            tick(&scheduler, &runner, &store, anchor() + Duration::minutes(i)).await.unwrap();
+            tick(&scheduler, &runner, &store, anchor() + Duration::minutes(i))
+                .await
+                .unwrap();
         }
         let warnings = scheduler.drain_warnings().await;
         assert_eq!(

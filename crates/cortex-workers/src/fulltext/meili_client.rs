@@ -492,9 +492,10 @@ impl crate::pruner::meili_sink::MeiliPruneOps for LiveMeiliClient {
         // pruner needs for `body`/`summary`/`outcome_distribution`
         // stripping on cold-tier rows.
         let url = self.url(&format!("/indexes/{index}/documents"));
-        let resp = self.http.post(&url).json(&docs).send().await.map_err(|e| {
-            crate::pruner::meili_sink::MeiliPruneError::Transport(e.to_string())
-        })?;
+        let resp =
+            self.http.post(&url).json(&docs).send().await.map_err(|e| {
+                crate::pruner::meili_sink::MeiliPruneError::Transport(e.to_string())
+            })?;
         let status = resp.status();
         if status.is_success() || status == StatusCode::ACCEPTED {
             return Ok(());
@@ -518,9 +519,10 @@ impl crate::pruner::meili_sink::MeiliPruneOps for LiveMeiliClient {
         // delete. Idempotent; missing ids are not surfaced as errors
         // by the server.
         let url = self.url(&format!("/indexes/{index}/documents/delete-batch"));
-        let resp = self.http.post(&url).json(&ids).send().await.map_err(|e| {
-            crate::pruner::meili_sink::MeiliPruneError::Transport(e.to_string())
-        })?;
+        let resp =
+            self.http.post(&url).json(&ids).send().await.map_err(|e| {
+                crate::pruner::meili_sink::MeiliPruneError::Transport(e.to_string())
+            })?;
         let status = resp.status();
         if status.is_success() || status == StatusCode::ACCEPTED {
             return Ok(());

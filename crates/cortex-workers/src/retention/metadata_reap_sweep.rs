@@ -90,20 +90,14 @@ impl Sweep for MetadataReapSweep {
                         "bootstrap_jobs_collapsed",
                         legacy.bootstrap_jobs_collapsed,
                     )
-                    .with_tier_transition(
-                        "bootstrap_daily_buckets",
-                        legacy.bootstrap_daily_buckets,
-                    )
+                    .with_tier_transition("bootstrap_daily_buckets", legacy.bootstrap_daily_buckets)
                     .with_tier_transition("sessions_collapsed", legacy.sessions_collapsed)
                     .with_tier_transition(
                         "sessions_monthly_buckets",
                         legacy.sessions_monthly_buckets,
                     )
                     .with_tier_transition("spend_collapsed", legacy.spend_collapsed)
-                    .with_tier_transition(
-                        "spend_monthly_buckets",
-                        legacy.spend_monthly_buckets,
-                    )
+                    .with_tier_transition("spend_monthly_buckets", legacy.spend_monthly_buckets)
                     .with_tier_transition("did_vacuum", u64::from(legacy.did_vacuum))
                     .with_tier_transition("vacuum_ms", legacy.vacuum_ms);
                 Ok(next.finish_success(ctx.now, rows_processed, 0))

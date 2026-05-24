@@ -129,10 +129,7 @@ pub async fn handle_list_events_with_lane(
                 continue;
             }
         }
-        let repo_slug = h
-            .repo
-            .as_deref()
-            .map(cortex_storage::names::slug_for_repo);
+        let repo_slug = h.repo.as_deref().map(cortex_storage::names::slug_for_repo);
         if !repo_allow.is_empty() {
             match repo_slug.as_deref() {
                 Some(r) if repo_allow.contains(r) => {}

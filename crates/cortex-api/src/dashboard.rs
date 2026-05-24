@@ -141,7 +141,10 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/analyses", get(analyses))
         .route("/v1/dashboard/analyses/{id}", get(analysis_detail))
         .route("/v1/dashboard/consolidations", get(consolidations))
-        .route("/v1/dashboard/consolidations/{id}", get(consolidation_detail))
+        .route(
+            "/v1/dashboard/consolidations/{id}",
+            get(consolidation_detail),
+        )
         .route("/v1/dashboard/tools/stats", get(tools_stats))
         .route("/v1/dashboard/graph", get(graph))
         .route("/v1/dashboard/sessions", get(sessions))

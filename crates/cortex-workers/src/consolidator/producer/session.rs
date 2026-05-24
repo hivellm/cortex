@@ -357,9 +357,7 @@ No markdown fence, no extra prose.",
                             .payload
                             .get("description")
                             .and_then(|v| v.as_str())
-                            .or_else(|| {
-                                e.payload.get("prompt").and_then(|v| v.as_str())
-                            })
+                            .or_else(|| e.payload.get("prompt").and_then(|v| v.as_str()))
                             .unwrap_or("");
                         format!("agent={agent} desc={desc}")
                     }
@@ -575,10 +573,10 @@ fn clip_title(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::summariser::{
         SummariserError, SummariserKind, SummariserRequest as Req, SummariserResult,
     };
+    use super::*;
     use cortex_core::events::{Context, Stream};
     use serde_json::Value;
 
@@ -656,8 +654,7 @@ mod tests {
                 .prompt
                 .contains("relevance judge for the Cortex consolidator")
             {
-                "{\"relevant\": true, \"reason\": \"substantive session\"}"
-                    .to_string()
+                "{\"relevant\": true, \"reason\": \"substantive session\"}".to_string()
             } else {
                 self.text.clone()
             };
@@ -685,7 +682,8 @@ mod tests {
         }
         async fn summarise(&self, req: Req) -> Result<SummariserResult, SummariserError> {
             assert!(
-                req.prompt.contains("relevance judge for the Cortex consolidator"),
+                req.prompt
+                    .contains("relevance judge for the Cortex consolidator"),
                 "summary LLM call MUST be skipped when relevance gate says no"
             );
             Ok(SummariserResult {
@@ -833,10 +831,7 @@ mod tests {
             "No-op session — zero turns, no work recorded",
         ];
         for title in cases {
-            assert!(
-                is_garbage_summary(title, ""),
-                "should flag title: {title}"
-            );
+            assert!(is_garbage_summary(title, ""), "should flag title: {title}");
         }
         // A real summary must not trip the filter.
         assert!(!is_garbage_summary(
@@ -894,9 +889,8 @@ mod tests {
             },
             payload: serde_json::json!({"memory_type": "preference", "body": "noise"}),
             redactions: Vec::new(),
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .into(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .into(),
             parent_event_id: None,
         };
         let input = SessionInput {
@@ -1120,10 +1114,8 @@ mod tests {
     /// JSON object.
     #[test]
     fn parse_relevance_reads_well_formed_verdict() {
-        let v = parse_relevance(
-            "{\"relevant\": true, \"reason\": \"real engineering work\"}",
-        )
-        .unwrap();
+        let v =
+            parse_relevance("{\"relevant\": true, \"reason\": \"real engineering work\"}").unwrap();
         assert!(v.relevant);
         assert_eq!(v.reason, "real engineering work");
 

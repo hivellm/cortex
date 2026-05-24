@@ -29,11 +29,7 @@ struct StubMeili {
 
 #[async_trait]
 impl MeiliPruneOps for StubMeili {
-    async fn update_documents(
-        &self,
-        _index: &str,
-        docs: &[Value],
-    ) -> Result<(), MeiliPruneError> {
+    async fn update_documents(&self, _index: &str, docs: &[Value]) -> Result<(), MeiliPruneError> {
         let mut g = self.docs.lock().unwrap();
         for d in docs {
             let map = match d.as_object() {
@@ -51,11 +47,7 @@ impl MeiliPruneOps for StubMeili {
         }
         Ok(())
     }
-    async fn delete_documents(
-        &self,
-        _index: &str,
-        ids: &[String],
-    ) -> Result<(), MeiliPruneError> {
+    async fn delete_documents(&self, _index: &str, ids: &[String]) -> Result<(), MeiliPruneError> {
         let mut g = self.docs.lock().unwrap();
         for id in ids {
             g.remove(id);

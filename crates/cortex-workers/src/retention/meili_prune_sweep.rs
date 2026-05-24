@@ -123,8 +123,7 @@ mod tests {
     #[tokio::test]
     async fn meili_prune_empty_backend_yields_zero_rows() {
         let backend = Arc::new(MemoryMeiliBackend::new());
-        let sweep =
-            MeiliPruneSweep::new(backend, PrunePlan::default_for(fixed_now()));
+        let sweep = MeiliPruneSweep::new(backend, PrunePlan::default_for(fixed_now()));
         let ctx = make_ctx(fixed_now());
         let report = sweep.run(&ctx).await.unwrap();
         assert_eq!(report.name, MEILI_PRUNE_NAME);
@@ -136,8 +135,7 @@ mod tests {
     #[tokio::test]
     async fn meili_prune_dry_run_via_ctx_does_not_mutate() {
         let backend = Arc::new(MemoryMeiliBackend::new());
-        let sweep =
-            MeiliPruneSweep::new(backend, PrunePlan::default_for(fixed_now()));
+        let sweep = MeiliPruneSweep::new(backend, PrunePlan::default_for(fixed_now()));
         let mut ctx = make_ctx(fixed_now());
         ctx.config.dry_run = true;
         let report = sweep.run(&ctx).await.unwrap();
@@ -148,8 +146,7 @@ mod tests {
     #[test]
     fn meili_prune_schedule_parses_and_name_is_canonical() {
         let backend = Arc::new(MemoryMeiliBackend::new());
-        let sweep =
-            MeiliPruneSweep::new(backend, PrunePlan::default_for(fixed_now()));
+        let sweep = MeiliPruneSweep::new(backend, PrunePlan::default_for(fixed_now()));
         let _ = sweep.schedule();
         assert_eq!(sweep.name(), "meili_prune");
     }

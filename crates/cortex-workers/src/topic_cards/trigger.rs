@@ -106,7 +106,10 @@ impl Trigger {
 /// Returns `true` when the event kind is considered high-impact for the
 /// purpose of rule 2.
 fn is_high_impact(kind: Kind) -> bool {
-    matches!(kind, Kind::Decision | Kind::LawViolation | Kind::Consolidation)
+    matches!(
+        kind,
+        Kind::Decision | Kind::LawViolation | Kind::Consolidation
+    )
 }
 
 #[cfg(test)]
@@ -210,6 +213,10 @@ mod tests {
             &|| TRIGGER_DISTANCE_THRESHOLD - 0.01,
             0,
         );
-        assert_eq!(d, TriggerDecision::Rewrite, "law violation near card must rewrite");
+        assert_eq!(
+            d,
+            TriggerDecision::Rewrite,
+            "law violation near card must rewrite"
+        );
     }
 }

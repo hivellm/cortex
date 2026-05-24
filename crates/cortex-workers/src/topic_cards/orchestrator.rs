@@ -22,7 +22,7 @@ use crate::consolidator::{
 
 use super::{
     contradictions::{scan, EvidenceFacts, HydratedEvidence},
-    producer::{produce, ProducedTopicCard, ProduceInput, ProducerError},
+    producer::{produce, ProduceInput, ProducedTopicCard, ProducerError},
     synthesiser::TopicCardSynthesiser,
 };
 use cortex_core::events::{EvidenceRef, TopicCardPayload};
@@ -85,12 +85,13 @@ impl Orchestrator {
     ///
     /// Chooses the model, gates the budget, calls [`produce`], and records
     /// the realised cost against the `"topic_card"` grain bucket.
-    pub async fn run(
-        &self,
-        input: ProduceInput,
-    ) -> Result<ProducedTopicCard, OrchestratorError> {
+    pub async fn run(&self, input: ProduceInput) -> Result<ProducedTopicCard, OrchestratorError> {
         let use_opus = self.should_use_opus(&input);
-        let est = if use_opus { EST_OPUS_CENTS } else { EST_HAIKU_CENTS };
+        let est = if use_opus {
+            EST_OPUS_CENTS
+        } else {
+            EST_HAIKU_CENTS
+        };
         self.gate_budget(est)?;
 
         let summariser_arc: Arc<dyn Summariser> = if use_opus {
@@ -121,9 +122,7 @@ impl Orchestrator {
             let open_contradictions = card
                 .contradictions
                 .iter()
-                .filter(|c| {
-                    c.status == cortex_core::events::ContradictionStatus::Open
-                })
+                .filter(|c| c.status == cortex_core::events::ContradictionStatus::Open)
                 .count();
             if open_contradictions >= OPUS_CONTRADICTION_THRESHOLD {
                 return true;
@@ -177,7 +176,8 @@ impl Orchestrator {
 mod tests {
     use super::*;
     use crate::consolidator::summariser::{
-        Summariser, SummariserError as SE, SummariserKind as SK, SummariserRequest, SummariserResult,
+        Summariser, SummariserError as SE, SummariserKind as SK, SummariserRequest,
+        SummariserResult,
     };
     use cortex_core::events::{
         Contradiction, ContradictionKind, ContradictionStatus, EvidenceKind, EvidenceRef,

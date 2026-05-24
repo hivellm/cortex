@@ -1,6 +1,8 @@
 //! Integration tests for `cortex_workers::classifier::haiku_cli`.
 
-use cortex_workers::classifier::haiku_cli::{normalise_topics, ClassifierOutputBatch, ClaudeJsonResponse};
+use cortex_workers::classifier::haiku_cli::{
+    normalise_topics, ClassifierOutputBatch, ClaudeJsonResponse,
+};
 use cortex_workers::classifier::types::Severity;
 
 #[test]

@@ -115,9 +115,8 @@ pub fn run(store: &mut CasStore, opts: &VacuumOpts) -> Result<VacuumReport, Vacu
     // than half the store unless `--force`. Dry-run still surfaces
     // the trip flag in the report (so operators can preview the
     // problem) without erroring out — `--dry-run` is observe-only.
-    let safeguard_would_trip = !opts.force
-        && report.total_blobs > 0
-        && (would_drop * 2) > report.total_blobs;
+    let safeguard_would_trip =
+        !opts.force && report.total_blobs > 0 && (would_drop * 2) > report.total_blobs;
     if safeguard_would_trip {
         report.safeguard_tripped = true;
         if !opts.dry_run {
@@ -186,7 +185,10 @@ fn sqlite_page_stats(store: &CasStore) -> Result<(u64, u64), VacuumError> {
 /// references" (Vectorizer / Nexus / Meili payloads) and compares
 /// the result against the stored `refcount`. Returns one row per
 /// drift.
-pub fn audit_refcounts<I>(store: &CasStore, references: I) -> Result<Vec<RefcountDrift>, VacuumError>
+pub fn audit_refcounts<I>(
+    store: &CasStore,
+    references: I,
+) -> Result<Vec<RefcountDrift>, VacuumError>
 where
     I: IntoIterator<Item = String>,
 {
@@ -212,8 +214,7 @@ where
 
     let mut out: Vec<RefcountDrift> = Vec::new();
     let claimed_map: BTreeMap<String, u64> = claimed.into_iter().collect();
-    let mut all_hashes: std::collections::BTreeSet<String> =
-        observed.keys().cloned().collect();
+    let mut all_hashes: std::collections::BTreeSet<String> = observed.keys().cloned().collect();
     all_hashes.extend(claimed_map.keys().cloned());
     for hash in all_hashes {
         let c = claimed_map.get(&hash).copied().unwrap_or(0);
@@ -284,7 +285,12 @@ mod tests {
             .with_timezone(&Utc)
     }
 
-    fn put_aged_blob(store: &CasStore, body: &[u8], age_days: i64, ref_now: DateTime<Utc>) -> String {
+    fn put_aged_blob(
+        store: &CasStore,
+        body: &[u8],
+        age_days: i64,
+        ref_now: DateTime<Utc>,
+    ) -> String {
         let hash = store.put(body, CasContentType::Text).unwrap();
         // Force last_referenced into the past via raw UPDATE — the
         // public `put`/`retain` helpers always stamp Utc::now().
@@ -409,11 +415,8 @@ mod tests {
         let hash = store.put(b"audit-me", CasContentType::Text).unwrap();
         store.retain(&hash).unwrap();
         // External references claim it appears 3 times.
-        let drift = audit_refcounts(
-            &store,
-            vec![hash.clone(), hash.clone(), hash.clone()],
-        )
-        .unwrap();
+        let drift =
+            audit_refcounts(&store, vec![hash.clone(), hash.clone(), hash.clone()]).unwrap();
         assert_eq!(drift.len(), 1);
         assert_eq!(drift[0].claimed, 1);
         assert_eq!(drift[0].observed, 3);

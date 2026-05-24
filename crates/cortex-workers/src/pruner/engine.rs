@@ -69,8 +69,7 @@ pub async fn run_sweep(
 
     // 2. Meili leg: cold-tier field stripping. Updates the same
     //    rows whose vectors moved to `cortex.cold.binary`.
-    let cold_touched =
-        super::meili_sink::demote(meili, meili_index, &actions).await?;
+    let cold_touched = super::meili_sink::demote(meili, meili_index, &actions).await?;
     if cold_touched > 0 {
         // The cold leg is recorded in the same `events_demoted_per_tier`
         // map under a "warm->cold:meili" sub-key so the health JSON

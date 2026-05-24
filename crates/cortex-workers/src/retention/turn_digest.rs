@@ -74,10 +74,7 @@ impl Bucket {
     /// Stable string key used in `cohort_counts_json` /
     /// `tier_transitions_json.turn_digest`.
     pub fn key(&self) -> String {
-        format!(
-            "{}|{}|{}",
-            self.repo, self.year_week, self.top_topic
-        )
+        format!("{}|{}|{}", self.repo, self.year_week, self.top_topic)
     }
 }
 
@@ -297,7 +294,9 @@ pub async fn run_turn_digest(
         // an idempotence-only run still pays for the lookup, but
         // a budget-exceeded state means the operator wants the
         // run to stop completely until the next budget window.
-        if report.usd_cents.saturating_add(plan.estimated_usd_cents_per_call)
+        if report
+            .usd_cents
+            .saturating_add(plan.estimated_usd_cents_per_call)
             > plan.max_usd_cents_per_run
         {
             report.buckets_pending += 1;
@@ -355,7 +354,9 @@ async fn digest_one(bucket: &Bucket, backend: &dyn DigestBackend) -> Result<u64,
     let digest = backend.summarize(bucket).await?;
     let usd = digest.usd_cents;
     let event_id = backend.persist_digest(bucket, &digest).await?;
-    backend.tag_source_turns(&event_id, &bucket.event_ids).await?;
+    backend
+        .tag_source_turns(&event_id, &bucket.event_ids)
+        .await?;
     Ok(usd)
 }
 
@@ -385,9 +386,19 @@ impl MemoryDigestBackend {
     }
     /// Pre-populate an "existing digest" for a bucket key so the
     /// idempotence guard tests fire predictably.
-    pub async fn pre_existing(&self, repo: &str, year_week: &str, top_topic: &str, digest_id: &str) {
+    pub async fn pre_existing(
+        &self,
+        repo: &str,
+        year_week: &str,
+        top_topic: &str,
+        digest_id: &str,
+    ) {
         let key = format!("{repo}|{year_week}|{top_topic}");
-        self.inner.lock().await.existing.insert(key, digest_id.to_string());
+        self.inner
+            .lock()
+            .await
+            .existing
+            .insert(key, digest_id.to_string());
     }
     /// Force `summarize` to return a fixed result.
     pub async fn set_summary(&self, result: DigestResult) {
@@ -477,10 +488,7 @@ impl DigestBackend for MemoryDigestBackend {
         ));
         // Pre-populate existing so the idempotence test on a re-run
         // returns the persisted id.
-        let key = format!(
-            "{}|{}|{}",
-            bucket.repo, bucket.year_week, bucket.top_topic
-        );
+        let key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.top_topic);
         s.existing.insert(key, digest_id.clone());
         Ok(digest_id)
     }

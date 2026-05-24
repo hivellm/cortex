@@ -18,9 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::producer::{
-    EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport,
-};
+use crate::producer::{EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport};
 
 use super::orchestrator::{Orchestrator, OrchestratorError};
 use super::producer::ProduceInput;
@@ -68,10 +66,7 @@ pub struct TopicCardsProducer {
 impl TopicCardsProducer {
     /// Build the producer over the supplied orchestrator + input
     /// provider.
-    pub fn new(
-        orchestrator: Arc<Orchestrator>,
-        provider: Arc<dyn TopicCardInputProvider>,
-    ) -> Self {
+    pub fn new(orchestrator: Arc<Orchestrator>, provider: Arc<dyn TopicCardInputProvider>) -> Self {
         Self {
             orchestrator,
             provider,
@@ -97,8 +92,7 @@ impl EnvelopeProducer for TopicCardsProducer {
                     total += 1;
                     last_event_id = produced.payload.topic_slug.clone();
                     let store = ctx.metadata.lock().await;
-                    let accumulated_at =
-                        Utc::now() + chrono::Duration::microseconds(idx as i64);
+                    let accumulated_at = Utc::now() + chrono::Duration::microseconds(idx as i64);
                     store.record_producer_checkpoint(
                         TOPIC_CARDS_PRODUCER_NAME,
                         &scope,

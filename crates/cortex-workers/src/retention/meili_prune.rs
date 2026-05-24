@@ -242,8 +242,7 @@ pub async fn run_meili_prune(
                 .await
                 .map_err(PruneError::Backend)?;
             report.pruned = report.pruned.saturating_add(chunk.len() as u64);
-            *report.per_index.entry(index.clone()).or_insert(0) +=
-                chunk.len() as u64;
+            *report.per_index.entry(index.clone()).or_insert(0) += chunk.len() as u64;
         }
     }
     Ok(report)

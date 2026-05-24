@@ -69,9 +69,8 @@ fn turn_with_embedding(
         },
         payload,
         redactions: vec![],
-        content_hash:
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                .into(),
+        content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .into(),
         parent_event_id: None,
     }
 }

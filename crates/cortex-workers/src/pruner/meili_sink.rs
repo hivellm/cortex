@@ -34,11 +34,7 @@ pub trait MeiliPruneOps: Send + Sync {
 
     /// Hard-delete documents by primary key from `index`. Idempotent;
     /// missing ids are not surfaced as errors.
-    async fn delete_documents(
-        &self,
-        index: &str,
-        ids: &[String],
-    ) -> Result<(), MeiliPruneError>;
+    async fn delete_documents(&self, index: &str, ids: &[String]) -> Result<(), MeiliPruneError>;
 }
 
 /// Errors surfaced by [`MeiliPruneOps`].
@@ -63,10 +59,8 @@ pub async fn demote(
     actions: &[DemotionAction],
 ) -> Result<u64, MeiliPruneError> {
     use super::PruneTier;
-    let cold_targets: Vec<&DemotionAction> = actions
-        .iter()
-        .filter(|a| a.to == PruneTier::Cold)
-        .collect();
+    let cold_targets: Vec<&DemotionAction> =
+        actions.iter().filter(|a| a.to == PruneTier::Cold).collect();
     if cold_targets.is_empty() {
         return Ok(0);
     }
@@ -203,9 +197,13 @@ mod tests {
     #[tokio::test]
     async fn purge_routes_through_delete_documents() {
         let client = RecordingMeili::default();
-        purge(&client, "cortex_consolidations", &["c-x".into(), "c-y".into()])
-            .await
-            .unwrap();
+        purge(
+            &client,
+            "cortex_consolidations",
+            &["c-x".into(), "c-y".into()],
+        )
+        .await
+        .unwrap();
         let deletes = client.deletes.lock().unwrap();
         assert_eq!(deletes.len(), 1);
         assert_eq!(deletes[0].0, "cortex_consolidations");

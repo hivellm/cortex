@@ -390,7 +390,8 @@ pub fn compact_partition(
     let mut readable_sources: Vec<PathBuf> = Vec::new();
 
     let tmp_file = File::create(&tmp_path)?;
-    let mut encoder = zstd::stream::write::Encoder::new(tmp_file, ArchiveLayout::COMPRESSION_LEVEL)?;
+    let mut encoder =
+        zstd::stream::write::Encoder::new(tmp_file, ArchiveLayout::COMPRESSION_LEVEL)?;
 
     for source in &plan.sources {
         match read_source_file(source) {

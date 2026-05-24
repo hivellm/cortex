@@ -21,13 +21,13 @@
 
 use std::sync::Arc;
 
+use cortex_core::events::{
+    ConsolidationDepth, ConsolidationGrain, ConsolidationScope, Context, Envelope, Kind, Stream,
+};
 use cortex_workers::consolidator::orchestrator::Orchestrator;
 use cortex_workers::consolidator::producer::session::SessionInput;
 use cortex_workers::consolidator::summariser::{
     Summariser, SummariserError, SummariserKind, SummariserRequest, SummariserResult,
-};
-use cortex_core::events::{
-    ConsolidationDepth, ConsolidationGrain, ConsolidationScope, Context, Envelope, Kind, Stream,
 };
 
 const CANNED_RESPONSE: &str = r#"{

@@ -37,10 +37,8 @@ impl LiveSessionSource {
     /// has zero envelopes for the id (the bin treats this as a
     /// clean exit-0 path).
     pub fn fetch(&self, session_id: &str) -> Result<SessionInput, SourceError> {
-        let envelopes = cortex_storage::archive::scan_envelopes_by_session(
-            &self.archive_root,
-            session_id,
-        )?;
+        let envelopes =
+            cortex_storage::archive::scan_envelopes_by_session(&self.archive_root, session_id)?;
         if envelopes.is_empty() {
             return Err(SourceError::EmptyResult);
         }
@@ -126,9 +124,8 @@ mod tests {
             })
             .unwrap(),
             redactions: Vec::new(),
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             parent_event_id: None,
         }
     }
@@ -169,7 +166,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_archive(
             dir.path(),
-            &[envelope_with_repo("E1", "OTHER", "2026-04-26T19:00:00Z", Some("cortex"))],
+            &[envelope_with_repo(
+                "E1",
+                "OTHER",
+                "2026-04-26T19:00:00Z",
+                Some("cortex"),
+            )],
         );
         let src = LiveSessionSource::new(dir.path());
         let err = src.fetch("MISSING").unwrap_err();
@@ -190,7 +192,11 @@ mod tests {
         );
         let src = LiveSessionSource::new(dir.path());
         let input = src.fetch("S1").unwrap();
-        let ids: Vec<&str> = input.envelopes.iter().map(|e| e.event_id.as_str()).collect();
+        let ids: Vec<&str> = input
+            .envelopes
+            .iter()
+            .map(|e| e.event_id.as_str())
+            .collect();
         assert_eq!(ids, vec!["E0", "E2", "E5"]);
     }
 

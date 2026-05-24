@@ -154,9 +154,7 @@ fn run_rewrite(cli: &Cli, topic_slug: &str, repo: &str) -> Result<()> {
     let _ = build_summarisers(cli)?;
     let _ = budget_from(cli);
     println!("  status  : pending §3 routing wiring (live evidence read path)");
-    println!(
-        "  next    : seed evidence set from cortex-storage + cortex-api ingest read API"
-    );
+    println!("  next    : seed evidence set from cortex-storage + cortex-api ingest read API");
     Ok(())
 }
 
@@ -253,8 +251,7 @@ mod tests {
 
     #[test]
     fn cli_parses_top_level_deep_flag() {
-        let cli = Cli::try_parse_from(["cortex-topic-cards", "--deep", "scan-now"])
-            .expect("parse");
+        let cli = Cli::try_parse_from(["cortex-topic-cards", "--deep", "scan-now"]).expect("parse");
         assert!(cli.deep);
     }
 

@@ -22,9 +22,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use crate::producer::{
-    EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport,
-};
+use crate::producer::{EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport};
 
 use super::orchestrator::Orchestrator;
 use super::producer::decision_trace::DecisionTraceInput;

@@ -36,8 +36,7 @@ Rules:
 - Emit the JSON **only** — no surrounding prose, no code fences wrapping the outer object."#;
 
 /// Raw template body embedded at compile time.
-pub const REWRITE_TEMPLATE_BODY: &str =
-    include_str!("../../templates/topic_cards/rewrite.md");
+pub const REWRITE_TEMPLATE_BODY: &str = include_str!("../../templates/topic_cards/rewrite.md");
 
 /// Input slots for the topic-card rewrite template.
 #[derive(Debug, Clone)]

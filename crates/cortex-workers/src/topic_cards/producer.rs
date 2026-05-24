@@ -7,8 +7,7 @@
 use chrono::Utc;
 use cortex_core::events::{
     Contradiction, ContradictionStatus, EvidenceRef, TopicCardPayload,
-    TOPIC_CARD_OPEN_QUESTIONS_MAX, TOPIC_CARD_SYNTHESIS_MAX_BYTES,
-    TOPIC_CARD_SYNTHESIS_MIN_BYTES,
+    TOPIC_CARD_OPEN_QUESTIONS_MAX, TOPIC_CARD_SYNTHESIS_MAX_BYTES, TOPIC_CARD_SYNTHESIS_MIN_BYTES,
 };
 
 use super::synthesiser::{RewriteOutput, SynthesiserError, TopicCardSynthesiser};
@@ -193,7 +192,8 @@ fn enrich_contradictions(output: &RewriteOutput, at_rev: u32) -> Vec<Contradicti
 mod tests {
     use super::*;
     use crate::consolidator::summariser::{
-        Summariser, SummariserError as SE, SummariserKind as SK, SummariserRequest, SummariserResult,
+        Summariser, SummariserError as SE, SummariserKind as SK, SummariserRequest,
+        SummariserResult,
     };
     use cortex_core::events::EvidenceKind;
     use std::sync::Arc;
@@ -284,7 +284,10 @@ mod tests {
         input.existing_card = Some(existing);
         let synth = synthesiser(&valid_json(&"y".repeat(250)), 12);
         let result = produce(&input, &synth).await.expect("produce");
-        assert_eq!(result.payload.revision, 4, "must increment from prior revision");
+        assert_eq!(
+            result.payload.revision, 4,
+            "must increment from prior revision"
+        );
         assert_eq!(result.payload.events_since_last_rev, 0, "reset on rewrite");
     }
 
@@ -371,7 +374,9 @@ mod tests {
         // confidence missing → serde error → SynthesiserError::Parse → ProducerError::Synthesiser
         let bad_json = r#"{"synthesis_markdown": "valid text that is long enough to pass the floor check and actually exceeds two hundred bytes to be safe and provide a proper test case here", "contradictions": [], "open_questions": []}"#;
         let synth = synthesiser(bad_json, 5);
-        let err = produce(&base_input(), &synth).await.expect_err("missing field");
+        let err = produce(&base_input(), &synth)
+            .await
+            .expect_err("missing field");
         assert!(
             matches!(err, ProducerError::Synthesiser(_)),
             "expected Synthesiser error, got {err:?}"

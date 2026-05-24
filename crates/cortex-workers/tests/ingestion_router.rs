@@ -3,11 +3,9 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
-use cortex_workers::ingestion::archive::InMemoryArchive;
-use cortex_workers::ingestion::{
-    build_router, AppState, ArchiveWriter, MemoryPublisher, Metrics,
-};
 use cortex_storage::{STREAM_EVENTS_BOOTSTRAP, STREAM_EVENTS_RAW};
+use cortex_workers::ingestion::archive::InMemoryArchive;
+use cortex_workers::ingestion::{build_router, AppState, ArchiveWriter, MemoryPublisher, Metrics};
 use serde_json::{json, Value};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -32,7 +30,12 @@ fn good_envelope() -> Value {
     })
 }
 
-fn build_app() -> (Router, Arc<InMemoryArchive>, Arc<MemoryPublisher>, Arc<Metrics>) {
+fn build_app() -> (
+    Router,
+    Arc<InMemoryArchive>,
+    Arc<MemoryPublisher>,
+    Arc<Metrics>,
+) {
     let archive: Arc<InMemoryArchive> = Arc::new(InMemoryArchive::default());
     let publisher: Arc<MemoryPublisher> = Arc::new(MemoryPublisher::default());
     let metrics = Arc::new(Metrics::default());
@@ -46,7 +49,12 @@ fn build_app() -> (Router, Arc<InMemoryArchive>, Arc<MemoryPublisher>, Arc<Metri
 async fn healthz_ok() {
     let (app, _, _, _) = build_app();
     let resp = app
-        .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -242,8 +250,8 @@ async fn archive_write_back_stamps_event_identity_partition() {
     let metrics = Arc::new(Metrics::default());
     let archive_dyn: Arc<dyn ArchiveWriter> = archive.clone();
     let pub_dyn: Arc<dyn cortex_workers::ingestion::Publisher> = publisher.clone();
-    let state = AppState::new(archive_dyn, pub_dyn, metrics.clone())
-        .with_metadata(metadata.clone());
+    let state =
+        AppState::new(archive_dyn, pub_dyn, metrics.clone()).with_metadata(metadata.clone());
     let app = build_router(state);
 
     let body = serde_json::to_vec(&good_envelope()).unwrap();

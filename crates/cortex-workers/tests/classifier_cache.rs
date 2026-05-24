@@ -1,9 +1,9 @@
 //! Integration tests for `cortex_workers::classifier::cache`.
 
+use cortex_core::events::Kind;
 use cortex_workers::classifier::cache::{CachedClassifier, ClassifierCache, InMemoryCache};
 use cortex_workers::classifier::statics::StaticClassifier;
 use cortex_workers::classifier::types::{Classifier, ClassifierSource, EnrichmentInput};
-use cortex_core::events::Kind;
 use serde_json::json;
 
 fn input(event_id: &str, content_hash: &str) -> EnrichmentInput {

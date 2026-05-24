@@ -16,9 +16,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cortex_storage::MetadataStore;
-use cortex_workers::producer::{
-    EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport,
-};
+use cortex_workers::producer::{EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport};
 use tokio::sync::Mutex;
 
 /// Synthetic producer that walks a fixed corpus of `event_id`
@@ -88,8 +86,7 @@ impl EnvelopeProducer for FixtureProducer {
                             self.scope,
                             &last_event_id,
                             ctx.now,
-                            Utc::now()
-                                + chrono::Duration::microseconds(batches as i64),
+                            Utc::now() + chrono::Duration::microseconds(batches as i64),
                         )?;
                         return Err(anyhow::anyhow!(
                             "simulated kill -9 after emitting {} envelopes",
@@ -100,8 +97,7 @@ impl EnvelopeProducer for FixtureProducer {
             }
             // End-of-batch checkpoint.
             let store = ctx.metadata.lock().await;
-            let accumulated_at =
-                Utc::now() + chrono::Duration::microseconds(batches as i64);
+            let accumulated_at = Utc::now() + chrono::Duration::microseconds(batches as i64);
             store.record_producer_checkpoint(
                 self.name,
                 self.scope,
@@ -167,7 +163,11 @@ async fn resume_after_kill_finishes_corpus_with_no_duplicates_or_gaps() {
     );
     {
         let emitted_so_far = emitted.lock().await;
-        assert_eq!(emitted_so_far.len(), 3_000, "phase 1 emits 30% of the corpus");
+        assert_eq!(
+            emitted_so_far.len(),
+            3_000,
+            "phase 1 emits 30% of the corpus"
+        );
     }
     // The checkpoint table now carries the cursor at the kill
     // point — verify before phase 2 wires a new producer.

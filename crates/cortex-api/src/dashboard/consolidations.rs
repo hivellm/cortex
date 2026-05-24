@@ -203,10 +203,7 @@ pub(super) async fn consolidation_detail(
         if h.symbol.as_deref() != Some("consolidation") {
             continue;
         }
-        let row_id = h
-            .doc_id
-            .strip_prefix("archive|")
-            .unwrap_or(&h.doc_id);
+        let row_id = h.doc_id.strip_prefix("archive|").unwrap_or(&h.doc_id);
         if row_id == want {
             let (row, body_markdown) = build_row(h);
             return Json(ConsolidationDetail { row, body_markdown }).into_response();

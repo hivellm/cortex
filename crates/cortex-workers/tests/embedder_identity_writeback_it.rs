@@ -1,16 +1,14 @@
 //! ADR-012 §3.1 — embedder worker write-back stamps
 //! `event_identity.vec_id` after a successful embed batch.
 
+use cortex_core::events::Kind;
+use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+use cortex_workers::embedder::metrics::Metrics as EmbedderMetrics;
 use cortex_workers::embedder::{
     Chunk, ChunkMetadata, ChunkSource, ConsumedMessage, EmbedderConfig, EnrichedEvent,
-    MemorySynapConsumer, MemorySynapPublisher, MemoryVectorizerClient, VectorizerEmbedder,
-    Worker, STREAM_ENRICHED,
-};
-use cortex_workers::embedder::metrics::Metrics as EmbedderMetrics;
-use cortex_core::events::Kind;
-use cortex_storage::{
-    Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex,
+    MemorySynapConsumer, MemorySynapPublisher, MemoryVectorizerClient, VectorizerEmbedder, Worker,
+    STREAM_ENRICHED,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -97,10 +95,7 @@ async fn embedder_worker_stamps_event_identity_vec_id_after_success() {
         .lookup("01HXEMBED000000000000000001")
         .expect("lookup ok")
         .expect("identity row present after embed");
-    let vec_id = row
-        .vec_id
-        .clone()
-        .expect("vec_id stamped");
+    let vec_id = row.vec_id.clone().expect("vec_id stamped");
     assert!(
         !vec_id.is_empty(),
         "vec_id must carry the Vectorizer server id, got empty string"
@@ -151,24 +146,28 @@ async fn embedder_worker_skips_identity_writeback_when_metadata_absent() {
         0,
         "worker must consume the enqueued message"
     );
-    let _ = (Chunk { // silence unused-import: types are wired through embedder
-        dedup_key: String::new(),
-        parent_event_id: String::new(),
-        parent_content_hash: String::new(),
-        chunk_content_hash: String::new(),
-        collection: String::new(),
-        text: String::new(),
-        metadata: ChunkMetadata {
-            kind: Kind::ToolCall,
-            topics: Vec::new(),
-            severity: Severity::Info,
-            repo: None,
-            path: None,
-            symbol: None,
-            byte_range: None,
-            language: None,
-            source: ChunkSource::FallbackWindow,
-            prompt_version: None,
+    let _ = (
+        Chunk {
+            // silence unused-import: types are wired through embedder
+            dedup_key: String::new(),
+            parent_event_id: String::new(),
+            parent_content_hash: String::new(),
+            chunk_content_hash: String::new(),
+            collection: String::new(),
+            text: String::new(),
+            metadata: ChunkMetadata {
+                kind: Kind::ToolCall,
+                topics: Vec::new(),
+                severity: Severity::Info,
+                repo: None,
+                path: None,
+                symbol: None,
+                byte_range: None,
+                language: None,
+                source: ChunkSource::FallbackWindow,
+                prompt_version: None,
+            },
         },
-    }, STREAM_ENRICHED);
+        STREAM_ENRICHED,
+    );
 }

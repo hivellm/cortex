@@ -660,12 +660,7 @@ fn derive_laws(
         if let Some(violation_id) = h.overlay.violation_id.as_deref() {
             violations.push(ViolationRef {
                 id: violation_id.to_string(),
-                law_id: h
-                    .overlay
-                    .law_id
-                    .as_deref()
-                    .unwrap_or("LAW-???")
-                    .to_string(),
+                law_id: h.overlay.law_id.as_deref().unwrap_or("LAW-???").to_string(),
                 severity: h.severity.clone().unwrap_or_else(|| "info".into()),
                 message: h.text.clone(),
                 // `observed_in` stays on extras for now — it is a
@@ -734,11 +729,7 @@ fn derive_similar_turns(fused: &[LaneHit], limit: usize) -> Vec<SimilarTurn> {
                     .model
                     .clone()
                     .unwrap_or_else(|| "unknown".to_string()),
-                summary: h
-                    .overlay
-                    .summary
-                    .clone()
-                    .unwrap_or_else(|| h.text.clone()),
+                summary: h.overlay.summary.clone().unwrap_or_else(|| h.text.clone()),
                 score: h.score,
                 outcome: h
                     .extras

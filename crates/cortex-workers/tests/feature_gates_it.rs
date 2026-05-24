@@ -35,8 +35,7 @@ fn cortex_claude_archive_bin_requires_feature() {
     // Use a per-test target dir so the harness does not race against the
     // outer cargo invocation that's already holding the main target/ lock.
     let tmp = tempfile::tempdir().expect("tempdir");
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("Cargo.toml");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
 
     let output = Command::new(&cargo)
         .arg("build")
@@ -79,8 +78,7 @@ fn cortex_claude_archive_bin_builds_with_feature() {
     };
 
     let tmp = tempfile::tempdir().expect("tempdir");
-    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("Cargo.toml");
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
 
     let output = Command::new(&cargo)
         .arg("build")

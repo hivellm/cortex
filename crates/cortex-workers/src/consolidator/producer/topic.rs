@@ -221,10 +221,10 @@ fn clip_title(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::summariser::{
         SummariserError, SummariserKind, SummariserRequest as Req, SummariserResult,
     };
+    use super::*;
 
     fn session(id: &str, start_ms: i64, end_ms: i64, outcomes: &[(&str, u32)]) -> ClusterSession {
         ClusterSession {

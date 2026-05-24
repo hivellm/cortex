@@ -1,8 +1,8 @@
 //! Integration tests for `cortex_workers::embedder::worker`.
 
 use async_trait::async_trait;
-use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::embedder::{
     Chunk, CollectionSchema, ConsumedMessage, EmbedderConfig, EnrichedEvent, MemoryCall,
     MemorySynapConsumer, MemorySynapPublisher, MemoryVectorizerClient, Metrics, UpsertReport,

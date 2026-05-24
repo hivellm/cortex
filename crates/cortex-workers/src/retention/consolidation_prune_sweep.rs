@@ -106,9 +106,8 @@ impl Sweep for ConsolidationPruneSweep {
     }
 
     fn schedule(&self) -> Schedule {
-        parse_schedule(CONSOLIDATION_PRUNE_SCHEDULE).expect(
-            "CONSOLIDATION_PRUNE_SCHEDULE is a constant valid 5-field cron expression",
-        )
+        parse_schedule(CONSOLIDATION_PRUNE_SCHEDULE)
+            .expect("CONSOLIDATION_PRUNE_SCHEDULE is a constant valid 5-field cron expression")
     }
 
     async fn run(&self, ctx: &SweepCtx) -> anyhow::Result<SweepReport> {
@@ -221,7 +220,10 @@ mod tests {
         assert_eq!(report.name, CONSOLIDATION_PRUNE_NAME);
         assert_eq!(report.status, SweepStatus::Success);
         assert_eq!(report.rows_processed, 0);
-        assert_eq!(*report.tier_transitions.get("consolidations_seen").unwrap(), 0);
+        assert_eq!(
+            *report.tier_transitions.get("consolidations_seen").unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -249,7 +251,10 @@ mod tests {
         let ctx = make_ctx(now);
         let report = sweep.run(&ctx).await.unwrap();
         assert_eq!(report.status, SweepStatus::Success);
-        assert_eq!(*report.tier_transitions.get("consolidations_seen").unwrap(), 2);
+        assert_eq!(
+            *report.tier_transitions.get("consolidations_seen").unwrap(),
+            2
+        );
     }
 
     #[test]

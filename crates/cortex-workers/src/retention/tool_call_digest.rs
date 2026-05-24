@@ -289,10 +289,7 @@ pub trait ToolCallDigestBackend: Send + Sync {
     /// when `plan.purge_originals = true`. Returns the count of
     /// rows actually deleted (so the report can surface the
     /// per-bucket headline).
-    async fn delete_source_tool_calls(
-        &self,
-        event_ids: &[String],
-    ) -> Result<u64, String>;
+    async fn delete_source_tool_calls(&self, event_ids: &[String]) -> Result<u64, String>;
 }
 
 /// Run the orchestrator against `backend`. The bucket order is
@@ -497,10 +494,7 @@ impl ToolCallDigestBackend for MemoryToolCallDigestBackend {
         bucket: &Bucket,
         _digest: &DigestResult,
     ) -> Result<String, String> {
-        let event_id = format!(
-            "01TCD-{}-{}-{}",
-            bucket.repo, bucket.year_week, bucket.tool
-        );
+        let event_id = format!("01TCD-{}-{}-{}", bucket.repo, bucket.year_week, bucket.tool);
         self.inner.lock().await.persisted.push((
             bucket.repo.clone(),
             bucket.year_week.clone(),
@@ -523,10 +517,7 @@ impl ToolCallDigestBackend for MemoryToolCallDigestBackend {
         Ok(())
     }
 
-    async fn delete_source_tool_calls(
-        &self,
-        event_ids: &[String],
-    ) -> Result<u64, String> {
+    async fn delete_source_tool_calls(&self, event_ids: &[String]) -> Result<u64, String> {
         self.inner
             .lock()
             .await
@@ -566,8 +557,12 @@ mod tests {
         tcs.extend(old("cortex", "Edit", 4));
         let buckets = bucketize(&plan, tcs);
         assert_eq!(buckets.len(), 2, "Bash + Read survive, Edit dropped");
-        assert!(buckets.iter().any(|b| b.tool == "Bash" && b.event_ids.len() == 6));
-        assert!(buckets.iter().any(|b| b.tool == "Read" && b.event_ids.len() == 5));
+        assert!(buckets
+            .iter()
+            .any(|b| b.tool == "Bash" && b.event_ids.len() == 6));
+        assert!(buckets
+            .iter()
+            .any(|b| b.tool == "Read" && b.event_ids.len() == 5));
     }
 
     #[test]
@@ -594,7 +589,10 @@ mod tests {
             })
             .collect();
         let buckets = bucketize(&plan, fresh);
-        assert!(buckets.is_empty(), "tool calls < 30 d old must not bucketise");
+        assert!(
+            buckets.is_empty(),
+            "tool calls < 30 d old must not bucketise"
+        );
     }
 
     #[tokio::test]
@@ -608,7 +606,10 @@ mod tests {
         let report = run_tool_call_digest(&plan, &backend, tcs).await.unwrap();
         assert_eq!(report.examined, 2);
         assert_eq!(report.buckets_done, 2);
-        assert_eq!(report.records_purged, 0, "purge_originals=false → no deletes");
+        assert_eq!(
+            report.records_purged, 0,
+            "purge_originals=false → no deletes"
+        );
         assert_eq!(backend.summaries().await.len(), 2);
         assert_eq!(backend.persisted().await.len(), 2);
         assert_eq!(backend.tag_calls().await.len(), 2);
@@ -625,7 +626,10 @@ mod tests {
         let tcs = old("cortex", "Bash", 6);
         let report = run_tool_call_digest(&plan, &backend, tcs).await.unwrap();
         assert_eq!(report.buckets_done, 1);
-        assert_eq!(report.records_purged, 6, "every original tool-call hard-purged");
+        assert_eq!(
+            report.records_purged, 6,
+            "every original tool-call hard-purged"
+        );
         let calls = backend.delete_calls().await;
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].len(), 6);

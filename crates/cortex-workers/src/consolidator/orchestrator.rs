@@ -547,9 +547,10 @@ mod tests {
         // a second once the first lands. The gate compares *the
         // estimated charge* against the cap, so a 100-cent estimate
         // against a 99-cent ledger remainder must trip.
-        let orch = Orchestrator::new(haiku, opus).with_budget(super::super::cost_telemetry::CostBudget {
-            monthly_cents_cap: 100,
-        });
+        let orch =
+            Orchestrator::new(haiku, opus).with_budget(super::super::cost_telemetry::CostBudget {
+                monthly_cents_cap: 100,
+            });
         let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),

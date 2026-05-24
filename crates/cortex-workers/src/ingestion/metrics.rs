@@ -198,7 +198,8 @@ impl Metrics {
     /// after a successful publish.
     pub fn record_batch_accepted_now(&self) {
         let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
-        self.last_batch_accepted_ts_ms.store(now_ms, Ordering::Relaxed);
+        self.last_batch_accepted_ts_ms
+            .store(now_ms, Ordering::Relaxed);
     }
 
     /// Read the most recent accepted-batch timestamp in
@@ -263,16 +264,9 @@ mod tests {
         m.incr_events_archived_kind("tool_call");
         m.incr_events_rejected_reason("validation");
         let txt = m.render();
-        assert!(txt.contains(
-            "cortex_ingestion_events_received_total{kind=\"tool_call\"} 1"
-        ));
-        assert!(txt.contains(
-            "cortex_ingestion_events_archived_total{kind=\"tool_call\"} 1"
-        ));
-        assert!(txt.contains(
-            "cortex_ingestion_events_rejected_total{reason=\"validation\"} 1"
-        ));
+        assert!(txt.contains("cortex_ingestion_events_received_total{kind=\"tool_call\"} 1"));
+        assert!(txt.contains("cortex_ingestion_events_archived_total{kind=\"tool_call\"} 1"));
+        assert!(txt.contains("cortex_ingestion_events_rejected_total{reason=\"validation\"} 1"));
         assert!(txt.contains("cortex_ingestion_last_archive_write_ts_ms{kind=\"tool_call\"}"));
     }
 }
-

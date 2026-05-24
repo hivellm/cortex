@@ -78,10 +78,7 @@ fn evidence_decision(id: &str) -> EvidenceRef {
     }
 }
 
-fn build_input(
-    existing: Option<TopicCardPayload>,
-    extra_evidence_ids: &[&str],
-) -> ProduceInput {
+fn build_input(existing: Option<TopicCardPayload>, extra_evidence_ids: &[&str]) -> ProduceInput {
     // The producer trusts the caller to dedupe evidence by id — its
     // contract is "all_evidence is the canonical citation set" — so the
     // upstream orchestrator (or the smoke harness here) coalesces by id

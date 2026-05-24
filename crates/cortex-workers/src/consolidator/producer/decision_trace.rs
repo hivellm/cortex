@@ -220,10 +220,10 @@ fn clip_title(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::super::summariser::{
         SummariserError, SummariserKind, SummariserRequest as Req, SummariserResult,
     };
+    use super::*;
     use cortex_core::events::{Context, Stream};
 
     fn ctx() -> Context {

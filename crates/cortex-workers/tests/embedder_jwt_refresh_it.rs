@@ -32,7 +32,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 /// `prefix-{N}` JWTs (each with a valid `exp` claim 3600 s in the
 /// future) on every POST. Return the server + the call counter so
 /// tests can assert how many logins happened.
-async fn fake_vectorizer_with_rotating_jwt(prefix: &str) -> (MockServer, std::sync::Arc<AtomicU64>) {
+async fn fake_vectorizer_with_rotating_jwt(
+    prefix: &str,
+) -> (MockServer, std::sync::Arc<AtomicU64>) {
     let server = MockServer::start().await;
     let counter = std::sync::Arc::new(AtomicU64::new(0));
     let counter_for_handler = counter.clone();
@@ -91,7 +93,11 @@ async fn with_credentials_logs_in_at_construction_and_populates_cache() {
         .await
         .expect("with_credentials");
     let cache = client.token_cache();
-    assert_eq!(login_count.load(Ordering::Relaxed), 1, "exactly one login at boot");
+    assert_eq!(
+        login_count.load(Ordering::Relaxed),
+        1,
+        "exactly one login at boot"
+    );
     assert!(cache.token().unwrap().starts_with("first."));
     assert!(cache.last_login_ts_ms() > 0);
     assert_eq!(cache.refreshes_total(), 1);
@@ -141,21 +147,14 @@ async fn ensure_token_fresh_relogs_in_when_token_near_expiry() {
         .record_refresh("dummy-expired".into(), now_ms - 1_000, now_ms - 10_000);
     // record_refresh bumped the counter; capture pre-state.
     let pre_refreshes = client.token_cache().refreshes_total();
-    client
-        .ensure_token_fresh()
-        .await
-        .expect("refresh succeeds");
+    client.ensure_token_fresh().await.expect("refresh succeeds");
     assert_eq!(
         login_count.load(Ordering::Relaxed),
         2,
         "must re-login on near-expiry"
     );
     assert!(client.token_cache().refreshes_total() > pre_refreshes);
-    assert!(client
-        .token_cache()
-        .token()
-        .unwrap()
-        .starts_with("rot."));
+    assert!(client.token_cache().token().unwrap().starts_with("rot."));
 }
 
 #[tokio::test]
@@ -188,7 +187,11 @@ async fn ensure_token_fresh_records_error_when_login_fails() {
     // the simpler contract via the cache directly.
     let _ = &client; // touch the client so the borrow checker is happy
     let cache = std::sync::Arc::new(cortex_workers::embedder::TokenCache::new());
-    cache.record_refresh("good".into(), chrono::Utc::now().timestamp_millis() + 5_000, 0);
+    cache.record_refresh(
+        "good".into(),
+        chrono::Utc::now().timestamp_millis() + 5_000,
+        0,
+    );
     let pre_token = cache.token();
     cache.record_error();
     cache.record_error();

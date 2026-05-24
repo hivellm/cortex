@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::fulltext::indexer::IndexReport;
 use cortex_workers::fulltext::meili_client::MeiliError;
 use cortex_workers::fulltext::{

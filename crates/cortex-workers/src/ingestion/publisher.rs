@@ -57,16 +57,11 @@ impl Publisher for SynapPublisher {
         // fresh Synap drops every envelope until an operator creates
         // the rooms by hand (which is what the 2026-04-28 silent-loss
         // incident traced back to).
-        match self
-            .streams
-            .publish(stream, kind, envelope.clone())
-            .await
-        {
+        match self.streams.publish(stream, kind, envelope.clone()).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
-                let looks_like_missing_room =
-                    msg.contains("not found") && msg.contains("Room");
+                let looks_like_missing_room = msg.contains("not found") && msg.contains("Room");
                 if !looks_like_missing_room {
                     return Err(PublisherError::Synap(msg));
                 }
@@ -74,9 +69,7 @@ impl Publisher for SynapPublisher {
                     stream,
                     "synap room missing on first publish; creating and retrying"
                 );
-                if let Err(create_err) =
-                    self.streams.create_room(stream, None).await
-                {
+                if let Err(create_err) = self.streams.create_room(stream, None).await {
                     // The room may already exist (race with another
                     // publisher); only treat the error as fatal if
                     // the second publish ALSO fails.
@@ -133,4 +126,3 @@ impl Publisher for MemoryPublisher {
         Ok(())
     }
 }
-

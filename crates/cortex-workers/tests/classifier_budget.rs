@@ -1,13 +1,13 @@
 //! Integration tests for `cortex_workers::classifier::budget`.
 
 use async_trait::async_trait;
+use cortex_core::events::Kind;
 use cortex_workers::classifier::budget::{BudgetState, BudgetTracker, BudgetedClassifier};
 use cortex_workers::classifier::errors::ClassifierError;
 use cortex_workers::classifier::stats::PricingTable;
 use cortex_workers::classifier::types::{
     Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
 };
-use cortex_core::events::Kind;
 use serde_json::json;
 use std::sync::Arc;
 

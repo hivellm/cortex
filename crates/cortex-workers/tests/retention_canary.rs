@@ -23,6 +23,8 @@
 mod support;
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
+use cortex_storage::cas::CasContentType;
+use cortex_storage::{CasStore, MetadataStore};
 use cortex_workers::retention::cas_vacuum::{run as cas_run, VacuumOpts};
 use cortex_workers::retention::meili_prune::{
     run_meili_prune, MeiliBackend, MeiliDoc, MemoryMeiliBackend, PrunePlan,
@@ -39,12 +41,8 @@ use cortex_workers::retention::turn_digest::{
     run_turn_digest, DigestPlan, DigestResult, MemoryDigestBackend, Turn,
 };
 use cortex_workers::retention::{run_sweep, MemoryVectorizerOps, SweepPlan, Tier};
-use cortex_storage::cas::CasContentType;
-use cortex_storage::{CasStore, MetadataStore};
 
-use support::synth_corpus::{
-    self as synth, AgeBucket, CorpusKind, SynthEnvelope,
-};
+use support::synth_corpus::{self as synth, AgeBucket, CorpusKind, SynthEnvelope};
 
 /// Deterministic reference time the canary travels with.
 fn now_anchor() -> DateTime<Utc> {
@@ -62,8 +60,7 @@ async fn retention_canary_full_pipeline() {
     let events_root = archive_path.join("events");
 
     // ----- plant the corrupted artifact + write archive files ------
-    let corrupted = synth::plant_corrupted_artifact(&events_root)
-        .expect("plant corrupted");
+    let corrupted = synth::plant_corrupted_artifact(&events_root).expect("plant corrupted");
     write_archive_files(&corpus, archive_path);
 
     // ----- seed Vectorizer collections by tier --------------------
@@ -98,26 +95,23 @@ async fn retention_canary_full_pipeline() {
             usd_cents: 0,
         })
         .await;
-    let mut redacted_ids: std::collections::BTreeSet<String> =
-        std::collections::BTreeSet::new();
+    let mut redacted_ids: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
     // =================================================================
     // First pass — drive every retention sweep with `--time-travel now`.
     // =================================================================
-    let report1 = drive_retention(
-        DriveCtx {
-            now,
-            archive_path,
-            vec_ops: &vec_ops,
-            meili: &meili,
-            cas: &mut cas,
-            metadata: &mut metadata,
-            corpus: &corpus,
-            pii_backend: &pii_backend,
-            digest_backend: &digest_backend,
-            redacted_ids: &redacted_ids,
-        },
-    )
+    let report1 = drive_retention(DriveCtx {
+        now,
+        archive_path,
+        vec_ops: &vec_ops,
+        meili: &meili,
+        cas: &mut cas,
+        metadata: &mut metadata,
+        corpus: &corpus,
+        pii_backend: &pii_backend,
+        digest_backend: &digest_backend,
+        redacted_ids: &redacted_ids,
+    })
     .await;
     // Mark every event_id the first pass redacted so the second
     // pass's targets carry `redacted: Some(_)` and the matcher
@@ -138,9 +132,7 @@ async fn retention_canary_full_pipeline() {
 
     // 4.1 — FP32 collections have zero records older than 30 d.
     for kind in ["turn", "tool_call"] {
-        let snap = vec_ops
-            .snapshot(&format!("cortex.{kind}.fp32"))
-            .await;
+        let snap = vec_ops.snapshot(&format!("cortex.{kind}.fp32")).await;
         for r in &snap {
             assert!(
                 (now - r.occurred_at).num_days() <= 30,
@@ -152,9 +144,7 @@ async fn retention_canary_full_pipeline() {
     }
     // 4.2 — PQ collections have zero records older than 365 d.
     for kind in ["turn", "tool_call"] {
-        let snap = vec_ops
-            .snapshot(&format!("cortex.{kind}.pq"))
-            .await;
+        let snap = vec_ops.snapshot(&format!("cortex.{kind}.pq")).await;
         for r in &snap {
             assert!(
                 (now - r.occurred_at).num_days() <= 365,
@@ -245,7 +235,9 @@ async fn retention_canary_full_pipeline() {
     assert_eq!(stale_bootstrap, 0, "stale success rows remained");
     let daily: i64 = metadata
         .conn()
-        .query_row("SELECT COUNT(*) FROM bootstrap_jobs_daily", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM bootstrap_jobs_daily", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert!(daily > 0, "bootstrap_jobs_daily should be populated");
 
@@ -350,7 +342,10 @@ async fn synthetic_corpus_distribution_matches_spec() {
         .iter()
         .filter(|e| e.kind == CorpusKind::Memory)
         .count();
-    assert_eq!((turns, tool_calls, decisions, analyses, memory), (600, 250, 50, 50, 50));
+    assert_eq!(
+        (turns, tool_calls, decisions, analyses, memory),
+        (600, 250, 50, 50, 50)
+    );
     // PII distribution — 600 null, 250 low, 100 medium, 50 high.
     let mut counts = (0usize, 0usize, 0usize, 0usize);
     for e in &corpus {
@@ -448,7 +443,11 @@ async fn drive_retention<'a>(ctx: DriveCtx<'a>) -> DriveReport {
         .expect("pii enforcement");
     report.pii_applied = pii_report.applied;
     let rewrites_after = ctx.pii_backend.rewrites().await;
-    report.pii_rewrites = rewrites_after.iter().skip(rewrites_before).cloned().collect();
+    report.pii_rewrites = rewrites_after
+        .iter()
+        .skip(rewrites_before)
+        .cloned()
+        .collect();
 
     // 3.4 — turn digest with bounded budget (5 ¢ per spec).
     let turns: Vec<Turn> = ctx
@@ -572,11 +571,7 @@ async fn seed_meili(meili: &MemoryMeiliBackend, corpus: &[SynthEnvelope]) {
     }
 }
 
-fn seed_cas_blobs(
-    cas: &mut CasStore,
-    corpus: &[SynthEnvelope],
-    now: DateTime<Utc>,
-) -> Vec<String> {
+fn seed_cas_blobs(cas: &mut CasStore, corpus: &[SynthEnvelope], now: DateTime<Utc>) -> Vec<String> {
     // Insert one blob per envelope, retain it once so the high-PII
     // path's decrement_cas would matter in production. Mark a fixed
     // subset as "orphans" by aging their last_referenced past the
@@ -644,7 +639,13 @@ fn seed_metadata(metadata: &MetadataStore, now: DateTime<Utc>) {
                 "INSERT INTO sessions
                     (session_id, tool, repo, started_at, event_count)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![format!("01S{i:030}"), "claude-code", "cortex", started, 7_i64],
+                rusqlite::params![
+                    format!("01S{i:030}"),
+                    "claude-code",
+                    "cortex",
+                    started,
+                    7_i64
+                ],
             )
             .unwrap();
     }

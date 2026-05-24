@@ -12,12 +12,12 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use cortex_core::events::{Context as EvtContext, Envelope, Kind, Stream};
+use cortex_storage::MetadataStore;
 use cortex_workers::classifier::{
     build_offline_stack, BudgetTracker, Classifier, ClassifierError, ClassifierOutput,
     ClassifierSource, EnrichmentInput, InMemoryCache, PiiRisk, PricingTable, Severity,
 };
-use cortex_core::events::{Context as EvtContext, Envelope, Kind, Stream};
-use cortex_storage::MetadataStore;
 use cortex_workers::classifier_worker::{
     ConsumedMessage, MemorySynapConsumer, MemorySynapPublisher, Worker, STREAM_BOOTSTRAP,
     STREAM_ENRICHED, STREAM_RAW,
@@ -33,7 +33,8 @@ fn worker_with_offline_stack() -> (
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::new());
     let budget = Arc::new(BudgetTracker::new(2000, PricingTable::HAIKU_4_5));
-    let cache: Box<dyn cortex_workers::classifier::ClassifierCache> = Box::new(InMemoryCache::default());
+    let cache: Box<dyn cortex_workers::classifier::ClassifierCache> =
+        Box::new(InMemoryCache::default());
     let stack = build_offline_stack(cache, budget);
     let cfg = cortex_workers::classifier_worker::ClassifierWorkerConfig::default();
     let worker = Worker::with_stack(cfg, stack, consumer.clone(), publisher.clone());
@@ -307,7 +308,8 @@ async fn budget_halt_uses_static_fallback() {
     let publisher = Arc::new(MemorySynapPublisher::new());
     let budget = Arc::new(BudgetTracker::new(100, PricingTable::HAIKU_4_5));
     budget.set_spend_cents_for_test(10_000); // 100x over limit -> Halt.
-    let cache: Box<dyn cortex_workers::classifier::ClassifierCache> = Box::new(InMemoryCache::default());
+    let cache: Box<dyn cortex_workers::classifier::ClassifierCache> =
+        Box::new(InMemoryCache::default());
     let stack = build_offline_stack(cache, budget);
     let cfg = cortex_workers::classifier_worker::ClassifierWorkerConfig::default();
     let worker = Worker::with_stack(cfg, stack, consumer.clone(), publisher.clone());

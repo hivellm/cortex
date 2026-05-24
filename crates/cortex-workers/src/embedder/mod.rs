@@ -29,9 +29,7 @@ pub use embedder::{EmbedError, EmbedReport, Embedder, EnrichedEvent, VectorizerE
 pub use identity::dedup_key;
 pub use metrics::Metrics;
 pub use routing::collection_for;
-pub use token_cache::{
-    parse_jwt_exp_ms, TokenCache, DEFAULT_TOKEN_TTL_SECS, REFRESH_BUFFER_SECS,
-};
+pub use token_cache::{parse_jwt_exp_ms, TokenCache, DEFAULT_TOKEN_TTL_SECS, REFRESH_BUFFER_SECS};
 pub use vectorizer_client::{
     with_retry, CollectionSchema, LiveVectorizerClient, MemoryCall, MemoryVectorizerClient, Metric,
     UpsertReport, UpsertedChunk, VectorizerClient, VectorizerClientError,

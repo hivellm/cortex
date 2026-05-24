@@ -366,12 +366,11 @@ impl LiveVectorizerClient {
         // when present; falls back to `now + DEFAULT_TOKEN_TTL_SECS`.
         if let Some(token) = config.vectorizer_password.clone() {
             let now_ms = chrono::Utc::now().timestamp_millis().max(0);
-            let expires_at_ms = super::token_cache::parse_jwt_exp_ms(&token)
-                .unwrap_or_else(|| {
-                    now_ms.saturating_add(
-                        super::token_cache::DEFAULT_TOKEN_TTL_SECS.saturating_mul(1_000),
-                    )
-                });
+            let expires_at_ms = super::token_cache::parse_jwt_exp_ms(&token).unwrap_or_else(|| {
+                now_ms.saturating_add(
+                    super::token_cache::DEFAULT_TOKEN_TTL_SECS.saturating_mul(1_000),
+                )
+            });
             token_cache.record_refresh(token, expires_at_ms, now_ms);
         }
         Ok(Self {

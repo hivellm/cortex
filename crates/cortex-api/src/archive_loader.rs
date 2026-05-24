@@ -455,13 +455,13 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
         extras.insert("model".to_string(), serde_json::Value::String(m));
     }
     if let Some(d) = consolidation_depth {
-        extras.insert("depth".to_string(), serde_json::Value::String(d.to_string()));
+        extras.insert(
+            "depth".to_string(),
+            serde_json::Value::String(d.to_string()),
+        );
     }
     if let Some(body) = consolidation_body_markdown {
-        extras.insert(
-            "body_markdown".to_string(),
-            serde_json::Value::String(body),
-        );
+        extras.insert("body_markdown".to_string(), serde_json::Value::String(body));
     }
 
     // ADR-011 — overlay starts from the source envelope so kind +
@@ -831,7 +831,9 @@ mod tests {
         // 2026-05-19 — source_event_count + model + depth also
         // land on extras so the dashboard reports them.
         assert_eq!(
-            hit.extras.get("source_event_count").and_then(|v| v.as_u64()),
+            hit.extras
+                .get("source_event_count")
+                .and_then(|v| v.as_u64()),
             Some(1)
         );
         assert_eq!(

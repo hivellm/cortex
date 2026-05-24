@@ -1,14 +1,14 @@
 //! ADR-012 §3.2 — fulltext worker write-back stamps
 //! `event_identity.meili_id` after a successful index batch.
 
+use cortex_core::events::Kind;
+use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::embedder::EnrichedEvent;
 use cortex_workers::fulltext::{
-    ConsumedMessage, FulltextConfig, MemoryMeiliClient, MemorySynapConsumer,
-    MemorySynapPublisher, MeiliFulltextIndexer, Metrics as FulltextMetrics, Worker,
+    ConsumedMessage, FulltextConfig, MeiliFulltextIndexer, MemoryMeiliClient, MemorySynapConsumer,
+    MemorySynapPublisher, Metrics as FulltextMetrics, Worker,
 };
-use cortex_core::events::Kind;
-use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 use serde_json::json;
 use std::sync::Arc;
 

@@ -2,17 +2,17 @@
 //! `event_identity.nexus_id` after a successful patch flush.
 
 use async_trait::async_trait;
+use cortex_core::events::Kind;
+use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::embedder::EnrichedEvent;
+use cortex_workers::graph::metrics::Metrics as GraphMetrics;
+use cortex_workers::graph::nexus_client::GraphClientError;
+use cortex_workers::graph::patch::EdgeDeleteFilter;
 use cortex_workers::graph::{
     ConsumedMessage, GraphConfig, GraphPatch, GraphWriteReport, GraphWriter, MemorySynapConsumer,
     MemorySynapPublisher, Worker,
 };
-use cortex_workers::graph::metrics::Metrics as GraphMetrics;
-use cortex_workers::graph::nexus_client::GraphClientError;
-use cortex_workers::graph::patch::EdgeDeleteFilter;
-use cortex_core::events::Kind;
-use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -102,14 +102,8 @@ async fn graph_worker_stamps_event_identity_nexus_id_after_success() {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::default());
 
-    let worker = Worker::new(
-        config,
-        writer,
-        consumer.clone(),
-        publisher.clone(),
-        metrics,
-    )
-    .with_metadata(metadata.clone());
+    let worker = Worker::new(config, writer, consumer.clone(), publisher.clone(), metrics)
+        .with_metadata(metadata.clone());
 
     let event = make_enriched("01HXGRAPH00000000000000001");
     enqueue_event(&consumer, &event, 1);
@@ -146,13 +140,7 @@ async fn graph_worker_skips_identity_writeback_when_metadata_absent() {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::default());
 
-    let worker = Worker::new(
-        config,
-        writer,
-        consumer.clone(),
-        publisher.clone(),
-        metrics,
-    );
+    let worker = Worker::new(config, writer, consumer.clone(), publisher.clone(), metrics);
 
     let event = make_enriched("01HXGRAPH00000000000000002");
     enqueue_event(&consumer, &event, 1);

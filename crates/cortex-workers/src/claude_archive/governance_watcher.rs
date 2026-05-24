@@ -101,10 +101,7 @@ impl MemoryGovernanceEmitter {
 
     /// Snapshot every change captured so far.
     pub fn captured(&self) -> Vec<GovernanceChange> {
-        self.captured
-            .lock()
-            .map(|v| v.clone())
-            .unwrap_or_default()
+        self.captured.lock().map(|v| v.clone()).unwrap_or_default()
     }
 }
 
@@ -222,9 +219,7 @@ impl GovernanceWatcher {
                 content_hash: content_hash.clone(),
             };
             if let Err(err) = self.emitter.emit(change) {
-                report
-                    .errors
-                    .push(format!("emit {}: {err}", abs.display()));
+                report.errors.push(format!("emit {}: {err}", abs.display()));
                 continue;
             }
             self.cursors.insert(abs, GovernanceCursor { content_hash });
@@ -368,7 +363,11 @@ mod tests {
     #[test]
     fn first_tick_emits_upsert_for_each_governance_file() {
         let root = make_root();
-        write(root.path(), "AGENTS.override.md", "# laws\n## LAW-CORTEX-001\n");
+        write(
+            root.path(),
+            "AGENTS.override.md",
+            "# laws\n## LAW-CORTEX-001\n",
+        );
         write(
             root.path(),
             ".rulebook/decisions/0001-pick-meili.md",
@@ -379,10 +378,8 @@ mod tests {
             ".claude/rules/no-shortcuts.md",
             "# Rule\nNever ship stubs.\n",
         );
-        let mut watcher = GovernanceWatcher::with_defaults(
-            root.path(),
-            Box::new(MemoryGovernanceEmitter::new()),
-        );
+        let mut watcher =
+            GovernanceWatcher::with_defaults(root.path(), Box::new(MemoryGovernanceEmitter::new()));
         let report = watcher.tick_once();
         assert_eq!(report.files_seen, 3);
         assert_eq!(report.upserted, 3);
@@ -393,11 +390,13 @@ mod tests {
     #[test]
     fn unchanged_files_do_not_re_emit_on_subsequent_ticks() {
         let root = make_root();
-        write(root.path(), "AGENTS.override.md", "# laws\n## LAW-CORTEX-001\n");
-        let mut watcher = GovernanceWatcher::with_defaults(
+        write(
             root.path(),
-            Box::new(MemoryGovernanceEmitter::new()),
+            "AGENTS.override.md",
+            "# laws\n## LAW-CORTEX-001\n",
         );
+        let mut watcher =
+            GovernanceWatcher::with_defaults(root.path(), Box::new(MemoryGovernanceEmitter::new()));
         watcher.tick_once();
         let report = watcher.tick_once();
         assert_eq!(report.upserted, 0, "second tick must not re-emit");
@@ -442,10 +441,8 @@ mod tests {
         let root = make_root();
         let path = "AGENTS.override.md";
         write(root.path(), path, "x");
-        let mut watcher = GovernanceWatcher::with_defaults(
-            root.path(),
-            Box::new(MemoryGovernanceEmitter::new()),
-        );
+        let mut watcher =
+            GovernanceWatcher::with_defaults(root.path(), Box::new(MemoryGovernanceEmitter::new()));
         watcher.tick_once();
         fs::remove_file(root.path().join(path)).unwrap();
         let report = watcher.tick_once();
@@ -462,10 +459,8 @@ mod tests {
         // sibling Hive repo without governance content would mark
         // the watcher degraded.
         let root = make_root();
-        let mut watcher = GovernanceWatcher::with_defaults(
-            root.path(),
-            Box::new(MemoryGovernanceEmitter::new()),
-        );
+        let mut watcher =
+            GovernanceWatcher::with_defaults(root.path(), Box::new(MemoryGovernanceEmitter::new()));
         let report = watcher.tick_once();
         assert_eq!(report.files_seen, 0);
         assert!(report.errors.is_empty());

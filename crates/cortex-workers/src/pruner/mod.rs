@@ -238,10 +238,7 @@ mod tests {
         let action = plan_demotion("c2", occurred, now, vec!["v1".into(), "v2".into()]).unwrap();
         assert_eq!(action.from, PruneTier::Hot);
         assert_eq!(action.to, PruneTier::Warm);
-        assert_eq!(
-            action.src_collection(),
-            Some(COLLECTION_CONSOLIDATION_FP32)
-        );
+        assert_eq!(action.src_collection(), Some(COLLECTION_CONSOLIDATION_FP32));
         assert_eq!(action.dst_collection(), Some(COLLECTION_CONSOLIDATION_PQ));
     }
 

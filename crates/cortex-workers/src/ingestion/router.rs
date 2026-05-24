@@ -106,16 +106,12 @@ async fn healthz(State(state): State<AppState>) -> Response {
         ))
         .map(|t| t.to_rfc3339())
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let mut status = SubsystemStatus::ok(
-        "cortex-ingestion",
-        env!("CARGO_PKG_VERSION"),
-        started_at,
-    );
+    let mut status = SubsystemStatus::ok("cortex-ingestion", env!("CARGO_PKG_VERSION"), started_at);
     // Phase8c — version block (git_sha + build_ts + git_dirty) so
     // the cortex-api drift aggregator can flag stale running
     // binaries.
-    let version_block = serde_json::to_value(cortex_build::version_info!())
-        .unwrap_or(serde_json::Value::Null);
+    let version_block =
+        serde_json::to_value(cortex_build::version_info!()).unwrap_or(serde_json::Value::Null);
     status.extras.insert("version".into(), version_block);
     // Archive root writability — the readwrite property of the
     // mount that backs the events archive. A non-writable root is
@@ -171,19 +167,14 @@ async fn healthz(State(state): State<AppState>) -> Response {
     );
     status.extras.insert(
         "last_archive_write_ts_ms".into(),
-        serde_json::to_value(state.metrics.last_archive_write_ts_snapshot())
-            .unwrap_or_default(),
+        serde_json::to_value(state.metrics.last_archive_write_ts_snapshot()).unwrap_or_default(),
     );
     let now_ms = chrono::Utc::now().timestamp_millis() as u64;
     let stale = last_batch_ts_ms > 0
-        && now_ms.saturating_sub(last_batch_ts_ms)
-            > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000;
+        && now_ms.saturating_sub(last_batch_ts_ms) > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000;
     if !archive_writable && !root.as_os_str().is_empty() {
         status.state = HealthState::Down;
-        status.last_error = Some(format!(
-            "archive root not writable: {}",
-            root.display()
-        ));
+        status.last_error = Some(format!("archive root not writable: {}", root.display()));
     } else if stale {
         status.state = HealthState::Degraded;
         status.last_error = Some(format!(
@@ -307,7 +298,10 @@ async fn ingest_batch(
             Ok(_) => accepted += 1,
             Err(err) => {
                 rejected += 1;
-                state.metrics.events_rejected.fetch_add(1, Ordering::Relaxed);
+                state
+                    .metrics
+                    .events_rejected
+                    .fetch_add(1, Ordering::Relaxed);
                 let event_id = envelope
                     .get("event_id")
                     .and_then(|s| s.as_str())
@@ -383,7 +377,10 @@ impl IngestError {
     async fn into_response(self, state: AppState) -> Response {
         match self {
             IngestError::InvalidJson(errors) => {
-                state.metrics.events_rejected.fetch_add(1, Ordering::Relaxed);
+                state
+                    .metrics
+                    .events_rejected
+                    .fetch_add(1, Ordering::Relaxed);
                 state.metrics.incr_events_rejected_reason("invalid_json");
                 (
                     StatusCode::BAD_REQUEST,
@@ -534,7 +531,10 @@ async fn process_event(
     // signal. Without this split, a flapping synap connection looked
     // like total ingestion silence in /metrics even though the archive
     // (which is what the dashboard reads) was healthy.
-    state.metrics.events_received.fetch_add(1, Ordering::Relaxed);
+    state
+        .metrics
+        .events_received
+        .fetch_add(1, Ordering::Relaxed);
     // Phase8b — per-kind durability stamp + last_archive_write_ts.
     state.metrics.incr_events_archived_kind(&kind_label);
 
@@ -565,7 +565,10 @@ async fn process_event(
     }
 
     match stream {
-        StreamPick::Raw => state.metrics.events_routed_raw.fetch_add(1, Ordering::Relaxed),
+        StreamPick::Raw => state
+            .metrics
+            .events_routed_raw
+            .fetch_add(1, Ordering::Relaxed),
         StreamPick::Bootstrap => state
             .metrics
             .events_routed_bootstrap
@@ -625,11 +628,7 @@ fn stamp_server_fields(envelope: &mut Value, stream: StreamPick) {
             ),
         );
         if !map.contains_key("event_id") {
-            map.insert(
-                "event_id".into(),
-                Value::String(cortex_core::event_id()),
-            );
+            map.insert("event_id".into(), Value::String(cortex_core::event_id()));
         }
     }
 }
-

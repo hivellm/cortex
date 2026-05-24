@@ -102,11 +102,7 @@ mod tests {
     use std::io::Write;
     use std::path::Path;
 
-    fn envelope(
-        event_id: &str,
-        kind: Kind,
-        parent_event_id: Option<&str>,
-    ) -> Envelope {
+    fn envelope(event_id: &str, kind: Kind, parent_event_id: Option<&str>) -> Envelope {
         Envelope {
             event_id: event_id.to_string(),
             schema_version: "1".to_string(),
@@ -135,9 +131,8 @@ mod tests {
             })
             .unwrap(),
             redactions: Vec::new(),
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             parent_event_id: parent_event_id.map(str::to_string),
         }
     }

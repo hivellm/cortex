@@ -8,8 +8,8 @@
 
 use std::sync::Arc;
 
-use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::fulltext::meili_client::MemoryCall;
 use cortex_workers::fulltext::{
     EnrichedEvent, FulltextConfig, FulltextIndexer, MeiliFulltextIndexer, MemoryMeiliClient,
@@ -37,12 +37,7 @@ fn classifier(event_id: &str) -> ClassifierOutput {
     }
 }
 
-fn evt(
-    event_id: &str,
-    kind: Kind,
-    repo: &str,
-    payload: serde_json::Value,
-) -> EnrichedEvent {
+fn evt(event_id: &str, kind: Kind, repo: &str, payload: serde_json::Value) -> EnrichedEvent {
     EnrichedEvent {
         event_id: event_id.to_string(),
         kind,
@@ -213,10 +208,7 @@ async fn non_governance_kinds_do_not_dual_write_to_globals() {
     )];
     let report = indexer.index_batch(&events).await.expect("index_batch");
     assert_eq!(report.documents_upserted, 1);
-    assert_eq!(
-        report.by_index.get("cortex-cortex-turns").copied(),
-        Some(1),
-    );
+    assert_eq!(report.by_index.get("cortex-cortex-turns").copied(), Some(1),);
     // No global lane fan-out for `Kind::Turn`.
     let written: Vec<String> = client
         .calls_snapshot()

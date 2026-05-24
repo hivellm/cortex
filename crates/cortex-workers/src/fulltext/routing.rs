@@ -381,7 +381,13 @@ mod tests {
 
     #[test]
     fn is_low_signal_tool_name_lets_high_signal_tools_through() {
-        for tool in ["Task", "WebFetch", "WebSearch", "TodoWrite", "AskUserQuestion"] {
+        for tool in [
+            "Task",
+            "WebFetch",
+            "WebSearch",
+            "TodoWrite",
+            "AskUserQuestion",
+        ] {
             assert!(
                 !is_low_signal_tool_name(tool),
                 "{tool} must NOT be on the deny list — it carries real retrieval signal"
@@ -622,7 +628,10 @@ mod tests {
         // Phase11k §2.1 — Decision events MUST dual-write to the
         // global `cortex_decisions` index so cross-repo lookups
         // resolve without enumerating repos.
-        assert_eq!(index_for_event_global(Kind::Decision), Some("cortex_decisions"));
+        assert_eq!(
+            index_for_event_global(Kind::Decision),
+            Some("cortex_decisions")
+        );
     }
 
     #[test]

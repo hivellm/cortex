@@ -1,8 +1,10 @@
 //! Integration tests for `cortex_workers::classifier::statics`.
 
-use cortex_workers::classifier::statics::StaticClassifier;
-use cortex_workers::classifier::types::{Classifier, ClassifierSource, EnrichmentInput, PiiRisk, Severity};
 use cortex_core::events::Kind;
+use cortex_workers::classifier::statics::StaticClassifier;
+use cortex_workers::classifier::types::{
+    Classifier, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
+};
 use serde_json::{json, Value};
 
 fn input(kind: Kind, payload: Value) -> EnrichmentInput {

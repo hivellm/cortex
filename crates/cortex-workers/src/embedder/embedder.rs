@@ -21,8 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use crate::classifier::ClassifierOutput;
+use async_trait::async_trait;
 use cortex_core::events::Kind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

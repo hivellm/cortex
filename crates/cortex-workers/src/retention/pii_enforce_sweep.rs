@@ -36,9 +36,7 @@ use cron::Schedule;
 
 use crate::sweep::{Sweep, SweepCtx, SweepReport, SweepReportView};
 
-use super::pii_enforce::{
-    run_enforcement, EnforcementPlan, PiiBackend, PiiTarget,
-};
+use super::pii_enforce::{run_enforcement, EnforcementPlan, PiiBackend, PiiTarget};
 use super::scheduler::parse_schedule;
 
 /// Canonical sweep name.
@@ -130,10 +128,7 @@ impl Sweep for PiiEnforceSweep {
                     .with_tier_transition("examined", legacy.examined)
                     .with_tier_transition("applied", legacy.applied)
                     .with_tier_transition("skipped", legacy.skipped)
-                    .with_tier_transition(
-                        "null_safety_warnings",
-                        legacy.null_safety_warnings,
-                    );
+                    .with_tier_transition("null_safety_warnings", legacy.null_safety_warnings);
                 for (cohort, count) in &legacy.cohort_counts {
                     next = next.with_tier_transition(&format!("cohort:{cohort}"), *count);
                 }
@@ -151,9 +146,7 @@ impl Sweep for PiiEnforceSweep {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::retention::pii_enforce::{
-        EnforcementPlan, MemoryPiiBackend, PiiRisk, PiiTarget,
-    };
+    use crate::retention::pii_enforce::{EnforcementPlan, MemoryPiiBackend, PiiRisk, PiiTarget};
     use crate::sweep::SweepStatus;
     use chrono::Duration;
     use cortex_storage::MetadataStore;

@@ -751,7 +751,10 @@ fn emit_topic_card(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPat
         });
     stamp_display_label(&mut props, &clip_display(&display, 96));
     if let Some(p) = payload.as_ref() {
-        props.insert("topic_slug".to_string(), Value::String(p.topic_slug.clone()));
+        props.insert(
+            "topic_slug".to_string(),
+            Value::String(p.topic_slug.clone()),
+        );
         props.insert("revision".to_string(), Value::from(p.revision));
         props.insert("confidence".to_string(), Value::from(p.confidence));
         props.insert(

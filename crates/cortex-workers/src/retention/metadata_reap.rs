@@ -168,8 +168,9 @@ pub fn run(conn: &mut Connection, plan: &ReapPlan) -> Result<ReapReport, ReapErr
 
     let bootstrap_cutoff = plan.now - Duration::days(plan.bootstrap_retain_days);
     let sessions_cutoff = plan.now - Duration::days(plan.sessions_retain_days);
-    let spend_cutoff_date =
-        (plan.now - Duration::days(plan.spend_retain_days)).format("%Y-%m-%d").to_string();
+    let spend_cutoff_date = (plan.now - Duration::days(plan.spend_retain_days))
+        .format("%Y-%m-%d")
+        .to_string();
 
     if matches!(plan.target, ReapTarget::All | ReapTarget::BootstrapJobs) {
         let (collapsed, buckets) = roll_bootstrap_jobs(conn, bootstrap_cutoff, plan.dry_run)?;
@@ -182,8 +183,7 @@ pub fn run(conn: &mut Connection, plan: &ReapPlan) -> Result<ReapReport, ReapErr
         report.sessions_monthly_buckets = buckets;
     }
     if matches!(plan.target, ReapTarget::All | ReapTarget::ClassifierSpend) {
-        let (collapsed, buckets) =
-            roll_classifier_spend(conn, &spend_cutoff_date, plan.dry_run)?;
+        let (collapsed, buckets) = roll_classifier_spend(conn, &spend_cutoff_date, plan.dry_run)?;
         report.spend_collapsed = collapsed;
         report.spend_monthly_buckets = buckets;
     }
@@ -435,7 +435,13 @@ mod tests {
                 "INSERT INTO sessions
                     (session_id, tool, repo, started_at, event_count)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![session_id, tool, repo, started_at.to_rfc3339(), event_count as i64],
+                params![
+                    session_id,
+                    tool,
+                    repo,
+                    started_at.to_rfc3339(),
+                    event_count as i64
+                ],
             )
             .unwrap();
     }
@@ -484,7 +490,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
             )
             .unwrap();
-        assert_eq!(day, (now() - Duration::days(31)).format("%Y-%m-%d").to_string());
+        assert_eq!(
+            day,
+            (now() - Duration::days(31)).format("%Y-%m-%d").to_string()
+        );
         assert_eq!(repo_path, "/repo/cortex");
         assert_eq!(runs, 1);
         assert_eq!(files, 120);
@@ -561,7 +570,14 @@ mod tests {
                 .unwrap()
                 .with_timezone(&Utc)
                 + Duration::seconds(i);
-            insert_session_row(&s, &format!("01S{i:030}"), "claude-code", Some("cortex"), ts, 7);
+            insert_session_row(
+                &s,
+                &format!("01S{i:030}"),
+                "claude-code",
+                Some("cortex"),
+                ts,
+                7,
+            );
         }
         let report = run(s.conn_mut(), &ReapPlan::default_for(now())).unwrap();
         assert_eq!(report.sessions_collapsed, 200);
@@ -595,11 +611,9 @@ mod tests {
         run(s.conn_mut(), &ReapPlan::default_for(now())).unwrap();
         let (repo, count): (String, i64) = s
             .conn()
-            .query_row(
-                "SELECT repo, count FROM sessions_monthly",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
+            .query_row("SELECT repo, count FROM sessions_monthly", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
             .unwrap();
         assert_eq!(repo, "");
         assert_eq!(count, 2);
@@ -678,7 +692,9 @@ mod tests {
         // No daily row inserted.
         let daily: i64 = s
             .conn()
-            .query_row("SELECT COUNT(*) FROM bootstrap_jobs_daily", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM bootstrap_jobs_daily", [], |r| {
+                r.get(0)
+            })
             .unwrap();
         assert_eq!(daily, 0);
     }

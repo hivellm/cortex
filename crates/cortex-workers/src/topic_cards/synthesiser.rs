@@ -72,7 +72,10 @@ impl TopicCardSynthesiser {
     }
 
     /// Run a rewrite: render the template, call the summariser, parse the output.
-    pub async fn rewrite(&self, slots: RewriteSlots<'_>) -> Result<RewriteOutput, SynthesiserError> {
+    pub async fn rewrite(
+        &self,
+        slots: RewriteSlots<'_>,
+    ) -> Result<RewriteOutput, SynthesiserError> {
         let prompt = render_rewrite_prompt(&slots);
         let request = SummariserRequest {
             prompt,
@@ -116,7 +119,7 @@ fn strip_json_fences(s: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consolidator::summariser::{SummariserResult, SummariserKind as SK};
+    use crate::consolidator::summariser::{SummariserKind as SK, SummariserResult};
     use std::sync::Arc;
 
     struct CannedSummariser {
@@ -238,15 +241,26 @@ mod tests {
         struct FailSummariser;
         #[async_trait::async_trait]
         impl Summariser for FailSummariser {
-            fn kind(&self) -> SK { SK::Haiku45 }
-            async fn summarise(&self, _r: SummariserRequest) -> Result<SummariserResult, SummariserError> {
+            fn kind(&self) -> SK {
+                SK::Haiku45
+            }
+            async fn summarise(
+                &self,
+                _r: SummariserRequest,
+            ) -> Result<SummariserResult, SummariserError> {
                 Err(SummariserError::Transport("network down".into()))
             }
         }
         let tc = TopicCardSynthesiser::new(Arc::new(FailSummariser));
-        let err = tc.rewrite(default_slots()).await.expect_err("transport error");
+        let err = tc
+            .rewrite(default_slots())
+            .await
+            .expect_err("transport error");
         assert!(
-            matches!(err, SynthesiserError::Summariser(SummariserError::Transport(_))),
+            matches!(
+                err,
+                SynthesiserError::Summariser(SummariserError::Transport(_))
+            ),
             "expected Summariser(Transport), got {err:?}"
         );
     }

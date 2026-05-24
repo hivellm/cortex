@@ -20,9 +20,7 @@ use std::collections::BTreeMap;
 use async_trait::async_trait;
 use chrono::Utc;
 
-use crate::producer::{
-    EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport,
-};
+use crate::producer::{EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport};
 
 use super::walker::{walk, WalkConfig, WalkEntry};
 
@@ -78,12 +76,8 @@ impl EnvelopeProducer for ClaudeArchiveProducer {
         {
             let store = ctx.metadata.lock().await;
             for (idx, (scope, entry)) in by_project.iter().enumerate() {
-                let cursor = entry
-                    .path
-                    .to_string_lossy()
-                    .into_owned();
-                let accumulated_at =
-                    Utc::now() + chrono::Duration::microseconds(idx as i64);
+                let cursor = entry.path.to_string_lossy().into_owned();
+                let accumulated_at = Utc::now() + chrono::Duration::microseconds(idx as i64);
                 store.record_producer_checkpoint(
                     CLAUDE_ARCHIVE_PRODUCER_NAME,
                     scope,

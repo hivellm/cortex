@@ -1,7 +1,7 @@
 //! Chunker trait and shared chunk types.
 
-use anyhow::Result;
 use crate::classifier::Severity;
+use anyhow::Result;
 use cortex_core::events::Kind;
 use serde::{Deserialize, Serialize};
 

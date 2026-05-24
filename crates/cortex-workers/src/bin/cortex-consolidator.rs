@@ -428,7 +428,11 @@ fn fallback_path() -> Option<PathBuf> {
         }
     }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(PathBuf::from(home).join(".cortex").join("consolidations.jsonl"))
+    Some(
+        PathBuf::from(home)
+            .join(".cortex")
+            .join("consolidations.jsonl"),
+    )
 }
 
 /// Soft cap on the live `consolidations.jsonl` file. Past this size
@@ -474,8 +478,7 @@ fn append_publish_fallback_to(
         "reason": reason,
         "envelope": envelope,
     });
-    let mut serialised =
-        serde_json::to_string(&line).context("serialise fallback envelope")?;
+    let mut serialised = serde_json::to_string(&line).context("serialise fallback envelope")?;
     serialised.push('\n');
 
     use std::fs::OpenOptions;
@@ -569,9 +572,7 @@ async fn run_session(cli: &Cli, session_id: &str) -> Result<()> {
     .with_context(|| format!("publish session={}", input.session_id))?;
     println!(
         "  status  : ok — consolidation_id={}, source_event_count={}, cost_cents={}",
-        produced.payload.consolidation_id,
-        produced.payload.source_event_count,
-        produced.cost_cents,
+        produced.payload.consolidation_id, produced.payload.source_event_count, produced.cost_cents,
     );
     Ok(())
 }
@@ -614,7 +615,10 @@ async fn run_topic(cli: &Cli, repo: &str) -> Result<()> {
             }
         }
     }
-    println!("  status  : produced {produced_count} / {} clusters", clusters.len());
+    println!(
+        "  status  : produced {produced_count} / {} clusters",
+        clusters.len()
+    );
     Ok(())
 }
 
@@ -708,8 +712,14 @@ async fn run_nightly(cli: &Cli, dry_run: bool, all: bool) -> Result<()> {
         budget.monthly_cents_cap as f64 / 100.0
     );
     if let Some(c) = &prev {
-        println!("  previous    : {} (sessions={} topics={} decisions={} cents={})",
-            c.last_run_ts, c.sessions_processed, c.topics_processed, c.decisions_processed, c.cost_cents_total);
+        println!(
+            "  previous    : {} (sessions={} topics={} decisions={} cents={})",
+            c.last_run_ts,
+            c.sessions_processed,
+            c.topics_processed,
+            c.decisions_processed,
+            c.cost_cents_total
+        );
     }
     println!("  dry-run     : {dry_run}");
     let archive_root = cli.resolve_archive_root()?;
@@ -811,13 +821,18 @@ async fn run_nightly(cli: &Cli, dry_run: bool, all: bool) -> Result<()> {
                             )
                             .await
                             {
-                                eprintln!("  topic {repo}/{lbl} publish error: {e}", lbl = cluster.label);
+                                eprintln!(
+                                    "  topic {repo}/{lbl} publish error: {e}",
+                                    lbl = cluster.label
+                                );
                                 continue;
                             }
                             topics_processed += 1;
                             cost_cents_total = cost_cents_total.saturating_add(produced.cost_cents);
                         }
-                        Err(e) => eprintln!("  topic {repo}/{lbl} skipped: {e}", lbl = cluster.label),
+                        Err(e) => {
+                            eprintln!("  topic {repo}/{lbl} skipped: {e}", lbl = cluster.label)
+                        }
                     }
                 }
             }
@@ -961,15 +976,13 @@ async fn estimate(
         None => req,
     };
 
-    let stats: serde_json::Value = auth(http.get(format!(
-        "{}/stats",
-        meili_url.trim_end_matches('/')
-    )))
-    .send()
-    .await?
-    .error_for_status()?
-    .json()
-    .await?;
+    let stats: serde_json::Value =
+        auth(http.get(format!("{}/stats", meili_url.trim_end_matches('/'))))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
     let map = stats
         .get("indexes")
         .and_then(|v| v.as_object())
@@ -1030,8 +1043,7 @@ async fn estimate(
     let decision_traces: u64 = 100;
     let decision_input = decision_traces.saturating_mul(3_000);
     let decision_output = decision_traces.saturating_mul(1_024);
-    let decision_cost_cents =
-        cost_cents(SummariserKind::Opus47, decision_input, decision_output);
+    let decision_cost_cents = cost_cents(SummariserKind::Opus47, decision_input, decision_output);
 
     let passes = vec![
         PassEstimate {
@@ -1130,10 +1142,7 @@ async fn scan_index(
             }
         }
         offset += results.len();
-        let total = body
-            .get("total")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0) as usize;
+        let total = body.get("total").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         if total > 0 && offset >= total {
             break;
         }
@@ -1149,7 +1158,11 @@ fn render_text(r: &EstimateReport) {
     for p in &r.per_repo {
         println!(
             "  {}: sessions={}, envelopes={}, body_bytes={}, est_input_tokens={}",
-            p.repo_slug, p.sessions, p.total_envelopes, p.total_body_bytes, p.estimated_input_tokens
+            p.repo_slug,
+            p.sessions,
+            p.total_envelopes,
+            p.total_body_bytes,
+            p.estimated_input_tokens
         );
     }
     println!();
@@ -1199,9 +1212,8 @@ mod tests {
 
     #[test]
     fn cli_parses_run_topic_subcommand_with_repo_flag() {
-        let cli =
-            Cli::try_parse_from(["cortex-consolidator", "run-topic", "--repo", "cortex"])
-                .expect("parse");
+        let cli = Cli::try_parse_from(["cortex-consolidator", "run-topic", "--repo", "cortex"])
+            .expect("parse");
         match cli.command {
             Command::RunTopic { repo } => assert_eq!(repo, "cortex"),
             other => panic!("wrong subcommand: {other:?}"),
@@ -1210,8 +1222,7 @@ mod tests {
 
     #[test]
     fn cli_parses_nightly_dry_run_default_true() {
-        let cli =
-            Cli::try_parse_from(["cortex-consolidator", "nightly"]).expect("parse");
+        let cli = Cli::try_parse_from(["cortex-consolidator", "nightly"]).expect("parse");
         match cli.command {
             Command::Nightly { dry_run, all } => {
                 assert!(dry_run);
@@ -1251,7 +1262,10 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
-            command: Command::Nightly { dry_run: true, all: false },
+            command: Command::Nightly {
+                dry_run: true,
+                all: false,
+            },
         };
         let err = require_api_key(&cli).expect_err("no key");
         assert!(format!("{err:#}").contains("ANTHROPIC_API_KEY"));
@@ -1268,7 +1282,10 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
-            command: Command::Nightly { dry_run: true, all: false },
+            command: Command::Nightly {
+                dry_run: true,
+                all: false,
+            },
         };
         assert_eq!(require_api_key(&cli).unwrap(), "sk-test-12345");
     }
@@ -1325,10 +1342,16 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: None,
             metadata_db: None,
-            command: Command::Nightly { dry_run: true, all: false },
+            command: Command::Nightly {
+                dry_run: true,
+                all: false,
+            },
         };
         let got = enumerate_recent_sessions(&cli).unwrap();
-        assert!(got.is_empty(), "missing --metadata-db must yield empty list");
+        assert!(
+            got.is_empty(),
+            "missing --metadata-db must yield empty list"
+        );
     }
 
     #[test]
@@ -1342,7 +1365,10 @@ mod tests {
             monthly_cents_cap: 100_000,
             archive_root: Some(PathBuf::from("D:/explicit")),
             metadata_db: None,
-            command: Command::Nightly { dry_run: true, all: false },
+            command: Command::Nightly {
+                dry_run: true,
+                all: false,
+            },
         };
         let got = cli.resolve_archive_root().unwrap();
         assert_eq!(got, PathBuf::from("D:/explicit"));
@@ -1430,7 +1456,11 @@ mod tests {
         append_publish_fallback_to(&target, u64::MAX, &envelope, "env_unset").unwrap();
 
         let live = std::fs::read_to_string(&target).unwrap();
-        assert_eq!(live.matches('\n').count(), 2, "both lines retained in live file");
+        assert_eq!(
+            live.matches('\n').count(),
+            2,
+            "both lines retained in live file"
+        );
 
         let mut rotated = target.clone().into_os_string();
         rotated.push(".1");

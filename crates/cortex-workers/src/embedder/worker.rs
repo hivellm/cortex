@@ -446,10 +446,7 @@ impl Worker {
     /// `event_identity.vec_id` write-back. The handle is shared
     /// across the worker's lifetime; each successful embed batch
     /// takes the mutex briefly to stamp one row.
-    pub fn with_metadata(
-        mut self,
-        metadata: Arc<Mutex<cortex_storage::MetadataStore>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Arc<Mutex<cortex_storage::MetadataStore>>) -> Self {
         self.metadata = Some(metadata);
         self
     }
@@ -742,11 +739,9 @@ impl Worker {
             Ok(guard) => {
                 use cortex_storage::IdentityIndex as _;
                 let idx = cortex_storage::SqliteIdentityIndex::new(guard.conn());
-                if let Err(e) = idx.upsert_identity(
-                    event_id,
-                    cortex_storage::Backend::Vectorizer,
-                    server_id,
-                ) {
+                if let Err(e) =
+                    idx.upsert_identity(event_id, cortex_storage::Backend::Vectorizer, server_id)
+                {
                     tracing::warn!(
                         event_id = %event_id,
                         vec_id = %server_id,

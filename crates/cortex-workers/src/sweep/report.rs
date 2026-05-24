@@ -328,8 +328,7 @@ mod tests {
     fn report_round_trips_via_serde_with_failed_status() {
         let start = ts("2026-05-19T12:00:00Z");
         let end = ts("2026-05-19T12:00:05Z");
-        let r =
-            SweepReport::started("meili_prune", start).finish_failed(end, 7, 128, "boom");
+        let r = SweepReport::started("meili_prune", start).finish_failed(end, 7, 128, "boom");
         let j = serde_json::to_string(&r).unwrap();
         let p: SweepReport = serde_json::from_str(&j).unwrap();
         assert_eq!(p, r);

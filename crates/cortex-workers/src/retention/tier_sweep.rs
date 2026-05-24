@@ -21,8 +21,8 @@
 //! | `run` | call `run_sweep(plan, ops)`, fold the legacy [`SweepReport`](super::SweepReport) into the new [`cortex_workers::sweep::SweepReport`] |
 //! | `report_view` | `report.view()` |
 
-use std::sync::Arc;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use cron::Schedule;
@@ -85,11 +85,7 @@ impl Sweep for TierSweep {
                 for (key, count) in &legacy.tier_transitions {
                     next = next.with_tier_transition(key, *count);
                 }
-                let bytes_reclaimed = legacy
-                    .transitions
-                    .iter()
-                    .map(|_| 0u64)
-                    .sum::<u64>();
+                let bytes_reclaimed = legacy.transitions.iter().map(|_| 0u64).sum::<u64>();
                 let rows_processed = legacy.records_demoted + legacy.records_dropped;
                 Ok(next.finish_success(ctx.now, rows_processed, bytes_reclaimed))
             }
@@ -174,7 +170,11 @@ mod tests {
         // 3 eligible records, 1 upsert fails → 33% drop ≫ 5% ceiling.
         ops.seed(
             "cortex.turn.fp32",
-            vec![rec("01A", 31, now), rec("01B", 31, now), rec("01C", 31, now)],
+            vec![
+                rec("01A", 31, now),
+                rec("01B", 31, now),
+                rec("01C", 31, now),
+            ],
         )
         .await;
         ops.inject_upsert_error_once("cortex.turn.pq", "synthetic")

@@ -85,10 +85,7 @@ impl Sweep for CasVacuumSweep {
                     .with_tier_transition("blobs_dropped", legacy.blobs_dropped)
                     .with_tier_transition("total_blobs", legacy.total_blobs)
                     .with_tier_transition("did_vacuum", u64::from(legacy.did_vacuum))
-                    .with_tier_transition(
-                        "safeguard_tripped",
-                        u64::from(legacy.safeguard_tripped),
-                    )
+                    .with_tier_transition("safeguard_tripped", u64::from(legacy.safeguard_tripped))
                     .with_tier_transition("vacuum_ms", legacy.vacuum_ms);
                 Ok(next.finish_success(ctx.now, rows_processed, bytes_reclaimed))
             }
@@ -152,8 +149,7 @@ mod tests {
     fn cas_vacuum_schedule_parses_and_name_is_canonical() {
         let dir = TempDir::new().unwrap();
         let cas_path = dir.path().join("cas.sqlite");
-        let sweep =
-            CasVacuumSweep::new(cas_path, VacuumOpts::default_for(fixed_now()));
+        let sweep = CasVacuumSweep::new(cas_path, VacuumOpts::default_for(fixed_now()));
         let _ = sweep.schedule();
         assert_eq!(sweep.name(), "cas_vacuum");
     }

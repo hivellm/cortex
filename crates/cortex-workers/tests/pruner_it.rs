@@ -60,11 +60,7 @@ impl StubMeili {
 
 #[async_trait]
 impl MeiliPruneOps for StubMeili {
-    async fn update_documents(
-        &self,
-        _index: &str,
-        docs: &[Value],
-    ) -> Result<(), MeiliPruneError> {
+    async fn update_documents(&self, _index: &str, docs: &[Value]) -> Result<(), MeiliPruneError> {
         let mut g = self.docs.lock().unwrap();
         for d in docs {
             let map = match d.as_object() {
@@ -86,11 +82,7 @@ impl MeiliPruneOps for StubMeili {
         }
         Ok(())
     }
-    async fn delete_documents(
-        &self,
-        _index: &str,
-        ids: &[String],
-    ) -> Result<(), MeiliPruneError> {
+    async fn delete_documents(&self, _index: &str, ids: &[String]) -> Result<(), MeiliPruneError> {
         let mut g = self.docs.lock().unwrap();
         for id in ids {
             g.remove(id);
@@ -208,8 +200,7 @@ async fn prune_seeds_100_events_and_demotes_correctly() {
     // takes the 20 warm→cold arrivals + the original 20 cold
     // entries (which warm→cold doesn't touch — those are 500 d
     // and route to expired purge).
-    let fp32_left =
-        vec_client.stored_count_for(COLLECTION_CONSOLIDATION_FP32);
+    let fp32_left = vec_client.stored_count_for(COLLECTION_CONSOLIDATION_FP32);
     let pq_left = vec_client.stored_count_for(COLLECTION_CONSOLIDATION_PQ);
     let cold_left = vec_client.stored_count_for(COLLECTION_COLD_BINARY);
     assert_eq!(fp32_left, 40, "20 fresh + 20 recent stay in fp32");
@@ -223,11 +214,7 @@ async fn prune_seeds_100_events_and_demotes_correctly() {
     assert_eq!(g.len(), 16, "20 seeded - 4 expired = 16");
     for (id, map) in g.iter() {
         if id.starts_with("cons-")
-            && (12..=15).contains(
-                &id.trim_start_matches("cons-")
-                    .parse::<u32>()
-                    .unwrap_or(99),
-            )
+            && (12..=15).contains(&id.trim_start_matches("cons-").parse::<u32>().unwrap_or(99))
         {
             // The 4 cold-tier consolidations (indexes 12..15 — the
             // 4th bucket in seed order) were stripped.

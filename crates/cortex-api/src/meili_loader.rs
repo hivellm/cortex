@@ -129,10 +129,7 @@ pub async fn load_meili_into_keyword_lane_with_metrics(
         m.add_meili_docs_seeded("memories", report.memories_seeded as u64);
         m.add_meili_docs_seeded("analyses", report.analyses_seeded as u64);
         m.add_meili_docs_seeded("turns", report.turns_seeded as u64);
-        m.add_meili_docs_seeded(
-            "consolidations",
-            report.consolidations_seeded as u64,
-        );
+        m.add_meili_docs_seeded("consolidations", report.consolidations_seeded as u64);
         m.record_meili_refresh_now();
     }
     Ok(report)
@@ -577,10 +574,7 @@ fn doc_to_hit(doc: &Value, family: &str) -> Option<(&'static str, LaneHit)> {
                     );
                 }
                 if let Some(cnt) = cons.get("source_event_count").and_then(|v| v.as_u64()) {
-                    extras.insert(
-                        "source_event_count".to_string(),
-                        Value::Number(cnt.into()),
-                    );
+                    extras.insert("source_event_count".to_string(), Value::Number(cnt.into()));
                 }
             }
             text = body_md;

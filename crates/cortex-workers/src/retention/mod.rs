@@ -318,7 +318,9 @@ pub async fn run_sweep(
         let cutoff = pair.cutoff(plan.now);
         let source = pair.kind.collection_for(pair.from_tier);
         let dest = pair.kind.collection_for(pair.to_tier);
-        let candidates = ops.list_older_than(&source, cutoff, plan.batch_size).await?;
+        let candidates = ops
+            .list_older_than(&source, cutoff, plan.batch_size)
+            .await?;
         for record in candidates {
             // Idempotence check — destination already holds it
             // ⇒ this is a re-run, no-op.
@@ -496,7 +498,10 @@ impl VectorizerOps for MemoryVectorizerOps {
         if let Some(reason) = inner.inject_upsert_error_once.remove(dest_collection) {
             return Err(SweepError::Vectorizer(reason));
         }
-        let bucket = inner.by_collection.entry(dest_collection.to_string()).or_default();
+        let bucket = inner
+            .by_collection
+            .entry(dest_collection.to_string())
+            .or_default();
         // Upsert: replace if event_id already present.
         if let Some(existing) = bucket.iter_mut().find(|r| r.event_id == record.event_id) {
             *existing = record.clone();

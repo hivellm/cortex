@@ -44,9 +44,7 @@ use cortex_workers::retention::pii_enforce::{EnforcementPlan, MemoryPiiBackend};
 use cortex_workers::retention::pii_enforce_sweep::{PiiEnforceSweep, StaticTargets};
 use cortex_workers::retention::tier_sweep::TierSweep;
 use cortex_workers::retention::{MemoryVectorizerOps, SweepPlan};
-use cortex_workers::sweep::{
-    canonical_registry, into_handle, Sweep, SweepCtx, SweepReport,
-};
+use cortex_workers::sweep::{canonical_registry, into_handle, Sweep, SweepCtx, SweepReport};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -102,8 +100,7 @@ fn build_canonical_sweep_set(
         SweepPlan::default_for(now),
     ));
     let parquet: Box<dyn Sweep> = Box::new(ParquetRollupSweep::new(archive_root));
-    let cas: Box<dyn Sweep> =
-        Box::new(CasVacuumSweep::new(cas_path, VacuumOpts::default_for(now)));
+    let cas: Box<dyn Sweep> = Box::new(CasVacuumSweep::new(cas_path, VacuumOpts::default_for(now)));
     let pii: Box<dyn Sweep> = Box::new(PiiEnforceSweep::new(
         Arc::new(StaticTargets::new(Vec::new())),
         Arc::new(MemoryPiiBackend::new()),
@@ -178,8 +175,9 @@ async fn canonical_registry_writes_one_retention_sweeps_row_per_sweep() {
         );
         // `tier_transitions_json` carries the full `SweepReport`
         // payload — parsing it back must succeed.
-        let payload: SweepReport = serde_json::from_str(row.tier_transitions_json.as_deref().unwrap_or("{}"))
-            .expect("payload deserialises as SweepReport");
+        let payload: SweepReport =
+            serde_json::from_str(row.tier_transitions_json.as_deref().unwrap_or("{}"))
+                .expect("payload deserialises as SweepReport");
         assert!(!payload.name.is_empty());
     }
 }

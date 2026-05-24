@@ -18,13 +18,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::embedder::EnrichedEvent;
-use anyhow::Result;
-use async_trait::async_trait;
 use crate::classifier::{
     Classifier, ClassifierOutput, ClassifierSource, ClassifierStack, EnrichmentInput, PiiRisk,
     PricingTable, Severity,
 };
+use crate::embedder::EnrichedEvent;
+use anyhow::Result;
+use async_trait::async_trait;
 use cortex_core::events::{Envelope, Kind};
 use cortex_storage::{hour_bucket_rfc3339, MetadataStore};
 use serde::{Deserialize, Serialize};
@@ -735,8 +735,7 @@ impl Worker {
                     // reset the consecutive-error counter and
                     // stamp `last_consume_ts_ms` regardless of
                     // whether the batch was empty.
-                    self.consume_errors_consecutive
-                        .store(0, Ordering::Relaxed);
+                    self.consume_errors_consecutive.store(0, Ordering::Relaxed);
                     let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
                     self.last_consume_ts_ms.store(now_ms, Ordering::Relaxed);
                     n
@@ -1063,11 +1062,7 @@ mod tests {
 
     #[async_trait]
     impl SynapConsumer for AlwaysFailingConsumer {
-        async fn next_batch(
-            &self,
-            _room: &str,
-            _max: usize,
-        ) -> Result<Vec<ConsumedMessage>> {
+        async fn next_batch(&self, _room: &str, _max: usize) -> Result<Vec<ConsumedMessage>> {
             Err(anyhow::anyhow!("synap consume: simulated transport error"))
         }
         async fn ack(&self, _room: &str, _offset: u64) -> Result<()> {
@@ -1171,11 +1166,7 @@ mod tests {
 
     #[async_trait]
     impl SynapConsumer for FlakyThenStableConsumer {
-        async fn next_batch(
-            &self,
-            _room: &str,
-            _max: usize,
-        ) -> Result<Vec<ConsumedMessage>> {
+        async fn next_batch(&self, _room: &str, _max: usize) -> Result<Vec<ConsumedMessage>> {
             // Saturating-at-zero decrement — the naive
             // `fetch_sub > 0` check wraps around u64 and reverts
             // to perpetual failures, which masks the

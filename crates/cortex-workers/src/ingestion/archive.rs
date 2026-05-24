@@ -69,11 +69,7 @@ impl NdJsonZstdArchive {
         }
     }
 
-    fn ensure_open(
-        &self,
-        stream_tag: &str,
-        ts: DateTime<Utc>,
-    ) -> Result<(), ArchiveError> {
+    fn ensure_open(&self, stream_tag: &str, ts: DateTime<Utc>) -> Result<(), ArchiveError> {
         let bucket = format!("{}", ts.format("%Y%m%d%H"));
         let mut open = self
             .open
@@ -316,7 +312,11 @@ mod tests {
         // sibling — it must be a sibling at the next free index.
         assert_ne!(chosen, &preexisting);
         assert!(
-            chosen.file_name().unwrap().to_string_lossy().contains("00001"),
+            chosen
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("00001"),
             "expected sequence-1 file, got {}",
             chosen.display(),
         );
@@ -330,8 +330,8 @@ mod tests {
 pub fn read_archive_file(path: &Path) -> Result<Vec<Value>, ArchiveError> {
     let raw = std::fs::read(path)?;
     let decoded = zstd::decode_all(raw.as_slice())?;
-    let text = String::from_utf8(decoded)
-        .map_err(|e| ArchiveError::Internal(format!("utf8: {e}")))?;
+    let text =
+        String::from_utf8(decoded).map_err(|e| ArchiveError::Internal(format!("utf8: {e}")))?;
     let mut out = Vec::new();
     for line in text.lines() {
         if line.trim().is_empty() {
@@ -341,4 +341,3 @@ pub fn read_archive_file(path: &Path) -> Result<Vec<Value>, ArchiveError> {
     }
     Ok(out)
 }
-

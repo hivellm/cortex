@@ -22,8 +22,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Envelope;
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::embedder::EnrichedEvent;
 use cortex_workers::graph::{
     cypher::{load_from_dir, REQUIRED_TEMPLATES},

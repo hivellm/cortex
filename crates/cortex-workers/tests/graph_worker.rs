@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_core::events::Kind;
+use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
 use cortex_workers::graph::nexus_client::GraphClientError;
 use cortex_workers::graph::patch::{EdgeDeleteFilter, GraphPatch, GraphWriteReport};
 use cortex_workers::graph::worker::orphan_turn_patch;

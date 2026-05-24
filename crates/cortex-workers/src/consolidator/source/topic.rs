@@ -243,7 +243,11 @@ mod tests {
             serde_json::Value::Array(
                 embedding
                     .into_iter()
-                    .map(|x| serde_json::Number::from_f64(x).map(serde_json::Value::Number).unwrap())
+                    .map(|x| {
+                        serde_json::Number::from_f64(x)
+                            .map(serde_json::Value::Number)
+                            .unwrap()
+                    })
                     .collect(),
             ),
         );
@@ -269,9 +273,8 @@ mod tests {
             },
             payload,
             redactions: Vec::new(),
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             parent_event_id: None,
         }
     }

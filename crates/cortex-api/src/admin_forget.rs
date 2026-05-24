@@ -747,9 +747,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_forget_drops_event_identity_row_after_cascade() {
-        use cortex_storage::{
-            Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex,
-        };
+        use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 
         // Pre-seed an archive envelope (so kind resolution finds Turn).
         let dir = tempfile::tempdir().unwrap();
@@ -828,9 +826,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_forget_dry_run_does_not_drop_identity_row() {
-        use cortex_storage::{
-            Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex,
-        };
+        use cortex_storage::{Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex};
 
         let dir = tempfile::tempdir().unwrap();
         write_archive(dir.path(), &[turn_envelope("EVT_DRY")]);
@@ -845,7 +841,8 @@ mod tests {
         {
             let guard = metadata.lock().unwrap();
             let idx = SqliteIdentityIndex::new(guard.conn());
-            idx.upsert_identity("EVT_DRY", Backend::Meili, "EVT_DRY").unwrap();
+            idx.upsert_identity("EVT_DRY", Backend::Meili, "EVT_DRY")
+                .unwrap();
         }
 
         let req = ForgetRequest {

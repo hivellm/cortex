@@ -172,9 +172,7 @@ pub fn classify(plan: &EnforcementPlan, target: &PiiTarget) -> Option<PiiCohort>
         .num_days();
     match target.pii_risk {
         Some(PiiRisk::High) if age_days >= plan.high_after_days => Some(PiiCohort::High30d),
-        Some(PiiRisk::Medium) if age_days >= plan.medium_after_days => {
-            Some(PiiCohort::Medium90d)
-        }
+        Some(PiiRisk::Medium) if age_days >= plan.medium_after_days => Some(PiiCohort::Medium90d),
         Some(PiiRisk::Low) => None,
         None if age_days >= plan.null_after_days => Some(PiiCohort::NullSafety90d),
         _ => None,
@@ -386,7 +384,9 @@ async fn apply_high(backend: &dyn PiiBackend, target: &PiiTarget) -> Result<(), 
     backend
         .rewrite_row(&target.event_id, &target.kind, None, "pii_high_30d")
         .await?;
-    backend.delete_vector(&target.event_id, &target.kind).await?;
+    backend
+        .delete_vector(&target.event_id, &target.kind)
+        .await?;
     backend.delete_meili(&target.event_id, &target.kind).await?;
     if let Some(body_ref) = &target.body_ref {
         backend.decrement_cas(body_ref).await?;
@@ -521,7 +521,8 @@ impl PiiBackend for MemoryPiiBackend {
             s.fail_on = None;
             return Err("synthetic-vector-failure".into());
         }
-        s.vector_deletes.push((event_id.to_string(), kind.to_string()));
+        s.vector_deletes
+            .push((event_id.to_string(), kind.to_string()));
         Ok(())
     }
     async fn delete_meili(&self, event_id: &str, kind: &str) -> Result<(), String> {
@@ -530,7 +531,8 @@ impl PiiBackend for MemoryPiiBackend {
             s.fail_on = None;
             return Err("synthetic-meili-failure".into());
         }
-        s.meili_deletes.push((event_id.to_string(), kind.to_string()));
+        s.meili_deletes
+            .push((event_id.to_string(), kind.to_string()));
         Ok(())
     }
     async fn decrement_cas(&self, body_ref: &str) -> Result<(), String> {
@@ -548,10 +550,12 @@ impl PiiBackend for MemoryPiiBackend {
             s.fail_on = None;
             return Err("synthetic-summary-failure".into());
         }
-        let out = s
-            .summary_override
-            .clone()
-            .unwrap_or_else(|| format!("[summary:{}]", original.chars().take(40).collect::<String>()));
+        let out = s.summary_override.clone().unwrap_or_else(|| {
+            format!(
+                "[summary:{}]",
+                original.chars().take(40).collect::<String>()
+            )
+        });
         s.summaries.push((original.to_string(), out.clone()));
         Ok(out)
     }
@@ -566,11 +570,8 @@ impl PiiBackend for MemoryPiiBackend {
             s.fail_on = None;
             return Err("synthetic-reembed-failure".into());
         }
-        s.reembeds.push((
-            event_id.to_string(),
-            kind.to_string(),
-            summary.to_string(),
-        ));
+        s.reembeds
+            .push((event_id.to_string(), kind.to_string(), summary.to_string()));
         Ok(format!("sha256:reembed:{}", event_id))
     }
     async fn reindex_meili(&self, event_id: &str, kind: &str, summary: &str) -> Result<(), String> {
@@ -579,17 +580,13 @@ impl PiiBackend for MemoryPiiBackend {
             s.fail_on = None;
             return Err("synthetic-reindex-failure".into());
         }
-        s.reindexes.push((
-            event_id.to_string(),
-            kind.to_string(),
-            summary.to_string(),
-        ));
+        s.reindexes
+            .push((event_id.to_string(), kind.to_string(), summary.to_string()));
         Ok(())
     }
     async fn emit_warning(&self, event_id: &str, message: &str) -> Result<(), String> {
         let mut s = self.inner.lock().await;
-        s.warnings
-            .push((event_id.to_string(), message.to_string()));
+        s.warnings.push((event_id.to_string(), message.to_string()));
         Ok(())
     }
 }
@@ -711,7 +708,10 @@ mod tests {
         assert_eq!(rewrites[0].3, "pii_high_30d");
         assert_eq!(backend.vector_deletes().await.len(), 1);
         assert_eq!(backend.meili_deletes().await.len(), 1);
-        assert_eq!(backend.cas_decrements().await, vec!["sha256:body".to_string()]);
+        assert_eq!(
+            backend.cas_decrements().await,
+            vec!["sha256:body".to_string()]
+        );
         // Medium-path operations MUST NOT have run.
         assert!(backend.summaries().await.is_empty());
         assert!(backend.reembeds().await.is_empty());
@@ -747,7 +747,10 @@ mod tests {
         assert_eq!(rewrites[0].2, Some("synthetic-summary".to_string()));
         assert_eq!(rewrites[0].3, "pii_medium_90d");
         // CAS decremented after the public surface flipped.
-        assert_eq!(backend.cas_decrements().await, vec!["sha256:body".to_string()]);
+        assert_eq!(
+            backend.cas_decrements().await,
+            vec!["sha256:body".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -827,7 +830,13 @@ mod tests {
         let backend = MemoryPiiBackend::new();
         backend.inject_failure("vector").await;
         let plan = EnforcementPlan::default_for(now());
-        let targets = vec![target("01H", Some(PiiRisk::High), 31, Some("sha256:b"), None)];
+        let targets = vec![target(
+            "01H",
+            Some(PiiRisk::High),
+            31,
+            Some("sha256:b"),
+            None,
+        )];
         let report = run_enforcement(&plan, &backend, targets).await.unwrap();
         assert_eq!(report.examined, 1);
         assert_eq!(report.applied, 0);

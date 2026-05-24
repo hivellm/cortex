@@ -34,12 +34,12 @@
 
 use std::sync::Arc;
 
+use cortex_core::events::{Context, Envelope, Kind, Stream};
 use cortex_workers::consolidator::orchestrator::Orchestrator;
 use cortex_workers::consolidator::producer::session::SessionInput;
 use cortex_workers::consolidator::summariser::{
     Summariser, SummariserError, SummariserKind, SummariserRequest, SummariserResult,
 };
-use cortex_core::events::{Context, Envelope, Kind, Stream};
 
 const SAMPLE_SIZE: usize = 50;
 const TAKEAWAY_BYTE_CAP: usize = 280;
@@ -93,7 +93,13 @@ fn ctx() -> Context {
     }
 }
 
-fn envelope(session_idx: usize, env_idx: usize, kind: Kind, ts: &str, payload: serde_json::Value) -> Envelope {
+fn envelope(
+    session_idx: usize,
+    env_idx: usize,
+    kind: Kind,
+    ts: &str,
+    payload: serde_json::Value,
+) -> Envelope {
     Envelope {
         // 26-char ULID-shaped id keeps every envelope unique across
         // the 50-session corpus without colliding with the producer's

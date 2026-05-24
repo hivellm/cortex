@@ -720,7 +720,11 @@ async fn handle_admin_forget(
                 .ok()
                 .filter(|s| !s.is_empty())
         })
-        .or_else(|| std::env::var("VECTORIZER_URL").ok().filter(|s| !s.is_empty()));
+        .or_else(|| {
+            std::env::var("VECTORIZER_URL")
+                .ok()
+                .filter(|s| !s.is_empty())
+        });
     if let Some(url) = vectorizer_url.clone() {
         embed_cfg.vectorizer_url = url;
     }
@@ -770,7 +774,8 @@ async fn handle_admin_forget(
             // Legacy / dev path: no creds, build the unauthenticated
             // client. Cascade calls that need auth will surface 401
             // and the caller's safety-gated retry kicks in.
-            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg) {
+            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg)
+            {
                 Ok(c) => Arc::new(c),
                 Err(e) => {
                     return (

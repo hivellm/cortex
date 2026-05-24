@@ -6,9 +6,9 @@
 //! test asserts the patch shape only — the writer test suite covers
 //! the Cypher dispatch layer.
 
+use cortex_core::events::Kind;
 use cortex_workers::classifier::types::{ExtractedEntity, ExtractedRelation};
 use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
-use cortex_core::events::Kind;
 use cortex_workers::graph::{map_event_to_patch, EnrichedEvent, GraphPatch};
 use serde_json::json;
 

@@ -36,12 +36,9 @@ async fn main() -> Result<()> {
     // direct-JWT path stays available for callers that supply a
     // pre-minted token (test paths, single-shot CLIs).
     let vectorizer_client = if let Some(pwd) = config.vectorizer_password.clone() {
-        let looks_like_jwt =
-            pwd.split('.').count() == 3 && pwd.split('.').all(|s| !s.is_empty());
+        let looks_like_jwt = pwd.split('.').count() == 3 && pwd.split('.').all(|s| !s.is_empty());
         if looks_like_jwt {
-            tracing::info!(
-                "vectorizer password is a pre-minted JWT — auto-refresh disabled"
-            );
+            tracing::info!("vectorizer password is a pre-minted JWT — auto-refresh disabled");
             Arc::new(
                 LiveVectorizerClient::new(config.clone())
                     .map_err(|e| anyhow::anyhow!("failed to build Vectorizer client: {e}"))?,
@@ -169,32 +166,31 @@ async fn main() -> Result<()> {
     });
     let metrics_for_prom = worker.metrics.clone();
     let token_cache_for_prom = token_cache_for_health_arc.clone();
-    let renderer: cortex_health::server::MetricsRenderer =
-        std::sync::Arc::new(move || {
-            // Phase11s §3.4 — append JWT-refresh gauges to the
-            // existing Prometheus body.
-            let mut body = metrics_for_prom.render_prom();
-            use std::fmt::Write as _;
-            body.push_str("# TYPE cortex_embedder_jwt_last_login_ts_ms gauge\n");
-            let _ = writeln!(
-                body,
-                "cortex_embedder_jwt_last_login_ts_ms {}",
-                token_cache_for_prom.last_login_ts_ms()
-            );
-            body.push_str("# TYPE cortex_embedder_jwt_refresh_total counter\n");
-            let _ = writeln!(
-                body,
-                "cortex_embedder_jwt_refresh_total {}",
-                token_cache_for_prom.refreshes_total()
-            );
-            body.push_str("# TYPE cortex_embedder_jwt_refresh_errors_total counter\n");
-            let _ = writeln!(
-                body,
-                "cortex_embedder_jwt_refresh_errors_total {}",
-                token_cache_for_prom.refresh_errors_total()
-            );
-            body
-        });
+    let renderer: cortex_health::server::MetricsRenderer = std::sync::Arc::new(move || {
+        // Phase11s §3.4 — append JWT-refresh gauges to the
+        // existing Prometheus body.
+        let mut body = metrics_for_prom.render_prom();
+        use std::fmt::Write as _;
+        body.push_str("# TYPE cortex_embedder_jwt_last_login_ts_ms gauge\n");
+        let _ = writeln!(
+            body,
+            "cortex_embedder_jwt_last_login_ts_ms {}",
+            token_cache_for_prom.last_login_ts_ms()
+        );
+        body.push_str("# TYPE cortex_embedder_jwt_refresh_total counter\n");
+        let _ = writeln!(
+            body,
+            "cortex_embedder_jwt_refresh_total {}",
+            token_cache_for_prom.refreshes_total()
+        );
+        body.push_str("# TYPE cortex_embedder_jwt_refresh_errors_total counter\n");
+        let _ = writeln!(
+            body,
+            "cortex_embedder_jwt_refresh_errors_total {}",
+            token_cache_for_prom.refresh_errors_total()
+        );
+        body
+    });
     spawn_health_listener_with_metrics(
         port,
         "cortex-embedder-worker",

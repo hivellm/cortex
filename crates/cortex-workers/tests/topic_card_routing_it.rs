@@ -30,10 +30,7 @@ use cortex_workers::fulltext::{family_for, family_for_event, index_for, FAMILIES
 #[test]
 fn fulltext_router_maps_topic_card_to_topic_cards_family() {
     assert_eq!(family_for(Kind::TopicCard), "topic_cards");
-    assert_eq!(
-        family_for_event(Kind::TopicCard, &[], None),
-        "topic_cards"
-    );
+    assert_eq!(family_for_event(Kind::TopicCard, &[], None), "topic_cards");
     assert!(
         FAMILIES.contains(&"topic_cards"),
         "FAMILIES must enumerate `topic_cards` so the bootstrap settings push covers it"

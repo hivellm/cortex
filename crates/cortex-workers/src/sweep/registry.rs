@@ -145,14 +145,17 @@ async fn run_one(sweep: &dyn Sweep, ctx: &SweepCtx) -> Result<SweepReport, Regis
     // continues with the next sweep.
     let report = match sweep.run(ctx).await {
         Ok(r) => r,
-        Err(e) => SweepReport::started(sweep.name(), started_at)
-            .finish_failed(ctx.now, 0, 0, e.to_string()),
+        Err(e) => SweepReport::started(sweep.name(), started_at).finish_failed(
+            ctx.now,
+            0,
+            0,
+            e.to_string(),
+        ),
     };
 
     // Stamp the terminal row.
     let finished_at = report.finished_at.unwrap_or(ctx.now);
-    let payload = serde_json::to_string(&report)
-        .unwrap_or_else(|_| "{}".to_string());
+    let payload = serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string());
     // The legacy `records_dropped` column tracks the tier sweep's
     // drop count specifically. For the trait-level report, pull a
     // dropped count from `tier_transitions` when the sweep emits
@@ -219,8 +222,8 @@ mod tests {
     use crate::sweep::report::SweepStatus;
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
-    use cron::Schedule;
     use cortex_storage::MetadataStore;
+    use cron::Schedule;
     use std::str::FromStr;
 
     /// Per-test sweep — name + a `should_fail` flag drive the
@@ -244,8 +247,7 @@ mod tests {
             if self.should_fail {
                 Err(anyhow::anyhow!("scripted failure"))
             } else {
-                Ok(SweepReport::started(self.name, ctx.now)
-                    .finish_success(ctx.now, self.rows, 0))
+                Ok(SweepReport::started(self.name, ctx.now).finish_success(ctx.now, self.rows, 0))
             }
         }
         fn report_view(&self, report: &SweepReport) -> crate::sweep::SweepReportView {
@@ -285,11 +287,7 @@ mod tests {
         assert_eq!(reports.len(), 2);
         assert_eq!(reports[0].rows_processed, 5);
         assert_eq!(reports[1].rows_processed, 7);
-        let rows = handle
-            .lock()
-            .await
-            .list_recent_sweeps(10)
-            .expect("list");
+        let rows = handle.lock().await.list_recent_sweeps(10).expect("list");
         assert_eq!(rows.len(), 2, "two retention_sweeps rows expected");
         assert!(rows.iter().all(|r| r.status == "success"));
     }
@@ -313,11 +311,7 @@ mod tests {
         assert_eq!(reports.len(), 2);
         assert_eq!(reports[0].status, SweepStatus::Success);
         assert_eq!(reports[1].status, SweepStatus::Failed);
-        let rows = handle
-            .lock()
-            .await
-            .list_recent_sweeps(10)
-            .expect("list");
+        let rows = handle.lock().await.list_recent_sweeps(10).expect("list");
         let statuses: Vec<_> = rows.iter().map(|r| r.status.clone()).collect();
         assert!(statuses.contains(&"failed".to_string()));
         assert!(statuses.contains(&"success".to_string()));

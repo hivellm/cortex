@@ -392,10 +392,7 @@ impl Worker {
     /// `event_identity.meili_id` write-back. Held for the worker's
     /// lifetime; each successful batch takes the mutex once to
     /// stamp every event in the batch.
-    pub fn with_metadata(
-        mut self,
-        metadata: Arc<Mutex<cortex_storage::MetadataStore>>,
-    ) -> Self {
+    pub fn with_metadata(mut self, metadata: Arc<Mutex<cortex_storage::MetadataStore>>) -> Self {
         self.metadata = Some(metadata);
         self
     }
@@ -702,11 +699,9 @@ impl Worker {
                     if event_id.is_empty() {
                         continue;
                     }
-                    if let Err(e) = idx.upsert_identity(
-                        event_id,
-                        cortex_storage::Backend::Meili,
-                        event_id,
-                    ) {
+                    if let Err(e) =
+                        idx.upsert_identity(event_id, cortex_storage::Backend::Meili, event_id)
+                    {
                         tracing::warn!(
                             event_id = %event_id,
                             error = %e,

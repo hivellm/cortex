@@ -146,7 +146,12 @@ fn live_session_source_returns_full_30_envelope_set() {
     let mut expected_ids: HashSet<String> = HashSet::new();
     for i in 0..10 {
         let id = format!("E_TURN_USR_{i:02}");
-        envelopes.push(turn_user(&id, session_id, &format!("2026-04-26T19:{:02}:00Z", i), i));
+        envelopes.push(turn_user(
+            &id,
+            session_id,
+            &format!("2026-04-26T19:{:02}:00Z", i),
+            i,
+        ));
         expected_ids.insert(id);
     }
     for i in 0..10 {
@@ -181,7 +186,11 @@ fn live_session_source_returns_full_30_envelope_set() {
     // Sorted by occurred_at.
     let mut prev = String::new();
     for env in &input.envelopes {
-        assert!(env.occurred_at >= prev, "out of order: {} after {prev}", env.occurred_at);
+        assert!(
+            env.occurred_at >= prev,
+            "out of order: {} after {prev}",
+            env.occurred_at
+        );
         prev = env.occurred_at.clone();
     }
 }
