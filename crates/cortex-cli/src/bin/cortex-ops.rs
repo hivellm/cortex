@@ -33,6 +33,8 @@ mod doctor;
 mod graph_cmd;
 #[path = "cortex-ops/helpers.rs"]
 mod helpers;
+#[path = "cortex-ops/config_audit.rs"]
+mod config_audit;
 #[path = "cortex-ops/identity_coverage.rs"]
 mod identity_coverage;
 #[path = "cortex-ops/meili.rs"]
@@ -621,6 +623,22 @@ enum Command {
     /// bootstrap PATCH (`bin/cortex-init.sh` § "seed: Meilisearch
     /// indexes") which is the reconcile path — running this doctor
     /// after a deploy confirms reconcile succeeded.
+    /// ADR-016 §4 — workspace audit of `std::env::var("CORTEX_*")`
+    /// call sites outside `cortex-config`. Exits `0` when zero
+    /// ad-hoc reads remain (every knob bound through the typed
+    /// `cortex_config::Config`), `2` otherwise. The CI grep gate
+    /// shares the same call so a regression that adds a new
+    /// `env::var("CORTEX_*")` reference fails both surfaces in
+    /// lockstep.
+    DoctorConfigAudit {
+        /// Workspace `crates/` root (defaults to `crates/`
+        /// resolved against the current working directory).
+        #[arg(long)]
+        crates_root: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// ADR-012 §4.1 — `event_identity` coverage probe. Walks the
     /// SQLite `event_identity` table once and reports the per-
     /// backend coverage gap: for every row, which of `nexus_id` /
@@ -1116,6 +1134,9 @@ fn main() -> ExitCode {
             master_key,
             json,
         } => doctor::doctor_meili_indexes(meili_url, master_key, json),
+        Command::DoctorConfigAudit { crates_root, json } => {
+            config_audit::doctor_config_audit(crates_root, json)
+        }
         Command::DoctorIdentityCoverage {
             metadata_db,
             sample_limit,

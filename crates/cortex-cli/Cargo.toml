@@ -26,6 +26,7 @@ path = "src/bin/cortex-relevance-eval.rs"
 cortex-build = { path = "../cortex-build" }
 
 [dependencies]
+cortex-config = { path = "../cortex-config" }
 cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-workers = { path = "../cortex-workers" }
