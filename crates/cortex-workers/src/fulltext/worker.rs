@@ -357,6 +357,14 @@ pub struct Worker {
     pub metrics: Arc<Metrics>,
     backpressure: Arc<BackpressureState>,
     processed: Mutex<BTreeSet<String>>,
+    /// ADR-012 — optional `MetadataStore` handle for stamping
+    /// `event_identity.meili_id` after every successful index
+    /// batch. `None` keeps the legacy worker path (pre-phase13d)
+    /// running unchanged. The phase13d boot path in
+    /// `cortex-fulltext-worker/main.rs` builds the store from the
+    /// resolved DB path and chains `with_metadata(store)` after
+    /// `Worker::new`.
+    metadata: Option<Arc<Mutex<cortex_storage::MetadataStore>>>,
 }
 
 impl Worker {
@@ -376,7 +384,20 @@ impl Worker {
             metrics,
             backpressure: Arc::new(BackpressureState::new()),
             processed: Mutex::new(BTreeSet::new()),
+            metadata: None,
         }
+    }
+
+    /// ADR-012 — wire the `MetadataStore` handle for
+    /// `event_identity.meili_id` write-back. Held for the worker's
+    /// lifetime; each successful batch takes the mutex once to
+    /// stamp every event in the batch.
+    pub fn with_metadata(
+        mut self,
+        metadata: Arc<Mutex<cortex_storage::MetadataStore>>,
+    ) -> Self {
+        self.metadata = Some(metadata);
+        self
     }
 
     /// Borrow runtime configuration.
@@ -530,6 +551,14 @@ impl Worker {
                     "fulltext batch indexed"
                 );
                 self.publish_report(&events, &report).await;
+                // ADR-012 §3.2 — stamp `event_identity.meili_id`
+                // for every event the batch indexed. The Meili
+                // doc id for live envelopes IS `event_id` per
+                // `Document::id` (`docs/specs/08-fulltext.md`
+                // §Index keys); using `event_id` as the native
+                // value keeps `lookup_by_native(Meili, event_id)`
+                // a one-row lookup for the doctor + forget paths.
+                self.stamp_identity_after_success(&events);
                 self.backpressure.record_success();
                 for offset in &to_ack {
                     self.ack_offset(*offset).await;
@@ -639,6 +668,58 @@ impl Worker {
         if let Ok(mut seen) = self.processed.lock() {
             for e in events {
                 seen.remove(&e.event_id);
+            }
+        }
+    }
+
+    /// ADR-012 §3.2 — stamp `event_identity.meili_id` for every
+    /// event in `events` after a successful `index_batch`. Best-
+    /// effort: a poisoned mutex or per-row SQLite failure logs at
+    /// WARN but does NOT undo the index batch. Empty `events` is
+    /// a no-op (every msg in the batch was an upstream parse
+    /// failure routed to `invalid` already).
+    ///
+    /// Native value: `event_id` itself. The Meili doc id for
+    /// live envelopes IS `event_id` (`Document::id` contract per
+    /// `docs/specs/08-fulltext.md` §Index keys), and bootstrap
+    /// envelopes still resolve via Meili's `event_id`
+    /// filterableAttribute — using `event_id` as the native value
+    /// keeps `lookup_by_native(Meili, event_id)` a one-row hit
+    /// from the doctor + forget paths.
+    fn stamp_identity_after_success(&self, events: &[EnrichedEvent]) {
+        let Some(metadata) = self.metadata.as_ref() else {
+            return;
+        };
+        if events.is_empty() {
+            return;
+        }
+        match metadata.lock() {
+            Ok(guard) => {
+                use cortex_storage::IdentityIndex as _;
+                let idx = cortex_storage::SqliteIdentityIndex::new(guard.conn());
+                for event in events {
+                    let event_id = event.event_id.as_str();
+                    if event_id.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = idx.upsert_identity(
+                        event_id,
+                        cortex_storage::Backend::Meili,
+                        event_id,
+                    ) {
+                        tracing::warn!(
+                            event_id = %event_id,
+                            error = %e,
+                            "identity index: meili upsert failed (post-index)"
+                        );
+                    }
+                }
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    error = %poisoned,
+                    "identity index: metadata mutex poisoned; skipping meili upserts"
+                );
             }
         }
     }

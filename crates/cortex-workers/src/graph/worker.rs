@@ -704,6 +704,13 @@ pub struct Worker {
     /// `(repo, path, hash)` triple is never re-analyzed by two
     /// concurrent workers.
     analyzer_state: Arc<AnalyzerState>,
+    /// ADR-012 — optional `MetadataStore` handle for stamping
+    /// `event_identity.nexus_id` after every successful patch
+    /// flush. `None` keeps the legacy graph-worker path
+    /// (pre-phase13d) running unchanged. The phase13d boot path
+    /// in `cortex-graph-worker/main.rs` builds the store and
+    /// chains `with_metadata(store)` after `Worker::new`.
+    metadata: Option<Arc<Mutex<cortex_storage::MetadataStore>>>,
 }
 
 impl Worker {
@@ -726,7 +733,20 @@ impl Worker {
             buffer: Arc::new(OutOfOrderBuffer::new(timeout)),
             processed: Mutex::new(BTreeSet::new()),
             analyzer_state: Arc::new(AnalyzerState::new()),
+            metadata: None,
         }
+    }
+
+    /// ADR-012 — wire the `MetadataStore` handle for
+    /// `event_identity.nexus_id` write-back. Held for the worker's
+    /// lifetime; each successful patch flush takes the mutex once
+    /// to stamp every event in the batch.
+    pub fn with_metadata(
+        mut self,
+        metadata: Arc<Mutex<cortex_storage::MetadataStore>>,
+    ) -> Self {
+        self.metadata = Some(metadata);
+        self
     }
 
     /// Borrow the runtime configuration.
@@ -930,6 +950,14 @@ impl Worker {
                 );
                 self.publish_report(&ready.events, &ready.orphan_turn_ids, &report)
                     .await;
+                // ADR-012 §3.3 — stamp `event_identity.nexus_id`
+                // for every event the patch flush covered. The
+                // Nexus node id for an envelope IS its `event_id`
+                // per spec-07 §Node keys (`MERGE (n { event_id:
+                // $id })`); using `event_id` as the native value
+                // keeps `lookup_by_native(Nexus, event_id)` a
+                // one-row hit from the doctor + forget paths.
+                self.stamp_identity_after_success(&ready.events);
                 self.backpressure.record_success();
                 for offset in &to_ack {
                     self.ack_offset(*offset).await;
@@ -1031,6 +1059,53 @@ impl Worker {
         if let Ok(mut seen) = self.processed.lock() {
             for e in events {
                 seen.remove(&e.event_id);
+            }
+        }
+    }
+
+    /// ADR-012 §3.3 — stamp `event_identity.nexus_id` for every
+    /// event a patch flush covered. Best-effort: a poisoned
+    /// mutex or per-row SQLite failure logs at WARN but does NOT
+    /// undo the graph write. Empty `events` is a no-op.
+    ///
+    /// Native value: `event_id` itself. Per spec-07 §Node keys
+    /// the Nexus node id IS `event_id` (`MERGE (n { event_id:
+    /// $id })`); using `event_id` keeps `lookup_by_native(Nexus,
+    /// event_id)` a one-row hit from the doctor + forget paths.
+    fn stamp_identity_after_success(&self, events: &[EnrichedEvent]) {
+        let Some(metadata) = self.metadata.as_ref() else {
+            return;
+        };
+        if events.is_empty() {
+            return;
+        }
+        match metadata.lock() {
+            Ok(guard) => {
+                use cortex_storage::IdentityIndex as _;
+                let idx = cortex_storage::SqliteIdentityIndex::new(guard.conn());
+                for event in events {
+                    let event_id = event.event_id.as_str();
+                    if event_id.is_empty() {
+                        continue;
+                    }
+                    if let Err(e) = idx.upsert_identity(
+                        event_id,
+                        cortex_storage::Backend::Nexus,
+                        event_id,
+                    ) {
+                        tracing::warn!(
+                            event_id = %event_id,
+                            error = %e,
+                            "identity index: nexus upsert failed (post-write)"
+                        );
+                    }
+                }
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    error = %poisoned,
+                    "identity index: metadata mutex poisoned; skipping nexus upserts"
+                );
             }
         }
     }
