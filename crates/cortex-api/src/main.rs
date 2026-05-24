@@ -861,7 +861,12 @@ async fn main() -> Result<()> {
 
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
-    let app = cortex_api::build_router_with_auth(service, Some(dashboard_state), api_keys_store);
+    let app = cortex_api::build_router_with_auth_and_cfg(
+        service,
+        Some(dashboard_state),
+        api_keys_store,
+        cfg.clone(),
+    );
     axum::serve(listener, app).await?;
     Ok(())
 }

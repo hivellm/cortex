@@ -32,6 +32,13 @@ pub struct ApiState {
     /// coverage handler can include a `nexus` backend in the diff.
     /// `None` when the daemon was started without a Nexus URL.
     pub nexus: Option<Arc<nexus_sdk::NexusClient>>,
+    /// Phase13e §3.2 — typed Config snapshot the handlers read
+    /// instead of re-calling `std::env::var("CORTEX_*")` on every
+    /// request. Builders default this to `Config::load()` /
+    /// `Config::default()`; main.rs threads the boot-time snapshot
+    /// in via the `_with_cfg` builder variants so the API and the
+    /// dashboard agree on the same resolution.
+    pub cfg: Arc<cortex_config::Config>,
 }
 
 /// `/v1/status` response body — consumed by the spec-18
@@ -128,10 +135,23 @@ pub fn build_router_with_auth(
     dashboard: Option<crate::dashboard::DashboardState>,
     api_key_store: Option<Arc<crate::storage::api_keys::ApiKeyStore>>,
 ) -> Router {
+    let cfg = Arc::new(cortex_config::Config::load().unwrap_or_default());
+    build_router_with_auth_and_cfg(service, dashboard, api_key_store, cfg)
+}
+
+/// Phase13e §3.2 — variant that accepts a pre-resolved Config so
+/// the daemon and tests share the same snapshot the boot path used.
+pub fn build_router_with_auth_and_cfg(
+    service: Arc<QueryService>,
+    dashboard: Option<crate::dashboard::DashboardState>,
+    api_key_store: Option<Arc<crate::storage::api_keys::ApiKeyStore>>,
+    cfg: Arc<cortex_config::Config>,
+) -> Router {
     let state = ApiState {
         service,
         started_at: Arc::new(Instant::now()),
         nexus: dashboard.as_ref().and_then(|d| d.nexus.clone()),
+        cfg,
     };
     let mut router = Router::new()
         .route("/v1/query", post(handle_query))
@@ -402,16 +422,15 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
-    let env_slugs =
-        crate::coverage::slugs_from_env(std::env::var("CORTEX_COVERAGE_SLUGS").ok().as_deref());
+    let env_slugs = crate::coverage::slugs_from_env(state.cfg.dashboard.coverage_slugs.as_deref());
     slugs.extend(env_slugs);
     // Allow-list override: when `CORTEX_COVERAGE_SLUGS_ONLY` is set,
     // restrict the audit to those slugs only. Stops the lane-derived
     // set from including classifier-stamped language tags (rust /
     // python / typescript / …) that aren't real repos and inflate
     // the "missing" count under every backend.
-    let only_env = std::env::var("CORTEX_COVERAGE_SLUGS_ONLY").ok();
-    let only_set = crate::coverage::slugs_from_env(only_env.as_deref());
+    let only_set =
+        crate::coverage::slugs_from_env(state.cfg.dashboard.coverage_slugs_only.as_deref());
     if !only_set.is_empty() {
         slugs.retain(|s| only_set.contains(s));
     }
@@ -435,16 +454,22 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
         }
     };
 
-    let vectorizer_url = std::env::var("CORTEX_VECTORIZER_URL")
-        .or_else(|_| std::env::var("VECTORIZER_URL"))
-        .ok();
+    let vectorizer_url = state
+        .cfg
+        .embedder
+        .vectorizer_url
+        .clone()
+        .or_else(|| std::env::var("VECTORIZER_URL").ok());
     let bearer = match vectorizer_url.as_deref() {
-        Some(url) => resolve_vectorizer_bearer_for_audit(&http, url).await,
+        Some(url) => resolve_vectorizer_bearer_for_audit(&http, url, &state.cfg).await,
         None => None,
     };
-    let meili_url = std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok();
-    let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
-        .ok()
+    let meili_url = state.cfg.meili.meili_url.clone();
+    let meili_key = state
+        .cfg
+        .meili
+        .meili_api_key
+        .clone()
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     let archive_watchers = crate::coverage::resolve_archive_watcher_urls();
@@ -469,20 +494,23 @@ async fn handle_health_coverage(State(state): State<ApiState>) -> Response {
 async fn resolve_vectorizer_bearer_for_audit(
     http: &reqwest::Client,
     base_url: &str,
+    cfg: &cortex_config::Config,
 ) -> Option<String> {
-    if let Ok(key) =
-        std::env::var("CORTEX_VECTORIZER_API_KEY").or_else(|_| std::env::var("VECTORIZER_API_KEY"))
+    if let Some(key) = cfg
+        .embedder
+        .vectorizer_api_key
+        .clone()
+        .or_else(|| std::env::var("VECTORIZER_API_KEY").ok())
     {
         if !key.is_empty() {
             return Some(key);
         }
     }
-    let user = std::env::var("CORTEX_VECTORIZER_USER")
-        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER"))
-        .ok()?;
-    let pass = std::env::var("CORTEX_VECTORIZER_PASSWORD")
-        .or_else(|_| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD"))
-        .ok()?;
+    if cfg.embedder.vectorizer_user.is_empty() {
+        return None;
+    }
+    let user = cfg.embedder.vectorizer_user.clone();
+    let pass = cfg.embedder.vectorizer_password.clone()?;
     let url = format!("{}/auth/login", base_url.trim_end_matches('/'));
     let body = serde_json::json!({ "username": user, "password": pass });
     let resp = http
@@ -670,10 +698,11 @@ async fn handle_admin_forget(
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    // Resolve config from the same env vars the rest of cortex-api
-    // honours. Missing knobs land 500 with a structured reason so
-    // the operator can fix the deployment instead of guessing.
-    let archive_root: PathBuf = match std::env::var("CORTEX_ARCHIVE_ROOT").ok() {
+    // Resolve config from the typed cortex_config snapshot the
+    // builder threaded onto ApiState. Missing knobs land 500 with a
+    // structured reason so the operator can fix the deployment
+    // instead of guessing.
+    let archive_root: PathBuf = match state.cfg.ingestion.archive_root.as_deref() {
         Some(s) if !s.is_empty() => PathBuf::from(s),
         _ => {
             return (
@@ -712,14 +741,12 @@ async fn handle_admin_forget(
     // Failure here is a transient deployment issue, not a cascade
     // error — surface as 500 with a clear reason.
     let mut embed_cfg = cortex_workers::embedder::EmbedderConfig::default();
-    let vectorizer_url = std::env::var("CORTEX_VECTORIZER_URL")
-        .ok()
+    let vectorizer_url = state
+        .cfg
+        .embedder
+        .vectorizer_url
+        .clone()
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL")
-                .ok()
-                .filter(|s| !s.is_empty())
-        })
         .or_else(|| {
             std::env::var("VECTORIZER_URL")
                 .ok()
@@ -728,22 +755,17 @@ async fn handle_admin_forget(
     if let Some(url) = vectorizer_url.clone() {
         embed_cfg.vectorizer_url = url;
     }
-    let vectorizer_user = std::env::var("CORTEX_VECTORIZER_USER")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER")
-                .ok()
-                .filter(|s| !s.is_empty())
-        });
-    let vectorizer_pw = std::env::var("CORTEX_VECTORIZER_PASSWORD")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD")
-                .ok()
-                .filter(|s| !s.is_empty())
-        });
+    let vectorizer_user = if state.cfg.embedder.vectorizer_user.is_empty() {
+        None
+    } else {
+        Some(state.cfg.embedder.vectorizer_user.clone())
+    };
+    let vectorizer_pw = state
+        .cfg
+        .embedder
+        .vectorizer_password
+        .clone()
+        .filter(|s| !s.is_empty());
     let vec_client = match (vectorizer_user, vectorizer_pw, vectorizer_url) {
         (Some(user), Some(pw), Some(url)) => {
             // Login path — mint a JWT then build the client.
@@ -795,14 +817,14 @@ async fn handle_admin_forget(
     // the LiveMeiliClient (which carries the §1.3 MeiliPruneOps
     // impl).
     let mut meili_cfg = cortex_workers::fulltext::FulltextConfig::default();
-    if let Ok(url) = std::env::var("CORTEX_FULLTEXT_MEILI_URL") {
+    if let Some(url) = state.cfg.meili.meili_url.as_deref() {
         if !url.is_empty() {
-            meili_cfg.meili_url = url;
+            meili_cfg.meili_url = url.to_string();
         }
     }
-    if let Ok(key) = std::env::var("CORTEX_FULLTEXT_MEILI_KEY") {
+    if let Some(key) = state.cfg.meili.meili_api_key.as_deref() {
         if !key.is_empty() {
-            meili_cfg.meili_api_key = Some(key);
+            meili_cfg.meili_api_key = Some(key.to_string());
         }
     }
     let meili_client =

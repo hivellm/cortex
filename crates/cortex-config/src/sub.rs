@@ -475,6 +475,13 @@ pub struct DashboardConfig {
     /// lane has already learned. Env: `CORTEX_COVERAGE_SLUGS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage_slugs: Option<String>,
+    /// Comma-separated allow-list — when set, the on-demand
+    /// `/v1/health/coverage` audit restricts the slug set to these.
+    /// Stops classifier-stamped language tags (rust, python, …) that
+    /// aren't real repos from inflating the "missing" count.
+    /// Env: `CORTEX_COVERAGE_SLUGS_ONLY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage_slugs_only: Option<String>,
     /// RRF alpha blend weight (`0.0`–`1.0`). `None` uses the
     /// `relevance.toml`-derived default. Env: `CORTEX_RRF_ALPHA`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -511,6 +518,7 @@ impl Default for DashboardConfig {
             watch: true,
             memory_tail: true,
             coverage_slugs: None,
+            coverage_slugs_only: None,
             rrf_alpha: None,
             rrf_k: None,
             query_rewriter: None,

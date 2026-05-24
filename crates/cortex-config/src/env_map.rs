@@ -33,6 +33,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_CANARY_ENABLED", "/canary/enabled"),
     ("CORTEX_CANARY_INTERVAL_SECS", "/canary/interval_secs"),
     ("CORTEX_COVERAGE_SLUGS", "/dashboard/coverage_slugs"),
+    (
+        "CORTEX_COVERAGE_SLUGS_ONLY",
+        "/dashboard/coverage_slugs_only",
+    ),
     ("CORTEX_DASHBOARD_MEMORY_TAIL", "/dashboard/memory_tail"),
     ("CORTEX_DASHBOARD_WATCH", "/dashboard/watch"),
     (
@@ -64,6 +68,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_FULLTEXT_MAX_BODY_BYTES", "/meili/max_body_bytes"),
     ("CORTEX_FULLTEXT_MAX_RETRY", "/meili/max_retry"),
     ("CORTEX_FULLTEXT_MEILI_API_KEY", "/meili/meili_api_key"),
+    ("CORTEX_FULLTEXT_MEILI_KEY", "/meili/meili_api_key"),
     ("CORTEX_FULLTEXT_MEILI_URL", "/meili/meili_url"),
     ("CORTEX_FULLTEXT_SYNAP_GROUP", "/meili/synap_group"),
     ("CORTEX_FULLTEXT_SYNAP_URL", "/meili/synap_url"),
