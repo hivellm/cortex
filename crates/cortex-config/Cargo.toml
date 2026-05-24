@@ -1,0 +1,17 @@
+[package]
+name = "cortex-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADR-016 — typed Config crate. Single source of truth for every CORTEX_* knob the workspace reads."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
