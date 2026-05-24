@@ -13,7 +13,7 @@
 - [ ] 3.1 `cortex-api/src/main.rs` (82 → 0). Replace each `std::env::var` with `Config::load()` accessor.
 - [ ] 3.2 `cortex-api/src/http.rs` (32 → 0).
 - [ ] 3.3 `cortex-api/src/config_audit.rs` — replace with thin wrapper around `cortex_config::audit()`.
-- [ ] 3.4 `cortex-workers/**/*.rs` — every call site migrates.
+- [ ] 3.4 `cortex-workers/**/*.rs` — every call site migrates. Per-config migration in progress: embedder/config.rs (7 reads → 0), fulltext/config.rs (12 reads → 0), graph/config.rs (12 reads → 0), ingestion/config.rs (5 CORTEX_* reads → 0; SYNAP_URL legacy non-CORTEX read kept as direct env::var fallback per audit ignore rules). 36 ad-hoc env reads removed; remaining `cortex-workers` reads live in bin entry points (`bin/{cortex-consolidator,classifier-worker,fulltext-indexer,graph-writer,graph-backfill,cortex-claude-archive}.rs`) + `classifier_worker/{config,worker}.rs` + `graph/stale_sweeper.rs` + `fulltext/routing.rs` + `claude_archive/tail.rs` — separate per-file commits.
 - [ ] 3.5 `cortex-cli/**/*.rs` — every call site migrates.
 - [ ] 3.6 CI grep gate: `rg "std::env::var\(\"CORTEX_" crates/ --type rust --files-with-matches | grep -v cortex-config` MUST be empty.
 

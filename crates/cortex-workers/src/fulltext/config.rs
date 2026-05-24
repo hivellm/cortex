@@ -1,9 +1,8 @@
-//! Runtime configuration for the full-text indexer worker, parsed from
-//! `CORTEX_FULLTEXT_*` environment variables. Mirrors the embedder /
-//! graph-writer config layout so operations work the same way across
-//! the three Phase-1 worker binaries.
-
-use std::env;
+//! Runtime configuration for the full-text indexer worker.
+//!
+//! ADR-016 §3.4b — `FulltextConfig::from_env()` delegates to
+//! `cortex_config::Config::load()`. Struct shape preserved so
+//! existing call sites compile unchanged.
 
 /// Full-text-worker configuration.
 #[derive(Debug, Clone)]
@@ -39,74 +38,43 @@ pub struct FulltextConfig {
 
 impl Default for FulltextConfig {
     fn default() -> Self {
-        Self {
-            meili_url: "http://127.0.0.1:7700".to_string(),
-            meili_api_key: None,
-            synap_url: "http://127.0.0.1:17003".to_string(),
-            synap_group: "cortex-fulltext".to_string(),
-            index_prefix: "cortex-".to_string(),
-            workers: 4,
-            upsert_batch: 1_000,
-            flush_ms: 1_000,
-            max_retry: 3,
-            await_task: false,
-            max_body_bytes: 10 * 1024 * 1024,
-        }
+        Self::from_typed(cortex_config::MeiliConfig::default())
     }
 }
 
 impl FulltextConfig {
-    /// Read configuration from `CORTEX_FULLTEXT_*` environment variables.
-    /// Missing variables fall back to [`FulltextConfig::default`].
+    /// Read configuration via `cortex_config::Config::load()`.
+    /// Resolves CLI > env > `cortex.toml` > default. Load failure
+    /// falls back to `Default::default()` (legacy "missing env →
+    /// defaults" behaviour).
     pub fn from_env() -> Self {
-        let def = Self::default();
-        Self {
-            meili_url: env::var("CORTEX_FULLTEXT_MEILI_URL").unwrap_or(def.meili_url),
-            meili_api_key: env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok(),
-            synap_url: env::var("CORTEX_FULLTEXT_SYNAP_URL").unwrap_or(def.synap_url),
-            synap_group: env::var("CORTEX_FULLTEXT_SYNAP_GROUP").unwrap_or(def.synap_group),
-            index_prefix: env::var("CORTEX_FULLTEXT_INDEX_PREFIX").unwrap_or(def.index_prefix),
-            workers: parse_usize("CORTEX_FULLTEXT_WORKERS", def.workers),
-            upsert_batch: parse_usize("CORTEX_FULLTEXT_BATCH", def.upsert_batch),
-            flush_ms: parse_u64("CORTEX_FULLTEXT_FLUSH_MS", def.flush_ms),
-            max_retry: parse_u32("CORTEX_FULLTEXT_MAX_RETRY", def.max_retry),
-            await_task: parse_bool("CORTEX_FULLTEXT_AWAIT_TASK", def.await_task),
-            max_body_bytes: parse_usize("CORTEX_FULLTEXT_MAX_BODY_BYTES", def.max_body_bytes),
+        match cortex_config::Config::load() {
+            Ok(cfg) => Self::from_typed(cfg.meili),
+            Err(_) => Self::default(),
         }
     }
-}
 
-fn parse_usize(key: &str, fallback: usize) -> usize {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<usize>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_u32(key: &str, fallback: u32) -> u32 {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_u64(key: &str, fallback: u64) -> u64 {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_bool(key: &str, fallback: bool) -> bool {
-    env::var(key)
-        .ok()
-        .map(|raw| matches!(raw.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(fallback)
+    fn from_typed(t: cortex_config::MeiliConfig) -> Self {
+        Self {
+            meili_url: t.meili_url,
+            meili_api_key: t.meili_api_key,
+            synap_url: t.synap_url,
+            synap_group: t.synap_group,
+            index_prefix: t.index_prefix,
+            workers: t.workers,
+            upsert_batch: t.upsert_batch,
+            flush_ms: t.flush_ms,
+            max_retry: t.max_retry,
+            await_task: t.await_task,
+            max_body_bytes: t.max_body_bytes,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -185,35 +153,5 @@ mod tests {
         assert_eq!(cfg.max_body_bytes, 4096);
 
         clear_all();
-    }
-
-    #[test]
-    fn parse_bool_accepts_canonical_truthy_values() {
-        let _g = ENV_LOCK.lock().unwrap();
-        for v in ["1", "true", "TRUE", "yes", "on"] {
-            env::set_var("CORTEX_FULLTEXT_AWAIT_TASK", v);
-            assert!(parse_bool("CORTEX_FULLTEXT_AWAIT_TASK", false), "{v}");
-        }
-        env::set_var("CORTEX_FULLTEXT_AWAIT_TASK", "false");
-        assert!(!parse_bool("CORTEX_FULLTEXT_AWAIT_TASK", false));
-        env::set_var("CORTEX_FULLTEXT_AWAIT_TASK", "nonsense");
-        assert!(!parse_bool("CORTEX_FULLTEXT_AWAIT_TASK", false));
-        env::remove_var("CORTEX_FULLTEXT_AWAIT_TASK");
-        // Missing var → fallback.
-        assert!(parse_bool("CORTEX_FULLTEXT_AWAIT_TASK", true));
-    }
-
-    #[test]
-    fn parse_numbers_fall_back_on_garbage() {
-        let _g = ENV_LOCK.lock().unwrap();
-        env::set_var("CORTEX_FULLTEXT_BATCH", "junk");
-        env::set_var("CORTEX_FULLTEXT_FLUSH_MS", "junk");
-        env::set_var("CORTEX_FULLTEXT_MAX_RETRY", "junk");
-        assert_eq!(parse_usize("CORTEX_FULLTEXT_BATCH", 99), 99);
-        assert_eq!(parse_u64("CORTEX_FULLTEXT_FLUSH_MS", 77), 77);
-        assert_eq!(parse_u32("CORTEX_FULLTEXT_MAX_RETRY", 11), 11);
-        env::remove_var("CORTEX_FULLTEXT_BATCH");
-        env::remove_var("CORTEX_FULLTEXT_FLUSH_MS");
-        env::remove_var("CORTEX_FULLTEXT_MAX_RETRY");
     }
 }

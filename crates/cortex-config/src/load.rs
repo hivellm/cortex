@@ -28,7 +28,7 @@ impl Config {
     /// CLI overrides are NOT applied here — binaries that thread
     /// flags through call [`Config::load_with_cli`] instead.
     pub fn load() -> Result<Self, ConfigError> {
-        Self::load_from(Path::new("cortex.toml"), |_| None)
+        Self::load_from(&default_toml_path(), |name| std::env::var(name).ok())
     }
 
     /// Like [`Self::load`] but reads the TOML from `toml_path`
@@ -229,10 +229,7 @@ mod tests {
 
     #[test]
     fn env_overrides_numeric_field_via_coercion() {
-        let env = env_from(HashMap::from([(
-            "CORTEX_RETENTION_BATCH_SIZE",
-            "1024",
-        )]));
+        let env = env_from(HashMap::from([("CORTEX_RETENTION_BATCH_SIZE", "1024")]));
         let cfg = Config::load_from(Path::new("__nonexistent.toml"), env).unwrap();
         assert_eq!(cfg.retention.batch_size, 1024);
     }
@@ -283,16 +280,90 @@ mod tests {
 
     #[test]
     fn empty_env_value_is_treated_as_unset() {
-        let env = env_from(HashMap::from([(
-            "CORTEX_EMBEDDER_VECTORIZER_URL",
-            "",
-        )]));
+        let env = env_from(HashMap::from([("CORTEX_EMBEDDER_VECTORIZER_URL", "")]));
         let cfg = Config::load_from(Path::new("__nonexistent.toml"), env).unwrap();
         assert_eq!(
             cfg.embedder.vectorizer_url,
             EmbedderConfigDefault::vectorizer_url(),
             "empty env value MUST fall through to the default, not clobber it"
         );
+    }
+
+    #[test]
+    fn load_with_cli_reads_toml_when_file_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("cortex.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+                [embedder]
+                vectorizer_url = "http://from-toml-cli:1"
+            "#,
+        )
+        .unwrap();
+        let cli = serde_json::json!({});
+        let cfg = Config::load_with_cli(&toml_path, |_| None, cli).unwrap();
+        assert_eq!(cfg.embedder.vectorizer_url, "http://from-toml-cli:1");
+    }
+
+    #[test]
+    fn load_with_cli_layers_env_then_cli_on_top_of_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let toml_path = dir.path().join("cortex.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+                [embedder]
+                vectorizer_url = "http://toml:1"
+            "#,
+        )
+        .unwrap();
+        let env = env_from(HashMap::from([(
+            "CORTEX_EMBEDDER_VECTORIZER_URL",
+            "http://env:2",
+        )]));
+        // Null CLI overlay leaves env winner intact.
+        let cfg = Config::load_with_cli(&toml_path, env, Value::Null).unwrap();
+        assert_eq!(cfg.embedder.vectorizer_url, "http://env:2");
+    }
+
+    #[test]
+    fn coerce_to_json_scalar_picks_tightest_type() {
+        assert_eq!(coerce_to_json_scalar("true"), Value::Bool(true));
+        assert_eq!(coerce_to_json_scalar("false"), Value::Bool(false));
+        assert_eq!(coerce_to_json_scalar("42"), Value::from(42_i64));
+        assert_eq!(coerce_to_json_scalar("-7"), Value::from(-7_i64));
+        assert_eq!(
+            coerce_to_json_scalar("9223372036854775808"),
+            Value::from(9_223_372_036_854_775_808_u64)
+        );
+        assert_eq!(coerce_to_json_scalar("1.5"), Value::from(1.5_f64));
+        assert_eq!(
+            coerce_to_json_scalar("http://x:1"),
+            Value::String("http://x:1".to_string())
+        );
+    }
+
+    #[test]
+    fn set_by_pointer_overwrites_intermediate_scalar() {
+        // Previous layer dropped a scalar at /a; deeper pointer
+        // /a/b/c must replace it with an object tree.
+        let mut tree = serde_json::json!({ "a": "scalar-value" });
+        set_by_pointer(&mut tree, "/a/b/c", Value::from(7_i64));
+        assert_eq!(tree, serde_json::json!({ "a": { "b": { "c": 7 } } }));
+    }
+
+    #[test]
+    fn merge_json_object_into_scalar_replaces() {
+        let mut base = Value::String("scalar".into());
+        merge_json(&mut base, serde_json::json!({ "k": 1 }));
+        assert_eq!(base, serde_json::json!({ "k": 1 }));
+    }
+
+    #[test]
+    fn deserialize_from_empty_json_fires_default_schema_version() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.schema_version, crate::config::SCHEMA_VERSION);
     }
 
     #[test]

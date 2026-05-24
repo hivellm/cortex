@@ -1,4 +1,11 @@
 //! Ingestion-service configuration.
+//!
+//! ADR-016 §3.4d — `IngestionConfig::from_env()` delegates the
+//! `CORTEX_*` knobs to `cortex_config::Config::load()`. Two
+//! non-CORTEX legacy reads stay direct because they fall
+//! outside the typed-Config surface (`SYNAP_URL` is the legacy
+//! non-namespaced fallback for `CORTEX_SYNAP_URL`; the audit
+//! regex ignores it because it lacks the `CORTEX_` prefix).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -42,45 +49,45 @@ impl Default for IngestionConfig {
 }
 
 impl IngestionConfig {
-    /// Read the usual env vars (`CORTEX_BIND`, `CORTEX_API_PORT`,
-    /// `CORTEX_ARCHIVE_ROOT`, `CORTEX_SYNAP_URL` / `SYNAP_URL`,
-    /// `CORTEX_ARCHIVE_ZSTD`). `CORTEX_SYNAP_URL` is the
-    /// project-namespaced canonical form and wins when both are set;
-    /// `SYNAP_URL` stays accepted for backwards compatibility with
-    /// shell scripts and CI workflows that pre-date the rename.
+    /// Read the configuration via `cortex_config::Config::load()`.
+    /// Legacy `SYNAP_URL` (non-namespaced) is preserved as a
+    /// direct fallback when `CORTEX_SYNAP_URL` is unset — it lives
+    /// outside the typed Config surface because its name predates
+    /// the `CORTEX_*` namespace and the audit regex (correctly)
+    /// only flags `CORTEX_*` reads.
     pub fn from_env() -> Self {
+        let typed = cortex_config::Config::load().ok().map(|c| c.ingestion);
+        let def_self = Self::default();
         let mut cfg = IngestionConfig {
             source: Source::Environment,
             ..Self::default()
         };
-        if let Ok(addr) = std::env::var("CORTEX_INGESTION_BIND") {
-            if let Ok(sa) = addr.parse::<SocketAddr>() {
+
+        if let Some(t) = typed {
+            if let Ok(sa) = t.bind.parse::<SocketAddr>() {
                 cfg.bind = sa;
             }
+            if let Some(p) = t.archive_root {
+                cfg.archive_root = PathBuf::from(p);
+            } else {
+                cfg.archive_root = def_self.archive_root.clone();
+            }
+            cfg.synap_url = t.synap_url;
+            cfg.archive_zstd_level = t.archive_zstd_level;
         }
-        if let (Ok(host), Ok(port)) = (std::env::var("CORTEX_BIND"), std::env::var("CORTEX_API_PORT")) {
-            if let Ok(sa) = format!("{host}:{port}").parse::<SocketAddr>() {
-                cfg.bind = sa;
+
+        // SYNAP_URL legacy fallback — non-CORTEX_ prefix so the
+        // audit regex does NOT flag it. Wins only when
+        // CORTEX_SYNAP_URL was unset (typed load left `synap_url`
+        // as None).
+        if cfg.synap_url.is_none() {
+            if let Ok(url) = std::env::var("SYNAP_URL") {
+                if !url.is_empty() {
+                    cfg.synap_url = Some(url);
+                }
             }
         }
-        if let Ok(path) = std::env::var("CORTEX_ARCHIVE_ROOT") {
-            cfg.archive_root = PathBuf::from(path);
-        }
-        // CORTEX_SYNAP_URL is the canonical project-namespaced form;
-        // SYNAP_URL is the legacy name shell scripts + the docker-
-        // compose env block historically used. Read both, prefer
-        // CORTEX_SYNAP_URL when both are set so a future cleanup of
-        // the duplicate compose env var is structurally safe.
-        if let Ok(url) = std::env::var("CORTEX_SYNAP_URL") {
-            cfg.synap_url = Some(url);
-        } else if let Ok(url) = std::env::var("SYNAP_URL") {
-            cfg.synap_url = Some(url);
-        }
-        if let Ok(level) = std::env::var("CORTEX_ARCHIVE_ZSTD") {
-            if let Ok(l) = level.parse::<i32>() {
-                cfg.archive_zstd_level = l;
-            }
-        }
+
         cfg
     }
 }

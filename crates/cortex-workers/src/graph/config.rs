@@ -1,7 +1,7 @@
-//! Runtime configuration for the graph-writer worker, parsed from
-//! `CORTEX_GRAPH_*` environment variables.
-
-use std::env;
+//! Runtime configuration for the graph-writer worker.
+//!
+//! ADR-016 §3.4c — `GraphConfig::from_env()` delegates to
+//! `cortex_config::Config::load()`. Struct shape preserved.
 
 /// Transport selector for the Nexus client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,73 +60,40 @@ pub struct GraphConfig {
 
 impl Default for GraphConfig {
     fn default() -> Self {
-        Self {
-            nexus_url: "http://127.0.0.1:17002".to_string(),
-            transport: GraphTransport::Auto,
-            synap_url: "http://127.0.0.1:17003".to_string(),
-            synap_group: "cortex-graph".to_string(),
-            workers: 4,
-            patch_batch: 256,
-            flush_ms: 500,
-            max_retry: 3,
-            nexus_user: None,
-            nexus_password: None,
-            out_of_order_buffer_secs: 30,
-        }
+        Self::from_typed(cortex_config::NexusConfig::default())
     }
 }
 
 impl GraphConfig {
-    /// Read configuration from `CORTEX_GRAPH_*` environment variables.
-    /// Missing variables fall back to [`GraphConfig::default`].
+    /// Read configuration via `cortex_config::Config::load()`.
     pub fn from_env() -> Self {
-        let def = Self::default();
-        Self {
-            nexus_url: env::var("CORTEX_GRAPH_NEXUS_URL").unwrap_or(def.nexus_url),
-            transport: env::var("CORTEX_GRAPH_TRANSPORT")
-                .ok()
-                .and_then(|raw| GraphTransport::parse(&raw))
-                .unwrap_or(def.transport),
-            synap_url: env::var("CORTEX_GRAPH_SYNAP_URL").unwrap_or(def.synap_url),
-            synap_group: env::var("CORTEX_GRAPH_SYNAP_GROUP").unwrap_or(def.synap_group),
-            workers: parse_usize("CORTEX_GRAPH_WORKERS", def.workers),
-            patch_batch: parse_usize("CORTEX_GRAPH_PATCH_BATCH", def.patch_batch),
-            flush_ms: parse_u64("CORTEX_GRAPH_FLUSH_MS", def.flush_ms),
-            max_retry: parse_u32("CORTEX_GRAPH_MAX_RETRY", def.max_retry),
-            nexus_user: env::var("CORTEX_GRAPH_NEXUS_USER").ok(),
-            nexus_password: env::var("CORTEX_GRAPH_NEXUS_PASSWORD").ok(),
-            out_of_order_buffer_secs: parse_u64(
-                "CORTEX_GRAPH_OUT_OF_ORDER_BUFFER_SECS",
-                def.out_of_order_buffer_secs,
-            ),
+        match cortex_config::Config::load() {
+            Ok(cfg) => Self::from_typed(cfg.nexus),
+            Err(_) => Self::default(),
         }
     }
-}
 
-fn parse_usize(key: &str, fallback: usize) -> usize {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<usize>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_u32(key: &str, fallback: u32) -> u32 {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_u64(key: &str, fallback: u64) -> u64 {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .unwrap_or(fallback)
+    fn from_typed(t: cortex_config::NexusConfig) -> Self {
+        Self {
+            nexus_url: t.nexus_url,
+            transport: GraphTransport::parse(&t.transport).unwrap_or(GraphTransport::Auto),
+            synap_url: t.synap_url,
+            synap_group: t.synap_group,
+            workers: t.workers,
+            patch_batch: t.patch_batch,
+            flush_ms: t.flush_ms,
+            max_retry: t.max_retry,
+            nexus_user: t.nexus_user,
+            nexus_password: t.nexus_password,
+            out_of_order_buffer_secs: t.out_of_order_buffer_secs,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());

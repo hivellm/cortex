@@ -1,7 +1,13 @@
-//! Runtime configuration for the embedder worker, parsed from `CORTEX_EMBEDDER_*`
-//! environment variables.
-
-use std::env;
+//! Runtime configuration for the embedder worker.
+//!
+//! ADR-016 §3.4a — `EmbedderConfig::from_env()` delegates to
+//! `cortex_config::Config::load()`. The struct shape stays
+//! unchanged so existing call sites (`cfg.workers`,
+//! `cfg.vectorizer_url`, …) compile without edits, but the
+//! resolution path now flows through the typed Config crate:
+//! CLI > env > `cortex.toml` > default. Every `CORTEX_EMBEDDER_*`
+//! env var keeps working byte-for-byte via the env-overlay
+//! pointer table in `cortex_config::env_map::KNOWN_ENV_NAMES`.
 
 /// Embedder worker configuration.
 #[derive(Debug, Clone)]
@@ -34,70 +40,54 @@ pub struct EmbedderConfig {
 
 impl Default for EmbedderConfig {
     fn default() -> Self {
-        Self {
-            workers: 6,
-            chunker_concurrency: 4,
-            upsert_batch: 64,
-            max_retry: 3,
-            vectorizer_url: "http://127.0.0.1:17001".to_string(),
-            synap_url: "http://127.0.0.1:17003".to_string(),
-            vectorizer_user: "admin".to_string(),
-            vectorizer_password: None,
-            collection_prefix: "cortex".to_string(),
-            vector_dim: 768,
-        }
+        // Mirror cortex_config::EmbedderConfig::default() field-for-
+        // field so the two paths converge on the same defaults.
+        let d = cortex_config::EmbedderConfig::default();
+        Self::from_typed(d)
     }
 }
 
 impl EmbedderConfig {
-    /// Read the configuration from `CORTEX_EMBEDDER_*` environment variables.
-    ///
-    /// Missing variables fall back to [`EmbedderConfig::default`].
+    /// Read the configuration via the typed Config crate
+    /// ([`cortex_config::Config::load`]). Resolves CLI > env >
+    /// `cortex.toml` > default. A load failure falls back to
+    /// `Default::default()` so the legacy "missing env → defaults"
+    /// behaviour stays.
     pub fn from_env() -> Self {
-        let def = Self::default();
-        Self {
-            workers: parse_usize("CORTEX_EMBEDDER_WORKERS", def.workers),
-            chunker_concurrency: parse_usize(
-                "CORTEX_EMBEDDER_CHUNKER_CONCURRENCY",
-                def.chunker_concurrency,
-            ),
-            upsert_batch: parse_usize("CORTEX_EMBEDDER_UPSERT_BATCH", def.upsert_batch),
-            max_retry: parse_u32("CORTEX_EMBEDDER_MAX_RETRY", def.max_retry),
-            vectorizer_url: env::var("CORTEX_EMBEDDER_VECTORIZER_URL")
-                .unwrap_or(def.vectorizer_url),
-            synap_url: env::var("CORTEX_EMBEDDER_SYNAP_URL").unwrap_or(def.synap_url),
-            vectorizer_user: env::var("CORTEX_EMBEDDER_VECTORIZER_USER")
-                .unwrap_or(def.vectorizer_user),
-            vectorizer_password: env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok(),
-            collection_prefix: env::var("CORTEX_EMBEDDER_COLLECTION_PREFIX")
-                .unwrap_or(def.collection_prefix),
-            vector_dim: parse_u32("CORTEX_EMBEDDER_DIM", def.vector_dim),
+        match cortex_config::Config::load() {
+            Ok(cfg) => Self::from_typed(cfg.embedder),
+            Err(_) => Self::default(),
         }
     }
-}
 
-fn parse_usize(key: &str, fallback: usize) -> usize {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<usize>().ok())
-        .unwrap_or(fallback)
-}
-
-fn parse_u32(key: &str, fallback: u32) -> u32 {
-    env::var(key)
-        .ok()
-        .and_then(|raw| raw.parse::<u32>().ok())
-        .unwrap_or(fallback)
+    fn from_typed(t: cortex_config::EmbedderConfig) -> Self {
+        Self {
+            workers: t.workers,
+            chunker_concurrency: t.chunker_concurrency,
+            upsert_batch: t.upsert_batch,
+            max_retry: t.max_retry,
+            vectorizer_url: t.vectorizer_url,
+            synap_url: t.synap_url,
+            vectorizer_user: t.vectorizer_user,
+            vectorizer_password: t.vectorizer_password,
+            collection_prefix: t.collection_prefix,
+            vector_dim: t.vector_dim,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::sync::Mutex;
 
     // Env-mutating tests must run sequentially. The std env table is
     // process-global; multiple tests racing on `set_var` corrupt each
-    // other's reads.
+    // other's reads. cortex_config::Config::load() also reads the env,
+    // so this lock is shared semantics — own only inside this module's
+    // tests; cortex_config has its own hermetic loader (load_from)
+    // that bypasses process env entirely.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const ALL_KEYS: &[&str] = &[
@@ -182,6 +172,11 @@ mod tests {
         env::set_var("CORTEX_EMBEDDER_WORKERS", "abc");
         env::set_var("CORTEX_EMBEDDER_DIM", "not-an-int");
 
+        // cortex_config's env-overlay coerces non-numeric strings to
+        // `Value::String`, which then fails serde deserialisation
+        // into `usize` / `u32`. The Config::load() call returns Err,
+        // and from_env() falls back to Default. That preserves the
+        // legacy "unparseable → default" behaviour byte-for-byte.
         let cfg = EmbedderConfig::from_env();
         let def = EmbedderConfig::default();
         assert_eq!(cfg.workers, def.workers);

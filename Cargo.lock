@@ -651,6 +651,7 @@ dependencies = [
  "clap",
  "cortex-api",
  "cortex-build",
+ "cortex-config",
  "cortex-core",
  "cortex-storage",
  "cortex-workers",
@@ -672,6 +673,19 @@ dependencies = [
  "ulid",
  "vectorizer-sdk",
  "zstd",
+]
+
+[[package]]
+name = "cortex-config"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "walkdir",
 ]
 
 [[package]]
@@ -775,6 +789,7 @@ dependencies = [
  "chrono",
  "clap",
  "cortex-build",
+ "cortex-config",
  "cortex-core",
  "cortex-health",
  "cortex-storage",

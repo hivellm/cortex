@@ -67,48 +67,95 @@ impl Default for RetentionConfig {
 // Embedder
 // -------------------------------------------------------------
 
-/// Embedder worker knobs.
+/// Embedder worker knobs. Mirrors the legacy
+/// `cortex_workers::embedder::EmbedderConfig` field-for-field
+/// so the worker's `from_env()` can route through
+/// `cortex_config::Config::load()` without changing its public
+/// struct shape.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EmbedderConfig {
+    /// Number of concurrent Synap-consumer worker tasks.
+    /// Env: `CORTEX_EMBEDDER_WORKERS`.
+    #[serde(default = "default_embedder_workers")]
+    pub workers: usize,
+    /// Chunker parallelism per worker task.
+    /// Env: `CORTEX_EMBEDDER_CHUNKER_CONCURRENCY`.
+    #[serde(default = "default_embedder_chunker_concurrency")]
+    pub chunker_concurrency: usize,
+    /// Maximum chunks per Vectorizer upsert call.
+    /// Env: `CORTEX_EMBEDDER_UPSERT_BATCH`.
+    #[serde(default = "default_embedder_upsert_batch")]
+    pub upsert_batch: usize,
+    /// Maximum retry attempts for Vectorizer requests.
+    /// Env: `CORTEX_EMBEDDER_MAX_RETRY`.
+    #[serde(default = "default_embedder_max_retry")]
+    pub max_retry: u32,
     /// Vectorizer base URL. Env: `CORTEX_EMBEDDER_VECTORIZER_URL`.
     #[serde(default = "default_vectorizer_url")]
     pub vectorizer_url: String,
-    /// Vectorizer admin user.
-    /// Env: `CORTEX_EMBEDDER_VECTORIZER_USER`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vectorizer_user: Option<String>,
-    /// Vectorizer admin password.
-    /// Env: `CORTEX_EMBEDDER_VECTORIZER_PASSWORD`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vectorizer_password: Option<String>,
     /// Synap base URL the embedder consumes from.
     /// Env: `CORTEX_EMBEDDER_SYNAP_URL`.
     #[serde(default = "default_embedder_synap_url")]
     pub synap_url: String,
+    /// Vectorizer admin user.
+    /// Env: `CORTEX_EMBEDDER_VECTORIZER_USER`.
+    #[serde(default = "default_embedder_vectorizer_user")]
+    pub vectorizer_user: String,
+    /// Vectorizer admin password.
+    /// Env: `CORTEX_EMBEDDER_VECTORIZER_PASSWORD`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectorizer_password: Option<String>,
     /// Collection prefix (deployment namespace).
     /// Env: `CORTEX_EMBEDDER_COLLECTION_PREFIX`.
     #[serde(default = "default_collection_prefix")]
     pub collection_prefix: String,
+    /// Vector dimension to provision new collections with.
+    /// Env: `CORTEX_EMBEDDER_DIM`.
+    #[serde(default = "default_embedder_vector_dim")]
+    pub vector_dim: u32,
 }
 
 fn default_vectorizer_url() -> String {
     "http://127.0.0.1:17001".to_string()
 }
 fn default_embedder_synap_url() -> String {
-    "http://127.0.0.1:15500".to_string()
+    "http://127.0.0.1:17003".to_string()
 }
 fn default_collection_prefix() -> String {
-    "cortex.".to_string()
+    "cortex".to_string()
+}
+fn default_embedder_workers() -> usize {
+    6
+}
+fn default_embedder_chunker_concurrency() -> usize {
+    4
+}
+fn default_embedder_upsert_batch() -> usize {
+    64
+}
+fn default_embedder_max_retry() -> u32 {
+    3
+}
+fn default_embedder_vectorizer_user() -> String {
+    "admin".to_string()
+}
+fn default_embedder_vector_dim() -> u32 {
+    768
 }
 
 impl Default for EmbedderConfig {
     fn default() -> Self {
         Self {
+            workers: default_embedder_workers(),
+            chunker_concurrency: default_embedder_chunker_concurrency(),
+            upsert_batch: default_embedder_upsert_batch(),
+            max_retry: default_embedder_max_retry(),
             vectorizer_url: default_vectorizer_url(),
-            vectorizer_user: None,
-            vectorizer_password: None,
             synap_url: default_embedder_synap_url(),
+            vectorizer_user: default_embedder_vectorizer_user(),
+            vectorizer_password: None,
             collection_prefix: default_collection_prefix(),
+            vector_dim: default_embedder_vector_dim(),
         }
     }
 }
@@ -138,19 +185,58 @@ pub struct MeiliConfig {
     /// Env: `CORTEX_FULLTEXT_INDEX_PREFIX`.
     #[serde(default = "default_index_prefix")]
     pub index_prefix: String,
+    /// Number of concurrent worker tasks.
+    /// Env: `CORTEX_FULLTEXT_WORKERS`.
+    #[serde(default = "default_fulltext_workers")]
+    pub workers: usize,
+    /// Maximum documents per Meili upsert call.
+    /// Env: `CORTEX_FULLTEXT_BATCH`.
+    #[serde(default = "default_fulltext_batch")]
+    pub upsert_batch: usize,
+    /// Coalesced micro-batch flush interval in milliseconds.
+    /// Env: `CORTEX_FULLTEXT_FLUSH_MS`.
+    #[serde(default = "default_fulltext_flush_ms")]
+    pub flush_ms: u64,
+    /// Maximum retry attempts for transient Meili errors.
+    /// Env: `CORTEX_FULLTEXT_MAX_RETRY`.
+    #[serde(default = "default_fulltext_max_retry")]
+    pub max_retry: u32,
+    /// When true, `upsert_documents` waits on the returned task.
+    /// Env: `CORTEX_FULLTEXT_AWAIT_TASK`.
+    #[serde(default)]
+    pub await_task: bool,
+    /// Maximum body size in bytes before truncation kicks in.
+    /// Env: `CORTEX_FULLTEXT_MAX_BODY_BYTES`.
+    #[serde(default = "default_fulltext_max_body_bytes")]
+    pub max_body_bytes: usize,
 }
 
 fn default_meili_url() -> String {
-    "http://127.0.0.1:17004".to_string()
+    "http://127.0.0.1:7700".to_string()
 }
 fn default_fulltext_synap_url() -> String {
-    "http://127.0.0.1:15500".to_string()
+    "http://127.0.0.1:17003".to_string()
 }
 fn default_fulltext_synap_group() -> String {
     "cortex-fulltext".to_string()
 }
 fn default_index_prefix() -> String {
     "cortex-".to_string()
+}
+fn default_fulltext_workers() -> usize {
+    4
+}
+fn default_fulltext_batch() -> usize {
+    1_000
+}
+fn default_fulltext_flush_ms() -> u64 {
+    1_000
+}
+fn default_fulltext_max_retry() -> u32 {
+    3
+}
+fn default_fulltext_max_body_bytes() -> usize {
+    10 * 1024 * 1024
 }
 
 impl Default for MeiliConfig {
@@ -161,6 +247,12 @@ impl Default for MeiliConfig {
             synap_url: default_fulltext_synap_url(),
             synap_group: default_fulltext_synap_group(),
             index_prefix: default_index_prefix(),
+            workers: default_fulltext_workers(),
+            upsert_batch: default_fulltext_batch(),
+            flush_ms: default_fulltext_flush_ms(),
+            max_retry: default_fulltext_max_retry(),
+            await_task: false,
+            max_body_bytes: default_fulltext_max_body_bytes(),
         }
     }
 }
@@ -169,7 +261,7 @@ impl Default for MeiliConfig {
 // Nexus (graph)
 // -------------------------------------------------------------
 
-/// Nexus graph store knobs.
+/// Nexus graph store knobs + graph-worker tuning.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NexusConfig {
     /// Nexus base URL. Env: `CORTEX_NEXUS_URL` (also accepts
@@ -177,24 +269,92 @@ pub struct NexusConfig {
     /// per-subsystem override).
     #[serde(default = "default_nexus_url")]
     pub nexus_url: String,
+    /// Transport selector — string form `"auto"` / `"rpc"` /
+    /// `"http"` / aliases (`"bolt"`, `"nexus"`, `"https"`).
+    /// Workers parse to their typed `GraphTransport` enum.
+    /// Env: `CORTEX_GRAPH_TRANSPORT`.
+    #[serde(default = "default_graph_transport")]
+    pub transport: String,
+    /// Synap base URL the graph worker consumes from.
+    /// Env: `CORTEX_GRAPH_SYNAP_URL`.
+    #[serde(default = "default_graph_synap_url")]
+    pub synap_url: String,
+    /// Synap consumer group.
+    /// Env: `CORTEX_GRAPH_SYNAP_GROUP`.
+    #[serde(default = "default_graph_synap_group")]
+    pub synap_group: String,
+    /// Concurrent worker tasks.
+    /// Env: `CORTEX_GRAPH_WORKERS`.
+    #[serde(default = "default_graph_workers")]
+    pub workers: usize,
+    /// Max nodes + edges per Cypher tx.
+    /// Env: `CORTEX_GRAPH_PATCH_BATCH`.
+    #[serde(default = "default_graph_patch_batch")]
+    pub patch_batch: usize,
+    /// Micro-batch flush interval (ms).
+    /// Env: `CORTEX_GRAPH_FLUSH_MS`.
+    #[serde(default = "default_graph_flush_ms")]
+    pub flush_ms: u64,
+    /// Max retry attempts for transient Nexus errors.
+    /// Env: `CORTEX_GRAPH_MAX_RETRY`.
+    #[serde(default = "default_graph_max_retry")]
+    pub max_retry: u32,
     /// Nexus auth user. Env: `CORTEX_GRAPH_NEXUS_USER`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nexus_user: Option<String>,
     /// Nexus auth password. Env: `CORTEX_GRAPH_NEXUS_PASSWORD`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nexus_password: Option<String>,
+    /// Out-of-order tolerance window (seconds) for buffering a
+    /// `tool_call` waiting for its `turn.start` before
+    /// fabricating an orphan Turn.
+    /// Env: `CORTEX_GRAPH_OUT_OF_ORDER_BUFFER_SECS`.
+    #[serde(default = "default_graph_out_of_order_secs")]
+    pub out_of_order_buffer_secs: u64,
 }
 
 fn default_nexus_url() -> String {
     "http://127.0.0.1:17002".to_string()
+}
+fn default_graph_transport() -> String {
+    "auto".to_string()
+}
+fn default_graph_synap_url() -> String {
+    "http://127.0.0.1:17003".to_string()
+}
+fn default_graph_synap_group() -> String {
+    "cortex-graph".to_string()
+}
+fn default_graph_workers() -> usize {
+    4
+}
+fn default_graph_patch_batch() -> usize {
+    256
+}
+fn default_graph_flush_ms() -> u64 {
+    500
+}
+fn default_graph_max_retry() -> u32 {
+    3
+}
+fn default_graph_out_of_order_secs() -> u64 {
+    30
 }
 
 impl Default for NexusConfig {
     fn default() -> Self {
         Self {
             nexus_url: default_nexus_url(),
+            transport: default_graph_transport(),
+            synap_url: default_graph_synap_url(),
+            synap_group: default_graph_synap_group(),
+            workers: default_graph_workers(),
+            patch_batch: default_graph_patch_batch(),
+            flush_ms: default_graph_flush_ms(),
+            max_retry: default_graph_max_retry(),
             nexus_user: None,
             nexus_password: None,
+            out_of_order_buffer_secs: default_graph_out_of_order_secs(),
         }
     }
 }
