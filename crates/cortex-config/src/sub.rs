@@ -332,6 +332,10 @@ pub struct NexusConfig {
     /// Env: `CORTEX_GRAPH_OUT_OF_ORDER_BUFFER_SECS`.
     #[serde(default = "default_graph_out_of_order_secs")]
     pub out_of_order_buffer_secs: u64,
+    /// Graph worker metadata DB path override.
+    /// Env: `CORTEX_GRAPH_METADATA_DB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_db: Option<String>,
 }
 
 fn default_graph_transport() -> String {
@@ -374,6 +378,7 @@ impl Default for NexusConfig {
             nexus_password: None,
             nexus_api_key: None,
             out_of_order_buffer_secs: default_graph_out_of_order_secs(),
+            metadata_db: None,
         }
     }
 }
@@ -410,6 +415,15 @@ pub struct IngestionConfig {
     /// overridden. Env: `CORTEX_HOME`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// Client-side URL of the ingestion router (cortex-ingestion or
+    /// cortex-ops replay). Distinct from `bind` which is the
+    /// listen-side address. Env: `CORTEX_INGESTION_URL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ingestion_url: Option<String>,
+    /// CAS SQLite database path (adjacent to the archive).
+    /// Env: `CORTEX_CAS_DB`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cas_db: Option<String>,
 }
 
 fn default_ingestion_bind() -> String {
@@ -428,6 +442,8 @@ impl Default for IngestionConfig {
             archive_zstd_level: default_zstd(),
             metadata_db: None,
             home: None,
+            ingestion_url: None,
+            cas_db: None,
         }
     }
 }
@@ -495,6 +511,14 @@ pub struct DashboardConfig {
     /// `noun_phrase` with a WARN log. Env: `CORTEX_QUERY_REWRITER`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_rewriter: Option<String>,
+    /// Bearer token the CLI uses when calling the cortex-api.
+    /// Env: `CORTEX_API_TOKEN`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+    /// Client-side URL of the cortex-api (distinct from `api_bind`
+    /// which is the listen-side address). Env: `CORTEX_API_URL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_url: Option<String>,
 }
 
 fn default_api_bind() -> String {
@@ -522,6 +546,8 @@ impl Default for DashboardConfig {
             rrf_alpha: None,
             rrf_k: None,
             query_rewriter: None,
+            api_token: None,
+            api_url: None,
         }
     }
 }
@@ -625,4 +651,73 @@ impl Default for PreThinkingConfig {
             timeout_ms: default_pre_thinking_timeout(),
         }
     }
+}
+
+// -------------------------------------------------------------
+// Doctor
+// -------------------------------------------------------------
+
+/// Doctor subcommand knobs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DoctorConfig {
+    /// Enable the 100k-row budget gate test (expensive; default `false`).
+    /// Set to `true` in CI to enforce the §4.2 latency contract.
+    /// Env: `CORTEX_DOCTOR_BENCH`.
+    #[serde(default)]
+    pub bench: bool,
+}
+
+impl Default for DoctorConfig {
+    fn default() -> Self {
+        Self { bench: false }
+    }
+}
+
+// -------------------------------------------------------------
+// Classifier
+// -------------------------------------------------------------
+
+/// Classifier worker health-probe knobs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ClassifierConfig {
+    /// HTTP URL of the classifier worker's `/healthz` endpoint.
+    /// When `None`, the doctor skips the classifier probe.
+    /// Env: `CORTEX_CLASSIFIER_HEALTH_URL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_url: Option<String>,
+    /// Staleness threshold in milliseconds. When
+    /// `last_consume_ts_ms` is older than this, the worker is
+    /// flagged as degraded. Default `None` means 60 000 ms.
+    /// Env: `CORTEX_CLASSIFIER_STALENESS_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staleness_ms: Option<u64>,
+}
+
+// -------------------------------------------------------------
+// Consolidator
+// -------------------------------------------------------------
+
+/// Consolidator knobs (JSONL fallback path).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ConsolidatorConfig {
+    /// Path to the JSONL fallback file the consolidator writes
+    /// when the ingestion router is unreachable.
+    /// Env: `CORTEX_CONSOLIDATIONS_FALLBACK_FILE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_file: Option<String>,
+}
+
+// -------------------------------------------------------------
+// Auto-memory
+// -------------------------------------------------------------
+
+/// Auto-memory integration knobs.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AutoMemoryConfig {
+    /// Rulebook project slug for auto-memory directory resolution.
+    /// When set, `cortex-ops memory-consolidate` targets
+    /// `~/.claude/projects/<slug>/memory/` without needing `--project`.
+    /// Env: `CORTEX_AUTO_MEMORY_PROJECT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }

@@ -1,5 +1,5 @@
-use std::process::ExitCode;
 use super::helpers::home_dir;
+use std::process::ExitCode;
 
 /// Phase9c — `cortex-ops cas-vacuum`. Drops orphaned CAS blobs and
 /// reclaims disk via SQLite `VACUUM` when the freelist warrants it.
@@ -29,8 +29,9 @@ pub(super) fn cas_vacuum(
     let cas_path = cas_db
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var("CORTEX_CAS_DB")
+            cortex_config::Config::load()
                 .ok()
+                .and_then(|c| c.ingestion.cas_db)
                 .map(std::path::PathBuf::from)
         })
         .unwrap_or_else(|| {

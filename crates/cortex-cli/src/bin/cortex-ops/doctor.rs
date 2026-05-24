@@ -1,5 +1,5 @@
-use std::process::ExitCode;
 use super::helpers::home_dir;
+use std::process::ExitCode;
 
 pub(super) fn doctor(
     vectorizer: Option<String>,
@@ -52,10 +52,8 @@ pub(super) fn doctor(
     // Doctor probes the five canonical routes against
     // `CORTEX_API_URL` so a missed registration shows up as a
     // doctor red BEFORE the operator opens the GUI.
-    if let Some(api) = std::env::var("CORTEX_API_URL")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(api) = cfg.dashboard.api_url.clone().filter(|s| !s.is_empty()) {
         for path in [
             "/v1/health",
             "/v1/health/freshness",
@@ -90,20 +88,20 @@ pub(super) fn doctor(
     // Read the worker's `/healthz.extras.last_consume_ts_ms` and
     // flag the worker as `degraded` when the timestamp is older
     // than `CORTEX_CLASSIFIER_STALENESS_MS` (default 60_000).
-    if let Some(classifier) = std::env::var("CORTEX_CLASSIFIER_HEALTH_URL")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
-        let staleness_ms: u64 = std::env::var("CORTEX_CLASSIFIER_STALENESS_MS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(60_000);
+    if let Some(classifier) = cfg.classifier.health_url.clone().filter(|s| !s.is_empty()) {
+        let staleness_ms: u64 = cfg.classifier.staleness_ms.unwrap_or(60_000);
         let url = format!("{}/healthz", classifier.trim_end_matches('/'));
         let body = std::process::Command::new("curl")
             .args(["-fsS", "--max-time", "3", &url])
             .output()
             .ok()
-            .and_then(|o| if o.status.success() { Some(o.stdout) } else { None })
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(o.stdout)
+                } else {
+                    None
+                }
+            })
             .and_then(|b| String::from_utf8(b).ok());
         match body {
             Some(b) => {
@@ -161,7 +159,11 @@ pub(super) fn doctor(
 /// Phase8d — `cortex-ops doctor-config`. Runs the cortex-api config
 /// audit (read-only, static analysis) and renders either a plain-text
 /// table or JSON. Exit codes match `Severity`: 0=ok, 1=warn, 2=critical.
-pub(super) fn doctor_config(workspace: Option<String>, adapter_toml: Option<String>, json: bool) -> ExitCode {
+pub(super) fn doctor_config(
+    workspace: Option<String>,
+    adapter_toml: Option<String>,
+    json: bool,
+) -> ExitCode {
     use cortex_api::config_audit::{run_audit_with, AuditOptions, AuditPaths, Severity};
 
     let workspace = workspace
@@ -314,7 +316,11 @@ pub(super) fn doctor_alerts(state_dir: Option<String>, json: bool) -> ExitCode {
 ///   critical), or the daemon is unreachable
 pub(super) fn doctor_coverage(api_url: Option<String>, json: bool) -> ExitCode {
     let url = api_url
-        .or_else(|| std::env::var("CORTEX_API_URL").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.dashboard.api_url)
+        })
         .unwrap_or_else(|| "http://127.0.0.1:17000".to_string());
     let endpoint = format!("{}/v1/health/coverage", url.trim_end_matches('/'));
 
@@ -473,32 +479,39 @@ pub(super) fn doctor_consistency(
     min_overlap_jaccard: f64,
     json: bool,
 ) -> ExitCode {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
     let archive_root = archive_root
-        .or_else(|| std::env::var("CORTEX_ARCHIVE_ROOT").ok())
+        .or_else(|| cfg.ingestion.archive_root.clone())
         .unwrap_or_else(|| {
             home_dir()
                 .map(|h| h.join(".cortex/archive").display().to_string())
                 .unwrap_or_else(|| ".cortex/archive".to_string())
         });
-    let meili_url = match meili.or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok()) {
+    let meili_url = match meili.or_else(|| cfg.meili.meili_url.clone()) {
         Some(u) if !u.is_empty() => u,
         _ => {
             eprintln!("doctor consistency: --meili (or $CORTEX_FULLTEXT_MEILI_URL) is required");
             return ExitCode::FAILURE;
         }
     };
-    let meili_key = meili_key.or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok());
+    let meili_key = meili_key.or_else(|| cfg.meili.meili_api_key.clone());
     let vectorizer_url = vectorizer
-        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL").ok())
+        .or_else(|| cfg.embedder.vectorizer_url.clone())
         .filter(|u| !u.is_empty());
     let vectorizer_user = vectorizer_user
-        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER").ok())
+        .or_else(|| {
+            if cfg.embedder.vectorizer_user.is_empty() {
+                None
+            } else {
+                Some(cfg.embedder.vectorizer_user.clone())
+            }
+        })
         .filter(|u| !u.is_empty());
     let vectorizer_password = vectorizer_password
-        .or_else(|| std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok())
+        .or_else(|| cfg.embedder.vectorizer_password.clone())
         .filter(|u| !u.is_empty());
     let nexus_url = nexus
-        .or_else(|| std::env::var("CORTEX_NEXUS_URL").ok())
+        .or_else(|| cfg.nexus.nexus_url.clone())
         .filter(|u| !u.is_empty());
 
     let archive = match cortex_cli::ops::ArchiveProbe::new(&archive_root).scan() {
@@ -604,9 +617,13 @@ pub(super) fn doctor_consistency(
         // Vectorizer collection naming mirrors Meili index naming.
         let live_vec = match runtime.block_on(build_live_vec_query_probe(
             &report,
-            std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL").ok(),
-            std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER").ok(),
-            std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok(),
+            cfg.embedder.vectorizer_url.clone(),
+            if cfg.embedder.vectorizer_user.is_empty() {
+                None
+            } else {
+                Some(cfg.embedder.vectorizer_user.clone())
+            },
+            cfg.embedder.vectorizer_password.clone(),
         )) {
             Ok(p) => p,
             Err(e) => {
@@ -614,15 +631,14 @@ pub(super) fn doctor_consistency(
                 return ExitCode::FAILURE;
             }
         };
-        let live_nexus = match runtime.block_on(build_live_nexus_query_probe(
-            std::env::var("CORTEX_NEXUS_URL").ok(),
-        )) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("nexus query probe init failed: {e}");
-                return ExitCode::FAILURE;
-            }
-        };
+        let live_nexus =
+            match runtime.block_on(build_live_nexus_query_probe(cfg.nexus.nexus_url.clone())) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("nexus query probe init failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
         let q_reports = runtime.block_on(cortex_cli::ops::run_query_probes(
             &queries,
             probe_k,
@@ -942,7 +958,11 @@ pub(super) fn doctor_meili_indexes(
                     continue;
                 }
             };
-            let endpoint = format!("{}/indexes/{}/settings", url.trim_end_matches('/'), idx.name);
+            let endpoint = format!(
+                "{}/indexes/{}/settings",
+                url.trim_end_matches('/'),
+                idx.name
+            );
             let mut req = client.get(&endpoint);
             if let Some(k) = key.as_deref() {
                 req = req.bearer_auth(k);
@@ -1036,10 +1056,7 @@ impl MeiliDriftReport {
         }
         println!();
         for entry in &self.entries {
-            println!(
-                "{:<6} {:<24} {}",
-                entry.status, entry.index, entry.detail
-            );
+            println!("{:<6} {:<24} {}", entry.status, entry.index, entry.detail);
         }
     }
 }
@@ -1065,7 +1082,11 @@ struct MeiliAttrDiff {
 
 impl MeiliIndexCheck {
     fn error(index: &'static str, reason: String) -> Self {
-        let status = if reason == "missing" { "missing" } else { "error" };
+        let status = if reason == "missing" {
+            "missing"
+        } else {
+            "error"
+        };
         Self {
             index,
             status,
@@ -1203,7 +1224,10 @@ mod meili_drift_tests {
         // Declared has no filterableAttributes → empty set; live has
         // ["repo"] → drift.
         assert_eq!(check.status, "drift");
-        assert!(check.diffs.iter().any(|d| d.attribute == "filterableAttributes"));
+        assert!(check
+            .diffs
+            .iter()
+            .any(|d| d.attribute == "filterableAttributes"));
     }
 
     #[test]

@@ -130,7 +130,9 @@ fn collect_coverage(
     };
 
     report.rows_total = conn
-        .query_row("SELECT COUNT(*) FROM event_identity", [], |r| r.get::<_, i64>(0))?
+        .query_row("SELECT COUNT(*) FROM event_identity", [], |r| {
+            r.get::<_, i64>(0)
+        })?
         .max(0) as u64;
 
     for (label, column) in [
@@ -215,9 +217,7 @@ fn render_text(r: &CoverageReport) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cortex_storage::{
-        apply_phase13d_schema, Backend, IdentityIndex as _, SqliteIdentityIndex,
-    };
+    use cortex_storage::{apply_phase13d_schema, Backend, IdentityIndex as _, SqliteIdentityIndex};
 
     fn open() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -241,8 +241,10 @@ mod tests {
     fn fully_stamped_row_reports_zero_gaps() {
         let conn = open();
         let idx = SqliteIdentityIndex::new(&conn);
-        idx.upsert_identity("EVT", Backend::Nexus, "node-1").unwrap();
-        idx.upsert_identity("EVT", Backend::Vectorizer, "vec-1").unwrap();
+        idx.upsert_identity("EVT", Backend::Nexus, "node-1")
+            .unwrap();
+        idx.upsert_identity("EVT", Backend::Vectorizer, "vec-1")
+            .unwrap();
         idx.upsert_identity("EVT", Backend::Meili, "doc-1").unwrap();
         idx.upsert_identity(
             "EVT",
@@ -278,7 +280,8 @@ mod tests {
             "events/year=2026/month=05/raw-00000.parquet",
         )
         .unwrap();
-        idx.upsert_identity("EVT_B", Backend::Meili, "EVT_B").unwrap();
+        idx.upsert_identity("EVT_B", Backend::Meili, "EVT_B")
+            .unwrap();
 
         let report = collect_coverage(&conn, std::path::Path::new(":memory:"), 50).unwrap();
         assert_eq!(report.rows_total, 2);
@@ -313,8 +316,11 @@ mod tests {
     // workflow.
     #[test]
     fn scan_100k_rows_finishes_under_10s_budget() {
-        if std::env::var("CORTEX_DOCTOR_BENCH").ok().as_deref() != Some("1") {
-            eprintln!("skipping: set CORTEX_DOCTOR_BENCH=1 to run the 100k budget gate");
+        if !cortex_config::Config::load()
+            .map(|c| c.doctor.bench)
+            .unwrap_or(false)
+        {
+            eprintln!("skipping: set CORTEX_DOCTOR_BENCH=true to run the 100k budget gate");
             return;
         }
         let conn = open();
@@ -344,8 +350,7 @@ mod tests {
         conn.execute_batch("COMMIT").unwrap();
 
         let started = std::time::Instant::now();
-        let report =
-            collect_coverage(&conn, std::path::Path::new(":memory:"), 0).unwrap();
+        let report = collect_coverage(&conn, std::path::Path::new(":memory:"), 0).unwrap();
         let elapsed = started.elapsed();
         assert_eq!(report.rows_total, 100_000);
         assert!(!report.failed, "every row should be fully stamped");

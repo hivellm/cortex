@@ -52,16 +52,27 @@ pub(super) fn turn_digest(
         }
     };
 
-    let api_base =
-        std::env::var("CORTEX_API_URL").unwrap_or_else(|_| "http://127.0.0.1:17000".to_string());
-    let api_token = std::env::var("CORTEX_API_TOKEN").ok();
-    let ingestion_base = std::env::var("CORTEX_INGESTION_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string());
-    let meili_base = std::env::var("CORTEX_FULLTEXT_MEILI_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:7700".to_string());
-    let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
-        .ok()
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_KEY").ok())
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let api_base = cfg
+        .dashboard
+        .api_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:17000".to_string());
+    let api_token = cfg.dashboard.api_token.clone();
+    let ingestion_base = cfg
+        .ingestion
+        .ingestion_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:17010".to_string());
+    let meili_base = cfg
+        .meili
+        .meili_url
+        .clone()
+        .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
+    let meili_key = cfg
+        .meili
+        .meili_api_key
+        .clone()
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     let _ = page_size; // reserved for future Meili-direct fallback path
@@ -385,16 +396,27 @@ pub(super) fn tool_call_digest(
     // preview pair or as the live Meili → cortex-api pair.
     let (tool_calls, backend, mode_label): (Vec<ToolCall>, Box<dyn ToolCallDigestBackend>, &str) =
         if apply {
-            let api_base = std::env::var("CORTEX_API_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17000".to_string());
-            let api_token = std::env::var("CORTEX_API_TOKEN").ok();
-            let ingestion_base = std::env::var("CORTEX_INGESTION_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string());
-            let meili_base = std::env::var("CORTEX_FULLTEXT_MEILI_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:7700".to_string());
-            let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
-                .ok()
-                .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_KEY").ok())
+            let cfg = cortex_config::Config::load().unwrap_or_default();
+            let api_base = cfg
+                .dashboard
+                .api_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:17000".to_string());
+            let api_token = cfg.dashboard.api_token.clone();
+            let ingestion_base = cfg
+                .ingestion
+                .ingestion_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:17010".to_string());
+            let meili_base = cfg
+                .meili
+                .meili_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
+            let meili_key = cfg
+                .meili
+                .meili_api_key
+                .clone()
                 .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
             let cutoff = now - chrono::Duration::days(plan.digest_after_days);
             let live = match super::tool_call_digest_live::LiveToolCallDigestBackend::new(
@@ -493,16 +515,27 @@ pub(super) fn tool_call_digest(
     // safety gate.
     let live_for_purge: Option<super::tool_call_digest_live::LiveToolCallDigestBackend> =
         if apply && purge_originals && !dry_run {
-            let api_base = std::env::var("CORTEX_API_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17000".to_string());
-            let api_token = std::env::var("CORTEX_API_TOKEN").ok();
-            let ingestion_base = std::env::var("CORTEX_INGESTION_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string());
-            let meili_base = std::env::var("CORTEX_FULLTEXT_MEILI_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:7700".to_string());
-            let meili_key = std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
-                .ok()
-                .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_KEY").ok())
+            let cfg = cortex_config::Config::load().unwrap_or_default();
+            let api_base = cfg
+                .dashboard
+                .api_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:17000".to_string());
+            let api_token = cfg.dashboard.api_token.clone();
+            let ingestion_base = cfg
+                .ingestion
+                .ingestion_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:17010".to_string());
+            let meili_base = cfg
+                .meili
+                .meili_url
+                .clone()
+                .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
+            let meili_key = cfg
+                .meili
+                .meili_api_key
+                .clone()
                 .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
             match super::tool_call_digest_live::LiveToolCallDigestBackend::new(
                 api_base,

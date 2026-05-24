@@ -23,6 +23,8 @@ mod bootstrap;
 mod canary;
 #[path = "cortex-ops/cas.rs"]
 mod cas;
+#[path = "cortex-ops/config_audit.rs"]
+mod config_audit;
 #[path = "cortex-ops/consolidation.rs"]
 mod consolidation;
 #[path = "cortex-ops/digest.rs"]
@@ -33,12 +35,12 @@ mod doctor;
 mod graph_cmd;
 #[path = "cortex-ops/helpers.rs"]
 mod helpers;
-#[path = "cortex-ops/config_audit.rs"]
-mod config_audit;
 #[path = "cortex-ops/identity_coverage.rs"]
 mod identity_coverage;
 #[path = "cortex-ops/meili.rs"]
 mod meili;
+#[path = "cortex-ops/meili_audit.rs"]
+mod meili_audit;
 #[path = "cortex-ops/memory_consolidate_cmd.rs"]
 mod memory_consolidate_cmd;
 #[path = "cortex-ops/metadata.rs"]
@@ -47,18 +49,16 @@ mod metadata;
 mod pii;
 #[path = "cortex-ops/plan.rs"]
 mod plan;
-#[path = "cortex-ops/meili_audit.rs"]
-mod meili_audit;
 #[path = "cortex-ops/retention.rs"]
 mod retention;
-#[path = "cortex-ops/sessions_backfill.rs"]
-mod sessions_backfill;
 #[path = "cortex-ops/retention_archive_purge.rs"]
 mod retention_archive_purge;
 #[path = "cortex-ops/rollup.rs"]
 mod rollup;
 #[path = "cortex-ops/schedule_cmd.rs"]
 mod schedule_cmd;
+#[path = "cortex-ops/sessions_backfill.rs"]
+mod sessions_backfill;
 #[path = "cortex-ops/tool_call_digest_live.rs"]
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
@@ -623,12 +623,12 @@ enum Command {
     /// bootstrap PATCH (`bin/cortex-init.sh` § "seed: Meilisearch
     /// indexes") which is the reconcile path — running this doctor
     /// after a deploy confirms reconcile succeeded.
-    /// ADR-016 §4 — workspace audit of `std::env::var("CORTEX_*")`
+    /// ADR-016 §4 — workspace audit of `std :: env :: var ("CORTEX_*")`
     /// call sites outside `cortex-config`. Exits `0` when zero
     /// ad-hoc reads remain (every knob bound through the typed
     /// `cortex_config::Config`), `2` otherwise. The CI grep gate
     /// shares the same call so a regression that adds a new
-    /// `env::var("CORTEX_*")` reference fails both surfaces in
+    /// `env :: var ("CORTEX_*")` reference fails both surfaces in
     /// lockstep.
     DoctorConfigAudit {
         /// Workspace `crates/` root (defaults to `crates/`
@@ -1409,10 +1409,11 @@ fn resolve_metadata_path_for_bookkeeping() -> std::path::PathBuf {
     // `<HOME>/.cortex/metadata.sqlite` (a NEW DB no other process
     // reads), and the dashboard would surface zero rows under
     // `Bytes reclaimed last 30 d` despite every sweep succeeding.
-    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
         return std::path::PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         return std::path::PathBuf::from(home).join("metadata.sqlite");
     }
     let home = std::env::var("HOME")

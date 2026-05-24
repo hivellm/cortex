@@ -1,5 +1,5 @@
-use std::process::ExitCode;
 use super::helpers::resolve_metadata_db_path;
+use std::process::ExitCode;
 
 /// Phase11l §7.1 — `cortex-ops graph drop` dispatcher. Calls Nexus
 /// `MATCH (n:Label) DETACH DELETE n` for every label Cortex owns,
@@ -11,7 +11,12 @@ use super::helpers::resolve_metadata_db_path;
 /// phase11k §1.4 graph-correlation labels. The list lives here
 /// rather than in the schema module because it is admin-only —
 /// the runtime worker never enumerates labels for deletion.
-pub(super) fn graph_drop(confirm: bool, dry_run: bool, nexus: Option<String>, json: bool) -> ExitCode {
+pub(super) fn graph_drop(
+    confirm: bool,
+    dry_run: bool,
+    nexus: Option<String>,
+    json: bool,
+) -> ExitCode {
     use cortex_workers::graph::config::GraphConfig;
     use cortex_workers::graph::nexus_client::{GraphClient, LiveNexusClient};
 
@@ -49,7 +54,11 @@ pub(super) fn graph_drop(confirm: bool, dry_run: bool, nexus: Option<String>, js
     }
 
     let nexus_url = nexus
-        .or_else(|| std::env::var("CORTEX_GRAPH_NEXUS_URL").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.nexus.nexus_url)
+        })
         .unwrap_or_else(|| "http://127.0.0.1:17002".to_string());
     let cfg = GraphConfig {
         nexus_url: nexus_url.clone(),

@@ -37,8 +37,7 @@ pub(super) fn meili_audit(json: bool) -> ExitCode {
         }
     };
     let report = match rt.block_on(async {
-        let client = LiveMeiliClient::new(&cfg)
-            .map_err(|e| format!("meili client: {e}"))?;
+        let client = LiveMeiliClient::new(&cfg).map_err(|e| format!("meili client: {e}"))?;
         audit_indexes(&client)
             .await
             .map_err(|e| format!("audit: {e}"))
@@ -76,10 +75,7 @@ pub(super) fn meili_audit(json: bool) -> ExitCode {
 /// root (CLI flag → `$CORTEX_ARCHIVE_ROOT` → `<HOME|USERPROFILE>/.cortex/archive`),
 /// derive the index prefix from the live `FulltextConfig`, and walk
 /// every archive partition Meili does not already cover.
-pub(super) fn meili_reindex(
-    archive_root: Option<String>,
-    json: bool,
-) -> ExitCode {
+pub(super) fn meili_reindex(archive_root: Option<String>, json: bool) -> ExitCode {
     let cfg = FulltextConfig::from_env();
     let archive_path = match resolve_archive_root(archive_root) {
         Some(p) => p,
@@ -112,8 +108,7 @@ pub(super) fn meili_reindex(
 
     let prefix = cfg.index_prefix.clone();
     let result = rt.block_on(async {
-        let client = LiveMeiliClient::new(&cfg)
-            .map_err(|e| format!("meili client: {e}"))?;
+        let client = LiveMeiliClient::new(&cfg).map_err(|e| format!("meili client: {e}"))?;
         let client_arc: Arc<dyn cortex_workers::fulltext::meili_client::MeiliClient> =
             Arc::new(client);
         let metrics = Arc::new(Metrics::default());
@@ -122,15 +117,9 @@ pub(super) fn meili_reindex(
             client_arc.clone(),
             metrics.clone(),
         ));
-        replay_missing_partitions(
-            &*client_arc,
-            indexer,
-            &metrics,
-            &archive_path,
-            &prefix,
-        )
-        .await
-        .map_err(|e| format!("replay: {e}"))
+        replay_missing_partitions(&*client_arc, indexer, &metrics, &archive_path, &prefix)
+            .await
+            .map_err(|e| format!("replay: {e}"))
     });
 
     let report = match result {
@@ -174,10 +163,7 @@ fn render_text(report: &AuditReport, meili_url: &str) {
     println!("meili_url: {meili_url}");
     println!(
         "summary:   populated={} empty={} missing={} orphan={}",
-        report.populated_count,
-        report.empty_count,
-        report.missing_count,
-        report.orphan_count
+        report.populated_count, report.empty_count, report.missing_count, report.orphan_count
     );
     println!();
     for row in &report.rows {
@@ -192,12 +178,13 @@ fn resolve_archive_root(cli: Option<String>) -> Option<std::path::PathBuf> {
     if let Some(s) = cli.filter(|s| !s.is_empty()) {
         return Some(std::path::PathBuf::from(s));
     }
-    if let Ok(s) = std::env::var("CORTEX_ARCHIVE_ROOT") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(s) = cfg.ingestion.archive_root.as_deref() {
         if !s.is_empty() {
             return Some(std::path::PathBuf::from(s));
         }
     }
-    if let Ok(s) = std::env::var("CORTEX_HOME") {
+    if let Some(s) = cfg.ingestion.home.as_deref() {
         if !s.is_empty() {
             return Some(std::path::PathBuf::from(s).join("archive"));
         }
@@ -211,29 +198,13 @@ mod tests {
 
     #[test]
     fn resolve_archive_root_prefers_cli_flag() {
-        std::env::remove_var("CORTEX_ARCHIVE_ROOT");
-        std::env::remove_var("CORTEX_HOME");
         let resolved = resolve_archive_root(Some("E:/explicit".to_string())).unwrap();
         assert_eq!(resolved, std::path::PathBuf::from("E:/explicit"));
     }
 
-    #[test]
-    fn resolve_archive_root_falls_back_to_archive_root_env() {
-        std::env::set_var("CORTEX_ARCHIVE_ROOT", "E:/from-env");
-        let resolved = resolve_archive_root(None).unwrap();
-        assert_eq!(resolved, std::path::PathBuf::from("E:/from-env"));
-        std::env::remove_var("CORTEX_ARCHIVE_ROOT");
-    }
-
-    #[test]
-    fn resolve_archive_root_falls_back_to_cortex_home_with_archive_subdir() {
-        std::env::remove_var("CORTEX_ARCHIVE_ROOT");
-        std::env::set_var("CORTEX_HOME", "E:/cortex-home");
-        let resolved = resolve_archive_root(None).unwrap();
-        assert_eq!(
-            resolved,
-            std::path::PathBuf::from("E:/cortex-home").join("archive")
-        );
-        std::env::remove_var("CORTEX_HOME");
-    }
+    // ADR-016 §3.5 — the env-precedence tests for resolve_archive_root
+    // moved to crates/cortex-config/src/load.rs. Per-helper env-
+    // mutation tests would duplicate centralised coverage and race
+    // each other on CORTEX_ARCHIVE_ROOT / CORTEX_HOME (shared process
+    // state). The CLI-flag path stays because it doesn't touch env.
 }

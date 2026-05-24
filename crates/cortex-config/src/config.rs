@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::sub::{
-    CanaryConfig, DashboardConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig,
-    PreThinkingConfig, RetentionConfig, RulebookConfig,
+    AutoMemoryConfig, CanaryConfig, ClassifierConfig, ConsolidatorConfig, DashboardConfig,
+    DoctorConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
+    RetentionConfig, RulebookConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -53,6 +54,18 @@ pub struct Config {
     /// Opt-in synthetic canary runner knobs.
     #[serde(default)]
     pub canary: CanaryConfig,
+    /// Doctor subcommand knobs (bench gate).
+    #[serde(default)]
+    pub doctor: DoctorConfig,
+    /// Classifier worker health-probe knobs.
+    #[serde(default)]
+    pub classifier: ClassifierConfig,
+    /// Consolidator JSONL fallback knobs.
+    #[serde(default)]
+    pub consolidator: ConsolidatorConfig,
+    /// Auto-memory integration knobs.
+    #[serde(default)]
+    pub auto_memory: AutoMemoryConfig,
 }
 
 fn default_schema_version() -> String {
@@ -72,6 +85,10 @@ impl Default for Config {
             pre_thinking: PreThinkingConfig::default(),
             rulebook: RulebookConfig::default(),
             canary: CanaryConfig::default(),
+            doctor: DoctorConfig::default(),
+            classifier: ClassifierConfig::default(),
+            consolidator: ConsolidatorConfig::default(),
+            auto_memory: AutoMemoryConfig::default(),
         }
     }
 }

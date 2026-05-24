@@ -1,5 +1,8 @@
+use super::{
+    helpers::{home_dir, resolve_metadata_db},
+    LogConfigOverrides, MetadataReapTargetArg,
+};
 use std::process::ExitCode;
-use super::{LogConfigOverrides, MetadataReapTargetArg, helpers::{home_dir, resolve_metadata_db}};
 
 /// Phase9g — `cortex-ops metadata-reap`. Aggregates aged SQLite rows
 /// into rollup tables, deletes the sources, and rotates the operator
@@ -15,8 +18,8 @@ pub(super) fn metadata_reap(
     json: bool,
 ) -> ExitCode {
     use cortex_cli::ops::{rotate_if_needed, LogRotateOpts, LogRotateOutcome};
-    use cortex_workers::retention::metadata_reap::{run, ReapPlan, ReapTarget};
     use cortex_storage::MetadataStore;
+    use cortex_workers::retention::metadata_reap::{run, ReapPlan, ReapTarget};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -32,8 +35,9 @@ pub(super) fn metadata_reap(
     let metadata_path = metadata_db
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var("CORTEX_METADATA_DB")
+            cortex_config::Config::load()
                 .ok()
+                .and_then(|c| c.ingestion.metadata_db)
                 .map(std::path::PathBuf::from)
         })
         .unwrap_or_else(|| {

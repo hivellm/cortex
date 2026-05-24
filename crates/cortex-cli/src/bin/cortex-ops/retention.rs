@@ -17,8 +17,8 @@ pub(super) fn retention_sweep(
     metadata_db: Option<String>,
     json: bool,
 ) -> ExitCode {
-    use cortex_workers::retention::{run_sweep, MemoryVectorizerOps, SweepError, SweepPlan};
     use cortex_storage::MetadataStore;
+    use cortex_workers::retention::{run_sweep, MemoryVectorizerOps, SweepError, SweepPlan};
 
     let now = match time_travel {
         Some(s) => match chrono::DateTime::parse_from_rfc3339(&s) {
@@ -38,8 +38,9 @@ pub(super) fn retention_sweep(
     let metadata_path = metadata_db
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            std::env::var("CORTEX_METADATA_DB")
+            cortex_config::Config::load()
                 .ok()
+                .and_then(|c| c.ingestion.metadata_db)
                 .map(std::path::PathBuf::from)
         })
         .unwrap_or_else(|| {
@@ -161,11 +162,12 @@ pub(super) fn sweep_empty(
     use cortex_workers::fulltext::sweep::{sweep_empty_canonical, sweep_stale_indexes};
     use cortex_workers::fulltext::{FulltextConfig, LiveMeiliClient};
 
+    let cfg_typed = cortex_config::Config::load().unwrap_or_default();
     let meili_url = meili
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .or_else(|| cfg_typed.meili.meili_url.clone())
         .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
     let api_key = meili_key
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok())
+        .or_else(|| cfg_typed.meili.meili_api_key.clone())
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     let cfg = FulltextConfig {
@@ -219,8 +221,7 @@ pub(super) fn sweep_empty(
         .collect();
     non_canonical_empty.sort();
 
-    let canonical_empty_uids: Vec<String> =
-        canonical_empty.iter().map(|c| c.uid.clone()).collect();
+    let canonical_empty_uids: Vec<String> = canonical_empty.iter().map(|c| c.uid.clone()).collect();
 
     if !apply {
         if json {
@@ -238,17 +239,11 @@ pub(super) fn sweep_empty(
         } else {
             println!("cortex-ops sweep-empty (dry-run)");
             println!("meili: {meili_url}");
-            println!(
-                "non-canonical empty ({}):",
-                non_canonical_empty.len()
-            );
+            println!("non-canonical empty ({}):", non_canonical_empty.len());
             for n in &non_canonical_empty {
                 println!("  would drop: {n}");
             }
-            println!(
-                "canonical empty ({}):",
-                canonical_empty_uids.len()
-            );
+            println!("canonical empty ({}):", canonical_empty_uids.len());
             for n in &canonical_empty_uids {
                 println!("  would drop: {n}");
             }

@@ -39,12 +39,14 @@ pub(super) fn consolidation_prune(
     let vec_password = consolidation_prune_vectorizer_password(ConsolidationPruneEnv::from_env());
 
     let meili_url_v = meili_url
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.meili.meili_url)
+        })
         .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
-    let meili_key_v = consolidation_prune_meili_key(
-        meili_key.clone(),
-        ConsolidationPruneEnv::from_env(),
-    );
+    let meili_key_v =
+        consolidation_prune_meili_key(meili_key.clone(), ConsolidationPruneEnv::from_env());
 
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -75,9 +77,8 @@ pub(super) fn consolidation_prune(
         embed_cfg.vectorizer_url = vec_url.clone();
         embed_cfg.vectorizer_password = Some(token);
         let live_vec =
-            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(
-                embed_cfg,
-            ) {
+            match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg)
+            {
                 Ok(c) => c,
                 Err(e) => return Err(format!("vectorizer client: {e}")),
             };
@@ -98,12 +99,11 @@ pub(super) fn consolidation_prune(
         // Pull every consolidation doc. Meili's `GET /indexes/{uid}/documents?limit=N&offset=K`
         // returns `{results: [...], offset, limit, total}`. We paginate
         // until we've seen everything.
-        let docs = match fetch_all_consolidations(&meili_url_v, meili_key_v.as_deref(), page_size)
-            .await
-        {
-            Ok(d) => d,
-            Err(e) => return Err(format!("meili list: {e}")),
-        };
+        let docs =
+            match fetch_all_consolidations(&meili_url_v, meili_key_v.as_deref(), page_size).await {
+                Ok(d) => d,
+                Err(e) => return Err(format!("meili list: {e}")),
+            };
 
         if dry_run {
             // Bucket without touching either backend.
@@ -210,10 +210,7 @@ pub(super) fn consolidation_prune(
                 started_at,
                 "success",
                 cortex_cli::ops::sweep_bookkeeping::SweepStageStats {
-                    records_demoted: report
-                        .events_demoted_per_tier
-                        .values()
-                        .sum::<u64>(),
+                    records_demoted: report.events_demoted_per_tier.values().sum::<u64>(),
                     records_dropped: report.events_purged,
                     extras,
                     ..Default::default()
@@ -358,9 +355,7 @@ pub(super) async fn fetch_all_consolidations(
             {
                 Some(s) => s,
                 None => {
-                    eprintln!(
-                        "consolidation-prune: skip {event_id} without occurred_at/ts"
-                    );
+                    eprintln!("consolidation-prune: skip {event_id} without occurred_at/ts");
                     continue;
                 }
             };
@@ -427,15 +422,33 @@ pub(super) struct ConsolidationPruneEnv {
 
 impl ConsolidationPruneEnv {
     pub(super) fn from_env() -> Self {
+        // ADR-016 §3.5 — cortex_config carries the legacy aliases:
+        // CORTEX_VECTORIZER_{URL,USER,PASSWORD} and
+        // CORTEX_FULLTEXT_MEILI_KEY all map to the same typed
+        // fields as their _EMBEDDER_ / _API_KEY counterparts. The
+        // legacy-vs-embedder distinction the helper functions still
+        // make exists only for the boot precedence — but with the
+        // typed Config the env overlay already collapses both onto
+        // the same value, so the embedder_* + non-embedder_* fields
+        // mirror each other here.
+        let cfg = cortex_config::Config::load().unwrap_or_default();
         Self {
-            vectorizer_url: std::env::var("CORTEX_VECTORIZER_URL").ok(),
-            embedder_vectorizer_url: std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL").ok(),
-            vectorizer_user: std::env::var("CORTEX_VECTORIZER_USER").ok(),
-            embedder_vectorizer_user: std::env::var("CORTEX_EMBEDDER_VECTORIZER_USER").ok(),
-            vectorizer_password: std::env::var("CORTEX_VECTORIZER_PASSWORD").ok(),
-            embedder_vectorizer_password: std::env::var("CORTEX_EMBEDDER_VECTORIZER_PASSWORD").ok(),
-            fulltext_meili_api_key: std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok(),
-            fulltext_meili_key: std::env::var("CORTEX_FULLTEXT_MEILI_KEY").ok(),
+            vectorizer_url: cfg.embedder.vectorizer_url.clone(),
+            embedder_vectorizer_url: cfg.embedder.vectorizer_url.clone(),
+            vectorizer_user: if cfg.embedder.vectorizer_user.is_empty() {
+                None
+            } else {
+                Some(cfg.embedder.vectorizer_user.clone())
+            },
+            embedder_vectorizer_user: if cfg.embedder.vectorizer_user.is_empty() {
+                None
+            } else {
+                Some(cfg.embedder.vectorizer_user.clone())
+            },
+            vectorizer_password: cfg.embedder.vectorizer_password.clone(),
+            embedder_vectorizer_password: cfg.embedder.vectorizer_password.clone(),
+            fulltext_meili_api_key: cfg.meili.meili_api_key.clone(),
+            fulltext_meili_key: cfg.meili.meili_api_key.clone(),
             meili_master_key: std::env::var("MEILI_MASTER_KEY").ok(),
         }
     }
@@ -489,12 +502,13 @@ pub(super) fn consolidations_replay_path(cli_from: Option<PathBuf>) -> Option<Pa
     if let Some(p) = cli_from {
         return Some(p);
     }
-    if let Ok(p) = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.consolidator.fallback_file.as_deref() {
         if !p.trim().is_empty() {
             return Some(PathBuf::from(p));
         }
     }
-    if let Ok(p) = std::env::var("CORTEX_HOME") {
+    if let Some(p) = cfg.ingestion.home.as_deref() {
         if !p.trim().is_empty() {
             return Some(PathBuf::from(p).join("consolidations.jsonl"));
         }
@@ -511,7 +525,11 @@ pub(super) fn consolidations_replay_path(cli_from: Option<PathBuf>) -> Option<Pa
 /// URL trimmed of trailing slash so callers can append `/v1/events`.
 pub(super) fn consolidations_replay_ingest_url(cli: Option<String>) -> String {
     let raw = cli
-        .or_else(|| std::env::var("CORTEX_INGESTION_URL").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.ingestion.ingestion_url)
+        })
         .unwrap_or_else(|| "http://127.0.0.1:17010".to_string());
     raw.trim().trim_end_matches('/').to_string()
 }
@@ -811,7 +829,7 @@ mod consolidation_prune_env_tests {
 
     #[test]
     fn replay_path_honours_cli_flag_first() {
-        let saved = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        let saved = std::env::var_os("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
         std::env::set_var(
             "CORTEX_CONSOLIDATIONS_FALLBACK_FILE",
             "D:/from-env/fallback.jsonl",
@@ -826,8 +844,8 @@ mod consolidation_prune_env_tests {
 
     #[test]
     fn replay_path_falls_through_to_cortex_home() {
-        let saved_override = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
-        let saved_home = std::env::var("CORTEX_HOME").ok();
+        let saved_override = std::env::var_os("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
+        let saved_home = std::env::var_os("CORTEX_HOME");
         std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
         std::env::set_var("CORTEX_HOME", "D:/cortex-root");
         let p = consolidations_replay_path(None);
@@ -839,12 +857,15 @@ mod consolidation_prune_env_tests {
             Some(v) => std::env::set_var("CORTEX_HOME", v),
             None => std::env::remove_var("CORTEX_HOME"),
         }
-        assert_eq!(p, Some(PathBuf::from("D:/cortex-root/consolidations.jsonl")));
+        assert_eq!(
+            p,
+            Some(PathBuf::from("D:/cortex-root/consolidations.jsonl"))
+        );
     }
 
     #[test]
     fn replay_ingest_url_strips_trailing_slash() {
-        let saved = std::env::var("CORTEX_INGESTION_URL").ok();
+        let saved = std::env::var_os("CORTEX_INGESTION_URL");
         std::env::remove_var("CORTEX_INGESTION_URL");
         assert_eq!(
             consolidations_replay_ingest_url(Some("http://localhost:9999/".to_string())),

@@ -1,6 +1,6 @@
 //! ADR-016 §4 — `cortex-ops doctor-config-audit` — walks the
 //! workspace via `cortex_config::audit` and reports every
-//! ad-hoc `std::env::var("CORTEX_*")` call site living outside
+//! ad-hoc `std :: env :: var ("CORTEX_*")` call site living outside
 //! `cortex-config`. Exit code `0` when the report is empty
 //! (every knob bound through the typed `Config`), `2` otherwise.
 //!
@@ -23,10 +23,7 @@ struct ReportEnvelope {
     usages: Vec<EnvVarUsage>,
 }
 
-pub(super) fn doctor_config_audit(
-    crates_root: Option<String>,
-    json_output: bool,
-) -> ExitCode {
+pub(super) fn doctor_config_audit(crates_root: Option<String>, json_output: bool) -> ExitCode {
     let root = match resolve_crates_root(crates_root) {
         Some(p) => p,
         None => {

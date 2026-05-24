@@ -154,9 +154,7 @@ pub(super) fn sessions_backfill(
                 Ok(()) => upserted = upserted.saturating_add(1),
                 Err(e) => {
                     failed = failed.saturating_add(1);
-                    eprintln!(
-                        "sessions-backfill: upsert {sid} failed: {e}"
-                    );
+                    eprintln!("sessions-backfill: upsert {sid} failed: {e}");
                 }
             }
         }
@@ -206,12 +204,13 @@ fn resolve_archive_root(arg: Option<String>) -> PathBuf {
     if let Some(p) = arg {
         return PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("CORTEX_ARCHIVE_ROOT") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.ingestion.archive_root.as_deref() {
         if !p.is_empty() {
             return PathBuf::from(p);
         }
     }
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         if !home.is_empty() {
             return PathBuf::from(home).join("archive");
         }
@@ -235,8 +234,8 @@ mod tests {
 
     #[test]
     fn resolve_archive_root_falls_back_to_cortex_home() {
-        let saved_arch = std::env::var("CORTEX_ARCHIVE_ROOT").ok();
-        let saved_home = std::env::var("CORTEX_HOME").ok();
+        let saved_arch = std::env::var_os("CORTEX_ARCHIVE_ROOT");
+        let saved_home = std::env::var_os("CORTEX_HOME");
         std::env::remove_var("CORTEX_ARCHIVE_ROOT");
         std::env::set_var("CORTEX_HOME", "D:/fakehome");
         let p = resolve_archive_root(None);

@@ -88,10 +88,7 @@ pub(super) fn run(
     extras.insert("files_deleted".into(), report.files_deleted.into());
     extras.insert("files_kept".into(), report.files_kept.into());
     extras.insert("files_partial".into(), report.files_partial.into());
-    extras.insert(
-        "files_unreadable".into(),
-        report.files_unreadable.into(),
-    );
+    extras.insert("files_unreadable".into(), report.files_unreadable.into());
     extras.insert(
         "partitions_visited".into(),
         report.partitions_visited.into(),
@@ -130,7 +127,10 @@ fn resolve_home(cli_home: Option<String>) -> Option<PathBuf> {
     if let Some(s) = cli_home.filter(|s| !s.is_empty()) {
         return Some(PathBuf::from(s));
     }
-    if let Ok(s) = std::env::var("CORTEX_HOME") {
+    if let Some(s) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.ingestion.home)
+    {
         if !s.is_empty() {
             return Some(PathBuf::from(s));
         }
@@ -144,27 +144,15 @@ mod tests {
 
     #[test]
     fn resolve_home_prefers_cli_flag() {
-        std::env::remove_var("CORTEX_HOME");
         let resolved = resolve_home(Some("E:/explicit".to_string())).unwrap();
         assert_eq!(resolved, PathBuf::from("E:/explicit"));
     }
 
-    #[test]
-    fn resolve_home_falls_back_to_env() {
-        std::env::set_var("CORTEX_HOME", "E:/env");
-        let resolved = resolve_home(None).unwrap();
-        assert_eq!(resolved, PathBuf::from("E:/env"));
-        std::env::remove_var("CORTEX_HOME");
-    }
-
-    #[test]
-    fn resolve_home_drops_empty_strings_through_to_default() {
-        // Empty CLI flag value shouldn't pin the resolver to "" —
-        // the filter step inside `resolve_home` strips it before the
-        // env lookup runs.
-        std::env::set_var("CORTEX_HOME", "E:/from-env");
-        let resolved = resolve_home(Some("".to_string())).unwrap();
-        assert_eq!(resolved, PathBuf::from("E:/from-env"));
-        std::env::remove_var("CORTEX_HOME");
-    }
+    // ADR-016 §3.5 — the env-precedence tests for resolve_home moved
+    // to crates/cortex-config/src/load.rs (env_overrides_default_*).
+    // Cortex-CLI helpers now thread through `Config::load()`, so per-
+    // helper env-mutation tests would duplicate centralised coverage
+    // and race each other when run in parallel (CORTEX_HOME is shared
+    // process state). The CLI-flag path stays here because it doesn't
+    // touch env.
 }

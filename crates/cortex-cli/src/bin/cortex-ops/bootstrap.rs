@@ -1,5 +1,5 @@
-use std::process::ExitCode;
 use super::helpers::resolve_metadata_db;
+use std::process::ExitCode;
 
 /// Phase10c — `cortex-ops bootstrap-dedup` dispatcher. Walks the
 /// `bootstrap_seen` ledger looking for `(repo, content_hash)`
@@ -321,11 +321,12 @@ pub(super) fn dedupe_laws(
     apply: bool,
     json: bool,
 ) -> ExitCode {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
     let meili_url = meili
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .or_else(|| cfg.meili.meili_url.clone())
         .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
     let api_key = meili_key
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok())
+        .or_else(|| cfg.meili.meili_api_key.clone())
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -340,7 +341,15 @@ pub(super) fn dedupe_laws(
     };
 
     runtime.block_on(async move {
-        match dedupe_laws_async(&meili_url, api_key.as_deref(), target_index.as_deref(), apply, json).await {
+        match dedupe_laws_async(
+            &meili_url,
+            api_key.as_deref(),
+            target_index.as_deref(),
+            apply,
+            json,
+        )
+        .await
+        {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("dedupe-laws: {e}");
@@ -372,12 +381,13 @@ async fn dedupe_laws_async(
     let candidates: Vec<String> = if let Some(t) = target_index {
         vec![t.to_string()]
     } else {
-        let stats: serde_json::Value = auth(http.get(format!("{}/stats", meili_url.trim_end_matches('/'))))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
+        let stats: serde_json::Value =
+            auth(http.get(format!("{}/stats", meili_url.trim_end_matches('/'))))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
         let map = stats
             .get("indexes")
             .and_then(|v| v.as_object())
@@ -395,7 +405,8 @@ async fn dedupe_laws_async(
         keep: Vec<String>,
         drop: Vec<String>,
     }
-    let mut per_index: std::collections::BTreeMap<String, IndexReport> = std::collections::BTreeMap::new();
+    let mut per_index: std::collections::BTreeMap<String, IndexReport> =
+        std::collections::BTreeMap::new();
 
     for index in &candidates {
         let mut all_docs: Vec<serde_json::Value> = Vec::new();
@@ -411,7 +422,10 @@ async fn dedupe_laws_async(
             );
             let resp = auth(http.get(&url)).send().await?;
             if !resp.status().is_success() {
-                anyhow::bail!("list documents {index} offset={offset}: status {}", resp.status());
+                anyhow::bail!(
+                    "list documents {index} offset={offset}: status {}",
+                    resp.status()
+                );
             }
             let body: serde_json::Value = resp.json().await?;
             let results = body
@@ -434,16 +448,23 @@ async fn dedupe_laws_async(
 
         // Group by (law_id, content_hash). Keep the document with the
         // oldest `ts` (numeric epoch ms).
-        let mut groups: std::collections::HashMap<
-            (String, String),
-            Vec<(String, i64)>,
-        > = std::collections::HashMap::new();
+        let mut groups: std::collections::HashMap<(String, String), Vec<(String, i64)>> =
+            std::collections::HashMap::new();
         for d in &all_docs {
-            let id = d.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = d
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let law_id = d
                 .get("law_id")
                 .and_then(|v| v.as_str())
-                .or_else(|| d.get("ext").and_then(|e| e.get("law_violation")).and_then(|lv| lv.get("law_id")).and_then(|v| v.as_str()))
+                .or_else(|| {
+                    d.get("ext")
+                        .and_then(|e| e.get("law_violation"))
+                        .and_then(|lv| lv.get("law_id"))
+                        .and_then(|v| v.as_str())
+                })
                 .unwrap_or("")
                 .to_string();
             let content_hash = d
@@ -500,7 +521,10 @@ async fn dedupe_laws_async(
         });
         println!("{}", serde_json::to_string_pretty(&body)?);
     } else {
-        println!("cortex-ops dedupe-laws ({})", if apply { "apply" } else { "dry-run" });
+        println!(
+            "cortex-ops dedupe-laws ({})",
+            if apply { "apply" } else { "dry-run" }
+        );
         println!("meili: {meili_url}");
         for (uid, r) in &per_index {
             println!(
@@ -539,7 +563,11 @@ async fn dedupe_laws_async(
                 anyhow::bail!("delete-batch {uid}: {detail}");
             }
         }
-        eprintln!("dedupe-laws: applied {} deletes on {}", report.drop.len(), uid);
+        eprintln!(
+            "dedupe-laws: applied {} deletes on {}",
+            report.drop.len(),
+            uid
+        );
     }
     Ok(())
 }

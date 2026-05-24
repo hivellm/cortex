@@ -4,26 +4,30 @@
 /// precedence so `cortex-ops graph replay` writes to the same row
 /// the worker reads on boot.
 pub(super) fn resolve_metadata_db_path() -> std::path::PathBuf {
-    if let Ok(p) = std::env::var("CORTEX_GRAPH_METADATA_DB") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.nexus.metadata_db.as_deref() {
         return std::path::PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+    if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
         return std::path::PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         return std::path::PathBuf::from(home).join("metadata.sqlite");
     }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    std::path::PathBuf::from(home).join(".cortex").join("metadata.sqlite")
+    std::path::PathBuf::from(home)
+        .join(".cortex")
+        .join("metadata.sqlite")
 }
 
 pub(super) fn resolve_metadata_db(arg: Option<String>) -> Option<std::path::PathBuf> {
     if let Some(p) = arg {
         return Some(std::path::PathBuf::from(p));
     }
-    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
         if !p.is_empty() {
             return Some(std::path::PathBuf::from(p));
         }
@@ -34,7 +38,7 @@ pub(super) fn resolve_metadata_db(arg: Option<String>) -> Option<std::path::Path
     // fallback `cortex-ops schedule list` resolves to
     // `<HOME>/.cortex/metadata.sqlite` (HOME default) and prints an
     // empty registry instead of the real one.
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         if !home.is_empty() {
             return Some(std::path::PathBuf::from(home).join("metadata.sqlite"));
         }

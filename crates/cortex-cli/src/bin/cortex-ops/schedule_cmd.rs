@@ -1,5 +1,5 @@
+use super::{helpers::home_dir, ScheduleCommand};
 use std::process::ExitCode;
-use super::{ScheduleCommand, helpers::home_dir};
 
 /// Phase9k — `cortex-ops schedule` dispatcher. Each subcommand
 /// translates straight onto `cortex_cli::ops::scheduler` calls plus
@@ -15,7 +15,8 @@ pub(super) fn schedule(command: ScheduleCommand) -> ExitCode {
         if let Some(p) = arg {
             return std::path::PathBuf::from(p);
         }
-        if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+        let cfg = cortex_config::Config::load().unwrap_or_default();
+        if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
             if !p.is_empty() {
                 return std::path::PathBuf::from(p);
             }
@@ -25,7 +26,7 @@ pub(super) fn schedule(command: ScheduleCommand) -> ExitCode {
         // (`CORTEX_HOME=/var/lib/cortex`). Without this fallback
         // schedule list/run-now silently target an empty
         // `<HOME>/.cortex/metadata.sqlite` and return `unknown job`.
-        if let Ok(home) = std::env::var("CORTEX_HOME") {
+        if let Some(home) = cfg.ingestion.home.as_deref() {
             if !home.is_empty() {
                 return std::path::PathBuf::from(home).join("metadata.sqlite");
             }

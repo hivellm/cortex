@@ -1,5 +1,5 @@
+use super::{helpers::home_dir, RollupGranularityArg};
 use std::process::ExitCode;
-use super::{RollupGranularityArg, helpers::home_dir};
 
 /// Phase9b — `cortex-ops rollup`. Compacts the archive's hourly /
 /// daily / monthly Parquet partitions per spec 19. Quarantines
@@ -29,7 +29,11 @@ pub(super) fn rollup(
     };
 
     let archive = archive_root
-        .or_else(|| std::env::var("CORTEX_ARCHIVE_ROOT").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.ingestion.archive_root)
+        })
         .unwrap_or_else(|| {
             home_dir()
                 .map(|h| h.join(".cortex/archive").display().to_string())

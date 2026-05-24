@@ -1,5 +1,5 @@
-use std::process::ExitCode;
 use super::helpers::home_dir;
+use std::process::ExitCode;
 
 /// Phase9h — `cortex-ops memory-consolidate`. Embeds, clusters, and
 /// merges Claude Code's auto-memory directory. Today's binding wires
@@ -33,8 +33,11 @@ pub(super) fn memory_consolidate(
             // then finally falls back to deriving the slug from cwd.
             let slug = match project {
                 Some(s) => s,
-                None => match std::env::var("CORTEX_AUTO_MEMORY_PROJECT") {
-                    Ok(s) if !s.trim().is_empty() => s,
+                None => match cortex_config::Config::load()
+                    .ok()
+                    .and_then(|c| c.auto_memory.project)
+                {
+                    Some(s) if !s.trim().is_empty() => s,
                     _ => {
                         let cwd = match std::env::current_dir() {
                             Ok(c) => c,
