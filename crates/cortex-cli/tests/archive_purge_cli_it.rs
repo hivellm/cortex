@@ -157,7 +157,11 @@ fn live_run_deletes_old_files_and_keeps_recent_ones() {
         .arg(dir.path())
         .output()
         .expect("spawn cortex-ops");
-    assert!(output.status.success(), "expected exit 0, got {:?}", output.status);
+    assert!(
+        output.status.success(),
+        "expected exit 0, got {:?}",
+        output.status
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(report["files_deleted"], 1);
@@ -193,7 +197,10 @@ fn invalid_before_flag_exits_with_code_two() {
         .expect("spawn cortex-ops");
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--before"), "expected stderr to name the flag, got: {stderr}");
+    assert!(
+        stderr.contains("--before"),
+        "expected stderr to name the flag, got: {stderr}"
+    );
 }
 
 #[test]

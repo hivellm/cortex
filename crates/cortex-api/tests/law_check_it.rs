@@ -45,8 +45,6 @@ fn build_service() -> (Arc<QueryService>, Arc<MemoryKeywordLane>) {
 fn law_lane_hit(law_id: &str, message: &str, severity: &str) -> LaneHit {
     let mut extras = std::collections::BTreeMap::new();
     extras.insert("source".into(), json!("keyword"));
-    extras.insert("law_id".into(), json!(law_id));
-    extras.insert("severity".into(), json!(severity));
     LaneHit {
         doc_id: format!("meili|{INDEX_LAWS}|{law_id}"),
         text: message.to_string(),
@@ -63,7 +61,12 @@ fn law_lane_hit(law_id: &str, message: &str, severity: &str) -> LaneHit {
         // for law_violation kinds).
         severity: Some(severity.to_string()),
         extras,
-        overlay: Default::default(),
+        overlay: cortex_api::lanes::Overlay {
+            source: cortex_api::lanes::LaneSource::Keyword,
+            law_id: Some(law_id.to_string()),
+            severity: Some(severity.to_string()),
+            ..Default::default()
+        },
     }
 }
 

@@ -45,9 +45,7 @@ fn build_service() -> (Arc<QueryService>, Arc<MemoryKeywordLane>) {
 fn decision_lane_hit(decision_id: &str, title: &str, repo: &str) -> LaneHit {
     let mut extras = std::collections::BTreeMap::new();
     extras.insert("source".into(), json!("keyword"));
-    extras.insert("decision_id".into(), json!(decision_id));
     extras.insert("decision_title".into(), json!(title));
-    extras.insert("decision_status".into(), json!("accepted"));
     LaneHit {
         doc_id: format!("meili|{INDEX_DECISIONS}|{decision_id}"),
         text: format!("ADR body for {decision_id}"),
@@ -59,7 +57,12 @@ fn decision_lane_hit(decision_id: &str, title: &str, repo: &str) -> LaneHit {
         ts: 1714200000000,
         severity: None,
         extras,
-        overlay: Default::default(),
+        overlay: cortex_api::lanes::Overlay {
+            source: cortex_api::lanes::LaneSource::Keyword,
+            decision_id: Some(decision_id.to_string()),
+            decision_status: Some(cortex_api::lanes::DecisionStatus::Accepted),
+            ..Default::default()
+        },
     }
 }
 

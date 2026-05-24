@@ -322,8 +322,7 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         if summary.len() < 200 {
             // Pad with a deterministic footer so the schema's
             // 200-char minimum holds without losing information.
-            let pad =
-                "\n\n---\nThis digest aggregates the listed source events; \
+            let pad = "\n\n---\nThis digest aggregates the listed source events; \
                  expand the `source_event_ids` array for the full Parquet \
                  round-trip view.";
             summary.push_str(pad);
@@ -352,8 +351,8 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
             "repos": [bucket.repo.clone()],
             "tags": ["tool_call_digest", bucket.tool.clone()],
         });
-        let payload_bytes = serde_json::to_vec(&payload)
-            .map_err(|e| format!("encode payload: {e}"))?;
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(|e| format!("encode payload: {e}"))?;
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
         hasher.update(&payload_bytes);
@@ -427,10 +426,7 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         ))
     }
 
-    async fn delete_source_tool_calls(
-        &self,
-        _event_ids: &[String],
-    ) -> Result<u64, String> {
+    async fn delete_source_tool_calls(&self, _event_ids: &[String]) -> Result<u64, String> {
         // Neutralised at the trait level. The orchestrator must NOT
         // delete originals immediately after `persist_digest` because
         // the ingestion → classifier → embedder → fulltext-worker
@@ -630,12 +626,11 @@ async fn fetch_tool_calls_from_index(
                         .and_then(|p| p.get("occurred_at"))
                         .and_then(|x| x.as_str())
                 });
-            let occurred_at = match occurred_str
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            {
-                Some(t) => t.with_timezone(&Utc),
-                None => continue,
-            };
+            let occurred_at =
+                match occurred_str.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
+                    Some(t) => t.with_timezone(&Utc),
+                    None => continue,
+                };
             if occurred_at >= cutoff_ts {
                 continue;
             }
@@ -747,10 +742,7 @@ pub async fn fetch_old_tool_calls_via_admin(
         if r.kind != "tool_call" {
             continue;
         }
-        if r.summarized_by
-            .as_deref()
-            .is_some_and(|s| !s.is_empty())
-        {
+        if r.summarized_by.as_deref().is_some_and(|s| !s.is_empty()) {
             continue;
         }
         // Recover real timestamp from the ULID when the lane stamped

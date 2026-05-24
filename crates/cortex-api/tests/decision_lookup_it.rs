@@ -60,15 +60,19 @@ fn build_service() -> (Arc<QueryService>, Arc<MemoryKeywordLane>) {
 
 fn lane_hit_for_decision(decision_id: &str, title: &str, status: &str, repo: &str) -> LaneHit {
     let mut extras = std::collections::BTreeMap::new();
-    // The lane projection contract reads decision_id / decision_title
-    // / decision_status / supersedes out of `extras`. Phase11k §1
-    // stamps these at the top of the Meili document; the live
-    // `MeiliKeywordLane.project` flattens them through `extras_raw`
-    // into `extras` keyed by the same names.
+    // ADR-011 — decision_title still lives in extras (the typed
+    // Overlay does not yet carry it). decision_id + decision_status
+    // move to the typed overlay so derive_decisions surfaces them.
     extras.insert("source".into(), json!("keyword"));
-    extras.insert("decision_id".into(), json!(decision_id));
     extras.insert("decision_title".into(), json!(title));
-    extras.insert("decision_status".into(), json!(status));
+    let typed_status = match status {
+        "proposed" => Some(cortex_api::lanes::DecisionStatus::Proposed),
+        "accepted" => Some(cortex_api::lanes::DecisionStatus::Accepted),
+        "superseded" => Some(cortex_api::lanes::DecisionStatus::Superseded),
+        "deprecated" => Some(cortex_api::lanes::DecisionStatus::Deprecated),
+        "rejected" => Some(cortex_api::lanes::DecisionStatus::Rejected),
+        _ => None,
+    };
     LaneHit {
         doc_id: format!("meili|cortex_decisions|{decision_id}"),
         text: format!("Body of {decision_id}"),
@@ -80,7 +84,12 @@ fn lane_hit_for_decision(decision_id: &str, title: &str, status: &str, repo: &st
         ts: 1714200000000,
         severity: None,
         extras,
-        overlay: Default::default(),
+        overlay: cortex_api::lanes::Overlay {
+            source: cortex_api::lanes::LaneSource::Keyword,
+            decision_id: Some(decision_id.to_string()),
+            decision_status: typed_status,
+            ..Default::default()
+        },
     }
 }
 

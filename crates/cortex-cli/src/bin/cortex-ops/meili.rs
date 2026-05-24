@@ -11,7 +11,9 @@ pub(super) fn meili_prune(
     batch_size: u32,
     json: bool,
 ) -> ExitCode {
-    use cortex_workers::retention::meili_prune::{run_meili_prune, MeiliDoc, MemoryMeiliBackend, PrunePlan};
+    use cortex_workers::retention::meili_prune::{
+        run_meili_prune, MeiliDoc, MemoryMeiliBackend, PrunePlan,
+    };
 
     // phase11v §6 — bookkeeping anchor.
     let started_at = chrono::Utc::now();

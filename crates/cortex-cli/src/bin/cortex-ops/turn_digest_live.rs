@@ -31,9 +31,7 @@ use std::time::Duration;
 use anyhow::Context;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cortex_workers::retention::turn_digest::{
-    Bucket, DigestBackend, DigestResult, Turn,
-};
+use cortex_workers::retention::turn_digest::{Bucket, DigestBackend, DigestResult, Turn};
 
 const FORGET_CONFIRMATION_TOKEN: &str = "I-UNDERSTAND-FORGET-IS-IRREVERSIBLE";
 const MEILI_INDEX_MEMORIES: &str = "cortex_memories";
@@ -303,8 +301,7 @@ impl DigestBackend for LiveTurnDigestBackend {
         };
         let mut summary = digest.body.clone();
         if summary.len() < 200 {
-            let pad =
-                "\n\n---\nThis digest aggregates the listed source turn events; \
+            let pad = "\n\n---\nThis digest aggregates the listed source turn events; \
                  expand the `source_event_ids` array for the full Parquet \
                  round-trip view.";
             summary.push_str(pad);
@@ -333,8 +330,8 @@ impl DigestBackend for LiveTurnDigestBackend {
             "repos": [bucket.repo.clone()],
             "tags": ["turn_digest", bucket.top_topic.clone()],
         });
-        let payload_bytes = serde_json::to_vec(&payload)
-            .map_err(|e| format!("encode payload: {e}"))?;
+        let payload_bytes =
+            serde_json::to_vec(&payload).map_err(|e| format!("encode payload: {e}"))?;
         use sha2::Digest;
         let mut hasher = sha2::Sha256::new();
         hasher.update(&payload_bytes);
@@ -647,12 +644,11 @@ async fn fetch_turns_from_index(
                         .and_then(|p| p.get("occurred_at"))
                         .and_then(|x| x.as_str())
                 });
-            let occurred_at = match occurred_str
-                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            {
-                Some(t) => t.with_timezone(&Utc),
-                None => continue,
-            };
+            let occurred_at =
+                match occurred_str.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
+                    Some(t) => t.with_timezone(&Utc),
+                    None => continue,
+                };
             if occurred_at >= cutoff_ts {
                 continue;
             }
@@ -758,10 +754,7 @@ pub(crate) fn ulid_timestamp_ms(id: &str) -> Option<i64> {
 /// the timestamp encoded in the ULID `event_id`. Returns `None`
 /// only when every source disagrees and the ULID itself fails to
 /// decode (defensive — every Cortex envelope ID is a ULID).
-pub(crate) fn resolve_occurred_at(
-    v: &serde_json::Value,
-    event_id: &str,
-) -> Option<DateTime<Utc>> {
+pub(crate) fn resolve_occurred_at(v: &serde_json::Value, event_id: &str) -> Option<DateTime<Utc>> {
     let from_str = |s: Option<&str>| {
         s.filter(|s| !s.is_empty() && !s.starts_with("1970"))
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())

@@ -456,9 +456,7 @@ async fn run_apply_settings_only(
     args: &CliArgs,
     targets: &[(PathBuf, String, Option<PathBuf>)],
 ) -> Result<()> {
-    use cortex_storage::names::{
-        repo_scoped_name, slug_for_repo, ALL_INDEXES, NS_PREFIX,
-    };
+    use cortex_storage::names::{repo_scoped_name, slug_for_repo, ALL_INDEXES, NS_PREFIX};
     use cortex_workers::fulltext::{
         settings_v1_json, FulltextConfig, LiveMeiliClient, MeiliClient, FAMILIES,
     };

@@ -38,7 +38,6 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use cortex_core::canonical_json::canonicalize;
-use cortex_workers::ingestion::archive::ArchiveWriter;
 use cortex_storage::external_repos::ExternalRepoIndex;
 use cortex_workers::graph::analyzer::{
     build_graph_patch, AnalyzerLanguage, CodeAnalyzer, GoAnalyzer, PatchBuildContext,
@@ -48,6 +47,7 @@ use cortex_workers::graph::markdown::{is_markdown_path, MarkdownAnalyzer};
 use cortex_workers::graph::resolver::{
     build_rust_module_map_from_root, LocalSymbols, ModuleMap, PackageMap, SymbolResolver,
 };
+use cortex_workers::ingestion::archive::ArchiveWriter;
 use ignore::WalkBuilder;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};

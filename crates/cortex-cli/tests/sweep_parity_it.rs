@@ -41,7 +41,10 @@ async fn dry_run_sweep_reports_are_byte_equivalent_across_bin_paths() {
     // Path A — what `cortex-retention-sweep --dry-run` would produce.
     let ops_a = MemoryVectorizerOps::new();
     ops_a
-        .seed("cortex.turn.fp32", vec![rec("01A", 31, now), rec("02A", 100, now)])
+        .seed(
+            "cortex.turn.fp32",
+            vec![rec("01A", 31, now), rec("02A", 100, now)],
+        )
         .await;
     let mut plan_a = SweepPlan::default_for(now);
     plan_a.dry_run = true;
@@ -52,7 +55,10 @@ async fn dry_run_sweep_reports_are_byte_equivalent_across_bin_paths() {
     // for this IT since we are testing path parity, not live integration).
     let ops_b = MemoryVectorizerOps::new();
     ops_b
-        .seed("cortex.turn.fp32", vec![rec("01A", 31, now), rec("02A", 100, now)])
+        .seed(
+            "cortex.turn.fp32",
+            vec![rec("01A", 31, now), rec("02A", 100, now)],
+        )
         .await;
     let mut plan_b = SweepPlan::default_for(now);
     plan_b.dry_run = true;

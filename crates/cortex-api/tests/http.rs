@@ -84,7 +84,10 @@ async fn pre_change_context_returns_snippet_within_budget() {
             ts: 100,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let req = pre_change_request("ef_search tuning", Some("Vectorizer"));
@@ -120,7 +123,10 @@ async fn cache_hit_marks_cache_hit_and_skips_lanes() {
             ts: 0,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc.clone());
@@ -273,7 +279,10 @@ async fn lane_failure_does_not_block_other_lanes() {
             ts: 1,
             severity: None,
             extras: keyword_extras,
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Keyword,
+                ..Default::default()
+            },
         }],
     );
     let svc = Arc::new(QueryService {
@@ -444,7 +453,7 @@ async fn law_check_returns_only_violations_field() {
     extras.insert("law_id".into(), json!("LAW-007"));
     extras.insert("violation_id".into(), json!("VIO-1"));
     extras.insert("observed_in".into(), json!("turn:01HX"));
-    let violation_hit = cortex_api::LaneHit {
+    let mut violation_hit = cortex_api::LaneHit {
         doc_id: "lv".into(),
         text: "violation message".into(),
         repo: None,
@@ -455,9 +464,18 @@ async fn law_check_returns_only_violations_field() {
         ts: 1,
         severity: Some("critical".into()),
         extras,
-        overlay: Default::default(),
+        overlay: cortex_api::lanes::Overlay {
+            source: cortex_api::lanes::LaneSource::Keyword,
+            law_id: Some("LAW-007".to_string()),
+            violation_id: Some("VIO-1".to_string()),
+            severity: Some("critical".to_string()),
+            ..Default::default()
+        },
     };
-    g.seed("law_violations_last_30d", vec![violation_hit.clone()]);
+    let mut graph_hit = violation_hit.clone();
+    graph_hit.overlay.source = cortex_api::lanes::LaneSource::Graph;
+    g.seed("law_violations_last_30d", vec![graph_hit]);
+    violation_hit.overlay.source = cortex_api::lanes::LaneSource::Keyword;
     k.seed("cortex-vectorizer-governance", vec![violation_hit]);
     let svc = Arc::new(QueryService::with_memory_defaults(Orchestrator::new(
         v, k, g,
@@ -514,7 +532,10 @@ async fn redaction_strips_aws_key_from_snippet_text_in_response() {
             ts: 0,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);
@@ -581,7 +602,10 @@ async fn x_cortex_cwd_header_resolves_repo_from_basename() {
             ts: 0,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);
@@ -622,7 +646,10 @@ async fn x_cortex_repo_header_resolves_when_body_omits_scope() {
             ts: 0,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);
@@ -666,7 +693,10 @@ async fn audit_envelope_records_scope_resolution_lane() {
             ts: 0,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);
@@ -752,7 +782,10 @@ async fn mcp_invoke_routes_through_the_same_service() {
             ts: 0,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let result = cortex_api::mcp_invoke(
@@ -813,7 +846,10 @@ async fn status_indexed_repos_reports_seeded_repo_slugs() {
                 ts: 0,
                 severity: None,
                 extras: Default::default(),
-                overlay: Default::default(),
+                overlay: cortex_api::lanes::Overlay {
+                    source: cortex_api::lanes::LaneSource::Vector,
+                    ..Default::default()
+                },
             },
             LaneHit {
                 doc_id: "h2".into(),
@@ -826,7 +862,10 @@ async fn status_indexed_repos_reports_seeded_repo_slugs() {
                 ts: 0,
                 severity: None,
                 extras: Default::default(),
-                overlay: Default::default(),
+                overlay: cortex_api::lanes::Overlay {
+                    source: cortex_api::lanes::LaneSource::Vector,
+                    ..Default::default()
+                },
             },
         ],
     );
@@ -896,7 +935,10 @@ async fn explain_intent_returns_snippets_with_no_overlay_noise() {
             ts: 1_777_400_000,
             severity: None,
             extras: decision_extras.clone(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let mut keyword_extras = std::collections::BTreeMap::new();
@@ -914,7 +956,10 @@ async fn explain_intent_returns_snippets_with_no_overlay_noise() {
             ts: 1_777_400_000,
             severity: None,
             extras: keyword_extras,
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Keyword,
+                ..Default::default()
+            },
         }],
     );
 
@@ -1067,7 +1112,12 @@ async fn decision_overlay_surfaces_decision_id_from_extras() {
             ts: 1_777_400_000,
             severity: None,
             extras,
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Keyword,
+                decision_id: Some("DEC-0042".to_string()),
+                decision_status: Some(cortex_api::lanes::DecisionStatus::Accepted),
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);
@@ -1131,7 +1181,13 @@ async fn similar_turns_overlay_surfaces_turn_id_from_extras() {
             ts: 1_777_400_000,
             severity: None,
             extras,
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                turn_id: Some("01HTURNFIXTURE0000000000XX".to_string()),
+                model: Some("claude-sonnet-4-6".to_string()),
+                summary: Some("planned the phase6b lane projection contract".to_string()),
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);
@@ -1186,7 +1242,10 @@ async fn audit_endpoint_returns_envelope_after_a_query() {
             ts: 1,
             severity: None,
             extras: Default::default(),
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Vector,
+                ..Default::default()
+            },
         }],
     );
     let app = build_router(svc);

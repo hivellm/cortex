@@ -49,7 +49,10 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
             ts: 1,
             severity: None,
             extras: keyword_extras,
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Keyword,
+                ..Default::default()
+            },
         }],
     );
 
@@ -91,7 +94,13 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
             ts: 0,
             severity: None,
             extras: graph_extras,
-            overlay: Default::default(),
+            overlay: cortex_api::lanes::Overlay {
+                source: cortex_api::lanes::LaneSource::Graph,
+                edge_from: Some("DEC-0042".to_string()),
+                edge_to: Some("DEC-0001".to_string()),
+                hops: Some(1),
+                ..Default::default()
+            },
         }],
     );
 

@@ -1057,9 +1057,7 @@ pub fn emit_for_file_multi(
     body: &str,
     stream: &str,
 ) -> Vec<BootstrapEvent> {
-    emit_for_file_multi_with_extract(
-        repo_id, session_id, git_ref, entry, body, None, stream,
-    )
+    emit_for_file_multi_with_extract(repo_id, session_id, git_ref, entry, body, None, stream)
 }
 
 /// Phase11k §3.2 — same as [`emit_for_file_multi`] but with an

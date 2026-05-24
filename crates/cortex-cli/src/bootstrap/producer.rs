@@ -29,9 +29,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
-use cortex_workers::producer::{
-    EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport,
-};
+use cortex_workers::producer::{EnvelopeProducer, ProducerCheckpoint, ProducerCtx, ProducerReport};
 
 use super::checkpoint::Checkpoint;
 use super::config::CortexSection;
@@ -237,14 +235,7 @@ mod tests {
         let repo_cfg = CortexSection::default();
         let publisher: Arc<dyn Publisher> = Arc::new(RecordingPublisher::default());
         let metrics = Arc::new(Metrics::default());
-        let producer = BootstrapProducer::new(
-            root,
-            runner_cfg,
-            repo_cfg,
-            publisher,
-            metrics,
-            None,
-        );
+        let producer = BootstrapProducer::new(root, runner_cfg, repo_cfg, publisher, metrics, None);
         let (ctx, handle) = make_ctx();
 
         let report = producer.produce(&ctx).await.unwrap();
@@ -273,14 +264,7 @@ mod tests {
         let repo_cfg = CortexSection::default();
         let publisher: Arc<dyn Publisher> = Arc::new(RecordingPublisher::default());
         let metrics = Arc::new(Metrics::default());
-        let producer = BootstrapProducer::new(
-            root,
-            runner_cfg,
-            repo_cfg,
-            publisher,
-            metrics,
-            None,
-        );
+        let producer = BootstrapProducer::new(root, runner_cfg, repo_cfg, publisher, metrics, None);
         let (ctx, _handle) = make_ctx();
 
         // First run writes a checkpoint.
