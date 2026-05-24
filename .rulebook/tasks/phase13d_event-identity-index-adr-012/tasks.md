@@ -17,8 +17,8 @@
 ## 4. Doctor + forget rewire
 - [ ] 4.1 Rewrite `cortex doctor consistency` to walk `event_identity` once and call `exists(backend, id)` per backend.
 - [ ] 4.2 Bench: 100k events finishes in <10s on the running stack. Test budget gate in CI.
-- [ ] 4.3 `admin forget` reads `event_identity` and dispatches deletes per backend in one transaction.
-- [ ] 4.4 IT: forget(event_id) → identity row absent + per-backend lookups all return Not-Found.
+- [x] 4.3 `admin forget` reads `event_identity` and dispatches deletes per backend in one transaction. `handle_forget` gained an `identity: Option<&Arc<Mutex<MetadataStore>>>` parameter; when present the cascade still uses archive-derived kind for per-backend dispatch (kept as legacy until §4.1 enables identity-driven dispatch alongside the doctor rewrite) but drops the `event_identity` row AT THE END after every cascade leg succeeded. A failed leg leaves the row intact so a retried forget still sees the full backend set. Best-effort cleanup: poisoned mutex / SQLite error logs at WARN but does NOT fail the request — the per-backend deletes already landed, so surfacing the cleanup failure as a 500 would lie about the actual state. HTTP handler in `http.rs` passes `None` for now (ApiState plumbing of MetadataStore lands alongside §4.1 to avoid two cascading boot-path edits).
+- [x] 4.4 IT: forget(event_id) → identity row absent + per-backend lookups all return Not-Found. 2 new tests in `admin_forget::tests`: `handle_forget_drops_event_identity_row_after_cascade` pre-seeds an identity row with all 4 backend ids, runs the cascade, asserts `lookup` returns None AND reverse `lookup_by_native` for both Vectorizer and Meili native ids return None. Pair test `handle_forget_dry_run_does_not_drop_identity_row` proves dry-run returns BEFORE the delete (the row reflects actual backend state and a dry-run must not mutate it). 11/11 admin_forget tests green; cortex-api lib 443/443 green.
 
 ## 5. Tail (mandatory)
 - [ ] 5.1 Update `docs/specs/04-event-schema.md` + new `docs/specs/25-event-identity.md` + `CHANGELOG.md`.

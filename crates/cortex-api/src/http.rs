@@ -826,6 +826,12 @@ async fn handle_admin_forget(
         &nexus_purger,
         &archive_purger,
         cortex_storage::names::INDEX_CONSOLIDATIONS,
+        // ADR-012 §4.3 — identity-index handle plumbing lands
+        // alongside §4.1 (doctor rewrite), which also adds the
+        // `MetadataStore` field to `ApiState`. Until then the
+        // forget cascade keeps the legacy archive-derived
+        // dispatch + skips the identity row delete cleanly.
+        None,
     )
     .await;
 

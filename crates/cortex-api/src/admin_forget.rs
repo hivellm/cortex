@@ -334,6 +334,16 @@ pub enum ForgetError {
 /// Handle one `/v1/admin/forget` invocation. The caller (`http.rs`)
 /// is responsible for instantiating the live ops + threading them
 /// in; this fn coordinates the cascade.
+///
+/// ADR-012 §4.3 — `identity` (optional) plumbs the
+/// `event_identity` table so the row is dropped after the cascade
+/// completes. The cascade itself does NOT yet read from identity
+/// to drive per-backend dispatch (legacy archive-derived kind
+/// stays the authoritative list) because the doctor's coverage
+/// guarantee (every backend stamped) is not yet enforceable —
+/// §4.1 ships the identity-driven dispatch alongside the doctor
+/// rewrite. Passing `None` keeps the pre-phase13d behaviour
+/// exactly.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_forget<V, M>(
     req: &ForgetRequest,
@@ -343,6 +353,7 @@ pub async fn handle_forget<V, M>(
     nexus: &dyn NexusPurgeOps,
     archive: &dyn ArchivePurgeOps,
     meili_index: &str,
+    identity: Option<&std::sync::Arc<std::sync::Mutex<cortex_storage::MetadataStore>>>,
 ) -> Result<ForgetResponse, ForgetError>
 where
     V: cortex_workers::embedder::vectorizer_client::VectorizerClient,
@@ -383,6 +394,36 @@ where
         REQUIRED_CONFIRMATION_TOKEN,
     )
     .await?;
+
+    // ADR-012 §4.3 — drop the identity row LAST, after every
+    // per-backend leg succeeded. A cascade failure leaves the row
+    // intact so a retried forget still sees the full backend set.
+    // Best-effort cleanup: a poisoned mutex or SQLite error logs
+    // at WARN but does NOT fail the request — the per-backend
+    // deletes have already landed and surfacing the cleanup
+    // failure as a 500 would lie about the actual state.
+    if let Some(metadata) = identity {
+        match metadata.lock() {
+            Ok(guard) => {
+                use cortex_storage::IdentityIndex as _;
+                let idx = cortex_storage::SqliteIdentityIndex::new(guard.conn());
+                if let Err(e) = idx.delete(&req.event_id) {
+                    tracing::warn!(
+                        event_id = %req.event_id,
+                        error = %e,
+                        "identity index: post-forget delete failed"
+                    );
+                }
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    event_id = %req.event_id,
+                    error = %poisoned,
+                    "identity index: metadata mutex poisoned; skipping post-forget delete"
+                );
+            }
+        }
+    }
 
     Ok(ForgetResponse {
         event_id: req.event_id.clone(),
@@ -613,6 +654,7 @@ mod tests {
             &nexus,
             &archive,
             cortex_storage::names::INDEX_CONSOLIDATIONS,
+            None,
         )
         .await
         .unwrap();
@@ -651,6 +693,7 @@ mod tests {
             &nexus,
             &archive,
             cortex_storage::names::INDEX_CONSOLIDATIONS,
+            None,
         )
         .await
         .unwrap_err();
@@ -682,6 +725,7 @@ mod tests {
             &nexus,
             &archive,
             cortex_storage::names::INDEX_CONSOLIDATIONS,
+            None,
         )
         .await
         .unwrap();
@@ -694,5 +738,142 @@ mod tests {
         let meili_calls = meili.deletes.lock().unwrap();
         assert_eq!(meili_calls.len(), 1);
         assert_eq!(meili_calls[0].1, vec!["EVT".to_string()]);
+    }
+
+    // -----------------------------------------------------------
+    // ADR-012 §4.3 / §4.4 — identity row is dropped after the
+    // cascade completes.
+    // -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn handle_forget_drops_event_identity_row_after_cascade() {
+        use cortex_storage::{
+            Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex,
+        };
+
+        // Pre-seed an archive envelope (so kind resolution finds Turn).
+        let dir = tempfile::tempdir().unwrap();
+        write_archive(dir.path(), &[turn_envelope("EVT_FORGET")]);
+        let nexus = StubNexus::default();
+        let archive = StubArchive::default();
+        let meili = StubMeili::default();
+        let vec_client =
+            cortex_workers::embedder::vectorizer_client::MemoryVectorizerClient::default();
+
+        // Pre-seed an identity row for the target event_id so we can
+        // assert the cascade drops it.
+        let store = MetadataStore::open_in_memory().expect("metadata opens");
+        let metadata = std::sync::Arc::new(std::sync::Mutex::new(store));
+        {
+            let guard = metadata.lock().unwrap();
+            let idx = SqliteIdentityIndex::new(guard.conn());
+            idx.upsert_identity("EVT_FORGET", Backend::Vectorizer, "vec-EVT_FORGET")
+                .unwrap();
+            idx.upsert_identity("EVT_FORGET", Backend::Meili, "EVT_FORGET")
+                .unwrap();
+            idx.upsert_identity("EVT_FORGET", Backend::Nexus, "EVT_FORGET")
+                .unwrap();
+            idx.upsert_identity(
+                "EVT_FORGET",
+                Backend::Archive,
+                "events/year=2026/month=05/day=24/raw-00000.parquet",
+            )
+            .unwrap();
+            assert!(
+                idx.lookup("EVT_FORGET").unwrap().is_some(),
+                "identity row present before forget"
+            );
+        }
+
+        let req = ForgetRequest {
+            event_id: "EVT_FORGET".into(),
+            confirmation_token: REQUIRED_CONFIRMATION_TOKEN.into(),
+            dry_run: false,
+        };
+        let resp = handle_forget(
+            &req,
+            dir.path(),
+            &vec_client,
+            &meili,
+            &nexus,
+            &archive,
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+            Some(&metadata),
+        )
+        .await
+        .unwrap();
+
+        assert!(!resp.dry_run);
+        assert!(resp.meili_deleted);
+        assert!(resp.nexus_deleted);
+        assert!(resp.archive_rewritten);
+        // Cascade fully ran; the identity row is gone.
+        let guard = metadata.lock().unwrap();
+        let idx = SqliteIdentityIndex::new(guard.conn());
+        assert!(
+            idx.lookup("EVT_FORGET").unwrap().is_none(),
+            "identity row must be dropped after a successful forget cascade"
+        );
+        // Reverse lookups also fail — the row is gone, not just
+        // nulled out.
+        assert!(idx
+            .lookup_by_native(Backend::Vectorizer, "vec-EVT_FORGET")
+            .unwrap()
+            .is_none());
+        assert!(idx
+            .lookup_by_native(Backend::Meili, "EVT_FORGET")
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn handle_forget_dry_run_does_not_drop_identity_row() {
+        use cortex_storage::{
+            Backend, IdentityIndex as _, MetadataStore, SqliteIdentityIndex,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        write_archive(dir.path(), &[turn_envelope("EVT_DRY")]);
+        let nexus = StubNexus::default();
+        let archive = StubArchive::default();
+        let meili = StubMeili::default();
+        let vec_client =
+            cortex_workers::embedder::vectorizer_client::MemoryVectorizerClient::default();
+
+        let store = MetadataStore::open_in_memory().expect("metadata opens");
+        let metadata = std::sync::Arc::new(std::sync::Mutex::new(store));
+        {
+            let guard = metadata.lock().unwrap();
+            let idx = SqliteIdentityIndex::new(guard.conn());
+            idx.upsert_identity("EVT_DRY", Backend::Meili, "EVT_DRY").unwrap();
+        }
+
+        let req = ForgetRequest {
+            event_id: "EVT_DRY".into(),
+            confirmation_token: REQUIRED_CONFIRMATION_TOKEN.into(),
+            dry_run: true,
+        };
+        let resp = handle_forget(
+            &req,
+            dir.path(),
+            &vec_client,
+            &meili,
+            &nexus,
+            &archive,
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+            Some(&metadata),
+        )
+        .await
+        .unwrap();
+        assert!(resp.dry_run);
+        // Dry-run returns BEFORE the identity-row delete, so the
+        // row survives — the row reflects the actual backend state
+        // and a dry-run does not mutate state by design.
+        let guard = metadata.lock().unwrap();
+        let idx = SqliteIdentityIndex::new(guard.conn());
+        assert!(
+            idx.lookup("EVT_DRY").unwrap().is_some(),
+            "identity row must survive a dry-run forget"
+        );
     }
 }
