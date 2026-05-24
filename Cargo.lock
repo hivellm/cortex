@@ -731,6 +731,7 @@ dependencies = [
  "clap",
  "cortex-api",
  "cortex-build",
+ "cortex-config",
  "cortex-pre-thinking",
  "reqwest 0.12.28",
  "serde",

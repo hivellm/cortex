@@ -19,6 +19,7 @@ cortex-build = { path = "../cortex-build" }
 
 [dependencies]
 cortex-api = { path = "../cortex-api" }
+cortex-config = { path = "../cortex-config" }
 cortex-pre-thinking = { path = "../cortex-pre-thinking" }
 cortex-build = { path = "../cortex-build" }
 

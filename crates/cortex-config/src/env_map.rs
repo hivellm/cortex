@@ -116,6 +116,11 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "CORTEX_RETENTION_PQ_TO_BINARY_DAYS",
         "/retention/pq_to_binary_days",
     ),
+    ("CORTEX_REWRITER_MODEL", "/dashboard/rewriter_model"),
+    (
+        "CORTEX_REWRITER_TIMEOUT_MS",
+        "/dashboard/rewriter_timeout_ms",
+    ),
     ("CORTEX_RRF_ALPHA", "/dashboard/rrf_alpha"),
     ("CORTEX_RRF_K", "/dashboard/rrf_k"),
     ("CORTEX_RULEBOOK_ROOT", "/rulebook/root"),

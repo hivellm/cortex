@@ -293,24 +293,22 @@ impl Default for SonnetRewriterConfig {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "claude".to_string()),
-            model: std::env::var("CORTEX_REWRITER_MODEL")
+            model: cortex_config::Config::load()
                 .ok()
+                .and_then(|c| c.dashboard.rewriter_model)
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "claude-sonnet-4-6".to_string()),
-            timeout: parse_timeout_ms_env("CORTEX_REWRITER_TIMEOUT_MS", 1_500),
+            timeout: Duration::from_millis(
+                cortex_config::Config::load()
+                    .ok()
+                    .and_then(|c| c.dashboard.rewriter_timeout_ms)
+                    .filter(|n| *n >= 100)
+                    .unwrap_or(1_500),
+            ),
             cache_ttl: Duration::from_secs(24 * 60 * 60),
             cache_capacity: 4096,
         }
     }
-}
-
-fn parse_timeout_ms_env(key: &str, default_ms: u64) -> Duration {
-    let ms = std::env::var(key)
-        .ok()
-        .and_then(|s| s.trim().parse::<u64>().ok())
-        .filter(|n| *n >= 100)
-        .unwrap_or(default_ms);
-    Duration::from_millis(ms)
 }
 
 #[derive(Clone)]

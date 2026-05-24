@@ -45,7 +45,11 @@ enum Cmd {
 
 fn resolve_api_url(cli_override: Option<String>) -> String {
     cli_override
-        .or_else(|| std::env::var("CORTEX_API_URL").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.dashboard.api_url)
+        })
         .unwrap_or_else(|| cortex_mcp_server::DEFAULT_API_URL.to_string())
 }
 

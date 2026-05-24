@@ -164,8 +164,9 @@ pub async fn handle_ingest(
     }
 
     // 5. Forward to cortex-ingestion.
-    let upstream = std::env::var("CORTEX_INGESTION_URL")
+    let upstream = cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.ingestion.ingestion_url)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_INGESTION_URL.to_string());
     let url = format!("{}/v1/events", upstream.trim_end_matches('/'));

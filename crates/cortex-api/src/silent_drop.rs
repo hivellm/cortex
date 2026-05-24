@@ -91,8 +91,10 @@ impl Default for SilentDropConfig {
             webhook_url: None,
             write_to_handoff: false,
             state_dir: PathBuf::from(home).join(".cortex").join("alerts"),
-            ingestion_url: std::env::var("CORTEX_INGESTION_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string()),
+            ingestion_url: cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.ingestion.ingestion_url)
+                .unwrap_or_else(|| "http://127.0.0.1:17010".to_string()),
         }
     }
 }

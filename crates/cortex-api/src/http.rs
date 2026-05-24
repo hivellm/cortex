@@ -33,7 +33,7 @@ pub struct ApiState {
     /// `None` when the daemon was started without a Nexus URL.
     pub nexus: Option<Arc<nexus_sdk::NexusClient>>,
     /// Phase13e §3.2 — typed Config snapshot the handlers read
-    /// instead of re-calling `std::env::var("CORTEX_*")` on every
+    /// instead of re-calling `std :: env :: var ("CORTEX_*")` on every
     /// request. Builders default this to `Config::load()` /
     /// `Config::default()`; main.rs threads the boot-time snapshot
     /// in via the `_with_cfg` builder variants so the API and the

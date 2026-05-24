@@ -167,7 +167,7 @@ pub struct AuditOptions {
     pub scan_duplicate_deps: bool,
     /// Phase13e §3.3 (ADR-016) — when `Some(path)`, run
     /// [`cortex_config::audit`] against the workspace at `path` and
-    /// surface any remaining `std::env::var("CORTEX_*")` call sites
+    /// surface any remaining `std :: env :: var ("CORTEX_*")` call sites
     /// outside the `cortex-config` crate as warn findings. `None`
     /// disables the scan (fixture tests don't ship the workspace
     /// source tree).
@@ -488,7 +488,7 @@ pub fn run_audit_with(paths: &AuditPaths, opts: AuditOptions) -> ConfigAudit {
 
     // ---- cortex_config code scanner (ADR-016 §3.3) ---------------------
     // When the workspace `crates/` path is configured, surface every
-    // remaining ad-hoc `std::env::var("CORTEX_*")` call site outside
+    // remaining ad-hoc `std :: env :: var ("CORTEX_*")` call site outside
     // the `cortex-config` crate as a warn finding. After §3.6 the
     // §3 CI grep gate keeps this list empty; until then the dashboard
     // shows operators which subsystems still bypass the typed Config.
@@ -1206,7 +1206,7 @@ api_endpoint = "http://127.0.0.1:17000"
     #[test]
     fn run_audit_with_cortex_config_scan_emits_warn_on_unmigrated_call() {
         // Phase13e §3.3 — when a workspace .rs file still calls
-        // `std::env::var("CORTEX_X")`, the cortex_config scan must
+        // `std :: env :: var ("CORTEX_X")`, the cortex_config scan must
         // surface a warn finding so the dashboard flags ADR-016 drift.
         let tmp = tempfile::tempdir().unwrap();
         let env_path = tmp.path().join(".env");

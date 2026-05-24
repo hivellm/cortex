@@ -70,6 +70,20 @@ pub fn audit(crates_root: &Path) -> Vec<EnvVarUsage> {
         if path.components().any(|c| c.as_os_str() == "cortex-config") {
             continue;
         }
+        // ADR-016 §3.6 — skip the build-time `cortex-build` helper.
+        // `version_info!` reads `CORTEX_GIT_SHA_OVERRIDE` and
+        // `CORTEX_GIT_DIRTY_OVERRIDE` inside a build-script-style
+        // macro that runs at `cargo build` against the workspace's
+        // `.git` checkout. The values are baked into every Cortex
+        // binary via `env!()`, NOT resolved from process env at
+        // runtime, so routing them through the typed runtime
+        // Config would be both architecturally wrong (cortex-config
+        // is runtime-only) and a circular workspace dep (cortex-
+        // build is intentionally dep-free outside serde). See
+        // `crates/cortex-build/Cargo.toml` for the contract.
+        if path.components().any(|c| c.as_os_str() == "cortex-build") {
+            continue;
+        }
         // Skip integration test directories — test fixtures may
         // legitimately probe env vars to drive setup.
         if path.components().any(|c| c.as_os_str() == "tests") {
@@ -191,6 +205,26 @@ mod tests {
         assert!(
             report.is_empty(),
             "cortex-config's own reads must be skipped — that crate IS the legitimate reader"
+        );
+    }
+
+    #[test]
+    fn skips_cortex_build_crate_for_compile_time_overrides() {
+        // ADR-016 §3.6 — `cortex-build` reads CORTEX_GIT_*_OVERRIDE
+        // at compile time inside a `build_info!` macro. The values
+        // are baked into binaries via `env!()`, not resolved at
+        // runtime, so routing them through cortex_config would be
+        // architecturally wrong + a circular workspace dep.
+        let dir = tempdir().unwrap();
+        write(
+            dir.path(),
+            "cortex-build/src/lib.rs",
+            "let _ = std::env::var(\"CORTEX_GIT_SHA_OVERRIDE\");\n",
+        );
+        let report = audit(dir.path());
+        assert!(
+            report.is_empty(),
+            "cortex-build reads MUST be skipped — they are compile-time, not runtime"
         );
     }
 

@@ -511,6 +511,15 @@ pub struct DashboardConfig {
     /// `noun_phrase` with a WARN log. Env: `CORTEX_QUERY_REWRITER`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_rewriter: Option<String>,
+    /// Sonnet rewriter model id. `None` uses the compile-time
+    /// default `claude-sonnet-4-6`. Env: `CORTEX_REWRITER_MODEL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewriter_model: Option<String>,
+    /// Sonnet rewriter per-call timeout in milliseconds (minimum
+    /// 100ms). `None` uses the compile-time default 1500ms.
+    /// Env: `CORTEX_REWRITER_TIMEOUT_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rewriter_timeout_ms: Option<u64>,
     /// Bearer token the CLI uses when calling the cortex-api.
     /// Env: `CORTEX_API_TOKEN`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -546,6 +555,8 @@ impl Default for DashboardConfig {
             rrf_alpha: None,
             rrf_k: None,
             query_rewriter: None,
+            rewriter_model: None,
+            rewriter_timeout_ms: None,
             api_token: None,
             api_url: None,
         }
