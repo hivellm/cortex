@@ -411,6 +411,14 @@ pub struct Worker {
     /// In-memory record of already-processed event ids; keeps at-least-once
     /// delivery from double-embedding during a single worker lifetime.
     processed: Mutex<BTreeSet<String>>,
+    /// ADR-012 — optional `MetadataStore` handle for stamping
+    /// `event_identity.vec_id` after every successful embed batch.
+    /// `None` keeps the legacy worker path (pre-phase13d) running
+    /// unchanged. The phase13d boot path in
+    /// `cortex-embedder-worker/main.rs` builds the store from the
+    /// resolved DB path and chains `with_metadata(store)` after
+    /// `Worker::new`.
+    pub metadata: Option<Arc<Mutex<cortex_storage::MetadataStore>>>,
 }
 
 impl Worker {
@@ -430,7 +438,20 @@ impl Worker {
             metrics,
             backpressure: Arc::new(BackpressureState::new()),
             processed: Mutex::new(BTreeSet::new()),
+            metadata: None,
         }
+    }
+
+    /// ADR-012 — wire the `MetadataStore` handle for
+    /// `event_identity.vec_id` write-back. The handle is shared
+    /// across the worker's lifetime; each successful embed batch
+    /// takes the mutex briefly to stamp one row.
+    pub fn with_metadata(
+        mut self,
+        metadata: Arc<Mutex<cortex_storage::MetadataStore>>,
+    ) -> Self {
+        self.metadata = Some(metadata);
+        self
     }
 
     /// Stream name this worker consumes from.
@@ -594,6 +615,13 @@ impl Worker {
         // 4. Classify the report.
         if report.errors.is_empty() {
             self.publish_success(&event, &report).await;
+            // ADR-012 §3.1 — stamp `event_identity.vec_id` with the
+            // representative server id (first chunk wins). The
+            // `vec_id` column is per-event (1:1) so a many-chunk
+            // event collapses to a single representative for the
+            // doctor + forget lookups; subsequent chunks share the
+            // dedup_key path the Vectorizer SDK already exposes.
+            self.stamp_identity_after_success(&event, &report);
             self.ack(STREAM_ENRICHED, offset).await;
             self.backpressure.record_success();
             return Ok(None);
@@ -685,6 +713,55 @@ impl Worker {
     async fn ack(&self, room: &str, offset: u64) {
         if let Err(e) = self.consumer.ack(room, offset).await {
             tracing::debug!(error = %e, "consumer ack failed");
+        }
+    }
+
+    /// ADR-012 §3.1 — stamp `event_identity.vec_id` with the
+    /// representative server id for `event` after a successful
+    /// embed batch. Best-effort: a poisoned mutex or a SQLite
+    /// failure logs at WARN but does NOT undo the embed. The
+    /// representative id is the FIRST entry in `new_records`
+    /// (chunk insertion order); the `vec_id` column is per-event
+    /// (1:1) so a many-chunk event collapses to one canonical
+    /// vector for downstream lookups. An empty `new_records`
+    /// (every chunk was deduped) is a no-op — the row was already
+    /// stamped on a prior embed.
+    fn stamp_identity_after_success(&self, event: &EnrichedEvent, report: &EmbedReport) {
+        let Some(metadata) = self.metadata.as_ref() else {
+            return;
+        };
+        let Some(first) = report.new_records.first() else {
+            return;
+        };
+        let event_id = event.event_id.as_str();
+        let server_id = first.server_id.as_str();
+        if event_id.is_empty() || server_id.is_empty() {
+            return;
+        }
+        match metadata.lock() {
+            Ok(guard) => {
+                use cortex_storage::IdentityIndex as _;
+                let idx = cortex_storage::SqliteIdentityIndex::new(guard.conn());
+                if let Err(e) = idx.upsert_identity(
+                    event_id,
+                    cortex_storage::Backend::Vectorizer,
+                    server_id,
+                ) {
+                    tracing::warn!(
+                        event_id = %event_id,
+                        vec_id = %server_id,
+                        error = %e,
+                        "identity index: vectorizer upsert failed (post-embed)"
+                    );
+                }
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    event_id = %event_id,
+                    error = %poisoned,
+                    "identity index: metadata mutex poisoned; skipping vectorizer upsert"
+                );
+            }
         }
     }
 }
