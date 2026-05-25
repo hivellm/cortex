@@ -195,6 +195,7 @@ impl ToolRegistry {
                 Arc::new(VectorSearchTool::new()),
                 Arc::new(GraphQueryTool::new()),
                 Arc::new(ActiveWorkTool::new()),
+                Arc::new(SimilarSessionsTool::new()),
             ],
         }
     }
@@ -1454,6 +1455,73 @@ impl Tool for ActiveWorkTool {
     }
 }
 
+/// MCP wrapper for `POST <api_url>/v1/search/similar-sessions`
+/// (phase13g §2.4). Returns up to `k` consolidation hits whose
+/// score clears the supplied confidence floor. Server-side enforces
+/// `1 <= k <= 10`.
+pub struct SimilarSessionsTool;
+
+impl SimilarSessionsTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SimilarSessionsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Hard cap on `k` enforced by the MCP layer in addition to the
+/// daemon-side clamp. Mirrors the spec's "max 10".
+pub const SIMILAR_SESSIONS_MAX_K: u64 = 10;
+
+#[async_trait]
+impl Tool for SimilarSessionsTool {
+    fn name(&self) -> &'static str {
+        "cortex_similar_sessions"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_similar_sessions",
+            "description": "Vector search restricted to the `cortex-<repo>-consolidations` collection. Returns top-K past sessions whose summary embeds close to `query`. Use this when the agent needs deterministic grounding on prior work (e.g. \"show me sessions that already tackled rework analysis\") instead of constructing a fusion query. Confidence floor defaults to 0.6 — sub-threshold hits drop server-side.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query", "repo"],
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text query the lane embeds + searches against the consolidation collection."},
+                    "repo": {"type": "string", "description": "Repo slug (case-insensitive). Scopes the search to `cortex-<repo>-consolidations`."},
+                    "k": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5, "description": "Top-K. Clamped server-side."},
+                    "confidence_floor": {"type": "number", "minimum": 0.0, "maximum": 1.0, "default": 0.6, "description": "Score cutoff — hits below this drop before the response is built."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        // Mirror the MCP-side k cap. The daemon also clamps; this
+        // gate catches obvious caller bugs before the round-trip.
+        if let Some(k) = args.get("k").and_then(|v| v.as_u64()) {
+            if k == 0 || k > SIMILAR_SESSIONS_MAX_K {
+                return Err(ToolError::invalid_input(format!(
+                    "`k` must be in [1, {SIMILAR_SESSIONS_MAX_K}]"
+                )));
+            }
+        }
+        if let Some(floor) = args.get("confidence_floor").and_then(|v| v.as_f64()) {
+            if !(0.0..=1.0).contains(&floor) {
+                return Err(ToolError::invalid_input(
+                    "`confidence_floor` must be in [0.0, 1.0]",
+                ));
+            }
+        }
+        proxy_search(ctx, "/v1/search/similar-sessions", args).await
+    }
+}
+
 /// GET-mode sibling of [`proxy_search`]. Reads the response body
 /// verbatim into a `ToolResult`.
 async fn proxy_get(ctx: &ToolContext, path: &str) -> Result<ToolResult, ToolError> {
@@ -1540,12 +1608,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_eleven_tools_with_unique_names() {
+    fn registry_returns_twelve_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            11,
-            "phase13g §1 adds cortex_active_work (10 -> 11)"
+            12,
+            "phase13g §2 adds cortex_similar_sessions (11 -> 12)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -1560,6 +1628,7 @@ mod tests {
             "cortex_vector_search",
             "cortex_graph_query",
             "cortex_active_work",
+            "cortex_similar_sessions",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1603,6 +1672,61 @@ mod tests {
             .call(&ctx, json!({ "repo": "../etc/passwd" }))
             .await
             .expect_err("invalid slug must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[test]
+    fn similar_sessions_descriptor_requires_query_and_repo() {
+        let t = SimilarSessionsTool::new();
+        let d = t.descriptor();
+        assert_eq!(d["name"], "cortex_similar_sessions");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        let req = d["inputSchema"]["required"].as_array().unwrap();
+        let names: Vec<&str> = req.iter().filter_map(|v| v.as_str()).collect();
+        assert!(names.contains(&"query"));
+        assert!(names.contains(&"repo"));
+        // k + confidence_floor stay optional with documented defaults.
+        let props = d["inputSchema"]["properties"].as_object().unwrap();
+        assert_eq!(props["k"]["maximum"].as_u64().unwrap(), 10);
+        assert_eq!(props["k"]["default"].as_u64().unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn similar_sessions_rejects_k_above_max() {
+        let t = SimilarSessionsTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "query": "x", "repo": "cortex", "k": 50 }))
+            .await
+            .expect_err("k > 10 must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn similar_sessions_rejects_zero_k() {
+        let t = SimilarSessionsTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "query": "x", "repo": "cortex", "k": 0 }))
+            .await
+            .expect_err("k=0 must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn similar_sessions_rejects_floor_outside_unit_interval() {
+        let t = SimilarSessionsTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(
+                &ctx,
+                json!({ "query": "x", "repo": "cortex", "confidence_floor": 1.5 }),
+            )
+            .await
+            .expect_err("floor > 1.0 must be rejected");
         assert_eq!(err.reason, reasons::INVALID_INPUT);
     }
 

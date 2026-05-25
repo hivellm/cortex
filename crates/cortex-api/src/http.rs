@@ -175,6 +175,15 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::search_proxy::handle_graph_query),
         )
         .with_state(state);
+    // phase13g §2.3 — similar-sessions route. Lives on its own
+    // sub-router because the handler reads from
+    // `SimilarSessionsState` (a `dyn ConsolidationSearchSource`)
+    // rather than the global `ApiState`. The default state carries
+    // the honest-empty source so the route returns `{ hits: [], total: 0 }`
+    // until main.rs wires a live Vectorizer lane.
+    router = router.merge(crate::similar_sessions::build_router(
+        crate::similar_sessions::SimilarSessionsState::default(),
+    ));
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
         // alongside the dashboard routes. Both endpoints share the
