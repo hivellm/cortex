@@ -99,17 +99,15 @@ async fn pre_tool_use_denies_on_critical_violation_from_mock_api() {
     let mock_server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/laws/check"))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200).set_body_json(json!({
-                "violations": [
-                    {
-                        "law_id": "LAW-007",
-                        "severity": "critical",
-                        "message": "no --no-verify"
-                    }
-                ]
-            })),
-        )
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "violations": [
+                {
+                    "law_id": "LAW-007",
+                    "severity": "critical",
+                    "message": "no --no-verify"
+                }
+            ]
+        })))
         .mount(&mock_server)
         .await;
 
@@ -151,39 +149,37 @@ async fn user_prompt_returns_bundle_when_api_responds() {
     let mock_server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/query"))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200).set_body_json(json!({
-                "intent": "pre_change_context",
-                "query_id": "01HX0DEMOQUERY0000000001",
-                "scope_resolved": { "repos": [], "topics": [] },
-                "results": {
-                    "snippets": [],
-                    "decisions": [
-                        {
-                            "rank": 1,
-                            "id": "DEC-0042",
-                            "title": "Use Meilisearch for keyword lane",
-                            "status": "accepted",
-                            "ts": 1_777_000_000_000_i64,
-                            "score": 0.91,
-                            "links": []
-                        }
-                    ],
-                    "violations": [],
-                    "graph_neighbors": [],
-                    "similar_turns": []
-                },
-                "laws_active": [
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "intent": "pre_change_context",
+            "query_id": "01HX0DEMOQUERY0000000001",
+            "scope_resolved": { "repos": [], "topics": [] },
+            "results": {
+                "snippets": [],
+                "decisions": [
                     {
-                        "id": "LAW-007",
-                        "severity": "critical",
-                        "title": "No --no-verify on commits"
+                        "rank": 1,
+                        "id": "DEC-0042",
+                        "title": "Use Meilisearch for keyword lane",
+                        "status": "accepted",
+                        "ts": 1_777_000_000_000_i64,
+                        "score": 0.91,
+                        "links": []
                     }
                 ],
-                "budget": { "used_ms": 12, "cap_ms": 600, "cache": "miss" },
-                "debug": { "lanes": {}, "errors": {} }
-            })),
-        )
+                "violations": [],
+                "graph_neighbors": [],
+                "similar_turns": []
+            },
+            "laws_active": [
+                {
+                    "id": "LAW-007",
+                    "severity": "critical",
+                    "title": "No --no-verify on commits"
+                }
+            ],
+            "budget": { "used_ms": 12, "cap_ms": 600, "cache": "miss" },
+            "debug": { "lanes": {}, "errors": {} }
+        })))
         .mount(&mock_server)
         .await;
 
@@ -220,11 +216,9 @@ async fn malformed_hook_input_replies_empty_and_publishes_nothing() {
     let (dispatcher, publisher) = build_dispatcher(cfg);
     // Send something that's valid JSON but doesn't match HookFrame —
     // the dispatcher's serde layer drops it.
-    let resp = cortex_adapter_claude_code::ipc::dispatch_inline(
-        json!({ "garbage": true }),
-        dispatcher,
-    )
-    .await;
+    let resp =
+        cortex_adapter_claude_code::ipc::dispatch_inline(json!({ "garbage": true }), dispatcher)
+            .await;
     assert!(resp.hook_specific_output.is_none());
     assert!(resp.permission_decision.is_none());
     assert_eq!(publisher.count().await, 0);
@@ -234,11 +228,7 @@ async fn malformed_hook_input_replies_empty_and_publishes_nothing() {
 async fn unknown_hook_kind_replies_empty() {
     let cfg = AdapterSection::default();
     let (dispatcher, publisher) = build_dispatcher(cfg);
-    let resp = dispatch_inline(
-        frame("ImaginaryHook", json!({ "k": "v" })),
-        dispatcher,
-    )
-    .await;
+    let resp = dispatch_inline(frame("ImaginaryHook", json!({ "k": "v" })), dispatcher).await;
     assert!(resp.hook_specific_output.is_none());
     assert_eq!(publisher.count().await, 0);
 }
@@ -345,17 +335,24 @@ async fn hook_response_serializes_to_protocol_shape() {
         .as_str()
         .unwrap()
         .contains("LAW-007"));
-    assert!(bundle.get("additional_context").is_none(),
-        "snake_case field must not be emitted");
+    assert!(
+        bundle.get("additional_context").is_none(),
+        "snake_case field must not be emitted"
+    );
 
     let empty_bundle =
         serde_json::to_value(HookResponse::additional_context(String::new())).unwrap();
-    assert_eq!(empty_bundle.as_object().unwrap().len(), 0,
-        "empty bundle must short-circuit to {{}}");
+    assert_eq!(
+        empty_bundle.as_object().unwrap().len(),
+        0,
+        "empty bundle must short-circuit to {{}}"
+    );
 
     let deny = serde_json::to_value(HookResponse::deny("LAW-007 ...")).unwrap();
     assert_eq!(deny["permissionDecision"], "deny");
     assert_eq!(deny["permissionDecisionReason"], "LAW-007 ...");
-    assert!(deny.get("permission_decision").is_none(),
-        "snake_case field must not be emitted");
+    assert!(
+        deny.get("permission_decision").is_none(),
+        "snake_case field must not be emitted"
+    );
 }

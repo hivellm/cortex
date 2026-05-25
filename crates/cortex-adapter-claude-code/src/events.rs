@@ -19,8 +19,7 @@
 use chrono::{SecondsFormat, Utc};
 use cortex_core::canonical_json::canonicalize;
 use cortex_core::events::{
-    AgentCall, Context, Envelope, Kind, Stream, ToolCall, ToolCallOutput,
-    TouchedArtifact, Turn,
+    AgentCall, Context, Envelope, Kind, Stream, ToolCall, ToolCallOutput, TouchedArtifact, Turn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -266,8 +265,7 @@ fn update_correlation(
                 }
                 None => {
                     extras.orphan = true;
-                    extras.tool_call_id =
-                        Some(sessions.open_tool_call(session_id, &tool_use_id));
+                    extras.tool_call_id = Some(sessions.open_tool_call(session_id, &tool_use_id));
                     sessions.close_tool_call(session_id, &tool_use_id);
                 }
             }
@@ -387,7 +385,10 @@ fn build_tool_call_payload(redacted: &Value) -> Value {
     let output = raw_output.map(|v| ToolCallOutput {
         stdout: read_optional_string(v, "stdout"),
         stderr: read_optional_string(v, "stderr"),
-        exit_code: v.get("exit_code").and_then(|x| x.as_i64()).map(|x| x as i32),
+        exit_code: v
+            .get("exit_code")
+            .and_then(|x| x.as_i64())
+            .map(|x| x as i32),
         truncated: v
             .get("truncated")
             .and_then(|x| x.as_bool())
@@ -498,7 +499,9 @@ fn build_agent_call_payload(redacted: &Value) -> Value {
 fn build_context(frame: &HookFrame, extras: &ClaudeCodeExtras) -> Context {
     let cwd = frame.cwd.clone();
     let repo = cwd.as_deref().and_then(repo_from_cwd);
-    let user = std::env::var("USER").ok().or_else(|| std::env::var("USERNAME").ok());
+    let user = std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("USERNAME").ok());
     let mut bag = std::collections::BTreeMap::new();
     bag.insert(
         "claude_code".to_string(),
@@ -525,13 +528,11 @@ fn read_string_field(value: &Value, field: &str) -> Option<String> {
 }
 
 fn read_optional_string(value: &Value, field: &str) -> Option<String> {
-    value
-        .get(field)
-        .and_then(|v| match v {
-            Value::String(s) => Some(s.clone()),
-            Value::Null => None,
-            other => Some(other.to_string()),
-        })
+    value.get(field).and_then(|v| match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Null => None,
+        other => Some(other.to_string()),
+    })
 }
 
 fn read_tool_use_id(payload: &Value) -> String {
@@ -811,7 +812,10 @@ mod tests {
         let tc: ToolCall = serde_json::from_value(env.payload).unwrap();
         let body = tc.input["command"].as_str().unwrap_or_default();
         assert!(!body.contains("AKIAIOSFODNN7EXAMPLE0000"));
-        assert!(!env.redactions.is_empty(), "redaction tokens must be recorded");
+        assert!(
+            !env.redactions.is_empty(),
+            "redaction tokens must be recorded"
+        );
     }
 
     #[test]
@@ -908,13 +912,8 @@ mod tests {
         // publish would silently drop turn-end signals on any
         // session that hasn't written a transcript yet.
         let mgr = SessionManager::new();
-        let env = build_event(
-            HookKind::Stop,
-            &frame("Stop", json!({})),
-            &mgr,
-            42,
-        )
-        .expect("Stop must publish even without transcript_path");
+        let env = build_event(HookKind::Stop, &frame("Stop", json!({})), &mgr, 42)
+            .expect("Stop must publish even without transcript_path");
         let payload: Turn = serde_json::from_value(env.payload).unwrap();
         assert_eq!(payload.user_message, "");
         assert_eq!(payload.assistant_message, None);
@@ -949,7 +948,6 @@ mod tests {
         )
         .unwrap();
         let value = serde_json::to_value(&env).unwrap();
-        cortex_core::validate_event(&value)
-            .expect("adapter envelope must satisfy spec-04 schema");
+        cortex_core::validate_event(&value).expect("adapter envelope must satisfy spec-04 schema");
     }
 }

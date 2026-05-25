@@ -68,10 +68,16 @@ impl Summariser for CannedSummariser {
     }
     async fn summarise(
         &self,
-        _request: SummariserRequest,
+        request: SummariserRequest,
     ) -> Result<SummariserResult, SummariserError> {
+        let text = if request.prompt.contains("relevance judge") {
+            r#"{"relevant": true, "reason": "session captures concrete ef_search tuning decision"}"#
+                .to_string()
+        } else {
+            CANNED_RESPONSE.to_string()
+        };
         Ok(SummariserResult {
-            text: CANNED_RESPONSE.to_string(),
+            text,
             cost_cents: 80,
             kind: self.kind,
             input_tokens: 1_500,
@@ -135,8 +141,8 @@ fn synth_session(session_idx: usize, pair_count: usize, tool_count: usize) -> Ve
             Kind::Turn,
             &ts_user,
             serde_json::json!({
-                "user_message": format!("user prompt {i} for session {session_idx}"),
-                "assistant_message": format!("assistant reply {i}"),
+                "user_message": format!("user-side prompt iteration {i} for session {session_idx} with body"),
+                "assistant_message": format!("assistant reply iteration {i} with substantive content"),
                 "outcome": if i % 4 == 0 { "error" } else { "success" }
             }),
         ));
@@ -147,8 +153,8 @@ fn synth_session(session_idx: usize, pair_count: usize, tool_count: usize) -> Ve
             Kind::Turn,
             &ts_assistant,
             serde_json::json!({
-                "user_message": format!("follow-up {i}"),
-                "assistant_message": format!("ok {i}"),
+                "user_message": format!("follow-up question for iteration {i} with body text"),
+                "assistant_message": format!("affirmative response iteration {i} with body text"),
                 "outcome": "success"
             }),
         ));

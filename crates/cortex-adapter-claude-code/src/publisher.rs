@@ -16,9 +16,9 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::{json, Value};
 
-use cortex_core::events::Envelope;
 use crate::metrics::Metrics;
 use crate::wal::OverflowWal;
+use cortex_core::events::Envelope;
 
 /// Publisher trait so tests use a recording fake.
 #[async_trait]
@@ -126,10 +126,7 @@ impl HttpPublisher {
         q.push_back(event);
     }
 
-    async fn flush_locked(
-        &self,
-        q: &mut std::collections::VecDeque<Envelope>,
-    ) -> usize {
+    async fn flush_locked(&self, q: &mut std::collections::VecDeque<Envelope>) -> usize {
         if q.is_empty() {
             return 0;
         }
@@ -149,8 +146,7 @@ impl HttpPublisher {
                 // hides every per-envelope rejection — schema drift,
                 // synap room missing, archive backpressure. Parse the
                 // body so the failure surfaces in metrics + logs.
-                self.metrics
-                    .add_publisher_accepted(report.accepted as u64);
+                self.metrics.add_publisher_accepted(report.accepted as u64);
                 if report.accepted > 0 {
                     // Phase8a — stamp the most recent successful
                     // publish so /healthz can detect publisher stall.
@@ -163,11 +159,8 @@ impl HttpPublisher {
                 // truthful — without the split, all rejected envelopes
                 // would still bump `publish_ok` and the divergence
                 // signal disappears.
-                let rejected_indices: std::collections::BTreeSet<usize> = report
-                    .errors
-                    .iter()
-                    .map(|err| err.index)
-                    .collect();
+                let rejected_indices: std::collections::BTreeSet<usize> =
+                    report.errors.iter().map(|err| err.index).collect();
                 for (i, e) in batch.iter().enumerate() {
                     // events_total is "submitted to ingestion", not
                     // "accepted". The split shows up as a divergence
@@ -178,8 +171,7 @@ impl HttpPublisher {
                         self.metrics
                             .incr_envelopes_publish_fail(e.kind.schema_stem());
                     } else {
-                        self.metrics
-                            .incr_envelopes_publish_ok(e.kind.schema_stem());
+                        self.metrics.incr_envelopes_publish_ok(e.kind.schema_stem());
                     }
                 }
                 if report.rejected > 0 {
@@ -235,10 +227,7 @@ impl HttpPublisher {
                 .map(|e| serde_json::to_value(e).unwrap_or(Value::Null))
                 .collect::<Vec<_>>()
         });
-        let url = format!(
-            "{}/v1/events/batch",
-            self.endpoint.trim_end_matches('/')
-        );
+        let url = format!("{}/v1/events/batch", self.endpoint.trim_end_matches('/'));
         let mut attempt = 0u32;
         let attempts = self.max_retry.max(1);
         loop {
@@ -383,10 +372,7 @@ impl Publisher for HttpPublisher {
     }
 
     fn queue_depth(&self) -> usize {
-        self.queue
-            .try_lock()
-            .map(|g| g.len())
-            .unwrap_or(0)
+        self.queue.try_lock().map(|g| g.len()).unwrap_or(0)
     }
 }
 
@@ -423,10 +409,7 @@ impl Publisher for MemoryPublisher {
         0
     }
     fn queue_depth(&self) -> usize {
-        self.events
-            .try_lock()
-            .map(|g| g.len())
-            .unwrap_or(0)
+        self.events.try_lock().map(|g| g.len()).unwrap_or(0)
     }
 }
 

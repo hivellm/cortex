@@ -209,7 +209,8 @@ impl Metrics {
     /// counter is unlabelled — same shape `cortex-ingestion` uses for
     /// `events_rejected_total`.
     pub fn incr_frames_parse_error(&self) {
-        self.frames_parse_error_total.fetch_add(1, Ordering::Relaxed);
+        self.frames_parse_error_total
+            .fetch_add(1, Ordering::Relaxed);
     }
     /// Phase8b — bump `envelopes_built_total{kind}` and stamp
     /// `last_envelope_ts_ms{kind}` with the current wall-clock ms.
@@ -385,7 +386,11 @@ impl Metrics {
             self.publisher_queue_depth()
         );
         out.push_str("# TYPE cortex_adapter_overflow_wal_bytes gauge\n");
-        let _ = writeln!(out, "cortex_adapter_overflow_wal_bytes {}", self.wal_bytes());
+        let _ = writeln!(
+            out,
+            "cortex_adapter_overflow_wal_bytes {}",
+            self.wal_bytes()
+        );
         out.push_str("# TYPE cortex_adapter_ipc_pipe_alive gauge\n");
         let _ = writeln!(
             out,
@@ -456,7 +461,9 @@ mod tests {
         m.incr_envelopes_publish_fail("turn");
         assert_eq!(m.envelopes_publish_ok_snapshot().get("tool_call"), Some(&2));
         assert_eq!(m.envelopes_publish_fail_snapshot().get("turn"), Some(&1));
-        assert!(m.last_publish_ok_ts_by_kind_snapshot().contains_key("tool_call"));
+        assert!(m
+            .last_publish_ok_ts_by_kind_snapshot()
+            .contains_key("tool_call"));
     }
 
     #[test]
@@ -477,22 +484,12 @@ mod tests {
         m.incr_envelopes_publish_fail("turn");
         m.incr_frames_parse_error();
         let txt = m.render_prom();
-        assert!(txt.contains(
-            "cortex_adapter_ipc_frames_received_total{hook=\"PostToolUse\"} 1"
-        ));
-        assert!(txt.contains(
-            "cortex_adapter_ipc_frames_parsed_total{hook=\"PostToolUse\"} 1"
-        ));
+        assert!(txt.contains("cortex_adapter_ipc_frames_received_total{hook=\"PostToolUse\"} 1"));
+        assert!(txt.contains("cortex_adapter_ipc_frames_parsed_total{hook=\"PostToolUse\"} 1"));
         assert!(txt.contains("cortex_adapter_ipc_frames_parse_error_total 1"));
-        assert!(txt.contains(
-            "cortex_adapter_envelopes_built_total{kind=\"tool_call\"} 1"
-        ));
-        assert!(txt.contains(
-            "cortex_adapter_envelopes_publish_ok_total{kind=\"tool_call\"} 1"
-        ));
-        assert!(txt.contains(
-            "cortex_adapter_envelopes_publish_fail_total{kind=\"turn\"} 1"
-        ));
+        assert!(txt.contains("cortex_adapter_envelopes_built_total{kind=\"tool_call\"} 1"));
+        assert!(txt.contains("cortex_adapter_envelopes_publish_ok_total{kind=\"tool_call\"} 1"));
+        assert!(txt.contains("cortex_adapter_envelopes_publish_fail_total{kind=\"turn\"} 1"));
         assert!(txt.contains("cortex_adapter_last_frame_ts_ms{hook=\"PostToolUse\"}"));
     }
 }

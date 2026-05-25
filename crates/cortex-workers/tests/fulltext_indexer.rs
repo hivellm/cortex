@@ -72,7 +72,7 @@ async fn index_batch_groups_events_per_index() {
             "tc-1",
             Kind::ToolCall,
             json!({
-                "tool_name": "Edit",
+                "tool_name": "Task",
                 "input": { "command": "x" },
                 "outcome": "success",
                 "touched": []
@@ -82,7 +82,7 @@ async fn index_batch_groups_events_per_index() {
             "tc-2",
             Kind::ToolCall,
             json!({
-                "tool_name": "Read",
+                "tool_name": "WebFetch",
                 "input": { "command": "y" },
                 "outcome": "success",
                 "touched": []
@@ -191,7 +191,7 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
         "tc-1",
         Kind::ToolCall,
         json!({
-            "tool_name": "Edit",
+            "tool_name": "Task",
             "input": { "command": "edit foo" },
             "outcome": "success",
             "touched": []
@@ -347,7 +347,7 @@ async fn batches_chunk_by_upsert_batch_size() {
             &format!("tc-{i}"),
             Kind::ToolCall,
             json!({
-                "tool_name": "Edit",
+                "tool_name": "Task",
                 "input": { "command": format!("cmd-{i}") },
                 "outcome": "success",
                 "touched": []
@@ -385,7 +385,7 @@ async fn await_task_branch_runs_and_succeeds() {
         "tc-await",
         Kind::ToolCall,
         json!({
-            "tool_name": "Edit",
+            "tool_name": "Task",
             "input": {"command": "x"},
             "outcome": "success",
             "touched": [],
@@ -417,7 +417,7 @@ async fn with_ensured_skips_settings_for_seeded_indexes() {
         "tc-ensured",
         Kind::ToolCall,
         json!({
-            "tool_name": "Edit",
+            "tool_name": "Task",
             "input": {"command": "x"},
             "outcome": "success",
             "touched": [],
@@ -447,7 +447,7 @@ async fn ensure_settings_runs_only_once_per_index() {
         "a-1",
         Kind::ToolCall,
         json!({
-            "tool_name": "Edit",
+            "tool_name": "Task",
             "input": {"command": "1"},
             "outcome": "success",
             "touched": [],
@@ -457,7 +457,7 @@ async fn ensure_settings_runs_only_once_per_index() {
         "a-2",
         Kind::ToolCall,
         json!({
-            "tool_name": "Edit",
+            "tool_name": "Task",
             "input": {"command": "2"},
             "outcome": "success",
             "touched": [],

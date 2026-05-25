@@ -315,9 +315,7 @@ impl Tool for QueryTool {
             // — instead of letting the transport drop the call to
             // a side-file the caller has to re-read by hand.
             let payload = serde_json::to_value(&parsed).unwrap_or(Value::Null);
-            let payload_bytes = serde_json::to_vec(&payload)
-                .map(|v| v.len())
-                .unwrap_or(0);
+            let payload_bytes = serde_json::to_vec(&payload).map(|v| v.len()).unwrap_or(0);
             if payload_bytes > MCP_RESPONSE_HARD_CAP {
                 let total_hits = parsed.results.snippets.len()
                     + parsed.results.decisions.len()
@@ -1190,8 +1188,7 @@ impl Tool for ForgetTool {
         // the irreversibility advisory at the same layer it would
         // reject any other malformed call.
         if status.as_u16() == 400 {
-            let err: Value =
-                serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+            let err: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
             let msg = err
                 .get("message")
                 .and_then(|v| v.as_str())
@@ -1363,11 +1360,7 @@ impl Tool for GraphQueryTool {
 /// the cortex-api response into a `ToolResult`. 2xx → ok with the
 /// JSON body; 400/403/404 → soft-error keyed on the upstream `reason`;
 /// other failures → `ToolResult::soft_error`.
-async fn proxy_search(
-    ctx: &ToolContext,
-    path: &str,
-    args: Value,
-) -> Result<ToolResult, ToolError> {
+async fn proxy_search(ctx: &ToolContext, path: &str, args: Value) -> Result<ToolResult, ToolError> {
     let url = format!("{}{}", ctx.api_url.trim_end_matches('/'), path);
     let resp = match ctx
         .http
@@ -1720,10 +1713,7 @@ mod tests {
             .await
             .expect("happy-path must succeed");
         assert!(!res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["index"], "cortex_consolidations");
         assert_eq!(payload["hits"].as_array().unwrap().len(), 2);
@@ -1751,10 +1741,7 @@ mod tests {
             .await
             .expect("404 must arrive as soft-error, not panic");
         assert!(res.is_error, "non-2xx must be a soft-error");
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["reason"], "index_not_found");
     }
@@ -1771,10 +1758,7 @@ mod tests {
             .await
             .expect("transport failure must arrive as soft-error, not panic");
         assert!(res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["reason"], reasons::API_UNREACHABLE);
     }
@@ -1809,10 +1793,7 @@ mod tests {
             .await
             .expect("happy path must succeed");
         assert!(!res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["collection"], "cortex.consolidation.fp32");
         assert_eq!(payload["hits"].as_array().unwrap().len(), 1);
@@ -1839,10 +1820,7 @@ mod tests {
             .await
             .expect("400 must arrive as soft-error");
         assert!(res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["reason"], "bad_input");
     }
@@ -1880,10 +1858,7 @@ mod tests {
             .await
             .expect("413 must arrive as soft-error");
         assert!(res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         // soft_error wraps the upstream body under `details`; the
         // MCP wrapper falls back to `API_HTTP_ERROR` for the soft-
         // error `reason` because the cortex-api 413 envelope uses
@@ -1923,10 +1898,7 @@ mod tests {
             .await
             .expect("neighbors happy path must succeed");
         assert!(!res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["mode"], "neighbors");
         assert_eq!(payload["nodes"].as_array().unwrap().len(), 2);
@@ -1959,10 +1931,7 @@ mod tests {
             .await
             .expect("403 must arrive as soft-error");
         assert!(res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["reason"], "cypher_disabled");
     }
@@ -1998,10 +1967,7 @@ mod tests {
             .await
             .expect("cypher happy path must succeed");
         assert!(!res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["mode"], "cypher");
         assert!(payload["nodes"].as_array().unwrap().is_empty());
@@ -2043,10 +2009,7 @@ mod tests {
             .await
             .expect("dry-run must succeed");
         assert!(!res.is_error);
-        let text = res.content[0]
-            .get("text")
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["dry_run"], true);
         assert_eq!(payload["meili_deleted"], false);

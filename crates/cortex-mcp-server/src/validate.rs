@@ -616,11 +616,9 @@ mod tests {
         fs::remove_file(dir.path().join("hooks/hooks.json")).unwrap();
         let report = validate_plugin(dir.path());
         assert!(!report.is_ok());
-        assert!(report
-            .errors
-            .iter()
-            .any(|e| e.contains("hooks/ directory present but no hooks.json descriptor inside")
-                || e.contains("missing")));
+        assert!(report.errors.iter().any(|e| e
+            .contains("hooks/ directory present but no hooks.json descriptor inside")
+            || e.contains("missing")));
     }
 
     #[test]

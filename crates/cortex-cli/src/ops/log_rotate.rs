@@ -312,10 +312,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("hook.log");
         write_file(&p, b"tiny");
-        // Time-travel the rotator forward beyond the 7-day window.
-        let mut opts = LogRotateOpts::default_for(now());
-        opts.now = now() + chrono::Duration::days(30);
+        // The test's fixed `now()` is a frozen RFC-3339 string; the
+        // file mtime comes from the real OS clock and inevitably drifts
+        // past it. Anchor `opts.now` to wall-clock + 30 days so the
+        // synthetic "now" sits well past the file mtime regardless of
+        // when the suite runs.
+        let mut opts = LogRotateOpts::default_for(Utc::now());
+        opts.now = Utc::now() + chrono::Duration::days(30);
         let outcome = rotate_if_needed(&p, &opts).unwrap();
-        assert!(outcome.rotated);
+        assert!(
+            outcome.rotated,
+            "30-day-old file MUST rotate; source_bytes={}, gz={:?}",
+            outcome.source_bytes, outcome.gz_path
+        );
     }
 }

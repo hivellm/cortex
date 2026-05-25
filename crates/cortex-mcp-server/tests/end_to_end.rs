@@ -415,13 +415,11 @@ async fn tools_call_capture_memory_round_trips_through_v1_ingest() {
     let mock = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/ingest"))
-        .respond_with(
-            ResponseTemplate::new(202).set_body_json(json!({
-                "event_id": "evt_test_1",
-                "content_hash": "deadbeef",
-                "indexed_at": "2026-04-30T12:00:00Z"
-            })),
-        )
+        .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+            "event_id": "evt_test_1",
+            "content_hash": "deadbeef",
+            "indexed_at": "2026-04-30T12:00:00Z"
+        })))
         .mount(&mock)
         .await;
 

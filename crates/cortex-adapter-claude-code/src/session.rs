@@ -219,10 +219,10 @@ impl SessionManager {
     /// when no PreToolUse correlation was recorded — the post-call
     /// event will be flagged as orphan.
     pub fn lookup_tool_call(&self, session_id: &str, tool_use_id: &str) -> Option<String> {
-        self.sessions
-            .lock()
-            .ok()
-            .and_then(|g| g.get(session_id).and_then(|s| s.tool_calls.get(tool_use_id).cloned()))
+        self.sessions.lock().ok().and_then(|g| {
+            g.get(session_id)
+                .and_then(|s| s.tool_calls.get(tool_use_id).cloned())
+        })
     }
 
     /// Drop a tool-call after PostToolUse handles it so the map
@@ -241,8 +241,11 @@ mod tests {
     use super::*;
 
     fn is_canonical_ulid(s: &str) -> bool {
-        s.len() == 26 && s.chars().all(|c| matches!(c,
-            '0'..='9' | 'A'..='H' | 'J'..='K' | 'M'..='N' | 'P'..='T' | 'V'..='Z'))
+        s.len() == 26
+            && s.chars().all(|c| {
+                matches!(c,
+            '0'..='9' | 'A'..='H' | 'J'..='K' | 'M'..='N' | 'P'..='T' | 'V'..='Z')
+            })
     }
 
     #[test]

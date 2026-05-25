@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn validate_produced_rejects_oversize_title() {
         let mut p = ok_payload();
-        p.title = "x".repeat(81);
+        p.title = "x".repeat(cortex_core::events::CONSOLIDATION_TITLE_MAX_CHARS + 1);
         let err = validate_produced(&p).expect_err("oversize title");
         assert!(format!("{err}").contains("title"));
     }

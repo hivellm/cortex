@@ -244,8 +244,7 @@ impl Dispatcher {
                 HookResponse::additional_context(result.bundle)
             }
             HookKind::PreToolUse => {
-                let tool_name =
-                    read_string_field(&frame.payload, "tool_name").unwrap_or_default();
+                let tool_name = read_string_field(&frame.payload, "tool_name").unwrap_or_default();
                 let input = frame.payload.get("input").cloned().unwrap_or(json!({}));
                 let result = self
                     .sync

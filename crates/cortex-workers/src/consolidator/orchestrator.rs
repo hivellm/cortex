@@ -317,9 +317,17 @@ mod tests {
         fn kind(&self) -> SK {
             self.kind
         }
-        async fn summarise(&self, _r: Req) -> Result<SummariserResult, SummariserError> {
+        async fn summarise(&self, r: Req) -> Result<SummariserResult, SummariserError> {
+            // The producer issues a relevance gate call first, then the
+            // full summary. Differentiate by prompt content so this
+            // canned summariser satisfies both phases.
+            let text = if r.prompt.contains("relevance judge") {
+                r#"{"relevant": true, "reason": "substantive"}"#.to_string()
+            } else {
+                self.text.clone()
+            };
             Ok(SummariserResult {
-                text: self.text.clone(),
+                text,
                 cost_cents: self.cost,
                 kind: self.kind,
                 input_tokens: 1,
@@ -338,10 +346,14 @@ mod tests {
     }
 
     fn turn_envelope() -> cortex_core::events::Envelope {
+        turn_envelope_at("01HXEVT0000000000000000001", "2026-04-20T10:00:00Z")
+    }
+
+    fn turn_envelope_at(event_id: &str, occurred_at: &str) -> cortex_core::events::Envelope {
         cortex_core::events::Envelope {
-            event_id: "01HXEVT0000000000000000001".into(),
+            event_id: event_id.into(),
             schema_version: "1".into(),
-            occurred_at: "2026-04-20T10:00:00Z".into(),
+            occurred_at: occurred_at.into(),
             ingested_at: None,
             session_id: "01HXSESS00000000000000000A".into(),
             stream: cortex_core::events::Stream::Live,
@@ -358,12 +370,22 @@ mod tests {
                 ide: None,
                 extras: Default::default(),
             },
-            payload: serde_json::json!({"user_message": "hi", "assistant_message": "ok"}),
+            payload: serde_json::json!({
+                "user_message": "tune ef_search recall benchmark across HNSW configurations",
+                "assistant_message": "ef_search 128 wins on recall vs latency tradeoff"
+            }),
             redactions: vec![],
             content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 .into(),
             parent_event_id: None,
         }
+    }
+
+    fn two_turn_envelopes() -> Vec<cortex_core::events::Envelope> {
+        vec![
+            turn_envelope_at("01HXEVT0000000000000000001", "2026-04-20T10:00:00Z"),
+            turn_envelope_at("01HXEVT0000000000000000002", "2026-04-20T10:01:00Z"),
+        ]
     }
 
     #[tokio::test]
@@ -383,7 +405,7 @@ mod tests {
         let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),
-            envelopes: vec![turn_envelope()],
+            envelopes: two_turn_envelopes(),
         };
         let produced = orch.run_session(&input).await.expect("run_session");
         assert_eq!(produced.cost_cents, 80);
@@ -520,7 +542,7 @@ mod tests {
         let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),
-            envelopes: vec![turn_envelope()],
+            envelopes: two_turn_envelopes(),
         };
         let p1 = orch1.run_session(&input).await.expect("first run");
         let p2 = orch2.run_session(&input).await.expect("second run");
@@ -554,7 +576,7 @@ mod tests {
         let input = super::super::producer::session::SessionInput {
             session_id: "01HXSESS00000000000000000A".into(),
             repo: Some("cortex".into()),
-            envelopes: vec![turn_envelope()],
+            envelopes: two_turn_envelopes(),
         };
         // First run lands (estimated 100, ledger 0, fits exactly).
         orch.run_session(&input).await.expect("first run");

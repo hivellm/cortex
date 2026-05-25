@@ -59,10 +59,7 @@ impl OverflowWal {
     pub fn append(&self, value: &Value) -> Result<(), WalError> {
         let mut line = serde_json::to_vec(value)?;
         line.push(b'\n');
-        let mut guard = self
-            .handle
-            .lock()
-            .expect("wal mutex poisoned");
+        let mut guard = self.handle.lock().expect("wal mutex poisoned");
         let file = guard
             .as_mut()
             .ok_or_else(|| WalError::Io(std::io::Error::other("wal closed")))?;
@@ -81,10 +78,7 @@ impl OverflowWal {
     /// file. Used at daemon startup to replay drops from the previous
     /// run.
     pub fn drain(&self) -> Result<Vec<Value>, WalError> {
-        let mut guard = self
-            .handle
-            .lock()
-            .expect("wal mutex poisoned");
+        let mut guard = self.handle.lock().expect("wal mutex poisoned");
         // Drop the live handle so we can reopen for read+truncate.
         guard.take();
 
@@ -154,10 +148,17 @@ mod tests {
     fn malformed_lines_are_skipped_not_fatal() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("overflow.wal");
-        std::fs::write(&path, "{\"event_id\":\"good\"}\nnot-json\n{\"event_id\":\"after\"}\n").unwrap();
+        std::fs::write(
+            &path,
+            "{\"event_id\":\"good\"}\nnot-json\n{\"event_id\":\"after\"}\n",
+        )
+        .unwrap();
         let wal = OverflowWal::open(&path).unwrap();
         let drained = wal.drain().unwrap();
-        let ids: Vec<&str> = drained.iter().map(|v| v["event_id"].as_str().unwrap()).collect();
+        let ids: Vec<&str> = drained
+            .iter()
+            .map(|v| v["event_id"].as_str().unwrap())
+            .collect();
         assert_eq!(ids, vec!["good", "after"]);
     }
 }

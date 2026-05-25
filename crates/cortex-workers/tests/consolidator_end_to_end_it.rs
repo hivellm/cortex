@@ -53,10 +53,20 @@ impl Summariser for CannedSummariser {
     }
     async fn summarise(
         &self,
-        _request: SummariserRequest,
+        request: SummariserRequest,
     ) -> Result<SummariserResult, SummariserError> {
+        // 2026-05-19 — producer makes two calls: a relevance gate first
+        // (`{"relevant": true|false, "reason": "..."}`), then the full
+        // summary. Distinguish by prompt content so the mock satisfies
+        // both stages with one fixture.
+        let text = if request.prompt.contains("relevance judge") {
+            r#"{"relevant": true, "reason": "session captures concrete ef_search tuning decision"}"#
+                .to_string()
+        } else {
+            self.text.clone()
+        };
         Ok(SummariserResult {
-            text: self.text.clone(),
+            text,
             cost_cents: self.cost,
             kind: self.kind,
             input_tokens: 1_500,
@@ -110,8 +120,8 @@ fn synth_session(pair_count: u8, tool_count: u8) -> Vec<Envelope> {
             Kind::Turn,
             &ts_user,
             serde_json::json!({
-                "user_message": format!("user prompt {i}"),
-                "assistant_message": format!("assistant reply {i}"),
+                "user_message": format!("user-side prompt iteration {i} with enough body text"),
+                "assistant_message": format!("assistant reply iteration {i} with enough body text"),
                 "outcome": if i % 3 == 0 { "error" } else { "success" }
             }),
         ));
@@ -124,8 +134,8 @@ fn synth_session(pair_count: u8, tool_count: u8) -> Vec<Envelope> {
             Kind::Turn,
             &ts_assistant,
             serde_json::json!({
-                "user_message": format!("follow-up {i}"),
-                "assistant_message": format!("ok {i}"),
+                "user_message": format!("follow-up question for iteration {i} with body text"),
+                "assistant_message": format!("affirmative response iteration {i} with body text"),
                 "outcome": "success"
             }),
         ));

@@ -178,9 +178,7 @@ impl SyncClient {
             }
         }));
 
-        let cwd_path = cwd
-            .map(Path::new)
-            .unwrap_or_else(|| Path::new("."));
+        let cwd_path = cwd.map(Path::new).unwrap_or_else(|| Path::new("."));
         let budget_bytes = u32::try_from(max_bytes).unwrap_or(u32::MAX);
         let budget_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
         let input = PreThinkingInput {
@@ -197,8 +195,7 @@ impl SyncClient {
 
         let prethink_metrics = Arc::new(PreThinkingMetrics::new());
         let output = pre_thinking_run(&input, query_fn, prethink_metrics).await;
-        let bundle_bytes =
-            u32::try_from(output.bundle.len()).unwrap_or(u32::MAX);
+        let bundle_bytes = u32::try_from(output.bundle.len()).unwrap_or(u32::MAX);
         self.metrics.observe_bundle_bytes(bundle_bytes);
 
         PreThinkingResult {
@@ -224,13 +221,9 @@ impl SyncClient {
             session_id,
             turn_id,
         };
-        let resp = tokio::time::timeout(
-            self.laws_timeout,
-            self.client.post(&url).json(&req).send(),
-        )
-        .await;
-        let latency_ms =
-            u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        let resp =
+            tokio::time::timeout(self.laws_timeout, self.client.post(&url).json(&req).send()).await;
+        let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
         self.metrics.observe_sync_latency("PreToolUse", latency_ms);
         let body: Option<Value> = match resp {
             Err(_) => {
