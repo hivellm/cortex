@@ -7,56 +7,97 @@
 //! transports. Lane traits are defined here; live wiring against
 //! Vectorizer / Meilisearch / Nexus drops in behind the same
 //! traits and is selected at daemon startup.
+//!
+//! ## Module layout (2026-05-25 reorg)
+//!
+//! The crate is bucketed into thematic dirs:
+//!
+//! - [`lanes`] — vector / keyword / graph clients + their loaders.
+//! - [`search`] — orchestrator, intent rewriter, fusion / RRF,
+//!   analyzer, lane strategies, response cache, byte budget,
+//!   search proxy.
+//! - [`security`] — auth, ACL, audit, rate limit, redaction.
+//! - [`admin`] — operator endpoints (forget, list-events,
+//!   config-audit, canary, silent-drop).
+//! - [`mcp`] — MCP tool bindings (`cortex_query`, topic-card).
+//! - [`health`] — health / freshness / divergence / coverage.
+//! - [`ingest`] — ingestion proxy surface.
+//! - [`dashboard`] — `/v1/dashboard/*` handlers + their loaders.
+//! - [`storage`] — SQLite-backed persistence (API keys today).
+//!
+//! Root-only modules (`http`, `service`, `types`, `main`,
+//! `retention_daemon`) host the crate's transport / lifecycle.
+//!
+//! Pre-bucket module paths (e.g. `cortex_api::meili_loader`) are
+//! preserved via `pub use` re-exports below so external crates
+//! (cortex-cli, integration tests, etc.) keep compiling unchanged.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod acl;
-pub mod admin_forget;
-pub mod admin_list_events;
-pub mod analyzer;
-pub mod archive_loader;
-pub mod audit;
-pub mod audit_store;
-pub mod auth;
-pub mod budget;
-pub mod cache;
-pub mod canary;
-pub mod config_audit;
-pub mod coverage;
+// -- buckets ----------------------------------------------------------------
+pub mod admin;
 pub mod dashboard;
-pub mod dashboard_consumer;
-pub mod dashboard_series;
-pub mod dashboard_watcher;
-pub mod fusion;
 pub mod health;
-pub mod http;
-pub mod ingest_proxy;
-#[cfg(test)]
-mod lane_contract;
+pub mod ingest;
 pub mod lanes;
-pub mod loader_metrics;
 pub mod mcp;
-pub mod mcp_topic_card;
-pub mod meili_lane;
-pub mod meili_loader;
-pub mod memory_tail;
-pub mod nexus_graph_lane;
-pub mod orchestrator;
-pub mod query_rewrite;
-pub mod rate_limit;
-pub mod redaction;
-pub mod relevance_config;
-pub mod retention_daemon;
-pub mod search_proxy;
-pub mod service;
-pub mod silent_drop;
-pub mod storage;
-pub mod strategies;
-pub mod tasks_loader;
-pub mod types;
-pub mod vectorizer_lane;
+pub mod search;
+pub mod security;
 
+// -- root modules -----------------------------------------------------------
+pub mod http;
+pub mod retention_daemon;
+pub mod service;
+pub mod storage;
+pub mod types;
+
+// -- pre-bucket path preservation ------------------------------------------
+//
+// Every `pub use bucket::child;` line below keeps an external import
+// like `use cortex_api::meili_loader;` resolving after the
+// 2026-05-25 reorg. Adding a new module: either drop it in its
+// natural bucket and add the corresponding `pub use` here, or skip
+// the re-export when no external crate references the old path.
+
+pub use admin::canary;
+pub use admin::config_audit;
+pub use admin::forget as admin_forget;
+pub use admin::list_events as admin_list_events;
+pub use admin::silent_drop;
+pub use dashboard::consumer as dashboard_consumer;
+pub use dashboard::memory_tail;
+pub use dashboard::series as dashboard_series;
+pub use dashboard::tasks_loader;
+pub use dashboard::watcher as dashboard_watcher;
+pub use health::coverage;
+pub use ingest::proxy as ingest_proxy;
+pub use lanes::archive_loader;
+pub use lanes::loader_metrics;
+pub use lanes::meili_lane;
+pub use lanes::meili_loader;
+pub use lanes::nexus_graph_lane;
+pub use lanes::vectorizer_lane;
+pub use mcp::topic_card as mcp_topic_card;
+pub use search::analyzer;
+pub use search::budget;
+pub use search::cache;
+pub use search::fusion;
+pub use search::orchestrator;
+pub use search::query_rewrite;
+pub use search::relevance_config;
+pub use search::search_proxy;
+pub use search::strategies;
+pub use security::acl;
+pub use security::audit;
+pub use security::audit_store;
+pub use security::auth;
+pub use security::rate_limit;
+pub use security::redaction;
+
+// -- crate-root symbol re-exports (kept verbatim from the
+// pre-reorg lib.rs so call sites like `cortex_api::LaneHit`
+// continue to resolve). -----------------------------------------------------
 pub use acl::{AclDecision, AclStore};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
@@ -75,26 +116,6 @@ pub use lanes::{
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
 pub use loader_metrics::LoaderMetrics;
-pub use meili_lane::MeiliKeywordLane;
-pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
-pub use nexus_graph_lane::NexusGraphLane;
-pub use relevance_config::{
-    default_config_path as default_relevance_config_path, RelevanceConfig, RelevanceConfigError,
-};
-pub use tasks_loader::{
-    CachedRowSnapshot, ListQuery, MultiTaskLoader, PhaseBreakdown, ProgressCounts, SortField,
-    SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,
-    TaskLoader, TaskRow, TaskSummary,
-};
-pub use vectorizer_lane::VectorizerLane;
-
-/// Phase8c — capture cortex-api's own compile-time version block.
-/// Wraps the [`cortex_build::version_info!`] macro so the `health`
-/// module (and tests) can read it without expanding the macro at
-/// every call site.
-pub fn self_version_info() -> cortex_build::VersionInfo {
-    cortex_build::version_info!()
-}
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
 pub use mcp_topic_card::{
     invoke_synthesize, invoke_topic_diff, invoke_topic_drill, invoke_topic_get,
@@ -107,13 +128,33 @@ pub use mcp_topic_card::{
     TOOL_NAME_TOPIC_GET, TOOL_NAME_TOPIC_NEIGHBORS, TOPIC_GET_CONFIDENCE_FLOOR,
     TOPIC_NEIGHBORS_DEFAULT_DEPTH, TOPIC_NEIGHBORS_NODE_CAP,
 };
+pub use meili_lane::MeiliKeywordLane;
+pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
+pub use nexus_graph_lane::NexusGraphLane;
 pub use orchestrator::Orchestrator;
 pub use rate_limit::{RateConfig, RateDecision, RateLimiter};
 pub use redaction::redact_response;
+pub use relevance_config::{
+    default_config_path as default_relevance_config_path, RelevanceConfig, RelevanceConfigError,
+};
 pub use service::{ErrorBody, QueryService, ServiceOutcome};
 pub use strategies::{build_plan, BudgetSplit, Overlay, Plan};
+pub use tasks_loader::{
+    CachedRowSnapshot, ListQuery, MultiTaskLoader, PhaseBreakdown, ProgressCounts, SortField,
+    SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,
+    TaskLoader, TaskRow, TaskSummary,
+};
 pub use types::{
     empty_response, BudgetReport, ConsolidationRef, DebugInfo, DecisionRef, GraphNeighbor,
     IncludeField, Intent, LaneTimings, LawRef, Notice, PastSession, Props, QueryRequest,
     QueryResponse, ResultsBag, Scope, SimilarTurn, Snippet, TopicCardRef, ViolationRef,
 };
+pub use vectorizer_lane::VectorizerLane;
+
+/// Phase8c — capture cortex-api's own compile-time version block.
+/// Wraps the [`cortex_build::version_info!`] macro so the `health`
+/// module (and tests) can read it without expanding the macro at
+/// every call site.
+pub fn self_version_info() -> cortex_build::VersionInfo {
+    cortex_build::version_info!()
+}

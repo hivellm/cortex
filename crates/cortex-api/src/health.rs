@@ -27,6 +27,11 @@
 //! aggregator caches in process memory; the first probe always
 //! returns growth = 0 (we don't have anything to compare against
 //! yet) and the row is therefore `ok` until the second probe lands.
+//!
+//! Sibling modules live under `crates/cortex-api/src/health/*.rs`
+//! (currently `coverage` for the `/v1/health/coverage` endpoint).
+
+pub mod coverage;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;

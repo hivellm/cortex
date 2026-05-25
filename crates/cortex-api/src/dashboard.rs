@@ -120,6 +120,17 @@ use self::retention::{retention_state, retention_sweeps};
 mod consolidations;
 use self::consolidations::{consolidation_detail, consolidations};
 
+// Loaders + lifecycle modules absorbed into `dashboard/` during the
+// 2026-05-25 reorg. Their pre-bucket paths (`crate::tasks_loader`,
+// `crate::memory_tail`, `crate::dashboard_consumer`,
+// `crate::dashboard_series`, `crate::dashboard_watcher`) are
+// preserved via `pub use` re-exports in `lib.rs`.
+pub mod consumer;
+pub mod memory_tail;
+pub mod series;
+pub mod tasks_loader;
+pub mod watcher;
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------

@@ -1,5 +1,8 @@
 //! MCP tool binding for `cortex_query`.
 //!
+//! Sibling modules live under `crates/cortex-api/src/mcp/*.rs`
+//! (currently `topic_card` for the topic-card MCP tool surface).
+//!
 //! Spec 11 §MCP tool binding: the same JSON schema is exposed as an
 //! MCP tool so agent hosts can call the orchestrator without
 //! speaking HTTP. The full MCP-runtime wire protocol lands with the
@@ -13,6 +16,8 @@
 //!   parsed input and returns the parsed output. Identical
 //!   surface-by-construction to the HTTP path so behaviour is
 //!   guaranteed to stay aligned.
+
+pub mod topic_card;
 
 use std::sync::Arc;
 

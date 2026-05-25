@@ -8,6 +8,18 @@
 //! `nexus-graph-sdk` lives behind the same traits and is selected at
 //! daemon startup; the orchestrator and acceptance tests never see
 //! the difference.
+//!
+//! Sibling modules (one per backend or shared concern) live in
+//! `crates/cortex-api/src/lanes/*.rs`.
+
+pub mod archive_loader;
+#[cfg(test)]
+mod lane_contract;
+pub mod loader_metrics;
+pub mod meili_lane;
+pub mod meili_loader;
+pub mod nexus_graph_lane;
+pub mod vectorizer_lane;
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
