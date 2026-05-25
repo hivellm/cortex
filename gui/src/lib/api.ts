@@ -384,6 +384,68 @@ export type ConsolidationDetail = ConsolidationRow & {
   body_markdown: string;
 };
 
+/** Echo of the filter the dashboard applied to produce a view. */
+export type ConsolidationFilter = {
+  /** Normalised repo allow-list. Empty array = no repo filter. */
+  repos: string[];
+  /** `session` | `topic` | `decision_trace` | `undefined` when no grain filter. */
+  grain?: string;
+};
+
+/**
+ * Wire envelope returned by `/v1/dashboard/consolidations` (ADR-014
+ * / phase13f §2.2). The GUI consumes `rows` verbatim; `total` mirrors
+ * `rows.length`; `filter` is the server's echo of the filter that
+ * produced the list.
+ */
+export type ConsolidationReportView = {
+  rows: ConsolidationRow[];
+  total: number;
+  filter: ConsolidationFilter;
+};
+
+/** One per-backend entry in [`CoverageReportView.backends`]. */
+export type BackendCoverageEntry = {
+  /** `nexus` | `vectorizer` | `meili` | `archive`. */
+  backend: string;
+  missing: number;
+  sample_event_ids: string[];
+};
+
+/**
+ * Wire envelope returned by `/v1/dashboard/coverage` (ADR-014 /
+ * phase13f §2.3). `metadata_db` is the empty string when no metadata
+ * store is wired; non-empty when the scan ran.
+ */
+export type CoverageReportView = {
+  metadata_db: string;
+  rows_total: number;
+  backends: BackendCoverageEntry[];
+  is_healthy: boolean;
+  latency_ms: number;
+};
+
+/** One row in [`ProducerCheckpointsReportView.rows`]. */
+export type ProducerCheckpointView = {
+  producer_name: string;
+  scope: string;
+  /** Last envelope id; `null` when the row carried an empty marker. */
+  last_event_id: string | null;
+  last_occurred_at: string;
+  accumulated_at: string;
+  has_progress: boolean;
+};
+
+/**
+ * Wire envelope returned by `/v1/dashboard/producers` (ADR-014 /
+ * phase13f §3.4). One row per `(producer_name, scope)` pair, sorted
+ * by `producer_name` then `scope`.
+ */
+export type ProducerCheckpointsReportView = {
+  rows: ProducerCheckpointView[];
+  total: number;
+};
+
 /// Per-session summary the Conversations list view renders. Each row
 /// is one chat thread the user can drill into via `api.conversation`.
 export type ConversationSummary = {
@@ -572,7 +634,7 @@ export const api = {
     if (params?.repo) qs.set("repo", params.repo);
     if (params?.grain) qs.set("grain", params.grain);
     const q = qs.toString();
-    return getJson<ConsolidationRow[]>(
+    return getJson<ConsolidationReportView>(
       `/v1/dashboard/consolidations${q ? `?${q}` : ""}`,
     );
   },
@@ -580,6 +642,9 @@ export const api = {
     getJson<ConsolidationDetail>(
       `/v1/dashboard/consolidations/${encodeURIComponent(id)}`,
     ),
+  coverage: () => getJson<CoverageReportView>("/v1/dashboard/coverage"),
+  producers: () =>
+    getJson<ProducerCheckpointsReportView>("/v1/dashboard/producers"),
   /// Pull the graph panorama. `repos` narrows the canvas to the
   /// listed projects' artifacts (sessions / decisions / memories
   /// stay regardless so the cross-project knowledge spine remains

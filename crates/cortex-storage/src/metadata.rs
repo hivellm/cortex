@@ -432,6 +432,39 @@ impl MetadataStore {
         Ok(rows?)
     }
 
+    /// Phase13f §3.4 — return the most recent checkpoint row for
+    /// every `(producer_name, scope)` pair, sorted by
+    /// `producer_name`, `scope`. The dashboard's
+    /// `/v1/dashboard/producers` endpoint reads this to render one
+    /// row per producer / scope pair without per-row queries.
+    pub fn latest_producer_checkpoint_per_scope(
+        &self,
+    ) -> Result<Vec<ProducerCheckpointRow>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT producer_name, scope, last_event_id, last_occurred_at, accumulated_at
+               FROM producer_checkpoints AS pc
+              WHERE accumulated_at = (
+                  SELECT MAX(accumulated_at)
+                    FROM producer_checkpoints
+                   WHERE producer_name = pc.producer_name
+                     AND scope = pc.scope
+              )
+              ORDER BY producer_name ASC, scope ASC",
+        )?;
+        let rows: Result<Vec<_>, _> = stmt
+            .query_map([], |row| {
+                Ok(ProducerCheckpointRow {
+                    producer_name: row.get(0)?,
+                    scope: row.get(1)?,
+                    last_event_id: row.get(2)?,
+                    last_occurred_at: row.get(3)?,
+                    accumulated_at: row.get(4)?,
+                })
+            })?
+            .collect();
+        Ok(rows?)
+    }
+
     /// Mark a session ended.
     pub fn close_session(
         &self,
@@ -1715,6 +1748,65 @@ mod tests {
             .expect("vec row");
         assert_eq!(cortex.last_event_id, "01CORTEX");
         assert_eq!(vec.last_event_id, "01VEC");
+    }
+
+    #[test]
+    fn latest_producer_checkpoint_per_scope_returns_one_row_per_pair_sorted() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let base = now();
+        // bootstrap / cortex: two writes — only the newer survives.
+        store
+            .record_producer_checkpoint("bootstrap", "cortex", "01A", base, base)
+            .unwrap();
+        store
+            .record_producer_checkpoint(
+                "bootstrap",
+                "cortex",
+                "01B",
+                base,
+                base + chrono::Duration::seconds(2),
+            )
+            .unwrap();
+        // bootstrap / vectorizer: one write.
+        store
+            .record_producer_checkpoint(
+                "bootstrap",
+                "vectorizer",
+                "01V",
+                base,
+                base + chrono::Duration::seconds(1),
+            )
+            .unwrap();
+        // claude_archive / proj1: one write.
+        store
+            .record_producer_checkpoint(
+                "claude_archive",
+                "proj1",
+                "01P",
+                base,
+                base + chrono::Duration::seconds(3),
+            )
+            .unwrap();
+
+        let rows = store.latest_producer_checkpoint_per_scope().unwrap();
+        assert_eq!(rows.len(), 3, "one row per (producer, scope) pair");
+        // Sort order: producer_name ASC, then scope ASC.
+        assert_eq!(rows[0].producer_name, "bootstrap");
+        assert_eq!(rows[0].scope, "cortex");
+        assert_eq!(rows[0].last_event_id, "01B", "newest wins per scope");
+        assert_eq!(rows[1].producer_name, "bootstrap");
+        assert_eq!(rows[1].scope, "vectorizer");
+        assert_eq!(rows[1].last_event_id, "01V");
+        assert_eq!(rows[2].producer_name, "claude_archive");
+        assert_eq!(rows[2].scope, "proj1");
+        assert_eq!(rows[2].last_event_id, "01P");
+    }
+
+    #[test]
+    fn latest_producer_checkpoint_per_scope_returns_empty_when_table_empty() {
+        let store = MetadataStore::open_in_memory().unwrap();
+        let rows = store.latest_producer_checkpoint_per_scope().unwrap();
+        assert!(rows.is_empty());
     }
 
     #[test]

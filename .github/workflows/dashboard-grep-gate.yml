@@ -1,20 +1,30 @@
 name: Dashboard grep gate
 
-# Phase13a §4.3 (ADR-014) — the retention dashboard handler must
-# not carry hardcoded missing-state literals. Wire-level `null`
-# replaces handler-side string sentinels so the dashboard never
-# claims a state it has no evidence for. This workflow is the
-# load-bearing CI check for that property.
+# ADR-014 / phase13f §4.1 (expands phase13a §4.3) — dashboard
+# handlers MUST be pure readers of typed domain reports. Hardcoded
+# missing-state literals would let handlers claim state they have
+# no evidence for (the failure mode phase11v hit when the
+# dashboard said "last run never" while `cron_jobs` clearly had a
+# row). This workflow is the load-bearing CI check that the
+# entire dashboard handler tree stays free of those literals.
+#
+# Phase13f scope expansion: phase13a only scanned
+# `dashboard/retention.rs` + `dashboard.rs`. The dashboard has
+# since split into 19 submodules; phase13f §4.1 expands the gate
+# to walk every `*.rs` under `crates/cortex-api/src/dashboard/`
+# plus the parent module file.
 
 on:
   push:
     branches: [main, master, develop]
     paths:
+      - "crates/cortex-api/src/dashboard.rs"
       - "crates/cortex-api/src/dashboard/**"
       - ".github/workflows/dashboard-grep-gate.yml"
   pull_request:
     branches: [main, master, develop]
     paths:
+      - "crates/cortex-api/src/dashboard.rs"
       - "crates/cortex-api/src/dashboard/**"
       - ".github/workflows/dashboard-grep-gate.yml"
 
@@ -23,7 +33,7 @@ permissions:
 
 jobs:
   grep-gate:
-    name: Dashboard handler — no missing-state literals
+    name: Dashboard handlers — no missing-state literals
     runs-on: ubuntu-latest
     timeout-minutes: 2
 
@@ -31,18 +41,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Assert zero matches in dashboard handler module
+      - name: Assert zero matches across the dashboard handler tree
         run: |
           set -e
-          # Phase13a §4.3 grep gate. The dashboard reads only
-          # `retention_sweeps` for last-run truth and surfaces
-          # missing rows as wire-level `null`. The three literal
-          # sentinels below must not appear in the handler module
-          # under any quotation.
-          if grep -nE '"never"|"n/a"|"unknown"' \
-              crates/cortex-api/src/dashboard/retention.rs \
-              crates/cortex-api/src/dashboard.rs; then
-            echo "::error::Dashboard handler carries forbidden missing-state literal — see ADR-014 / phase13a §4.3."
+          # ADR-014 / phase13f §4.1. Every handler under
+          # crates/cortex-api/src/dashboard{.rs,/**} must surface
+          # missing state as wire-level `null` (or the typed
+          # equivalent on a `*ReportView`) rather than a hardcoded
+          # string sentinel. The grep walks the parent module +
+          # every submodule .rs file.
+          if grep -RnE '"never"|"n/a"|"unknown"' \
+              crates/cortex-api/src/dashboard.rs \
+              crates/cortex-api/src/dashboard/; then
+            echo "::error::Dashboard handler carries forbidden missing-state literal — see ADR-014 / phase13f §4.1."
             exit 1
           fi
-          echo "Grep gate passed — zero matches in dashboard handler module."
+          echo "Grep gate passed — zero matches across the dashboard handler tree."

@@ -109,6 +109,30 @@ impl ConsolidationReportView {
     }
 }
 
+impl ConsolidationFilter {
+    /// Build a filter from the wire query params. Multi-value
+    /// `?repos=` and singular `?repo=` collapse into one normalised
+    /// repo allow-list; empty grain strings collapse to `None` so
+    /// `?grain=` does not match every row.
+    pub fn from_query(params: ConsolidationsQuery) -> Self {
+        let mut repos: Vec<String> = params
+            .repos
+            .into_iter()
+            .map(|r| normalize_repo(&r))
+            .collect();
+        if let Some(r) = params.repo.filter(|s| !s.is_empty()) {
+            let n = normalize_repo(&r);
+            if !repos.contains(&n) {
+                repos.push(n);
+            }
+        }
+        Self {
+            repos,
+            grain: params.grain.filter(|s| !s.is_empty()),
+        }
+    }
+}
+
 /// Source the consolidations handler reads from. Defaults to the
 /// in-process Meili lane (`MeiliConsolidationSource`); tests
 /// substitute a fixture implementation so the projection logic is
@@ -211,18 +235,22 @@ pub(super) async fn consolidations(
     State(state): State<DashboardState>,
     Query(params): Query<ConsolidationsQuery>,
 ) -> Response {
-    let hits = collect_lane_hits(&state.lane);
-    let mut allow: std::collections::HashSet<String> = params
-        .repos
-        .into_iter()
-        .map(|r| normalize_repo(&r))
-        .collect();
-    if let Some(r) = params.repo.filter(|s| !s.is_empty()) {
-        allow.insert(normalize_repo(&r));
-    }
-    let grain_filter = params.grain.filter(|s| !s.is_empty());
+    let filter = ConsolidationFilter::from_query(params);
+    let rows = collect_consolidation_rows(&state, &filter);
+    Json(ConsolidationReportView::from_rows(rows, filter)).into_response()
+}
 
-    let mut rows: Vec<ConsolidationRow> = hits
+/// Pure projection of lane hits → consolidation rows that match
+/// `filter`, sorted newest-first. Extracted from
+/// [`consolidations`] so the handler stays a thin
+/// filter+wrap+respond shell (ADR-014 / phase13f §3.2).
+fn collect_consolidation_rows(
+    state: &DashboardState,
+    filter: &ConsolidationFilter,
+) -> Vec<ConsolidationRow> {
+    let allow: std::collections::HashSet<&str> =
+        filter.repos.iter().map(String::as_str).collect();
+    let mut rows: Vec<ConsolidationRow> = collect_lane_hits(&state.lane)
         .into_iter()
         .filter(|h| h.symbol.as_deref() == Some("consolidation"))
         .filter(|h| {
@@ -230,12 +258,12 @@ pub(super) async fn consolidations(
                 return true;
             }
             match h.repo.as_deref() {
-                Some(r) => allow.contains(&normalize_repo(r)),
+                Some(r) => allow.contains(normalize_repo(r).as_str()),
                 None => false,
             }
         })
         .map(|h| build_row(&h).0)
-        .filter(|r| match grain_filter.as_deref() {
+        .filter(|r| match filter.grain.as_deref() {
             Some(g) => r.grain == g,
             None => true,
         })
@@ -243,8 +271,7 @@ pub(super) async fn consolidations(
     // Newest first by ts proxy — ts is 0 for many envelopes so fall
     // back to id sort to keep the order stable across reloads.
     rows.sort_by(|a, b| b.id.cmp(&a.id));
-
-    Json(rows).into_response()
+    rows
 }
 
 pub(super) async fn consolidation_detail(

@@ -33,27 +33,28 @@ export function ConsolidationsView() {
     refetchIntervalInBackground: true,
   });
 
-  const rows = data ?? [];
+  const rows = data?.rows ?? [];
+  const allRowsList = allRows?.rows ?? [];
 
   const repoOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const r of allRows ?? []) {
+    for (const r of allRowsList) {
       if (r.repo) set.add(r.repo.toLowerCase());
     }
     return Array.from(set).sort();
-  }, [allRows]);
+  }, [allRowsList]);
 
   const counts = useMemo(() => {
-    const total = allRows?.length ?? 0;
+    const total = allRows?.total ?? 0;
     const byGrain: Record<string, number> = {};
     let totalSourceEvents = 0;
-    for (const r of allRows ?? []) {
+    for (const r of allRowsList) {
       const g = r.grain || "(legacy)";
       byGrain[g] = (byGrain[g] ?? 0) + 1;
       totalSourceEvents += r.source_event_count ?? 0;
     }
     return { total, byGrain, totalSourceEvents };
-  }, [allRows]);
+  }, [allRows, allRowsList]);
 
   return (
     <div className="view">
@@ -72,9 +73,9 @@ export function ConsolidationsView() {
             style={{ fontFamily: "var(--font-mono)", fontSize: 12, padding: "5px 10px" }}
             title="Filter consolidations by project"
           >
-            <option value="">All projects ({allRows?.length ?? 0})</option>
+            <option value="">All projects ({allRows?.total ?? 0})</option>
             {repoOptions.map((r) => {
-              const c = (allRows ?? []).filter(
+              const c = allRowsList.filter(
                 (d) => d.repo?.toLowerCase() === r,
               ).length;
               return (

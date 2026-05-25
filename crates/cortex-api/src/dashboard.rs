@@ -120,6 +120,12 @@ use self::retention::{retention_state, retention_sweeps};
 mod consolidations;
 use self::consolidations::{consolidation_detail, consolidations};
 
+mod coverage;
+use self::coverage::coverage;
+
+mod producers;
+use self::producers::producers;
+
 // Loaders + lifecycle modules absorbed into `dashboard/` during the
 // 2026-05-25 reorg. Their pre-bucket paths (`crate::tasks_loader`,
 // `crate::memory_tail`, `crate::dashboard_consumer`,
@@ -177,6 +183,8 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/tasks/{id}", get(tasks_detail))
         .route("/v1/retention/sweeps", get(retention_sweeps))
         .route("/v1/retention/state", get(retention_state))
+        .route("/v1/dashboard/coverage", get(coverage))
+        .route("/v1/dashboard/producers", get(producers))
         // phase11w — admin lane projection used by
         // `cortex-ops tool-call-digest --apply` (and any other
         // operator binary that needs to walk the keyword lane's

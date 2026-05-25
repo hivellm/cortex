@@ -620,3 +620,60 @@ The view itself (`gui/src/views/Retention.tsx`):
 - Spec 19 — Retention (sweepers whose history feeds the new tab).
 - Vectorizer dashboard scaffold: `e:/HiveLLM/Vectorizer/dashboard`.
 - TanStack Router / Query docs.
+
+## Pure-reader contract (ADR-014 / phase13f)
+
+Dashboard handlers under `crates/cortex-api/src/dashboard.rs` plus
+the 19 submodules in `crates/cortex-api/src/dashboard/` are **pure
+typed readers** of per-domain `*ReportView` projections. Concrete
+contract:
+
+1. **Every domain that surfaces dashboard state exposes a
+   `Report` struct + a `view() -> Self::ReportView` projection**:
+   - `cortex_workers::sweep::report::SweepReport` →
+     `SweepReportView` (phase13a, ADR-009).
+   - `cortex_workers::producer::report::ProducerReport` →
+     `ProducerReportView` (phase13f §2.4, ADR-010).
+   - `cortex_workers::producer::report::ProducerCheckpoint` →
+     `ProducerCheckpointView` +
+     `ProducerCheckpointsReportView` aggregator (phase13f §3.4 —
+     the dashboard surfaces the durable checkpoint state since
+     `ProducerReport` is in-memory only).
+   - `cortex_workers::coverage::CoverageReport` →
+     `CoverageReportView` with per-backend
+     `BackendCoverageEntry` rows in fixed order (phase13f §2.3,
+     ADR-012).
+   - `cortex_api::dashboard::consolidations::ConsolidationRow`
+     wrapped in `ConsolidationReportView { rows, total, filter }`
+     (phase13f §2.2). The wire echo of the active filter lives on
+     `ConsolidationFilter`.
+
+2. **Handlers MUST call `.view()` rather than render the Report
+   directly.** This keeps the wire format stable across
+   domain-side refactors and prevents handler-side derivations of
+   the kind phase11v hit (a handler renders `"never"` while the
+   underlying table has a row).
+
+3. **No fallback string sentinels in the dashboard handler
+   tree.** A CI grep gate enforces this. The workflow is
+   `.github/workflows/dashboard-grep-gate.yml`; it walks
+   `crates/cortex-api/src/dashboard.rs` plus every `.rs` under
+   `crates/cortex-api/src/dashboard/` and fails the build if it
+   finds the literal `"never"`, `"n/a"`, or `"unknown"` (with
+   quotes) anywhere in that tree. The pre-bucket phase13a gate
+   only scanned `retention.rs` + `dashboard.rs`; phase13f §4.1
+   expanded the scope to the full submodule tree.
+
+4. **Missing state is wire-level `null` (or the typed empty
+   equivalent on a `*ReportView`).** A handler MAY return an
+   honest-empty view when the upstream is not wired (e.g.
+   `dashboard::coverage` returns a `CoverageReportView` with an
+   empty `metadata_db` marker when `DashboardState.metadata` is
+   `None`). It MUST NOT invent a status string.
+
+5. **New dashboard panels follow the same pattern:** define a
+   `Report` in the owning domain crate, add `view()`, write the
+   handler as `Json(report.view())`. The mechanical cost is ~50
+   lines of trait impl + ~100 lines of JSX (the GUI counterpart
+   is a `*ReportView`-typed consumer with no local fallback
+   branches).

@@ -27,7 +27,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use cortex_workers::coverage::{BackendCoverage, CoverageReport};
+use cortex_workers::coverage::{collect_coverage, CoverageReport};
 use rusqlite::Connection;
 use serde_json::json;
 
@@ -90,66 +90,6 @@ pub(super) fn doctor_identity_coverage(
     } else {
         ExitCode::SUCCESS
     }
-}
-
-fn collect_coverage(
-    conn: &Connection,
-    db_path: &std::path::Path,
-    sample_limit: usize,
-) -> rusqlite::Result<CoverageReport> {
-    let mut report = CoverageReport {
-        metadata_db: db_path.display().to_string(),
-        ..CoverageReport::default()
-    };
-
-    report.rows_total = conn
-        .query_row("SELECT COUNT(*) FROM event_identity", [], |r| {
-            r.get::<_, i64>(0)
-        })?
-        .max(0) as u64;
-
-    for (label, column) in [
-        ("nexus", "nexus_id"),
-        ("vectorizer", "vec_id"),
-        ("meili", "meili_id"),
-        ("archive", "archive_partition"),
-    ] {
-        let missing_count = conn
-            .query_row(
-                &format!("SELECT COUNT(*) FROM event_identity WHERE {column} IS NULL"),
-                [],
-                |r| r.get::<_, i64>(0),
-            )?
-            .max(0) as u64;
-        let mut sample: Vec<String> = Vec::new();
-        if missing_count > 0 && sample_limit > 0 {
-            let mut stmt = conn.prepare(&format!(
-                "SELECT event_id FROM event_identity WHERE {column} IS NULL \
-                 ORDER BY event_id ASC LIMIT ?1"
-            ))?;
-            let rows = stmt.query_map([sample_limit as i64], |r| r.get::<_, String>(0))?;
-            for row in rows.flatten() {
-                sample.push(row);
-            }
-        }
-        let coverage = BackendCoverage {
-            missing: missing_count,
-            sample_event_ids: sample,
-        };
-        match label {
-            "nexus" => report.nexus = coverage,
-            "vectorizer" => report.vectorizer = coverage,
-            "meili" => report.meili = coverage,
-            "archive" => report.archive = coverage,
-            _ => unreachable!(),
-        }
-    }
-
-    report.failed = report.nexus.missing > 0
-        || report.vectorizer.missing > 0
-        || report.meili.missing > 0
-        || report.archive.missing > 0;
-    Ok(report)
 }
 
 fn render_text(r: &CoverageReport) {

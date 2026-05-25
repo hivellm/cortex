@@ -14,27 +14,27 @@
 
 ## 3. Handler rewire
 - [x] 3.1 `dashboard::retention::*` reads `retention_sweeps` directly and projects `SweepReportView`. (already wired by phase13a — see `crates/cortex-api/src/dashboard/retention.rs:71-95` and the `last_run`/`last_status` projection sourced from `retention_sweeps`)
-- [ ] 3.2 `dashboard::consolidations::*` returns `ConsolidationReportView` (handler signature change; envelope source unchanged).
-- [ ] 3.3 `dashboard::coverage::*` (new submodule `crates/cortex-api/src/dashboard/coverage.rs`) returns `CoverageReportView`. Reads the identity-coverage SQLite table via the §2.3 shim.
-- [ ] 3.4 `dashboard::producers::*` (new submodule `crates/cortex-api/src/dashboard/producers.rs`) reads from `producer_checkpoints` joined with the most recent `ProducerReport` row per `(producer_name, scope)` and returns `ProducerReportView`.
+- [x] 3.2 `dashboard::consolidations::*` returns `ConsolidationReportView` (handler signature change; envelope source unchanged). (`dashboard/consolidations.rs:230-239` handler wraps `collect_consolidation_rows()` in `ConsolidationReportView::from_rows()`; `ConsolidationFilter::from_query()` added; 5 unit tests + 449 cortex-api lib tests green; wire JSON gains `{rows, total, filter}` envelope — GUI sync lands in §5.2 same PR)
+- [x] 3.3 `dashboard::coverage::*` (new submodule `crates/cortex-api/src/dashboard/coverage.rs`) returns `CoverageReportView`. Reads the identity-coverage SQLite table via the §2.3 shim. (Handler at `dashboard/coverage.rs`; `collect_coverage` moved from cortex-cli to `cortex-workers::coverage` so both CLI and dashboard share one scanner; route `/v1/dashboard/coverage` wired in `dashboard.rs:189`; 3 handler tests + 5 unchanged CLI tests + 6 worker tests pass)
+- [x] 3.4 `dashboard::producers::*` (new submodule `crates/cortex-api/src/dashboard/producers.rs`) reads from `producer_checkpoints` joined with the most recent `ProducerReport` row per `(producer_name, scope)` and returns `ProducerReportView`. (Spec deviation: no `producer_reports` SQLite table exists; ProducerReport is in-memory only. Surfaced `ProducerCheckpointsReportView` instead — durable state checkpoints only. New types `ProducerCheckpointView` + `ProducerCheckpointsReportView` + `ProducerCheckpoint::view()` in `producer/report.rs`; new `MetadataStore::latest_producer_checkpoint_per_scope()` in `cortex-storage`; handler at `dashboard/producers.rs`; route `/v1/dashboard/producers` wired; 5 new producer tests + 2 new storage tests + 1 handler test pass)
 - [x] 3.5 Hardcoded literals (`"never"`, `"n/a"`, `"unknown"`) deleted from every handler. (verified 2026-05-25 — `rg '"never"\|"n/a"\|"unknown"' crates/cortex-api/src/dashboard.rs crates/cortex-api/src/dashboard/` returns 0 matches)
 
 ## 4. CI gate
-- [ ] 4.1 Add a CI step: `rg '"never"\|"n/a"\|"unknown"' crates/cortex-api/src/dashboard.rs crates/cortex-api/src/dashboard/` MUST exit 1 (no matches). Scope expanded to cover the split submodules.
-- [ ] 4.2 Document the gate in `.github/workflows/ci.yml` and `docs/specs/21-dashboard.md` § Pure-reader contract.
+- [x] 4.1 Add a CI step: `rg '"never"\|"n/a"\|"unknown"' crates/cortex-api/src/dashboard.rs crates/cortex-api/src/dashboard/` MUST exit 1 (no matches). Scope expanded to cover the split submodules. (`.github/workflows/dashboard-grep-gate.yml` updated — scans `dashboard.rs` + every `.rs` under `dashboard/` recursively; phase13a's two-file scope replaced by full submodule tree; local reproduction passes — `grep -RnE '"never"|"n/a"|"unknown"' …` returns no matches)
+- [x] 4.2 Document the gate in `.github/workflows/ci.yml` and `docs/specs/21-dashboard.md` § Pure-reader contract. (Documented in `docs/specs/16-dashboard.md` § Pure-reader contract (ADR-014 / phase13f) — `21-dashboard.md` does not exist in this repo; `16-dashboard.md` is the dashboard spec doc. Workflow header doc-comment also references ADR-014 / phase13f §4.1.)
 
 ## 5. GUI sync
-- [ ] 5.1 `gui/src/views/Retention.tsx` consumes `SweepReportView` verbatim. Local fallback paths deleted. (verify; phase13a may have landed this already)
-- [ ] 5.2 `gui/src/views/Consolidations.tsx` consumes `ConsolidationReportView`.
-- [ ] 5.3 `gui/src/views/Coverage.tsx` consumes `CoverageReportView` (new view file if absent).
-- [ ] 5.4 New `gui/src/views/Producers.tsx` consumes `ProducerReportView`.
-- [ ] 5.5 Snapshot tests updated for every view.
+- [x] 5.1 `gui/src/views/Retention.tsx` consumes `SweepReportView` verbatim. Local fallback paths deleted. (verified — phase13a landed this; Retention.test.tsx 7/7 pass with no change needed)
+- [x] 5.2 `gui/src/views/Consolidations.tsx` consumes `ConsolidationReportView`. (`api.ts` types `ConsolidationReportView`, `ConsolidationFilter`, `CoverageReportView`, `BackendCoverageEntry`, `ProducerCheckpointView`, `ProducerCheckpointsReportView` added; `api.consolidations()` return type swapped to `ConsolidationReportView`; `Consolidations.tsx` unwraps `data.rows` + `data.total`; `Sidebar.tsx` count switched to `consolidationsQ.data?.total`)
+- [x] 5.3 `gui/src/views/Coverage.tsx` consumes `CoverageReportView` (new view file if absent). (new file — table of 4 backend rows + healthy/gaps pill + "not wired" affordance when `metadata_db === ""`)
+- [x] 5.4 New `gui/src/views/Producers.tsx` consumes `ProducerReportView`. (new file — surfaces `ProducerCheckpointsReportView` per the §3.4 spec drift resolution: one row per `(producer_name, scope)` with `has_progress` pill)
+- [x] 5.5 Snapshot tests updated for every view. (3 smoke tests each for `Coverage.test.tsx` + `Producers.test.tsx` covering happy path, empty/not-wired state, and failure/edge cases; full GUI suite 37/37 green)
 
 ## 6. Tail (mandatory)
-- [ ] 6.1 Update `docs/specs/21-dashboard.md` § Pure-reader contract + `CHANGELOG.md`.
-- [ ] 6.2 Tests: §2.5 × 4 + handler ITs against fixture rows + §4.1 CI gate + §5.5 snapshots.
-- [ ] 6.3 `cargo check --workspace && cargo clippy -- -D warnings && cargo test --workspace && pnpm -C gui test` clean.
+- [x] 6.1 Update `docs/specs/21-dashboard.md` § Pure-reader contract + `CHANGELOG.md`. (Documented in `docs/specs/16-dashboard.md` § Pure-reader contract; `21-dashboard.md` does not exist in this repo. CHANGELOG.md gains two `[Unreleased]` ### Added entries: the phase13f writeup + the cortex-api reorg note.)
+- [x] 6.2 Tests: §2.5 × 4 + handler ITs against fixture rows + §4.1 CI gate + §5.5 snapshots. (§2.5 covered inline per Report type — Sweep ✓ phase13a, Producer ✓ 4 + 5 new for Checkpoint*View, Consolidation ✓ 5, Coverage ✓ 6. Handler tests: `dashboard::coverage::tests` × 3, `dashboard::producers::tests` × 1, `dashboard::consolidations::tests` × 5. CI gate ✓ §4.1 local repro PASS. GUI smoke tests: `Coverage.test.tsx` × 3, `Producers.test.tsx` × 3.)
+- [-] 6.3 `cargo check --workspace && cargo clippy -- -D warnings && cargo test --workspace && pnpm -C gui test` clean. (`cargo check --workspace --all-targets` ✓ clean. `cargo test --workspace` ✓ 2247 / 2247 pass. `pnpm -C gui vitest` ✓ 37 / 37 pass. `cargo clippy --workspace -- -D warnings` ✗ 26 pre-existing errors in `cortex-workers::{graph::patch, graph::stale_sweeper, ingestion::archive, retention::turn_digest}` — NOT phase13f regressions; `cargo clippy -p cortex-api -- -D warnings` reports zero matches in any phase13f-touched file. Clippy debt is tracked separately and MUST be cleared before this task may `rulebook_task_archive`. Phase13f code itself is clippy-clean.)
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [ ] 99.1 Update or create documentation covering the implementation.
-- [ ] 99.2 Write tests covering the new behavior.
-- [ ] 99.3 Run tests and confirm they pass.
+- [x] 99.1 Update or create documentation covering the implementation. (`docs/specs/16-dashboard.md` § Pure-reader contract; `CHANGELOG.md` ### Added × 2; `.rulebook/decisions/015-adr-014-…`; `tasks.md` + `proposal.md` scope-revision notes.)
+- [x] 99.2 Write tests covering the new behavior. (27 new Rust unit tests + 6 new GUI smoke tests across `cortex-workers::{producer::report, coverage}`, `cortex-storage::metadata`, `cortex-api::dashboard::{consolidations, coverage, producers}`, `gui/src/views/{Coverage,Producers}.test.tsx`.)
+- [x] 99.3 Run tests and confirm they pass. (`cargo test --workspace` 2247 / 2247 ✓, `pnpm -C gui vitest` 37 / 37 ✓.)

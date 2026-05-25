@@ -58,7 +58,9 @@ pub mod report;
 pub use checkpoint::ProducerCheckpoint;
 pub use ctx::{ProducerCtx, ProducerMetadataHandle};
 pub use producer_trait::EnvelopeProducer;
-pub use report::{ProducerReport, ProducerReportView};
+pub use report::{
+    ProducerCheckpointView, ProducerCheckpointsReportView, ProducerReport, ProducerReportView,
+};
 
 #[cfg(test)]
 mod tests {

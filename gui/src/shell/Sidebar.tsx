@@ -136,7 +136,7 @@ export function Sidebar({ view, setView }: SidebarProps) {
     decisions: decisionsQ.data?.length,
     laws: lawsQ.data?.length,
     analyses: analysesQ.data?.length,
-    consolidations: consolidationsQ.data?.length,
+    consolidations: consolidationsQ.data?.total,
     tools: toolsQ.data?.tools.length,
     sessions: sessions.length,
     conversations: conversationsQ.data?.length,

@@ -16,6 +16,9 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::path::Path;
+
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 /// Per-backend coverage counter pair: total rows where the column
@@ -137,6 +140,75 @@ pub trait CoverageReportSource: Send + Sync {
     /// on demand or read a cached row — the dashboard handler does
     /// not care.
     fn collect(&self) -> anyhow::Result<CoverageReport>;
+}
+
+/// Single-pass scanner that walks `event_identity` and counts per-
+/// backend NULL columns + an orphan sample bounded by
+/// `sample_limit`. Shared by `cortex-ops doctor-identity-coverage`
+/// and the `/v1/dashboard/coverage` endpoint (ADR-014 / phase13f
+/// §3.3).
+///
+/// `latency_ms` on the returned [`CoverageReport`] is left at zero —
+/// callers that need the wall-clock latency stamp it themselves
+/// (the CLI prints it, the dashboard reports it on the view).
+pub fn collect_coverage(
+    conn: &Connection,
+    db_path: &Path,
+    sample_limit: usize,
+) -> rusqlite::Result<CoverageReport> {
+    let mut report = CoverageReport {
+        metadata_db: db_path.display().to_string(),
+        ..CoverageReport::default()
+    };
+
+    report.rows_total = conn
+        .query_row("SELECT COUNT(*) FROM event_identity", [], |r| {
+            r.get::<_, i64>(0)
+        })?
+        .max(0) as u64;
+
+    for (label, column) in [
+        ("nexus", "nexus_id"),
+        ("vectorizer", "vec_id"),
+        ("meili", "meili_id"),
+        ("archive", "archive_partition"),
+    ] {
+        let missing_count = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM event_identity WHERE {column} IS NULL"),
+                [],
+                |r| r.get::<_, i64>(0),
+            )?
+            .max(0) as u64;
+        let mut sample: Vec<String> = Vec::new();
+        if missing_count > 0 && sample_limit > 0 {
+            let mut stmt = conn.prepare(&format!(
+                "SELECT event_id FROM event_identity WHERE {column} IS NULL \
+                 ORDER BY event_id ASC LIMIT ?1"
+            ))?;
+            let rows = stmt.query_map([sample_limit as i64], |r| r.get::<_, String>(0))?;
+            for row in rows.flatten() {
+                sample.push(row);
+            }
+        }
+        let coverage = BackendCoverage {
+            missing: missing_count,
+            sample_event_ids: sample,
+        };
+        match label {
+            "nexus" => report.nexus = coverage,
+            "vectorizer" => report.vectorizer = coverage,
+            "meili" => report.meili = coverage,
+            "archive" => report.archive = coverage,
+            _ => unreachable!(),
+        }
+    }
+
+    report.failed = report.nexus.missing > 0
+        || report.vectorizer.missing > 0
+        || report.meili.missing > 0
+        || report.archive.missing > 0;
+    Ok(report)
 }
 
 #[cfg(test)]
