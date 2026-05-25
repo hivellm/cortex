@@ -14,7 +14,14 @@
       "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\.cortex\" | Select-Object Name,Length,LastWriteTime | Format-Table -AutoSize)",
       "Read(//c/Users/Bolado/.claude/**)",
       "PowerShell(where.exe cortex-hook 2>&1 ; \"---\" ; Get-ChildItem \"$env:USERPROFILE\\\\.cortex\" -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTime ; \"---\" ; Test-Path \"$env:USERPROFILE\\\\.claude\\\\settings.json\")",
-      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.claude\" ; Test-Path \"E:\\\\HiveLLM\\\\Cortex\\\\target\\\\release\" ; \\(Get-ChildItem \"E:\\\\HiveLLM\\\\Cortex\\\\target\" -ErrorAction SilentlyContinue\\).Name)"
+      "PowerShell(Test-Path \"$env:USERPROFILE\\\\.claude\" ; Test-Path \"E:\\\\HiveLLM\\\\Cortex\\\\target\\\\release\" ; \\(Get-ChildItem \"E:\\\\HiveLLM\\\\Cortex\\\\target\" -ErrorAction SilentlyContinue\\).Name)",
+      "PowerShell($env:Path += \";C:\\\\Program Files\\\\Git\\\\usr\\\\bin\"; Get-Command sqlite3 -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Users\\\\Bolado\\\\.cortex\\\\metadata.sqlite\" | Select-Object Length, LastWriteTime)",
+      "Read(//c/Users/Bolado/.cortex/**)",
+      "PowerShell($env:CORTEX_METADATA_DB=\"C:\\\\Users\\\\Bolado\\\\.cortex\\\\metadata.sqlite\"; .\\\\target\\\\release\\\\cortex-ops.exe retention-status --help 2>&1 | Select-Object -First 30)",
+      "PowerShell($env:CORTEX_METADATA_DB=\"C:\\\\Users\\\\Bolado\\\\.cortex\\\\metadata.sqlite\"; .\\\\target\\\\release\\\\cortex-ops.exe schedule run-now retention.consolidator_nightly --metadata-db \"C:\\\\Users\\\\Bolado\\\\.cortex\\\\metadata.sqlite\" 2>&1 | Select-Object -Last 40)",
+      "PowerShell(.\\\\target\\\\release\\\\cortex-ops.exe sessions-backfill --dry-run --json 2>&1)",
+      "PowerShell(.\\\\target\\\\release\\\\cortex-ops.exe sessions-backfill --json 2>&1)",
+      "PowerShell(.\\\\target\\\\debug\\\\cortex-ops.exe doctor-config-audit --crates-root crates --json 2>&1 | Out-File -Encoding utf8 e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json; \"exit=$LASTEXITCODE\"; Get-Content e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json | Select-Object -First 4)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
