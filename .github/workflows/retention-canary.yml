@@ -12,6 +12,15 @@ name: Retention canary
 on:
   push:
     branches: [main, master, develop]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - ".rulebook/**"
+      - ".github/workflows/codespell.yml"
+      - ".github/workflows/version-coherence.yml"
+      - ".github/workflows/dashboard-grep-gate.yml"
+      - "cortex-plugin/**"
+      - "scripts/**"
   pull_request:
     branches: [main, master, develop]
     paths:
