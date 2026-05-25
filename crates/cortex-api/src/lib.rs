@@ -38,6 +38,7 @@
 // -- buckets ----------------------------------------------------------------
 pub mod active_work;
 pub mod admin;
+pub mod decision_chain;
 pub mod similar_sessions;
 pub mod dashboard;
 pub mod health;

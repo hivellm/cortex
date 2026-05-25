@@ -184,6 +184,13 @@ pub fn build_router_with_auth_and_cfg(
     router = router.merge(crate::similar_sessions::build_router(
         crate::similar_sessions::SimilarSessionsState::default(),
     ));
+    // phase13g §3.3 — decision-chain route. Same lazy-init pattern
+    // as similar-sessions: the boot-time default is the
+    // honest-empty `UnwiredDecisionChainSource`; a live Nexus
+    // walker is wired by main.rs in a follow-up.
+    router = router.merge(crate::decision_chain::build_router(
+        crate::decision_chain::DecisionChainState::default(),
+    ));
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
         // alongside the dashboard routes. Both endpoints share the

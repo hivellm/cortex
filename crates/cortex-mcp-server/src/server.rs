@@ -243,7 +243,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_twelve_descriptors() {
+    async fn tools_list_returns_thirteen_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
@@ -251,8 +251,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            12,
-            "phase13g §2 adds cortex_similar_sessions (11 -> 12)"
+            13,
+            "phase13g §3 adds cortex_decision_chain (12 -> 13)"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [

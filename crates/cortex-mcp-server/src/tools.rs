@@ -196,6 +196,7 @@ impl ToolRegistry {
                 Arc::new(GraphQueryTool::new()),
                 Arc::new(ActiveWorkTool::new()),
                 Arc::new(SimilarSessionsTool::new()),
+                Arc::new(DecisionChainTool::new()),
             ],
         }
     }
@@ -1522,6 +1523,98 @@ impl Tool for SimilarSessionsTool {
     }
 }
 
+/// MCP wrapper for `GET <api_url>/v1/search/decision-chain`
+/// (phase13g §3.4). Walks `:SUPERSEDES` edges in both directions
+/// from a `Decision` ULID, returning the merged chain with
+/// per-direction hop counts. Server-side enforces `max_hops <= 16`
+/// and ULID-shaped `event_id`.
+pub struct DecisionChainTool;
+
+impl DecisionChainTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for DecisionChainTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// MCP-side ceiling on `max_hops`. Mirrors the daemon-side cap so
+/// obvious caller bugs surface before the round-trip.
+pub const DECISION_CHAIN_MAX_HOPS: u64 = 16;
+
+#[async_trait]
+impl Tool for DecisionChainTool {
+    fn name(&self) -> &'static str {
+        "cortex_decision_chain"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_decision_chain",
+            "description": "Walk `:SUPERSEDES` edges from a Decision node in both directions and return the chronological chain. Use this when the agent needs to know which ADR a current ADR replaces, or which later ADRs replace it. `event_id` must be a 26-char ULID; `max_hops` bounds the walk (default 16, max 16).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["event_id"],
+                "properties": {
+                    "event_id": {"type": "string", "description": "Decision node ULID — 26 chars from [0-9A-Z] (Crockford-safe subset)."},
+                    "max_hops": {"type": "integer", "minimum": 1, "maximum": 16, "default": 16, "description": "Path-length cap per direction."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let event_id = args
+            .get("event_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| ToolError::invalid_input("`event_id` is required"))?;
+        if !is_ulid_safe(&event_id) {
+            return Err(ToolError::invalid_input(
+                "`event_id` must match [0-9A-Z]{26}",
+            ));
+        }
+        if let Some(h) = args.get("max_hops").and_then(|v| v.as_u64()) {
+            if h == 0 || h > DECISION_CHAIN_MAX_HOPS {
+                return Err(ToolError::invalid_input(format!(
+                    "`max_hops` must be in [1, {DECISION_CHAIN_MAX_HOPS}]"
+                )));
+            }
+        }
+        let mut path = format!("/v1/search/decision-chain?event_id={event_id}");
+        if let Some(h) = args.get("max_hops").and_then(|v| v.as_u64()) {
+            path.push_str(&format!("&max_hops={h}"));
+        }
+        proxy_get(ctx, &path).await
+    }
+}
+
+/// 26-char Crockford-safe ULID regex, hand-rolled so the MCP layer
+/// doesn't pull a new dep.
+fn is_ulid_safe(s: &str) -> bool {
+    if s.len() != 26 {
+        return false;
+    }
+    s.bytes().all(|b| {
+        matches!(
+            b,
+            b'0'..=b'9'
+                | b'A'..=b'H'
+                | b'J'
+                | b'K'
+                | b'M'
+                | b'N'
+                | b'P'..=b'T'
+                | b'V'..=b'Z'
+        )
+    })
+}
+
 /// GET-mode sibling of [`proxy_search`]. Reads the response body
 /// verbatim into a `ToolResult`.
 async fn proxy_get(ctx: &ToolContext, path: &str) -> Result<ToolResult, ToolError> {
@@ -1608,12 +1701,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twelve_tools_with_unique_names() {
+    fn registry_returns_thirteen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            12,
-            "phase13g §2 adds cortex_similar_sessions (11 -> 12)"
+            13,
+            "phase13g §3 adds cortex_decision_chain (12 -> 13)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -1629,6 +1722,7 @@ mod tests {
             "cortex_graph_query",
             "cortex_active_work",
             "cortex_similar_sessions",
+            "cortex_decision_chain",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1713,6 +1807,51 @@ mod tests {
             .call(&ctx, json!({ "query": "x", "repo": "cortex", "k": 0 }))
             .await
             .expect_err("k=0 must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[test]
+    fn decision_chain_descriptor_requires_event_id_only() {
+        let t = DecisionChainTool::new();
+        let d = t.descriptor();
+        assert_eq!(d["name"], "cortex_decision_chain");
+        assert!(d.get("input_schema").is_none());
+        let req = d["inputSchema"]["required"].as_array().unwrap();
+        let names: Vec<&str> = req.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(names, vec!["event_id"]);
+        assert_eq!(
+            d["inputSchema"]["properties"]["max_hops"]["maximum"]
+                .as_u64()
+                .unwrap(),
+            16
+        );
+    }
+
+    #[tokio::test]
+    async fn decision_chain_rejects_invalid_ulid() {
+        let t = DecisionChainTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "event_id": "not-a-ulid" }))
+            .await
+            .expect_err("non-ULID must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn decision_chain_rejects_max_hops_over_ceiling() {
+        let t = DecisionChainTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(
+                &ctx,
+                json!({
+                    "event_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                    "max_hops": 100,
+                }),
+            )
+            .await
+            .expect_err("max_hops > 16 must be rejected");
         assert_eq!(err.reason, reasons::INVALID_INPUT);
     }
 
