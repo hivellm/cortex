@@ -20,5 +20,7 @@
 #![warn(missing_docs)]
 
 pub mod session;
+pub mod topic;
 
 pub use session::{LiveSessionInputFetcher, SessionGrain, SessionInputFetcher};
+pub use topic::{LiveTopicClusterFetcher, TopicClusterFetcher, TopicGrain};
