@@ -75,7 +75,7 @@ impl MeiliPruneOps for StubMeili {
                 Some(s) => s,
                 None => continue,
             };
-            let entry = g.entry(id).or_insert_with(serde_json::Map::new);
+            let entry = g.entry(id).or_default();
             for (k, v) in map.iter() {
                 entry.insert(k.clone(), v.clone());
             }

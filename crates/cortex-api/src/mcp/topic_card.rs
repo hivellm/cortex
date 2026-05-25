@@ -1210,8 +1210,10 @@ mod tests {
     async fn invoke_topic_get_requires_scope_repo() {
         let fake = Arc::new(FakeLookup::default());
         let audit = MemoryAuditPublisher::new();
-        let mut empty = Scope::default();
-        empty.repo = None;
+        let empty = Scope {
+            repo: None,
+            ..Scope::default()
+        };
         let err = invoke_topic_get(
             fake.clone(),
             &audit,

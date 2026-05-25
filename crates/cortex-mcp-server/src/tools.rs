@@ -194,6 +194,7 @@ impl ToolRegistry {
                 Arc::new(KeywordSearchTool::new()),
                 Arc::new(VectorSearchTool::new()),
                 Arc::new(GraphQueryTool::new()),
+                Arc::new(ActiveWorkTool::new()),
             ],
         }
     }
@@ -1356,6 +1357,142 @@ impl Tool for GraphQueryTool {
     }
 }
 
+/// MCP wrapper for `GET <api_url>/v1/dashboard/active-work` (phase13g
+/// §1.4). Reads `.rulebook/tasks/` + `.rulebook/archive/` via the
+/// `cortex-api` daemon and exposes the operator-state snapshot so
+/// the agent can ground its session on what is already in-flight
+/// without re-walking the filesystem.
+pub struct ActiveWorkTool;
+
+impl ActiveWorkTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ActiveWorkTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Server-side hard cap on the number of `active_tasks` rows the
+/// MCP tool surfaces. The daemon may return more; the MCP wrapper
+/// trims to keep the envelope under [`MCP_RESPONSE_HARD_CAP`]
+/// without forcing the dashboard endpoint to also clamp.
+pub const ACTIVE_WORK_TASK_CAP: usize = 50;
+
+#[async_trait]
+impl Tool for ActiveWorkTool {
+    fn name(&self) -> &'static str {
+        "cortex_active_work"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_active_work",
+            "description": "Operator-state snapshot — returns the rulebook tasks under `.rulebook/tasks/` plus a recent-archives tail. Each row carries id, phase, status, the next unchecked checklist item, and (when status='blocked') a blocked_reason. Optional `repo` filter scopes the snapshot to one workspace. Reads are cached for 60 s; the response is capped server-side to keep the MCP envelope small.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Optional repo slug (case-insensitive) — when set, only tasks whose workspace parent matches are returned."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let repo = args.get("repo").and_then(|v| v.as_str()).map(str::to_string);
+        // Validate `repo` is slug-safe before splicing into the URL —
+        // dashboard slugs are lowercase alnum + `-` / `_`; anything
+        // else is a client mistake the MCP layer rejects.
+        if let Some(slug) = repo.as_deref() {
+            if slug.is_empty()
+                || !slug
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err(ToolError::invalid_input(
+                    "`repo` must be a non-empty slug of [a-zA-Z0-9_-]",
+                ));
+            }
+        }
+        let mut path = String::from("/v1/dashboard/active-work");
+        if let Some(ref slug) = repo {
+            path.push_str("?repo=");
+            path.push_str(slug);
+        }
+        let mut value = match proxy_get(ctx, &path).await? {
+            ToolResult {
+                content,
+                is_error: false,
+            } => {
+                let text = content
+                    .first()
+                    .and_then(|v| v.get("text"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}")
+                    .to_string();
+                serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({}))
+            }
+            err @ ToolResult {
+                is_error: true, ..
+            } => return Ok(err),
+        };
+        // Cap active_tasks at ACTIVE_WORK_TASK_CAP. The daemon side
+        // already truncated `next_unchecked_item` to 256 bytes.
+        if let Some(arr) = value
+            .get_mut("active_tasks")
+            .and_then(|v| v.as_array_mut())
+        {
+            if arr.len() > ACTIVE_WORK_TASK_CAP {
+                arr.truncate(ACTIVE_WORK_TASK_CAP);
+            }
+        }
+        Ok(ToolResult::ok(value))
+    }
+}
+
+/// GET-mode sibling of [`proxy_search`]. Reads the response body
+/// verbatim into a `ToolResult`.
+async fn proxy_get(ctx: &ToolContext, path: &str) -> Result<ToolResult, ToolError> {
+    let url = format!("{}{}", ctx.api_url.trim_end_matches('/'), path);
+    let resp = match ctx
+        .http
+        .get(&url)
+        .header(cortex_api::CALLER_HEADER, CALLER)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return Ok(ToolResult::soft_error(
+                reasons::API_UNREACHABLE,
+                &format!("cortex-api unreachable at {url}: {e}"),
+                json!({ "url": url }),
+            ));
+        }
+    };
+    let status = resp.status();
+    let body_bytes = resp.bytes().await.unwrap_or_default();
+    if status.is_success() {
+        let payload: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+        return Ok(ToolResult::ok(payload));
+    }
+    let err: Value = serde_json::from_slice(&body_bytes).unwrap_or_else(|_| json!({}));
+    let reason = err
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or(reasons::API_HTTP_ERROR)
+        .to_string();
+    Ok(ToolResult::soft_error(
+        &reason,
+        &format!("cortex-api {url} returned HTTP {status}"),
+        err,
+    ))
+}
+
 /// Shared helper — POST `<api_url><path>` with the args body, fold
 /// the cortex-api response into a `ToolResult`. 2xx → ok with the
 /// JSON body; 400/403/404 → soft-error keyed on the upstream `reason`;
@@ -1403,9 +1540,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_ten_tools_with_unique_names() {
+    fn registry_returns_eleven_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
-        assert_eq!(reg.len(), 10, "phase11v adds 3 search tools (7 -> 10)");
+        assert_eq!(
+            reg.len(),
+            11,
+            "phase13g §1 adds cortex_active_work (10 -> 11)"
+        );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
             "cortex_query",
@@ -1418,6 +1559,7 @@ mod tests {
             "cortex_keyword_search",
             "cortex_vector_search",
             "cortex_graph_query",
+            "cortex_active_work",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1436,6 +1578,43 @@ mod tests {
     fn query_tool_descriptor_matches_cortex_api_source_of_truth() {
         let t = QueryTool::new();
         assert_eq!(t.descriptor(), cortex_api::tool_descriptor());
+    }
+
+    #[test]
+    fn active_work_descriptor_advertises_optional_repo_filter() {
+        let t = ActiveWorkTool::new();
+        let d = t.descriptor();
+        assert_eq!(d["name"], "cortex_active_work");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        let props = d["inputSchema"]["properties"].as_object().unwrap();
+        assert!(props.contains_key("repo"));
+        // `repo` is optional — no `required` array on this tool.
+        assert!(d["inputSchema"].get("required").is_none());
+    }
+
+    #[tokio::test]
+    async fn active_work_rejects_repo_with_special_chars() {
+        let t = ActiveWorkTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "repo": "../etc/passwd" }))
+            .await
+            .expect_err("invalid slug must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn active_work_rejects_empty_repo_string() {
+        let t = ActiveWorkTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "repo": "" }))
+            .await
+            .expect_err("empty slug must be rejected");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
     }
 
     #[test]

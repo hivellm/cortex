@@ -929,7 +929,8 @@ mod tests {
     #[test]
     fn derive_laws_skips_hit_with_empty_overlay() {
         let hit = lane_hit_default("doc-4");
-        let (laws, violations) = super::derive_laws(&[hit.clone()], &[hit], 10);
+        let hits = std::slice::from_ref(&hit);
+        let (laws, violations) = super::derive_laws(hits, hits, 10);
         assert!(laws.is_empty());
         assert!(violations.is_empty());
     }

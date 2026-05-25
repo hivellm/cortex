@@ -258,7 +258,7 @@ mod tests {
         assert!(parse_jwt_exp_ms("not.enough.parts.4").is_none());
         assert!(parse_jwt_exp_ms("!!!.@@@.###").is_none());
         // Valid base64 segments but the payload is not JSON.
-        let token = concat!("aGVsbG8.aGVsbG8.aGVsbG8");
+        let token = "aGVsbG8.aGVsbG8.aGVsbG8";
         assert!(parse_jwt_exp_ms(token).is_none());
     }
 

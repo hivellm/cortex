@@ -344,6 +344,7 @@ mod tests {
         .unwrap()
     }
 
+    #[allow(dead_code)]
     fn turn_envelope() -> cortex_core::events::Envelope {
         turn_envelope_at("01HXEVT0000000000000000001", "2026-04-20T10:00:00Z")
     }

@@ -805,8 +805,10 @@ mod tests {
     #[test]
     fn step_emits_one_envelope_per_transition() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut cfg = SilentDropConfig::default();
-        cfg.state_dir = tmp.path().to_path_buf();
+        let cfg = SilentDropConfig {
+            state_dir: tmp.path().to_path_buf(),
+            ..SilentDropConfig::default()
+        };
         let aggregator = Arc::new(HealthAggregatorState::new());
         let mut watcher = SilentDropWatcher::new(cfg, aggregator);
         let row_warn = DivergenceRow {
@@ -818,9 +820,9 @@ mod tests {
             severity: crate::health::Severity::Warn,
         };
         // First poll — no emit (debounce).
-        assert!(watcher.step(&[row_warn.clone()]).is_empty());
+        assert!(watcher.step(std::slice::from_ref(&row_warn)).is_empty());
         // Second poll — Warn fires.
-        let emitted = watcher.step(&[row_warn.clone()]);
+        let emitted = watcher.step(std::slice::from_ref(&row_warn));
         assert_eq!(emitted.len(), 1);
         assert_eq!(emitted[0].1, AlertSeverity::Warn);
     }
@@ -828,8 +830,10 @@ mod tests {
     #[test]
     fn watcher_step_persists_state_to_disk() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut cfg = SilentDropConfig::default();
-        cfg.state_dir = tmp.path().to_path_buf();
+        let cfg = SilentDropConfig {
+            state_dir: tmp.path().to_path_buf(),
+            ..SilentDropConfig::default()
+        };
         let aggregator = Arc::new(HealthAggregatorState::new());
         let mut watcher = SilentDropWatcher::new(cfg.clone(), aggregator);
         let row = DivergenceRow {
@@ -854,8 +858,10 @@ mod tests {
             recovery_streak: 0,
         };
         save_pair_state(tmp.path(), "old-pair", &s);
-        let mut cfg = SilentDropConfig::default();
-        cfg.state_dir = tmp.path().to_path_buf();
+        let cfg = SilentDropConfig {
+            state_dir: tmp.path().to_path_buf(),
+            ..SilentDropConfig::default()
+        };
         let aggregator = Arc::new(HealthAggregatorState::new());
         let mut watcher = SilentDropWatcher::new(cfg, aggregator);
         watcher.hydrate_from_disk();

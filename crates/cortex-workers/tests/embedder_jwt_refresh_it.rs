@@ -180,7 +180,7 @@ async fn ensure_token_fresh_records_error_when_login_fails() {
     // configure credentials post-hoc and verify error-on-refresh.
     let mut config = config_for(&server);
     config.vectorizer_password = Some("manual.jwt.token".to_string());
-    let mut client = LiveVectorizerClient::new(config).expect("build client");
+    let client = LiveVectorizerClient::new(config).expect("build client");
     // Manually install credentials so ensure_token_fresh tries
     // the failing /auth/login. Use the public credential field
     // through with_credentials by rebuilding... easier: assert

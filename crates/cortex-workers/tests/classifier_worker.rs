@@ -250,7 +250,7 @@ async fn metadata_store_records_classifier_spend_after_publish() {
         ConsumedMessage {
             offset: 1,
             kind: "turn".into(),
-            payload: serde_json::to_value(&canonical_envelope("01HSPEND", Kind::Turn)).unwrap(),
+            payload: serde_json::to_value(canonical_envelope("01HSPEND", Kind::Turn)).unwrap(),
             event_id: Some("01HSPEND".into()),
         },
     );
@@ -292,7 +292,7 @@ async fn worker_without_metadata_skips_spend_recording() {
         ConsumedMessage {
             offset: 1,
             kind: "turn".into(),
-            payload: serde_json::to_value(&canonical_envelope("01HNOMETA", Kind::Turn)).unwrap(),
+            payload: serde_json::to_value(canonical_envelope("01HNOMETA", Kind::Turn)).unwrap(),
             event_id: Some("01HNOMETA".into()),
         },
     );

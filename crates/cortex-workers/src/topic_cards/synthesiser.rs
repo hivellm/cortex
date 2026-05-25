@@ -208,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn rewrite_returns_parse_error_on_missing_field() {
-        let bad_json = r#"{"synthesis_markdown": "ok", "confidence": 0.5}"#; // missing contradictions ok (default), but missing confidence won't trigger — try truly broken:
+        let _bad_json = r#"{"synthesis_markdown": "ok", "confidence": 0.5}"#; // missing contradictions ok (default), but missing confidence won't trigger — try truly broken:
         let truly_broken = r#"{"not_valid": true}"#;
         let summariser = Arc::new(CannedSummariser {
             kind: SK::Haiku45,

@@ -750,8 +750,10 @@ mod adr_011_tests {
 
     #[test]
     fn overlay_is_empty_detects_populated_field() {
-        let mut o = Overlay::default();
-        o.decision_id = Some("01ABC".into());
+        let o = Overlay {
+            decision_id: Some("01ABC".into()),
+            ..Overlay::default()
+        };
         assert!(!o.is_empty());
     }
 

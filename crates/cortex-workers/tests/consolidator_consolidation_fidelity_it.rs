@@ -251,7 +251,7 @@ async fn fifty_session_consolidations_meet_structural_fidelity_contract() {
         // 6. Summary bounds.
         let summary_bytes = produced.payload.summary_markdown.len();
         assert!(
-            summary_bytes >= SUMMARY_FLOOR_BYTES && summary_bytes <= SUMMARY_CEILING_BYTES,
+            (SUMMARY_FLOOR_BYTES..=SUMMARY_CEILING_BYTES).contains(&summary_bytes),
             "session {session_idx}: summary {summary_bytes} bytes outside [{SUMMARY_FLOOR_BYTES}, {SUMMARY_CEILING_BYTES}]"
         );
         // 7. Per-takeaway bounds.

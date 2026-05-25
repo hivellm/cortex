@@ -2258,7 +2258,7 @@ mod tests {
         for thread_idx in 0..total_threads {
             let path = db_path.clone();
             handles.push(thread::spawn(move || {
-                let store = MetadataStore::open(&*path).unwrap();
+                let store = MetadataStore::open(&path).unwrap();
                 for call_idx in 0..calls_per_thread {
                     store
                         .record_cron_run(
@@ -2278,7 +2278,7 @@ mod tests {
             h.join().expect("worker thread");
         }
 
-        let store = MetadataStore::open(&*db_path).unwrap();
+        let store = MetadataStore::open(&db_path).unwrap();
         let row = store
             .get_cron_job("concurrent.sweep")
             .unwrap()
@@ -2311,7 +2311,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let db_path = Arc::new(dir.path().join("cron_mixed.sqlite"));
         {
-            let store = MetadataStore::open(&*db_path).unwrap();
+            let store = MetadataStore::open(&db_path).unwrap();
             store
                 .upsert_cron_job_if_absent(
                     "mixed.sweep",
@@ -2329,7 +2329,7 @@ mod tests {
         for thread_idx in 0..total_threads {
             let path = db_path.clone();
             handles.push(thread::spawn(move || {
-                let store = MetadataStore::open(&*path).unwrap();
+                let store = MetadataStore::open(&path).unwrap();
                 for call_idx in 0..calls_per_thread {
                     let status = if (thread_idx + call_idx) % 2 == 0 {
                         "failed"
@@ -2354,7 +2354,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        let store = MetadataStore::open(&*db_path).unwrap();
+        let store = MetadataStore::open(&db_path).unwrap();
         let row = store.get_cron_job("mixed.sweep").unwrap().unwrap();
         let last = row.last_status.as_deref();
         assert!(

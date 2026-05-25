@@ -1138,6 +1138,20 @@ impl MeiliIndexCheck {
     }
 }
 
+async fn build_live_nexus_query_probe(
+    nexus_url: Option<String>,
+) -> anyhow::Result<LiveNexusQueryProbe> {
+    let url = nexus_url
+        .ok_or_else(|| anyhow::anyhow!("CORTEX_NEXUS_URL is required for --query probes"))?;
+    let config = cortex_workers::graph::GraphConfig {
+        nexus_url: url,
+        ..cortex_workers::graph::GraphConfig::from_env()
+    };
+    let client = cortex_workers::graph::LiveNexusClient::new(config)
+        .map_err(|e| anyhow::anyhow!("nexus client: {e}"))?;
+    Ok(LiveNexusQueryProbe { client })
+}
+
 fn string_array(value: Option<&serde_json::Value>) -> Vec<String> {
     value
         .and_then(|v| v.as_array())
@@ -1285,14 +1299,3 @@ mod meili_drift_tests {
     }
 }
 
-async fn build_live_nexus_query_probe(
-    nexus_url: Option<String>,
-) -> anyhow::Result<LiveNexusQueryProbe> {
-    let url = nexus_url
-        .ok_or_else(|| anyhow::anyhow!("CORTEX_NEXUS_URL is required for --query probes"))?;
-    let mut config = cortex_workers::graph::GraphConfig::from_env();
-    config.nexus_url = url;
-    let client = cortex_workers::graph::LiveNexusClient::new(config)
-        .map_err(|e| anyhow::anyhow!("nexus client: {e}"))?;
-    Ok(LiveNexusQueryProbe { client })
-}

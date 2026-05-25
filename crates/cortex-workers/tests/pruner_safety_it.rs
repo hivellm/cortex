@@ -40,7 +40,7 @@ impl MeiliPruneOps for StubMeili {
                 Some(s) => s.to_string(),
                 None => continue,
             };
-            let entry = g.entry(id).or_insert_with(serde_json::Map::new);
+            let entry = g.entry(id).or_default();
             for (k, v) in map.iter() {
                 entry.insert(k.clone(), v.clone());
             }
@@ -125,7 +125,7 @@ async fn active_consolidation_vectors_survive_demotion() {
         .expect("sweep");
 
     // Invariant 1: active-hot vectors stay in fp32 untouched.
-    assert_eq!(
+    assert!(
         vec_client
             .dedup_keys_per_collection
             .lock()
@@ -133,12 +133,11 @@ async fn active_consolidation_vectors_survive_demotion() {
             .get(COLLECTION_CONSOLIDATION_FP32)
             .map(|m| m.contains_key("v-active-hot"))
             .unwrap_or(false),
-        true,
         "active-hot vector must NOT have moved",
     );
 
     // Invariant 2: active-warm vectors landed in PQ (NOT lost).
-    assert_eq!(
+    assert!(
         vec_client
             .dedup_keys_per_collection
             .lock()
@@ -146,14 +145,13 @@ async fn active_consolidation_vectors_survive_demotion() {
             .get(COLLECTION_CONSOLIDATION_PQ)
             .map(|m| m.contains_key("v-active-warm"))
             .unwrap_or(false),
-        true,
         "active-warm vector must exist in PQ after demotion",
     );
 
     // Invariant 3: active-cold vectors landed in cold.binary
     // (NOT lost). The active cold consolidation referenced a
     // vector originally in the PQ collection.
-    assert_eq!(
+    assert!(
         vec_client
             .dedup_keys_per_collection
             .lock()
@@ -161,7 +159,6 @@ async fn active_consolidation_vectors_survive_demotion() {
             .get(COLLECTION_COLD_BINARY)
             .map(|m| m.contains_key("v-active-cold"))
             .unwrap_or(false),
-        true,
         "active-cold vector must exist in cold.binary after demotion",
     );
 

@@ -185,6 +185,10 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/retention/state", get(retention_state))
         .route("/v1/dashboard/coverage", get(coverage))
         .route("/v1/dashboard/producers", get(producers))
+        .route(
+            "/v1/dashboard/active-work",
+            get(crate::active_work::active_work_handler),
+        )
         // phase11w — admin lane projection used by
         // `cortex-ops tool-call-digest --apply` (and any other
         // operator binary that needs to walk the keyword lane's

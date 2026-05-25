@@ -36,6 +36,7 @@
 #![warn(missing_docs)]
 
 // -- buckets ----------------------------------------------------------------
+pub mod active_work;
 pub mod admin;
 pub mod dashboard;
 pub mod health;

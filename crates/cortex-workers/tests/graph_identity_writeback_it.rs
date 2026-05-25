@@ -96,7 +96,7 @@ async fn graph_worker_stamps_event_identity_nexus_id_after_success() {
     let store = MetadataStore::open_in_memory().expect("metadata opens");
     let metadata = Arc::new(std::sync::Mutex::new(store));
 
-    let writer = Arc::new(FakeGraphWriter::default());
+    let writer = Arc::new(FakeGraphWriter);
     let config = GraphConfig::default();
     let metrics = Arc::new(GraphMetrics::default());
     let consumer = Arc::new(MemorySynapConsumer::new());
@@ -134,7 +134,7 @@ async fn graph_worker_stamps_event_identity_nexus_id_after_success() {
 
 #[tokio::test]
 async fn graph_worker_skips_identity_writeback_when_metadata_absent() {
-    let writer = Arc::new(FakeGraphWriter::default());
+    let writer = Arc::new(FakeGraphWriter);
     let config = GraphConfig::default();
     let metrics = Arc::new(GraphMetrics::default());
     let consumer = Arc::new(MemorySynapConsumer::new());

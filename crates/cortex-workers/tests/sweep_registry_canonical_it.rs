@@ -82,19 +82,21 @@ impl MeiliPruneOps for RecordingMeiliOps {
     }
 }
 
+type CanonicalSweepSet = (
+    Box<dyn Sweep>,
+    Box<dyn Sweep>,
+    Box<dyn Sweep>,
+    Box<dyn Sweep>,
+    Box<dyn Sweep>,
+    Box<dyn Sweep>,
+    Box<dyn Sweep>,
+);
+
 fn build_canonical_sweep_set(
     archive_root: PathBuf,
     cas_path: PathBuf,
     now: DateTime<Utc>,
-) -> (
-    Box<dyn Sweep>,
-    Box<dyn Sweep>,
-    Box<dyn Sweep>,
-    Box<dyn Sweep>,
-    Box<dyn Sweep>,
-    Box<dyn Sweep>,
-    Box<dyn Sweep>,
-) {
+) -> CanonicalSweepSet {
     let tier: Box<dyn Sweep> = Box::new(TierSweep::new(
         Arc::new(MemoryVectorizerOps::new()),
         SweepPlan::default_for(now),

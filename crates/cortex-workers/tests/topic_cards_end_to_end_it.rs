@@ -132,15 +132,16 @@ async fn three_sequential_rewrites_preserve_id_and_advance_revision() {
     assert_eq!(produced_1.payload.synthesis_model, "claude-haiku-4-5");
     assert_eq!(produced_1.cost_cents, 80);
 
-    let ledger_1 = orch_1.cost_ledger();
-    let ledger_lock = ledger_1.lock().unwrap();
-    let bucket = ledger_lock
-        .per_grain
-        .get(GRAIN_LABEL)
-        .expect("topic_card grain bucket exists");
-    assert_eq!(bucket.cost_cents, 80);
-    assert_eq!(bucket.consolidations, 1);
-    drop(ledger_lock);
+    {
+        let ledger_1 = orch_1.cost_ledger();
+        let ledger_lock = ledger_1.lock().unwrap();
+        let bucket = ledger_lock
+            .per_grain
+            .get(GRAIN_LABEL)
+            .expect("topic_card grain bucket exists");
+        assert_eq!(bucket.cost_cents, 80);
+        assert_eq!(bucket.consolidations, 1);
+    }
 
     // Round 2 — extend evidence. Same id, revision 2.
     let haiku_2: Arc<dyn Summariser> = Arc::new(CannedSummariser {
