@@ -43,6 +43,13 @@ on:
 permissions:
   contents: read
 
+# Cancel any in-flight smoke run on the same ref when a new commit
+# lands. Saves the matrix-doubled cost (ubuntu + windows) on quick
+# successive pushes.
+concurrency:
+  group: health-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   health-smoke:
     name: Health smoke (${{ matrix.os }})

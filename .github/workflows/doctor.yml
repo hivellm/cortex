@@ -35,6 +35,14 @@ on:
 permissions:
   contents: read
 
+# Cancel any in-flight doctor run on the same ref when a new commit
+# lands. Without this, a quick succession of pushes (CI fix
+# iterations) leaves N copies of the heavy docker-compose build
+# racing each other for ~25 min each.
+concurrency:
+  group: doctor-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   doctor-consistency:
     name: Cross-backend consistency doctor
