@@ -1,0 +1,112 @@
+name: Rust CI
+
+# Workspace-wide quality gates: format, clippy, test, security audit.
+# Runs on every push / PR against main / master / develop. Skips
+# doc-only changes via the standard paths-ignore filter shared with
+# the heavy stack workflows so a CHANGELOG-only commit does not
+# re-trigger an hour of CPU.
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - ".rulebook/**"
+      - ".github/workflows/codespell.yml"
+      - ".github/workflows/version-coherence.yml"
+      - ".github/workflows/dashboard-grep-gate.yml"
+      - "cortex-plugin/**"
+      - "scripts/**"
+  pull_request:
+    branches: [main, master, develop]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - ".rulebook/**"
+      - ".github/workflows/codespell.yml"
+      - ".github/workflows/version-coherence.yml"
+      - ".github/workflows/dashboard-grep-gate.yml"
+      - "cortex-plugin/**"
+      - "scripts/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ---------------------------------------------------------------
+  # fmt — cheap, runs first to fail fast on style regressions
+  # ---------------------------------------------------------------
+  fmt:
+    name: cargo fmt --check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  # ---------------------------------------------------------------
+  # clippy — workspace lints. Pre-phase13e debt blocks `-D warnings`
+  # globally, so we run clippy WITHOUT `-D warnings` and only fail
+  # on clippy `error`-level diagnostics (the default behaviour
+  # without the env var). The fmt + test jobs are the strict gates.
+  # ---------------------------------------------------------------
+  clippy:
+    name: cargo clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+      - run: cargo clippy --workspace --all-targets --no-deps
+
+  # ---------------------------------------------------------------
+  # test — full workspace test suite. Uses --no-fail-fast so a
+  # flaky single test does not mask sibling regressions.
+  # ---------------------------------------------------------------
+  test:
+    name: cargo test --workspace
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-ci
+      - run: cargo test --workspace --no-fail-fast --locked
+
+  # ---------------------------------------------------------------
+  # audit — cargo-audit against the workspace's Cargo.lock. Pulls
+  # rustsec/advisory-db on every run; the action handles caching.
+  # ---------------------------------------------------------------
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
