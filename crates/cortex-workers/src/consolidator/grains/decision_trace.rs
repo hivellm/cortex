@@ -153,6 +153,14 @@ impl Consolidator for DecisionTraceGrain {
             .await
             .map_err(|e| ConsolidatorError::Summariser(e.to_string()))?;
 
+        ctx.record_cost(
+            "decision_trace",
+            &produced.payload.model,
+            produced.cost_cents,
+            produced.input_tokens,
+            produced.output_tokens,
+        );
+
         Ok(ConsolidationReport {
             grain: ConsolidationGrain::DecisionTrace,
             trigger: TriggerLabel::from(trigger),
@@ -428,6 +436,30 @@ mod tests {
             ConsolidatorError::Other(msg) => assert!(msg.contains("empty result")),
             other => panic!("wrong error: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn decision_trace_grain_on_trigger_records_cost_into_ctx_ledger() {
+        let grain = build_grain(single_decision_input());
+        let trigger = Trigger::DecisionLanded {
+            decision_id: "DEC1".into(),
+            force_deep: false,
+        };
+        let ctx = ConsolidatorCtx::at(ts("2026-05-25T12:00:00Z"));
+        grain.on_trigger(&trigger, &ctx).await.expect("on_trigger");
+
+        let ledger = ctx.cost.lock().unwrap();
+        let bucket = ledger
+            .per_grain
+            .get("decision_trace")
+            .expect("decision_trace bucket");
+        assert_eq!(bucket.consolidations, 1);
+        // Opus path → 3_200 cents from the canned summariser cost.
+        assert_eq!(bucket.cost_cents, 3_200);
+        assert_eq!(bucket.input_tokens, 10);
+        assert_eq!(bucket.output_tokens, 200);
+        assert!(bucket.models_used.contains("claude-opus-4-7"));
+        assert_eq!(ledger.total_cents, 3_200);
     }
 
     #[tokio::test]

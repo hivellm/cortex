@@ -162,6 +162,14 @@ impl Consolidator for SessionGrain {
             .await
             .map_err(|e| ConsolidatorError::Summariser(e.to_string()))?;
 
+        ctx.record_cost(
+            "session",
+            &produced.payload.model,
+            produced.cost_cents,
+            produced.input_tokens,
+            produced.output_tokens,
+        );
+
         Ok(ConsolidationReport {
             grain: ConsolidationGrain::Session,
             trigger: TriggerLabel::from(trigger),
@@ -435,6 +443,28 @@ mod tests {
             ConsolidatorError::Other(msg) => assert!(msg.contains("empty result")),
             other => panic!("wrong error: {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn session_grain_on_trigger_records_cost_into_ctx_ledger() {
+        let grain = build_grain(ok_session_summary(), 80, two_turn_input());
+        let trigger = Trigger::SessionEnd {
+            session_id: "01HXSESS00000000000000000A".into(),
+        };
+        let ctx = ConsolidatorCtx::at(ts("2026-05-25T12:00:00Z"));
+        grain.on_trigger(&trigger, &ctx).await.expect("on_trigger");
+
+        let ledger = ctx.cost.lock().unwrap();
+        let bucket = ledger
+            .per_grain
+            .get("session")
+            .expect("session bucket recorded");
+        assert_eq!(bucket.consolidations, 1);
+        assert_eq!(bucket.cost_cents, 80);
+        assert_eq!(bucket.input_tokens, 10);
+        assert_eq!(bucket.output_tokens, 200);
+        assert!(bucket.models_used.contains("claude-haiku-4-5"));
+        assert_eq!(ledger.total_cents, 80);
     }
 
     #[tokio::test]

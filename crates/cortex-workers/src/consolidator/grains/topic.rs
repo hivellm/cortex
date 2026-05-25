@@ -183,6 +183,13 @@ impl Consolidator for TopicGrain {
         for cluster in &clusters {
             match self.orchestrator.run_topic(cluster).await {
                 Ok(produced) => {
+                    ctx.record_cost(
+                        "topic",
+                        &produced.payload.model,
+                        produced.cost_cents,
+                        produced.input_tokens,
+                        produced.output_tokens,
+                    );
                     envelopes_emitted += 1;
                     cost_cents = cost_cents.saturating_add(u64::from(produced.cost_cents));
                     source_event_count = source_event_count
@@ -430,6 +437,28 @@ mod tests {
                 other => panic!("wrong error: {other}"),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn topic_grain_on_trigger_records_cost_per_cluster_into_ctx_ledger() {
+        let clusters = vec![make_cluster("alpha"), make_cluster("beta")];
+        let grain = build_grain(clusters, 70);
+        let trigger = Trigger::NightlyTopic {
+            repo: "cortex".into(),
+        };
+        let ctx = ConsolidatorCtx::at(ts("2026-05-25T12:00:00Z"));
+        grain.on_trigger(&trigger, &ctx).await.expect("on_trigger");
+
+        let ledger = ctx.cost.lock().unwrap();
+        let bucket = ledger.per_grain.get("topic").expect("topic bucket");
+        // Two clusters → two ledger writes summing to 140 cents +
+        // 20 input tokens + 400 output tokens.
+        assert_eq!(bucket.consolidations, 2);
+        assert_eq!(bucket.cost_cents, 140);
+        assert_eq!(bucket.input_tokens, 20);
+        assert_eq!(bucket.output_tokens, 400);
+        assert!(bucket.models_used.contains("claude-haiku-4-5"));
+        assert_eq!(ledger.total_cents, 140);
     }
 
     #[tokio::test]

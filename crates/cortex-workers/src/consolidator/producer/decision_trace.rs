@@ -209,6 +209,8 @@ pub async fn produce(
     Ok(ProducedConsolidation {
         payload,
         cost_cents: result.cost_cents,
+        input_tokens: result.input_tokens,
+        output_tokens: result.output_tokens,
     })
 }
 

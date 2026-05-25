@@ -20,6 +20,20 @@ pub struct GrainCost {
     pub consolidations: u32,
     /// Total cents charged.
     pub cost_cents: u32,
+    /// Total prompt tokens consumed by this grain (phase14a §2.4).
+    /// Missing on rows written before the field landed — `serde`
+    /// defaults to zero so older ledgers deserialise cleanly.
+    #[serde(default)]
+    pub input_tokens: u64,
+    /// Total completion tokens produced by this grain (phase14a §2.4).
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Distinct summariser models that drove this grain's runs
+    /// (e.g. `claude-haiku-4-5`, `claude-opus-4-7`). Lets the
+    /// daemon-side dashboard render a model-fan-out indicator when
+    /// a grain's auto-promotion kicks in.
+    #[serde(default)]
+    pub models_used: std::collections::BTreeSet<String>,
 }
 
 impl GrainCost {
@@ -42,11 +56,39 @@ pub struct CostLedger {
 
 impl CostLedger {
     /// Record a single charge against the ledger. The orchestrator
-    /// calls this for every summariser response.
+    /// calls this for every summariser response. Token counters and
+    /// `models_used` stay at their previous values — callers that
+    /// have token information SHALL prefer [`Self::record_full`].
     pub fn record(&mut self, grain_label: &str, cost_cents: u32) {
         let bucket = self.per_grain.entry(grain_label.to_string()).or_default();
         bucket.consolidations = bucket.consolidations.saturating_add(1);
         bucket.cost_cents = bucket.cost_cents.saturating_add(cost_cents);
+        self.total_cents = self.total_cents.saturating_add(cost_cents);
+    }
+
+    /// Phase14a §2.4 — record a charge with full token telemetry.
+    /// The grain layer invokes this via
+    /// [`super::consolidator_trait::ConsolidatorCtx::record_cost`] so
+    /// every grain shares a single recording path. The `model`
+    /// argument is the wire-level model id (`claude-haiku-4-5` /
+    /// `claude-opus-4-7`) — added to `models_used` so the dashboard
+    /// can render a model-fan-out indicator.
+    pub fn record_full(
+        &mut self,
+        grain_label: &str,
+        model: &str,
+        cost_cents: u32,
+        input_tokens: u64,
+        output_tokens: u64,
+    ) {
+        let bucket = self.per_grain.entry(grain_label.to_string()).or_default();
+        bucket.consolidations = bucket.consolidations.saturating_add(1);
+        bucket.cost_cents = bucket.cost_cents.saturating_add(cost_cents);
+        bucket.input_tokens = bucket.input_tokens.saturating_add(input_tokens);
+        bucket.output_tokens = bucket.output_tokens.saturating_add(output_tokens);
+        if !model.is_empty() {
+            bucket.models_used.insert(model.to_string());
+        }
         self.total_cents = self.total_cents.saturating_add(cost_cents);
     }
 
@@ -112,6 +154,37 @@ mod tests {
         l.reset();
         assert_eq!(l.total_cents, 0);
         assert!(l.per_grain.is_empty());
+    }
+
+    #[test]
+    fn record_full_tracks_tokens_and_model_set() {
+        let mut l = CostLedger::default();
+        l.record_full("session", "claude-haiku-4-5", 80, 1_200, 320);
+        l.record_full("session", "claude-haiku-4-5", 90, 1_500, 400);
+        l.record_full("decision_trace", "claude-opus-4-7", 5_000, 3_000, 1_024);
+
+        let sess = &l.per_grain["session"];
+        assert_eq!(sess.consolidations, 2);
+        assert_eq!(sess.cost_cents, 170);
+        assert_eq!(sess.input_tokens, 2_700);
+        assert_eq!(sess.output_tokens, 720);
+        assert_eq!(sess.models_used.len(), 1);
+        assert!(sess.models_used.contains("claude-haiku-4-5"));
+
+        let dec = &l.per_grain["decision_trace"];
+        assert_eq!(dec.input_tokens, 3_000);
+        assert_eq!(dec.output_tokens, 1_024);
+        assert!(dec.models_used.contains("claude-opus-4-7"));
+
+        assert_eq!(l.total_cents, 5_170);
+    }
+
+    #[test]
+    fn record_full_skips_empty_model_string() {
+        let mut l = CostLedger::default();
+        l.record_full("session", "", 80, 100, 50);
+        assert!(l.per_grain["session"].models_used.is_empty());
+        assert_eq!(l.per_grain["session"].input_tokens, 100);
     }
 
     #[test]

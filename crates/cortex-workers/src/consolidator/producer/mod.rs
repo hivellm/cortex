@@ -21,6 +21,12 @@ pub struct ProducedConsolidation {
     pub payload: ConsolidationPayload,
     /// USD cents the summariser charged for this run.
     pub cost_cents: u32,
+    /// Prompt tokens the summariser consumed (phase14a §2.4 — fed
+    /// into [`super::cost_telemetry::CostLedger::record_full`] via
+    /// [`super::consolidator_trait::ConsolidatorCtx::record_cost`]).
+    pub input_tokens: u64,
+    /// Completion tokens the summariser produced (same plumbing).
+    pub output_tokens: u64,
 }
 
 /// Errors a producer surfaces. Keeps a clean separation from the

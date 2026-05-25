@@ -16,11 +16,14 @@
 //!
 //! [`Trigger`]: super::orchestrator::Trigger
 
+use std::sync::{Arc, Mutex};
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cortex_core::events::ConsolidationGrain;
 use serde::{Deserialize, Serialize};
 
+use super::cost_telemetry::CostLedger;
 use super::orchestrator::Trigger;
 use super::summariser::SummariserKind;
 use crate::producer::EnvelopeProducer;
@@ -154,17 +157,61 @@ pub struct ConsolidatorCtx {
     /// Reference clock — the grain stamps its `finished_at` field
     /// from this. Tests pin this to a fixed value.
     pub now: DateTime<Utc>,
+    /// Phase14a §2.4 — shared cost ledger. Every grain records its
+    /// realised cost + token usage here via [`Self::record_cost`].
+    /// The daemon clones this handle so the health endpoint /
+    /// dashboard can read the running totals without holding the
+    /// grain. Default ctxs get a fresh ledger so tests do not need
+    /// to wire one explicitly.
+    pub cost: Arc<Mutex<CostLedger>>,
 }
 
 impl ConsolidatorCtx {
-    /// Build a context that uses the supplied reference clock.
+    /// Build a context that uses the supplied reference clock and
+    /// a fresh cost ledger.
     pub fn at(now: DateTime<Utc>) -> Self {
-        Self { now }
+        Self {
+            now,
+            cost: Arc::new(Mutex::new(CostLedger::default())),
+        }
     }
 
-    /// Build a context anchored on the current wall clock.
+    /// Build a context anchored on the current wall clock with a
+    /// fresh cost ledger.
     pub fn now() -> Self {
-        Self { now: Utc::now() }
+        Self::at(Utc::now())
+    }
+
+    /// Build a context that shares an externally-owned cost ledger
+    /// (the daemon path — the supervisor owns the ledger so it can
+    /// surface the running totals via the health endpoint).
+    pub fn with_ledger(now: DateTime<Utc>, cost: Arc<Mutex<CostLedger>>) -> Self {
+        Self { now, cost }
+    }
+
+    /// Phase14a §2.4 — central recording entry point. Every grain
+    /// calls this after the per-trigger orchestrator run lands, so
+    /// the daemon-facing ledger holds a single canonical projection
+    /// of (cost_cents, model, prompt_tokens, completion_tokens) per
+    /// run. `grain_label` is the snake-case grain key
+    /// (`session` / `topic` / `decision_trace`) the ledger buckets
+    /// on.
+    pub fn record_cost(
+        &self,
+        grain_label: &str,
+        model: &str,
+        cost_cents: u32,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    ) {
+        let mut ledger = self.cost.lock().expect("consolidator cost ledger poisoned");
+        ledger.record_full(
+            grain_label,
+            model,
+            cost_cents,
+            prompt_tokens,
+            completion_tokens,
+        );
     }
 }
 
@@ -240,6 +287,35 @@ mod tests {
     fn consolidator_ctx_at_pins_clock_for_tests() {
         let ctx = ConsolidatorCtx::at(ts("2026-05-25T12:00:00Z"));
         assert_eq!(ctx.now, ts("2026-05-25T12:00:00Z"));
+    }
+
+    #[test]
+    fn consolidator_ctx_record_cost_writes_through_to_shared_ledger() {
+        let ctx = ConsolidatorCtx::at(ts("2026-05-25T12:00:00Z"));
+        ctx.record_cost("session", "claude-haiku-4-5", 80, 1_200, 320);
+        ctx.record_cost("decision_trace", "claude-opus-4-7", 5_000, 3_000, 1_024);
+        let ledger = ctx.cost.lock().unwrap();
+        assert_eq!(ledger.total_cents, 5_080);
+        assert_eq!(ledger.per_grain["session"].input_tokens, 1_200);
+        assert_eq!(ledger.per_grain["session"].output_tokens, 320);
+        assert!(ledger.per_grain["session"]
+            .models_used
+            .contains("claude-haiku-4-5"));
+        assert_eq!(ledger.per_grain["decision_trace"].cost_cents, 5_000);
+    }
+
+    #[test]
+    fn consolidator_ctx_with_ledger_shares_handle_across_clones() {
+        let shared = Arc::new(Mutex::new(CostLedger::default()));
+        let ctx_a =
+            ConsolidatorCtx::with_ledger(ts("2026-05-25T12:00:00Z"), Arc::clone(&shared));
+        let ctx_b = ctx_a.clone();
+        ctx_a.record_cost("session", "claude-haiku-4-5", 80, 100, 50);
+        ctx_b.record_cost("topic", "claude-haiku-4-5", 70, 90, 40);
+        let ledger = shared.lock().unwrap();
+        assert_eq!(ledger.total_cents, 150);
+        assert_eq!(ledger.per_grain["session"].consolidations, 1);
+        assert_eq!(ledger.per_grain["topic"].consolidations, 1);
     }
 
     #[test]
