@@ -41,6 +41,7 @@
 #[path = "consolidator_trait.rs"]
 pub mod consolidator_trait;
 pub mod cost_telemetry;
+pub mod grains;
 pub mod metrics;
 pub mod orchestrator;
 pub mod producer;
