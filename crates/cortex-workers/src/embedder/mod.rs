@@ -19,6 +19,7 @@ pub mod metrics;
 pub mod routing;
 pub mod token_cache;
 pub mod vectorizer_client;
+pub mod vectorizer_prune;
 pub mod worker;
 
 pub use chunker::{Chunk, ChunkMetadata, ChunkSource, Chunker};
