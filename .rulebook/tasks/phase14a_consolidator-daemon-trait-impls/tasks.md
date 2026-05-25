@@ -19,7 +19,7 @@
 
 ## 4. Health endpoint + dashboard
 - [x] 4.1 `cortex-api /v1/health/consolidator` returns `{ session_grain: { last_run, last_status }, topic_grain: ..., decision_trace_grain: ... }`. (Endpoint at `cortex-api/src/health/consolidator.rs`; pure typed projection through `ConsolidatorHealthSource` trait; default state carries `UnwiredConsolidatorHealthSource` so unrouted boots return all-empty grains until §3 daemon writes `consolidation_reports` rows main.rs can read. Route mounted via `health::consolidator::build_router` merged into the base router. 5 unit tests covering default source, all-empty snapshot, optional-field serde skipping, populated grain round-trip, handler returning source verbatim.)
-- [ ] 4.2 Dashboard `Consolidations` view (already shipped in working tree) consumes the new endpoint and shows last-run + last-status per grain.
+- [x] 4.2 Dashboard `Consolidations` view (already shipped in working tree) consumes the new endpoint and shows last-run + last-status per grain. (`gui/src/views/Consolidations.tsx` now renders a `DaemonHealthPanel` banner above the consolidation list, fed by a new `api.healthConsolidator()` client method polling `/v1/health/consolidator` every 30 s. The panel surfaces per-grain status tag (success → ok / failed → warn / no run → "never"), relative last_run (`Xm ago`, `Xh ago`, `Xd ago` via the local `formatRelative` helper) plus envelopes_emitted + latency_ms when present. Wire types `ConsolidatorHealthReport` + `GrainHealth` added to `gui/src/lib/api.ts` mirroring the Rust shape. `pnpm tsc --noEmit` clean.)
 
 ## 5. Tail (mandatory)
 - [ ] 5.1 Update `docs/specs/15-consolidation.md` + `CHANGELOG.md`.

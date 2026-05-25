@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { DetailDrawer } from "../atoms/DetailDrawer";
 import { Markdown } from "../atoms/Markdown";
 import { Tag } from "../atoms/Tag";
-import { api, type ConsolidationRow } from "../lib/api";
+import { api, type ConsolidationRow, type ConsolidatorHealthReport, type GrainHealth } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
 
 const GRAINS = ["", "session", "topic", "decision_trace"] as const;
@@ -30,6 +30,17 @@ export function ConsolidationsView() {
         grain: grainFilter || undefined,
       }),
     refetchInterval: 60_000,
+    refetchIntervalInBackground: true,
+  });
+
+  // phase14a §4.2 — pulls the daemon-side last-run / last-status
+  // per grain. Surfaced as a banner so operators can tell whether
+  // the daemon has fired recently before reading the consolidation
+  // list itself. Polled every 30 s — the daemon is not a hot path.
+  const { data: daemonHealth } = useQuery({
+    queryKey: [connKey, "consolidator-health"],
+    queryFn: () => api.healthConsolidator(),
+    refetchInterval: 30_000,
     refetchIntervalInBackground: true,
   });
 
@@ -115,6 +126,8 @@ export function ConsolidationsView() {
           sub="raw envelopes summarised"
         />
       </div>
+
+      <DaemonHealthPanel report={daemonHealth} />
 
       {error ? (
         <Empty msg="cortex-api unreachable. Start it with cargo run -p cortex-api." />
@@ -235,6 +248,88 @@ function ConsolidationDrawer({
       )}
     </DetailDrawer>
   );
+}
+
+function DaemonHealthPanel({ report }: { report?: ConsolidatorHealthReport }) {
+  const grains: Array<{ key: string; label: string; data?: GrainHealth }> = [
+    { key: "session", label: "session", data: report?.session_grain },
+    { key: "topic", label: "topic", data: report?.topic_grain },
+    { key: "decision_trace", label: "decision_trace", data: report?.decision_trace_grain },
+  ];
+  return (
+    <div
+      style={{
+        marginTop: 16,
+        padding: "10px 14px",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--bg-2, transparent)",
+        display: "flex",
+        gap: 18,
+        alignItems: "center",
+        flexWrap: "wrap",
+        fontSize: 12,
+      }}
+      title="Daemon-side last-run + last-status per grain (cortex-consolidator). Polled every 30s from /v1/health/consolidator."
+    >
+      <span className="muted" style={{ fontWeight: 600, letterSpacing: 0.4 }}>
+        DAEMON
+      </span>
+      {grains.map((g) => {
+        const last = g.data?.last_run ?? null;
+        const status = g.data?.last_status ?? null;
+        const tone: "ok" | "warn" | "info" | undefined =
+          status === "success" ? "ok" : status === "failed" ? "warn" : undefined;
+        return (
+          <span
+            key={g.key}
+            style={{ display: "flex", gap: 6, alignItems: "baseline" }}
+          >
+            <span className="mono" style={{ color: "var(--fg-2)" }}>
+              {g.label}
+            </span>
+            {status ? (
+              <Tag tone={tone}>{status}</Tag>
+            ) : (
+              <span className="muted">never</span>
+            )}
+            {last ? (
+              <span
+                className="muted mono"
+                style={{ fontSize: 10.5 }}
+                title={last}
+              >
+                {formatRelative(last)}
+              </span>
+            ) : null}
+            {g.data && g.data.envelopes_emitted > 0 ? (
+              <span className="muted" style={{ fontSize: 10.5 }}>
+                · {g.data.envelopes_emitted} env · {g.data.latency_ms}ms
+              </span>
+            ) : null}
+          </span>
+        );
+      })}
+      {!report ? (
+        <span className="muted" style={{ marginLeft: "auto" }}>
+          /v1/health/consolidator unreachable
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function formatRelative(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  const delta = Math.max(0, Date.now() - t);
+  const m = Math.floor(delta / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {

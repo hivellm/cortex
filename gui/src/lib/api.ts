@@ -674,6 +674,11 @@ export const api = {
   // Phase11e — collection / index inventory diff. Renders under
   // the existing extras column in the Health view.
   healthCoverage: () => getJson<CoverageReport>("/v1/health/coverage"),
+  // phase14a §4.2 — consolidator daemon health. Surfaces per-grain
+  // last_run + last_status that the Consolidations view renders as
+  // a daemon-status banner above the consolidation list.
+  healthConsolidator: () =>
+    getJson<ConsolidatorHealthReport>("/v1/health/consolidator"),
 
   // Phase9i — retention dashboard endpoints. `sweeps` is paginated
   // by `limit`; `state` is a compact snapshot. Both are cached via
@@ -961,6 +966,24 @@ export type CoverageReport = {
   families: string[];
   backends: CoverageBackend[];
   overall_severity: "ok" | "warn" | "critical";
+};
+
+/// phase14a §4.1 wire shape of `/v1/health/consolidator`. Mirrors
+/// `cortex_api::health::consolidator::ConsolidatorHealthReport`.
+/// All four fields on `GrainHealth` are independently optional /
+/// defaulted — `last_run` + `last_status` are omitted when no run
+/// has landed yet; the two counters default to zero.
+export type GrainHealth = {
+  last_run?: string;
+  last_status?: string;
+  envelopes_emitted: number;
+  latency_ms: number;
+};
+
+export type ConsolidatorHealthReport = {
+  session_grain: GrainHealth;
+  topic_grain: GrainHealth;
+  decision_trace_grain: GrainHealth;
 };
 
 export type HealthSnapshot = {
