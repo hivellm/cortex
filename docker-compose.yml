@@ -439,6 +439,40 @@ services:
       - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
     restart: unless-stopped
 
+  # phase14a §3.4 — cortex-consolidator daemon. Subscribes to the
+  # Synap trigger stream (`cortex.consolidator.triggers`) and runs
+  # the matching grain (session / topic / decision-trace) per
+  # trigger. Reads the parquet archive + writes producer-checkpoint
+  # rows back to the shared `~/.cortex/archive` bind-mount so the
+  # cortex-api health endpoint (`/v1/health/consolidator`) can read
+  # last-trigger timestamps. Anthropic credentials are picked up
+  # from `ANTHROPIC_API_KEY`; without one the daemon falls back to
+  # the `claude` CLI subprocess path (matches `run-session`).
+  cortex-consolidator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CORTEX_GIT_SHA: ${CORTEX_GIT_SHA:-unknown}
+        CORTEX_GIT_DIRTY: ${CORTEX_GIT_DIRTY:-false}
+      target: cortex-consolidator
+    image: cortex/consolidator:dev
+    container_name: cortex-consolidator
+    depends_on:
+      synap: { condition: service_healthy }
+      cortex-ingestion: { condition: service_started }
+    networks: [cortex-net]
+    environment:
+      SYNAP_BASE_URL: http://synap:15500
+      CORTEX_INGESTION_URL: http://cortex-ingestion:17010
+      CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
+      CORTEX_METADATA_DB: /var/lib/cortex/metadata.sqlite
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_API_URL: ${ANTHROPIC_API_URL:-}
+    volumes:
+      - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
+    restart: unless-stopped
+
 # NOTE: `cortex-adapter-claude` deliberately runs OUTSIDE this
 # compose file. It listens on a unix socket (`~/.cortex/adapter-claude.sock`
 # on Linux/macOS) or named pipe (`\\.\pipe\cortex-adapter-claude` on

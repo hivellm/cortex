@@ -19,11 +19,20 @@
 //! the producer plan + status. The `estimate` subcommand is fully working.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use cortex_workers::consolidator::cost_telemetry::CostBudget;
+use cortex_workers::consolidator::consolidator_trait::ConsolidatorCtx;
+use cortex_workers::consolidator::cost_telemetry::{CostBudget, CostLedger};
+use cortex_workers::consolidator::daemon::{
+    ConsolidatorDaemon, PendingTrigger, TriggerSource, TRIGGER_STREAM,
+};
+use cortex_workers::consolidator::grains::{
+    LiveDecisionTraceFetcher, LiveSessionInputFetcher, LiveTopicClusterFetcher,
+    DecisionTraceGrain, SessionGrain, TopicGrain,
+};
 use cortex_workers::consolidator::metrics::{
     metrics as consolidator_metrics, REASON_CLIENT_BUILD, REASON_ENV_UNSET, REASON_NETWORK,
     REASON_NON_2XX,
@@ -36,8 +45,13 @@ use cortex_workers::consolidator::summariser::{
     cost_cents, AnthropicSummariser, Summariser, SummariserKind,
 };
 use cortex_workers::consolidator::summariser_cli::ClaudeCliSummariser;
+use cortex_workers::producer::ProducerMetadataHandle;
 use serde::Serialize;
 use serde_json::json;
+use std::sync::atomic::{AtomicU64, Ordering};
+use synap_sdk::stream::StreamManager;
+use synap_sdk::{SynapClient, SynapConfig};
+use tokio::sync::{Notify, Mutex as TokioMutex};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -152,6 +166,24 @@ enum Command {
         #[arg(long, default_value_t = false)]
         all: bool,
     },
+    /// Phase14a §3 — long-running consolidator daemon. Subscribes
+    /// to the trigger stream, dispatches each trigger to the
+    /// matching grain, writes a producer-checkpoint row per
+    /// successful run, and exits cleanly on SIGTERM / Ctrl-C
+    /// (finishes the in-flight grain first).
+    Daemon {
+        /// Synap base URL the daemon pulls triggers from.
+        /// Defaults to `$SYNAP_BASE_URL` then `http://127.0.0.1:18020`.
+        #[arg(long, env = "SYNAP_BASE_URL")]
+        synap_url: Option<String>,
+        /// Stream name to subscribe to. Defaults to the canonical
+        /// `cortex.consolidator.triggers` constant.
+        #[arg(long, default_value = TRIGGER_STREAM)]
+        stream: String,
+        /// Idle-poll wait when the trigger queue is empty (ms).
+        #[arg(long, default_value_t = 250)]
+        idle_poll_ms: u64,
+    },
 }
 
 #[tokio::main]
@@ -192,6 +224,11 @@ async fn main() -> Result<()> {
         Command::RunTopic { repo } => run_topic(&cli, repo).await,
         Command::RunDecision { decision_id } => run_decision(&cli, decision_id).await,
         Command::Nightly { dry_run, all } => run_nightly(&cli, *dry_run, *all).await,
+        Command::Daemon {
+            synap_url,
+            stream,
+            idle_poll_ms,
+        } => run_daemon(&cli, synap_url.clone(), stream.clone(), *idle_poll_ms).await,
     }
 }
 
@@ -1195,6 +1232,242 @@ fn render_text(r: &EstimateReport) {
     println!("Operator must approve the USD total before the actual run is triggered.");
 }
 
+// ============================================================================
+// Phase14a §3.3 — daemon subcommand + Synap trigger source + signal handler
+// ============================================================================
+
+/// Parse one raw Synap event payload into a [`Trigger`]. The wire
+/// envelope is a JSON object with a `kind` discriminator + the
+/// per-variant payload. Unknown kinds surface as an error so the
+/// daemon does not silently drop unsupported events.
+fn parse_trigger_event(payload: &serde_json::Value) -> anyhow::Result<Trigger> {
+    let kind = payload
+        .get("kind")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("trigger envelope missing `kind` field"))?;
+    match kind {
+        "session_end" => {
+            let session_id = payload
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("session_end trigger missing `session_id`"))?
+                .to_string();
+            Ok(Trigger::SessionEnd { session_id })
+        }
+        "nightly_topic" => {
+            let repo = payload
+                .get("repo")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("nightly_topic trigger missing `repo`"))?
+                .to_string();
+            Ok(Trigger::NightlyTopic { repo })
+        }
+        "decision_landed" => {
+            let decision_id = payload
+                .get("decision_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("decision_landed trigger missing `decision_id`"))?
+                .to_string();
+            let force_deep = payload
+                .get("force_deep")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            Ok(Trigger::DecisionLanded {
+                decision_id,
+                force_deep,
+            })
+        }
+        other => Err(anyhow::anyhow!(
+            "unknown consolidator trigger kind: {other}"
+        )),
+    }
+}
+
+/// Synap-backed trigger source. Pulls events from `stream` via the
+/// 0.11 pull API with a local offset cursor (no server-side
+/// consumer group available yet — same shape as the embedder).
+struct SynapTriggerSource {
+    streams: StreamManager,
+    stream: String,
+    cursor: AtomicU64,
+}
+
+impl SynapTriggerSource {
+    fn new(streams: StreamManager, stream: String) -> Self {
+        Self {
+            streams,
+            stream,
+            cursor: AtomicU64::new(0),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl TriggerSource for SynapTriggerSource {
+    async fn next_trigger(&self) -> anyhow::Result<Option<PendingTrigger>> {
+        let offset = self.cursor.load(Ordering::Relaxed);
+        let events = self
+            .streams
+            .consume(&self.stream, Some(offset), Some(1))
+            .await
+            .map_err(|e| anyhow::anyhow!("synap consume {}: {e}", self.stream))?;
+        let Some(event) = events.into_iter().next() else {
+            return Ok(None);
+        };
+        match parse_trigger_event(&event.data) {
+            Ok(trigger) => Ok(Some(PendingTrigger {
+                offset: event.offset,
+                trigger,
+            })),
+            Err(err) => {
+                tracing::warn!(
+                    stream = %self.stream,
+                    offset = event.offset,
+                    error = %err,
+                    "consolidator daemon: dropping malformed trigger envelope"
+                );
+                // Advance past the malformed event so the loop does
+                // not infinitely retry it. Surfacing as Idle keeps
+                // the daemon polling the next message on the next
+                // tick.
+                self.cursor.fetch_max(event.offset + 1, Ordering::AcqRel);
+                Ok(None)
+            }
+        }
+    }
+
+    async fn ack(&self, offset: u64) -> anyhow::Result<()> {
+        // `fetch_max` keeps the cursor monotonic even if multiple
+        // dispatchers race.
+        self.cursor.fetch_max(offset + 1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+/// Wait for SIGTERM / SIGINT (Ctrl-C). Returns once any one fires.
+/// Cross-platform: `tokio::signal::ctrl_c` handles SIGINT everywhere;
+/// the SIGTERM branch is unix-only and noop on Windows.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::error!(error = %e, "consolidator daemon: ctrl_c install failed");
+        }
+    };
+
+    #[cfg(unix)]
+    let sigterm = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "consolidator daemon: sigterm install failed");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(not(unix))]
+    let sigterm = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("consolidator daemon: ctrl_c received, shutting down");
+        }
+        _ = sigterm => {
+            tracing::info!("consolidator daemon: sigterm received, shutting down");
+        }
+    }
+}
+
+async fn run_daemon(
+    cli: &Cli,
+    synap_url: Option<String>,
+    stream: String,
+    idle_poll_ms: u64,
+) -> Result<()> {
+    let base = synap_url
+        .or_else(|| std::env::var("SYNAP_BASE_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:18020".into());
+    println!("cortex-consolidator daemon");
+    println!("  synap : {base}");
+    println!("  stream: {stream}");
+    println!("  idle  : {idle_poll_ms} ms");
+
+    let synap_config = SynapConfig::new(&base);
+    let client = SynapClient::new(synap_config)
+        .map_err(|e| anyhow::anyhow!("synap client build: {e}"))?;
+    let streams = client.stream();
+    let source: Arc<dyn TriggerSource> =
+        Arc::new(SynapTriggerSource::new(streams, stream.clone()));
+
+    let archive_root = cli.resolve_archive_root()?;
+    let (haiku, opus) = build_summarisers(cli)?;
+    let orchestrator = Arc::new(Orchestrator::new(haiku, opus).with_budget(budget_from(cli)));
+
+    let session_fetcher = Arc::new(LiveSessionInputFetcher::new(LiveSessionSource::new(
+        &archive_root,
+    )));
+    let topic_fetcher = Arc::new(LiveTopicClusterFetcher::new(LiveTopicSource::new(
+        &archive_root,
+        0,
+    )));
+    let decision_fetcher = Arc::new(LiveDecisionTraceFetcher::new(LiveDecisionTraceSource::new(
+        &archive_root,
+    )));
+
+    let session_grain = Arc::new(SessionGrain::new(orchestrator.clone(), session_fetcher));
+    let topic_grain = Arc::new(TopicGrain::new(orchestrator.clone(), topic_fetcher));
+    let decision_grain = Arc::new(DecisionTraceGrain::new(orchestrator, decision_fetcher));
+
+    let cost = Arc::new(std::sync::Mutex::new(CostLedger::default()));
+    let ctx = ConsolidatorCtx::with_ledger(chrono::Utc::now(), cost);
+
+    let metadata: ProducerMetadataHandle = {
+        let store = if let Some(path) = &cli.metadata_db {
+            cortex_storage::MetadataStore::open(path)
+                .map_err(|e| anyhow::anyhow!("open metadata db {}: {e}", path.display()))?
+        } else {
+            cortex_storage::MetadataStore::open_in_memory()
+                .map_err(|e| anyhow::anyhow!("open in-memory metadata db: {e}"))?
+        };
+        Arc::new(TokioMutex::new(store))
+    };
+
+    let daemon = ConsolidatorDaemon::new(
+        session_grain,
+        topic_grain,
+        decision_grain,
+        source,
+        ctx,
+        metadata,
+    )
+    .with_idle_poll(Duration::from_millis(idle_poll_ms));
+
+    let shutdown = Arc::new(Notify::new());
+    let signal_handle = shutdown.clone();
+    let signal_task = tokio::spawn(async move {
+        shutdown_signal().await;
+        signal_handle.notify_one();
+    });
+
+    let report = daemon
+        .run_forever(async move { shutdown.notified().await })
+        .await?;
+
+    // The signal task is no longer needed once the daemon has
+    // returned; abort + drop in case ctrl_c never fired (e.g. the
+    // daemon stopped on a fatal Synap error).
+    signal_task.abort();
+    let _ = signal_task.await;
+
+    println!(
+        "  status: exited cleanly — dispatched={} failed={} idle_polls={}",
+        report.dispatched, report.failed, report.idle_polls
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1496,6 +1769,119 @@ mod tests {
         assert!(first["fallback_at"].is_string());
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
         assert_eq!(second["reason"].as_str(), Some("non_2xx"));
+    }
+
+    #[test]
+    fn cli_parses_daemon_subcommand_with_defaults() {
+        let cli = Cli::try_parse_from(["cortex-consolidator", "daemon"]).expect("parse");
+        match cli.command {
+            Command::Daemon {
+                synap_url,
+                stream,
+                idle_poll_ms,
+            } => {
+                assert!(synap_url.is_none());
+                assert_eq!(stream, "cortex.consolidator.triggers");
+                assert_eq!(idle_poll_ms, 250);
+            }
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_parses_daemon_subcommand_with_overrides() {
+        let cli = Cli::try_parse_from([
+            "cortex-consolidator",
+            "daemon",
+            "--synap-url",
+            "http://example.test:1234",
+            "--stream",
+            "alt.stream",
+            "--idle-poll-ms",
+            "1000",
+        ])
+        .expect("parse");
+        match cli.command {
+            Command::Daemon {
+                synap_url,
+                stream,
+                idle_poll_ms,
+            } => {
+                assert_eq!(synap_url.as_deref(), Some("http://example.test:1234"));
+                assert_eq!(stream, "alt.stream");
+                assert_eq!(idle_poll_ms, 1000);
+            }
+            other => panic!("wrong subcommand: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_trigger_event_recognises_session_end() {
+        let raw = serde_json::json!({
+            "kind": "session_end",
+            "session_id": "01HXSESS00000000000000000A",
+        });
+        match parse_trigger_event(&raw).expect("parse") {
+            Trigger::SessionEnd { session_id } => {
+                assert_eq!(session_id, "01HXSESS00000000000000000A");
+            }
+            other => panic!("wrong trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_trigger_event_recognises_nightly_topic() {
+        let raw = serde_json::json!({"kind": "nightly_topic", "repo": "cortex"});
+        match parse_trigger_event(&raw).expect("parse") {
+            Trigger::NightlyTopic { repo } => assert_eq!(repo, "cortex"),
+            other => panic!("wrong trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_trigger_event_recognises_decision_landed_with_force_deep_default_false() {
+        let raw = serde_json::json!({"kind": "decision_landed", "decision_id": "DEC-1"});
+        match parse_trigger_event(&raw).expect("parse") {
+            Trigger::DecisionLanded {
+                decision_id,
+                force_deep,
+            } => {
+                assert_eq!(decision_id, "DEC-1");
+                assert!(!force_deep);
+            }
+            other => panic!("wrong trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_trigger_event_honours_explicit_force_deep_flag() {
+        let raw = serde_json::json!({
+            "kind": "decision_landed",
+            "decision_id": "DEC-2",
+            "force_deep": true,
+        });
+        match parse_trigger_event(&raw).expect("parse") {
+            Trigger::DecisionLanded { force_deep, .. } => assert!(force_deep),
+            other => panic!("wrong trigger: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_trigger_event_rejects_unknown_kind() {
+        let raw = serde_json::json!({"kind": "wild_card"});
+        let err = parse_trigger_event(&raw).expect_err("unknown kind must error");
+        assert!(format!("{err:#}").contains("unknown consolidator trigger kind"));
+    }
+
+    #[test]
+    fn parse_trigger_event_rejects_missing_required_fields() {
+        let raw = serde_json::json!({"kind": "session_end"});
+        let err = parse_trigger_event(&raw).expect_err("missing session_id");
+        assert!(format!("{err:#}").contains("session_id"));
+
+        let raw = serde_json::json!({});
+        let err = parse_trigger_event(&raw).expect_err("missing kind");
+        assert!(format!("{err:#}").contains("kind"));
     }
 
     #[test]

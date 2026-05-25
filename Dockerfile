@@ -187,3 +187,19 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=6 \
     CMD curl -fsS http://127.0.0.1:17030/healthz >/dev/null || exit 1
 ENTRYPOINT ["/usr/local/bin/cortex-claude-archive"]
 CMD ["tail", "--root", "/data/claude-projects", "--projects-only", "--sink", "archive", "--archive-root", "/var/lib/cortex/archive"]
+
+# phase14a §3.4 — long-running daemon that subscribes to the Synap
+# trigger stream (`cortex.consolidator.triggers`) and dispatches each
+# trigger to the matching grain (Session / Topic / DecisionTrace).
+# The daemon does not own an HTTP surface itself — its health view
+# lives on cortex-api's `/v1/health/consolidator` (phase14a §4.1).
+# The container-side healthcheck therefore probes process liveness;
+# operators read run quality through the cortex-api endpoint.
+FROM runtime-base AS cortex-consolidator
+COPY --from=builder /out/cortex-consolidator /usr/local/bin/cortex-consolidator
+RUN apt-get update && apt-get install -y --no-install-recommends procps \
+    && rm -rf /var/lib/apt/lists/*
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=6 \
+    CMD pgrep -f cortex-consolidator >/dev/null || exit 1
+ENTRYPOINT ["/usr/local/bin/cortex-consolidator"]
+CMD ["daemon"]
