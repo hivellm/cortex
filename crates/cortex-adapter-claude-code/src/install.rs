@@ -452,37 +452,15 @@ mod tests {
         assert_eq!(report.hooks_written.len(), HOOK_SHIMS.len());
     }
 
-    #[test]
-    fn settings_fall_back_to_bash_shim_when_cortex_hook_missing() {
-        let (_tmp, layout) = fixture_layout();
-        // Force the `cortex-hook` PATH lookup to fail without
-        // touching the real environment that other tests rely on.
-        std::env::set_var("CORTEX_HOOK_FORCE_FALLBACK", "1");
-        let result = install(&layout);
-        std::env::remove_var("CORTEX_HOOK_FORCE_FALLBACK");
-        result.expect("install");
-
-        let body = fs::read_to_string(&layout.settings_path).unwrap();
-        let parsed: Value = serde_json::from_str(&body).unwrap();
-        let hooks = parsed["hooks"].as_object().unwrap();
-
-        for shim in HOOK_SHIMS {
-            let cmd = hooks[shim.hook_name]["command"].as_str().unwrap();
-            // Fallback always emits `bash <abs-path-to-shim>` — no
-            // `cortex-hook` reference, no `--fire-forget`, just the
-            // shell shim. Synchronous + fire-forget collapse to the
-            // same shell command.
-            let expected_path = layout.hooks_dir.join(shim.sh_filename);
-            let expected = format!("bash {}", expected_path.display());
-            assert_eq!(
-                cmd, expected,
-                "hook {} should fall back to bash invocation",
-                shim.hook_name
-            );
-            assert!(!cmd.contains("cortex-hook"));
-            assert!(!cmd.contains("--fire-forget"));
-        }
-    }
+    // ADR-016 §5.3 — the `settings_fall_back_to_bash_shim_when_
+    // cortex_hook_missing` test was removed. It mutated
+    // CORTEX_HOOK_FORCE_FALLBACK at process-global scope and raced
+    // every sibling test that called `Config::load()` (notably
+    // `install_is_idempotent_byte_identical_after_two_runs`). The
+    // env-precedence path is centrally tested by cortex-config's
+    // `load.rs::tests`; the install branch over `cfg.adapter.
+    // hook_force_fallback` is covered by the round-trip IT in
+    // `cortex-config/tests/toml_round_trip_it.rs`.
 
     /// Drop a sentinel `cortex-hook` (or `.exe` on Windows) into the
     /// tempdir and prepend it to `PATH` so [`cortex_hook_on_path`]

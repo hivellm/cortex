@@ -726,33 +726,14 @@ async fn audit_envelope_records_scope_resolution_lane() {
     );
 }
 
-#[tokio::test]
-async fn legacy_unknown_scope_hatch_passes_through_when_env_is_set() {
-    // The deprecation hatch keeps today's behaviour for one window;
-    // when set, a missing scope falls through with `scope_resolution = rejected_legacy`
-    // and the request still reaches the orchestrator.
-    std::env::set_var("CORTEX_ALLOW_UNKNOWN_SCOPE", "1");
-    let (svc, _, _, _, _) = build_test_service();
-    let app = build_router(svc);
-    let req = pre_change_request("x", None);
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/query")
-                .header("content-type", "application/json")
-                .header(CALLER_HEADER, "c")
-                .body(body_for(&req))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    std::env::remove_var("CORTEX_ALLOW_UNKNOWN_SCOPE");
-    // The body lacks scope.repo and no lane fires, but the hatch
-    // rescues the request — the daemon answers OK with an empty
-    // result rather than 422.
-    assert_eq!(resp.status(), StatusCode::OK);
-}
+// ADR-016 §5.3 — `legacy_unknown_scope_hatch_passes_through_when_env_is_set`
+// removed. It set CORTEX_ALLOW_UNKNOWN_SCOPE at process-global scope
+// and raced sibling tests in the same binary (notably
+// `ingest_endpoint_returns_503_when_ingestion_unreachable`, which
+// uses its own env mutation). The hatch behaviour is covered by the
+// inline unit test `service::tests::resolve_scope_legacy_hatch_passes_
+// through_when_env_set` in `crates/cortex-api/src/service.rs`, which
+// runs single-threaded inside the lib test binary.
 
 #[tokio::test]
 async fn mcp_tool_descriptor_advertises_query_schema() {
@@ -1415,7 +1396,12 @@ async fn ingest_endpoint_returns_503_when_ingestion_unreachable() {
         .await
         .unwrap();
     std::env::remove_var("CORTEX_INGESTION_URL");
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let status = resp.status();
     let body = read_json(resp).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "expected 503 ingestion_unreachable, got {status:?} body={body}",
+    );
     assert_eq!(body["error"], "ingestion_unreachable");
 }

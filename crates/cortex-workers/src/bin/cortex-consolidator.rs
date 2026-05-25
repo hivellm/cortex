@@ -1394,23 +1394,16 @@ mod tests {
         assert_eq!(p, PathBuf::from("D:/explicit/fallback.jsonl"));
     }
 
-    #[test]
-    fn fallback_path_falls_back_to_cortex_home_when_override_empty() {
-        let saved_override = std::env::var_os("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
-        let saved_home = std::env::var_os("CORTEX_HOME");
-        std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", "");
-        std::env::set_var("CORTEX_HOME", "D:/cortex-root");
-        let p = fallback_path().expect("fallback path resolved");
-        match saved_override {
-            Some(v) => std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", v),
-            None => std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE"),
-        }
-        match saved_home {
-            Some(v) => std::env::set_var("CORTEX_HOME", v),
-            None => std::env::remove_var("CORTEX_HOME"),
-        }
-        assert_eq!(p, PathBuf::from("D:/cortex-root/consolidations.jsonl"));
-    }
+    // ADR-016 §5.3 — `fallback_path_falls_back_to_cortex_home_when_
+    // override_empty` removed. It mutated CORTEX_HOME +
+    // CORTEX_CONSOLIDATIONS_FALLBACK_FILE at process-global scope and
+    // raced the sibling rotate / append tests. The
+    // `fallback_path()` helper's resolution order is centrally tested
+    // by cortex-config's `load.rs::tests::empty_env_value_is_
+    // treated_as_unset` (which pins the "empty-env-falls-through-to-
+    // default" semantic) plus the round-trip IT in
+    // `cortex-config/tests/toml_round_trip_it.rs` that asserts
+    // ingestion.home loads from TOML.
 
     #[test]
     fn append_publish_fallback_rotates_when_threshold_crossed() {

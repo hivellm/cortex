@@ -728,19 +728,13 @@ impl Default for PreThinkingConfig {
 // -------------------------------------------------------------
 
 /// Doctor subcommand knobs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DoctorConfig {
     /// Enable the 100k-row budget gate test (expensive; default `false`).
     /// Set to `true` in CI to enforce the §4.2 latency contract.
     /// Env: `CORTEX_DOCTOR_BENCH`.
     #[serde(default)]
     pub bench: bool,
-}
-
-impl Default for DoctorConfig {
-    fn default() -> Self {
-        Self { bench: false }
-    }
 }
 
 // -------------------------------------------------------------

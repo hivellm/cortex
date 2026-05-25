@@ -83,6 +83,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ),
     ("CORTEX_DASHBOARD_MEMORY_TAIL", "/dashboard/memory_tail"),
     ("CORTEX_DASHBOARD_WATCH", "/dashboard/watch"),
+    ("CORTEX_DOCTOR_BENCH", "/doctor/bench"),
     (
         "CORTEX_EMBEDDER_CHUNKER_CONCURRENCY",
         "/embedder/chunker_concurrency",
@@ -147,6 +148,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "/meili/index_low_signal_tool_calls",
     ),
     ("CORTEX_INGESTION_BIND", "/ingestion/bind"),
+    ("CORTEX_INGESTION_URL", "/ingestion/ingestion_url"),
     ("CORTEX_MEILI_REFRESH_SECS", "/dashboard/meili_refresh_secs"),
     ("CORTEX_METADATA_DB", "/ingestion/metadata_db"),
     ("CORTEX_NEXUS_API_KEY", "/nexus/nexus_api_key"),

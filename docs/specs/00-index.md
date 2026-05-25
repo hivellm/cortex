@@ -25,6 +25,7 @@
 | 17 | [Additional adapters — Cursor, Codex, Gemini](17-additional-adapters.md) | 🟡 | 10           | §5.1                         |
 | 18 | [Claude Code plugin — MCP server + commands + skills](18-claude-code-plugin.md) | 🟢 | 10, 11, 12 | §5.1, §8         |
 | 20 | [MCP tool surface registry](20-mcp-tool-surface.md)             |   🟢   | 11, 12, 16, 18    | §5.1, §8                     |
+| 26 | [Typed Config crate (ADR-016)](26-cortex-config.md)             |   🟢   | all crates        | §Configuration               |
 
 ## Spec format
 

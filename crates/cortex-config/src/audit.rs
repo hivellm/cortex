@@ -50,7 +50,13 @@ pub fn audit(crates_root: &Path) -> Vec<EnvVarUsage> {
     // Returns the env name in capture group 1. The shape's
     // bounded enough that a manual Aho-Corasick scan would not
     // be measurably faster on a 100-file workspace.
-    let re = Regex::new(r#"\benv::var(?:_os)?\(\s*"(CORTEX_[A-Z0-9_]+)""#)
+    // ADR-016 §4.3 — match `env::var(` only, NOT `env::var_os(`. The
+    // §3.6 grep gate uses the same shape (`std::env::var\(\"CORTEX_`).
+    // `env::var_os` is the explicit "save-state" idiom that lets
+    // `#[cfg(test)]` blocks snapshot the operator env without
+    // tripping the migration audit (the actual runtime resolution
+    // already goes through `cortex_config::Config::load()`).
+    let re = Regex::new(r#"\benv::var\(\s*"(CORTEX_[A-Z0-9_]+)""#)
         .expect("env-var audit regex compiles");
 
     let mut out: Vec<EnvVarUsage> = Vec::new();
@@ -169,7 +175,11 @@ mod tests {
     }
 
     #[test]
-    fn flags_env_var_and_env_var_os_shapes() {
+    fn flags_env_var_shape_and_ignores_env_var_os() {
+        // ADR-016 §4.3 — `env::var_os` is the explicit "save-state"
+        // idiom for `#[cfg(test)]` env-mutation tests and is NOT
+        // flagged by the audit. The §3.6 grep gate uses the same
+        // narrow `env::var\(` regex so both surfaces agree.
         let dir = tempdir().unwrap();
         write(
             dir.path(),
@@ -178,7 +188,7 @@ mod tests {
         );
         let report = audit(dir.path());
         let names: Vec<&str> = report.iter().map(|u| u.env_name.as_str()).collect();
-        assert_eq!(names, vec!["CORTEX_A", "CORTEX_B"]);
+        assert_eq!(names, vec!["CORTEX_A"]);
     }
 
     #[test]

@@ -75,7 +75,7 @@ pub struct IngestResponse {
 /// Phase10j — capture handler. Validates, builds the envelope, and
 /// forwards to `cortex-ingestion`.
 pub async fn handle_ingest(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
     Json(req): Json<IngestRequest>,
 ) -> Response {
     // 1. Validate body.
@@ -164,9 +164,11 @@ pub async fn handle_ingest(
     }
 
     // 5. Forward to cortex-ingestion.
-    let upstream = cortex_config::Config::load()
-        .ok()
-        .and_then(|c| c.ingestion.ingestion_url)
+    let upstream = state
+        .cfg
+        .ingestion
+        .ingestion_url
+        .clone()
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_INGESTION_URL.to_string());
     let url = format!("{}/v1/events", upstream.trim_end_matches('/'));
