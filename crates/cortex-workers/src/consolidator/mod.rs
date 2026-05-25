@@ -38,6 +38,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[path = "consolidator_trait.rs"]
+pub mod consolidator_trait;
 pub mod cost_telemetry;
 pub mod metrics;
 pub mod orchestrator;
@@ -47,6 +49,10 @@ pub mod source;
 pub mod summariser;
 pub mod summariser_cli;
 pub mod templates;
+
+pub use consolidator_trait::{
+    ConsolidationReport, Consolidator, ConsolidatorCtx, ConsolidatorError, TriggerLabel,
+};
 
 pub use source::{LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError};
 

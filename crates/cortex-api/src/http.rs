@@ -191,6 +191,12 @@ pub fn build_router_with_auth_and_cfg(
     router = router.merge(crate::decision_chain::build_router(
         crate::decision_chain::DecisionChainState::default(),
     ));
+    // phase14a §4.1 — consolidator health endpoint. Default state
+    // carries the honest-empty source until the daemon (phase14a
+    // §3) writes `consolidation_reports` rows main.rs can read.
+    router = router.merge(crate::health::consolidator::build_router(
+        crate::health::consolidator::ConsolidatorHealthState::default(),
+    ));
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
         // alongside the dashboard routes. Both endpoints share the

@@ -31,6 +31,7 @@
 //! Sibling modules live under `crates/cortex-api/src/health/*.rs`
 //! (currently `coverage` for the `/v1/health/coverage` endpoint).
 
+pub mod consolidator;
 pub mod coverage;
 
 use std::collections::BTreeMap;
