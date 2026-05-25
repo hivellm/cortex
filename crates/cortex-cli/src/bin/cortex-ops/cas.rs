@@ -90,8 +90,8 @@ pub(super) fn cas_vacuum(
                 started_at,
                 "success",
                 cortex_cli::ops::sweep_bookkeeping::SweepStageStats {
-                    bytes_reclaimed: report.bytes_reclaimed as u64,
-                    records_dropped: report.blobs_dropped as u64,
+                    bytes_reclaimed: report.bytes_reclaimed,
+                    records_dropped: report.blobs_dropped,
                     extras,
                     ..Default::default()
                 },

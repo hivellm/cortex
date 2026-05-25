@@ -26,11 +26,7 @@ impl GrainCost {
     /// Mean cost per consolidation in cents. Returns `0` when no
     /// consolidations have been produced yet.
     pub fn mean_cost_cents(&self) -> u32 {
-        if self.consolidations == 0 {
-            0
-        } else {
-            self.cost_cents / self.consolidations
-        }
+        self.cost_cents.checked_div(self.consolidations).unwrap_or(0)
     }
 }
 

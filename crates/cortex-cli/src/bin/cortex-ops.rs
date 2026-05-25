@@ -684,7 +684,7 @@ enum Command {
     /// Phase8d — config-coherence audit. Read-only static analysis
     /// of every config surface (`.env`, `~/.cortex/adapter.toml`,
     /// `cortex-plugin/.mcp.json`, `cortex-plugin/hooks/hooks.json`)
-    /// + cross-checks (e.g. adapter.endpoint must match
+    /// plus cross-checks (e.g. adapter.endpoint must match
     /// CORTEX_INGESTION_URL). Exit codes: `0` all ok, `1` any warn,
     /// `2` any critical.
     DoctorConfig {

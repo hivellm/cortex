@@ -287,8 +287,10 @@ pub async fn run_turn_digest(
     turns: Vec<Turn>,
 ) -> Result<DigestReport, DigestError> {
     let buckets = bucketize(plan, turns);
-    let mut report = DigestReport::default();
-    report.examined = buckets.len() as u64;
+    let mut report = DigestReport {
+        examined: buckets.len() as u64,
+        ..DigestReport::default()
+    };
     for bucket in buckets {
         // Budget guard before even calling `lookup_existing` —
         // an idempotence-only run still pays for the lookup, but

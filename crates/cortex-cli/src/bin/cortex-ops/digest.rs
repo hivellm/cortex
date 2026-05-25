@@ -8,6 +8,7 @@ use std::process::ExitCode;
 ///    `cortex-<repo>-turns` Meili index filtered by `kind=turn`,
 ///    runs each bucket through `cortex-ingestion` + (when paired
 ///    with `--purge-originals`) `cortex-api /v1/admin/forget`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn turn_digest(
     time_travel: Option<String>,
     dry_run: bool,
@@ -328,16 +329,17 @@ pub(super) fn turn_digest(
 /// phase11w — `cortex-ops tool-call-digest`. Two execution modes:
 ///
 /// 1. **Synthetic preview** (default, `--apply` off) — drives an
-///    in-process backend with a deterministic suite (6 Bash + 5 Read
-///    + 4 Edit, all 60 d old). Lets operators verify the
+///    in-process backend with a deterministic suite (6 Bash, 5 Read,
+///    and 4 Edit, all 60 d old). Lets operators verify the
 ///    `(repo, year_week, tool)` bucketisation contract without
 ///    touching live state.
 /// 2. **Live** (`--apply` on) — paginates Meili's `cortex_tool_calls`
 ///    index for everything older than the cutoff, runs each bucket
-///    through the live `cortex-ingestion` + (when paired with
-///    `--purge-originals`) `cortex-api /v1/admin/forget` cascade.
-///    The cron schedule (`retention.tool_call_digest`) ships this
-///    flag set.
+///    through the live `cortex-ingestion` (paired with
+///    `--purge-originals` for the `cortex-api /v1/admin/forget`
+///    cascade). The cron schedule (`retention.tool_call_digest`)
+///    ships this flag set.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn tool_call_digest(
     time_travel: Option<String>,
     dry_run: bool,
@@ -346,7 +348,7 @@ pub(super) fn tool_call_digest(
     apply: bool,
     purge_originals: bool,
     max_records: usize,
-    page_size: u32,
+    _page_size: u32,
     age_days: Option<i64>,
     min_bucket_size: Option<usize>,
     json: bool,

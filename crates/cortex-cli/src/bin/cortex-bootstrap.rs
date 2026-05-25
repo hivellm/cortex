@@ -379,12 +379,11 @@ fn print_summary_table(rows: &[RunSummary]) {
         .max(4);
     eprintln!();
     eprintln!(
-        "{:<id_width$}  {:>10}  {:>10}  {:>10}  {}",
+        "{:<id_width$}  {:>10}  {:>10}  {:>10}  status",
         "repo",
         "events",
         "dropped",
         "duration",
-        "status",
         id_width = id_width,
     );
     eprintln!(

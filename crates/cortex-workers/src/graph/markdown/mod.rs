@@ -90,10 +90,7 @@ pub fn parse(source: &str) -> ParsedMarkdown<'_> {
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
     let parser = Parser::new_ext(source, opts);
-    let events: Vec<(Event<'_>, std::ops::Range<usize>)> = parser
-        .into_offset_iter()
-        .map(|(ev, range)| (ev, range))
-        .collect();
+    let events: Vec<(Event<'_>, std::ops::Range<usize>)> = parser.into_offset_iter().collect();
     ParsedMarkdown { source, events }
 }
 
@@ -192,11 +189,12 @@ pub fn slugify(text: &str) -> String {
                 out.push(low);
             }
             prev_dash = false;
-        } else if ch.is_whitespace() || ch == '-' || ch == '_' {
-            if !prev_dash && !out.is_empty() {
-                out.push('-');
-                prev_dash = true;
-            }
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_')
+            && !prev_dash
+            && !out.is_empty()
+        {
+            out.push('-');
+            prev_dash = true;
         }
     }
     while out.ends_with('-') {

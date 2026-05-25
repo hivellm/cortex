@@ -169,7 +169,7 @@ fn prune_old_rotations(path: &Path, keep: usize) -> io::Result<Vec<PathBuf>> {
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
         rotations.push((modified, p));
     }
-    rotations.sort_by(|a, b| b.0.cmp(&a.0)); // newest first
+    rotations.sort_by_key(|r| std::cmp::Reverse(r.0)); // newest first
     let mut pruned = Vec::new();
     for (_, p) in rotations.into_iter().skip(keep) {
         fs::remove_file(&p)?;

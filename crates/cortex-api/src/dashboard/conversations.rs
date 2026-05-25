@@ -148,7 +148,7 @@ pub(super) async fn conversations_list(State(state): State<DashboardState>) -> R
     let mut rows: Vec<ConversationSummary> = by_session
         .into_iter()
         .map(|(session_id, mut bucket)| {
-            bucket.sort_by(|a, b| a.ts.cmp(&b.ts));
+            bucket.sort_by_key(|h| h.ts);
             // Distinct turn_ids — pairs (user envelope + Stop envelope)
             // sharing the same turn_id collapse to one count. Hits
             // without a turn_id (legacy archives pre-Stop-hook) each
@@ -190,7 +190,7 @@ pub(super) async fn conversations_list(State(state): State<DashboardState>) -> R
         })
         .collect();
 
-    rows.sort_by(|a, b| b.last_at_ms.cmp(&a.last_at_ms));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.last_at_ms));
     (StatusCode::OK, Json(rows)).into_response()
 }
 
@@ -295,7 +295,7 @@ pub(super) async fn conversation_detail(
             completed_at_ms: s.completed_at_ms,
         })
         .collect();
-    turns.sort_by(|a, b| a.started_at_ms.cmp(&b.started_at_ms));
+    turns.sort_by_key(|t| t.started_at_ms);
 
     let detail = ConversationDetail {
         session_id,

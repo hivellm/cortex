@@ -619,17 +619,15 @@ pub async fn run_one(
             &next,
         )
         .map_err(|e| RunError::Spawn(format!("record: {e}")))?;
-    if outcome.status == "failed" && new_streak >= 2 {
-        if should_warn(job, now) {
-            let mut warnings = scheduler.warnings.lock().await;
-            warnings.push(RepeatedFailureWarning {
-                name: job.name.clone(),
-                recent_failures: recent_failure_stamps(job, now),
-                last_error: outcome.last_error.clone(),
-            });
-            drop(warnings);
-            let _ = metadata.touch_cron_warning(&job.name, now);
-        }
+    if outcome.status == "failed" && new_streak >= 2 && should_warn(job, now) {
+        let mut warnings = scheduler.warnings.lock().await;
+        warnings.push(RepeatedFailureWarning {
+            name: job.name.clone(),
+            recent_failures: recent_failure_stamps(job, now),
+            last_error: outcome.last_error.clone(),
+        });
+        drop(warnings);
+        let _ = metadata.touch_cron_warning(&job.name, now);
     }
     Ok(outcome)
 }
@@ -657,8 +655,10 @@ pub async fn tick(
 ) -> Result<TickReport, MetadataError> {
     apply_phase9k_schema(metadata.conn())?;
     let due = metadata.select_due_cron_jobs(now)?;
-    let mut report = TickReport::default();
-    report.due = due.len() as u32;
+    let mut report = TickReport {
+        due: due.len() as u32,
+        ..TickReport::default()
+    };
     for job in due {
         match run_one(scheduler, runner, metadata, &job, now).await {
             Ok(out) => match out.status.as_str() {

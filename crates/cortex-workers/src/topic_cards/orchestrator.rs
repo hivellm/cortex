@@ -17,15 +17,16 @@ use std::sync::{Arc, Mutex};
 
 use crate::consolidator::{
     cost_telemetry::{CostBudget, CostLedger},
-    summariser::{Summariser, SummariserError, SummariserKind},
+    summariser::Summariser,
 };
 
 use super::{
-    contradictions::{scan, EvidenceFacts, HydratedEvidence},
+    contradictions::{EvidenceFacts, HydratedEvidence},
     producer::{produce, ProduceInput, ProducedTopicCard, ProducerError},
     synthesiser::TopicCardSynthesiser,
 };
-use cortex_core::events::{EvidenceRef, TopicCardPayload};
+#[cfg(test)]
+use cortex_core::events::TopicCardPayload;
 
 /// Grain label used in the cost ledger for all topic-card charges.
 pub const GRAIN_LABEL: &str = "topic_card";

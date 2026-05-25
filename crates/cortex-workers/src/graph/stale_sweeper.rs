@@ -113,28 +113,25 @@ impl StaleEdgeSweeper {
     /// against an already-clean graph reports zero deletions).
     pub async fn sweep_once(&self) -> Result<SweepReport, GraphClientError> {
         let started = std::time::Instant::now();
-        let mut report = SweepReport::default();
 
         // Pass 1 — version-based retire. Delete every edge stamped
         // with an analyzer_version that does NOT equal the current
         // version. The Cypher `<>` comparison handles both
         // legacy-shape (older string) and missing-version (NULL,
         // never matches `<> $current`).
-        report.edges_deleted_by_version = self.delete_other_versions().await.unwrap_or(0);
-
+        //
         // Pass 2 — hash-based retire is intentionally a no-op in the
         // first cut: it requires a Nexus query that aggregates
         // `:Artifact` nodes per `(repo, path)` and resolves the most
-        // recent content_hash, which is non-trivial Cypher. The
-        // contract here is the public surface; the implementation
-        // lands as a follow-up once the version-based pass proves
-        // stable in production. Until then,
-        // `edges_deleted_by_hash` stays at 0 and the worker's
+        // recent content_hash, which is non-trivial Cypher. Until
+        // then, `edges_deleted_by_hash` stays at 0 and the worker's
         // version-bump on every analyzer release achieves the same
         // soak-clean outcome.
-        report.edges_deleted_by_hash = 0;
-
-        report.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let report = SweepReport {
+            edges_deleted_by_version: self.delete_other_versions().await.unwrap_or(0),
+            edges_deleted_by_hash: 0,
+            duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        };
         Ok(report)
     }
 

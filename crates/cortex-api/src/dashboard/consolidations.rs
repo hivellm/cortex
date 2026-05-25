@@ -136,7 +136,10 @@ impl ConsolidationFilter {
 /// Source the consolidations handler reads from. Defaults to the
 /// in-process Meili lane (`MeiliConsolidationSource`); tests
 /// substitute a fixture implementation so the projection logic is
-/// exercised without Meili.
+/// exercised without Meili. The live handler reads the lane
+/// directly today; the trait is the typed surface for future
+/// dependency-injection of alternative backends.
+#[allow(dead_code)]
 #[async_trait::async_trait]
 pub trait ConsolidationReportSource: Send + Sync {
     /// Return rows that match `filter`, sorted newest-first.

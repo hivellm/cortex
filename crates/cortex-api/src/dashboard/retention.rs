@@ -294,10 +294,9 @@ pub(super) async fn retention_state(State(state): State<DashboardState>) -> Resp
     // (`Option::None`); disabled rows surface as
     // `Some("disabled")`. Handler-side missing-state literals are
     // gone — see ADR-014 + the CI grep gate.
-    let (cron_rows, last_per_sweep): (
-        std::collections::HashMap<&'static str, cortex_storage::CronJob>,
-        std::collections::HashMap<String, (Option<String>, String)>,
-    ) = match &state.metadata {
+    type CronRows = std::collections::HashMap<&'static str, cortex_storage::CronJob>;
+    type LastPerSweep = std::collections::HashMap<String, (Option<String>, String)>;
+    let (cron_rows, last_per_sweep): (CronRows, LastPerSweep) = match &state.metadata {
         Some(handle) => {
             let guard = match handle.lock() {
                 Ok(g) => g,

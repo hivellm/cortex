@@ -46,7 +46,7 @@ pub(super) async fn sessions(State(state): State<DashboardState>) -> Response {
         .into_iter()
         .map(|(session_id, mut bucket)| {
             // Sort oldest → newest so [0] is the earliest event.
-            bucket.sort_by(|a, b| a.ts.cmp(&b.ts));
+            bucket.sort_by_key(|h| h.ts);
             let started_at_ms = bucket.first().map(|h| h.ts).unwrap_or(0);
             let last_event_ms = bucket.last().map(|h| h.ts).unwrap_or(0);
             let duration_ms = (last_event_ms - started_at_ms).max(0);
@@ -86,7 +86,7 @@ pub(super) async fn sessions(State(state): State<DashboardState>) -> Response {
         .collect();
 
     // Sort by most-recent-activity, descending.
-    rows.sort_by(|a, b| b.last_event_ms.cmp(&a.last_event_ms));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.last_event_ms));
     (StatusCode::OK, Json(rows)).into_response()
 }
 

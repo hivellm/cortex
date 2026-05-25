@@ -142,11 +142,14 @@ pub fn memory_dir_for(home: &Path, project_slug: &str) -> PathBuf {
 
 /// Walk `dir` and parse every `*.md` other than `MEMORY.md` (and
 /// anything inside `_archive/`). Files whose frontmatter is missing
+/// One warning row produced by [`read_memory_dir`] — `(path, reason)`.
+pub type MemoryReadWarning = (PathBuf, String);
+
 /// or invalid are returned in the second component so the CLI can
 /// surface them as warnings without dropping them silently.
 pub fn read_memory_dir(
     dir: &Path,
-) -> Result<(Vec<MemoryFile>, Vec<(PathBuf, String)>), DiscoveryError> {
+) -> Result<(Vec<MemoryFile>, Vec<MemoryReadWarning>), DiscoveryError> {
     if !dir.exists() {
         return Err(DiscoveryError::MissingDir(dir.to_path_buf()));
     }

@@ -165,7 +165,7 @@ pub(super) async fn classifications(
         .into_iter()
         .map(|(topic, count)| TopicCount { topic, count })
         .collect();
-    top_topics.sort_by(|a, b| b.count.cmp(&a.count));
+    top_topics.sort_by_key(|t| std::cmp::Reverse(t.count));
     top_topics.truncate(40);
 
     let by_severity: Vec<KindCount> = sev_counts
@@ -180,14 +180,14 @@ pub(super) async fn classifications(
         .into_iter()
         .map(|(repo, count)| RepoCount { repo, count })
         .collect();
-    by_repo.sort_by(|a, b| b.count.cmp(&a.count));
+    by_repo.sort_by_key(|r| std::cmp::Reverse(r.count));
 
     let total = filtered.len() as u64;
 
     // Recent rows, newest-first, capped at `limit` (default 100, max 500).
     let limit = params.limit.unwrap_or(100).clamp(1, 500);
     let mut sorted: Vec<&crate::lanes::LaneHit> = filtered.into_iter().collect();
-    sorted.sort_by(|a, b| b.ts.cmp(&a.ts));
+    sorted.sort_by_key(|h| std::cmp::Reverse(h.ts));
     let rows: Vec<ClassificationRow> = sorted
         .into_iter()
         .take(limit)

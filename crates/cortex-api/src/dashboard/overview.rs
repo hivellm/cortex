@@ -80,7 +80,7 @@ pub(super) async fn overview(State(state): State<DashboardState>) -> Response {
         .into_iter()
         .map(|(repo, count)| RepoCount { repo, count })
         .collect();
-    repos_sorted.sort_by(|a, b| b.count.cmp(&a.count));
+    repos_sorted.sort_by_key(|r| std::cmp::Reverse(r.count));
     repos_sorted.truncate(8);
 
     let now = chrono::Utc::now();

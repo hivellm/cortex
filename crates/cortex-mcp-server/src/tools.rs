@@ -809,13 +809,13 @@ impl Tool for CaptureMemoryTool {
         if parsed.body.is_empty() {
             return Err(ToolError::invalid_input("body must not be empty"));
         }
-        if parsed.body.as_bytes().len() > MAX_CAPTURE_BODY_BYTES {
+        if parsed.body.len() > MAX_CAPTURE_BODY_BYTES {
             return Ok(ToolResult::soft_error(
                 "body_too_large",
                 "capture body exceeds the 8 KiB ceiling",
                 json!({
                     "max_bytes": MAX_CAPTURE_BODY_BYTES,
-                    "received": parsed.body.as_bytes().len(),
+                    "received": parsed.body.len(),
                 }),
             ));
         }

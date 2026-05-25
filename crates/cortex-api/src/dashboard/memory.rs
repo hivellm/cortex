@@ -110,7 +110,7 @@ pub(super) async fn memory(
         let needle = q.to_ascii_lowercase();
         hits.retain(|h| h.text.to_ascii_lowercase().contains(&needle));
     }
-    hits.sort_by(|a, b| b.ts.cmp(&a.ts));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.ts));
     hits.truncate(limit);
 
     let entries: Vec<MemoryEntry> = hits

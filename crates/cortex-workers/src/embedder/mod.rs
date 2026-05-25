@@ -12,6 +12,7 @@ pub mod chunker_code;
 pub mod chunker_doc;
 pub mod chunker_fallback;
 pub mod config;
+#[allow(clippy::module_inception)]
 pub mod embedder;
 pub mod identity;
 pub mod metrics;

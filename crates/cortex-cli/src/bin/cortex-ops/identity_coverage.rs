@@ -29,7 +29,6 @@ use std::process::ExitCode;
 
 use cortex_workers::coverage::{collect_coverage, CoverageReport};
 use rusqlite::Connection;
-use serde_json::json;
 
 use super::helpers::resolve_metadata_db_path;
 

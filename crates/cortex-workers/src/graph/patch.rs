@@ -193,9 +193,11 @@ mod tests {
 
     #[test]
     fn write_report_serde_round_trips() {
-        let mut r = GraphWriteReport::default();
-        r.nodes_upserted = 3;
-        r.edges_upserted = 2;
+        let mut r = GraphWriteReport {
+            nodes_upserted: 3,
+            edges_upserted: 2,
+            ..GraphWriteReport::default()
+        };
         r.by_label.insert("Turn".into(), 1);
         let json = serde_json::to_string(&r).unwrap();
         let parsed: GraphWriteReport = serde_json::from_str(&json).unwrap();

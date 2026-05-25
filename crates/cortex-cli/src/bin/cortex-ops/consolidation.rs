@@ -73,9 +73,11 @@ pub(super) fn consolidation_prune(
             Ok(t) => t.access_token,
             Err(e) => return Err(format!("vectorizer login: {e}")),
         };
-        let mut embed_cfg = cortex_workers::embedder::EmbedderConfig::default();
-        embed_cfg.vectorizer_url = vec_url.clone();
-        embed_cfg.vectorizer_password = Some(token);
+        let embed_cfg = cortex_workers::embedder::EmbedderConfig {
+            vectorizer_url: vec_url.clone(),
+            vectorizer_password: Some(token),
+            ..cortex_workers::embedder::EmbedderConfig::default()
+        };
         let live_vec =
             match cortex_workers::embedder::vectorizer_client::LiveVectorizerClient::new(embed_cfg)
             {
@@ -87,9 +89,11 @@ pub(super) fn consolidation_prune(
         // worker config — the `MeiliPruneOps` impl on
         // `LiveMeiliClient` (phase11o §2.3) is what the engine
         // needs.
-        let mut meili_cfg = cortex_workers::fulltext::FulltextConfig::default();
-        meili_cfg.meili_url = meili_url_v.clone();
-        meili_cfg.meili_api_key = meili_key_v.clone();
+        let meili_cfg = cortex_workers::fulltext::FulltextConfig {
+            meili_url: meili_url_v.clone(),
+            meili_api_key: meili_key_v.clone(),
+            ..cortex_workers::fulltext::FulltextConfig::default()
+        };
         let live_meili =
             match cortex_workers::fulltext::meili_client::LiveMeiliClient::new(&meili_cfg) {
                 Ok(c) => c,
@@ -257,8 +261,7 @@ fn persist_pruner_status(report: &SweepOutcome) -> std::io::Result<()> {
         last_run_duration_ms: report.last_run_duration_ms,
         last_error: report.last_error.clone(),
     };
-    let raw = serde_json::to_vec_pretty(&body)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let raw = serde_json::to_vec_pretty(&body).map_err(std::io::Error::other)?;
     let tmp = path.with_extension("json.tmp");
     {
         let mut f = std::fs::File::create(&tmp)?;

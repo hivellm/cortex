@@ -332,7 +332,7 @@ fn collect_session_hits(lane: &MemoryKeywordLane, session_id: &str) -> Vec<LaneH
             }
         }
     }
-    out.sort_by(|a, b| a.ts.cmp(&b.ts));
+    out.sort_by_key(|h| h.ts);
     out
 }
 

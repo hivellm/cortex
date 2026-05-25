@@ -33,7 +33,7 @@ pub struct PayloadCitationSource {
 }
 
 impl PayloadCitationSource {
-    fn into_node(&self) -> NodeRef {
+    fn to_node(&self) -> NodeRef {
         NodeRef {
             label: self.label.to_string(),
             natural_key: self.natural_key.clone(),
@@ -59,7 +59,7 @@ pub fn extract_payload_citations(
     synthetic_path: &str,
 ) -> Vec<CodeEdge> {
     let raw = MarkdownAnalyzer::new().extract(body, repo, synthetic_path);
-    let owner_node = owner.into_node();
+    let owner_node = owner.to_node();
     let mut out: Vec<CodeEdge> = Vec::with_capacity(raw.len());
     for edge in raw {
         // Drop section-level scaffolding edges — the payload body is

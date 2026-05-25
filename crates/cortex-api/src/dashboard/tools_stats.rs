@@ -73,7 +73,7 @@ pub(super) async fn tools_stats(State(state): State<DashboardState>) -> Response
             share: calls as f64 / total_f,
         })
         .collect();
-    rows.sort_by(|a, b| b.calls.cmp(&a.calls));
+    rows.sort_by_key(|r| std::cmp::Reverse(r.calls));
 
     let heatmap = build_tool_heatmap(&hits);
     let body = ToolsStatsBody {

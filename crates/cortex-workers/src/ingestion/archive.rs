@@ -234,6 +234,22 @@ impl ArchiveWriter for InMemoryArchive {
     }
 }
 
+/// Read all events from a given archive file (test / diagnostic helper).
+pub fn read_archive_file(path: &Path) -> Result<Vec<Value>, ArchiveError> {
+    let raw = std::fs::read(path)?;
+    let decoded = zstd::decode_all(raw.as_slice())?;
+    let text =
+        String::from_utf8(decoded).map_err(|e| ArchiveError::Internal(format!("utf8: {e}")))?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push(serde_json::from_str(line)?);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,20 +340,4 @@ mod tests {
         // — operators decide what to do with it.
         assert!(preexisting.exists());
     }
-}
-
-/// Read all events from a given archive file (test / diagnostic helper).
-pub fn read_archive_file(path: &Path) -> Result<Vec<Value>, ArchiveError> {
-    let raw = std::fs::read(path)?;
-    let decoded = zstd::decode_all(raw.as_slice())?;
-    let text =
-        String::from_utf8(decoded).map_err(|e| ArchiveError::Internal(format!("utf8: {e}")))?;
-    let mut out = Vec::new();
-    for line in text.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        out.push(serde_json::from_str(line)?);
-    }
-    Ok(out)
 }

@@ -102,10 +102,11 @@ impl Default for SilentDropConfig {
 /// Per-pair alert state. Persisted as JSON under
 /// `~/.cortex/alerts/<safe-pair-name>.json` so a daemon restart
 /// doesn't re-fire alerts for issues that were already flagged.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase", tag = "state")]
 pub enum AlertState {
     /// Pair is healthy.
+    #[default]
     Ok,
     /// Above warn threshold; carries the `consecutive` count of
     /// over-threshold polls (used for the 2-poll debounce).
@@ -115,12 +116,6 @@ pub enum AlertState {
     },
     /// Above critical threshold.
     Critical,
-}
-
-impl Default for AlertState {
-    fn default() -> Self {
-        AlertState::Ok
-    }
 }
 
 /// Outcome of one [`transition`] call.

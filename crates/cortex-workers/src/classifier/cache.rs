@@ -147,7 +147,7 @@ where
                     actual: miss_out.len(),
                 });
             }
-            for ((slot, input), output) in misses.iter().zip(miss_out.into_iter()) {
+            for ((slot, input), output) in misses.iter().zip(miss_out) {
                 let key = self.key(&input.content_hash);
                 self.cache
                     .put(&key, output.clone())

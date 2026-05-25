@@ -170,17 +170,14 @@ impl Summariser for ClaudeCliSummariser {
             ));
         }
 
+        let prompt_fallback = request.prompt.len() as u64 / BYTES_PER_TOKEN_FALLBACK;
+        let text_fallback = text.len() as u64 / BYTES_PER_TOKEN_FALLBACK;
         let (input_tokens, output_tokens) = match parsed.usage {
             Some(u) => (
-                u.input_tokens
-                    .unwrap_or_else(|| request.prompt.len() as u64 / BYTES_PER_TOKEN_FALLBACK),
-                u.output_tokens
-                    .unwrap_or_else(|| text.len() as u64 / BYTES_PER_TOKEN_FALLBACK),
+                u.input_tokens.unwrap_or(prompt_fallback),
+                u.output_tokens.unwrap_or(text_fallback),
             ),
-            None => (
-                request.prompt.len() as u64 / BYTES_PER_TOKEN_FALLBACK,
-                text.len() as u64 / BYTES_PER_TOKEN_FALLBACK,
-            ),
+            None => (prompt_fallback, text_fallback),
         };
         let _ = max_tokens;
 

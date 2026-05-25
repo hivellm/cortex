@@ -1,5 +1,14 @@
 //! phase11w live backend for `cortex-ops tool-call-digest`.
 //!
+//! Several scaffolded helpers (`fetch_old_tool_calls`,
+//! `list_code_indexes`, `fetch_tool_calls_from_index`,
+//! `sanitize_id_token`, `index_uid_to_repo`) belong to the legacy
+//! Meili-direct read path that the live mode does not exercise
+//! today — the orchestrator drives reads through
+//! `cortex-ingestion` instead. The helpers stay in tree so the
+//! Meili-direct fallback can be re-enabled without re-deriving the
+//! pagination contract.
+//!
 //! Wires the in-process orchestrator from
 //! [`cortex_workers::retention::tool_call_digest`] to three live
 //! services:
@@ -23,6 +32,8 @@
 //!    abort the bucket; the bookkeeping row carries the partial
 //!    count so the operator can re-run with the same plan to retry
 //!    the gaps.
+
+#![allow(dead_code)]
 
 use std::time::Duration;
 
@@ -236,7 +247,7 @@ impl ToolCallDigestBackend for LiveToolCallDigestBackend {
         // inspection. No LLM round-trip here: the aggregate shape
         // alone is the retrieval payload, and skipping classifier
         // calls keeps the cron's per-run cost at zero.
-        let mut ids: Vec<String> = bucket.event_ids.iter().cloned().collect();
+        let mut ids: Vec<String> = bucket.event_ids.to_vec();
         ids.sort();
         ids.dedup();
         let bucket_key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.tool);

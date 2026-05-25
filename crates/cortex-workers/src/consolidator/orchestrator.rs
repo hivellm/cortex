@@ -72,10 +72,9 @@ impl ProducerSelection {
                 // DecisionTrace always promotes to Opus; the
                 // `force_deep` knob is informational today (kept
                 // for §2.7 wiring against high-impact session
-                // outcomes).
-                summariser: if *force_deep {
-                    SummariserKind::Opus47
-                } else {
+                // outcomes) — both arms currently pick Opus47.
+                summariser: {
+                    let _ = force_deep;
                     SummariserKind::Opus47
                 },
                 repo: None,

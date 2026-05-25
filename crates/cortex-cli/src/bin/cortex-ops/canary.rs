@@ -11,9 +11,11 @@ pub(super) fn canary(
     json: bool,
 ) -> ExitCode {
     use cortex_api::canary::{run_canary_once, CanaryConfig};
-    let mut cfg = CanaryConfig::default();
-    cfg.deadline_secs = deadline_secs;
-    cfg.ipc_path = ipc;
+    let mut cfg = CanaryConfig {
+        deadline_secs,
+        ipc_path: ipc,
+        ..CanaryConfig::default()
+    };
     if let Some(url) = api_url {
         cfg.api_url = url;
     }

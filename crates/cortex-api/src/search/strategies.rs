@@ -172,7 +172,7 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
 /// stores. The 2026-04-29 audit caught the previous per-repo
 /// `cortex-{slug}-decisions` plan returning empty bodies because the
 /// rationale text lives in the global `cortex_decisions` Meili index
-/// + `cortex.decision.fp32` Vectorizer collection (per
+/// and `cortex.decision.fp32` Vectorizer collection (per
 /// `cortex-storage::names`). Fusing `Vectorizer + Meili + Nexus`
 /// against those globals — same RRF blend `pre_change_context` uses
 /// — closes the 50% recall floor on `decision_lookup` queries whose

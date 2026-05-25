@@ -47,7 +47,7 @@ pub(super) fn meili_prune(
     };
 
     // Synthetic preview: 3 turns over 90 d + 1 fresh + 1 oversize.
-    let preview_seed = vec![
+    let preview_seed = [
         MeiliDoc {
             event_id: "01PREVIEW-T1".to_string(),
             index: "cortex_turns".to_string(),
@@ -82,7 +82,7 @@ pub(super) fn meili_prune(
             .seed("cortex_turns", preview_seed[..3].to_vec())
             .await;
         backend
-            .seed("cortex_tool_calls", vec![preview_seed[3].clone()])
+            .seed("cortex_tool_calls", Vec::from([preview_seed[3].clone()]))
             .await;
     });
 

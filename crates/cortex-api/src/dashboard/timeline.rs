@@ -126,7 +126,7 @@ pub(super) async fn timeline_recent(
         hits.retain(|h| h.content_hash.as_deref() == Some(hash));
     }
     // Newest first by `ts`.
-    hits.sort_by(|a, b| b.ts.cmp(&a.ts));
+    hits.sort_by_key(|h| std::cmp::Reverse(h.ts));
     hits.truncate(limit);
 
     let events: Vec<TimelineEvent> = hits.iter().map(build_timeline_event).collect();
@@ -258,7 +258,7 @@ pub(super) fn filtered_hits(
     if let Some(hash) = content_hash_filter {
         hits.retain(|h| h.content_hash.as_deref() == Some(hash));
     }
-    hits.sort_by(|a, b| a.ts.cmp(&b.ts));
+    hits.sort_by_key(|h| h.ts);
     hits
 }
 

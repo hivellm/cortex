@@ -217,6 +217,7 @@ fn emit_preresolved_edge(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_workspace_edge(
     patch: &mut GraphPatch,
     edge: &CodeEdge,
@@ -327,6 +328,7 @@ fn emit_unresolved_edge(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn make_edge(
     edge_type: EdgeType,
     from_label: &str,

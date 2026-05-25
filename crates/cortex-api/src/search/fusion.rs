@@ -67,9 +67,11 @@ pub const DEFAULT_SAME_SESSION_BOOST: f32 = 2.0;
 /// Phase11i §3.4 — cohort-session boost (lighter than same-session).
 pub const DEFAULT_COHORT_SESSION_BOOST: f32 = 1.5;
 
-/// Phase11i §3.5 — outcome multipliers.
+/// Phase11i §3.5 — outcome multiplier for successful turns.
 pub const OUTCOME_MULT_SUCCESS: f32 = 1.2;
+/// Phase11i §3.5 — outcome multiplier for error turns.
 pub const OUTCOME_MULT_ERROR: f32 = 0.5;
+/// Phase11i §3.5 — outcome multiplier for law-blocked turns.
 pub const OUTCOME_MULT_BLOCKED_BY_LAW: f32 = 0.3;
 
 /// Tunable parameters for [`rrf_fuse`].

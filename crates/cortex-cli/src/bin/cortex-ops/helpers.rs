@@ -1,4 +1,4 @@
-/// Shared path-resolution helpers used across `cortex-ops` submodules.
+//! Shared path-resolution helpers used across `cortex-ops` submodules.
 
 /// Phase11s §2.4 — match the worker's metadata-DB resolution
 /// precedence so `cortex-ops graph replay` writes to the same row

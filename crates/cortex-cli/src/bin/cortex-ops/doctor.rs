@@ -457,7 +457,7 @@ pub(super) fn doctor_coverage(api_url: Option<String>, json: bool) -> ExitCode {
     match overall {
         "ok" => ExitCode::SUCCESS,
         "warn" => ExitCode::from(1),
-        "critical" | _ => ExitCode::from(2),
+        _ => ExitCode::from(2),
     }
 }
 

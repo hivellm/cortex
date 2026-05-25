@@ -546,7 +546,7 @@ async fn main() -> Result<()> {
         cfg.rulebook.roots.as_deref()
     {
         let mut out = Vec::new();
-        for raw in roots.split(|c: char| c == ',' || c == ';') {
+        for raw in roots.split([',', ';']) {
             let p = PathBuf::from(raw.trim());
             if p.as_os_str().is_empty() {
                 continue;
@@ -806,10 +806,12 @@ async fn main() -> Result<()> {
     // path phase8e uses. Off by default — operators flip the env
     // var when they want quiet-hours regression coverage.
     if cfg.canary.enabled {
-        let mut canary_cfg = cortex_api::canary::CanaryConfig::default();
-        canary_cfg.enabled = true;
-        canary_cfg.interval_secs = cfg.canary.interval_secs.max(10);
-        canary_cfg.deadline_secs = cfg.canary.deadline_secs.max(1);
+        let canary_cfg = cortex_api::canary::CanaryConfig {
+            enabled: true,
+            interval_secs: cfg.canary.interval_secs.max(10),
+            deadline_secs: cfg.canary.deadline_secs.max(1),
+            ..cortex_api::canary::CanaryConfig::default()
+        };
         tokio::spawn(cortex_api::canary::run_canary_loop(canary_cfg));
     } else {
         tracing::info!("canary runner disabled (set CORTEX_CANARY_ENABLED=true to enable)");

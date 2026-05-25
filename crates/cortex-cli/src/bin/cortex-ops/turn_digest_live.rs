@@ -8,9 +8,10 @@
 //!    whose `occurred_at < cutoff_ts` (and that has not been digested
 //!    already) into a [`Turn`].
 //! 2. **`cortex-ingestion /v1/events`** — receives one canonical
-//!    `Memory{memory_type=turn_digest}` envelope per bucket. Embedder
-//!    + Meili + Nexus pick it up downstream so the digest appears in
-//!    every backend without per-bucket fan-out from this binary.
+//!    `Memory{memory_type=turn_digest}` envelope per bucket.
+//!    Embedder, Meili, and Nexus pick it up downstream so the
+//!    digest appears in every backend without per-bucket fan-out
+//!    from this binary.
 //!
 //! The legacy unified `cortex_turns` Meili index from
 //! `cortex_storage::names` is declared but never populated — the
@@ -25,6 +26,14 @@
 //! `summarized_by` stamping endpoint. Operators run with
 //! `--purge-originals` (clean shrinkage) or `--dry-run` (no
 //! mutation).
+//!
+//! Some scaffolded helpers (`MEILI_INDEX_MEMORIES`,
+//! `resolve_occurred_at`) belong to the legacy unified-index path
+//! that the live mode does not exercise today. They stay in tree
+//! so the unified-index fallback can be re-enabled without
+//! re-deriving the contract.
+
+#![allow(dead_code)]
 
 use std::time::Duration;
 
@@ -231,7 +240,7 @@ impl DigestBackend for LiveTurnDigestBackend {
         // No LLM round-trip — the bucket shape itself is the
         // retrieval payload, and skipping classifier calls keeps
         // cron cost at zero.
-        let mut ids: Vec<String> = bucket.event_ids.iter().cloned().collect();
+        let mut ids: Vec<String> = bucket.event_ids.to_vec();
         ids.sort();
         ids.dedup();
         let bucket_key = format!("{}|{}|{}", bucket.repo, bucket.year_week, bucket.top_topic);
@@ -466,7 +475,7 @@ pub async fn fetch_old_turns_via_admin(
         let occurred_at = chrono::DateTime::parse_from_rfc3339(&r.occurred_at)
             .ok()
             .map(|t| t.with_timezone(&Utc))
-            .filter(|t| !r.occurred_at.starts_with("1970"))
+            .filter(|_| !r.occurred_at.starts_with("1970"))
             .or_else(|| {
                 ulid_timestamp_ms(&r.event_id)
                     .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)

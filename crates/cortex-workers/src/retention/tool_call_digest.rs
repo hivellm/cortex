@@ -104,7 +104,7 @@ pub struct DigestPlan {
     /// `Some(_)`.
     pub rebuild: bool,
     /// **phase11w core knob.** When `true`, after `persist_digest`
-    /// + `tag_source_tool_calls` succeed, the orchestrator calls
+    /// and `tag_source_tool_calls` succeed, the orchestrator calls
     /// `delete_source_tool_calls` to hard-purge the originals from
     /// Meili + Vectorizer + Parquet. Default `false` so the first
     /// production run is observable before deletes happen.

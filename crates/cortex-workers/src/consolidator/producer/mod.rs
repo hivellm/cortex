@@ -88,8 +88,9 @@ pub fn validate_produced(payload: &ConsolidationPayload) -> Result<(), ProducerE
         )));
     }
     let summary_len = payload.summary_markdown.len();
-    if summary_len < cortex_core::events::CONSOLIDATION_SUMMARY_MIN_BYTES
-        || summary_len > cortex_core::events::CONSOLIDATION_SUMMARY_MAX_BYTES
+    if !(cortex_core::events::CONSOLIDATION_SUMMARY_MIN_BYTES
+        ..=cortex_core::events::CONSOLIDATION_SUMMARY_MAX_BYTES)
+        .contains(&summary_len)
     {
         return Err(ProducerError::ValidationFailed(format!(
             "summary_markdown len ({summary_len}) outside [{}, {}]",

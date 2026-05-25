@@ -324,11 +324,12 @@ pub struct LiveVectorizerClient {
 }
 
 /// Phase11s §3.2 — credentials the token-refresh path uses. The
-/// embedder bin populates these from `CORTEX_EMBEDDER_VECTORIZER_USER`
-/// + `CORTEX_EMBEDDER_VECTORIZER_PASSWORD` so a token rotation
-/// keeps using the same identity. When the original config carried
-/// a raw JWT (no username/password), this stays `None` and the
-/// client runs in legacy-no-refresh mode.
+/// embedder bin populates these from
+/// `CORTEX_EMBEDDER_VECTORIZER_USER` and
+/// `CORTEX_EMBEDDER_VECTORIZER_PASSWORD` so a token rotation keeps
+/// using the same identity. When the original config carried a raw
+/// JWT (no username/password), this stays `None` and the client
+/// runs in legacy-no-refresh mode.
 #[derive(Debug, Clone)]
 pub struct VectorizerCredentials {
     /// Vectorizer base URL the client logs in against.
