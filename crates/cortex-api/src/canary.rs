@@ -121,10 +121,14 @@ impl Default for CanaryConfig {
                 .join(".cortex")
                 .join("canary-history.jsonl"),
             ipc_path: None,
-            api_url: std::env::var("CORTEX_API_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17000".to_string()),
-            ingestion_url: std::env::var("CORTEX_INGESTION_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:17010".to_string()),
+            api_url: cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.dashboard.api_url)
+                .unwrap_or_else(|| "http://127.0.0.1:17000".to_string()),
+            ingestion_url: cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.ingestion.ingestion_url)
+                .unwrap_or_else(|| "http://127.0.0.1:17010".to_string()),
         }
     }
 }

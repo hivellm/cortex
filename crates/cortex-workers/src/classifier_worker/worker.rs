@@ -47,9 +47,9 @@ pub const DEFAULT_MAX_CONSUME_ERRORS: u64 = 5;
 /// of `0` disables the supervisor (kept dormant for the original
 /// pre-§1.2 behaviour when an operator wants it off).
 pub fn max_consume_errors_from_env() -> u64 {
-    std::env::var("CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS")
+    cortex_config::Config::load()
         .ok()
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|c| c.classifier.max_consume_errors)
         .unwrap_or(DEFAULT_MAX_CONSUME_ERRORS)
 }
 

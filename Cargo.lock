@@ -568,6 +568,7 @@ dependencies = [
  "clap",
  "cortex-api",
  "cortex-build",
+ "cortex-config",
  "cortex-core",
  "cortex-health",
  "cortex-pre-thinking",

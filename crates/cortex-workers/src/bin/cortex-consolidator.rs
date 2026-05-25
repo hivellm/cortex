@@ -417,12 +417,13 @@ async fn publish_consolidation(
 /// `${CORTEX_CONSOLIDATIONS_FALLBACK_FILE}` → `${CORTEX_HOME}/consolidations.jsonl`
 /// → `<HOME|USERPROFILE>/.cortex/consolidations.jsonl`.
 fn fallback_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.consolidator.fallback_file.as_deref() {
         if !p.trim().is_empty() {
             return Some(PathBuf::from(p));
         }
     }
-    if let Ok(p) = std::env::var("CORTEX_HOME") {
+    if let Some(p) = cfg.ingestion.home.as_deref() {
         if !p.trim().is_empty() {
             return Some(PathBuf::from(p).join("consolidations.jsonl"));
         }
@@ -501,9 +502,9 @@ fn append_publish_fallback_to(
 /// Resolve the rotation threshold from env, falling back to
 /// [`FALLBACK_ROTATE_AT_BYTES`].
 fn fallback_rotate_threshold() -> u64 {
-    std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_ROTATE_BYTES")
+    cortex_config::Config::load()
         .ok()
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|c| c.consolidator.fallback_rotate_bytes)
         .filter(|n| *n > 0)
         .unwrap_or(FALLBACK_ROTATE_AT_BYTES)
 }
@@ -669,7 +670,10 @@ struct NightlyCursor {
 }
 
 fn cursor_path() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("CORTEX_CONSOLIDATOR_CURSOR_FILE") {
+    if let Some(p) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.consolidator.cursor_file)
+    {
         return Some(PathBuf::from(p));
     }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
@@ -959,11 +963,12 @@ async fn estimate(
     repo_filter: Option<String>,
     json: bool,
 ) -> Result<()> {
+    let cfg_typed = cortex_config::Config::load().unwrap_or_default();
     let meili_url = meili
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_URL").ok())
+        .or_else(|| cfg_typed.meili.meili_url.clone())
         .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
     let api_key = meili_key
-        .or_else(|| std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY").ok())
+        .or_else(|| cfg_typed.meili.meili_api_key.clone())
         .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
 
     let http = reqwest::Client::builder()
@@ -1376,7 +1381,7 @@ mod tests {
 
     #[test]
     fn fallback_path_honours_override_env() {
-        let saved = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
+        let saved = std::env::var_os("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
         std::env::set_var(
             "CORTEX_CONSOLIDATIONS_FALLBACK_FILE",
             "D:/explicit/fallback.jsonl",
@@ -1391,8 +1396,8 @@ mod tests {
 
     #[test]
     fn fallback_path_falls_back_to_cortex_home_when_override_empty() {
-        let saved_override = std::env::var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE").ok();
-        let saved_home = std::env::var("CORTEX_HOME").ok();
+        let saved_override = std::env::var_os("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
+        let saved_home = std::env::var_os("CORTEX_HOME");
         std::env::set_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE", "");
         std::env::set_var("CORTEX_HOME", "D:/cortex-root");
         let p = fallback_path().expect("fallback path resolved");

@@ -84,28 +84,32 @@ pub struct KeywordSearchResponse {
 }
 
 fn meili_base_url() -> String {
-    std::env::var("CORTEX_FULLTEXT_MEILI_URL")
+    cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.meili.meili_url)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| MEILI_URL_DEFAULT.to_string())
 }
 
 fn vectorizer_base_url() -> String {
-    std::env::var("CORTEX_EMBEDDER_VECTORIZER_URL")
+    cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.embedder.vectorizer_url)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| VECTORIZER_URL_DEFAULT.to_string())
 }
 
 fn vectorizer_jwt() -> Option<String> {
-    std::env::var("CORTEX_EMBEDDER_VECTORIZER_JWT")
+    cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.embedder.vectorizer_jwt)
         .filter(|s| !s.trim().is_empty())
 }
 
 fn meili_api_key() -> Option<String> {
-    std::env::var("CORTEX_FULLTEXT_MEILI_API_KEY")
+    cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.meili.meili_api_key)
         .filter(|s| !s.trim().is_empty())
 }
 
@@ -444,9 +448,8 @@ pub struct GraphQueryResponse {
 }
 
 fn cypher_enabled() -> bool {
-    std::env::var("CORTEX_GRAPH_CYPHER_ENABLED")
-        .ok()
-        .map(|v| v.trim() == "1" || v.eq_ignore_ascii_case("true"))
+    cortex_config::Config::load()
+        .map(|c| c.nexus.cypher_enabled)
         .unwrap_or(false)
 }
 
@@ -725,16 +728,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cypher_enabled_reads_env_var() {
-        std::env::remove_var("CORTEX_GRAPH_CYPHER_ENABLED");
-        assert!(!cypher_enabled());
-        std::env::set_var("CORTEX_GRAPH_CYPHER_ENABLED", "1");
-        assert!(cypher_enabled());
-        std::env::set_var("CORTEX_GRAPH_CYPHER_ENABLED", "true");
-        assert!(cypher_enabled());
-        std::env::set_var("CORTEX_GRAPH_CYPHER_ENABLED", "no");
-        assert!(!cypher_enabled());
-        std::env::remove_var("CORTEX_GRAPH_CYPHER_ENABLED");
-    }
+    // ADR-016 §3.6 — env-precedence test for cypher_enabled removed.
+    // cortex_config's typed bool now requires literal `true` / `false`
+    // (the `1` / `no` aliases this test exercised are no longer
+    // accepted — captured as an operator-visible break in CHANGELOG).
+    // The bool resolution is centrally tested in
+    // crates/cortex-config/src/load.rs::tests; per-helper duplicates
+    // race each other on shared CORTEX_GRAPH_CYPHER_ENABLED state.
 }

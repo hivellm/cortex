@@ -172,10 +172,11 @@ async fn main() -> Result<()> {
 /// 2. `${CORTEX_HOME}/metadata.sqlite` when `CORTEX_HOME` is set.
 /// 3. `<home>/.cortex/metadata.sqlite` (cross-platform default).
 fn resolve_metadata_db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         return PathBuf::from(home).join("metadata.sqlite");
     }
     home_dir().join(".cortex").join("metadata.sqlite")

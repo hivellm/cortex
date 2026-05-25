@@ -73,18 +73,20 @@ async fn main() -> Result<()> {
     // in Meili. Off by default so a hot restart never triggers a
     // multi-minute archive scan; ops flips it on after a worker outage
     // or for a cold archive-only deployment.
-    if std::env::var("CORTEX_FULLTEXT_REPLAY_MISSING")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "on"))
-        .unwrap_or(false)
-    {
-        let archive_root: PathBuf = std::env::var("CORTEX_ARCHIVE_ROOT")
+    let cfg_typed = cortex_config::Config::load().unwrap_or_default();
+    if cfg_typed.meili.replay_missing {
+        let archive_root: PathBuf = cfg_typed
+            .ingestion
+            .archive_root
+            .clone()
             .map(PathBuf::from)
-            .or_else(|_| {
+            .or_else(|| {
                 std::env::var("USERPROFILE")
                     .or_else(|_| std::env::var("HOME"))
+                    .ok()
                     .map(|home| PathBuf::from(home).join(".cortex").join("archive"))
             })
-            .context("CORTEX_FULLTEXT_REPLAY_MISSING=1 but no CORTEX_ARCHIVE_ROOT and no HOME/USERPROFILE")?;
+            .context("CORTEX_FULLTEXT_REPLAY_MISSING=true but no CORTEX_ARCHIVE_ROOT and no HOME/USERPROFILE")?;
         match replay_missing_partitions(
             meili_client.as_ref(),
             indexer.clone(),

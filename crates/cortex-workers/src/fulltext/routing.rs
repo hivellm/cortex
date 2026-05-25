@@ -59,8 +59,8 @@ pub fn is_low_signal_tool_call_event(event: &EnrichedEvent) -> bool {
     if !matches!(event.kind, Kind::ToolCall) {
         return false;
     }
-    if std::env::var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    if cortex_config::Config::load()
+        .map(|c| c.meili.index_low_signal_tool_calls)
         .unwrap_or(false)
     {
         return false;
@@ -450,8 +450,8 @@ mod tests {
     #[test]
     fn is_low_signal_tool_call_event_honours_operator_opt_out() {
         let _g = env_guard();
-        let saved = std::env::var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS").ok();
-        std::env::set_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS", "1");
+        let saved = std::env::var_os("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS");
+        std::env::set_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS", "true");
         let result = is_low_signal_tool_call_event(&tool_call_event("Bash"));
         match saved {
             Some(v) => std::env::set_var("CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS", v),

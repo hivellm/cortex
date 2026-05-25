@@ -166,9 +166,9 @@ async fn run_daemon(
     // crash in the IPC path doesn't break health probes (and vice
     // versa). Port comes from CORTEX_ADAPTER_ADMIN_PORT (default
     // 17011 — published in cortex_health::DEFAULT_ADAPTER_ADMIN_PORT).
-    let admin_port = std::env::var("CORTEX_ADAPTER_ADMIN_PORT")
+    let admin_port = cortex_config::Config::load()
         .ok()
-        .and_then(|s| s.trim().parse::<u16>().ok())
+        .and_then(|c| c.adapter.adapter_admin_port)
         .unwrap_or(cortex_health::DEFAULT_ADAPTER_ADMIN_PORT);
     let metrics_for_health = metrics.clone();
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -180,8 +180,8 @@ async fn run_daemon(
     // Phase8c — capture version block once at boot (compile-time
     // env vars never change for the running process), avoid re-
     // building it on every /healthz probe.
-    let version_block = serde_json::to_value(cortex_build::version_info!())
-        .unwrap_or(serde_json::Value::Null);
+    let version_block =
+        serde_json::to_value(cortex_build::version_info!()).unwrap_or(serde_json::Value::Null);
     let provider: cortex_health::server::SnapshotProvider = std::sync::Arc::new(move || {
         use cortex_health::server::HealthSnapshot;
         use cortex_health::{HealthState, DEFAULT_FRESHNESS_DEGRADED_SECS};
@@ -193,7 +193,10 @@ async fn run_daemon(
         let wal_bytes = metrics_for_health.wal_bytes();
         let last_publish_ok_ts_ms = metrics_for_health.last_publish_ok_ts_ms();
         let ipc_alive = metrics_for_health.ipc_pipe_alive();
-        extras.insert("publisher_queue_depth".into(), serde_json::json!(queue_depth));
+        extras.insert(
+            "publisher_queue_depth".into(),
+            serde_json::json!(queue_depth),
+        );
         extras.insert("wal_bytes".into(), serde_json::json!(wal_bytes));
         extras.insert(
             "last_publish_ok_ts_ms".into(),
@@ -213,8 +216,7 @@ async fn run_daemon(
         let envelopes_publish_fail = metrics_for_health.envelopes_publish_fail_snapshot();
         let last_frame_ts = metrics_for_health.last_frame_ts_snapshot();
         let last_envelope_ts = metrics_for_health.last_envelope_ts_snapshot();
-        let last_publish_ok_ts_by_kind =
-            metrics_for_health.last_publish_ok_ts_by_kind_snapshot();
+        let last_publish_ok_ts_by_kind = metrics_for_health.last_publish_ok_ts_by_kind_snapshot();
         extras.insert(
             "frames_received_total".into(),
             serde_json::to_value(&frames_received).unwrap_or_default(),

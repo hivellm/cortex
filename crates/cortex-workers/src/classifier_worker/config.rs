@@ -76,12 +76,19 @@ impl ClassifierWorkerConfig {
     /// Read config from `CORTEX_CLASSIFIER_*` env vars, falling back to defaults.
     pub fn from_env() -> Self {
         let def = Self::default();
+        let cfg = cortex_config::Config::load().unwrap_or_default();
         Self {
-            synap_url: env::var("CORTEX_CLASSIFIER_SYNAP_URL")
-                .or_else(|_| env::var("SYNAP_URL"))
+            synap_url: cfg
+                .classifier
+                .synap_url
+                .clone()
+                .or_else(|| env::var("SYNAP_URL").ok())
                 .unwrap_or(def.synap_url),
-            mode: env::var("CORTEX_CLASSIFIER_MODE")
-                .map(|s| ClassifierMode::parse(&s))
+            mode: cfg
+                .classifier
+                .mode
+                .as_deref()
+                .map(ClassifierMode::parse)
                 .unwrap_or(def.mode),
             workers: parse_usize("CORTEX_CLASSIFIER_WORKERS", def.workers),
             batch_size: parse_usize("CORTEX_CLASSIFIER_BATCH", def.batch_size),
@@ -89,10 +96,13 @@ impl ClassifierWorkerConfig {
                 "CORTEX_CLASSIFIER_DAILY_LIMIT_CENTS",
                 def.daily_limit_cents,
             ),
-            prompt_version: env::var("CORTEX_CLASSIFIER_PROMPT_VERSION")
+            prompt_version: cfg
+                .classifier
+                .prompt_version
+                .clone()
                 .unwrap_or(def.prompt_version),
             claude_bin: env::var("CLAUDE_CODE_BIN").unwrap_or(def.claude_bin),
-            model: env::var("CORTEX_CLASSIFIER_MODEL").unwrap_or(def.model),
+            model: cfg.classifier.model.clone().unwrap_or(def.model),
             cli_timeout_secs: parse_u64("CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS", def.cli_timeout_secs),
         }
     }

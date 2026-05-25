@@ -103,9 +103,11 @@ async fn main() -> Result<()> {
     // writer renders inline-literal Cypher; the registry remains the
     // future-state shape and `ensure_required` enforces the surface
     // hasn't drifted).
-    let cypher_dir = std::env::var("CORTEX_GRAPH_CYPHER_DIR")
+    let cypher_dir = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.nexus.cypher_dir)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("crates/cortex-graph/cypher"));
+        .unwrap_or_else(|| PathBuf::from("crates/cortex-graph/cypher"));
     let templates = load_from_dir(&cypher_dir)
         .with_context(|| format!("load cypher templates from {:?}", cypher_dir))?;
     templates
@@ -595,7 +597,10 @@ fn resolve_archive_root(cli_arg: Option<PathBuf>) -> Result<PathBuf> {
     if let Some(p) = cli_arg {
         return Ok(p);
     }
-    if let Ok(env) = std::env::var("CORTEX_ARCHIVE_ROOT") {
+    if let Some(env) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.ingestion.archive_root)
+    {
         return Ok(PathBuf::from(env));
     }
     let home = std::env::var("USERPROFILE")

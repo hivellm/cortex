@@ -101,9 +101,9 @@ impl StaleEdgeSweeper {
     /// [`DEFAULT_SWEEP_INTERVAL_SECS`]. Caller wires this into a
     /// fresh sweeper at construction.
     pub fn interval_from_env() -> Duration {
-        std::env::var("CORTEX_GRAPH_SWEEPER_INTERVAL_SECS")
+        cortex_config::Config::load()
             .ok()
-            .and_then(|s| s.parse::<u64>().ok())
+            .and_then(|c| c.nexus.sweeper_interval_secs)
             .map(Duration::from_secs)
             .unwrap_or_else(|| Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS))
     }
@@ -273,34 +273,11 @@ mod tests {
         assert_eq!(r.total_deleted(), 7);
     }
 
-    #[test]
-    fn interval_from_env_falls_back_to_default() {
-        std::env::remove_var("CORTEX_GRAPH_SWEEPER_INTERVAL_SECS");
-        assert_eq!(
-            StaleEdgeSweeper::interval_from_env(),
-            Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS)
-        );
-    }
-
-    #[test]
-    fn interval_from_env_honours_override() {
-        std::env::set_var("CORTEX_GRAPH_SWEEPER_INTERVAL_SECS", "120");
-        assert_eq!(
-            StaleEdgeSweeper::interval_from_env(),
-            Duration::from_secs(120)
-        );
-        std::env::remove_var("CORTEX_GRAPH_SWEEPER_INTERVAL_SECS");
-    }
-
-    #[test]
-    fn interval_from_env_ignores_garbage_value() {
-        std::env::set_var("CORTEX_GRAPH_SWEEPER_INTERVAL_SECS", "not-a-number");
-        assert_eq!(
-            StaleEdgeSweeper::interval_from_env(),
-            Duration::from_secs(DEFAULT_SWEEP_INTERVAL_SECS)
-        );
-        std::env::remove_var("CORTEX_GRAPH_SWEEPER_INTERVAL_SECS");
-    }
+    // ADR-016 §3.6 — the env-precedence tests for interval_from_env
+    // moved to crates/cortex-config/src/load.rs. Per-helper env-
+    // mutation tests duplicate centralised coverage and race each
+    // other on shared CORTEX_GRAPH_SWEEPER_INTERVAL_SECS process
+    // state when run in parallel.
 
     #[tokio::test]
     async fn sweep_once_returns_zero_on_empty_writer() {

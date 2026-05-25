@@ -350,7 +350,10 @@ fn build_hook_entry(shim: &HookShim, layout: &Layout, bin_available: bool) -> Va
 /// in the field flip to the shell shim path without unsetting their
 /// real PATH.
 fn cortex_hook_on_path() -> bool {
-    if std::env::var("CORTEX_HOOK_FORCE_FALLBACK").as_deref() == Ok("1") {
+    if cortex_config::Config::load()
+        .map(|c| c.adapter.hook_force_fallback)
+        .unwrap_or(false)
+    {
         return false;
     }
     let bin_name = if cfg!(windows) {

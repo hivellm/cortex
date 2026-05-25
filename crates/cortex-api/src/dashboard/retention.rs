@@ -271,17 +271,16 @@ pub(super) async fn retention_sweeps(
 /// `GET /v1/retention/state` — compact "current state" envelope the
 /// Retention tab's header cards consume.
 pub(super) async fn retention_state(State(state): State<DashboardState>) -> Response {
-    let archive_root = std::env::var("CORTEX_ARCHIVE_ROOT")
-        .ok()
-        .unwrap_or_else(|| {
-            home_path().map_or_else(
-                || ".cortex/archive".to_string(),
-                |h| h.join(".cortex/archive").display().to_string(),
-            )
-        });
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let archive_root = cfg.ingestion.archive_root.clone().unwrap_or_else(|| {
+        home_path().map_or_else(
+            || ".cortex/archive".to_string(),
+            |h| h.join(".cortex/archive").display().to_string(),
+        )
+    });
     let archive_bytes = scan_archive_age_buckets(std::path::Path::new(&archive_root));
 
-    let cas_path = std::env::var("CORTEX_CAS_DB").ok().unwrap_or_else(|| {
+    let cas_path = cfg.ingestion.cas_db.clone().unwrap_or_else(|| {
         home_path().map_or_else(
             || ".cortex/cas.sqlite".to_string(),
             |h| h.join(".cortex/cas.sqlite").display().to_string(),

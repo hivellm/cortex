@@ -30,9 +30,11 @@ async fn main() -> Result<()> {
     let config = GraphConfig::from_env();
     tracing::info!(?config, "loaded cortex-graph config");
 
-    let cypher_dir = std::env::var("CORTEX_GRAPH_CYPHER_DIR")
+    let cypher_dir = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.nexus.cypher_dir)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("crates/cortex-graph/cypher"));
+        .unwrap_or_else(|| PathBuf::from("crates/cortex-graph/cypher"));
     let templates_loaded = load_from_dir(&cypher_dir)
         .with_context(|| format!("failed to load cypher templates from {:?}", cypher_dir))?;
     templates_loaded
@@ -69,8 +71,9 @@ async fn main() -> Result<()> {
     // multiple graph-worker replicas can share the SQLite file
     // without colliding. Default to the env hostname / container
     // name; fall back to "cortex-graph-0" for single-instance dev.
-    let consumer_id = std::env::var("CORTEX_GRAPH_CONSUMER_ID")
+    let consumer_id = cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.nexus.consumer_id)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "cortex-graph-0".to_string());
     let consumer = Arc::new(
@@ -152,13 +155,14 @@ async fn main() -> Result<()> {
 /// 3. `${CORTEX_HOME}/metadata.sqlite` when `CORTEX_HOME` is set.
 /// 4. `<home>/.cortex/metadata.sqlite` (cross-platform default).
 fn resolve_metadata_db_path() -> PathBuf {
-    if let Ok(p) = std::env::var("CORTEX_GRAPH_METADATA_DB") {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if let Some(p) = cfg.nexus.metadata_db.as_deref() {
         return PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("CORTEX_METADATA_DB") {
+    if let Some(p) = cfg.ingestion.metadata_db.as_deref() {
         return PathBuf::from(p);
     }
-    if let Ok(home) = std::env::var("CORTEX_HOME") {
+    if let Some(home) = cfg.ingestion.home.as_deref() {
         return PathBuf::from(home).join("metadata.sqlite");
     }
     home_dir().join(".cortex").join("metadata.sqlite")

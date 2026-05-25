@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::sub::{
-    AutoMemoryConfig, CanaryConfig, ClassifierConfig, ConsolidatorConfig, DashboardConfig,
-    DoctorConfig, EmbedderConfig, IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
-    RetentionConfig, RulebookConfig,
+    AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
+    ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
+    IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig, RulebookConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -66,6 +66,15 @@ pub struct Config {
     /// Auto-memory integration knobs.
     #[serde(default)]
     pub auto_memory: AutoMemoryConfig,
+    /// Claude Code CLI analyzer knobs.
+    #[serde(default)]
+    pub analyzer: AnalyzerConfig,
+    /// `cortex-claude-archive` bin knobs.
+    #[serde(default)]
+    pub claude_archive: ClaudeArchiveConfig,
+    /// Claude Code adapter knobs (hook shim + admin port).
+    #[serde(default)]
+    pub adapter: AdapterConfig,
 }
 
 fn default_schema_version() -> String {
@@ -89,6 +98,9 @@ impl Default for Config {
             classifier: ClassifierConfig::default(),
             consolidator: ConsolidatorConfig::default(),
             auto_memory: AutoMemoryConfig::default(),
+            analyzer: AnalyzerConfig::default(),
+            claude_archive: ClaudeArchiveConfig::default(),
+            adapter: AdapterConfig::default(),
         }
     }
 }

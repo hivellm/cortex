@@ -123,7 +123,10 @@ fn fail_open() -> ! {
 }
 
 fn main() {
-    if std::env::var("CORTEX_ADAPTER_DISABLE").as_deref() == Ok("1") {
+    if cortex_config::Config::load()
+        .map(|c| c.adapter.adapter_disable)
+        .unwrap_or(false)
+    {
         fail_open();
     }
     let args = match Args::parse() {
@@ -170,7 +173,8 @@ fn build_frame(event: &str) -> String {
 
     let mut stdin = String::new();
     std::io::stdin().read_to_string(&mut stdin).ok();
-    let payload: Value = serde_json::from_str(stdin.trim()).unwrap_or(Value::Object(Default::default()));
+    let payload: Value =
+        serde_json::from_str(stdin.trim()).unwrap_or(Value::Object(Default::default()));
 
     let frame = serde_json::json!({
         "hook": event,
@@ -188,7 +192,10 @@ fn resolve_pipe_name(args: &Args) -> String {
     if let Some(p) = &args.pipe {
         return p.clone();
     }
-    if let Ok(p) = std::env::var("CORTEX_ADAPTER_PIPE") {
+    if let Some(p) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.adapter.adapter_pipe)
+    {
         if !p.is_empty() {
             return p;
         }
@@ -201,7 +208,10 @@ fn resolve_sock_path(args: &Args) -> std::path::PathBuf {
     if let Some(p) = &args.sock {
         return std::path::PathBuf::from(p);
     }
-    if let Ok(p) = std::env::var("CORTEX_ADAPTER_SOCK") {
+    if let Some(p) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.adapter.adapter_sock)
+    {
         if !p.is_empty() {
             return std::path::PathBuf::from(p);
         }

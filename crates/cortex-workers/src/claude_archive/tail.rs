@@ -454,8 +454,9 @@ fn file_mtime_ms(meta: &std::fs::Metadata) -> i64 {
 /// fall back to [`DEFAULT_HEALTH_BIND`]. Surfaces a parse error so a
 /// typo aborts the daemon at boot rather than silently falling back.
 pub fn resolve_health_bind() -> Result<SocketAddr> {
-    let raw = std::env::var("CORTEX_CLAUDE_ARCHIVE_BIND")
+    let raw = cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.claude_archive.bind)
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| DEFAULT_HEALTH_BIND.to_string());
     raw.parse::<SocketAddr>()
@@ -466,24 +467,21 @@ pub fn resolve_health_bind() -> Result<SocketAddr> {
 /// `CORTEX_CLAUDE_ARCHIVE_POLL_MS`. Out-of-range values fall back
 /// to [`DEFAULT_POLL_INTERVAL`] with a WARN.
 pub fn resolve_poll_interval() -> Duration {
-    let raw = match std::env::var("CORTEX_CLAUDE_ARCHIVE_POLL_MS") {
-        Ok(v) => v,
-        Err(_) => return DEFAULT_POLL_INTERVAL,
+    let v = match cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.claude_archive.poll_ms)
+    {
+        Some(v) => v,
+        None => return DEFAULT_POLL_INTERVAL,
     };
-    match raw.parse::<u64>() {
-        Ok(v) if (100..=60_000).contains(&v) => Duration::from_millis(v),
-        Ok(v) => {
-            tracing::warn!(
-                raw = %raw,
-                parsed = v,
-                "CORTEX_CLAUDE_ARCHIVE_POLL_MS out of [100, 60_000]; using default"
-            );
-            DEFAULT_POLL_INTERVAL
-        }
-        Err(err) => {
-            tracing::warn!(raw = %raw, %err, "CORTEX_CLAUDE_ARCHIVE_POLL_MS not a u64; using default");
-            DEFAULT_POLL_INTERVAL
-        }
+    if (100..=60_000).contains(&v) {
+        Duration::from_millis(v)
+    } else {
+        tracing::warn!(
+            parsed = v,
+            "CORTEX_CLAUDE_ARCHIVE_POLL_MS out of [100, 60_000]; using default"
+        );
+        DEFAULT_POLL_INTERVAL
     }
 }
 
@@ -491,8 +489,9 @@ pub fn resolve_poll_interval() -> Duration {
 /// when the CLI did not pass `--root`.
 #[allow(dead_code)]
 fn resolve_root_env() -> Option<PathBuf> {
-    std::env::var("CORTEX_CLAUDE_ARCHIVE_ROOT")
+    cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.claude_archive.root)
         .filter(|s| !s.trim().is_empty())
         .map(PathBuf::from)
 }
@@ -636,7 +635,7 @@ mod tests {
 
     #[test]
     fn resolve_health_bind_falls_back_to_default_when_unset() {
-        let prior = std::env::var("CORTEX_CLAUDE_ARCHIVE_BIND").ok();
+        let prior = std::env::var_os("CORTEX_CLAUDE_ARCHIVE_BIND");
         std::env::remove_var("CORTEX_CLAUDE_ARCHIVE_BIND");
         let addr = resolve_health_bind().unwrap();
         assert_eq!(addr.port(), 17030);

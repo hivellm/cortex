@@ -346,7 +346,10 @@ impl RawRelevanceConfig {
 /// `crates/cortex-api/config/relevance.toml` so the boot path
 /// works in checkout-style deployments without further wiring.
 pub fn default_config_path() -> std::path::PathBuf {
-    if let Ok(raw) = std::env::var("CORTEX_RELEVANCE_CONFIG") {
+    if let Some(raw) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.dashboard.relevance_config_path)
+    {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
             return std::path::PathBuf::from(trimmed);
@@ -497,7 +500,7 @@ mod tests {
     fn default_config_path_honours_env_override() {
         // Save / restore the env so the test does not leak into
         // siblings that read CORTEX_RELEVANCE_CONFIG.
-        let prior = std::env::var("CORTEX_RELEVANCE_CONFIG").ok();
+        let prior = std::env::var_os("CORTEX_RELEVANCE_CONFIG");
         std::env::set_var("CORTEX_RELEVANCE_CONFIG", "/tmp/relevance.toml");
         let got = default_config_path();
         assert_eq!(got, std::path::PathBuf::from("/tmp/relevance.toml"));

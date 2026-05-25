@@ -52,20 +52,32 @@ pub struct AnalyzerConfig {
 
 impl Default for AnalyzerConfig {
     fn default() -> Self {
+        let cfg = cortex_config::Config::load().unwrap_or_default();
         Self {
-            claude_bin: std::env::var("CORTEX_ANALYZER_BIN")
-                .or_else(|_| std::env::var("CLAUDE_CODE_BIN"))
-                .unwrap_or_else(|_| "claude".to_string()),
-            model: std::env::var("CORTEX_ANALYZER_MODEL")
-                .unwrap_or_else(|_| "claude-sonnet-4-6".to_string()),
+            claude_bin: cfg
+                .analyzer
+                .bin
+                .clone()
+                .or_else(|| std::env::var("CLAUDE_CODE_BIN").ok())
+                .unwrap_or_else(|| "claude".to_string()),
+            model: cfg
+                .analyzer
+                .model
+                .clone()
+                .unwrap_or_else(|| "claude-sonnet-4-6".to_string()),
             timeout: Duration::from_secs(120),
             max_events: 200,
-            api_key: std::env::var("CORTEX_ANALYZER_API_KEY")
-                .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-                .ok()
+            api_key: cfg
+                .analyzer
+                .api_key
+                .clone()
+                .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
                 .filter(|s| !s.is_empty()),
-            api_base: std::env::var("CORTEX_ANALYZER_API_BASE")
-                .unwrap_or_else(|_| "https://api.anthropic.com".to_string()),
+            api_base: cfg
+                .analyzer
+                .api_base
+                .clone()
+                .unwrap_or_else(|| "https://api.anthropic.com".to_string()),
         }
     }
 }

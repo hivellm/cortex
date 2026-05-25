@@ -568,8 +568,9 @@ pub async fn fetch_archive_watcher_status(
 /// / unset returns an empty Vec so the coverage path skips the
 /// archive_watchers block entirely.
 pub fn resolve_archive_watcher_urls() -> Vec<String> {
-    std::env::var("CORTEX_ARCHIVE_WATCHER_URLS")
+    cortex_config::Config::load()
         .ok()
+        .and_then(|c| c.ingestion.archive_watcher_urls)
         .map(|raw| {
             raw.split(',')
                 .map(|s| s.trim())
@@ -771,7 +772,10 @@ pub fn read_pruner_status_from_default_path() -> Option<PrunerStatus> {
 /// Resolve the pruner-status file path: honours `CORTEX_PRUNER_STATUS_FILE`
 /// when set, otherwise `<home>/.cortex/pruner-status.json`.
 pub fn pruner_status_path() -> Option<std::path::PathBuf> {
-    if let Ok(p) = std::env::var("CORTEX_PRUNER_STATUS_FILE") {
+    if let Some(p) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.ingestion.pruner_status_file)
+    {
         return Some(std::path::PathBuf::from(p));
     }
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
@@ -820,7 +824,7 @@ mod tests {
 
     #[test]
     fn resolve_archive_watcher_urls_splits_csv_and_trims() {
-        let prior = std::env::var("CORTEX_ARCHIVE_WATCHER_URLS").ok();
+        let prior = std::env::var_os("CORTEX_ARCHIVE_WATCHER_URLS");
         std::env::set_var(
             "CORTEX_ARCHIVE_WATCHER_URLS",
             "http://a:17030 , http://b:17030,, http://c:17030",

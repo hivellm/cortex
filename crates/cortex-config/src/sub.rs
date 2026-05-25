@@ -121,6 +121,12 @@ pub struct EmbedderConfig {
     /// Env: `CORTEX_VECTORIZER_JWT_WARMUP_SECS`.
     #[serde(default)]
     pub jwt_warmup_secs: u64,
+    /// Pre-minted Vectorizer JWT for the API's search proxy. When
+    /// set, the proxy presents this bearer instead of running the
+    /// `/auth/login` flow itself. Env:
+    /// `CORTEX_EMBEDDER_VECTORIZER_JWT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vectorizer_jwt: Option<String>,
     /// Collection prefix (deployment namespace).
     /// Env: `CORTEX_EMBEDDER_COLLECTION_PREFIX`.
     #[serde(default = "default_collection_prefix")]
@@ -169,6 +175,7 @@ impl Default for EmbedderConfig {
             vectorizer_password: None,
             vectorizer_api_key: None,
             jwt_warmup_secs: 0,
+            vectorizer_jwt: None,
             collection_prefix: default_collection_prefix(),
             vector_dim: default_embedder_vector_dim(),
         }
@@ -227,6 +234,16 @@ pub struct MeiliConfig {
     /// Env: `CORTEX_FULLTEXT_MAX_BODY_BYTES`.
     #[serde(default = "default_fulltext_max_body_bytes")]
     pub max_body_bytes: usize,
+    /// When true, the fulltext-indexer bin walks the archive on boot
+    /// and replays missing partitions before consuming Synap.
+    /// Env: `CORTEX_FULLTEXT_REPLAY_MISSING`.
+    #[serde(default)]
+    pub replay_missing: bool,
+    /// When true, the fulltext routing layer indexes low-signal
+    /// `tool_call` envelopes (otherwise they are dropped at routing).
+    /// Env: `CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS`.
+    #[serde(default)]
+    pub index_low_signal_tool_calls: bool,
 }
 
 fn default_fulltext_synap_url() -> String {
@@ -268,6 +285,8 @@ impl Default for MeiliConfig {
             max_retry: default_fulltext_max_retry(),
             await_task: false,
             max_body_bytes: default_fulltext_max_body_bytes(),
+            replay_missing: false,
+            index_low_signal_tool_calls: false,
         }
     }
 }
@@ -336,6 +355,24 @@ pub struct NexusConfig {
     /// Env: `CORTEX_GRAPH_METADATA_DB`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata_db: Option<String>,
+    /// Directory holding Cypher templates the graph-writer +
+    /// graph-backfill bins load on boot.
+    /// Env: `CORTEX_GRAPH_CYPHER_DIR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cypher_dir: Option<String>,
+    /// Synap consumer id stamped on commits.
+    /// Env: `CORTEX_GRAPH_CONSUMER_ID`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consumer_id: Option<String>,
+    /// When true, the MCP `cortex_graph_query` surface accepts raw
+    /// Cypher (kill-switch off in production unless signed).
+    /// Env: `CORTEX_GRAPH_CYPHER_ENABLED`.
+    #[serde(default)]
+    pub cypher_enabled: bool,
+    /// Stale-edge sweeper tick interval in seconds. `None` uses the
+    /// compile-time default. Env: `CORTEX_GRAPH_SWEEPER_INTERVAL_SECS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweeper_interval_secs: Option<u64>,
 }
 
 fn default_graph_transport() -> String {
@@ -379,6 +416,10 @@ impl Default for NexusConfig {
             nexus_api_key: None,
             out_of_order_buffer_secs: default_graph_out_of_order_secs(),
             metadata_db: None,
+            cypher_dir: None,
+            consumer_id: None,
+            cypher_enabled: false,
+            sweeper_interval_secs: None,
         }
     }
 }
@@ -415,6 +456,16 @@ pub struct IngestionConfig {
     /// overridden. Env: `CORTEX_HOME`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// Comma-separated list of upstream archive-watcher URLs the
+    /// coverage audit probes for archive-side keepers.
+    /// Env: `CORTEX_ARCHIVE_WATCHER_URLS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_watcher_urls: Option<String>,
+    /// Path the pruner writes its post-run status JSON to. `None`
+    /// falls back to `<home>/.cortex/pruner-status.json`.
+    /// Env: `CORTEX_PRUNER_STATUS_FILE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pruner_status_file: Option<String>,
     /// Client-side URL of the ingestion router (cortex-ingestion or
     /// cortex-ops replay). Distinct from `bind` which is the
     /// listen-side address. Env: `CORTEX_INGESTION_URL`.
@@ -444,6 +495,8 @@ impl Default for IngestionConfig {
             home: None,
             ingestion_url: None,
             cas_db: None,
+            archive_watcher_urls: None,
+            pruner_status_file: None,
         }
     }
 }
@@ -520,6 +573,11 @@ pub struct DashboardConfig {
     /// Env: `CORTEX_REWRITER_TIMEOUT_MS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewriter_timeout_ms: Option<u64>,
+    /// Override path for `relevance.toml`. `None` resolves to the
+    /// in-tree default via `default_relevance_config_path()`.
+    /// Env: `CORTEX_RELEVANCE_CONFIG`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relevance_config_path: Option<String>,
     /// Bearer token the CLI uses when calling the cortex-api.
     /// Env: `CORTEX_API_TOKEN`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -557,6 +615,7 @@ impl Default for DashboardConfig {
             query_rewriter: None,
             rewriter_model: None,
             rewriter_timeout_ms: None,
+            relevance_config_path: None,
             api_token: None,
             api_url: None,
         }
@@ -688,7 +747,7 @@ impl Default for DoctorConfig {
 // Classifier
 // -------------------------------------------------------------
 
-/// Classifier worker health-probe knobs.
+/// Classifier worker knobs (both health-probe and worker config).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ClassifierConfig {
     /// HTTP URL of the classifier worker's `/healthz` endpoint.
@@ -702,13 +761,34 @@ pub struct ClassifierConfig {
     /// Env: `CORTEX_CLASSIFIER_STALENESS_MS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub staleness_ms: Option<u64>,
+    /// Max consecutive consume errors before the worker self-exits.
+    /// `0` disables the supervisor (pre-§1.2 behaviour).
+    /// Env: `CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_consume_errors: Option<u64>,
+    /// Synap base URL the classifier consumes from.
+    /// Env: `CORTEX_CLASSIFIER_SYNAP_URL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synap_url: Option<String>,
+    /// Classifier mode (`heuristic` / `claude` / `passthrough`).
+    /// Env: `CORTEX_CLASSIFIER_MODE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Prompt version identifier baked into outgoing audit envelopes.
+    /// Env: `CORTEX_CLASSIFIER_PROMPT_VERSION`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_version: Option<String>,
+    /// Anthropic model id the classifier calls.
+    /// Env: `CORTEX_CLASSIFIER_MODEL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 // -------------------------------------------------------------
 // Consolidator
 // -------------------------------------------------------------
 
-/// Consolidator knobs (JSONL fallback path).
+/// Consolidator knobs (JSONL fallback path + cursor + rotation).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ConsolidatorConfig {
     /// Path to the JSONL fallback file the consolidator writes
@@ -716,6 +796,15 @@ pub struct ConsolidatorConfig {
     /// Env: `CORTEX_CONSOLIDATIONS_FALLBACK_FILE`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_file: Option<String>,
+    /// Byte ceiling that triggers JSONL rotation (per-run cap).
+    /// `None` uses the compile-time default.
+    /// Env: `CORTEX_CONSOLIDATIONS_FALLBACK_ROTATE_BYTES`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_rotate_bytes: Option<u64>,
+    /// Path the consolidator stores its tail cursor in.
+    /// Env: `CORTEX_CONSOLIDATOR_CURSOR_FILE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_file: Option<String>,
 }
 
 // -------------------------------------------------------------
@@ -731,4 +820,84 @@ pub struct AutoMemoryConfig {
     /// Env: `CORTEX_AUTO_MEMORY_PROJECT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+}
+
+// -------------------------------------------------------------
+// Analyzer (Claude Code CLI rewriter / summariser)
+// -------------------------------------------------------------
+
+/// `cortex-api::analyzer::Analyzer` knobs — the Claude Code CLI
+/// binding for prompt-side rewrites.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AnalyzerConfig {
+    /// Claude Code CLI binary name. Falls back to `CLAUDE_CODE_BIN`
+    /// (non-CORTEX env) then `"claude"`.
+    /// Env: `CORTEX_ANALYZER_BIN`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bin: Option<String>,
+    /// Anthropic model id the analyzer calls. `None` falls back to
+    /// the compile-time default `claude-sonnet-4-6`.
+    /// Env: `CORTEX_ANALYZER_MODEL`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Anthropic API key. Falls back to `ANTHROPIC_API_KEY`
+    /// (non-CORTEX env). Env: `CORTEX_ANALYZER_API_KEY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Anthropic API base URL override (default
+    /// `https://api.anthropic.com`). Env: `CORTEX_ANALYZER_API_BASE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_base: Option<String>,
+}
+
+// -------------------------------------------------------------
+// Claude archive (cortex-claude-archive bin)
+// -------------------------------------------------------------
+
+/// Bind / poll / root knobs for `cortex-claude-archive`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ClaudeArchiveConfig {
+    /// Bind address for the IPC socket / pipe. Env:
+    /// `CORTEX_CLAUDE_ARCHIVE_BIND`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind: Option<String>,
+    /// Poll interval in milliseconds. Env:
+    /// `CORTEX_CLAUDE_ARCHIVE_POLL_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll_ms: Option<u64>,
+    /// Root directory the watcher tails (defaults to
+    /// `~/.claude/projects` when unset). Env:
+    /// `CORTEX_CLAUDE_ARCHIVE_ROOT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+}
+
+// -------------------------------------------------------------
+// Adapter (cortex-adapter-claude-code)
+// -------------------------------------------------------------
+
+/// Claude Code adapter knobs (hook shim + admin port).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AdapterConfig {
+    /// When true, the `cortex-hook` shim forces the legacy
+    /// fallback transport (named pipe / unix socket) instead of the
+    /// direct daemon connection. Env: `CORTEX_HOOK_FORCE_FALLBACK`.
+    #[serde(default)]
+    pub hook_force_fallback: bool,
+    /// When true, the adapter exits early on every hook event
+    /// (kill-switch). Env: `CORTEX_ADAPTER_DISABLE`.
+    #[serde(default)]
+    pub adapter_disable: bool,
+    /// Override path for the Windows named pipe the adapter
+    /// connects through. Env: `CORTEX_ADAPTER_PIPE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_pipe: Option<String>,
+    /// Override path for the Unix domain socket the adapter
+    /// connects through. Env: `CORTEX_ADAPTER_SOCK`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_sock: Option<String>,
+    /// TCP port for the local admin endpoint. `None` defaults
+    /// inside the adapter. Env: `CORTEX_ADAPTER_ADMIN_PORT`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_admin_port: Option<u16>,
 }

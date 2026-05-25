@@ -464,7 +464,10 @@ fn default_claude_root() -> Result<PathBuf> {
 }
 
 fn default_archive_root() -> Result<PathBuf> {
-    if let Ok(p) = std::env::var("CORTEX_ARCHIVE_ROOT") {
+    if let Some(p) = cortex_config::Config::load()
+        .ok()
+        .and_then(|c| c.ingestion.archive_root)
+    {
         return Ok(PathBuf::from(p));
     }
     if let Ok(home) = std::env::var("USERPROFILE") {
