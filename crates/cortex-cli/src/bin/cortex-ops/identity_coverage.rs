@@ -27,38 +27,11 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use cortex_workers::coverage::{BackendCoverage, CoverageReport};
 use rusqlite::Connection;
-use serde::Serialize;
 use serde_json::json;
 
 use super::helpers::resolve_metadata_db_path;
-
-/// One per-backend coverage counter pair: total rows where the
-/// column was NULL plus a sample of orphan event_ids for the
-/// operator to spot-check. The sample is capped by
-/// `--sample-limit` so a million-row gap does not blow up the
-/// report.
-#[derive(Debug, Clone, Default, Serialize)]
-struct BackendCoverage {
-    missing: u64,
-    sample_event_ids: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize)]
-struct CoverageReport {
-    metadata_db: String,
-    rows_total: u64,
-    nexus: BackendCoverage,
-    vectorizer: BackendCoverage,
-    meili: BackendCoverage,
-    archive: BackendCoverage,
-    /// True when ANY backend column has at least one NULL row.
-    /// The CLI exit code mirrors this — operator-visible failure
-    /// at the cron level.
-    failed: bool,
-    /// Wall-clock latency of the scan in milliseconds.
-    latency_ms: u64,
-}
 
 pub(super) fn doctor_identity_coverage(
     metadata_db: Option<String>,

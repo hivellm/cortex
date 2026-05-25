@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::{clip, collect_lane_hits, normalize_repo, ts_to_relative, DashboardState};
 
 /// One row in the `/v1/dashboard/consolidations` list.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsolidationRow {
     /// Envelope ULID — opaque identifier, also the route id for
     /// `/v1/dashboard/consolidations/{id}`.
@@ -56,13 +56,67 @@ pub struct ConsolidationRow {
 
 /// Detail body for `/v1/dashboard/consolidations/{id}` — the row plus
 /// the unclipped markdown.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsolidationDetail {
     /// Spread of [`ConsolidationRow`].
     #[serde(flatten)]
     pub row: ConsolidationRow,
     /// Full envelope body (markdown).
     pub body_markdown: String,
+}
+
+/// Filter echo carried back on every [`ConsolidationReportView`].
+/// ADR-014 / phase13f §2.2 — handlers MUST surface what they actually
+/// filtered against so the GUI never re-derives the active filter
+/// from URL state alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsolidationFilter {
+    /// Repo allow-list after normalisation. Empty = no repo filter.
+    #[serde(default)]
+    pub repos: Vec<String>,
+    /// Grain filter (`session` | `topic` | `decision_trace`). `None`
+    /// when no grain filter was applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grain: Option<String>,
+}
+
+/// Dashboard projection of `/v1/dashboard/consolidations`. The handler
+/// renders these without doing any additional state inference — see
+/// ADR-014 / phase13f §2.2. `total` is carried explicitly so handlers
+/// and GUI never need to recompute from `rows.len()`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConsolidationReportView {
+    /// Rows that survived filtering, sorted newest-first.
+    pub rows: Vec<ConsolidationRow>,
+    /// Number of rows in `rows`. Equal to `rows.len()` but carried
+    /// on the view so consumers cannot drift.
+    pub total: u64,
+    /// Echo of the filter that produced this list.
+    pub filter: ConsolidationFilter,
+}
+
+impl ConsolidationReportView {
+    /// Build a view from a row collection + the active filter. The
+    /// caller owns the sort order — this constructor does not
+    /// re-sort.
+    pub fn from_rows(rows: Vec<ConsolidationRow>, filter: ConsolidationFilter) -> Self {
+        let total = rows.len() as u64;
+        Self {
+            rows,
+            total,
+            filter,
+        }
+    }
+}
+
+/// Source the consolidations handler reads from. Defaults to the
+/// in-process Meili lane (`MeiliConsolidationSource`); tests
+/// substitute a fixture implementation so the projection logic is
+/// exercised without Meili.
+#[async_trait::async_trait]
+pub trait ConsolidationReportSource: Send + Sync {
+    /// Return rows that match `filter`, sorted newest-first.
+    async fn list(&self, filter: &ConsolidationFilter) -> anyhow::Result<Vec<ConsolidationRow>>;
 }
 
 /// Query params — mirrors [`super::DecisionsQuery`] / [`super::AnalysesQuery`]
@@ -214,4 +268,127 @@ pub(super) async fn consolidation_detail(
         Json(serde_json::json!({ "error": "consolidation not found", "id": id })),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_row(id: &str, grain: &str) -> ConsolidationRow {
+        ConsolidationRow {
+            id: id.to_string(),
+            consolidation_id: Some(format!("cons-{id}")),
+            title: format!("{grain} digest {id}"),
+            grain: grain.to_string(),
+            depth: "shallow".to_string(),
+            model: Some("claude-haiku-4-5".to_string()),
+            source_event_count: 3,
+            repo: Some("Cortex".to_string()),
+            topics: vec!["retention".to_string(), "phase13f".to_string()],
+            excerpt: "first 800 chars of body".to_string(),
+            occurred_at: "2 minutes ago".to_string(),
+        }
+    }
+
+    #[test]
+    fn report_view_carries_total_from_row_count() {
+        let rows = vec![sample_row("01A", "session"), sample_row("01B", "topic")];
+        let filter = ConsolidationFilter {
+            repos: vec!["Cortex".into()],
+            grain: None,
+        };
+        let view = ConsolidationReportView::from_rows(rows.clone(), filter.clone());
+        assert_eq!(view.total, 2);
+        assert_eq!(view.rows, rows);
+        assert_eq!(view.filter, filter);
+    }
+
+    #[test]
+    fn report_view_round_trips_via_serde() {
+        let rows = vec![sample_row("01A", "session")];
+        let filter = ConsolidationFilter {
+            repos: vec!["Cortex".into()],
+            grain: Some("session".into()),
+        };
+        let view = ConsolidationReportView::from_rows(rows, filter);
+        let j = serde_json::to_string(&view).unwrap();
+        let p: ConsolidationReportView = serde_json::from_str(&j).unwrap();
+        assert_eq!(p, view);
+    }
+
+    #[test]
+    fn filter_serialises_without_none_grain_field() {
+        let filter = ConsolidationFilter {
+            repos: vec!["Cortex".into()],
+            grain: None,
+        };
+        let j = serde_json::to_string(&filter).unwrap();
+        // `grain: None` MUST be skipped; clients distinguish
+        // "no filter" from "explicit empty string".
+        assert!(!j.contains("grain"), "got: {j}");
+    }
+
+    #[test]
+    fn row_round_trips_via_serde_with_optional_fields_absent() {
+        let row = ConsolidationRow {
+            id: "01Z".into(),
+            consolidation_id: None,
+            title: "rollup".into(),
+            grain: String::new(),
+            depth: String::new(),
+            model: None,
+            source_event_count: 0,
+            repo: None,
+            topics: Vec::new(),
+            excerpt: String::new(),
+            occurred_at: String::new(),
+        };
+        let j = serde_json::to_string(&row).unwrap();
+        let p: ConsolidationRow = serde_json::from_str(&j).unwrap();
+        assert_eq!(p, row);
+    }
+
+    /// Fixture source used by tests to prove the trait shape is
+    /// object-safe + drives the projection without Meili.
+    struct StubSource(Vec<ConsolidationRow>);
+
+    #[async_trait::async_trait]
+    impl ConsolidationReportSource for StubSource {
+        async fn list(
+            &self,
+            filter: &ConsolidationFilter,
+        ) -> anyhow::Result<Vec<ConsolidationRow>> {
+            let allow: std::collections::HashSet<String> = filter.repos.iter().cloned().collect();
+            let g = filter.grain.clone();
+            let out: Vec<ConsolidationRow> = self
+                .0
+                .iter()
+                .filter(|r| match r.repo.as_deref() {
+                    Some(repo) if !allow.is_empty() => allow.contains(repo),
+                    _ => allow.is_empty(),
+                })
+                .filter(|r| match g.as_deref() {
+                    Some(g) => r.grain == g,
+                    None => true,
+                })
+                .cloned()
+                .collect();
+            Ok(out)
+        }
+    }
+
+    #[tokio::test]
+    async fn source_trait_is_object_safe_and_projects_filter() {
+        let src: Box<dyn ConsolidationReportSource> = Box::new(StubSource(vec![
+            sample_row("01A", "session"),
+            sample_row("01B", "topic"),
+        ]));
+        let filter = ConsolidationFilter {
+            repos: vec!["Cortex".into()],
+            grain: Some("topic".into()),
+        };
+        let rows = src.list(&filter).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].grain, "topic");
+    }
 }

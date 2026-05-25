@@ -18,7 +18,10 @@
 //! at the worker layer so callers do not need a `cortex_storage`
 //! import to handle a checkpoint.
 //!
-//! [`ProducerEnvelopeProducer::name`]: super::EnvelopeProducer::name
+//! `ProducerReport` and its dashboard view live in [`super::report`]
+//! (moved out by phase13f §2.4 to mirror the Sweep layout).
+//!
+//! [`EnvelopeProducer::name`]: super::EnvelopeProducer::name
 
 use chrono::{DateTime, Utc};
 use cortex_storage::ProducerCheckpointRow;
@@ -61,23 +64,6 @@ impl ProducerCheckpoint {
     }
 }
 
-/// Per-run producer summary the supervisor logs / persists.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProducerReport {
-    /// Producer name.
-    pub producer_name: String,
-    /// Total envelopes emitted across every batch in this run.
-    pub envelopes_emitted: u64,
-    /// Number of batches the producer wrote a checkpoint for.
-    pub batches_emitted: u64,
-    /// `event_id` of the last envelope emitted; empty when the
-    /// producer had no work.
-    pub last_event_id: String,
-    /// `occurred_at` of the last envelope; `None` when the
-    /// producer had no work.
-    pub last_occurred_at: Option<DateTime<Utc>>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,20 +84,6 @@ mod tests {
         let j = serde_json::to_string(&cp).unwrap();
         let p: ProducerCheckpoint = serde_json::from_str(&j).unwrap();
         assert_eq!(p, cp);
-    }
-
-    #[test]
-    fn report_round_trips_via_serde() {
-        let r = ProducerReport {
-            producer_name: "bootstrap".into(),
-            envelopes_emitted: 42,
-            batches_emitted: 3,
-            last_event_id: "01LAST".into(),
-            last_occurred_at: Some(ts("2026-05-19T12:00:00Z")),
-        };
-        let j = serde_json::to_string(&r).unwrap();
-        let p: ProducerReport = serde_json::from_str(&j).unwrap();
-        assert_eq!(p, r);
     }
 
     #[test]

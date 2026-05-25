@@ -40,8 +40,11 @@
 //! - [`EnvelopeProducer`] (`r#trait.rs`) — the contract.
 //! - [`ProducerCtx`] (`ctx.rs`) — shared environment: metadata
 //!   handle, reference clock, producer-name string, logger target.
-//! - [`ProducerCheckpoint`] / [`ProducerReport`] (`checkpoint.rs`)
-//!   — the persisted-cursor and per-run summary shapes.
+//! - [`ProducerCheckpoint`] (`checkpoint.rs`) — the persisted-cursor
+//!   shape.
+//! - [`ProducerReport`] / [`ProducerReportView`] (`report.rs`) — the
+//!   per-run summary shape and its dashboard projection (ADR-014 /
+//!   phase13f §2.4).
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -50,10 +53,12 @@ pub mod checkpoint;
 pub mod ctx;
 #[path = "trait.rs"]
 pub mod producer_trait;
+pub mod report;
 
-pub use checkpoint::{ProducerCheckpoint, ProducerReport};
+pub use checkpoint::ProducerCheckpoint;
 pub use ctx::{ProducerCtx, ProducerMetadataHandle};
 pub use producer_trait::EnvelopeProducer;
+pub use report::{ProducerReport, ProducerReportView};
 
 #[cfg(test)]
 mod tests {
