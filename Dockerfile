@@ -35,12 +35,20 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 # - pkg-config + libssl-dev → reqwest's TLS via native-tls (some
 #   transitive deps still link OpenSSL).
 # - protobuf-compiler        → tonic / prost build scripts.
-# - cmake + clang/git        → zstd-sys, parquet, rusqlite bundled.
+# - cmake + git              → zstd-sys, parquet, rusqlite bundled.
+# - gcc + g++ + make         → cc-rs default toolchain for every
+#   *-sys crate. (Previously this list included `clang`, but the
+#   `dhi.io/debian-base:trixie-dev` mirror temporarily ships
+#   `clang:amd64=1:19.0-63dhi0` which transitively pulls
+#   `libobjc-14-dev` and forces a downgrade of
+#   `gcc-14-base:amd64=14.2.0-19` against the already-installed
+#   `14.2.0-19dhi0`. The workspace builds with gcc fine; clang was
+#   redundant.)
 # - curl                     → rustup bootstrap.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         pkg-config libssl-dev ca-certificates curl \
-        protobuf-compiler cmake clang git \
+        protobuf-compiler cmake git \
         gcc g++ make \
  && rm -rf /var/lib/apt/lists/* \
  && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \

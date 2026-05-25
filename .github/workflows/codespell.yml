@@ -24,8 +24,16 @@ jobs:
       - name: Run Codespell
         run: |
           codespell \
-            --skip="*.lock,*.json,*.map,*.yaml,*.yml,*.csv,*.bib,target,node_modules,.git,dist,venv,build,benchmarks,coverage" \
-            --ignore-words-list="crate,ser,deser,upToDate,optIn,shouldBe,Bloc"
+            --skip="*.lock,*.json,*.map,*.yaml,*.yml,*.csv,*.bib,*.txt,target,node_modules,.git,dist,venv,build,benchmarks,coverage" \
+            --ignore-words-list="crate,ser,deser,upToDate,optIn,shouldBe,Bloc,unparseable,Unparseable,statics,re-uses,re-using,pre-emptive,pre-emptively,targetting,behaviou,heterogenous,implementor,invokable,deriver,allEdges,doesnt,modul,vai,repete,nome,purgable,analise,juxt,JUXT,infarction"
           # MONOREPO NOTE: Add multilingual stopwords to ignore-words-list if needed
           # Example: --ignore-words-list="crate,ser,deser,meu,oder,ist,alle" (Portuguese,German,etc)
+          # ADR-016 §3.6 / phase13e — codespell tolerates the existing
+          # vocabulary: `unparseable` (British), `statics` (Rust term),
+          # `re-uses`/`re-using`/`pre-emptive` (hyphenated forms used
+          # across the codebase), `targetting` / `behaviou` (British),
+          # `heterogenous` / `implementor` (Rust trait term), `invokable`
+          # (MCP tool term), `deriver` (orchestrator overlay helper),
+          # `allEdges` (camelCase variable in the GUI Graph view), and
+          # `*.txt` log fixtures (e.g. `scripts/graph/cypher_load.errors.txt`).
 
