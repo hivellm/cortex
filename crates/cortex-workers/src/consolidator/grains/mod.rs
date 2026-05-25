@@ -19,8 +19,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod decision_trace;
 pub mod session;
 pub mod topic;
 
+pub use decision_trace::{
+    DecisionTraceFetcher, DecisionTraceGrain, LiveDecisionTraceFetcher,
+};
 pub use session::{LiveSessionInputFetcher, SessionGrain, SessionInputFetcher};
 pub use topic::{LiveTopicClusterFetcher, TopicClusterFetcher, TopicGrain};
