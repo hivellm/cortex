@@ -5,7 +5,7 @@ name: Retention canary
 # corpus through every retention sweep and asserts the post-state
 # across Vectorizer / Nexus / Meili / SQLite / CAS / Parquet
 # archive. The harness lives at
-# `crates/cortex-retention/tests/canary.rs` and runs against
+# `crates/cortex-workers/tests/retention_canary.rs` and runs against
 # in-memory backends so the workflow stays fast (seconds, not
 # minutes), hermetic (no network), and reproducible.
 
@@ -15,7 +15,6 @@ on:
   pull_request:
     branches: [main, master, develop]
     paths:
-      - "crates/cortex-retention/**"
       - "crates/cortex-storage/**"
       - "crates/cortex-classifier/**"
       - "crates/cortex-workers/**"
@@ -46,13 +45,13 @@ jobs:
 
       - name: Build canary binary
         run: |
-          cargo test -p cortex-retention --test canary --no-run
+          cargo test -p cortex-workers --test retention_canary --no-run
 
       - name: Run canary
         env:
-          RUST_LOG: info,cortex_retention=info
+          RUST_LOG: info,cortex_workers=info
         run: |
-          cargo test -p cortex-retention --test canary -- --nocapture
+          cargo test -p cortex-workers --test retention_canary -- --nocapture
 
       # When the canary fails we want the SQLite + archive tempdirs
       # the test produced. Cargo wipes them on test exit, so the
@@ -62,7 +61,7 @@ jobs:
         if: failure()
         run: |
           mkdir -p artifacts
-          cargo test -p cortex-retention --test canary -- --nocapture \
+          cargo test -p cortex-workers --test retention_canary -- --nocapture \
             > artifacts/canary.log 2>&1 || true
 
       - name: Upload artifacts on failure
