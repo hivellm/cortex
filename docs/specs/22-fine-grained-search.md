@@ -176,15 +176,69 @@ Wire reasons used today (one per failure path):
 
 ## MCP tool surface (spec 18 link)
 
-`ToolRegistry::default_set()` registers three new tools alongside the
-seven existing ones (size: 7 → 10). All three POST to the
-corresponding `cortex-api` route with the request shape above.
+`ToolRegistry::default_set()` registered three new tools alongside the
+seven phase11 originals (size 7 → 10). Phase13g §1–§3 adds three more
+grounding tools (10 → 13).
 
-| Tool                    | Endpoint              | MCP descriptor highlights |
-|-------------------------|-----------------------|---------------------------|
-| `cortex_keyword_search` | `/v1/search/keyword`  | `index` required; `q`, `limit` (≤ 100), `filter`, `sort`, `attributes_to_retrieve`. |
-| `cortex_vector_search`  | `/v1/search/vector`   | `collection` + `query_vector` required; `k` (≤ 200), `score_threshold`. v1 declines `query_text`. |
-| `cortex_graph_query`    | `/v1/search/graph`    | `mode` discriminator; `neighbors.depth ≤ 5`; `cypher` gated. |
+| Tool                       | Endpoint                          | MCP descriptor highlights |
+|----------------------------|-----------------------------------|---------------------------|
+| `cortex_keyword_search`    | `POST /v1/search/keyword`         | `index` required; `q`, `limit` (≤ 100), `filter`, `sort`, `attributes_to_retrieve`. |
+| `cortex_vector_search`     | `POST /v1/search/vector`          | `collection` + `query_vector` required; `k` (≤ 200), `score_threshold`. v1 declines `query_text`. |
+| `cortex_graph_query`       | `POST /v1/search/graph`           | `mode` discriminator; `neighbors.depth ≤ 5`; `cypher` gated. |
+| `cortex_active_work`       | `GET /v1/dashboard/active-work`   | Optional `repo` filter; returns `{ active_tasks, in_progress_count, blocked_count, recent_archives }`. MCP caps `active_tasks` at 50. |
+| `cortex_similar_sessions`  | `POST /v1/search/similar-sessions` | `query` + `repo` required; `k` (≤ 10, default 5), `confidence_floor` (default 0.6); returns `{ rows: ConsolidationHit[], total, filter }`. |
+| `cortex_decision_chain`    | `GET /v1/search/decision-chain`   | `event_id` (ULID `[0-9A-Z]{26}`) required; `max_hops` (≤ 16, default 16); returns `{ chain, walked_predecessors, walked_successors }`. |
+
+### Phase13g §1–§3 wire shapes
+
+- **`cortex_active_work`** returns
+  ```json
+  {
+    "active_tasks": [{"id": "phase13g_demo", "phase": "phase13g", "status": "in-progress",
+                      "next_unchecked_item": "4.5 add renderer tests", "blocked_reason": null,
+                      "repo": "cortex"}],
+    "in_progress_count": 1,
+    "blocked_count": 0,
+    "recent_archives": [{"id": "2026-05-25-phase13f_demo",
+                         "archived_at": "2026-05-25",
+                         "title": "Dashboard handlers are pure readers"}]
+  }
+  ```
+  Error taxonomy: HTTP 200 with empty arrays when no metadata store
+  wired or the workspace tree is missing; soft-error envelope on
+  filesystem permission denied (`reason: workspace_unreachable`).
+
+- **`cortex_similar_sessions`** returns
+  ```json
+  {
+    "rows": [{"consolidation_id": "cons-ses-001", "session_id": "01HSESS",
+              "title": "rework analysis", "summary_markdown": "…",
+              "source_event_count": 3, "occurred_at": "2026-05-19T12:00:00Z",
+              "score": 0.91}],
+    "total": 1,
+    "filter": {"repo": "cortex", "k": 5, "confidence_floor": 0.6}
+  }
+  ```
+  Error taxonomy: `400 bad_input` on missing `query`/`repo` or
+  non-slug repo; `404 collection_missing` when the consolidation
+  collection does not exist for the repo; `502 vectorizer_unreachable`
+  on backend transport failure.
+
+- **`cortex_decision_chain`** returns
+  ```json
+  {
+    "chain": [{"event_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+               "slug": "adr-009-sweep-trait", "status": "superseded",
+               "date": "2026-05-19", "title": "Sweep trait …",
+               "supersedes": null,
+               "superseded_by": "01ARZ3NDEKTSV4RRFFQ69G5FAW"}],
+    "walked_predecessors": 0,
+    "walked_successors": 1
+  }
+  ```
+  Error taxonomy: `400 bad_input` on non-ULID `event_id` or
+  `max_hops` outside `[1, 16]`; `502 nexus_unreachable` on backend
+  transport failure.
 
 ## Decisions
 

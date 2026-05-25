@@ -63,6 +63,21 @@ pub mod section_caps {
     pub const SNIPPET_BYTES: usize = 1024;
     /// Max bytes per decision body.
     pub const DECISION_BYTES: usize = 512;
+    /// Phase13g §4.2 — section byte budget for the "Active operator
+    /// work" section produced by [`super::render_active_work`].
+    /// Sized for ~6 rows of `<phase> · <status> · <next>` plus a
+    /// recent-archives tail.
+    pub const ACTIVE_WORK_BYTES: usize = 1_200;
+    /// Phase13g §4.2 — section byte budget for the "Similar past
+    /// sessions" section produced by [`super::render_similar_sessions`].
+    /// Larger than the active-work cap because each row carries a
+    /// trimmed summary excerpt.
+    pub const SIMILAR_SESSIONS_BYTES: usize = 2_000;
+    /// Phase13g §4.2 — section byte budget for the "ADR provenance"
+    /// section produced by [`super::render_adr_provenance`].
+    /// Conditional — the orchestrator only renders it when an ADR
+    /// id appears in the query or fusion result.
+    pub const ADR_PROVENANCE_BYTES: usize = 800;
 }
 
 /// Trim mode applied by the budget clipper to snippets. Spec 12
@@ -109,6 +124,30 @@ pub struct FormatOptions {
     pub decision_byte_cap: usize,
     /// Per-snippet byte cap.
     pub snippet_byte_cap: usize,
+    /// Phase13g §4 — grounding sections fed by the three new MCP
+    /// tools (`cortex_active_work`, `cortex_similar_sessions`,
+    /// `cortex_decision_chain`). Default is empty; the orchestrator
+    /// populates these when the pre-thinking pipeline fetches the
+    /// tool output.
+    pub grounding: GroundingSections,
+}
+
+/// Phase13g §4 — typed envelope carrying the three grounding-tool
+/// outputs. The renderer projects each into its corresponding
+/// section under [`section_caps::ACTIVE_WORK_BYTES`] /
+/// [`SIMILAR_SESSIONS_BYTES`] / [`ADR_PROVENANCE_BYTES`].
+#[derive(Debug, Clone, Default)]
+pub struct GroundingSections {
+    /// Rows produced by `cortex_active_work`. Empty ⇒ the
+    /// "Active operator work" section is skipped.
+    pub active_work: Vec<ActiveWorkRow>,
+    /// Rows produced by `cortex_similar_sessions`. Empty ⇒ the
+    /// "Similar past sessions" section is skipped.
+    pub similar_sessions: Vec<SimilarSessionRow>,
+    /// Rows produced by `cortex_decision_chain`. Empty ⇒ the
+    /// "ADR provenance" section is skipped (phase13g §4.3
+    /// conditional).
+    pub adr_provenance: Vec<AdrProvenanceRow>,
 }
 
 impl Default for FormatOptions {
@@ -127,6 +166,7 @@ impl Default for FormatOptions {
             snippet_trim: SnippetTrim::Full,
             decision_byte_cap: section_caps::DECISION_BYTES,
             snippet_byte_cap: section_caps::SNIPPET_BYTES,
+            grounding: GroundingSections::default(),
         }
     }
 }
@@ -211,6 +251,27 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
             )
             .ok();
         }
+        out.push('\n');
+    }
+
+    // Phase13g §4.4 — grounding sections render between laws and
+    // the consolidated-context block. Active work and similar
+    // sessions outrank past raw turns because they carry richer
+    // signal per byte. Each renderer returns "" when its input is
+    // empty so an unwired tool degrades gracefully.
+    let aw = render_active_work(&opts.grounding.active_work);
+    if !aw.is_empty() {
+        out.push_str(&aw);
+        out.push('\n');
+    }
+    let ss = render_similar_sessions(&opts.grounding.similar_sessions);
+    if !ss.is_empty() {
+        out.push_str(&ss);
+        out.push('\n');
+    }
+    let adr = render_adr_provenance(&opts.grounding.adr_provenance);
+    if !adr.is_empty() {
+        out.push_str(&adr);
         out.push('\n');
     }
 
@@ -704,6 +765,252 @@ pub fn clip_utf8(s: &str, n: usize) -> String {
         cut -= 1;
     }
     s[..cut].to_string()
+}
+
+// ============================================================
+// phase13g §4 — grounding-tool section renderers.
+//
+// Three new sections fed by the phase13g MCP tools:
+//
+// - `## Active operator work` (cap [`section_caps::ACTIVE_WORK_BYTES`])
+//   surfaces rulebook tasks the agent has not closed yet.
+// - `## Similar past sessions` (cap
+//   [`section_caps::SIMILAR_SESSIONS_BYTES`]) surfaces top-K
+//   consolidations matching the current query.
+// - `## ADR provenance` (cap [`section_caps::ADR_PROVENANCE_BYTES`])
+//   surfaces the supersession chain when an ADR id appears in the
+//   query / fusion result.
+//
+// Renderers are pure projections of their input value into a
+// markdown string. The orchestrator-side dispatch (phase13g §4.3 +
+// §4.4) calls them after laws and before consolidated context.
+// ============================================================
+
+/// One row in the [`render_active_work`] input. Mirrors the
+/// shape `cortex_active_work` returns so the orchestrator can pass
+/// the parsed envelope through verbatim.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveWorkRow {
+    /// Task directory name.
+    pub id: String,
+    /// Phase identifier when known (`phase13g`).
+    pub phase: Option<String>,
+    /// Status string (`pending` / `in-progress` / `blocked` /
+    /// `completed`).
+    pub status: String,
+    /// First `- [ ]` row in `tasks.md`, already trimmed by the
+    /// daemon.
+    pub next_unchecked_item: Option<String>,
+    /// Operator-facing reason when `status == "blocked"`.
+    pub blocked_reason: Option<String>,
+}
+
+/// Render the active-work section. Returns an empty string when
+/// `rows` is empty so the caller can skip the section without
+/// emitting a stray header. Bounded by [`section_caps::ACTIVE_WORK_BYTES`].
+pub fn render_active_work(rows: &[ActiveWorkRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let count = rows.len();
+    let _ = writeln!(&mut out, "## Active operator work ({count})");
+    for row in rows {
+        let phase = row.phase.as_deref().unwrap_or("");
+        let head = if phase.is_empty() {
+            row.id.clone()
+        } else {
+            format!("{phase} ({id})", id = row.id)
+        };
+        let next = row
+            .next_unchecked_item
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(all items done)");
+        let mut line = format!("- {head} · {status} · {next}", status = row.status);
+        if let Some(reason) = row.blocked_reason.as_deref().filter(|s| !s.is_empty()) {
+            line.push_str(&format!(" — blocked: {reason}"));
+        }
+        line.push('\n');
+        if out.len() + line.len() > section_caps::ACTIVE_WORK_BYTES {
+            out.push_str("- … (truncated; see `cortex_active_work` for the full list)\n");
+            break;
+        }
+        out.push_str(&line);
+    }
+    out
+}
+
+/// One row in the [`render_similar_sessions`] input. Mirrors the
+/// shape `cortex_similar_sessions` returns.
+#[derive(Debug, Clone, Default)]
+pub struct SimilarSessionRow {
+    /// Consolidator key (`cons-ses-…` / `cons-top-…`).
+    pub consolidation_id: String,
+    /// Display title.
+    pub title: String,
+    /// First N chars of the summary markdown — already trimmed by
+    /// the caller.
+    pub summary_excerpt: String,
+    /// Cosine-similarity score the lane returned.
+    pub score: f64,
+}
+
+/// Render the similar-sessions section. Returns an empty string
+/// when `rows` is empty. Bounded by
+/// [`section_caps::SIMILAR_SESSIONS_BYTES`].
+pub fn render_similar_sessions(rows: &[SimilarSessionRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let count = rows.len();
+    let _ = writeln!(&mut out, "## Similar past sessions ({count})");
+    for (i, row) in rows.iter().enumerate() {
+        let title = if row.title.is_empty() {
+            row.consolidation_id.clone()
+        } else {
+            row.title.clone()
+        };
+        let excerpt = trim_one_line(&row.summary_excerpt);
+        let line = format!(
+            "{n}. `{id}` · score {score:.2} · {title}\n   {excerpt}\n",
+            n = i + 1,
+            id = row.consolidation_id,
+            score = row.score,
+            title = title,
+            excerpt = excerpt,
+        );
+        if out.len() + line.len() > section_caps::SIMILAR_SESSIONS_BYTES {
+            out.push_str(
+                "… (truncated; see `cortex_similar_sessions` for the full list)\n",
+            );
+            break;
+        }
+        out.push_str(&line);
+    }
+    out
+}
+
+/// One row in the [`render_adr_provenance`] input. Mirrors the
+/// shape `cortex_decision_chain` returns.
+#[derive(Debug, Clone, Default)]
+pub struct AdrProvenanceRow {
+    /// Decision ULID.
+    pub event_id: String,
+    /// Slug (e.g. `adr-014-...`).
+    pub slug: String,
+    /// Lifecycle status (`proposed` / `accepted` / `superseded`).
+    pub status: String,
+    /// ISO-8601 date stamp.
+    pub date: String,
+    /// Display title.
+    pub title: String,
+}
+
+/// Minimum trimmed `user_prompt` length (chars) before the
+/// orchestrator should fan out to `cortex_similar_sessions`. Below
+/// this floor the query is too short to embed meaningfully — the
+/// similar-sessions section returns noise and the fetch wastes
+/// budget. Spec phase13g §4.3.
+pub const SIMILAR_SESSIONS_QUERY_FLOOR_CHARS: usize = 16;
+
+/// Phase13g §4.3 — return `true` when the orchestrator should
+/// dispatch `cortex_similar_sessions` for `user_prompt`. False on
+/// bare tool pings (under the char floor) so the pre-thinking
+/// fan-out does not pay for noise hits.
+pub fn should_fetch_similar_sessions(user_prompt: &str) -> bool {
+    user_prompt.trim().chars().count() > SIMILAR_SESSIONS_QUERY_FLOOR_CHARS
+}
+
+/// Phase13g §4.3 — extract Crockford-safe ULIDs that appear in the
+/// query string. Returns unique ids in first-seen order. The
+/// orchestrator unions this with ULIDs found in the fusion result
+/// (laws, decisions, similar turns) and fires
+/// `cortex_decision_chain` once per id.
+pub fn extract_adr_event_ids(user_prompt: &str) -> Vec<String> {
+    let bytes = user_prompt.as_bytes();
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0usize;
+    while i + 26 <= bytes.len() {
+        let slice = &bytes[i..i + 26];
+        if is_ulid_byte_slice(slice) {
+            // Reject if the surrounding chars are themselves
+            // ULID-alphabet (catches a 30-char garbage run that
+            // happens to contain a 26-char window).
+            let preceded = i > 0 && is_ulid_byte(bytes[i - 1]);
+            let followed = i + 26 < bytes.len() && is_ulid_byte(bytes[i + 26]);
+            if !preceded && !followed {
+                if let Ok(id) = std::str::from_utf8(slice) {
+                    if !out.iter().any(|x| x == id) {
+                        out.push(id.to_string());
+                    }
+                }
+                i += 26;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn is_ulid_byte(b: u8) -> bool {
+    matches!(
+        b,
+        b'0'..=b'9'
+            | b'A'..=b'H'
+            | b'J'
+            | b'K'
+            | b'M'
+            | b'N'
+            | b'P'..=b'T'
+            | b'V'..=b'Z'
+    )
+}
+
+fn is_ulid_byte_slice(s: &[u8]) -> bool {
+    s.len() == 26 && s.iter().all(|b| is_ulid_byte(*b))
+}
+
+/// Render the ADR-provenance section. Returns an empty string when
+/// `rows` is empty (orchestrator only renders this conditionally —
+/// see phase13g §4.3). Bounded by
+/// [`section_caps::ADR_PROVENANCE_BYTES`].
+pub fn render_adr_provenance(rows: &[AdrProvenanceRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let count = rows.len();
+    let _ = writeln!(&mut out, "## ADR provenance ({count})");
+    for row in rows {
+        let slug = if row.slug.is_empty() {
+            row.event_id.clone()
+        } else {
+            row.slug.clone()
+        };
+        let date = if row.date.is_empty() {
+            "—".to_string()
+        } else {
+            row.date.clone()
+        };
+        let line = format!(
+            "- `{slug}` · {status} · {date} · {title}\n",
+            slug = slug,
+            status = row.status,
+            date = date,
+            title = trim_one_line(&row.title),
+        );
+        if out.len() + line.len() > section_caps::ADR_PROVENANCE_BYTES {
+            out.push_str(
+                "- … (truncated; see `cortex_decision_chain` for the full chain)\n",
+            );
+            break;
+        }
+        out.push_str(&line);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1440,5 +1747,307 @@ mod tests {
         assert!(bundle.contains("## Consolidated context"));
         assert!(!bundle.contains("## Topic card"));
         assert!(!bundle.contains("stale-topic-card"));
+    }
+
+    // ============================================================
+    // phase13g §4.5 — grounding renderer tests.
+    // ============================================================
+
+    #[test]
+    fn render_active_work_empty_input_returns_empty_string() {
+        assert!(render_active_work(&[]).is_empty());
+    }
+
+    #[test]
+    fn render_active_work_includes_phase_status_and_next_unchecked() {
+        let rows = vec![ActiveWorkRow {
+            id: "phase13g_demo".into(),
+            phase: Some("phase13g".into()),
+            status: "in-progress".into(),
+            next_unchecked_item: Some("4.5 add renderer tests".into()),
+            blocked_reason: None,
+        }];
+        let out = render_active_work(&rows);
+        assert!(out.starts_with("## Active operator work (1)"));
+        assert!(out.contains("phase13g (phase13g_demo)"));
+        assert!(out.contains("in-progress"));
+        assert!(out.contains("4.5 add renderer tests"));
+    }
+
+    #[test]
+    fn render_active_work_surfaces_blocked_reason_suffix() {
+        let rows = vec![ActiveWorkRow {
+            id: "phase14h_demo".into(),
+            phase: Some("phase14h".into()),
+            status: "blocked".into(),
+            next_unchecked_item: Some("2.1 ship synap shared module".into()),
+            blocked_reason: Some("synap upstream not merged".into()),
+        }];
+        let out = render_active_work(&rows);
+        assert!(out.contains("blocked: synap upstream not merged"));
+    }
+
+    #[test]
+    fn render_active_work_truncates_when_section_exceeds_budget() {
+        // Build enough rows that the cumulative length runs past
+        // the ACTIVE_WORK_BYTES cap. Each row ~80 bytes; 50 rows
+        // is ~4 KB, comfortably above the 1.2 KB cap.
+        let rows: Vec<ActiveWorkRow> = (0..50)
+            .map(|i| ActiveWorkRow {
+                id: format!("phase{i:02}a_demo_long_id_padding_to_inflate_row"),
+                phase: Some(format!("phase{i:02}a")),
+                status: "in-progress".into(),
+                next_unchecked_item: Some(format!(
+                    "{i}.1 a moderately long checklist item to consume budget"
+                )),
+                blocked_reason: None,
+            })
+            .collect();
+        let out = render_active_work(&rows);
+        assert!(out.len() <= section_caps::ACTIVE_WORK_BYTES + 96);
+        assert!(out.contains("(truncated; see `cortex_active_work`"));
+    }
+
+    #[test]
+    fn render_similar_sessions_empty_input_returns_empty_string() {
+        assert!(render_similar_sessions(&[]).is_empty());
+    }
+
+    #[test]
+    fn render_similar_sessions_lists_scored_rows() {
+        let rows = vec![
+            SimilarSessionRow {
+                consolidation_id: "cons-ses-001".into(),
+                title: "rework analysis".into(),
+                summary_excerpt: "Audit opus5.7 consolidator rework".into(),
+                score: 0.91,
+            },
+            SimilarSessionRow {
+                consolidation_id: "cons-ses-002".into(),
+                title: "consolidator pruning fix".into(),
+                summary_excerpt: "Patched the cold tier demotion path".into(),
+                score: 0.74,
+            },
+        ];
+        let out = render_similar_sessions(&rows);
+        assert!(out.starts_with("## Similar past sessions (2)"));
+        assert!(out.contains("`cons-ses-001`"));
+        assert!(out.contains("score 0.91"));
+        assert!(out.contains("rework analysis"));
+        assert!(out.contains("`cons-ses-002`"));
+        assert!(out.contains("score 0.74"));
+    }
+
+    #[test]
+    fn render_similar_sessions_truncates_when_section_exceeds_budget() {
+        let rows: Vec<SimilarSessionRow> = (0..40)
+            .map(|i| SimilarSessionRow {
+                consolidation_id: format!("cons-ses-{i:04}"),
+                title: format!("session {i} title with enough padding"),
+                summary_excerpt:
+                    "A meaningfully long summary excerpt that consumes meaningful budget".into(),
+                score: 0.6 + (i as f64) * 0.005,
+            })
+            .collect();
+        let out = render_similar_sessions(&rows);
+        assert!(out.len() <= section_caps::SIMILAR_SESSIONS_BYTES + 96);
+        assert!(out.contains("(truncated; see `cortex_similar_sessions`"));
+    }
+
+    #[test]
+    fn render_adr_provenance_empty_input_returns_empty_string() {
+        assert!(render_adr_provenance(&[]).is_empty());
+    }
+
+    #[test]
+    fn render_adr_provenance_renders_slug_and_status_per_row() {
+        let rows = vec![
+            AdrProvenanceRow {
+                event_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+                slug: "adr-009-sweep-trait".into(),
+                status: "superseded".into(),
+                date: "2026-05-19".into(),
+                title: "Sweep trait as the single contract".into(),
+            },
+            AdrProvenanceRow {
+                event_id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".into(),
+                slug: "adr-014-pure-readers".into(),
+                status: "proposed".into(),
+                date: "2026-05-25".into(),
+                title: "Dashboard handlers are pure readers".into(),
+            },
+        ];
+        let out = render_adr_provenance(&rows);
+        assert!(out.starts_with("## ADR provenance (2)"));
+        assert!(out.contains("adr-009-sweep-trait"));
+        assert!(out.contains("superseded"));
+        assert!(out.contains("2026-05-19"));
+        assert!(out.contains("adr-014-pure-readers"));
+        assert!(out.contains("proposed"));
+    }
+
+    #[test]
+    fn render_adr_provenance_handles_empty_slug_and_date() {
+        let rows = vec![AdrProvenanceRow {
+            event_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            slug: String::new(),
+            status: "proposed".into(),
+            date: String::new(),
+            title: "legacy decision".into(),
+        }];
+        let out = render_adr_provenance(&rows);
+        // Falls back to the event_id when the slug is empty + `—`
+        // when the date is empty so the row is still parseable.
+        assert!(out.contains("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        assert!(out.contains(" · — · "));
+    }
+
+    #[test]
+    fn render_adr_provenance_truncates_when_section_exceeds_budget() {
+        let rows: Vec<AdrProvenanceRow> = (0..30)
+            .map(|i| AdrProvenanceRow {
+                event_id: format!("01ARZ3NDEKTSV4RRFFQ69G5F{:02}", i),
+                slug: format!("adr-{i:03}-extended-slug-for-padding"),
+                status: "proposed".into(),
+                date: "2026-05-25".into(),
+                title: format!("Decision {i} with a reasonable title length"),
+            })
+            .collect();
+        let out = render_adr_provenance(&rows);
+        assert!(out.len() <= section_caps::ADR_PROVENANCE_BYTES + 96);
+        assert!(out.contains("(truncated; see `cortex_decision_chain`"));
+    }
+
+    #[test]
+    fn should_fetch_similar_sessions_respects_query_floor() {
+        // 16 chars or shorter: skip.
+        assert!(!should_fetch_similar_sessions(""));
+        assert!(!should_fetch_similar_sessions("hi"));
+        assert!(!should_fetch_similar_sessions("0123456789ABCDEF")); // exactly 16
+        // > 16 chars: fire.
+        assert!(should_fetch_similar_sessions(
+            "0123456789ABCDEFG"
+        ));
+        assert!(should_fetch_similar_sessions(
+            "rework consolidator analysis"
+        ));
+    }
+
+    #[test]
+    fn extract_adr_event_ids_finds_ulid_in_prose() {
+        let q = "Check ADR 01ARZ3NDEKTSV4RRFFQ69G5FAV before editing";
+        let ids = extract_adr_event_ids(q);
+        assert_eq!(ids, vec!["01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string()]);
+    }
+
+    #[test]
+    fn extract_adr_event_ids_dedupes_repeated_ulids() {
+        let q = "01ARZ3NDEKTSV4RRFFQ69G5FAV vs 01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let ids = extract_adr_event_ids(q);
+        assert_eq!(ids.len(), 1);
+    }
+
+    #[test]
+    fn extract_adr_event_ids_returns_empty_when_no_ulid_present() {
+        let ids = extract_adr_event_ids("a regular query with no ulid in it");
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn extract_adr_event_ids_rejects_window_buried_in_longer_run() {
+        // 32-char run of ULID-alphabet chars contains a 26-char
+        // window but is not itself a ULID — must reject.
+        let q = "ABCDEFGHJKMNPQRSTVWXYZ01234567890ABCDEFG";
+        let ids = extract_adr_event_ids(q);
+        assert!(ids.is_empty(), "got {ids:?}");
+    }
+
+    #[test]
+    fn format_bundle_renders_active_work_between_laws_and_consolidations() {
+        // phase13g §4.4 render order: laws → active work → similar
+        // sessions → ADR provenance → consolidated context.
+        let mut resp = sample_response_with_laws();
+        // Add one consolidation so the section appears.
+        resp.results.consolidations = vec![cortex_api::ConsolidationRef {
+            consolidation_id: "cons-ses-001".to_string(),
+            grain: "session".to_string(),
+            ts: 1_700_000_000,
+            title: "older session".to_string(),
+            outcome: Some("success".to_string()),
+            score: 0.8,
+        }];
+        let mut opts = FormatOptions::default();
+        opts.grounding.active_work = vec![ActiveWorkRow {
+            id: "phase13g_demo".into(),
+            phase: Some("phase13g".into()),
+            status: "in-progress".into(),
+            next_unchecked_item: Some("4.4 render order".into()),
+            blocked_reason: None,
+        }];
+        opts.grounding.similar_sessions = vec![SimilarSessionRow {
+            consolidation_id: "cons-ses-002".into(),
+            title: "consolidator rewrite".into(),
+            summary_excerpt: "Earlier rewrite that survived prod".into(),
+            score: 0.81,
+        }];
+        opts.grounding.adr_provenance = vec![AdrProvenanceRow {
+            event_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".into(),
+            slug: "adr-009-sweep-trait".into(),
+            status: "superseded".into(),
+            date: "2026-05-19".into(),
+            title: "Sweep trait".into(),
+        }];
+
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        let laws_pos = bundle.find("## Active laws in this scope").unwrap();
+        let aw_pos = bundle.find("## Active operator work").unwrap();
+        let ss_pos = bundle.find("## Similar past sessions").unwrap();
+        let adr_pos = bundle.find("## ADR provenance").unwrap();
+        let cons_pos = bundle.find("## Consolidated context").unwrap();
+        assert!(laws_pos < aw_pos);
+        assert!(aw_pos < ss_pos);
+        assert!(ss_pos < adr_pos);
+        assert!(adr_pos < cons_pos);
+    }
+
+    #[test]
+    fn format_bundle_omits_grounding_sections_when_input_is_empty() {
+        // Phase13g §4.5 "missing-tool error degrades gracefully" —
+        // when the orchestrator fetched nothing (because the tool
+        // returned an error or because §4.3 said "skip"), the
+        // bundle just omits those sections; the rest still renders.
+        let resp = sample_response_with_laws();
+        let opts = FormatOptions::default();
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(bundle.contains("## Active laws in this scope"));
+        assert!(!bundle.contains("## Active operator work"));
+        assert!(!bundle.contains("## Similar past sessions"));
+        assert!(!bundle.contains("## ADR provenance"));
+    }
+
+    fn sample_response_with_laws() -> QueryResponse {
+        QueryResponse {
+            query_id: "01HQ".into(),
+            laws_active: vec![LawRef {
+                id: "L-1".into(),
+                title: "Sample law".into(),
+                severity: "warn".into(),
+            }],
+            ..QueryResponse::default()
+        }
+    }
+
+    #[test]
+    fn section_caps_sum_stays_under_pre_thinking_ceiling() {
+        // phase13g §4.2 — combined the three new sections must fit
+        // under the existing 12 KB ceiling alongside everything
+        // else the formatter renders. With 1200 + 2000 + 800 =
+        // 4000 bytes, the three new sections take ~33 % of the
+        // ceiling — well within the slack.
+        const PRE_THINKING_CEILING: usize = 12 * 1024;
+        let sum = section_caps::ACTIVE_WORK_BYTES
+            + section_caps::SIMILAR_SESSIONS_BYTES
+            + section_caps::ADR_PROVENANCE_BYTES;
+        assert!(sum < PRE_THINKING_CEILING, "{sum} >= {PRE_THINKING_CEILING}");
     }
 }

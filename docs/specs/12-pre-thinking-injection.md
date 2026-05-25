@@ -92,7 +92,27 @@ JWT validation now consolidated behind a single middleware so token rotation lan
 <!-- end cortex -->
 ```
 
-Sections are always in the same order — phase 11r §5.4 reordered the matrix so the topic-card synthesis lane is the **top-priority context band** when fresh: **laws → topic_cards → consolidated context → decisions → similar turns → past sessions (fallback only) → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+Sections are always in the same order — phase 11r §5.4 reordered the matrix so the topic-card synthesis lane is the **top-priority context band** when fresh: **laws → active operator work (phase13g §4.4) → similar past sessions (phase13g §4.4) → ADR provenance (phase13g §4.4, conditional) → topic_cards → consolidated context → decisions → similar turns → past sessions (fallback only) → snippets → (optional) graph traversal sub-blocks → (optional) graph neighbours catch-all**. Sections with zero entries are omitted entirely (no empty headers). The trailing comment makes it easy to strip / diff in logs.
+
+#### Phase13g §4 — grounding sections (active work + similar sessions + ADR provenance)
+
+Three new sections feed off the phase13g MCP tools and sit between the laws block and the topic-card / consolidations block. Each renderer self-bounds via the section_caps byte budget below; when its input vec is empty the section is omitted entirely so an unwired or empty fetch degrades gracefully.
+
+| Section                        | Byte cap                                | Source tool                  |
+|--------------------------------|-----------------------------------------|------------------------------|
+| `## Active operator work (N)`  | `section_caps::ACTIVE_WORK_BYTES = 1200`| `cortex_active_work`         |
+| `## Similar past sessions (N)` | `section_caps::SIMILAR_SESSIONS_BYTES = 2000` | `cortex_similar_sessions` |
+| `## ADR provenance (N)`        | `section_caps::ADR_PROVENANCE_BYTES = 800` | `cortex_decision_chain`   |
+
+Combined the three caps consume 4 000 bytes — about 33 % of the existing 12 KB pre-thinking ceiling. The `section_caps_sum_stays_under_pre_thinking_ceiling` test pins the invariant.
+
+Dispatch policy (phase13g §4.3):
+
+- `cortex_active_work` fires unconditionally on every `pre_change_context` and `change_landing_context` turn.
+- `cortex_similar_sessions` fires when `formatter::should_fetch_similar_sessions(user_prompt)` returns true — i.e. when the trimmed user prompt is longer than `SIMILAR_SESSIONS_QUERY_FLOOR_CHARS = 16` characters. Bare tool pings (under the floor) skip the fetch because the resulting embedding produces noise hits.
+- `cortex_decision_chain` fires once per unique ULID returned by `formatter::extract_adr_event_ids(user_prompt)` plus the union of ULIDs found in `response.laws_active`, `response.results.decisions`, and `response.results.similar_turns`. The extractor walks 26-char Crockford-safe windows and rejects any window buried in a longer alphabet run, deduplicating in first-seen order.
+
+Each renderer truncates with `… (truncated; see <tool> for the full <unit>)` so the caller knows which MCP tool to invoke if it wants the rest.
 
 Phase11j §4.2 — when the consolidations lane returns ≥ 1 hit, the renderer emits the **Consolidated context** section and **suppresses the legacy Past sessions block** (§4.3 fallback). When the lane returns zero hits, the renderer falls back to the original past-sessions section so cold caches degrade gracefully.
 
