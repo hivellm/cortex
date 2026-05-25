@@ -97,7 +97,11 @@ pub struct SubsystemStatus {
 impl SubsystemStatus {
     /// Build a healthy `Ok` status with the given name and version.
     /// Caller fills in `extras` and `since`.
-    pub fn ok(name: impl Into<String>, version: impl Into<String>, since: impl Into<String>) -> Self {
+    pub fn ok(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        since: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             state: HealthState::Ok,
@@ -255,11 +259,13 @@ mod tests {
     #[test]
     fn json_roundtrip_keeps_wire_shape() {
         let mut s = ok("x");
-        s.extras
-            .insert("queue_depth".into(), serde_json::json!(42));
+        s.extras.insert("queue_depth".into(), serde_json::json!(42));
         let serialized = serde_json::to_string(&s).unwrap();
         let parsed: SubsystemStatus = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.name, "x");
-        assert_eq!(parsed.extras.get("queue_depth"), Some(&serde_json::json!(42)));
+        assert_eq!(
+            parsed.extras.get("queue_depth"),
+            Some(&serde_json::json!(42))
+        );
     }
 }

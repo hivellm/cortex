@@ -13,17 +13,17 @@ pub struct IndexDescriptor {
 }
 
 const SETTINGS_TURNS: &str = include_str!("../schemas/meili/cortex_turns.settings.v1.json");
-const SETTINGS_TOOL_CALLS: &str = include_str!("../schemas/meili/cortex_tool_calls.settings.v1.json");
-const SETTINGS_CODE_CHUNKS: &str = include_str!("../schemas/meili/cortex_code_chunks.settings.v1.json");
+const SETTINGS_TOOL_CALLS: &str =
+    include_str!("../schemas/meili/cortex_tool_calls.settings.v1.json");
+const SETTINGS_CODE_CHUNKS: &str =
+    include_str!("../schemas/meili/cortex_code_chunks.settings.v1.json");
 const SETTINGS_DOCS: &str = include_str!("../schemas/meili/cortex_docs.settings.v1.json");
 const SETTINGS_DECISIONS: &str = include_str!("../schemas/meili/cortex_decisions.settings.v1.json");
 const SETTINGS_ANALYSES: &str = include_str!("../schemas/meili/cortex_analyses.settings.v1.json");
 const SETTINGS_MEMORIES: &str = include_str!("../schemas/meili/cortex_memories.settings.v1.json");
 const SETTINGS_LAWS: &str = include_str!("../schemas/meili/cortex_laws.settings.v1.json");
-const SETTINGS_KNOWLEDGE: &str =
-    include_str!("../schemas/meili/cortex_knowledge.settings.v1.json");
-const SETTINGS_LEARNINGS: &str =
-    include_str!("../schemas/meili/cortex_learnings.settings.v1.json");
+const SETTINGS_KNOWLEDGE: &str = include_str!("../schemas/meili/cortex_knowledge.settings.v1.json");
+const SETTINGS_LEARNINGS: &str = include_str!("../schemas/meili/cortex_learnings.settings.v1.json");
 // phase12d — consolidation + topic_card indexes were created lazily
 // by Meili on first write but had no `searchableAttributes` /
 // `filterableAttributes` configured, so every query against them
@@ -103,4 +103,3 @@ pub const INDEXES: &[IndexDescriptor] = &[
         settings_json: SETTINGS_TOPIC_CARDS,
     },
 ];
-

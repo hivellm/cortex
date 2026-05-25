@@ -131,11 +131,7 @@ async fn unreachable_target_lands_as_down_with_clear_reason() {
     assert!(
         row.last_error
             .as_deref()
-            .map(|s| {
-                s.contains("transport")
-                    || s.contains("connect")
-                    || s.contains("timeout")
-            })
+            .map(|s| { s.contains("transport") || s.contains("connect") || s.contains("timeout") })
             .unwrap_or(false),
         "expected transport / connect / timeout reason, got {:?}",
         row.last_error

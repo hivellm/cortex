@@ -148,17 +148,12 @@ fn purge_dir(
                         // structured event from the per-file delete
                         // result it walks. Stderr keeps the bug
                         // visible during ad-hoc CLI runs.
-                        eprintln!(
-                            "archive_purge: remove_file {} failed: {e}",
-                            path.display()
-                        );
+                        eprintln!("archive_purge: remove_file {} failed: {e}", path.display());
                     }
                 }
             }
             FileVerdict::Keep => report.files_kept = report.files_kept.saturating_add(1),
-            FileVerdict::Partial => {
-                report.files_partial = report.files_partial.saturating_add(1)
-            }
+            FileVerdict::Partial => report.files_partial = report.files_partial.saturating_add(1),
             FileVerdict::Unreadable => {
                 report.files_unreadable = report.files_unreadable.saturating_add(1)
             }
@@ -278,10 +273,7 @@ mod is_live_partial_frame_tests {
         // A "real" I/O error (UnexpectedEof, not zstd-frame-shaped)
         // must NOT be treated as a live-writer marker — that would
         // mask actual corruption.
-        let err = std::io::Error::new(
-            std::io::ErrorKind::UnexpectedEof,
-            "unexpected end of file",
-        );
+        let err = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "unexpected end of file");
         assert!(!is_live_partial_frame(&err));
     }
 
@@ -289,10 +281,7 @@ mod is_live_partial_frame_tests {
     fn incomplete_frame_message_is_partial() {
         // The shape zstd raises mid-flush when the trailing frame's
         // body bytes are present but the checksum is missing.
-        let err = std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "incomplete frame",
-        );
+        let err = std::io::Error::new(std::io::ErrorKind::InvalidData, "incomplete frame");
         assert!(is_live_partial_frame(&err));
     }
 
@@ -301,10 +290,7 @@ mod is_live_partial_frame_tests {
         // zstd raises this when the magic bytes do not parse as a
         // known frame header — happens when the writer has only
         // flushed the first byte or two of the next frame.
-        let err = std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Unknown frame magic bytes",
-        );
+        let err = std::io::Error::new(std::io::ErrorKind::InvalidData, "Unknown frame magic bytes");
         assert!(is_live_partial_frame(&err));
     }
 
@@ -312,10 +298,7 @@ mod is_live_partial_frame_tests {
     fn frame_descriptor_message_is_partial() {
         // The third operational shape — a malformed frame descriptor.
         // Same root cause: the writer is mid-flush.
-        let err = std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "Wrong frame descriptor",
-        );
+        let err = std::io::Error::new(std::io::ErrorKind::InvalidData, "Wrong frame descriptor");
         assert!(is_live_partial_frame(&err));
     }
 
@@ -323,10 +306,7 @@ mod is_live_partial_frame_tests {
     fn permission_denied_is_not_partial() {
         // Sanity — a permission error is operational, never a
         // "live writer" signal.
-        let err = std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            "permission denied",
-        );
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
         assert!(!is_live_partial_frame(&err));
     }
 }
@@ -367,9 +347,8 @@ mod tests {
             })
             .unwrap(),
             redactions: Vec::new(),
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             parent_event_id: None,
         }
     }
@@ -431,7 +410,10 @@ mod tests {
             .into_iter()
             .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("parquet"))
             .collect();
-        assert!(leftover.is_empty(), "expected zero parquet files, got {leftover:?}");
+        assert!(
+            leftover.is_empty(),
+            "expected zero parquet files, got {leftover:?}"
+        );
     }
 
     #[test]
@@ -532,7 +514,10 @@ mod tests {
         let report = purge_before(dir.path(), cutoff, false, Some("cortex")).unwrap();
         assert_eq!(report.files_deleted, 0);
         assert_eq!(report.files_kept, 1);
-        assert!(path.exists(), "mixed-repo file must be preserved when filter is set");
+        assert!(
+            path.exists(),
+            "mixed-repo file must be preserved when filter is set"
+        );
         assert_eq!(report.repo_filter.as_deref(), Some("cortex"));
     }
 

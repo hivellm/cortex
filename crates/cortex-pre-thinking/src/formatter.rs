@@ -151,11 +151,7 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
     // floor OR (age > 30d AND ≥ 1 fresh event since the last
     // rewrite). When stale, consolidations render before the topic
     // card section; when fresh, the topic card leads.
-    let topic_cards_count = response
-        .results
-        .topic_cards
-        .len()
-        .min(opts.topic_cards_cap);
+    let topic_cards_count = response.results.topic_cards.len().min(opts.topic_cards_cap);
     let topic_card_stale = topic_cards_count > 0
         && response
             .results
@@ -495,7 +491,9 @@ fn render_topic_card_section(
     }
     out.push_str("## Topic card\n");
     if stale {
-        out.push_str("> stale-topic-card: confidence below floor or synthesis stale with new evidence\n");
+        out.push_str(
+            "> stale-topic-card: confidence below floor or synthesis stale with new evidence\n",
+        );
     }
     for c in cards.iter().take(cap) {
         let confidence_pct = (c.confidence * 100.0).round() as i32;
@@ -520,10 +518,7 @@ fn render_topic_card_section(
             writeln!(out, "\n### Evidence ({n})", n = c.evidence_top5.len()).ok();
             for e in &c.evidence_top5 {
                 let kind = format!("{:?}", e.kind).to_ascii_lowercase();
-                let weight = e
-                    .weight
-                    .map(|w| format!(", w={w:.2}"))
-                    .unwrap_or_default();
+                let weight = e.weight.map(|w| format!(", w={w:.2}")).unwrap_or_default();
                 writeln!(
                     out,
                     "- {kind}:{id} (cited@rev={rev}{weight})",
@@ -1030,13 +1025,8 @@ mod tests {
             None,
             0.7,
         )];
-        resp.results.past_sessions = vec![past_session(
-            "sess-Y",
-            1_715_000_000_000,
-            "prompt",
-            3,
-            0.6,
-        )];
+        resp.results.past_sessions =
+            vec![past_session("sess-Y", 1_715_000_000_000, "prompt", 3, 0.6)];
         let bundle = format_bundle("pre_change_context", &resp, &FormatOptions::default());
         assert!(bundle.contains("Consolidated context"));
         assert!(

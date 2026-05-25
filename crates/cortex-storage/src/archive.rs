@@ -86,10 +86,7 @@ pub enum ScanError {
 /// `false` the envelope is dropped. Returns the matched set
 /// sorted by `occurred_at` (RFC-3339 lexicographic comparison
 /// matches chronological order for our timestamps).
-pub fn walk_envelopes<F>(
-    archive_root: &Path,
-    mut predicate: F,
-) -> Result<Vec<Envelope>, ScanError>
+pub fn walk_envelopes<F>(archive_root: &Path, mut predicate: F) -> Result<Vec<Envelope>, ScanError>
 where
     F: FnMut(&Envelope) -> bool,
 {
@@ -237,9 +234,8 @@ mod scan_tests {
             })
             .unwrap(),
             redactions: Vec::new(),
-            content_hash:
-                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                    .to_string(),
+            content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
             parent_event_id: None,
         }
     }
@@ -341,4 +337,3 @@ mod scan_tests {
         assert!(got.is_none());
     }
 }
-

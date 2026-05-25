@@ -276,8 +276,10 @@ impl<'a> IdentityIndex for SqliteIdentityIndex<'a> {
 
     fn delete(&self, event_id: &str) -> Result<(), IdentityError> {
         validate_id("event_id", event_id)?;
-        self.conn
-            .execute("DELETE FROM event_identity WHERE event_id = ?1", params![event_id])?;
+        self.conn.execute(
+            "DELETE FROM event_identity WHERE event_id = ?1",
+            params![event_id],
+        )?;
         Ok(())
     }
 }
@@ -328,7 +330,8 @@ mod tests {
     fn insert_then_lookup_returns_full_identity_row() {
         let conn = open();
         let idx = SqliteIdentityIndex::new(&conn);
-        idx.upsert_identity("01EVT", Backend::Vectorizer, "vec-1").unwrap();
+        idx.upsert_identity("01EVT", Backend::Vectorizer, "vec-1")
+            .unwrap();
         let row = idx.lookup("01EVT").unwrap().unwrap();
         assert_eq!(row.event_id, "01EVT");
         assert_eq!(row.vec_id.as_deref(), Some("vec-1"));
@@ -341,11 +344,18 @@ mod tests {
     fn upsert_merges_across_backends_for_same_event() {
         let conn = open();
         let idx = SqliteIdentityIndex::new(&conn);
-        idx.upsert_identity("01EVT", Backend::Vectorizer, "vec-1").unwrap();
-        idx.upsert_identity("01EVT", Backend::Meili, "doc-7").unwrap();
-        idx.upsert_identity("01EVT", Backend::Nexus, "node-42").unwrap();
-        idx.upsert_identity("01EVT", Backend::Archive, "events/year=2026/month=05/raw-00000.parquet")
+        idx.upsert_identity("01EVT", Backend::Vectorizer, "vec-1")
             .unwrap();
+        idx.upsert_identity("01EVT", Backend::Meili, "doc-7")
+            .unwrap();
+        idx.upsert_identity("01EVT", Backend::Nexus, "node-42")
+            .unwrap();
+        idx.upsert_identity(
+            "01EVT",
+            Backend::Archive,
+            "events/year=2026/month=05/raw-00000.parquet",
+        )
+        .unwrap();
         let row = idx.lookup("01EVT").unwrap().unwrap();
         assert_eq!(row.vec_id.as_deref(), Some("vec-1"));
         assert_eq!(row.meili_id.as_deref(), Some("doc-7"));
@@ -360,9 +370,12 @@ mod tests {
     fn lookup_by_each_native_id_finds_the_row() {
         let conn = open();
         let idx = SqliteIdentityIndex::new(&conn);
-        idx.upsert_identity("01EVT", Backend::Vectorizer, "vec-1").unwrap();
-        idx.upsert_identity("01EVT", Backend::Meili, "doc-7").unwrap();
-        idx.upsert_identity("01EVT", Backend::Nexus, "node-42").unwrap();
+        idx.upsert_identity("01EVT", Backend::Vectorizer, "vec-1")
+            .unwrap();
+        idx.upsert_identity("01EVT", Backend::Meili, "doc-7")
+            .unwrap();
+        idx.upsert_identity("01EVT", Backend::Nexus, "node-42")
+            .unwrap();
 
         let by_vec = idx
             .lookup_by_native(Backend::Vectorizer, "vec-1")
@@ -387,7 +400,8 @@ mod tests {
     fn delete_drops_the_row_and_is_idempotent() {
         let conn = open();
         let idx = SqliteIdentityIndex::new(&conn);
-        idx.upsert_identity("01EVT", Backend::Meili, "doc-7").unwrap();
+        idx.upsert_identity("01EVT", Backend::Meili, "doc-7")
+            .unwrap();
         assert!(idx.lookup("01EVT").unwrap().is_some());
         idx.delete("01EVT").unwrap();
         assert!(idx.lookup("01EVT").unwrap().is_none());
@@ -401,7 +415,8 @@ mod tests {
     fn unique_index_rejects_two_events_claiming_the_same_native_id() {
         let conn = open();
         let idx = SqliteIdentityIndex::new(&conn);
-        idx.upsert_identity("01EVT_A", Backend::Vectorizer, "vec-1").unwrap();
+        idx.upsert_identity("01EVT_A", Backend::Vectorizer, "vec-1")
+            .unwrap();
         // A second envelope cannot claim the same Vectorizer id —
         // the partial UNIQUE index on `vec_id` rejects the insert.
         // This is the structural invariant the doctor relies on to

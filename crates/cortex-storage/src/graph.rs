@@ -67,4 +67,3 @@ pub const BOOTSTRAP_STATEMENTS: &[&str] = &[
     "CREATE INDEX tool_call_tool_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name)",
     "CREATE INDEX artifact_path IF NOT EXISTS FOR (a:Artifact) ON (a.path)",
 ];
-

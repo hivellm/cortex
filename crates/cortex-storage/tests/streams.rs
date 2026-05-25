@@ -8,7 +8,10 @@ use std::collections::HashSet;
 fn streams_cover_every_name() {
     let declared: HashSet<_> = STREAMS.iter().map(|s| s.name).collect();
     for expected in ALL_STREAMS {
-        assert!(declared.contains(expected), "missing stream config for `{expected}`");
+        assert!(
+            declared.contains(expected),
+            "missing stream config for `{expected}`"
+        );
     }
 }
 

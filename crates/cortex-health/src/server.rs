@@ -136,7 +136,10 @@ async fn handle_metrics(State(state): State<ServerState>) -> impl IntoResponse {
     };
     (
         StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         body,
     )
 }
@@ -186,10 +189,7 @@ mod tests {
     fn fixed_provider(state: HealthState, queue_depth: u64) -> SnapshotProvider {
         Arc::new(move || {
             let mut extras = Map::new();
-            extras.insert(
-                "queue_depth".to_string(),
-                serde_json::json!(queue_depth),
-            );
+            extras.insert("queue_depth".to_string(), serde_json::json!(queue_depth));
             HealthSnapshot {
                 state,
                 last_error: if state == HealthState::Ok {

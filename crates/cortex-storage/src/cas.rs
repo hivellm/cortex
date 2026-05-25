@@ -193,8 +193,7 @@ impl CasStore {
         Ok(CasBlob {
             hash: hash.to_string(),
             size: size as u64,
-            content_type: CasContentType::parse(&ct)
-                .unwrap_or(CasContentType::Binary),
+            content_type: CasContentType::parse(&ct).unwrap_or(CasContentType::Binary),
             bytes,
         })
     }
@@ -252,12 +251,12 @@ impl CasStore {
         if hashes.is_empty() {
             return Ok(0);
         }
-        let tx = self.conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut total: u64 = 0;
         {
-            let mut stmt = tx.prepare(
-                "DELETE FROM cas_blobs WHERE hash = ?1 AND refcount = 0",
-            )?;
+            let mut stmt = tx.prepare("DELETE FROM cas_blobs WHERE hash = ?1 AND refcount = 0")?;
             for h in hashes {
                 total += stmt.execute(params![h])? as u64;
             }
@@ -279,13 +278,11 @@ impl CasStore {
     /// Phase9c — sum of `size` (uncompressed bytes) across all
     /// blobs. Used by the report's `bytes_reclaimed` estimate.
     pub fn total_blob_bytes(&self) -> Result<u64, CasError> {
-        let n: i64 = self
-            .conn
-            .query_row(
-                "SELECT COALESCE(SUM(size), 0) FROM cas_blobs",
-                [],
-                |r| r.get(0),
-            )?;
+        let n: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(SUM(size), 0) FROM cas_blobs", [], |r| {
+                    r.get(0)
+                })?;
         Ok(n.max(0) as u64)
     }
 
@@ -339,4 +336,3 @@ fn compute_hash(bytes: &[u8]) -> String {
     }
     out
 }
-

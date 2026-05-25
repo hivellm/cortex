@@ -272,11 +272,8 @@ pub fn validate_topic_card_payload(
             message: "evidence_required: at least one EvidenceRef must be cited".into(),
         });
     }
-    let known: std::collections::HashSet<&str> = payload
-        .evidence
-        .iter()
-        .map(|e| e.id.as_str())
-        .collect();
+    let known: std::collections::HashSet<&str> =
+        payload.evidence.iter().map(|e| e.id.as_str()).collect();
     for (idx, c) in payload.contradictions.iter().enumerate() {
         if !known.contains(c.evidence_a.as_str()) {
             return Err(ValidationError::Schema {
@@ -446,7 +443,10 @@ mod topic_card_validate_tests {
             ValidationError::Schema { path, .. } => path.contains("synthesis_markdown"),
             _ => false,
         });
-        assert!(mentions_synthesis, "errors did not flag synthesis_markdown: {err:?}");
+        assert!(
+            mentions_synthesis,
+            "errors did not flag synthesis_markdown: {err:?}"
+        );
     }
 
     #[test]
@@ -760,7 +760,9 @@ mod consolidation_validate_tests {
         });
         let err = validate_event(&envelope).expect_err("missing body");
         assert!(
-            err.iter().any(|e| matches!(e, ValidationError::Schema { message, .. } if message.contains("body"))),
+            err.iter().any(
+                |e| matches!(e, ValidationError::Schema { message, .. } if message.contains("body"))
+            ),
             "expected body error, got {err:?}"
         );
     }
@@ -786,7 +788,9 @@ mod consolidation_validate_tests {
         });
         let err = validate_event(&envelope).expect_err("unknown category");
         assert!(
-            err.iter().any(|e| matches!(e, ValidationError::Schema { path, .. } if path.contains("category"))),
+            err.iter().any(
+                |e| matches!(e, ValidationError::Schema { path, .. } if path.contains("category"))
+            ),
             "expected category error, got {err:?}"
         );
     }
@@ -813,7 +817,8 @@ mod consolidation_validate_tests {
         });
         let err = validate_event(&envelope).expect_err("extra fields");
         assert!(
-            err.iter().any(|e| matches!(e, ValidationError::Schema { .. })),
+            err.iter()
+                .any(|e| matches!(e, ValidationError::Schema { .. })),
             "expected schema error, got {err:?}"
         );
     }
@@ -910,7 +915,8 @@ mod consolidation_validate_tests {
         });
         let err = validate_event(&envelope).expect_err("extra fields");
         assert!(
-            err.iter().any(|e| matches!(e, ValidationError::Schema { .. })),
+            err.iter()
+                .any(|e| matches!(e, ValidationError::Schema { .. })),
             "expected schema error, got {err:?}"
         );
     }

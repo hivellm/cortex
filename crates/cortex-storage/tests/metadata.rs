@@ -39,7 +39,14 @@ fn session_upsert_is_idempotent() {
     let store = MetadataStore::open_in_memory().unwrap();
     let now = Utc::now();
     store
-        .upsert_session("01H", "claude-code", Some("claude-opus-4-7"), Some("Cortex"), Some("andre"), now)
+        .upsert_session(
+            "01H",
+            "claude-code",
+            Some("claude-opus-4-7"),
+            Some("Cortex"),
+            Some("andre"),
+            now,
+        )
         .unwrap();
     store
         .upsert_session("01H", "claude-code", None, None, None, now)
@@ -54,8 +61,12 @@ fn session_upsert_is_idempotent() {
 #[test]
 fn classifier_spend_accumulates() {
     let store = MetadataStore::open_in_memory().unwrap();
-    store.record_classifier_spend("2026-04-17", 1, 100, 50, 5).unwrap();
-    store.record_classifier_spend("2026-04-17", 2, 200, 100, 10).unwrap();
+    store
+        .record_classifier_spend("2026-04-17", 1, 100, 50, 5)
+        .unwrap();
+    store
+        .record_classifier_spend("2026-04-17", 2, 200, 100, 10)
+        .unwrap();
     let s = store.classifier_spend("2026-04-17").unwrap().unwrap();
     assert_eq!(s.calls, 3);
     assert_eq!(s.tokens_in, 300);
@@ -82,11 +93,13 @@ fn hour_bucket_rfc3339_truncates_minutes_seconds_and_nanos() {
 fn classifier_spend_hourly_accumulates() {
     let store = MetadataStore::open_in_memory().unwrap();
     let hour = "2026-04-28T17:00:00Z";
-    store.record_classifier_spend_hourly(hour, 1, 100, 50, 1).unwrap();
-    store.record_classifier_spend_hourly(hour, 2, 250, 75, 4).unwrap();
-    let rows = store
-        .classifier_spend_hourly_window(hour, hour)
+    store
+        .record_classifier_spend_hourly(hour, 1, 100, 50, 1)
         .unwrap();
+    store
+        .record_classifier_spend_hourly(hour, 2, 250, 75, 4)
+        .unwrap();
+    let rows = store.classifier_spend_hourly_window(hour, hour).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].hour, hour);
     assert_eq!(rows[0].spend.calls, 3);
@@ -99,17 +112,22 @@ fn classifier_spend_hourly_accumulates() {
 fn classifier_spend_hourly_window_filters_to_range_and_sorts_ascending() {
     let store = MetadataStore::open_in_memory().unwrap();
     // Out-of-order writes — both must come back sorted.
-    store.record_classifier_spend_hourly("2026-04-28T17:00:00Z", 1, 0, 0, 12).unwrap();
-    store.record_classifier_spend_hourly("2026-04-28T15:00:00Z", 1, 0, 0, 7).unwrap();
+    store
+        .record_classifier_spend_hourly("2026-04-28T17:00:00Z", 1, 0, 0, 12)
+        .unwrap();
+    store
+        .record_classifier_spend_hourly("2026-04-28T15:00:00Z", 1, 0, 0, 7)
+        .unwrap();
     // Outside the requested window — must NOT be returned.
-    store.record_classifier_spend_hourly("2026-04-28T10:00:00Z", 1, 0, 0, 99).unwrap();
-    store.record_classifier_spend_hourly("2026-04-28T20:00:00Z", 1, 0, 0, 99).unwrap();
+    store
+        .record_classifier_spend_hourly("2026-04-28T10:00:00Z", 1, 0, 0, 99)
+        .unwrap();
+    store
+        .record_classifier_spend_hourly("2026-04-28T20:00:00Z", 1, 0, 0, 99)
+        .unwrap();
 
     let rows = store
-        .classifier_spend_hourly_window(
-            "2026-04-28T15:00:00Z",
-            "2026-04-28T17:00:00Z",
-        )
+        .classifier_spend_hourly_window("2026-04-28T15:00:00Z", "2026-04-28T17:00:00Z")
         .unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].hour, "2026-04-28T15:00:00Z");
@@ -122,10 +140,7 @@ fn classifier_spend_hourly_window_filters_to_range_and_sorts_ascending() {
 fn classifier_spend_hourly_empty_window_returns_no_rows() {
     let store = MetadataStore::open_in_memory().unwrap();
     let rows = store
-        .classifier_spend_hourly_window(
-            "2026-04-28T00:00:00Z",
-            "2026-04-28T23:00:00Z",
-        )
+        .classifier_spend_hourly_window("2026-04-28T00:00:00Z", "2026-04-28T23:00:00Z")
         .unwrap();
     assert!(rows.is_empty());
 }
@@ -135,7 +150,9 @@ fn schema_version_is_recorded() {
     let store = MetadataStore::open_in_memory().unwrap();
     let v: u32 = store
         .conn()
-        .query_row("SELECT version FROM meta WHERE key = 'schema'", [], |r| r.get(0))
+        .query_row("SELECT version FROM meta WHERE key = 'schema'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(v, SCHEMA_VERSION);
 }

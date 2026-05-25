@@ -7,7 +7,11 @@ fn every_index_parses() {
     for idx in INDEXES {
         let v: serde_json::Value = serde_json::from_str(idx.settings_json)
             .unwrap_or_else(|e| panic!("settings for {} do not parse: {e}", idx.name));
-        assert!(v.is_object(), "settings must be a JSON object for {}", idx.name);
+        assert!(
+            v.is_object(),
+            "settings must be a JSON object for {}",
+            idx.name
+        );
     }
 }
 

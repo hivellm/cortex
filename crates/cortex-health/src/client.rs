@@ -58,18 +58,15 @@ pub async fn probe_one(
             .await
             .map_err(|e| format!("transport: {e}"))?;
         let status_code = resp.status();
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| format!("read body: {e}"))?;
+        let body = resp.text().await.map_err(|e| format!("read body: {e}"))?;
         if !status_code.is_success() && status_code.as_u16() != 503 {
             // 503 carries a `Down` body — accept it. Other 4xx /
             // 5xx are surfaced as a probe failure so the aggregator
             // can mark the subsystem `Down` with a clear reason.
             return Err(format!("http {status_code}"));
         }
-        let parsed: SubsystemStatus = serde_json::from_str(&body)
-            .map_err(|e| format!("json: {e}"))?;
+        let parsed: SubsystemStatus =
+            serde_json::from_str(&body).map_err(|e| format!("json: {e}"))?;
         Ok::<SubsystemStatus, String>(parsed)
     })
     .await;
@@ -91,7 +88,8 @@ pub async fn probe_one(
             s
         }
         Err(_) => {
-            let mut s = SubsystemStatus::down(target.name, format!("timeout {}ms", timeout.as_millis()));
+            let mut s =
+                SubsystemStatus::down(target.name, format!("timeout {}ms", timeout.as_millis()));
             s.latency_ms = latency_ms;
             s
         }
@@ -144,7 +142,11 @@ pub fn build_client(config: &AggregatorConfig) -> Result<reqwest::Client, reqwes
 /// a single `Degraded` row so the operator sees an explicit "I
 /// don't know who to ask" rather than a confusing "everything OK".
 pub fn unknown_targets_report(name: &'static str, reason: impl Into<String>) -> HealthReport {
-    let mut s = SubsystemStatus::ok(name, env!("CARGO_PKG_VERSION"), chrono::Utc::now().to_rfc3339());
+    let mut s = SubsystemStatus::ok(
+        name,
+        env!("CARGO_PKG_VERSION"),
+        chrono::Utc::now().to_rfc3339(),
+    );
     s.state = HealthState::Degraded;
     s.last_error = Some(reason.into());
     HealthReport::aggregate(vec![s])

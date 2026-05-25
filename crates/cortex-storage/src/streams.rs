@@ -124,4 +124,3 @@ pub const KV_NAMESPACES: &[KvNamespace] = &[
         purpose: "Per-session governance reminders",
     },
 ];
-

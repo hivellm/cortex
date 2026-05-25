@@ -263,10 +263,6 @@ mod tests {
             repo_scoped_name("cortex", "cortex", "docs"),
             "cortex-cortex-docs"
         );
-        assert_eq!(
-            repo_scoped_name("cortex", "tml", "code"),
-            "cortex-tml-code"
-        );
+        assert_eq!(repo_scoped_name("cortex", "tml", "code"), "cortex-tml-code");
     }
 }
-

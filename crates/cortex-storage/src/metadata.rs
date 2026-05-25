@@ -87,7 +87,9 @@ impl MetadataStore {
         }
         // Record or assert schema version.
         let existing: Option<u32> = conn
-            .query_row("SELECT version FROM meta WHERE key = 'schema'", [], |r| r.get(0))
+            .query_row("SELECT version FROM meta WHERE key = 'schema'", [], |r| {
+                r.get(0)
+            })
             .optional()?;
         match existing {
             Some(v) if v == SCHEMA_VERSION => Ok(()),
@@ -151,14 +153,7 @@ impl MetadataStore {
                model=COALESCE(excluded.model, sessions.model),
                repo=COALESCE(excluded.repo, sessions.repo),
                user=COALESCE(excluded.user, sessions.user)",
-            params![
-                session_id,
-                tool,
-                model,
-                repo,
-                user,
-                started_at.to_rfc3339()
-            ],
+            params![session_id, tool, model, repo, user, started_at.to_rfc3339()],
         )?;
         Ok(())
     }
@@ -169,11 +164,7 @@ impl MetadataStore {
     /// Returns the rowcount touched so the caller can build a
     /// dry-run report. `tool` is canonicalised to its trimmed,
     /// non-empty form; passing `""` is a no-op.
-    pub fn set_session_tool(
-        &self,
-        session_id: &str,
-        tool: &str,
-    ) -> Result<u64, MetadataError> {
+    pub fn set_session_tool(&self, session_id: &str, tool: &str) -> Result<u64, MetadataError> {
         let trimmed = tool.trim();
         if trimmed.is_empty() {
             return Ok(0);
@@ -198,10 +189,9 @@ impl MetadataStore {
              ORDER BY started_at DESC
              LIMIT ?1",
         )?;
-        let rows = stmt.query_map(
-            params![i64::try_from(limit).unwrap_or(i64::MAX)],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-        )?;
+        let rows = stmt.query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -613,11 +603,7 @@ impl MetadataStore {
 
     /// Toggle the `enabled` flag. Returns the row count affected
     /// (0 when `name` is unknown).
-    pub fn set_cron_job_enabled(
-        &self,
-        name: &str,
-        enabled: bool,
-    ) -> Result<usize, MetadataError> {
+    pub fn set_cron_job_enabled(&self, name: &str, enabled: bool) -> Result<usize, MetadataError> {
         let n = self.conn.execute(
             "UPDATE cron_jobs SET enabled = ?1 WHERE name = ?2",
             params![if enabled { 1_i64 } else { 0_i64 }, name],
@@ -707,10 +693,7 @@ impl MetadataStore {
     }
 
     /// Return every job whose `enabled=1 AND next_run_at <= now`.
-    pub fn select_due_cron_jobs(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<CronJob>, MetadataError> {
+    pub fn select_due_cron_jobs(&self, now: DateTime<Utc>) -> Result<Vec<CronJob>, MetadataError> {
         let mut stmt = self.conn.prepare(
             "SELECT name, schedule, command, enabled, last_run_at,
                     last_status, next_run_at, last_error, last_stdout,
@@ -899,21 +882,16 @@ impl MetadataStore {
     /// branches on this — when the ledger is empty AND the live
     /// lane carries far more rows than the disk has files, a
     /// `cortex-ops bootstrap dedup` run is the suggested remedy.
-    pub fn bootstrap_seen_count(
-        &self,
-        repo: Option<&str>,
-    ) -> Result<u64, MetadataError> {
+    pub fn bootstrap_seen_count(&self, repo: Option<&str>) -> Result<u64, MetadataError> {
         let count: i64 = match repo {
             Some(r) => self.conn.query_row(
                 "SELECT COUNT(*) FROM bootstrap_seen WHERE repo = ?1",
                 params![r],
                 |row| row.get(0),
             )?,
-            None => self.conn.query_row(
-                "SELECT COUNT(*) FROM bootstrap_seen",
-                [],
-                |row| row.get(0),
-            )?,
+            None => self
+                .conn
+                .query_row("SELECT COUNT(*) FROM bootstrap_seen", [], |row| row.get(0))?,
         };
         Ok(count.max(0) as u64)
     }
@@ -941,10 +919,7 @@ impl MetadataStore {
             let count: i64 = r.get(2)?;
             Ok(BootstrapSeenDuplicate {
                 content_hash: hash,
-                paths: paths_blob
-                    .split('\u{1f}')
-                    .map(String::from)
-                    .collect(),
+                paths: paths_blob.split('\u{1f}').map(String::from).collect(),
                 count: count.max(0) as u64,
             })
         })?;
@@ -1515,8 +1490,6 @@ pub struct ClassifierSpendMonthlyRow {
     pub est_usd_cents: u64,
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1707,7 +1680,9 @@ mod tests {
                 .record_producer_checkpoint("bootstrap", scope, "01ENV", base, accumulated)
                 .unwrap();
         }
-        let rows = store.list_producer_checkpoints_for("bootstrap", 50).unwrap();
+        let rows = store
+            .list_producer_checkpoints_for("bootstrap", 50)
+            .unwrap();
         assert_eq!(rows.len(), 3);
         // Newest first per the ORDER BY.
         assert_eq!(rows[0].scope, "repo_c");
@@ -1768,7 +1743,13 @@ mod tests {
                         (job_id, repo_path, started_at, finished_at,
                          files_processed, chunks_emitted, status)
                      VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'success')",
-                    params![format!("01A{i}"), "/repo/x", aged.to_rfc3339(), 10_i64, 100_i64],
+                    params![
+                        format!("01A{i}"),
+                        "/repo/x",
+                        aged.to_rfc3339(),
+                        10_i64,
+                        100_i64
+                    ],
                 )
                 .unwrap();
         }
@@ -1780,7 +1761,13 @@ mod tests {
                         (job_id, repo_path, started_at, finished_at,
                          files_processed, chunks_emitted, status)
                      VALUES (?1, ?2, ?3, ?3, ?4, ?5, 'success')",
-                    params![format!("01B{i}"), "/repo/x", fresh.to_rfc3339(), 1_i64, 7_i64],
+                    params![
+                        format!("01B{i}"),
+                        "/repo/x",
+                        fresh.to_rfc3339(),
+                        1_i64,
+                        7_i64
+                    ],
                 )
                 .unwrap();
         }
@@ -1831,9 +1818,7 @@ mod tests {
     #[test]
     fn bootstrap_seen_lookup_returns_none_for_unknown_path() {
         let store = MetadataStore::open_in_memory().unwrap();
-        let row = store
-            .bootstrap_seen_lookup("Cortex", "src/lib.rs")
-            .unwrap();
+        let row = store.bootstrap_seen_lookup("Cortex", "src/lib.rs").unwrap();
         assert!(row.is_none());
     }
 
@@ -1842,13 +1827,7 @@ mod tests {
         let store = MetadataStore::open_in_memory().unwrap();
         let when = now();
         store
-            .bootstrap_seen_upsert(
-                "Cortex",
-                "src/lib.rs",
-                "sha256:abc",
-                Some("01RUN"),
-                when,
-            )
+            .bootstrap_seen_upsert("Cortex", "src/lib.rs", "sha256:abc", Some("01RUN"), when)
             .unwrap();
         let row = store
             .bootstrap_seen_lookup("Cortex", "src/lib.rs")
@@ -1954,7 +1933,10 @@ mod tests {
         store
             .upsert_session("01SESSA", "claude-code", None, None, None, now())
             .unwrap();
-        assert_eq!(read_session_tool(&store, "01SESSA").as_deref(), Some("claude-code"));
+        assert_eq!(
+            read_session_tool(&store, "01SESSA").as_deref(),
+            Some("claude-code")
+        );
         // Subsequent upsert with empty tool — must NOT overwrite.
         store
             .upsert_session("01SESSA", "", Some("sonnet"), None, None, now())
@@ -1989,7 +1971,10 @@ mod tests {
             .unwrap();
         let touched = store.set_session_tool("01SESSC", "claude-code").unwrap();
         assert_eq!(touched, 1);
-        assert_eq!(read_session_tool(&store, "01SESSC").as_deref(), Some("claude-code"));
+        assert_eq!(
+            read_session_tool(&store, "01SESSC").as_deref(),
+            Some("claude-code")
+        );
         // Empty tool is a no-op.
         let touched_empty = store.set_session_tool("01SESSC", "").unwrap();
         assert_eq!(touched_empty, 0);
@@ -2031,11 +2016,21 @@ mod tests {
         // already persisted.
         let store = MetadataStore::open_in_memory().unwrap();
         store
-            .consumer_offset_upsert("cortex-graph-0", "cortex.events.enriched", 100, Some("01EVT"))
+            .consumer_offset_upsert(
+                "cortex-graph-0",
+                "cortex.events.enriched",
+                100,
+                Some("01EVT"),
+            )
             .unwrap();
         // Smaller offset must NOT regress the stored value.
         store
-            .consumer_offset_upsert("cortex-graph-0", "cortex.events.enriched", 50, Some("01OLD"))
+            .consumer_offset_upsert(
+                "cortex-graph-0",
+                "cortex.events.enriched",
+                50,
+                Some("01OLD"),
+            )
             .unwrap();
         let row = store
             .consumer_offset_lookup("cortex-graph-0", "cortex.events.enriched")
@@ -2053,7 +2048,12 @@ mod tests {
         // MAX semantics to rewinds.
         let store = MetadataStore::open_in_memory().unwrap();
         store
-            .consumer_offset_upsert("cortex-graph-0", "cortex.events.enriched", 500, Some("01HEAD"))
+            .consumer_offset_upsert(
+                "cortex-graph-0",
+                "cortex.events.enriched",
+                500,
+                Some("01HEAD"),
+            )
             .unwrap();
         store
             .consumer_offset_set("cortex-graph-0", "cortex.events.enriched", 100)

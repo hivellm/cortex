@@ -279,7 +279,10 @@ mod tests {
         // assert the shape is well-formed.
         assert!(!v.git_sha.is_empty());
         assert!(!v.build_ts.is_empty());
-        assert!(matches!(v.profile.as_str(), "debug" | "release" | "unknown"));
+        assert!(matches!(
+            v.profile.as_str(),
+            "debug" | "release" | "unknown"
+        ));
         assert_eq!(v.crate_version, "0.1.0");
     }
 

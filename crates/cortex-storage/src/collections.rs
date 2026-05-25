@@ -57,7 +57,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_TURN_PQ,
@@ -65,7 +68,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Warm,
         dim: EMBED_DIM,
         encoding: "pq",
-        hnsw: HnswParams { m: 16, ef_search: 64 },
+        hnsw: HnswParams {
+            m: 16,
+            ef_search: 64,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_TOOL_CALL_FP32,
@@ -73,7 +79,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_TOOL_CALL_PQ,
@@ -81,7 +90,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Warm,
         dim: EMBED_DIM,
         encoding: "pq",
-        hnsw: HnswParams { m: 16, ef_search: 64 },
+        hnsw: HnswParams {
+            m: 16,
+            ef_search: 64,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_CODE_CHUNK_FP32,
@@ -89,7 +101,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_CODE_CHUNK_PQ,
@@ -97,7 +112,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Warm,
         dim: EMBED_DIM,
         encoding: "pq",
-        hnsw: HnswParams { m: 16, ef_search: 64 },
+        hnsw: HnswParams {
+            m: 16,
+            ef_search: 64,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_DOC_CHUNK_FP32,
@@ -105,7 +123,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_DECISION_FP32,
@@ -113,7 +134,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 48, ef_search: 256 },
+        hnsw: HnswParams {
+            m: 48,
+            ef_search: 256,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_ANALYSIS_FP32,
@@ -121,7 +145,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 48, ef_search: 256 },
+        hnsw: HnswParams {
+            m: 48,
+            ef_search: 256,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_MEMORY_FP32,
@@ -129,7 +156,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_LAW_FP32,
@@ -137,7 +167,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 48, ef_search: 256 },
+        hnsw: HnswParams {
+            m: 48,
+            ef_search: 256,
+        },
     },
     // phase10e — Rulebook MCP captures (`rulebook_knowledge_add` /
     // `rulebook_learn_capture`). Single hot tier; the corpus is
@@ -149,7 +182,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_LEARNING_FP32,
@@ -157,7 +193,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 32, ef_search: 128 },
+        hnsw: HnswParams {
+            m: 32,
+            ef_search: 128,
+        },
     },
     // phase11j — consolidation summaries. Hot tier carries the recent
     // window + every Deep-depth consolidation (high-recall HNSW so the
@@ -170,7 +209,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 48, ef_search: 256 },
+        hnsw: HnswParams {
+            m: 48,
+            ef_search: 256,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_CONSOLIDATION_PQ,
@@ -178,7 +220,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Warm,
         dim: EMBED_DIM,
         encoding: "pq",
-        hnsw: HnswParams { m: 16, ef_search: 64 },
+        hnsw: HnswParams {
+            m: 16,
+            ef_search: 64,
+        },
     },
     // phase11r — topic card synthesis bodies. Hot tier carries every
     // currently-active card with recall-tuned HNSW so the renderer's
@@ -192,7 +237,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Hot,
         dim: EMBED_DIM,
         encoding: "fp32",
-        hnsw: HnswParams { m: 48, ef_search: 256 },
+        hnsw: HnswParams {
+            m: 48,
+            ef_search: 256,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_TOPIC_CARD_PQ,
@@ -200,7 +248,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Warm,
         dim: EMBED_DIM,
         encoding: "pq",
-        hnsw: HnswParams { m: 16, ef_search: 64 },
+        hnsw: HnswParams {
+            m: 16,
+            ef_search: 64,
+        },
     },
     CollectionSchema {
         name: crate::names::COLLECTION_COLD_BINARY,
@@ -208,7 +259,10 @@ pub const COLLECTIONS: &[CollectionSchema] = &[
         tier: CollectionTier::Cold,
         dim: EMBED_DIM,
         encoding: "binary",
-        hnsw: HnswParams { m: 8, ef_search: 32 },
+        hnsw: HnswParams {
+            m: 8,
+            ef_search: 32,
+        },
     },
 ];
 

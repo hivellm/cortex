@@ -21,13 +21,19 @@ fn indexes_are_unique() {
 #[test]
 fn all_streams_prefixed() {
     for s in ALL_STREAMS {
-        assert!(s.starts_with("cortex."), "stream `{s}` missing cortex. prefix");
+        assert!(
+            s.starts_with("cortex."),
+            "stream `{s}` missing cortex. prefix"
+        );
     }
 }
 
 #[test]
 fn all_indexes_prefixed() {
     for i in ALL_INDEXES {
-        assert!(i.starts_with("cortex_"), "index `{i}` missing cortex_ prefix");
+        assert!(
+            i.starts_with("cortex_"),
+            "index `{i}` missing cortex_ prefix"
+        );
     }
 }
