@@ -100,8 +100,7 @@ mod tests {
 
     #[test]
     fn error_trait_is_implemented_so_anyhow_can_wrap_it() {
-        let err: Box<dyn std::error::Error> =
-            Box::new(AdapterError::MissingField("turn_id"));
+        let err: Box<dyn std::error::Error> = Box::new(AdapterError::MissingField("turn_id"));
         assert_eq!(err.to_string(), "missing required field: turn_id");
     }
 }

@@ -181,8 +181,7 @@ impl Server {
         // result, indistinguishable from "tool returned empty").
         let timeout = self.ctx.tool_timeout(&name);
         let join = tokio::task::spawn(run_tool(tool, self.ctx.clone(), args));
-        let outcome: Result<ToolResult, ToolError> = match tokio::time::timeout(timeout, join)
-            .await
+        let outcome: Result<ToolResult, ToolError> = match tokio::time::timeout(timeout, join).await
         {
             Ok(Ok(res)) => res,
             Ok(Err(join_err)) => {

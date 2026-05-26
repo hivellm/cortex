@@ -281,7 +281,10 @@ mod tests {
             // gate first, then full summary. Match on the relevance
             // prompt anchor so the canned summariser returns a
             // green verdict before the real summary lands.
-            let text = if req.prompt.contains("relevance judge for the Cortex consolidator") {
+            let text = if req
+                .prompt
+                .contains("relevance judge for the Cortex consolidator")
+            {
                 "{\"relevant\": true, \"reason\": \"substantive\"}".to_string()
             } else {
                 self.text.clone()

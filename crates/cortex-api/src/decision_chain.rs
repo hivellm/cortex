@@ -175,7 +175,9 @@ pub async fn decision_chain_handler(
             // sink to the front of the same bucket; the handler
             // surfaces these because the projection is honest.
             resp.chain.sort_by(|a, b| {
-                a.date.cmp(&b.date).then_with(|| a.event_id.cmp(&b.event_id))
+                a.date
+                    .cmp(&b.date)
+                    .then_with(|| a.event_id.cmp(&b.event_id))
             });
             Json(resp).into_response()
         }
@@ -201,7 +203,9 @@ pub async fn decision_chain_handler(
 /// Clamp `max_hops` into `[1, MAX_HOPS_CEILING]`. `None` returns
 /// [`DEFAULT_MAX_HOPS`].
 pub fn clamp_max_hops(max_hops: Option<u32>) -> u32 {
-    max_hops.unwrap_or(DEFAULT_MAX_HOPS).clamp(1, MAX_HOPS_CEILING)
+    max_hops
+        .unwrap_or(DEFAULT_MAX_HOPS)
+        .clamp(1, MAX_HOPS_CEILING)
 }
 
 /// Validate a ULID — 26 chars, base32 alphabet `[0-9A-Z]` with the
@@ -329,7 +333,12 @@ mod tests {
         format!("{}{}", "0".repeat(25), char::from(b'A' + n))
     }
 
-    fn node(event_id: &str, date: &str, supersedes: Option<&str>, superseded_by: Option<&str>) -> DecisionNode {
+    fn node(
+        event_id: &str,
+        date: &str,
+        supersedes: Option<&str>,
+        superseded_by: Option<&str>,
+    ) -> DecisionNode {
         DecisionNode {
             event_id: event_id.into(),
             slug: format!("slug-{event_id}"),
@@ -435,7 +444,11 @@ mod tests {
         let mut nodes = BTreeMap::new();
         let mut edges = Vec::new();
         for (i, id) in ids.iter().enumerate() {
-            let prev = if i == 0 { None } else { Some(ids[i - 1].as_str()) };
+            let prev = if i == 0 {
+                None
+            } else {
+                Some(ids[i - 1].as_str())
+            };
             let next = if i == ids.len() - 1 {
                 None
             } else {
@@ -452,7 +465,10 @@ mod tests {
         // max_hops = 2 from start `a`: walks b, then c. d and e dropped.
         let r = walk_chain(&ids[0], &nodes, &edges, 2);
         let chain_ids: Vec<&str> = r.chain.iter().map(|n| n.event_id.as_str()).collect();
-        assert_eq!(chain_ids, vec![ids[0].as_str(), ids[1].as_str(), ids[2].as_str()]);
+        assert_eq!(
+            chain_ids,
+            vec![ids[0].as_str(), ids[1].as_str(), ids[2].as_str()]
+        );
         assert_eq!(r.walked_successors, 2);
     }
 
@@ -481,7 +497,9 @@ mod tests {
             }),
         )
         .await;
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let value: DecisionChainResponse = serde_json::from_slice(&body).unwrap();
         assert!(value.chain.is_empty());
         assert_eq!(value.walked_predecessors, 0);

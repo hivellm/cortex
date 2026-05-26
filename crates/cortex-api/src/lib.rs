@@ -38,16 +38,16 @@
 // -- buckets ----------------------------------------------------------------
 pub mod active_work;
 pub mod admin;
+pub mod dashboard;
 pub mod decision_chain;
 pub mod feedback;
-pub mod similar_sessions;
-pub mod dashboard;
 pub mod health;
 pub mod ingest;
 pub mod lanes;
 pub mod mcp;
 pub mod search;
 pub mod security;
+pub mod similar_sessions;
 
 // -- root modules -----------------------------------------------------------
 pub mod http;

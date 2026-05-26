@@ -178,9 +178,8 @@ async fn run_daemon(
     let heartbeat_metrics = metrics.clone();
     let heartbeat_shutdown = shutdown.clone();
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(
-            HEARTBEAT_INTERVAL_SECS,
-        ));
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
         // Fire one tick immediately so the gauge is non-zero from
         // boot — otherwise a /healthz probe in the first 30 s would
         // see `last_heartbeat_ts_ms = 0` and the aggregator would
@@ -361,11 +360,13 @@ async fn run_daemon(
     );
 
     // Phase11w §2.4 — spawn the HTTP listener alongside the primary
-    // socket/pipe binding when `CORTEX_ADAPTER_HTTP_BIND` is set OR
-    // when the operator explicitly opts in via `--enable-http`. The
-    // OpenCode TS plugin posts here; the primary socket / named pipe
-    // keeps serving the Claude Code hook shims.
-    if std::env::var("CORTEX_ADAPTER_HTTP_BIND").is_ok() {
+    // socket/pipe binding when the typed `cortex_config::AdapterConfig.http_bind`
+    // is set (which the ADR-016 env map populates from
+    // `CORTEX_ADAPTER_HTTP_BIND`). The OpenCode TS plugin posts
+    // here; the primary socket / named pipe keeps serving the
+    // Claude Code hook shims.
+    let typed_cfg = cortex_config::Config::load().unwrap_or_default();
+    if typed_cfg.adapter.http_bind.is_some() {
         let http_binding = IpcBinding::default_http();
         let http_dispatcher = dispatcher.clone();
         let http_shutdown = shutdown.clone();

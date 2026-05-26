@@ -70,7 +70,11 @@ pub fn load_csv(path: &std::path::Path) -> Result<Vec<ClassificationRow>> {
 /// supplies the kind string the classifier actually returned per
 /// row, in the same order as `rows`.
 pub fn build_report(rows: &[ClassificationRow], predicted: &[String]) -> SuiteReport {
-    assert_eq!(rows.len(), predicted.len(), "row/prediction length mismatch");
+    assert_eq!(
+        rows.len(),
+        predicted.len(),
+        "row/prediction length mismatch"
+    );
     // Collect the union of labels so we compute F1 over every kind
     // that appears in expected OR predicted.
     let mut labels: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -95,10 +99,8 @@ pub fn build_report(rows: &[ClassificationRow], predicted: &[String]) -> SuiteRe
             counters.get_mut(&row.expected_kind).expect("seeded").2 += 1;
         }
     }
-    let per_class: Vec<(String, (usize, usize, usize))> = counters
-        .iter()
-        .map(|(k, v)| (k.clone(), *v))
-        .collect();
+    let per_class: Vec<(String, (usize, usize, usize))> =
+        counters.iter().map(|(k, v)| (k.clone(), *v)).collect();
     let macro_score = macro_f1(&per_class);
 
     // Per-label F1 emitted as advisory metrics so the dashboard can

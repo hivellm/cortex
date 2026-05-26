@@ -235,7 +235,10 @@ pub async fn reencode_collection(
         });
     }
 
-    debug_assert!(report.invariant_holds(), "scanned must equal kept + dropped");
+    debug_assert!(
+        report.invariant_holds(),
+        "scanned must equal kept + dropped"
+    );
     Ok(report)
 }
 
@@ -285,9 +288,7 @@ impl MemoryVectorizerPruneOps {
     /// so callers can reset between scenarios.
     pub async fn seed(&self, collection: &str, records: Vec<VectorRecord>) {
         let mut inner = self.inner.lock().await;
-        inner
-            .by_collection
-            .insert(collection.to_string(), records);
+        inner.by_collection.insert(collection.to_string(), records);
     }
 
     /// Snapshot the rows in `collection` for assertions.

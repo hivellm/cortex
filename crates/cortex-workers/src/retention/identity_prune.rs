@@ -507,8 +507,14 @@ mod tests {
     #[tokio::test]
     async fn static_source_filters_by_cutoff() {
         let source = StaticIdentitySource::new(vec![
-            row("e-old", "events/year=2024/month=01/day=01/hour=00/raw.parquet"),
-            row("e-new", "events/year=2026/month=05/day=20/hour=00/raw.parquet"),
+            row(
+                "e-old",
+                "events/year=2024/month=01/day=01/hour=00/raw.parquet",
+            ),
+            row(
+                "e-new",
+                "events/year=2026/month=05/day=20/hour=00/raw.parquet",
+            ),
         ]);
         let expired = source
             .expired_identities(ts("2026-04-01T00:00:00Z"))

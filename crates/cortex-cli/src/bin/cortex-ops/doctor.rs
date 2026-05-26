@@ -1298,4 +1298,3 @@ mod meili_drift_tests {
         assert!(!report.has_drift());
     }
 }
-

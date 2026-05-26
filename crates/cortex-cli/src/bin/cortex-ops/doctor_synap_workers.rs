@@ -78,9 +78,7 @@ pub fn run(
         print_table(&rows);
     }
 
-    let any_fail = rows
-        .iter()
-        .any(|r| r.error.is_some() || r.state != "ok");
+    let any_fail = rows.iter().any(|r| r.error.is_some() || r.state != "ok");
     if any_fail {
         ExitCode::from(2)
     } else {
@@ -184,9 +182,7 @@ fn parse_health_row(worker: &'static str, url: &str, body: &str) -> WorkerRow {
         .get("consume_errors_consecutive")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let lag = extras
-        .get("synap_worker_lag")
-        .and_then(|v| v.as_u64());
+    let lag = extras.get("synap_worker_lag").and_then(|v| v.as_u64());
     WorkerRow {
         worker,
         url: url.to_string(),
@@ -293,10 +289,7 @@ mod tests {
         // SAFETY-ish: each branch isolates the unique env key.
         let key = "TEST_CORTEX_DOC_SYNAP_W_RESOLVE_KEY";
         std::env::remove_var(key);
-        assert_eq!(
-            resolve_url(None, key, "http://default/"),
-            "http://default/"
-        );
+        assert_eq!(resolve_url(None, key, "http://default/"), "http://default/");
         std::env::set_var(key, "http://from-env/");
         assert_eq!(
             resolve_url(None, key, "http://default/"),

@@ -25,10 +25,7 @@ use serde::{Deserialize, Serialize};
 /// Per-grain status row carried on the response.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct GrainHealth {
     /// `finished_at` stamp of the most recent
     /// [`super::super::consolidator::ConsolidationReport`] row for
@@ -50,10 +47,7 @@ pub struct GrainHealth {
 /// Top-level wire response for `/v1/health/consolidator`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct ConsolidatorHealthReport {
     /// Session-grain status row.
     pub session_grain: GrainHealth,
@@ -108,9 +102,7 @@ pub fn build_router(state: ConsolidatorHealthState) -> axum::Router {
 }
 
 /// Axum handler. Pure projection of [`ConsolidatorHealthSource::snapshot`].
-pub async fn consolidator_health_handler(
-    State(state): State<ConsolidatorHealthState>,
-) -> Response {
+pub async fn consolidator_health_handler(State(state): State<ConsolidatorHealthState>) -> Response {
     let report = state.source.snapshot().await;
     Json(report).into_response()
 }
@@ -191,7 +183,9 @@ mod tests {
             source: Arc::new(StubSource(expected.clone())),
         };
         let resp = consolidator_health_handler(State(state)).await;
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: ConsolidatorHealthReport = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed, expected);
     }

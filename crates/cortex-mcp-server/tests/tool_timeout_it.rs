@@ -120,11 +120,7 @@ async fn fast_tool_below_timeout_returns_normal_result() {
         fn descriptor(&self) -> Value {
             json!({"name": "fast_tool", "description": "fast", "inputSchema": {"type": "object"}})
         }
-        async fn call(
-            &self,
-            _ctx: &ToolContext,
-            _args: Value,
-        ) -> Result<ToolResult, ToolError> {
+        async fn call(&self, _ctx: &ToolContext, _args: Value) -> Result<ToolResult, ToolError> {
             Ok(ToolResult {
                 content: vec![json!({"type": "text", "text": "ok"})],
                 is_error: false,

@@ -27,15 +27,11 @@ use cortex_core::events::{Context, Envelope, Kind, Stream};
 use cortex_storage::MetadataStore;
 use cortex_workers::consolidator::consolidator_trait::ConsolidatorCtx;
 use cortex_workers::consolidator::cost_telemetry::CostLedger;
-use cortex_workers::consolidator::daemon::{
-    ConsolidatorDaemon, PendingTrigger, TriggerSource,
-};
+use cortex_workers::consolidator::daemon::{ConsolidatorDaemon, PendingTrigger, TriggerSource};
 use cortex_workers::consolidator::grains::decision_trace::DecisionTraceFetcher;
 use cortex_workers::consolidator::grains::session::SessionInputFetcher;
 use cortex_workers::consolidator::grains::topic::TopicClusterFetcher;
-use cortex_workers::consolidator::grains::{
-    DecisionTraceGrain, SessionGrain, TopicGrain,
-};
+use cortex_workers::consolidator::grains::{DecisionTraceGrain, SessionGrain, TopicGrain};
 use cortex_workers::consolidator::orchestrator::{Orchestrator, Trigger};
 use cortex_workers::consolidator::producer::decision_trace::DecisionTraceInput;
 use cortex_workers::consolidator::producer::session::SessionInput;
@@ -127,7 +123,10 @@ impl Summariser for CannedSummariser {
         self.kind
     }
     async fn summarise(&self, req: SummariserRequest) -> Result<SummariserResult, SummariserError> {
-        let text = if req.prompt.contains("relevance judge for the Cortex consolidator") {
+        let text = if req
+            .prompt
+            .contains("relevance judge for the Cortex consolidator")
+        {
             "{\"relevant\": true, \"reason\": \"substantive\"}".to_string()
         } else {
             SUMMARY_BODY.to_string()
@@ -149,7 +148,10 @@ impl SessionInputFetcher for StaticSessionFetcher {
         Ok(SessionInput {
             session_id: sid.to_string(),
             repo: Some("cortex".into()),
-            envelopes: vec![turn(1, "2026-04-20T10:00:00Z"), turn(2, "2026-04-20T10:01:00Z")],
+            envelopes: vec![
+                turn(1, "2026-04-20T10:00:00Z"),
+                turn(2, "2026-04-20T10:01:00Z"),
+            ],
         })
     }
 }
@@ -257,10 +259,7 @@ fn build_daemon_with(
         Arc::new(Orchestrator::new(haiku, opus)),
         Arc::new(StaticDecisionFetcher),
     ));
-    let ctx = ConsolidatorCtx::with_ledger(
-        Utc::now(),
-        Arc::new(Mutex::new(CostLedger::default())),
-    );
+    let ctx = ConsolidatorCtx::with_ledger(Utc::now(), Arc::new(Mutex::new(CostLedger::default())));
     let metadata: ProducerMetadataHandle =
         Arc::new(TokioMutex::new(MetadataStore::open_in_memory().unwrap()));
     let daemon = Arc::new(

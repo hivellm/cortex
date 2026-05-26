@@ -186,7 +186,10 @@ mod tests {
         (build_router(state), handle)
     }
 
-    async fn post_json(router: &axum::Router, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    async fn post_json(
+        router: &axum::Router,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
         let resp = router
             .clone()
             .oneshot(
@@ -200,7 +203,9 @@ mod tests {
             .await
             .unwrap();
         let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let val: serde_json::Value =
             serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
         (status, val)
@@ -228,8 +233,11 @@ mod tests {
     #[tokio::test]
     async fn empty_query_id_returns_400() {
         let (router, _) = router().await;
-        let (status, body) =
-            post_json(&router, serde_json::json!({"query_id": "  ", "helpful": true})).await;
+        let (status, body) = post_json(
+            &router,
+            serde_json::json!({"query_id": "  ", "helpful": true}),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert!(body["error"].as_str().unwrap_or("").contains("query_id"));
     }
@@ -243,7 +251,11 @@ mod tests {
                 serde_json::json!({"query_id": "q", "helpful": true, "rating": r}),
             )
             .await;
-            assert_eq!(status, StatusCode::BAD_REQUEST, "rating {r} should be rejected");
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "rating {r} should be rejected"
+            );
             assert!(body["error"].as_str().unwrap_or("").contains("rating"));
         }
     }

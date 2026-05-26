@@ -115,7 +115,11 @@ impl ToolContext {
     /// Phase14i §2.3 — register a per-tool timeout override. Tests
     /// use this to inject short timeouts; production wiring reads
     /// from `cortex_config::McpConfig` once it ships.
-    pub fn with_tool_timeout(mut self, tool_name: impl Into<String>, dur: std::time::Duration) -> Self {
+    pub fn with_tool_timeout(
+        mut self,
+        tool_name: impl Into<String>,
+        dur: std::time::Duration,
+    ) -> Self {
         self.tool_timeouts.insert(tool_name.into(), dur);
         self
     }
@@ -1464,7 +1468,10 @@ impl Tool for ActiveWorkTool {
     }
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
-        let repo = args.get("repo").and_then(|v| v.as_str()).map(str::to_string);
+        let repo = args
+            .get("repo")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         // Validate `repo` is slug-safe before splicing into the URL —
         // dashboard slugs are lowercase alnum + `-` / `_`; anything
         // else is a client mistake the MCP layer rejects.
@@ -1497,16 +1504,11 @@ impl Tool for ActiveWorkTool {
                     .to_string();
                 serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({}))
             }
-            err @ ToolResult {
-                is_error: true, ..
-            } => return Ok(err),
+            err @ ToolResult { is_error: true, .. } => return Ok(err),
         };
         // Cap active_tasks at ACTIVE_WORK_TASK_CAP. The daemon side
         // already truncated `next_unchecked_item` to 256 bytes.
-        if let Some(arr) = value
-            .get_mut("active_tasks")
-            .and_then(|v| v.as_array_mut())
-        {
+        if let Some(arr) = value.get_mut("active_tasks").and_then(|v| v.as_array_mut()) {
             if arr.len() > ACTIVE_WORK_TASK_CAP {
                 arr.truncate(ACTIVE_WORK_TASK_CAP);
             }

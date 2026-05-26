@@ -22,6 +22,7 @@
 pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_ADAPTER_ADMIN_PORT", "/adapter/adapter_admin_port"),
     ("CORTEX_ADAPTER_DISABLE", "/adapter/adapter_disable"),
+    ("CORTEX_ADAPTER_HTTP_BIND", "/adapter/http_bind"),
     ("CORTEX_ADAPTER_PIPE", "/adapter/adapter_pipe"),
     ("CORTEX_ADAPTER_SOCK", "/adapter/adapter_sock"),
     ("CORTEX_ANALYZER_API_BASE", "/analyzer/api_base"),

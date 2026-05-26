@@ -31,8 +31,7 @@ use ts_rs::TS;
 use crate::dashboard::ConsolidationFilter;
 use crate::health::consolidator::{ConsolidatorHealthReport, GrainHealth};
 use crate::health::pre_thinking::{
-    IntentByteQuantilesView, IntentHelpfulRateView, IntentMismatchView,
-    PreThinkingHealthReport,
+    IntentByteQuantilesView, IntentHelpfulRateView, IntentMismatchView, PreThinkingHealthReport,
 };
 use crate::health::{FreshnessRow, Severity};
 

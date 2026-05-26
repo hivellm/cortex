@@ -187,13 +187,17 @@ impl RewriteCache {
     pub async fn insert(&self, query: &str, intent: &str, rewrite: String, max_entries: usize) {
         let key = Self::key(query, intent);
         let mut inner = self.inner.lock().await;
-        if inner.entries.insert(
-            key.clone(),
-            CacheEntry {
-                rewrite,
-                inserted_at: Instant::now(),
-            },
-        ).is_none() {
+        if inner
+            .entries
+            .insert(
+                key.clone(),
+                CacheEntry {
+                    rewrite,
+                    inserted_at: Instant::now(),
+                },
+            )
+            .is_none()
+        {
             inner.insertion_order.push_back(key);
         }
         while inner.entries.len() > max_entries {
@@ -404,7 +408,10 @@ mod tests {
         assert_eq!(r.query, "refactor the hnsw thing");
         let snap = metrics.rewriter_path_snapshot();
         assert_eq!(snap.get(path_labels::SONNET_TIMEOUT).copied(), Some(1));
-        assert_eq!(snap.get(path_labels::DETERMINISTIC_FALLBACK).copied(), Some(1));
+        assert_eq!(
+            snap.get(path_labels::DETERMINISTIC_FALLBACK).copied(),
+            Some(1)
+        );
     }
 
     #[tokio::test]

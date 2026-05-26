@@ -155,10 +155,7 @@ impl ActiveWorkLoader {
         if !self.cache_is_fresh() {
             self.refresh();
         }
-        let cache = self
-            .cache
-            .read()
-            .expect("active_work cache poisoned");
+        let cache = self.cache.read().expect("active_work cache poisoned");
         cache.report.clone()
     }
 
@@ -200,10 +197,7 @@ impl ActiveWorkLoader {
     }
 
     fn cache_is_fresh(&self) -> bool {
-        let cache = self
-            .cache
-            .read()
-            .expect("active_work cache poisoned");
+        let cache = self.cache.read().expect("active_work cache poisoned");
         let Some(scanned_at) = cache.scanned_at else {
             return false;
         };
@@ -224,10 +218,7 @@ impl ActiveWorkLoader {
 
     fn refresh(&self) {
         let (report, stamps) = scan(&self.root);
-        let mut cache = self
-            .cache
-            .write()
-            .expect("active_work cache poisoned");
+        let mut cache = self.cache.write().expect("active_work cache poisoned");
         cache.report = report;
         cache.stamps = stamps;
         cache.scanned_at = Some(Instant::now());
@@ -238,11 +229,10 @@ impl ActiveWorkLoader {
 /// report plus the list of `(path, mtime)` stamps the cache uses
 /// for invalidation.
 fn scan(root: &Path) -> (ActiveWorkReport, Vec<(PathBuf, SystemTime)>) {
-    let repo = root.parent().and_then(|p| p.file_name()).map(|n| {
-        n.to_string_lossy()
-            .into_owned()
-            .to_ascii_lowercase()
-    });
+    let repo = root
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned().to_ascii_lowercase());
     let mut active_tasks = Vec::new();
     let mut stamps = Vec::new();
     let tasks_root = root.join("tasks");
@@ -331,7 +321,11 @@ fn read_task_row(
     let status = metadata.status.unwrap_or_else(|| "pending".to_string());
 
     let blocked_reason = if status == "blocked" {
-        Some(metadata.blocked_reason.unwrap_or_else(|| "blocked".to_string()))
+        Some(
+            metadata
+                .blocked_reason
+                .unwrap_or_else(|| "blocked".to_string()),
+        )
     } else {
         None
     };
@@ -513,9 +507,7 @@ mod tests {
         let dir = rb.join("tasks").join(id);
         stdfs::create_dir_all(&dir).unwrap();
         let metadata = match blocked_reason {
-            Some(reason) => format!(
-                "{{\"status\":\"{status}\",\"blocked_reason\":\"{reason}\"}}",
-            ),
+            Some(reason) => format!("{{\"status\":\"{status}\",\"blocked_reason\":\"{reason}\"}}",),
             None => format!("{{\"status\":\"{status}\"}}"),
         };
         stdfs::write(dir.join(".metadata.json"), metadata).unwrap();
@@ -593,10 +585,7 @@ mod tests {
         // sees the missing path and forces a refresh; the rebuilt
         // report drops the task entirely (read_task_row needs
         // `.metadata.json`).
-        stdfs::remove_file(
-            rb.join("tasks").join("phase1a_demo").join(".metadata.json"),
-        )
-        .unwrap();
+        stdfs::remove_file(rb.join("tasks").join("phase1a_demo").join(".metadata.json")).unwrap();
         let second = loader.snapshot();
         assert_eq!(second.active_tasks.len(), 0);
     }

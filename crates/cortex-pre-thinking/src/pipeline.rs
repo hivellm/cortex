@@ -125,7 +125,10 @@ pub const FAIL_OPEN_SENTINEL_PREFIX: &str = "<!-- cortex: timeout reason=";
 pub fn fail_open_sentinel(reason: FailReason, query_id: Option<&str>) -> String {
     match query_id {
         Some(id) if !id.is_empty() => {
-            format!("{FAIL_OPEN_SENTINEL_PREFIX}{} query_id={id} -->", reason.as_str())
+            format!(
+                "{FAIL_OPEN_SENTINEL_PREFIX}{} query_id={id} -->",
+                reason.as_str()
+            )
         }
         _ => format!("{FAIL_OPEN_SENTINEL_PREFIX}{} -->", reason.as_str()),
     }
@@ -208,15 +211,14 @@ pub async fn run_with_breaker<Q: QueryFn>(
     };
 
     let total_budget = Duration::from_millis(input.budget.time_ms.max(1) as u64);
-    let (resp_opt, reason) =
-        match tokio::time::timeout(total_budget, query_fn.query(req)).await {
-            Ok(opt @ Some(_)) => (opt, None),
-            Ok(None) => (None, Some(FailReason::Internal)),
-            Err(_) => {
-                metrics.incr_timeouts();
-                (None, Some(FailReason::Timeout))
-            }
-        };
+    let (resp_opt, reason) = match tokio::time::timeout(total_budget, query_fn.query(req)).await {
+        Ok(opt @ Some(_)) => (opt, None),
+        Ok(None) => (None, Some(FailReason::Internal)),
+        Err(_) => {
+            metrics.incr_timeouts();
+            (None, Some(FailReason::Timeout))
+        }
+    };
     let response = match resp_opt {
         Some(r) => {
             // Successful upstream response — half-open probes
@@ -350,13 +352,8 @@ mod tests {
         let cwd = std::env::current_dir().unwrap();
         let metrics = Arc::new(Metrics::new());
         let breaker = Arc::new(Breaker::with_config(BreakerConfig::default()));
-        let out = run_with_breaker(
-            &input(&cwd),
-            Arc::new(AlwaysNone),
-            metrics.clone(),
-            breaker,
-        )
-        .await;
+        let out =
+            run_with_breaker(&input(&cwd), Arc::new(AlwaysNone), metrics.clone(), breaker).await;
         assert!(out.fail_open);
         assert!(
             out.bundle.starts_with(FAIL_OPEN_SENTINEL_PREFIX),
@@ -389,13 +386,8 @@ mod tests {
         assert_eq!(breaker.state(), BreakerState::Open);
         // 4th call: short-circuit, reason=breaker_open, sentinel
         // present, NO upstream attempt.
-        let out = run_with_breaker(
-            &input(&cwd),
-            Arc::new(AlwaysNone),
-            metrics.clone(),
-            breaker,
-        )
-        .await;
+        let out =
+            run_with_breaker(&input(&cwd), Arc::new(AlwaysNone), metrics.clone(), breaker).await;
         assert!(out.fail_open);
         assert!(out.bundle.contains("breaker_open"));
         let snap = metrics.fail_open_snapshot();

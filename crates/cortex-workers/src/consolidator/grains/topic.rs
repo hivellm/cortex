@@ -44,11 +44,8 @@ pub const TOPIC_DEFAULT_WINDOW: Duration = Duration::days(7);
 pub trait TopicClusterFetcher: Send + Sync {
     /// Cluster the repo's turn corpus at `now` and return the
     /// resulting [`TopicCluster`] list. Empty result is `Ok(vec![])`.
-    async fn fetch(
-        &self,
-        repo: &str,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<TopicCluster>, SourceError>;
+    async fn fetch(&self, repo: &str, now: DateTime<Utc>)
+        -> Result<Vec<TopicCluster>, SourceError>;
 }
 
 /// Production fetcher backed by [`LiveTopicSource`]. The underlying
@@ -220,9 +217,7 @@ impl Consolidator for TopicGrain {
     }
 }
 
-fn depth_to_summariser(
-    depth: cortex_core::events::ConsolidationDepth,
-) -> SummariserKind {
+fn depth_to_summariser(depth: cortex_core::events::ConsolidationDepth) -> SummariserKind {
     match depth {
         cortex_core::events::ConsolidationDepth::Shallow => SummariserKind::Haiku45,
         cortex_core::events::ConsolidationDepth::Deep => SummariserKind::Opus47,
@@ -425,10 +420,7 @@ mod tests {
                 "decision_landed",
             ),
         ] {
-            let err = grain
-                .on_trigger(&bad, &ctx)
-                .await
-                .expect_err("must reject");
+            let err = grain.on_trigger(&bad, &ctx).await.expect_err("must reject");
             match err {
                 ConsolidatorError::TriggerMismatch { got: g, expected } => {
                     assert_eq!(g, got);

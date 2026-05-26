@@ -111,7 +111,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "who decided",
         intent: Intent::DecisionLookup,
     },
-
     // similar_problems — compound debugging phrases.
     Rule {
         keyword: "have we seen",
@@ -157,7 +156,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "isn't working",
         intent: Intent::SimilarProblems,
     },
-
     // law_check — compound policy / permission queries.
     Rule {
         keyword: "is this allowed",
@@ -187,7 +185,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "violates law",
         intent: Intent::LawCheck,
     },
-
     // pre_change_context — compound action phrases. Run before
     // bare verbs so "going to refactor X" is recorded with the
     // compound trigger for audit.
@@ -199,7 +196,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "about to change",
         intent: Intent::PreChangeContext,
     },
-
     // ─────────── EXPLAIN COMPOUNDS ───────────
     // `Explain` compounds run AFTER the compound decision +
     // policy + debug phrases above so a compound question that
@@ -246,7 +242,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "definition of",
         intent: Intent::Explain,
     },
-
     // ─────────── MEDIUM-SPECIFICITY RULES ───────────
     // 2-token compounds. Decision-lookup queries lose to
     // navigational `explain` here unless the longer compound
@@ -271,7 +266,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "can i ",
         intent: Intent::LawCheck,
     },
-
     // ─────────── SINGLE-WORD FALLBACKS ───────────
     // Run last so they only fire when the prompt carries no
     // compound signal. `explain` deliberately sits in this tier

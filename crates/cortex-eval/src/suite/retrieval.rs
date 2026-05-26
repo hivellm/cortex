@@ -95,7 +95,11 @@ pub fn load_csv(path: &std::path::Path) -> Result<Vec<RetrievalRow>> {
 /// Build a [`SuiteReport`] from per-row observations. Each row
 /// supplies the ranked list it actually got back from `/v1/query`.
 pub fn build_report(rows: &[RetrievalRow], observed: &[Vec<String>]) -> SuiteReport {
-    assert_eq!(rows.len(), observed.len(), "row/observation length mismatch");
+    assert_eq!(
+        rows.len(),
+        observed.len(),
+        "row/observation length mismatch"
+    );
     let mut sum_mrr = 0.0;
     let mut sum_recall = 0.0;
     let mut per_row = std::collections::BTreeMap::new();

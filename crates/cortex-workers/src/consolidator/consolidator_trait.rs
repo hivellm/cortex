@@ -307,8 +307,7 @@ mod tests {
     #[test]
     fn consolidator_ctx_with_ledger_shares_handle_across_clones() {
         let shared = Arc::new(Mutex::new(CostLedger::default()));
-        let ctx_a =
-            ConsolidatorCtx::with_ledger(ts("2026-05-25T12:00:00Z"), Arc::clone(&shared));
+        let ctx_a = ConsolidatorCtx::with_ledger(ts("2026-05-25T12:00:00Z"), Arc::clone(&shared));
         let ctx_b = ctx_a.clone();
         ctx_a.record_cost("session", "claude-haiku-4-5", 80, 100, 50);
         ctx_b.record_cost("topic", "claude-haiku-4-5", 70, 90, 40);

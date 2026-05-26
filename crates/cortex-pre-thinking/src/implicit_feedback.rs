@@ -51,7 +51,10 @@ pub fn extract_file_tokens(prefix: &str) -> HashSet<String> {
     // both surface the path cleanly.
     for raw in prefix.split(|c: char| {
         c.is_whitespace()
-            || matches!(c, '(' | ')' | '[' | ']' | '`' | ',' | ';' | '"' | '\'' | '<' | '>' | '|')
+            || matches!(
+                c,
+                '(' | ')' | '[' | ']' | '`' | ',' | ';' | '"' | '\'' | '<' | '>' | '|'
+            )
     }) {
         let t = raw.trim_matches(|c: char| matches!(c, '.' | ':' | '#'));
         if t.is_empty() {

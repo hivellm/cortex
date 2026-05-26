@@ -14,12 +14,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use cron::Schedule;
 
-use crate::embedder::vectorizer_prune::{
-    reencode_collection, PrunePredicate, VectorizerPruneOps,
-};
+use crate::embedder::vectorizer_prune::{reencode_collection, PrunePredicate, VectorizerPruneOps};
 use crate::retention::identity_prune::{
-    render_cascade_summary, run_identity_cascade, CascadePolicy, IdentityCascadeOps,
-    IdentitySource,
+    render_cascade_summary, run_identity_cascade, CascadePolicy, IdentityCascadeOps, IdentitySource,
 };
 use crate::sweep::{Sweep, SweepCtx, SweepReport, SweepReportView};
 
@@ -280,9 +277,24 @@ mod tests {
         assert!(live.iter().all(|r| r.id.starts_with("alive")));
 
         // Per-tier-transition counters populated.
-        assert_eq!(*report.tier_transitions.get("cold:cascade_ok").unwrap_or(&0), 1);
-        assert_eq!(*report.tier_transitions.get("cold:vectorizer_kept").unwrap_or(&0), 4);
-        assert_eq!(*report.tier_transitions.get("cold:vectorizer_dropped").unwrap_or(&0), 2);
+        assert_eq!(
+            *report.tier_transitions.get("cold:cascade_ok").unwrap_or(&0),
+            1
+        );
+        assert_eq!(
+            *report
+                .tier_transitions
+                .get("cold:vectorizer_kept")
+                .unwrap_or(&0),
+            4
+        );
+        assert_eq!(
+            *report
+                .tier_transitions
+                .get("cold:vectorizer_dropped")
+                .unwrap_or(&0),
+            2
+        );
 
         // Young identity preserved, old identity dropped.
         let known = source.known_ids().await;
@@ -300,14 +312,20 @@ mod tests {
             // hot — within the last year
             rows.push(row(
                 &format!("hot-{i:03}"),
-                &format!("events/year=2026/month=04/day=01/hour={:02}/raw.parquet", i % 24),
+                &format!(
+                    "events/year=2026/month=04/day=01/hour={:02}/raw.parquet",
+                    i % 24
+                ),
             ));
         }
         for i in 0..70 {
             // cold — > 365 days old
             rows.push(row(
                 &format!("cold-{i:03}"),
-                &format!("events/year=2024/month=01/day=01/hour={:02}/raw.parquet", i % 24),
+                &format!(
+                    "events/year=2024/month=01/day=01/hour={:02}/raw.parquet",
+                    i % 24
+                ),
             ));
         }
         let source = Arc::new(StaticIdentitySource::new(rows));

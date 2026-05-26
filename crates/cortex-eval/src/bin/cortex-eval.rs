@@ -18,9 +18,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cortex_eval::report::{is_regression, SuiteReport};
-use cortex_eval::suite::{
-    classification, consolidation, retrieval, AcceptanceVerdict, SuiteName,
-};
+use cortex_eval::suite::{classification, consolidation, retrieval, AcceptanceVerdict, SuiteName};
 use cortex_eval::CI_REGRESSION_THRESHOLD;
 use tracing_subscriber::EnvFilter;
 
@@ -85,8 +83,8 @@ fn init_tracing(verbose: bool) {
 }
 
 async fn run(cli: &Cli) -> Result<ExitCode> {
-    let suite = SuiteName::parse(&cli.suite)
-        .with_context(|| format!("unknown --suite={}", cli.suite))?;
+    let suite =
+        SuiteName::parse(&cli.suite).with_context(|| format!("unknown --suite={}", cli.suite))?;
     let golden = cli
         .golden
         .clone()
@@ -108,9 +106,7 @@ async fn run(cli: &Cli) -> Result<ExitCode> {
     let (report, acceptance) = match suite {
         SuiteName::Retrieval => run_retrieval(&http, &api_url, &golden).await?,
         SuiteName::Consolidation => run_consolidation(&http, &api_url, &golden).await?,
-        SuiteName::Classification => {
-            run_classification(&http, &classifier_url, &golden).await?
-        }
+        SuiteName::Classification => run_classification(&http, &classifier_url, &golden).await?,
     };
 
     emit(&report, &cli.output)?;
@@ -123,7 +119,11 @@ async fn run(cli: &Cli) -> Result<ExitCode> {
         .context("parse baseline JSON")?;
         let regressed = regression_summary(&baseline, &report, cli.threshold);
         if !regressed.is_empty() {
-            eprintln!("REGRESSION: {} metric(s) slipped > {} vs baseline:", regressed.len(), cli.threshold);
+            eprintln!(
+                "REGRESSION: {} metric(s) slipped > {} vs baseline:",
+                regressed.len(),
+                cli.threshold
+            );
             for (m, delta) in &regressed {
                 eprintln!("  {m}: -{delta:.4}");
             }

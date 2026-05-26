@@ -32,8 +32,7 @@ pub fn recall_at_k(ranked_results: &[String], relevant: &[String], k: usize) -> 
     if k == 0 || relevant.is_empty() {
         return 0.0;
     }
-    let top: std::collections::HashSet<&String> =
-        ranked_results.iter().take(k).collect();
+    let top: std::collections::HashSet<&String> = ranked_results.iter().take(k).collect();
     let hits = relevant.iter().filter(|r| top.contains(r)).count();
     hits as f64 / relevant.len() as f64
 }
@@ -136,10 +135,7 @@ mod tests {
 
     #[test]
     fn macro_f1_averages_per_class() {
-        let per = vec![
-            ("a".to_string(), (4, 1, 2)),
-            ("b".to_string(), (3, 0, 1)),
-        ];
+        let per = vec![("a".to_string(), (4, 1, 2)), ("b".to_string(), (3, 0, 1))];
         let m = macro_f1(&per);
         // F1_a = 8/11 = 0.7272…, F1_b = 6/7 = 0.8571…, mean = 61/77 ≈ 0.7922077922
         assert!((m - 61.0 / 77.0).abs() < 1e-9);

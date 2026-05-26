@@ -2553,8 +2553,17 @@ mod tests {
         let t = Utc::now();
         s.upsert_pre_thinking_feedback("q-x", Some("law_check"), false, "[]", None, None, None, t)
             .unwrap();
-        s.upsert_pre_thinking_feedback("q-x", Some("law_check"), true, "[\"f.rs\"]", Some(4), Some("yes"), Some(0.5), t)
-            .unwrap();
+        s.upsert_pre_thinking_feedback(
+            "q-x",
+            Some("law_check"),
+            true,
+            "[\"f.rs\"]",
+            Some(4),
+            Some("yes"),
+            Some(0.5),
+            t,
+        )
+        .unwrap();
         let row = s.pre_thinking_feedback("q-x").unwrap().unwrap();
         assert!(row.2, "helpful flipped to true");
         assert_eq!(row.3, "[\"f.rs\"]");

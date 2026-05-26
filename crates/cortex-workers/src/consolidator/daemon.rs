@@ -370,7 +370,10 @@ mod tests {
             &self,
             req: SummariserRequest,
         ) -> Result<SummariserResult, SummariserError> {
-            let text = if req.prompt.contains("relevance judge for the Cortex consolidator") {
+            let text = if req
+                .prompt
+                .contains("relevance judge for the Cortex consolidator")
+            {
                 "{\"relevant\": true, \"reason\": \"substantive\"}".to_string()
             } else {
                 SUMMARY.to_string()
@@ -482,7 +485,9 @@ mod tests {
         }
     }
 
-    fn build_daemon(source: Arc<dyn TriggerSource>) -> (ConsolidatorDaemon, ProducerMetadataHandle) {
+    fn build_daemon(
+        source: Arc<dyn TriggerSource>,
+    ) -> (ConsolidatorDaemon, ProducerMetadataHandle) {
         let haiku: Arc<dyn Summariser> = Arc::new(CannedSummariser {
             kind: SummariserKind::Haiku45,
             cost: 80,
@@ -509,15 +514,9 @@ mod tests {
         );
         let metadata: ProducerMetadataHandle =
             Arc::new(TokioMutex::new(MetadataStore::open_in_memory().unwrap()));
-        let daemon = ConsolidatorDaemon::new(
-            session,
-            topic,
-            decision,
-            source,
-            ctx,
-            metadata.clone(),
-        )
-        .with_idle_poll(Duration::from_millis(1));
+        let daemon =
+            ConsolidatorDaemon::new(session, topic, decision, source, ctx, metadata.clone())
+                .with_idle_poll(Duration::from_millis(1));
         (daemon, metadata)
     }
 

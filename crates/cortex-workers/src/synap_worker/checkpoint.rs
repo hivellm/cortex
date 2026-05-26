@@ -53,10 +53,9 @@ impl CursorCheckpoint {
     pub fn record(&self, room: &str, offset: u64) -> Result<DateTime<Utc>, MetadataError> {
         let now = Utc::now();
         let producer = self.producer_label();
-        let guard = self
-            .store
-            .lock()
-            .map_err(|e| MetadataError::Internal(format!("cursor checkpoint mutex poisoned: {e}")))?;
+        let guard = self.store.lock().map_err(|e| {
+            MetadataError::Internal(format!("cursor checkpoint mutex poisoned: {e}"))
+        })?;
         guard.record_producer_checkpoint(&producer, room, &offset.to_string(), now, now)?;
         Ok(now)
     }
@@ -67,10 +66,9 @@ impl CursorCheckpoint {
     /// can resume at `n + 1`.
     pub fn resume_offset(&self, room: &str) -> Result<Option<u64>, MetadataError> {
         let producer = self.producer_label();
-        let guard = self
-            .store
-            .lock()
-            .map_err(|e| MetadataError::Internal(format!("cursor checkpoint mutex poisoned: {e}")))?;
+        let guard = self.store.lock().map_err(|e| {
+            MetadataError::Internal(format!("cursor checkpoint mutex poisoned: {e}"))
+        })?;
         let row = guard.latest_producer_checkpoint(&producer, room)?;
         Ok(row.and_then(|r| r.last_event_id.parse::<u64>().ok()))
     }
@@ -138,7 +136,10 @@ mod tests {
         assert_eq!(ckpt_e.producer_label(), "synap_consumer:embedder");
         assert_eq!(ckpt_f.producer_label(), "synap_consumer:fulltext");
         ckpt_e.record("cortex.events.enriched", 5).unwrap();
-        assert_eq!(ckpt_f.resume_offset("cortex.events.enriched").unwrap(), None);
+        assert_eq!(
+            ckpt_f.resume_offset("cortex.events.enriched").unwrap(),
+            None
+        );
         assert_eq!(
             ckpt_e.resume_offset("cortex.events.enriched").unwrap(),
             Some(5)

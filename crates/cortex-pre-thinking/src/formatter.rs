@@ -882,9 +882,7 @@ pub fn render_similar_sessions(rows: &[SimilarSessionRow]) -> String {
             excerpt = excerpt,
         );
         if out.len() + line.len() > section_caps::SIMILAR_SESSIONS_BYTES {
-            out.push_str(
-                "… (truncated; see `cortex_similar_sessions` for the full list)\n",
-            );
+            out.push_str("… (truncated; see `cortex_similar_sessions` for the full list)\n");
             break;
         }
         out.push_str(&line);
@@ -1003,9 +1001,7 @@ pub fn render_adr_provenance(rows: &[AdrProvenanceRow]) -> String {
             title = trim_one_line(&row.title),
         );
         if out.len() + line.len() > section_caps::ADR_PROVENANCE_BYTES {
-            out.push_str(
-                "- … (truncated; see `cortex_decision_chain` for the full chain)\n",
-            );
+            out.push_str("- … (truncated; see `cortex_decision_chain` for the full chain)\n");
             break;
         }
         out.push_str(&line);
@@ -1924,10 +1920,8 @@ mod tests {
         assert!(!should_fetch_similar_sessions(""));
         assert!(!should_fetch_similar_sessions("hi"));
         assert!(!should_fetch_similar_sessions("0123456789ABCDEF")); // exactly 16
-        // > 16 chars: fire.
-        assert!(should_fetch_similar_sessions(
-            "0123456789ABCDEFG"
-        ));
+                                                                     // > 16 chars: fire.
+        assert!(should_fetch_similar_sessions("0123456789ABCDEFG"));
         assert!(should_fetch_similar_sessions(
             "rework consolidator analysis"
         ));
@@ -2048,6 +2042,9 @@ mod tests {
         let sum = section_caps::ACTIVE_WORK_BYTES
             + section_caps::SIMILAR_SESSIONS_BYTES
             + section_caps::ADR_PROVENANCE_BYTES;
-        assert!(sum < PRE_THINKING_CEILING, "{sum} >= {PRE_THINKING_CEILING}");
+        assert!(
+            sum < PRE_THINKING_CEILING,
+            "{sum} >= {PRE_THINKING_CEILING}"
+        );
     }
 }

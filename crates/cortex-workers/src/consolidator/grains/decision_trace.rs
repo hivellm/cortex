@@ -174,9 +174,7 @@ impl Consolidator for DecisionTraceGrain {
     }
 }
 
-fn depth_to_summariser(
-    depth: cortex_core::events::ConsolidationDepth,
-) -> SummariserKind {
+fn depth_to_summariser(depth: cortex_core::events::ConsolidationDepth) -> SummariserKind {
     match depth {
         cortex_core::events::ConsolidationDepth::Shallow => SummariserKind::Haiku45,
         cortex_core::events::ConsolidationDepth::Deep => SummariserKind::Opus47,
@@ -388,10 +386,7 @@ mod tests {
                 "nightly_topic",
             ),
         ] {
-            let err = grain
-                .on_trigger(&bad, &ctx)
-                .await
-                .expect_err("must reject");
+            let err = grain.on_trigger(&bad, &ctx).await.expect_err("must reject");
             match err {
                 ConsolidatorError::TriggerMismatch { got: g, expected } => {
                     assert_eq!(g, got);

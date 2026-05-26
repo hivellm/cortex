@@ -18,8 +18,7 @@ use chrono::Duration;
 use cron::Schedule;
 
 use crate::retention::identity_prune::{
-    render_cascade_summary, run_identity_cascade, CascadePolicy, IdentityCascadeOps,
-    IdentitySource,
+    render_cascade_summary, run_identity_cascade, CascadePolicy, IdentityCascadeOps, IdentitySource,
 };
 use crate::sweep::{Sweep, SweepCtx, SweepReport, SweepReportView};
 
@@ -118,7 +117,10 @@ impl Sweep for HotTierPrune {
                         ctx.now,
                         c.processed,
                         0,
-                        format!("{summary} ({} of {} cascade legs failed)", c.failed, c.processed),
+                        format!(
+                            "{summary} ({} of {} cascade legs failed)",
+                            c.failed, c.processed
+                        ),
                     ))
                 } else {
                     Ok(next.finish_success(ctx.now, c.processed, 0))

@@ -285,7 +285,10 @@ impl Default for SimilarSessionsState {
 pub fn build_router(state: SimilarSessionsState) -> axum::Router {
     use axum::routing::post;
     axum::Router::new()
-        .route("/v1/search/similar-sessions", post(similar_sessions_handler))
+        .route(
+            "/v1/search/similar-sessions",
+            post(similar_sessions_handler),
+        )
         .with_state(state)
 }
 
@@ -504,7 +507,9 @@ mod tests {
             }),
         )
         .await;
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let value: SimilarSessionsResponse = serde_json::from_slice(&body).unwrap();
         assert!(value.hits.is_empty());
         assert_eq!(value.total, 0);
@@ -534,7 +539,9 @@ mod tests {
             }),
         )
         .await;
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let value: SimilarSessionsResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(value.total, 3);
         let ids: Vec<&str> = value
@@ -566,7 +573,9 @@ mod tests {
             }),
         )
         .await;
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let value: SimilarSessionsResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(value.total, MAX_K);
         assert_eq!(value.filter.k, MAX_K);

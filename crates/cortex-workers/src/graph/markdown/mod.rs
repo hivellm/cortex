@@ -189,10 +189,7 @@ pub fn slugify(text: &str) -> String {
                 out.push(low);
             }
             prev_dash = false;
-        } else if (ch.is_whitespace() || ch == '-' || ch == '_')
-            && !prev_dash
-            && !out.is_empty()
-        {
+        } else if (ch.is_whitespace() || ch == '-' || ch == '_') && !prev_dash && !out.is_empty() {
             out.push('-');
             prev_dash = true;
         }

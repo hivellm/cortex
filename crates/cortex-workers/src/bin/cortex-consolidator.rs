@@ -30,8 +30,8 @@ use cortex_workers::consolidator::daemon::{
     ConsolidatorDaemon, PendingTrigger, TriggerSource, TRIGGER_STREAM,
 };
 use cortex_workers::consolidator::grains::{
-    LiveDecisionTraceFetcher, LiveSessionInputFetcher, LiveTopicClusterFetcher,
-    DecisionTraceGrain, SessionGrain, TopicGrain,
+    DecisionTraceGrain, LiveDecisionTraceFetcher, LiveSessionInputFetcher, LiveTopicClusterFetcher,
+    SessionGrain, TopicGrain,
 };
 use cortex_workers::consolidator::metrics::{
     metrics as consolidator_metrics, REASON_CLIENT_BUILD, REASON_ENV_UNSET, REASON_NETWORK,
@@ -51,7 +51,7 @@ use serde_json::json;
 use std::sync::atomic::{AtomicU64, Ordering};
 use synap_sdk::stream::StreamManager;
 use synap_sdk::{SynapClient, SynapConfig};
-use tokio::sync::{Notify, Mutex as TokioMutex};
+use tokio::sync::{Mutex as TokioMutex, Notify};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -1455,11 +1455,10 @@ async fn run_daemon(
     println!("  idle  : {idle_poll_ms} ms");
 
     let synap_config = SynapConfig::new(&base);
-    let client = SynapClient::new(synap_config)
-        .map_err(|e| anyhow::anyhow!("synap client build: {e}"))?;
+    let client =
+        SynapClient::new(synap_config).map_err(|e| anyhow::anyhow!("synap client build: {e}"))?;
     let streams = client.stream();
-    let source: Arc<dyn TriggerSource> =
-        Arc::new(SynapTriggerSource::new(streams, stream.clone()));
+    let source: Arc<dyn TriggerSource> = Arc::new(SynapTriggerSource::new(streams, stream.clone()));
 
     let archive_root = cli.resolve_archive_root()?;
     let (haiku, opus) = build_summarisers(cli)?;
@@ -1577,7 +1576,10 @@ fn render_cluster_prompt(repo: &str, docs: &[ConsolidationDoc], min_cluster_size
             .chars()
             .take(200)
             .collect::<String>();
-        lines.push(format!("- id={} | title={} | excerpt={}", d.id, d.title, snippet));
+        lines.push(format!(
+            "- id={} | title={} | excerpt={}",
+            d.id, d.title, snippet
+        ));
     }
     let listing = lines.join("\n");
     format!(
@@ -1727,8 +1729,10 @@ async fn run_topic_recluster(
         .claude_bin
         .clone()
         .unwrap_or_else(|| PathBuf::from("claude"));
-    let summariser =
-        ClaudeCliSummariser::new(claude_bin, cortex_workers::consolidator::summariser::SummariserKind::Haiku45);
+    let summariser = ClaudeCliSummariser::new(
+        claude_bin,
+        cortex_workers::consolidator::summariser::SummariserKind::Haiku45,
+    );
 
     let repos = match repo {
         Some(r) => vec![r],
@@ -1746,13 +1750,18 @@ async fn run_topic_recluster(
             println!("  [{slug}] {} doc(s) — below floor, skipping", docs.len());
             continue;
         }
-        println!("  [{slug}] {} doc(s) — clustering via claude CLI", docs.len());
+        println!(
+            "  [{slug}] {} doc(s) — clustering via claude CLI",
+            docs.len()
+        );
         let prompt = render_cluster_prompt(slug, &docs, min_cluster_size);
         let result = match summariser
-            .summarise(cortex_workers::consolidator::summariser::SummariserRequest {
-                prompt,
-                max_output_tokens: None,
-            })
+            .summarise(
+                cortex_workers::consolidator::summariser::SummariserRequest {
+                    prompt,
+                    max_output_tokens: None,
+                },
+            )
             .await
         {
             Ok(r) => r,
@@ -1768,8 +1777,7 @@ async fn run_topic_recluster(
                 continue;
             }
         };
-        let id_set: std::collections::HashSet<&str> =
-            docs.iter().map(|d| d.id.as_str()).collect();
+        let id_set: std::collections::HashSet<&str> = docs.iter().map(|d| d.id.as_str()).collect();
         for plan in plans {
             // Sanitise: drop unknown ids, drop below floor.
             let members: Vec<String> = plan
@@ -1794,7 +1802,16 @@ async fn run_topic_recluster(
             // Build a TopicCluster + run through the topic producer
             // to ride the existing prompt template + payload
             // assembly + validation.
-            match emit_topic_consolidation(cli, &summariser, slug, &plan.topic_label, &members, &docs).await {
+            match emit_topic_consolidation(
+                cli,
+                &summariser,
+                slug,
+                &plan.topic_label,
+                &members,
+                &docs,
+            )
+            .await
+            {
                 Ok(()) => emitted += 1,
                 Err(err) => eprintln!("    publish failed: {err}"),
             }
@@ -1835,7 +1852,10 @@ async fn emit_topic_consolidation(
     let mut digests = Vec::with_capacity(member_ids.len());
     for id in member_ids {
         if let Some(d) = by_id.get(id.as_str()) {
-            digests.push(format!("- {id} | {}", d.title.chars().take(200).collect::<String>()));
+            digests.push(format!(
+                "- {id} | {}",
+                d.title.chars().take(200).collect::<String>()
+            ));
         }
     }
     let prompt = format!(

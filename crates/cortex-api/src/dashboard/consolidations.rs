@@ -71,10 +71,7 @@ pub struct ConsolidationDetail {
 /// from URL state alone.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct ConsolidationFilter {
     /// Repo allow-list after normalisation. Empty = no repo filter.
     #[serde(default)]
@@ -256,8 +253,7 @@ fn collect_consolidation_rows(
     state: &DashboardState,
     filter: &ConsolidationFilter,
 ) -> Vec<ConsolidationRow> {
-    let allow: std::collections::HashSet<&str> =
-        filter.repos.iter().map(String::as_str).collect();
+    let allow: std::collections::HashSet<&str> = filter.repos.iter().map(String::as_str).collect();
     let mut rows: Vec<ConsolidationRow> = collect_lane_hits(&state.lane)
         .into_iter()
         .filter(|h| h.symbol.as_deref() == Some("consolidation"))

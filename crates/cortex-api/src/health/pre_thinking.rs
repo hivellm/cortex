@@ -23,10 +23,7 @@ use serde::{Deserialize, Serialize};
 /// Phase14f §4.3 — per-intent bundle-byte quantile row.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct IntentByteQuantilesView {
     /// Sample count.
     #[serde(default)]
@@ -47,10 +44,7 @@ pub struct IntentByteQuantilesView {
 /// no feedback has been recorded for this intent.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct IntentHelpfulRateView {
     /// helpful=true count.
     #[serde(default)]
@@ -67,10 +61,7 @@ pub struct IntentHelpfulRateView {
 /// Top-level wire response for `/v1/health/pre-thinking`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct PreThinkingHealthReport {
     /// Current breaker state (`closed` / `open` / `halfopen`).
     pub breaker_state: String,
@@ -103,10 +94,7 @@ pub struct PreThinkingHealthReport {
 /// Phase14g §2.3 — per-pair intent mismatch row.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct IntentMismatchView {
     /// Intent the bundle was routed to.
     pub from: String,
@@ -169,9 +157,7 @@ pub fn build_router(state: PreThinkingHealthState) -> axum::Router {
 }
 
 /// Axum handler. Pure projection of [`PreThinkingHealthSource::snapshot`].
-pub async fn pre_thinking_health_handler(
-    State(state): State<PreThinkingHealthState>,
-) -> Response {
+pub async fn pre_thinking_health_handler(State(state): State<PreThinkingHealthState>) -> Response {
     let report = state.source.snapshot().await;
     Json(report).into_response()
 }
@@ -226,9 +212,10 @@ mod tests {
             source: Arc::new(StubSource(expected.clone())),
         };
         let resp = pre_thinking_health_handler(State(state)).await;
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
         let parsed: PreThinkingHealthReport = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed, expected);
     }
-
 }

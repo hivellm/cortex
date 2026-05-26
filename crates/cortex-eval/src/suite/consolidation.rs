@@ -109,7 +109,11 @@ pub fn load_csv(path: &std::path::Path) -> Result<Vec<ConsolidationRow>> {
 /// supplies the `summary_markdown + takeaways` corpus the suite
 /// scans for entities + facts.
 pub fn build_report(rows: &[ConsolidationRow], observed: &[String]) -> SuiteReport {
-    assert_eq!(rows.len(), observed.len(), "row/observation length mismatch");
+    assert_eq!(
+        rows.len(),
+        observed.len(),
+        "row/observation length mismatch"
+    );
     let mut sum_entity = 0.0;
     let mut sum_fact = 0.0;
     let mut per_row = std::collections::BTreeMap::new();

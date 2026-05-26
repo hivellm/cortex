@@ -23,10 +23,10 @@ use cortex_workers::consolidator::consolidator_trait::{
     Consolidator, ConsolidatorCtx, ConsolidatorError, TriggerLabel,
 };
 use cortex_workers::consolidator::cost_telemetry::CostLedger;
-use cortex_workers::consolidator::grains::{DecisionTraceGrain, SessionGrain, TopicGrain};
 use cortex_workers::consolidator::grains::decision_trace::DecisionTraceFetcher;
 use cortex_workers::consolidator::grains::session::SessionInputFetcher;
 use cortex_workers::consolidator::grains::topic::TopicClusterFetcher;
+use cortex_workers::consolidator::grains::{DecisionTraceGrain, SessionGrain, TopicGrain};
 use cortex_workers::consolidator::orchestrator::{Orchestrator, Trigger};
 use cortex_workers::consolidator::producer::decision_trace::DecisionTraceInput;
 use cortex_workers::consolidator::producer::session::SessionInput;
@@ -156,7 +156,10 @@ impl Summariser for CannedSummariser {
         self.kind
     }
     async fn summarise(&self, req: SummariserRequest) -> Result<SummariserResult, SummariserError> {
-        let text = if req.prompt.contains("relevance judge for the Cortex consolidator") {
+        let text = if req
+            .prompt
+            .contains("relevance judge for the Cortex consolidator")
+        {
             "{\"relevant\": true, \"reason\": \"substantive\"}".to_string()
         } else {
             self.body.clone()
@@ -284,7 +287,9 @@ fn build_grains(
     );
     let decision_grain = DecisionTraceGrain::new(
         orch_for_decision,
-        Arc::new(InMemoryDecisionFetcher(Mutex::new(fixture_decision_input()))),
+        Arc::new(InMemoryDecisionFetcher(
+            Mutex::new(fixture_decision_input()),
+        )),
     );
     (session_grain, topic_grain, decision_grain)
 }

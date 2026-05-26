@@ -9,17 +9,13 @@ name: Relevance harness gate
 # dashboard can later render the trend.
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      - ".rulebook/**"
-      - ".github/workflows/codespell.yml"
-      - ".github/workflows/version-coherence.yml"
-      - ".github/workflows/dashboard-grep-gate.yml"
-      - "cortex-plugin/**"
-      - "scripts/**"
+  # Pre-phase14j — the relevance harness boots the docker-compose
+  # stack + replays the labelled query set. Same stack-availability
+  # issue the Doctor gate hits; until the boot is deterministic the
+  # harness runs on manual + nightly + targeted PRs.
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * *"
   pull_request:
     branches: [main, master, develop]
     paths:

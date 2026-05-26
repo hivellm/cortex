@@ -1187,13 +1187,7 @@ fn main() -> ExitCode {
             graph_url,
             classifier_url,
             json,
-        } => doctor_synap_workers::run(
-            embedder_url,
-            fulltext_url,
-            graph_url,
-            classifier_url,
-            json,
-        ),
+        } => doctor_synap_workers::run(embedder_url, fulltext_url, graph_url, classifier_url, json),
         Command::IntentStats {
             api_url,
             since,

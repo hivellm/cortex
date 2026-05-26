@@ -65,7 +65,8 @@ async fn user_prompt_returns_empty_additional_context_on_unreachable_api() {
         .hook_specific_output
         .expect("fail-open carries hookSpecificOutput with sentinel");
     assert!(
-        hook.additional_context.contains("<!-- cortex: timeout reason="),
+        hook.additional_context
+            .contains("<!-- cortex: timeout reason="),
         "additionalContext missing fail-open sentinel: {:?}",
         hook.additional_context
     );

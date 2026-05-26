@@ -932,6 +932,12 @@ pub struct AdapterConfig {
     /// inside the adapter. Env: `CORTEX_ADAPTER_ADMIN_PORT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_admin_port: Option<u16>,
+    /// Phase11w §2.4 — HTTP listener bind address for the OpenCode
+    /// transport. When `Some`, the daemon spawns the
+    /// `IpcBinding::Http` listener alongside the primary
+    /// socket/pipe binding. Env: `CORTEX_ADAPTER_HTTP_BIND`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http_bind: Option<String>,
 }
 
 // -------------------------------------------------------------
@@ -1025,10 +1031,19 @@ mod tests_phase14f {
     #[test]
     fn default_budget_per_intent_carries_the_f005_table() {
         let cfg = PreThinkingConfig::default();
-        assert_eq!(cfg.budget_per_intent.get("pre_change_context").copied(), Some(32));
-        assert_eq!(cfg.budget_per_intent.get("similar_problems").copied(), Some(32));
+        assert_eq!(
+            cfg.budget_per_intent.get("pre_change_context").copied(),
+            Some(32)
+        );
+        assert_eq!(
+            cfg.budget_per_intent.get("similar_problems").copied(),
+            Some(32)
+        );
         assert_eq!(cfg.budget_per_intent.get("explain").copied(), Some(24));
-        assert_eq!(cfg.budget_per_intent.get("decision_lookup").copied(), Some(24));
+        assert_eq!(
+            cfg.budget_per_intent.get("decision_lookup").copied(),
+            Some(24)
+        );
         assert_eq!(cfg.budget_per_intent.get("coverage").copied(), Some(16));
         assert_eq!(cfg.budget_per_intent.get("law_check").copied(), Some(12));
         assert_eq!(cfg.budget_per_intent.get("free_search").copied(), Some(16));

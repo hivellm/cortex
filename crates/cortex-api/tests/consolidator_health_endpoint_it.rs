@@ -82,7 +82,10 @@ async fn consolidator_endpoint_is_mounted_with_default_unwired_source() {
         // last_run / last_status are skip_serializing_if=None per
         // ConsolidatorHealthReport. The two counters always render.
         assert!(grain.get("last_run").is_none(), "{key} last_run absent");
-        assert!(grain.get("last_status").is_none(), "{key} last_status absent");
+        assert!(
+            grain.get("last_status").is_none(),
+            "{key} last_status absent"
+        );
         assert_eq!(
             grain.get("envelopes_emitted").and_then(|v| v.as_u64()),
             Some(0),
@@ -112,21 +115,13 @@ async fn consolidator_endpoint_returns_custom_source_snapshot_verbatim() {
     // through tower + axum, not just the handler unit.
     let fixture = ConsolidatorHealthReport {
         session_grain: GrainHealth {
-            last_run: Some(
-                "2026-05-25T12:00:00Z"
-                    .parse()
-                    .expect("rfc3339 fixture"),
-            ),
+            last_run: Some("2026-05-25T12:00:00Z".parse().expect("rfc3339 fixture")),
             last_status: Some("success".into()),
             envelopes_emitted: 4,
             latency_ms: 1_500,
         },
         topic_grain: GrainHealth {
-            last_run: Some(
-                "2026-05-24T03:00:00Z"
-                    .parse()
-                    .expect("rfc3339 fixture"),
-            ),
+            last_run: Some("2026-05-24T03:00:00Z".parse().expect("rfc3339 fixture")),
             last_status: Some("failed".into()),
             envelopes_emitted: 0,
             latency_ms: 200,
@@ -154,5 +149,8 @@ async fn consolidator_endpoint_returns_custom_source_snapshot_verbatim() {
         .get("decision_trace_grain")
         .expect("decision_trace_grain present");
     assert!(dt.get("last_run").is_none(), "default grain skips last_run");
-    assert!(dt.get("last_status").is_none(), "default grain skips last_status");
+    assert!(
+        dt.get("last_status").is_none(),
+        "default grain skips last_status"
+    );
 }

@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cortex_api::health::pre_thinking::{
-    IntentByteQuantilesView, IntentHelpfulRateView, IntentMismatchView,
-    PreThinkingHealthReport, PreThinkingHealthSource,
+    IntentByteQuantilesView, IntentHelpfulRateView, IntentMismatchView, PreThinkingHealthReport,
+    PreThinkingHealthSource,
 };
 
 use crate::breaker::{Breaker, BreakerState};

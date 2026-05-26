@@ -53,14 +53,17 @@ impl IpcBinding {
     }
 
     /// Phase11w §2.4 — default HTTP bind for the OpenCode plugin
-    /// transport. Reads `CORTEX_ADAPTER_HTTP_BIND` then falls back to
-    /// `127.0.0.1:17004` (loopback so the listener never accepts
-    /// off-host posts; bind addr is operator-configurable for
-    /// container scenarios where the plugin lives in another network
-    /// namespace).
+    /// transport. Reads from the typed `cortex_config::AdapterConfig.http_bind`
+    /// (which loads `CORTEX_ADAPTER_HTTP_BIND` via the ADR-016 env
+    /// map) then falls back to `127.0.0.1:17004` (loopback so the
+    /// listener never accepts off-host posts).
     pub fn default_http() -> Self {
-        let bind = std::env::var("CORTEX_ADAPTER_HTTP_BIND")
-            .unwrap_or_else(|_| "127.0.0.1:17004".to_string());
+        let cfg = cortex_config::Config::load().unwrap_or_default();
+        let bind = cfg
+            .adapter
+            .http_bind
+            .clone()
+            .unwrap_or_else(|| "127.0.0.1:17004".to_string());
         IpcBinding::Http(bind)
     }
 }
@@ -99,10 +102,7 @@ pub async fn serve_http(
         dispatcher: Arc<Dispatcher>,
     }
 
-    async fn hook_handler(
-        State(state): State<HttpState>,
-        Json(frame): Json<Value>,
-    ) -> Json<Value> {
+    async fn hook_handler(State(state): State<HttpState>, Json(frame): Json<Value>) -> Json<Value> {
         let response = match serde_json::to_string(&frame) {
             Ok(s) => handle_line(&s, state.dispatcher.clone()).await,
             Err(_) => HookResponse::empty(),

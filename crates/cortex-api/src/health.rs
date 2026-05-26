@@ -55,10 +55,7 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub enum Severity {
     /// Within tolerance.
     Ok,
@@ -98,10 +95,7 @@ impl Severity {
 /// One row in the `/v1/health/freshness` table.
 #[derive(Debug, Clone, Serialize)]
 #[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
-#[cfg_attr(
-    feature = "ts-export",
-    ts(export, export_to = "../../gui-types/")
-)]
+#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]
 pub struct FreshnessRow {
     /// Stage + kind/hook key (e.g. `adapter.publisher.tool_call`).
     pub key: String,
@@ -726,12 +720,7 @@ fn freshness_row(key: &str, ts_ms: u64, now_ms: u64) -> FreshnessRow {
 /// `gap_seconds` and `severity` use `max(ts_ms, floor_ts_ms)`, but
 /// `last_event_ts_ms` on the wire preserves the original `ts_ms`
 /// so the raw row stays honest about per-kind activity.
-fn freshness_row_with_floor(
-    key: &str,
-    ts_ms: u64,
-    now_ms: u64,
-    floor_ts_ms: u64,
-) -> FreshnessRow {
+fn freshness_row_with_floor(key: &str, ts_ms: u64, now_ms: u64, floor_ts_ms: u64) -> FreshnessRow {
     let effective = ts_ms.max(floor_ts_ms);
     let gap_seconds = if effective == 0 {
         -1

@@ -152,7 +152,11 @@ impl Metrics {
             .iter()
             .map(|((f, t), n)| (f.clone(), t.clone(), *n))
             .collect();
-        out.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+        out.sort_by(|a, b| {
+            b.2.cmp(&a.2)
+                .then_with(|| a.0.cmp(&b.0))
+                .then_with(|| a.1.cmp(&b.1))
+        });
         out
     }
 

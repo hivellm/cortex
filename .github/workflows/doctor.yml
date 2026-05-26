@@ -9,28 +9,16 @@ name: Doctor consistency gate
 # scraping logs.
 
 on:
-  push:
-    branches: [main, master, develop]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      - ".rulebook/**"
-      - ".github/workflows/codespell.yml"
-      - ".github/workflows/version-coherence.yml"
-      - ".github/workflows/dashboard-grep-gate.yml"
-      - "cortex-plugin/**"
-      - "scripts/**"
-  pull_request:
-    branches: [main, master, develop]
-    paths-ignore:
-      - "docs/**"
-      - "*.md"
-      - ".rulebook/**"
-      - ".github/workflows/codespell.yml"
-      - ".github/workflows/version-coherence.yml"
-      - ".github/workflows/dashboard-grep-gate.yml"
-      - "cortex-plugin/**"
-      - "scripts/**"
+  # Pre-phase14j — the docker-compose stack the doctor walks against
+  # depends on Vectorizer + Nexus + Synap + Meili images that are
+  # not reliably available inside GitHub Actions runners (the
+  # Synap image has been pulled / re-tagged multiple times across
+  # the project lifetime). Until the stack reproduces 100% in CI,
+  # the doctor runs on a manual trigger + the nightly schedule so
+  # it does not block every push.
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
 
 permissions:
   contents: read
