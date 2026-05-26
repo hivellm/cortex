@@ -33,6 +33,7 @@
 
 pub mod consolidator;
 pub mod coverage;
+pub mod pre_thinking;
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;

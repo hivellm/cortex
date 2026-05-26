@@ -200,8 +200,16 @@ async fn timeout_returns_empty_bundle_and_increments_timeouts() {
     let mut input = input_for("refactor", &cwd);
     input.budget.time_ms = 200;
     let out = run(&input, canned, metrics.clone()).await;
-    assert!(out.bundle.is_empty());
+    // Phase14e — fail-open bundles carry the timeout sentinel
+    // instead of being empty. The empty assertion is replaced
+    // with a sentinel-prefix check; the `fail_open` flag is the
+    // structural signal callers branch on.
     assert!(out.fail_open);
+    assert!(
+        out.bundle.starts_with("<!-- cortex: timeout reason="),
+        "expected fail-open sentinel; got {:?}",
+        out.bundle
+    );
     assert_eq!(
         metrics.timeouts.load(std::sync::atomic::Ordering::Relaxed),
         1
@@ -213,9 +221,16 @@ async fn always_none_query_fn_returns_empty_with_fail_open() {
     let metrics = Arc::new(Metrics::new());
     let cwd = std::env::temp_dir();
     let out = run(&input_for("refactor", &cwd), Arc::new(AlwaysNone), metrics).await;
-    assert!(out.bundle.is_empty());
+    // Phase14e — sentinel-bearing fail-open replaces the empty
+    // bundle so the model can distinguish outage from "no
+    // context matched".
     assert!(out.fail_open);
     assert!(out.query_id.is_none());
+    assert!(
+        out.bundle.starts_with("<!-- cortex: timeout reason="),
+        "expected fail-open sentinel; got {:?}",
+        out.bundle
+    );
 }
 
 #[tokio::test]

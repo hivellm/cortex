@@ -12,8 +12,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod breaker;
 pub mod budget;
 pub mod formatter;
+pub mod health_source;
 pub mod intent_select;
 pub mod metrics;
 pub mod pipeline;

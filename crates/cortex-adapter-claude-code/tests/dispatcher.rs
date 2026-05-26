@@ -56,8 +56,19 @@ async fn user_prompt_returns_empty_additional_context_on_unreachable_api() {
         dispatcher,
     )
     .await;
-    // Empty fail-open ⇒ {} reply ⇒ no hookSpecificOutput field.
-    assert!(resp.hook_specific_output.is_none());
+    // Phase14e — fail-open bundles now carry the
+    // `<!-- cortex: timeout reason=… -->` sentinel so the model
+    // can distinguish outage from "no context matched". The
+    // additionalContext field surfaces it verbatim; the
+    // permission decision is still untouched on UserPromptSubmit.
+    let hook = resp
+        .hook_specific_output
+        .expect("fail-open carries hookSpecificOutput with sentinel");
+    assert!(
+        hook.additional_context.contains("<!-- cortex: timeout reason="),
+        "additionalContext missing fail-open sentinel: {:?}",
+        hook.additional_context
+    );
     assert!(resp.permission_decision.is_none());
     // UserPromptSubmit is publishable as a canonical `turn` event.
     assert_eq!(publisher.count().await, 1);

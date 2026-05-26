@@ -432,6 +432,57 @@ Every call emits a span with `query_id`, `intent`, `scope_hash`, `bundle_bytes`,
 1. **Intent routing via an MCP tool.** Should the model pick its own intent (a dropdown) instead of the adapter guessing? Leaning no (UX cost, latency) but revisit if intent mismatch shows up as the dominant failure mode.
 2. **Adaptive budgets.** A 32-KB cap is a hunch. Once we have eval data, tune per intent (e.g., `similar_problems` wants more snippets).
 
+## Fail-open contract + circuit breaker (phase14e)
+
+Every call to [`cortex_pre_thinking::pipeline::run_with_breaker`] guards its upstream `cortex-api` call through a shared [`cortex_pre_thinking::breaker::Breaker`]:
+
+```
+Closed → 5 fails / 60s window → Open
+Open   → 30s cooldown          → HalfOpen
+HalfOpen probe success         → Closed
+HalfOpen probe failure         → Open
+```
+
+Defaults: `threshold = 5`, `window = 60s`, `cooldown = 30s`. Operator overrides land via `BreakerConfig`.
+
+### Fail-open dispatch
+
+Every fail-open path (timeout, network, internal, or breaker-open short-circuit) emits:
+
+1. A `tracing::warn!` line with structured fields `session_id`, `turn_id`, `intent`, `reason`, `new_state`. Scrape this to alert on outages.
+2. A `cortex_pre_thinking_fail_open_total{reason}` metric increment. Reasons: `timeout`, `network`, `unauthorised`, `internal`, `breaker_open`.
+3. A bundle sentinel: the empty bundle is replaced with `<!-- cortex: timeout reason=<reason> [query_id=<id>] -->`. The HTML-comment shape survives markdown rendering without being treated as content; downstream models can distinguish "context retrieval failed" from "no context matched" by grepping for the prefix.
+
+The breaker itself emits a structured WARN log on every state transition (`closed → open`, `open → half_open`, `half_open → open`, `half_open → closed`) so the scrape pipeline can alert without polling.
+
+### Health endpoint
+
+`GET /v1/health/pre-thinking` returns:
+
+```json
+{
+  "breaker_state": "closed",
+  "failures_in_window": 0,
+  "fail_open_total": { "timeout": 3, "breaker_open": 1 },
+  "fail_open_sum": 4
+}
+```
+
+`breaker_state` is one of `closed` / `open` / `halfopen`. `failures_in_window` is the current breaker-window failure count (resets on window roll-over). `fail_open_total` is the per-reason counter since process boot; `fail_open_sum` is the convenience total.
+
+Default state ships an `UnwiredPreThinkingHealthSource` that returns `closed` + zero counters. Production wires a [`cortex_pre_thinking::health_source::LivePreThinkingHealthSource`] over the same `Arc<Breaker>` + `Arc<Metrics>` the pipeline guards calls through. The live source lives in `cortex-pre-thinking` (not `cortex-api`) because `cortex-pre-thinking` already depends on `cortex-api` — wiring the reverse would create a circular dep.
+
+### Operator playbook
+
+| Symptom | Action |
+|---|---|
+| `fail_open_sum` climbing + `breaker_state = closed` | upstream `cortex-api` flaky but below threshold; check `fail_open_total.timeout` vs `network` to bucket the cause. |
+| `breaker_state = open` | breaker tripped; subsequent calls short-circuit instantly. Cooldown is 30 s. Investigate `cortex-api` health (cores, GC, vectorizer reachability). |
+| `breaker_state = halfopen` | breaker probing recovery; the next call decides. |
+| Bundle starts with `<!-- cortex: timeout reason=… -->` | confirms the model saw a fail-open. Grep transcripts for the prefix to count silent context losses. |
+
+Live operator probe: `curl -s http://127.0.0.1:17000/v1/health/pre-thinking | jq`.
+
 ## References
 
 - Architecture §5.3 (query → context bundle), §8 (end-to-end example step 2).

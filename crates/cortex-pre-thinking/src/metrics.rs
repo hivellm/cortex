@@ -23,6 +23,12 @@ pub struct Metrics {
     pub empty_bundle: AtomicU64,
     /// `cortex.prethink.timeouts`.
     pub timeouts: AtomicU64,
+    /// Phase14e — `cortex_pre_thinking_fail_open_total{reason}`.
+    /// Reasons: `timeout`, `network`, `unauthorised`, `internal`,
+    /// `breaker_open`. Read by the doctor + the
+    /// `/v1/health/pre-thinking` endpoint to surface outage
+    /// counts to the operator.
+    pub fail_open_total: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -67,5 +73,24 @@ impl Metrics {
     /// Increment the timeout counter.
     pub fn incr_timeouts(&self) {
         self.timeouts.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Phase14e — bump the per-reason fail-open counter. Called
+    /// from the pipeline on every fail-open dispatch (real
+    /// upstream failure OR breaker-open short-circuit).
+    pub fn incr_fail_open(&self, reason: &str) {
+        if let Ok(mut m) = self.fail_open_total.lock() {
+            *m.entry(reason.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Phase14e — snapshot the per-reason fail-open counters.
+    /// Used by the doctor + the `/v1/health/pre-thinking`
+    /// endpoint.
+    pub fn fail_open_snapshot(&self) -> BTreeMap<String, u64> {
+        self.fail_open_total
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
     }
 }

@@ -332,6 +332,14 @@ mod tests {
             .pre_thinking("hello", "sess", None, Some("/repo"))
             .await;
         assert!(r.fail_open);
-        assert!(r.bundle.is_empty());
+        // Phase14e — fail-open bundles carry an HTML-comment
+        // sentinel instead of being empty, so the model can
+        // distinguish outage from "no results matched". The
+        // marker `<!-- cortex: timeout reason=…` is the contract.
+        assert!(
+            r.bundle.starts_with("<!-- cortex: timeout reason="),
+            "fail-open bundle missing sentinel: {:?}",
+            r.bundle
+        );
     }
 }

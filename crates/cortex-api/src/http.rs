@@ -197,6 +197,13 @@ pub fn build_router_with_auth_and_cfg(
     router = router.merge(crate::health::consolidator::build_router(
         crate::health::consolidator::ConsolidatorHealthState::default(),
     ));
+    // phase14e — pre-thinking circuit-breaker health endpoint.
+    // Default state carries the unwired source (closed + zero
+    // counters); main.rs threads a `LivePreThinkingHealthSource`
+    // over the shared `Arc<Breaker>` + `Arc<Metrics>` when wired.
+    router = router.merge(crate::health::pre_thinking::build_router(
+        crate::health::pre_thinking::PreThinkingHealthState::default(),
+    ));
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
         // alongside the dashboard routes. Both endpoints share the

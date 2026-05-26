@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use cortex_api::{Intent, Notice, QueryRequest, QueryResponse};
 
+use crate::breaker::{Breaker, BreakerState, FailReason};
 use crate::budget::{clip_to_budget, ClippedBundle, TrimStep};
 use crate::intent_select::select as select_intent;
 use crate::metrics::Metrics;
@@ -105,18 +106,85 @@ pub struct PreThinkingOutput {
     /// caller can disambiguate from a generic empty bundle. See
     /// issue hivellm/cortex#1.
     pub notice: Option<Notice>,
+    /// Phase14e — breaker state observed when the run completed.
+    /// `None` for legacy callers using [`run`] without a shared
+    /// breaker.
+    pub breaker_state: Option<BreakerState>,
 }
 
-/// Run the spec-12 pipeline.
+/// Phase14e sentinel embedded in the bundle on every fail-open
+/// dispatch. Distinguishes an empty bundle caused by an outage
+/// (`<!-- cortex: timeout reason=… -->`) from a bundle that was
+/// legitimately empty because no context matched. Operators grep
+/// transcripts for the marker when triaging silent agent drift.
+pub const FAIL_OPEN_SENTINEL_PREFIX: &str = "<!-- cortex: timeout reason=";
+
+/// Build the fail-open bundle sentinel. Format is intentionally
+/// HTML-comment shaped so it survives markdown rendering without
+/// being treated as content.
+pub fn fail_open_sentinel(reason: FailReason, query_id: Option<&str>) -> String {
+    match query_id {
+        Some(id) if !id.is_empty() => {
+            format!("{FAIL_OPEN_SENTINEL_PREFIX}{} query_id={id} -->", reason.as_str())
+        }
+        _ => format!("{FAIL_OPEN_SENTINEL_PREFIX}{} -->", reason.as_str()),
+    }
+}
+
+/// Run the spec-12 pipeline (no breaker — kept for callers that
+/// have not migrated yet). Delegates to [`run_with_breaker`] with
+/// a fresh local breaker so behaviour is identical to a
+/// breaker-aware caller that never sees a failure.
 pub async fn run<Q: QueryFn>(
     input: &PreThinkingInput<'_>,
     query_fn: Arc<Q>,
     metrics: Arc<Metrics>,
 ) -> PreThinkingOutput {
+    let breaker = Arc::new(Breaker::new());
+    run_with_breaker(input, query_fn, metrics, breaker).await
+}
+
+/// Phase14e — run the pipeline through a shared circuit breaker.
+/// Production callers (the Claude Code adapter, MCP shim) build
+/// one `Arc<Breaker>` at boot and reuse it across calls so the
+/// breaker observes the system-wide failure tally.
+pub async fn run_with_breaker<Q: QueryFn>(
+    input: &PreThinkingInput<'_>,
+    query_fn: Arc<Q>,
+    metrics: Arc<Metrics>,
+    breaker: Arc<Breaker>,
+) -> PreThinkingOutput {
     let started = Instant::now();
     let derived = derive_scope(input.user_prompt, input.cwd, input.recent_files);
     let intent = select_intent(input.user_prompt);
     metrics.incr_calls(intent.label());
+
+    // Breaker guard — Open ⇒ instant fail-open. The
+    // `breaker_open` reason carries no query_id (no upstream call
+    // happened).
+    let permit = match breaker.guard() {
+        Ok(p) => p,
+        Err(_) => {
+            metrics.incr_fail_open(FailReason::BreakerOpen.as_str());
+            tracing::warn!(
+                session_id = %input.session_id,
+                turn_id = %input.turn_id,
+                intent = %intent.label(),
+                reason = "breaker_open",
+                "pre-thinking fail-open short-circuited by breaker"
+            );
+            return PreThinkingOutput {
+                bundle: fail_open_sentinel(FailReason::BreakerOpen, None),
+                intent,
+                query_id: None,
+                steps_applied: Vec::new(),
+                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                fail_open: true,
+                notice: None,
+                breaker_state: Some(BreakerState::Open),
+            };
+        }
+    };
 
     let req = QueryRequest {
         intent,
@@ -140,24 +208,43 @@ pub async fn run<Q: QueryFn>(
     };
 
     let total_budget = Duration::from_millis(input.budget.time_ms.max(1) as u64);
-    let resp_opt = match tokio::time::timeout(total_budget, query_fn.query(req)).await {
-        Ok(opt) => opt,
-        Err(_) => {
-            metrics.incr_timeouts();
-            None
-        }
-    };
+    let (resp_opt, reason) =
+        match tokio::time::timeout(total_budget, query_fn.query(req)).await {
+            Ok(opt @ Some(_)) => (opt, None),
+            Ok(None) => (None, Some(FailReason::Internal)),
+            Err(_) => {
+                metrics.incr_timeouts();
+                (None, Some(FailReason::Timeout))
+            }
+        };
     let response = match resp_opt {
-        Some(r) => r,
+        Some(r) => {
+            // Successful upstream response — half-open probes
+            // close the breaker; closed-state successes are no-ops.
+            permit.record_success();
+            r
+        }
         None => {
+            let r = reason.unwrap_or(FailReason::Internal);
+            metrics.incr_fail_open(r.as_str());
+            let new_state = permit.record_failure();
+            tracing::warn!(
+                session_id = %input.session_id,
+                turn_id = %input.turn_id,
+                intent = %intent.label(),
+                reason = r.as_str(),
+                new_state = ?new_state,
+                "pre-thinking fail-open dispatched"
+            );
             return PreThinkingOutput {
-                bundle: String::new(),
+                bundle: fail_open_sentinel(r, None),
                 intent,
                 query_id: None,
                 steps_applied: Vec::new(),
                 latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
                 fail_open: true,
                 notice: None,
+                breaker_state: Some(breaker.state()),
             };
         }
     };
@@ -209,6 +296,7 @@ pub async fn run<Q: QueryFn>(
         latency_ms,
         fail_open: false,
         notice,
+        breaker_state: Some(breaker.state()),
     }
 }
 
@@ -221,4 +309,101 @@ fn response_section_summary(r: &QueryResponse) -> String {
         r.results.snippets.len(),
         r.results.graph_neighbors.len(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::breaker::BreakerConfig;
+    use std::path::PathBuf;
+    use std::time::Duration as StdDuration;
+
+    /// QueryFn that always returns `None` — drives the timeout
+    /// fail-open path in tests without sleeping the full budget.
+    struct AlwaysNone;
+    #[async_trait]
+    impl QueryFn for AlwaysNone {
+        async fn query(&self, _req: QueryRequest) -> Option<QueryResponse> {
+            None
+        }
+    }
+
+    fn input<'a>(cwd: &'a PathBuf) -> PreThinkingInput<'a> {
+        PreThinkingInput {
+            session_id: "01SESS",
+            turn_id: "01TURN",
+            user_prompt: "investigate failing auth tests",
+            cwd,
+            recent_files: &[],
+            budget: PreThinkingBudget {
+                bundle_bytes: 4 * 1024,
+                time_ms: 50,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn fail_open_bundle_carries_sentinel_with_reason() {
+        let cwd = std::env::current_dir().unwrap();
+        let metrics = Arc::new(Metrics::new());
+        let breaker = Arc::new(Breaker::with_config(BreakerConfig::default()));
+        let out = run_with_breaker(
+            &input(&cwd),
+            Arc::new(AlwaysNone),
+            metrics.clone(),
+            breaker,
+        )
+        .await;
+        assert!(out.fail_open);
+        assert!(
+            out.bundle.starts_with(FAIL_OPEN_SENTINEL_PREFIX),
+            "bundle must carry sentinel; got {:?}",
+            out.bundle
+        );
+        let snap = metrics.fail_open_snapshot();
+        assert!(snap.values().sum::<u64>() >= 1, "fail_open counter bumped");
+    }
+
+    #[tokio::test]
+    async fn burst_fails_trip_breaker_and_short_circuit_subsequent_calls() {
+        let cwd = std::env::current_dir().unwrap();
+        let metrics = Arc::new(Metrics::new());
+        let breaker = Arc::new(Breaker::with_config(BreakerConfig {
+            threshold: 3,
+            window: StdDuration::from_secs(60),
+            cooldown: StdDuration::from_secs(30),
+        }));
+        // 3 failures should trip the breaker.
+        for _ in 0..3 {
+            let _ = run_with_breaker(
+                &input(&cwd),
+                Arc::new(AlwaysNone),
+                metrics.clone(),
+                breaker.clone(),
+            )
+            .await;
+        }
+        assert_eq!(breaker.state(), BreakerState::Open);
+        // 4th call: short-circuit, reason=breaker_open, sentinel
+        // present, NO upstream attempt.
+        let out = run_with_breaker(
+            &input(&cwd),
+            Arc::new(AlwaysNone),
+            metrics.clone(),
+            breaker,
+        )
+        .await;
+        assert!(out.fail_open);
+        assert!(out.bundle.contains("breaker_open"));
+        let snap = metrics.fail_open_snapshot();
+        assert!(snap.get("breaker_open").copied().unwrap_or(0) >= 1);
+    }
+
+    #[test]
+    fn fail_open_sentinel_format_is_stable() {
+        let s = fail_open_sentinel(FailReason::Timeout, Some("q-1"));
+        assert_eq!(s, "<!-- cortex: timeout reason=timeout query_id=q-1 -->");
+        let s2 = fail_open_sentinel(FailReason::BreakerOpen, None);
+        assert_eq!(s2, "<!-- cortex: timeout reason=breaker_open -->");
+    }
 }
