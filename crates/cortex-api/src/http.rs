@@ -211,6 +211,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::consolidation_costs::handle_consolidation_costs),
         )
         .route(
+            "/v1/query/explain",
+            post(crate::query_explain::handle_query_explain),
+        )
+        .route(
             "/v1/consolidations/diff",
             get(crate::consolidations_diff::handle_consolidations_diff),
         )

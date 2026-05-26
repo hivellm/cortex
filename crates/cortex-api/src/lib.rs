@@ -101,6 +101,7 @@ pub use search::files_touched;
 pub use search::fusion;
 pub use search::law_violations;
 pub use search::orchestrator;
+pub use search::query_explain;
 pub use search::query_rewrite;
 pub use search::relevance_config;
 pub use search::search_proxy;

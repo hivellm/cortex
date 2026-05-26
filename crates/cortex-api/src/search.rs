@@ -24,6 +24,7 @@ pub mod files_touched;
 pub mod fusion;
 pub mod law_violations;
 pub mod orchestrator;
+pub mod query_explain;
 pub mod query_rewrite;
 pub mod relevance_config;
 pub mod search_proxy;

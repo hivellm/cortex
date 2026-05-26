@@ -275,6 +275,7 @@ impl ToolRegistry {
                 Arc::new(FeedbackSignalsTool::new()),
                 Arc::new(DecisionSearchTool::new()),
                 Arc::new(ConsolidationCostsTool::new()),
+                Arc::new(QueryExplainTool::new()),
             ],
         }
     }
@@ -1936,6 +1937,96 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §3.5 — cortex_query_explain
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/query/explain`.
+pub struct QueryExplainTool;
+
+impl QueryExplainTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for QueryExplainTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for QueryExplainTool {
+    fn name(&self) -> &'static str {
+        "cortex_query_explain"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_query_explain",
+            "description": "Diagnostic view over a `cortex_query` run: returns `{intent, per_lane_hits[], fusion_math{rrf_k, alpha, recency_decay_lambda, drops[]}, final_envelope}`. Today's `per_lane_hits[]` carries lane name + wall-clock + error / note only — pre-fusion ranked hit lists are not surfaced (orchestrator does not retain them after `rrf_fuse`). Response carries `match_strategy = \"envelope_only\"`.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text query to explain."},
+                    "intent": {
+                        "type": "string",
+                        "enum": [
+                            "pre_change_context", "decision_lookup", "similar_problems",
+                            "law_check", "free_search", "explain"
+                        ],
+                        "description": "Optional intent label; defaults to `free_search` when omitted."
+                    },
+                    "scope": {"type": "object", "description": "Optional scope filter (same shape as `/v1/query`)."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`query` is required"))?
+            .to_string();
+        if let Some(intent) = args
+            .get("intent")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if ![
+                "pre_change_context",
+                "decision_lookup",
+                "similar_problems",
+                "law_check",
+                "free_search",
+                "explain",
+            ]
+            .contains(&intent)
+            {
+                return Err(ToolError::invalid_input(format!(
+                    "unknown intent `{intent}`"
+                )));
+            }
+        }
+        let mut body = json!({ "query": query });
+        for field in ["intent", "scope"] {
+            if let Some(v) = args.get(field) {
+                if !v.is_null() {
+                    body[field] = v.clone();
+                }
+            }
+        }
+        proxy_search(ctx, "/v1/query/explain", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §3.4 — cortex_consolidation_costs
 // ---------------------------------------------------------------------
 
@@ -2928,12 +3019,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentyeight_tools_with_unique_names() {
+    fn registry_returns_twentynine_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            28,
-            "phase19 §3.4 adds cortex_consolidation_costs (27 -> 28)"
+            29,
+            "phase19 §3.5 adds cortex_query_explain (28 -> 29) — closes Group C + the 16-tool surface"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2965,6 +3056,7 @@ mod tests {
             "cortex_feedback_signals",
             "cortex_decision_search",
             "cortex_consolidation_costs",
+            "cortex_query_explain",
         ] {
             assert!(
                 names.contains(&expected),
