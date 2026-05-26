@@ -47,11 +47,16 @@
 use super::patch::EdgeOp;
 use crate::embedder::EnrichedEvent;
 
+pub mod about;
+pub mod answered_by;
 pub mod calls;
+pub mod cites;
 pub mod contradicts;
 pub mod defines;
 pub mod emitted_by;
 pub mod imports;
+pub mod mentions_file;
+pub mod relates_to;
 pub mod returns;
 pub mod supersedes;
 
