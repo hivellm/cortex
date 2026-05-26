@@ -48,6 +48,7 @@ use super::patch::EdgeOp;
 use crate::embedder::EnrichedEvent;
 
 pub mod calls;
+pub mod defines;
 pub mod imports;
 
 /// Friendly re-export — `Edge` is the same shape as
