@@ -14,6 +14,12 @@ use cortex_adapter_claude_code::{
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
+/// Phase14c — cadence the heartbeat task bumps `last_heartbeat_ts_ms`
+/// at. Picked at 30 s so the cortex-api freshness aggregator's
+/// 60 s WARN threshold has a 2× safety margin (a single missed tick
+/// still keeps the gauge fresh).
+const HEARTBEAT_INTERVAL_SECS: u64 = 30;
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "cortex-adapter-claude", version, about)]
 struct Cli {
@@ -162,6 +168,33 @@ async fn run_daemon(
         signal_shutdown.notify_waiters();
     });
 
+    // Phase14c — adapter heartbeat. Bumps `last_heartbeat_ts_ms`
+    // every HEARTBEAT_INTERVAL_SECS so the cortex-api freshness
+    // aggregator can distinguish "adapter idle" from "adapter dead"
+    // without relying on Claude Code firing hooks. Synthetic — does
+    // NOT touch any per-kind frame/envelope timestamp, so the
+    // dashboard's per-kind rows stay honest about real Claude Code
+    // activity.
+    let heartbeat_metrics = metrics.clone();
+    let heartbeat_shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(
+            HEARTBEAT_INTERVAL_SECS,
+        ));
+        // Fire one tick immediately so the gauge is non-zero from
+        // boot — otherwise a /healthz probe in the first 30 s would
+        // see `last_heartbeat_ts_ms = 0` and the aggregator would
+        // fall back to per-kind rows.
+        tick.tick().await;
+        heartbeat_metrics.record_heartbeat_now();
+        loop {
+            tokio::select! {
+                _ = tick.tick() => heartbeat_metrics.record_heartbeat_now(),
+                _ = heartbeat_shutdown.notified() => break,
+            }
+        }
+    });
+
     // Phase8a — admin /healthz listener. Spawned independently so a
     // crash in the IPC path doesn't break health probes (and vice
     // versa). Port comes from CORTEX_ADAPTER_ADMIN_PORT (default
@@ -253,8 +286,26 @@ async fn run_daemon(
             "last_publish_ok_ts_ms_by_kind".into(),
             serde_json::to_value(&last_publish_ok_ts_by_kind).unwrap_or_default(),
         );
+        // Phase14c — heartbeat gauge. Bumped every
+        // HEARTBEAT_INTERVAL_SECS by the background task above so
+        // the cortex-api freshness aggregator can floor every
+        // per-kind row's gap against this value (= "adapter is
+        // alive but idle").
+        let last_heartbeat_ts_ms = metrics_for_health.last_heartbeat_ts_ms();
+        extras.insert(
+            "last_heartbeat_ts_ms".into(),
+            serde_json::json!(last_heartbeat_ts_ms),
+        );
         let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
-        let stale = last_publish_ok_ts_ms > 0
+        // Stall detection now honours the heartbeat: if the
+        // heartbeat is fresh, the adapter is functionally alive
+        // even when no publishes have landed recently (which is
+        // the steady-state between Claude Code sessions).
+        let heartbeat_fresh = last_heartbeat_ts_ms > 0
+            && now_ms.saturating_sub(last_heartbeat_ts_ms)
+                <= DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000;
+        let stale = !heartbeat_fresh
+            && last_publish_ok_ts_ms > 0
             && now_ms.saturating_sub(last_publish_ok_ts_ms)
                 > DEFAULT_FRESHNESS_DEGRADED_SECS * 1_000;
         let (state, last_error) = if !ipc_alive {

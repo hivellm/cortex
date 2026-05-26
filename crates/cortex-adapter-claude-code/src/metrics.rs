@@ -78,6 +78,14 @@ pub struct Metrics {
     /// kinds; this map keeps the per-kind breakdown the freshness
     /// aggregator pivots on.
     pub last_publish_ok_ts_ms_by_kind: Mutex<BTreeMap<String, u64>>,
+    /// Phase14c — `last_heartbeat_ts_ms` — Unix-epoch ms of the most
+    /// recent self-heartbeat tick. A background task in `main.rs`
+    /// bumps this on a fixed cadence so the cortex-api freshness
+    /// aggregator can distinguish "adapter is alive but idle" from
+    /// "adapter is dead/stalled" without needing real frames from
+    /// Claude Code. `0` until the heartbeat task fires its first
+    /// tick.
+    pub last_heartbeat_ts_ms: AtomicU64,
 }
 
 impl Metrics {
@@ -162,6 +170,23 @@ impl Metrics {
     /// `0` means the publisher has never succeeded since boot.
     pub fn last_publish_ok_ts_ms(&self) -> u64 {
         self.last_publish_ok_ts_ms.load(Ordering::Relaxed)
+    }
+
+    /// Phase14c — stamp `last_heartbeat_ts_ms` to `now`. Called
+    /// from the heartbeat task spawned in `main.rs` on a fixed
+    /// cadence (every [`HEARTBEAT_INTERVAL_SECS`] seconds) so the
+    /// cortex-api freshness aggregator can distinguish "adapter
+    /// idle but alive" from "adapter dead". Does NOT touch any
+    /// per-kind frame/envelope/publish timestamp — those still
+    /// reflect real Claude Code activity.
+    pub fn record_heartbeat_now(&self) {
+        let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+        self.last_heartbeat_ts_ms.store(now_ms, Ordering::Relaxed);
+    }
+    /// Phase14c — read the most recent heartbeat timestamp. `0`
+    /// means the heartbeat task has not run yet (boot grace).
+    pub fn last_heartbeat_ts_ms(&self) -> u64 {
+        self.last_heartbeat_ts_ms.load(Ordering::Relaxed)
     }
     /// Phase8a — set the current queue depth gauge.
     pub fn set_publisher_queue_depth(&self, depth: u64) {

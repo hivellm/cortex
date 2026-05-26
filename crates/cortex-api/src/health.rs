@@ -470,26 +470,40 @@ pub async fn freshness_handler(State(state): State<HealthState>) -> Response {
 
     // ---- adapter.* ---------------------------------------------------------
     if let Some(adapter) = by_name.get("cortex-adapter") {
+        // Phase14c — heartbeat floor. Adapter bumps
+        // `last_heartbeat_ts_ms` every 30 s; freshness rows for
+        // every adapter.* metric use it as a max() floor so an idle
+        // adapter (no real Claude Code activity) reads OK as long
+        // as the heartbeat is fresh. Per-kind gaps still reflect
+        // the true age in the raw extras JSON for debugging.
+        let heartbeat = adapter
+            .extras
+            .get("last_heartbeat_ts_ms")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
         // Per-hook last_frame_ts.
-        push_per_label_ts(
+        push_per_label_ts_with_floor(
             &mut rows,
             now_ms,
             "adapter.last_frame",
             adapter.extras.get("last_frame_ts_ms"),
+            heartbeat,
         );
         // Per-kind last_envelope_ts (built).
-        push_per_label_ts(
+        push_per_label_ts_with_floor(
             &mut rows,
             now_ms,
             "adapter.last_envelope",
             adapter.extras.get("last_envelope_ts_ms"),
+            heartbeat,
         );
         // Per-kind last_publish_ok_ts.
-        push_per_label_ts(
+        push_per_label_ts_with_floor(
             &mut rows,
             now_ms,
             "adapter.last_publish_ok",
             adapter.extras.get("last_publish_ok_ts_ms_by_kind"),
+            heartbeat,
         );
         // Aggregate (any-kind) publish-ok timestamp from phase8a.
         if let Some(ms) = adapter
@@ -497,7 +511,12 @@ pub async fn freshness_handler(State(state): State<HealthState>) -> Response {
             .get("last_publish_ok_ts_ms")
             .and_then(|v| v.as_u64())
         {
-            rows.push(freshness_row("adapter.last_publish_ok", ms, now_ms));
+            rows.push(freshness_row_with_floor(
+                "adapter.last_publish_ok",
+                ms,
+                now_ms,
+                heartbeat,
+            ));
         }
     }
 
@@ -691,6 +710,36 @@ fn freshness_row(key: &str, ts_ms: u64, now_ms: u64) -> FreshnessRow {
     }
 }
 
+/// Phase14c — `freshness_row` variant that floors the effective
+/// timestamp at `floor_ts_ms` (typically the adapter's heartbeat).
+/// `gap_seconds` and `severity` use `max(ts_ms, floor_ts_ms)`, but
+/// `last_event_ts_ms` on the wire preserves the original `ts_ms`
+/// so the raw row stays honest about per-kind activity.
+fn freshness_row_with_floor(
+    key: &str,
+    ts_ms: u64,
+    now_ms: u64,
+    floor_ts_ms: u64,
+) -> FreshnessRow {
+    let effective = ts_ms.max(floor_ts_ms);
+    let gap_seconds = if effective == 0 {
+        -1
+    } else {
+        ((now_ms.saturating_sub(effective)) / 1000) as i64
+    };
+    let severity = if effective == 0 {
+        Severity::Warn
+    } else {
+        Severity::from_gap_seconds(gap_seconds)
+    };
+    FreshnessRow {
+        key: key.to_string(),
+        last_event_ts_ms: ts_ms,
+        gap_seconds,
+        severity,
+    }
+}
+
 /// Iterate over a `Map<String, u64>` extras value and emit one row per
 /// entry, using `<prefix>.<label>` as the row key.
 fn push_per_label_ts(
@@ -708,6 +757,30 @@ fn push_per_label_ts(
             let ms = raw.as_u64().unwrap_or(0);
             let key = format!("{prefix}.{label}");
             rows.push(freshness_row(&key, ms, now_ms));
+        }
+    }
+}
+
+/// Phase14c — `push_per_label_ts` variant that floors every per-
+/// label gap at `floor_ts_ms`. Used for `adapter.*` rows so the
+/// adapter's heartbeat lifts per-kind severities to OK while keeping
+/// `last_event_ts_ms` honest in the wire shape.
+fn push_per_label_ts_with_floor(
+    rows: &mut Vec<FreshnessRow>,
+    now_ms: u64,
+    prefix: &str,
+    extras_value: Option<&Value>,
+    floor_ts_ms: u64,
+) {
+    let map = match extras_value {
+        Some(v) => v,
+        None => return,
+    };
+    if let Some(obj) = map.as_object() {
+        for (label, raw) in obj {
+            let ms = raw.as_u64().unwrap_or(0);
+            let key = format!("{prefix}.{label}");
+            rows.push(freshness_row_with_floor(&key, ms, now_ms, floor_ts_ms));
         }
     }
 }
