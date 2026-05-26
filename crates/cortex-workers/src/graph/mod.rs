@@ -12,6 +12,7 @@ pub mod citations;
 pub mod coalescer;
 pub mod config;
 pub mod cypher;
+pub mod extractors;
 pub mod identity;
 pub mod mapper;
 pub mod markdown;
