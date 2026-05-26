@@ -490,66 +490,14 @@ impl Worker {
         Ok(processed_count)
     }
 
-    /// Long-running loop. Polls `run_once`, idling briefly when the room is
-    /// empty, and honouring backpressure pauses. Exits cleanly when
-    /// `shutdown.load(Relaxed)` becomes true.
-    pub async fn run_forever(&self, shutdown: Arc<AtomicBool>) -> Result<()> {
-        tracing::info!(
-            workers = self.config.workers,
-            chunker_concurrency = self.config.chunker_concurrency,
-            upsert_batch = self.config.upsert_batch,
-            vectorizer = %self.config.vectorizer_url,
-            synap = %self.config.synap_url,
-            "cortex-embedder worker started"
-        );
-        while !shutdown.load(Ordering::Relaxed) {
-            if self.backpressure.is_paused() {
-                self.metrics.set_backpressure(true);
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-            let handled = match self.run_once().await {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::warn!(error = %e, "run_once failed; backing off");
-                    self.metrics.incr_vectorizer_errors(1);
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
-            };
-            // Phase8b — stamp jobs_processed + last_job_ts. The bump
-            // is conditional on handled > 0 so an idle poll never
-            // looks like ongoing work to the freshness aggregator.
-            self.metrics.record_jobs_processed(handled as u64);
-            if handled == 0 {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-        tracing::info!("cortex-embedder worker stopped");
-        Ok(())
-    }
-
-    /// Spawn `config.workers` copies of the loop onto the current Tokio
-    /// runtime and join them. Every copy shares the embedder, consumer, and
-    /// publisher via `Arc`, so the backpressure gauge and metrics are
-    /// naturally shared too.
+    /// Phase14h — delegate to the shared `synap_worker` runtime.
+    /// The trait impl below carries the embedder-specific hooks
+    /// (back-pressure gate, vectorizer-error counter, jobs-processed
+    /// bookkeeping). See [`crate::synap_worker::run_pool`].
     pub async fn run_pool(self: Arc<Self>, shutdown: Arc<AtomicBool>) -> Result<()> {
-        let count = self.config.workers.max(1);
-        let mut handles = Vec::with_capacity(count);
-        for idx in 0..count {
-            let this = self.clone();
-            let shut = shutdown.clone();
-            handles.push(tokio::spawn(async move {
-                tracing::debug!(worker = idx, "pool worker starting");
-                this.run_forever(shut).await
-            }));
-        }
-        for h in handles {
-            if let Err(e) = h.await {
-                tracing::warn!(error = %e, "worker join failed");
-            }
-        }
-        Ok(())
+        crate::synap_worker::run_pool(self, shutdown)
+            .await
+            .map_err(anyhow::Error::from)
     }
 
     /// Dispatch a single message. Returns `Ok(Some(Halt))` when the caller
@@ -767,4 +715,40 @@ impl Worker {
 enum LoopControl {
     /// Halt the current batch (rate-limit observed).
     Halt,
+}
+
+#[async_trait]
+impl crate::synap_worker::SynapWorker for Worker {
+    fn worker_name(&self) -> &'static str {
+        "embedder"
+    }
+
+    fn pool_size(&self) -> usize {
+        self.config.workers.max(1)
+    }
+
+    async fn run_once(&self) -> anyhow::Result<usize> {
+        Worker::run_once(self).await
+    }
+
+    fn backpressure(&self) -> crate::synap_worker::BackpressureGate {
+        if self.backpressure.is_paused() {
+            crate::synap_worker::BackpressureGate::Paused
+        } else {
+            self.metrics.set_backpressure(self.backpressure.is_active());
+            crate::synap_worker::BackpressureGate::Active
+        }
+    }
+
+    fn on_run_once_ok(&self, handled: usize) {
+        self.metrics.record_jobs_processed(handled as u64);
+    }
+
+    fn on_run_once_err(&self, _err: &anyhow::Error, _consecutive: u32) {
+        self.metrics.incr_vectorizer_errors(1);
+    }
+
+    fn on_backpressure_pause(&self) {
+        self.metrics.set_backpressure(true);
+    }
 }

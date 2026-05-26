@@ -394,6 +394,76 @@ default ever changes. The keyword lane has the matching invariant
 6. **Raw-oversize text stays in Vectorizer metadata, not on disk.** Vectorizer is the system of record for chunk text in v1. Parquet archive (spec 02) is the durable copy; Vectorizer is the queryable copy.
 7. **Server-assigned UUIDs, client-side dedup keys.** The server rejects client-supplied primary ids (`hivehub/vectorizer:3.0.x` reassigns a UUID per stored vector regardless of the caller's `id`). Instead of forking the server or faking ids on our side, we adopt the server's UUID as canonical (surfaced through `UpsertedChunk::server_id` / `EmbedReport::new_records`) and carry our deterministic identifier as `metadata.dedup_key`. Idempotency is enforced by a pre-upsert scan of `metadata.dedup_key` rather than by the key-based upsert the original spec assumed. Downstream consumers that need to reference a stored vector join on the server-assigned UUID.
 
+## Shared Synap-worker scaffolding (phase14h)
+
+The embedder, fulltext indexer, graph writer, and classifier all
+implement the same `SynapWorker` trait shipped in
+`cortex_workers::synap_worker`. The shared module owns the loop
+shape (back-off, supervisor, idle sleep, graceful shutdown, pool
+join) so a fix in one place lands on all four workers at once.
+
+Trait surface (`cortex_workers::synap_worker::SynapWorker`):
+
+- `worker_name() -> &'static str` — stable label (`embedder` /
+  `fulltext` / `graph` / `classifier`) used as the metric label
+  and log target.
+- `pool_size() -> usize` — number of `run_forever` copies the
+  shared runtime spawns.
+- `async fn run_once() -> Result<usize>` — one iteration; returns
+  the number of envelopes handled so the runtime can decide
+  whether to idle-sleep.
+- `idle_duration() / backpressure_sleep() / error_backoff()` —
+  per-worker sleep tunables (defaults: 100ms / 5s / 500ms).
+- `backpressure() -> BackpressureGate` — `Active` / `Paused`;
+  paused gates short-circuit `run_once` so the worker parks the
+  loop without burning the Vectorizer / Nexus retry budget.
+- `max_consume_errors() -> u32` — supervisor threshold; `0`
+  disables the exit. Classifier sets this to the legacy
+  `CORTEX_CLASSIFIER_MAX_CONSUME_ERRORS` value, embedder /
+  fulltext / graph default to `0` (back off forever).
+- `on_run_once_ok / on_run_once_err / on_run_once_success_reset /
+  on_backpressure_pause` — hooks the worker uses to bump its
+  domain metrics (`record_jobs_processed`, `incr_errors`, the
+  classifier `consume_errors_consecutive` mirror, etc.).
+
+Driver surface:
+
+- `run_forever(worker, shutdown) -> Result<(), RunError>` — single
+  loop copy.
+- `run_pool(worker, shutdown) -> Result<(), RunError>` — spawns
+  `pool_size` copies onto the current Tokio runtime and joins
+  them.
+
+`RunError::Supervisor` carries the worker name, consecutive count,
+threshold, and last error message — the bin's `main` propagates
+the non-zero exit so docker `restart: unless-stopped` recovers
+the container fresh (the phase11s contract is preserved).
+
+Central telemetry (`cortex_workers::synap_worker::metrics::WorkerMetrics`):
+
+- `cortex_synap_worker_lag{worker}` — last observed lag gauge,
+  rendered in the Prometheus body via `WorkerMetrics::render_prom`.
+- `cortex_synap_worker_dead_letter_total{worker, reason}` — counter
+  family keyed by the `DeadLetterReason` taxonomy
+  (`deserialize_failed`, `permanent_handler_error`,
+  `retry_budget_exhausted`, `publish_failed`,
+  `missing_required_field`). New reasons require a code change so
+  the doctor's per-reason rendering stays stable.
+
+Cursor checkpointing (`cortex_workers::synap_worker::checkpoint::CursorCheckpoint`)
+re-uses the phase13b `producer_checkpoints` primitive. The
+namespace is `synap_consumer:{worker_name}` and the scope is the
+Synap room; `last_event_id` carries the offset as a stringified
+`u64`. Workers seed their `OffsetTracker` from
+`resume_offset(room)` on boot so kill-resume does not rewind to
+offset `0`.
+
+Operator surface: `cortex-ops doctor-synap-workers` probes each
+worker's `/healthz`, parses the `state` / `last_consume_ts_ms` /
+`consume_errors_consecutive` / `synap_worker_lag` extras, and
+prints a per-worker table (or JSON via `--json`). Exit code `2`
+when any worker reports non-`ok` state or a fetch failure.
+
 ## Open questions
 
 1. **Per-collection model override.** Should `cortex-decisions` use a bigger model (e.g., MiniLM-L12) for better semantic fidelity, given the low volume? Defer to first retrieval-quality pass (Phase 2).

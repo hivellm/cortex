@@ -435,62 +435,12 @@ impl Worker {
         Ok(received)
     }
 
-    /// Long-running loop.
-    pub async fn run_forever(&self, shutdown: Arc<AtomicBool>) -> Result<()> {
-        tracing::info!(
-            workers = self.config.workers,
-            upsert_batch = self.config.upsert_batch,
-            flush_ms = self.config.flush_ms,
-            meili = %self.config.meili_url,
-            synap = %self.config.synap_url,
-            "cortex-fulltext worker started"
-        );
-        let idle = Duration::from_millis(self.config.flush_ms.max(50));
-        while !shutdown.load(Ordering::Relaxed) {
-            if self.backpressure.is_paused() {
-                self.metrics.set_backpressure(true);
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-            let handled = match self.run_once().await {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::warn!(error = %e, "run_once failed; backing off");
-                    self.metrics.incr_errors("other");
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    continue;
-                }
-            };
-            // Phase8b — bump jobs_processed + stamp last_job_ts when
-            // run_once produced work. Idle polls are skipped so the
-            // freshness aggregator keeps an honest gap-grows signal.
-            self.metrics.record_jobs_processed(handled as u64);
-            if handled == 0 {
-                tokio::time::sleep(idle).await;
-            }
-        }
-        tracing::info!("cortex-fulltext worker stopped");
-        Ok(())
-    }
-
-    /// Spawn `config.workers` copies of the loop.
+    /// Phase14h — delegate to the shared `synap_worker` runtime.
+    /// See [`crate::synap_worker::run_pool`].
     pub async fn run_pool(self: Arc<Self>, shutdown: Arc<AtomicBool>) -> Result<()> {
-        let count = self.config.workers.max(1);
-        let mut handles = Vec::with_capacity(count);
-        for idx in 0..count {
-            let this = self.clone();
-            let shut = shutdown.clone();
-            handles.push(tokio::spawn(async move {
-                tracing::debug!(worker = idx, "pool worker starting");
-                this.run_forever(shut).await
-            }));
-        }
-        for h in handles {
-            if let Err(e) = h.await {
-                tracing::warn!(error = %e, "worker join failed");
-            }
-        }
-        Ok(())
+        crate::synap_worker::run_pool(self, shutdown)
+            .await
+            .map_err(anyhow::Error::from)
     }
 
     async fn handle_batch(&self, msgs: Vec<ConsumedMessage>) -> Result<()> {
@@ -717,5 +667,45 @@ impl Worker {
                 );
             }
         }
+    }
+}
+
+#[async_trait]
+impl crate::synap_worker::SynapWorker for Worker {
+    fn worker_name(&self) -> &'static str {
+        "fulltext"
+    }
+
+    fn pool_size(&self) -> usize {
+        self.config.workers.max(1)
+    }
+
+    fn idle_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.config.flush_ms.max(50))
+    }
+
+    async fn run_once(&self) -> anyhow::Result<usize> {
+        Worker::run_once(self).await
+    }
+
+    fn backpressure(&self) -> crate::synap_worker::BackpressureGate {
+        if self.backpressure.is_paused() {
+            crate::synap_worker::BackpressureGate::Paused
+        } else {
+            self.metrics.set_backpressure(self.backpressure.is_active());
+            crate::synap_worker::BackpressureGate::Active
+        }
+    }
+
+    fn on_run_once_ok(&self, handled: usize) {
+        self.metrics.record_jobs_processed(handled as u64);
+    }
+
+    fn on_run_once_err(&self, _err: &anyhow::Error, _consecutive: u32) {
+        self.metrics.incr_errors("other");
+    }
+
+    fn on_backpressure_pause(&self) {
+        self.metrics.set_backpressure(true);
     }
 }

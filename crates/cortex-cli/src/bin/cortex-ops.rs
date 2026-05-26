@@ -31,6 +31,8 @@ mod consolidation;
 mod digest;
 #[path = "cortex-ops/doctor.rs"]
 mod doctor;
+#[path = "cortex-ops/doctor_synap_workers.rs"]
+mod doctor_synap_workers;
 #[path = "cortex-ops/graph_cmd.rs"]
 mod graph_cmd;
 #[path = "cortex-ops/helpers.rs"]
@@ -721,6 +723,36 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase14h §3.3 — Synap-worker cross-cut doctor. Probes each
+    /// worker's `/healthz` endpoint and prints per-worker lag,
+    /// `consume_errors_consecutive`, last-consume freshness, and
+    /// dead-letter counters so the operator can spot a stuck
+    /// pipeline without four separate doctor calls.
+    DoctorSynapWorkers {
+        /// Embedder `/healthz` URL. Defaults to
+        /// `$CORTEX_EMBEDDER_HEALTH_URL` then
+        /// `http://127.0.0.1:17100/healthz`.
+        #[arg(long)]
+        embedder_url: Option<String>,
+        /// Fulltext `/healthz` URL. Defaults to
+        /// `$CORTEX_FULLTEXT_HEALTH_URL` then
+        /// `http://127.0.0.1:17110/healthz`.
+        #[arg(long)]
+        fulltext_url: Option<String>,
+        /// Graph `/healthz` URL. Defaults to
+        /// `$CORTEX_GRAPH_HEALTH_URL` then
+        /// `http://127.0.0.1:17120/healthz`.
+        #[arg(long)]
+        graph_url: Option<String>,
+        /// Classifier `/healthz` URL. Defaults to
+        /// `$CORTEX_CLASSIFIER_HEALTH_URL` then
+        /// `http://127.0.0.1:17130/healthz`.
+        #[arg(long)]
+        classifier_url: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Cross-backend consistency checker. v1 (phase4d) covered the
     /// archive ↔ Meili axis; phase4h widens it to Vectorizer +
     /// Nexus. Each probe is opt-in via its own flag / env var so
@@ -1149,6 +1181,19 @@ fn main() -> ExitCode {
             adapter_toml,
             json,
         } => doctor::doctor_config(workspace, adapter_toml, json),
+        Command::DoctorSynapWorkers {
+            embedder_url,
+            fulltext_url,
+            graph_url,
+            classifier_url,
+            json,
+        } => doctor_synap_workers::run(
+            embedder_url,
+            fulltext_url,
+            graph_url,
+            classifier_url,
+            json,
+        ),
         Command::IntentStats {
             api_url,
             since,
