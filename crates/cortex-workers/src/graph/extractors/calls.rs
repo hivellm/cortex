@@ -27,14 +27,11 @@
 
 use cortex_core::events::Kind;
 
-use super::{stamp_provenance, Edge, ExtractCtx};
+use super::{extract_via_classifier_relations, Edge, ExtractCtx};
 use crate::embedder::EnrichedEvent;
 
 /// Canonical edge type string the projection pipeline filters on.
 pub const EDGE_TYPE: &str = "CALLS";
-
-/// The classifier's anchor literal for "the envelope itself".
-const ANCHOR_THIS_EVENT: &str = "this_event";
 
 /// Extract `CALLS` edges from a [`EnrichedEvent`]. Returns the
 /// empty vec for any envelope kind other than `ToolCall`, or for
@@ -43,66 +40,7 @@ pub fn extract(env: &EnrichedEvent, ctx: &ExtractCtx) -> Vec<Edge> {
     if env.kind != Kind::ToolCall {
         return Vec::new();
     }
-    let mut out: Vec<Edge> = Vec::new();
-    for rel in &env.classifier.relations {
-        if !rel.relation.eq_ignore_ascii_case(EDGE_TYPE) {
-            continue;
-        }
-        let from = resolve_endpoint(env, rel.from.as_str());
-        let to = resolve_endpoint(env, rel.to.as_str());
-        let (Some(from), Some(to)) = (from, to) else {
-            continue;
-        };
-        let edge = Edge {
-            edge_type: EDGE_TYPE.to_string(),
-            from_label: from.0,
-            from_key: from.1,
-            to_label: to.0,
-            to_key: to.1,
-            props: std::collections::BTreeMap::new(),
-        };
-        out.push(stamp_provenance(edge, env, ctx));
-    }
-    out
-}
-
-/// Resolve a relation endpoint string to `(label, natural_key)`.
-/// `"this_event"` anchors at the envelope; any other identifier
-/// resolves through the classifier's `entities` table. Returns
-/// `None` when the identifier is unknown so the caller drops the
-/// edge rather than fabricating a phantom node.
-pub(crate) fn resolve_endpoint(env: &EnrichedEvent, identifier: &str) -> Option<(String, String)> {
-    if identifier == ANCHOR_THIS_EVENT {
-        return Some(("ToolCall".to_string(), env.event_id.clone()));
-    }
-    let entity = env
-        .classifier
-        .entities
-        .iter()
-        .find(|e| e.identifier == identifier)?;
-    let label = entity_type_to_label(&entity.entity_type)?;
-    Some((label, entity.identifier.clone()))
-}
-
-/// Map the classifier's `entity_type` controlled vocab to the
-/// graph node label. Unknown entity types return `None` so the
-/// extractor drops the edge rather than guessing.
-pub(crate) fn entity_type_to_label(entity_type: &str) -> Option<String> {
-    let label = match entity_type {
-        "decision" => "Decision",
-        "law" => "Law",
-        "analysis" => "Analysis",
-        "artifact" => "Artifact",
-        "repo" => "Repo",
-        "topic" => "Topic",
-        "concept" => "Concept",
-        "tool" => "Tool",
-        "person" => "Person",
-        "session" => "Session",
-        "turn" => "Turn",
-        _ => return None,
-    };
-    Some(label.to_string())
+    extract_via_classifier_relations(env, ctx, EDGE_TYPE)
 }
 
 #[cfg(test)]

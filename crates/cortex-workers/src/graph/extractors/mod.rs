@@ -48,6 +48,7 @@ use super::patch::EdgeOp;
 use crate::embedder::EnrichedEvent;
 
 pub mod calls;
+pub mod imports;
 
 /// Friendly re-export — `Edge` is the same shape as
 /// [`super::patch::EdgeOp`]; the alias lets each extractor file
@@ -121,6 +122,112 @@ pub fn stamp_provenance(mut edge: Edge, env: &EnrichedEvent, ctx: &ExtractCtx) -
     edge.props
         .insert("created_at_ms".to_string(), Value::from(ctx.now_ms));
     edge
+}
+
+/// Map the canonical envelope kind to the matching graph node
+/// label so the `"this_event"` endpoint anchor resolves to the
+/// right `(label, key)` pair. Mirrors the kind → label mapping
+/// the mapper at [`super::mapper`] uses for the identity-only
+/// patches.
+pub(crate) fn kind_to_label(kind: cortex_core::events::Kind) -> &'static str {
+    use cortex_core::events::Kind;
+    match kind {
+        Kind::Turn => "Turn",
+        Kind::ToolCall => "ToolCall",
+        Kind::AgentCall => "AgentCall",
+        Kind::Memory => "Memory",
+        Kind::Decision => "Decision",
+        Kind::Analysis => "Analysis",
+        Kind::LawViolation => "LawViolation",
+        Kind::Artifact => "Artifact",
+        Kind::Knowledge => "Knowledge",
+        Kind::Learning => "Learning",
+        Kind::Consolidation => "Consolidation",
+        Kind::TopicCard => "TopicCard",
+    }
+}
+
+/// Map the classifier's `entity_type` controlled vocab to the
+/// graph node label. Unknown entity types return `None` so
+/// callers drop the edge rather than guessing the label.
+pub(crate) fn entity_type_to_label(entity_type: &str) -> Option<&'static str> {
+    let label = match entity_type {
+        "decision" => "Decision",
+        "law" => "Law",
+        "analysis" => "Analysis",
+        "artifact" => "Artifact",
+        "repo" => "Repo",
+        "topic" => "Topic",
+        "concept" => "Concept",
+        "tool" => "Tool",
+        "person" => "Person",
+        "session" => "Session",
+        "turn" => "Turn",
+        _ => return None,
+    };
+    Some(label)
+}
+
+/// Resolve a relation endpoint string to `(label, natural_key)`.
+/// The `anchor` literal (`"this_event"` per the classifier
+/// contract) anchors at the envelope itself using the envelope's
+/// kind → label mapping. Any other identifier resolves through
+/// the classifier's `entities` table; returns `None` when the
+/// identifier or entity type is unknown so callers drop the edge
+/// rather than fabricating a phantom node.
+pub(crate) fn resolve_endpoint(env: &EnrichedEvent, identifier: &str) -> Option<(String, String)> {
+    if identifier == ANCHOR_THIS_EVENT {
+        return Some((kind_to_label(env.kind).to_string(), env.event_id.clone()));
+    }
+    let entity = env
+        .classifier
+        .entities
+        .iter()
+        .find(|e| e.identifier == identifier)?;
+    let label = entity_type_to_label(&entity.entity_type)?;
+    Some((label.to_string(), entity.identifier.clone()))
+}
+
+/// The classifier's anchor literal for "the envelope itself".
+pub(crate) const ANCHOR_THIS_EVENT: &str = "this_event";
+
+/// Walk `classifier.relations`, keep entries whose label matches
+/// `edge_type` case-insensitively, and project each into a stamped
+/// [`Edge`]. Endpoints resolve through [`resolve_endpoint`]; a
+/// relation whose endpoint resolution fails is dropped silently
+/// (the same-record entity-table invariant means it would land
+/// as a phantom-node edge otherwise).
+///
+/// Shared by every classifier-relation-driven extractor
+/// (`CALLS` / `IMPORTS` / `DEFINES` / `RETURNS` / etc.) so the
+/// per-kind file only declares the edge-type constant + the
+/// envelope-kind filter.
+pub(crate) fn extract_via_classifier_relations(
+    env: &EnrichedEvent,
+    ctx: &ExtractCtx,
+    edge_type: &str,
+) -> Vec<Edge> {
+    let mut out: Vec<Edge> = Vec::new();
+    for rel in &env.classifier.relations {
+        if !rel.relation.eq_ignore_ascii_case(edge_type) {
+            continue;
+        }
+        let from = resolve_endpoint(env, rel.from.as_str());
+        let to = resolve_endpoint(env, rel.to.as_str());
+        let (Some(from), Some(to)) = (from, to) else {
+            continue;
+        };
+        let edge = Edge {
+            edge_type: edge_type.to_string(),
+            from_label: from.0,
+            from_key: from.1,
+            to_label: to.0,
+            to_key: to.1,
+            props: std::collections::BTreeMap::new(),
+        };
+        out.push(stamp_provenance(edge, env, ctx));
+    }
+    out
 }
 
 #[cfg(test)]
