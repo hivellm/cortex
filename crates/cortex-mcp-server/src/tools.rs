@@ -270,6 +270,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationsByEntityTool::new()),
                 Arc::new(ConsolidationsSearchTool::new()),
                 Arc::new(ConsolidationLineageTool::new()),
+                Arc::new(ConsolidationsDiffTool::new()),
             ],
         }
     }
@@ -1931,6 +1932,79 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §2.6 — cortex_consolidations_diff
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/consolidations/diff`.
+pub struct ConsolidationsDiffTool;
+
+impl ConsolidationsDiffTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationsDiffTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationsDiffTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidations_diff"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidations_diff",
+            "description": "Return consolidations whose `occurred_at` is at or after `since_ts` (epoch ms), ordered ascending. Drives the \"what's new in consolidations since I last polled?\" pattern — pass the highest `occurred_at` you have seen so far as the cursor. Optional `repo` filter narrows the corpus. `since_ts` is required; reads from the `cortex_consolidations` Meili index.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["since_ts"],
+                "properties": {
+                    "since_ts": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Epoch-ms lower bound on `occurred_at`. Pass 0 for an unbounded scan."
+                    },
+                    "repo": {"type": "string", "description": "Optional `repo` filter."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let since_ts = args
+            .get("since_ts")
+            .and_then(Value::as_i64)
+            .ok_or_else(|| ToolError::invalid_input("`since_ts` is required (epoch ms)"))?;
+        if since_ts < 0 {
+            return Err(ToolError::invalid_input(
+                "since_ts must be a non-negative epoch-ms integer",
+            ));
+        }
+        let mut qs: Vec<String> = vec![format!("since_ts={since_ts}")];
+        if let Some(repo) = args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            qs.push(format!("repo={}", urlencode(repo)));
+        }
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            qs.push(format!("limit={limit}"));
+        }
+        let path = format!("/v1/consolidations/diff?{}", qs.join("&"));
+        proxy_get(ctx, &path).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §2.5 — cortex_consolidation_lineage
 // ---------------------------------------------------------------------
 
@@ -2525,12 +2599,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentythree_tools_with_unique_names() {
+    fn registry_returns_twentyfour_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            23,
-            "phase19 §2.5 adds cortex_consolidation_lineage (22 -> 23)"
+            24,
+            "phase19 §2.6 adds cortex_consolidations_diff (23 -> 24) — closes Group B"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2557,6 +2631,7 @@ mod tests {
             "cortex_consolidations_by_entity",
             "cortex_consolidations_search",
             "cortex_consolidation_lineage",
+            "cortex_consolidations_diff",
         ] {
             assert!(
                 names.contains(&expected),

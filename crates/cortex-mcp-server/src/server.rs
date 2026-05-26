@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_twentythree_descriptors() {
+    async fn tools_list_returns_twentyfour_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
@@ -273,8 +273,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            23,
-            "phase19 §2.5 adds cortex_consolidation_lineage (22 -> 23)"
+            24,
+            "phase19 §2.6 adds cortex_consolidations_diff (23 -> 24) — closes Group B"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
