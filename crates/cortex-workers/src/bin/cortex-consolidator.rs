@@ -184,6 +184,33 @@ enum Command {
         #[arg(long, default_value_t = 250)]
         idle_poll_ms: u64,
     },
+    /// Phase14c topic-recluster — re-cluster already-published
+    /// session consolidations into topic-grain consolidations using
+    /// the claude CLI as the grouping engine. Closes the
+    /// cross-session theme-dedup gap left by LiveTopicSource's
+    /// embedding-inline requirement.
+    TopicRecluster {
+        /// Meilisearch base URL. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL` then `http://127.0.0.1:17004`.
+        #[arg(long)]
+        meili: Option<String>,
+        /// Meilisearch master key.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Restrict to a single repo slug (matches the
+        /// `cortex-{slug}-consolidations` index suffix). All repos
+        /// when omitted.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Minimum cluster size to emit a topic consolidation.
+        #[arg(long, default_value_t = 2)]
+        min_cluster_size: u32,
+        /// When true, print the proposed clusters but skip the
+        /// claude summary + publish. Default false because the
+        /// claude CLI cost is negligible.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -229,6 +256,23 @@ async fn main() -> Result<()> {
             stream,
             idle_poll_ms,
         } => run_daemon(&cli, synap_url.clone(), stream.clone(), *idle_poll_ms).await,
+        Command::TopicRecluster {
+            meili,
+            meili_key,
+            repo,
+            min_cluster_size,
+            dry_run,
+        } => {
+            run_topic_recluster(
+                &cli,
+                meili.clone(),
+                meili_key.clone(),
+                repo.clone(),
+                *min_cluster_size,
+                *dry_run,
+            )
+            .await
+        }
     }
 }
 
@@ -1482,6 +1526,435 @@ async fn run_daemon(
         report.dispatched, report.failed, report.idle_polls
     );
     Ok(())
+}
+
+// ============================================================================
+// Phase14c §topic-recluster — posthoc cross-session theme dedup
+// ============================================================================
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ConsolidationDoc {
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    excerpt: Option<String>,
+    #[serde(default)]
+    body_markdown: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ClusterPlan {
+    topic_label: String,
+    #[serde(default)]
+    rationale: Option<String>,
+    member_ids: Vec<String>,
+}
+
+/// Strip a `````json` / `````` fence the model often wraps responses
+/// in. Returns the original string when no fence is found.
+fn strip_json_fence(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let trimmed = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim_start();
+    trimmed.strip_suffix("```").unwrap_or(trimmed).trim()
+}
+
+/// Build the cluster-prompt the claude CLI sees. Lists every
+/// consolidation's id + title + first 200 chars of body so the
+/// model can group on substance, not just title.
+fn render_cluster_prompt(repo: &str, docs: &[ConsolidationDoc], min_cluster_size: u32) -> String {
+    let mut lines = Vec::with_capacity(docs.len());
+    for d in docs {
+        let snippet = d
+            .body_markdown
+            .as_deref()
+            .or(d.excerpt.as_deref())
+            .unwrap_or("")
+            .chars()
+            .take(200)
+            .collect::<String>();
+        lines.push(format!("- id={} | title={} | excerpt={}", d.id, d.title, snippet));
+    }
+    let listing = lines.join("\n");
+    format!(
+        "You are a deduplication judge for the Cortex consolidations index. \
+Given the {n} session-grain consolidations below for repo {repo:?}, identify groups \
+that cover the SAME engineering theme (same feature, same incident, same refactor, \
+same investigation thread). Emit one cluster per recurring theme; ignore singletons.\n\n\
+Hard rules:\n\
+- Only emit clusters with at least {min} members.\n\
+- Every member_id MUST be one of the ids listed below.\n\
+- topic_label MUST be ≤80 chars, lower-kebab-case-ish (free form OK but stable).\n\
+- Skip clusters whose theme is generic infrastructure (\"misc cleanup\", \"adhoc\") \
+unless the members are clearly the SAME thread.\n\n\
+Consolidations (id | title | first 200 chars of body):\n{listing}\n\n\
+Return EXACTLY one JSON object on a single line with shape:\n\
+{{\"clusters\": [{{\"topic_label\":\"...\",\"rationale\":\"...\",\"member_ids\":[\"...\",\"...\"]}}, ...]}}\n\
+No markdown fence, no extra prose.",
+        n = docs.len(),
+        repo = repo,
+        min = min_cluster_size,
+        listing = listing
+    )
+}
+
+/// Fetch every doc in `cortex-{slug}-consolidations` via Meili.
+/// Pages by 200; 200 should be enough for any current repo (the
+/// largest repo today holds <50).
+async fn fetch_repo_consolidations(
+    http: &reqwest::Client,
+    meili_url: &str,
+    api_key: Option<&str>,
+    slug: &str,
+) -> Result<Vec<ConsolidationDoc>> {
+    let uid = format!("cortex-{slug}-consolidations");
+    let url = format!(
+        "{}/indexes/{}/documents?limit=200&fields=id,title,excerpt,body_markdown",
+        meili_url.trim_end_matches('/'),
+        uid
+    );
+    let mut req = http.get(&url);
+    if let Some(k) = api_key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await?;
+    if resp.status().as_u16() == 404 {
+        return Ok(Vec::new());
+    }
+    if !resp.status().is_success() {
+        anyhow::bail!("fetch {uid}: status {}", resp.status());
+    }
+    let body: serde_json::Value = resp.json().await?;
+    let arr = body
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        match serde_json::from_value::<ConsolidationDoc>(v) {
+            Ok(d) => out.push(d),
+            Err(err) => tracing::warn!(error = %err, "skipping malformed consolidation doc"),
+        }
+    }
+    Ok(out)
+}
+
+/// Enumerate every `cortex-{slug}-consolidations` index Meili
+/// currently knows about. Returns the slug list.
+async fn enumerate_consolidation_repos(
+    http: &reqwest::Client,
+    meili_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<String>> {
+    let url = format!("{}/indexes?limit=1000", meili_url.trim_end_matches('/'));
+    let mut req = http.get(&url);
+    if let Some(k) = api_key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<serde_json::Value>()
+        .await?;
+    let results = resp
+        .get("results")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let mut slugs = Vec::new();
+    for entry in results {
+        if let Some(uid) = entry.get("uid").and_then(|v| v.as_str()) {
+            if let Some(slug) = uid
+                .strip_prefix("cortex-")
+                .and_then(|s| s.strip_suffix("-consolidations"))
+            {
+                slugs.push(slug.to_string());
+            }
+        }
+    }
+    slugs.sort();
+    Ok(slugs)
+}
+
+/// Parse the claude CLI cluster response into [`ClusterPlan`].
+fn parse_cluster_response(raw: &str) -> Result<Vec<ClusterPlan>> {
+    #[derive(serde::Deserialize)]
+    struct Wrapper {
+        clusters: Vec<ClusterPlan>,
+    }
+    let body = strip_json_fence(raw);
+    let wrapped: Wrapper = serde_json::from_str(body)
+        .with_context(|| format!("claude cluster response not parseable: body={body}"))?;
+    Ok(wrapped.clusters)
+}
+
+async fn run_topic_recluster(
+    cli: &Cli,
+    meili: Option<String>,
+    meili_key: Option<String>,
+    repo: Option<String>,
+    min_cluster_size: u32,
+    dry_run: bool,
+) -> Result<()> {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let meili_url = meili
+        .or_else(|| cfg.meili.meili_url.clone())
+        .unwrap_or_else(|| "http://127.0.0.1:17004".to_string());
+    let api_key = meili_key
+        .or_else(|| cfg.meili.meili_api_key.clone())
+        .or_else(|| std::env::var("MEILI_MASTER_KEY").ok());
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("reqwest build")?;
+
+    println!("topic-recluster");
+    println!("  meili    : {meili_url}");
+    println!("  min_size : {min_cluster_size}");
+    println!("  dry_run  : {dry_run}");
+
+    // Build the claude CLI summariser (Haiku — fast + cheap enough
+    // for one prompt per repo). Always uses claude CLI; no Anthropic
+    // API key path because the cluster prompt is small and CLI is
+    // the universally-available fallback.
+    let claude_bin = cli
+        .claude_bin
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("claude"));
+    let summariser =
+        ClaudeCliSummariser::new(claude_bin, cortex_workers::consolidator::summariser::SummariserKind::Haiku45);
+
+    let repos = match repo {
+        Some(r) => vec![r],
+        None => enumerate_consolidation_repos(&http, &meili_url, api_key.as_deref()).await?,
+    };
+    println!("  repos    : {} candidate(s)", repos.len());
+
+    let mut emitted = 0u32;
+    let mut clusters_total = 0u32;
+    let mut singletons_skipped = 0u32;
+
+    for slug in &repos {
+        let docs = fetch_repo_consolidations(&http, &meili_url, api_key.as_deref(), slug).await?;
+        if (docs.len() as u32) < min_cluster_size {
+            println!("  [{slug}] {} doc(s) — below floor, skipping", docs.len());
+            continue;
+        }
+        println!("  [{slug}] {} doc(s) — clustering via claude CLI", docs.len());
+        let prompt = render_cluster_prompt(slug, &docs, min_cluster_size);
+        let result = match summariser
+            .summarise(cortex_workers::consolidator::summariser::SummariserRequest {
+                prompt,
+                max_output_tokens: None,
+            })
+            .await
+        {
+            Ok(r) => r,
+            Err(err) => {
+                eprintln!("  [{slug}] cluster prompt failed: {err}");
+                continue;
+            }
+        };
+        let plans = match parse_cluster_response(&result.text) {
+            Ok(p) => p,
+            Err(err) => {
+                eprintln!("  [{slug}] cluster parse failed: {err}");
+                continue;
+            }
+        };
+        let id_set: std::collections::HashSet<&str> =
+            docs.iter().map(|d| d.id.as_str()).collect();
+        for plan in plans {
+            // Sanitise: drop unknown ids, drop below floor.
+            let members: Vec<String> = plan
+                .member_ids
+                .into_iter()
+                .filter(|m| id_set.contains(m.as_str()))
+                .collect();
+            if (members.len() as u32) < min_cluster_size {
+                singletons_skipped += 1;
+                continue;
+            }
+            clusters_total += 1;
+            println!(
+                "    cluster topic_label={:?} members={} rationale={}",
+                plan.topic_label,
+                members.len(),
+                plan.rationale.as_deref().unwrap_or("")
+            );
+            if dry_run {
+                continue;
+            }
+            // Build a TopicCluster + run through the topic producer
+            // to ride the existing prompt template + payload
+            // assembly + validation.
+            match emit_topic_consolidation(cli, &summariser, slug, &plan.topic_label, &members, &docs).await {
+                Ok(()) => emitted += 1,
+                Err(err) => eprintln!("    publish failed: {err}"),
+            }
+        }
+    }
+    println!(
+        "  status   : clusters={clusters_total} emitted={emitted} singletons_skipped={singletons_skipped}"
+    );
+    Ok(())
+}
+
+/// Topic-recluster bypass path. Builds the topic prompt + parses
+/// the claude CLI response + assembles a `ConsolidationPayload`
+/// directly, skipping `producer::topic::produce` because that
+/// helper hardcodes `MIN_CLUSTER_SIZE = 3` (the recluster path
+/// has its own operator-tunable floor) and uses a stricter
+/// `{title, summary_markdown, takeaways}` template that claude CLI
+/// occasionally answers with prose. Validation still runs against
+/// the canonical `validate_produced` rules so the wire envelope
+/// stays honest.
+async fn emit_topic_consolidation(
+    cli: &Cli,
+    summariser: &ClaudeCliSummariser,
+    slug: &str,
+    topic_label: &str,
+    member_ids: &[String],
+    docs: &[ConsolidationDoc],
+) -> Result<()> {
+    use cortex_core::events::{
+        ConsolidationDepth, ConsolidationGrain, ConsolidationPayload, ConsolidationScope, TimeSpan,
+        CONSOLIDATION_SOURCE_IDS_INLINE_CAP, CONSOLIDATION_TITLE_MAX_CHARS,
+    };
+    use cortex_workers::consolidator::producer::{derive_consolidation_id, validate_produced};
+    use cortex_workers::consolidator::summariser::{Summariser, SummariserRequest};
+
+    let by_id: std::collections::HashMap<&str, &ConsolidationDoc> =
+        docs.iter().map(|d| (d.id.as_str(), d)).collect();
+    let mut digests = Vec::with_capacity(member_ids.len());
+    for id in member_ids {
+        if let Some(d) = by_id.get(id.as_str()) {
+            digests.push(format!("- {id} | {}", d.title.chars().take(200).collect::<String>()));
+        }
+    }
+    let prompt = format!(
+        "You are summarising a set of session-grain consolidations that all cover the SAME engineering theme into a single topic-grain consolidation for repo {slug:?}.\n\n\
+Theme label (working title): {topic_label}\n\
+Member session consolidations (id | title excerpt):\n{listing}\n\n\
+Produce a JSON OBJECT (no markdown fence, no prose around it) with this shape:\n\
+{{\"title\":\"<<=80 char descriptive title>\",\
+\"summary_markdown\":\"<300-1800 char narrative covering the shared thread across the members; mention concrete artifacts when present>\",\
+\"takeaways\":[\"<3-5 bullet takeaways>\"]}}\n\
+STRICTLY JSON ONLY. The summary_markdown MUST be at least 300 characters.",
+        listing = digests.join("\n")
+    );
+    let result = summariser
+        .summarise(SummariserRequest {
+            prompt,
+            max_output_tokens: None,
+        })
+        .await?;
+    let body = extract_first_json_object(&result.text)
+        .ok_or_else(|| anyhow::anyhow!("claude returned no parseable JSON object"))?;
+    #[derive(serde::Deserialize)]
+    struct TopicResp {
+        title: String,
+        summary_markdown: String,
+        #[serde(default)]
+        takeaways: Vec<String>,
+    }
+    let parsed: TopicResp = serde_json::from_str(&body)
+        .with_context(|| format!("topic response shape mismatch: {body}"))?;
+
+    let scope = ConsolidationScope::Topic(topic_label.to_string());
+    let consolidation_id = derive_consolidation_id(ConsolidationGrain::Topic, &scope);
+    let title: String = parsed
+        .title
+        .chars()
+        .take(CONSOLIDATION_TITLE_MAX_CHARS)
+        .collect();
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut source_event_ids = member_ids.to_vec();
+    let source_event_count = source_event_ids.len() as u32;
+    if source_event_ids.len() > CONSOLIDATION_SOURCE_IDS_INLINE_CAP {
+        source_event_ids.truncate(CONSOLIDATION_SOURCE_IDS_INLINE_CAP);
+    }
+    let payload = ConsolidationPayload {
+        consolidation_id,
+        grain: ConsolidationGrain::Topic,
+        scope,
+        title,
+        summary_markdown: parsed.summary_markdown,
+        takeaways: parsed.takeaways,
+        source_event_ids,
+        source_event_count,
+        model: result.kind.model_id().to_string(),
+        depth: match result.kind {
+            cortex_workers::consolidator::summariser::SummariserKind::Haiku45 => {
+                ConsolidationDepth::Shallow
+            }
+            cortex_workers::consolidator::summariser::SummariserKind::Opus47 => {
+                ConsolidationDepth::Deep
+            }
+        },
+        outcome_distribution: std::collections::BTreeMap::new(),
+        temporal_span: TimeSpan {
+            start_ms: now_ms - 86_400_000,
+            end_ms: now_ms,
+            duration_ms: 86_400_000,
+        },
+        repos: vec![slug.to_string()],
+        tags: vec![topic_label.to_string()],
+    };
+    validate_produced(&payload).map_err(|e| anyhow::anyhow!("topic payload invalid: {e}"))?;
+    // session_id slot on the envelope is a 26-char ULID per ADR-001;
+    // synthesise one so the ingestion's regex gate accepts the
+    // envelope. The real per-session ids live in source_event_ids.
+    let session_id = ulid::Ulid::new().to_string();
+    publish_consolidation(cli, &payload, &session_id, Some(slug)).await?;
+    Ok(())
+}
+
+/// Pull the first balanced `{...}` JSON object out of `raw`. Claude
+/// CLI occasionally wraps the requested JSON in prose; this helper
+/// extracts the first top-level object regardless.
+fn extract_first_json_object(raw: &str) -> Option<String> {
+    let bytes = raw.as_bytes();
+    let mut depth: i32 = 0;
+    let mut start: Option<usize> = None;
+    let mut in_str = false;
+    let mut escape = false;
+    for (i, &b) in bytes.iter().enumerate() {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    let s = start?;
+                    return Some(raw[s..=i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
