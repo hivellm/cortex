@@ -269,6 +269,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationsRecentTool::new()),
                 Arc::new(ConsolidationsByEntityTool::new()),
                 Arc::new(ConsolidationsSearchTool::new()),
+                Arc::new(ConsolidationLineageTool::new()),
             ],
         }
     }
@@ -1930,6 +1931,70 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §2.5 — cortex_consolidation_lineage
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/consolidations/{id}/lineage`.
+pub struct ConsolidationLineageTool;
+
+impl ConsolidationLineageTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationLineageTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationLineageTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidation_lineage"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidation_lineage",
+            "description": "Structured citation view for one consolidation: `{source_session_ids, decisions, files, cost{model, cents?, prompt_tokens?, completion_tokens?}}`. Derived from the consolidation envelope's own `topics` (`session:<ulid>`, `file:<path>`, `decision:DEC-…` conventions) + `DEC-NNN+` mentions in title/summary/body. Cost block today carries `model` only; per-consolidation cents/token telemetry requires writer-side projection (response surfaces `match_strategy = \"doc_only\"` so callers can detect the shape).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "ULID or slug — accepted on both `event_id` (envelope) and `consolidation_id` (producer-stable)."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`id` is required"))?
+            .to_string();
+        if !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            || id.len() > 128
+        {
+            return Err(ToolError::invalid_input(
+                "id must be alphanumeric (ULID or slug shape, ≤128 chars)",
+            ));
+        }
+        proxy_get(ctx, &format!("/v1/consolidations/{id}/lineage")).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §2.4 — cortex_consolidations_search
 // ---------------------------------------------------------------------
 
@@ -2460,12 +2525,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentytwo_tools_with_unique_names() {
+    fn registry_returns_twentythree_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            22,
-            "phase19 §2.4 adds cortex_consolidations_search (21 -> 22)"
+            23,
+            "phase19 §2.5 adds cortex_consolidation_lineage (22 -> 23)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2491,6 +2556,7 @@ mod tests {
             "cortex_consolidations_recent",
             "cortex_consolidations_by_entity",
             "cortex_consolidations_search",
+            "cortex_consolidation_lineage",
         ] {
             assert!(
                 names.contains(&expected),

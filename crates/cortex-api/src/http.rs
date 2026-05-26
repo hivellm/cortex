@@ -211,6 +211,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::consolidations_search::handle_consolidations_search),
         )
         .route(
+            "/v1/consolidations/{id}/lineage",
+            get(crate::consolidation_lineage::handle_consolidation_lineage),
+        )
+        .route(
             "/v1/consolidations/{id}",
             get(crate::consolidation_get::handle_consolidation_get),
         )
