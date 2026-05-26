@@ -51,6 +51,7 @@ pub mod calls;
 pub mod defines;
 pub mod imports;
 pub mod returns;
+pub mod supersedes;
 
 /// Friendly re-export — `Edge` is the same shape as
 /// [`super::patch::EdgeOp`]; the alias lets each extractor file
