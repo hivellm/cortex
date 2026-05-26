@@ -17,9 +17,27 @@ export default defineConfig({
     proxy: {
       // Forward `/v1/*` API calls to cortex-api during dev so the
       // browser's same-origin policy doesn't bite on fetch().
+      //
+      // SSE endpoints (`*/stream`) need explicit handling — the
+      // default http-proxy-middleware behaviour buffers the
+      // response body which collapses the keep-alive heartbeat +
+      // event stream into nothing until the connection closes,
+      // surfacing in the GUI as "stream cancelado". The
+      // configure hook injects `x-accel-buffering: no` +
+      // disables transform caches so the chunks pass through
+      // immediately.
       "/v1": {
         target: "http://127.0.0.1:17000",
         changeOrigin: true,
+        ws: true,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes, req) => {
+            if (req.url && req.url.includes("/stream")) {
+              proxyRes.headers["x-accel-buffering"] = "no";
+              proxyRes.headers["cache-control"] = "no-cache, no-transform";
+            }
+          });
+        },
       },
     },
   },

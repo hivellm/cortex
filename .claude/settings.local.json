@@ -22,7 +22,14 @@
       "PowerShell(.\\\\target\\\\release\\\\cortex-ops.exe sessions-backfill --dry-run --json 2>&1)",
       "PowerShell(.\\\\target\\\\release\\\\cortex-ops.exe sessions-backfill --json 2>&1)",
       "PowerShell(.\\\\target\\\\debug\\\\cortex-ops.exe doctor-config-audit --crates-root crates --json 2>&1 | Out-File -Encoding utf8 e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json; \"exit=$LASTEXITCODE\"; Get-Content e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json | Select-Object -First 4)",
-      "PowerShell(Stop-Process -Id 160676 -Force)"
+      "PowerShell(Stop-Process -Id 160676 -Force)",
+      "PowerShell(Get-Process -Name \"cortex-adapter-claude\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-NetTCPConnection -State Listen | Where-Object { $_.LocalPort -ge 17000 -and $_.LocalPort -le 17040 } | Select-Object LocalPort, OwningProcess | Sort-Object LocalPort)",
+      "PowerShell(Get-NetTCPConnection -State Listen -LocalPort 17011 -ErrorAction SilentlyContinue | ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue } | Select-Object Id, ProcessName, Path)",
+      "PowerShell(Get-Process -Id 146412)",
+      "PowerShell(Get-WmiObject Win32_Process -Filter \"ProcessId = 146412\")",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 146412\")",
+      "PowerShell($pid_for_5173 = \\(Get-NetTCPConnection -State Listen -LocalPort 5173 -ErrorAction SilentlyContinue\\).OwningProcess; if \\($pid_for_5173\\) { Stop-Process -Id $pid_for_5173 -Force; Write-Host \"stopped pid $pid_for_5173\" } else { Write-Host \"no listener on 5173\" })"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

@@ -170,6 +170,22 @@ pub(super) async fn timeline_stream(
     // emits the diff against the previously-seen ids. Heartbeat
     // every 15 s decouples liveness signal from event volume.
     let stream = async_stream::stream! {
+        // Phase14j — emit an immediate heartbeat so the response
+        // body's first chunk lands inside the first millisecond.
+        // Without this the stream sits silent for the full 15s
+        // keep-alive interval, which (a) the Vite dev-proxy buffers
+        // until the connection closes — surfacing in the GUI as
+        // "stream cancelado", and (b) hides liveness from any
+        // proxy chain that flushes only on first chunk. Browsers
+        // ignore the heartbeat event type by default unless the
+        // caller subscribes to it; the GUI's `useSSE` hook DOES
+        // subscribe to refresh its `lastHeartbeatAt` gauge.
+        yield Ok::<SseEvent, Infallible>(
+            SseEvent::default()
+                .event("heartbeat")
+                .data(r#"{"ok":true,"phase":"open"}"#)
+        );
+
         // Prime the seen-ids set with whatever the lane has now,
         // optionally rewinding to `Last-Event-ID` so the client gets
         // events newer than that point on reconnect. Without rewind,
