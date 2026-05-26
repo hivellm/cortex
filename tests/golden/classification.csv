@@ -1,0 +1,11 @@
+id,envelope_json,expected_kind
+cl-001,"{""tool"":""claude-code"",""payload"":{""user_message"":""please fix the failing auth test"",""assistant_message"":""patched the JWT cache""}}",Turn
+cl-002,"{""tool"":""claude-code"",""payload"":{""tool_name"":""Bash"",""input"":{""command"":""cargo test""}}}",ToolCall
+cl-003,"{""tool"":""cortex-cli"",""payload"":{""decision_id"":""DEC-1"",""title"":""Adopt HNSW"",""status"":""accepted""}}",Decision
+cl-004,"{""tool"":""claude-code"",""payload"":{""agent_type"":""researcher"",""prompt"":""survey the codebase""}}",AgentCall
+cl-005,"{""tool"":""rulebook"",""payload"":{""memory_type"":""preference"",""body"":""user prefers terse responses""}}",Memory
+cl-006,"{""tool"":""rulebook"",""payload"":{""knowledge_id"":""K-01"",""title"":""DAG layering pattern"",""kind"":""pattern""}}",Knowledge
+cl-007,"{""tool"":""rulebook"",""payload"":{""learning_id"":""L-01"",""title"":""prefer dedicated tools over Bash"",""source"":""session""}}",Learning
+cl-008,"{""tool"":""claude-code"",""payload"":{""user_message"":""what is the cortex daemon"",""assistant_message"":""it dispatches triggers""}}",Turn
+cl-009,"{""tool"":""claude-code"",""payload"":{""tool_name"":""Edit"",""input"":{""file_path"":""x.rs""}}}",ToolCall
+cl-010,"{""tool"":""cortex-cli"",""payload"":{""decision_id"":""DEC-2"",""title"":""Drop SDK 3.1 path"",""status"":""superseded""}}",Decision

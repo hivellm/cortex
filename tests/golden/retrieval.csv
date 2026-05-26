@@ -1,0 +1,11 @@
+id,query,repo,expected_event_ids
+r-001,how does tier sweep work,cortex,
+r-002,what is ADR-013,cortex,
+r-003,how does the consolidator daemon dispatch triggers,cortex,
+r-004,how is the cortex-adapter heartbeat exposed,cortex,
+r-005,why does the freshness aggregator floor adapter rows,cortex,
+r-006,where do session-grain consolidations write to,cortex,
+r-007,how does cold-tier prune cascade across backends,cortex,
+r-008,what role does event_identity play in the cascade,cortex,
+r-009,which producer trait emits envelopes for the bus,cortex,
+r-010,how does the Sweep trait register a cron job,cortex,

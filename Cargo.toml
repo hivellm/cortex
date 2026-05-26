@@ -12,6 +12,7 @@ members = [
     "crates/cortex-mcp-server",
     "crates/cortex-health",
     "crates/cortex-build",
+    "crates/cortex-eval",
 ]
 
 [workspace.package]

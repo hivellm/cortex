@@ -1,0 +1,94 @@
+name: eval
+
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "tests/golden/**"
+      - ".github/workflows/eval.yml"
+  push:
+    branches:
+      - main
+
+jobs:
+  eval:
+    name: cortex-eval ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [retrieval, consolidation, classification]
+    services:
+      synap:
+        image: hivehub/synap:latest
+        ports: ["15500:15500"]
+      meilisearch:
+        image: getmeili/meilisearch:v1.10
+        env:
+          MEILI_MASTER_KEY: cortex-dev-master-key
+          MEILI_ENV: development
+        ports: ["7700:7700"]
+    env:
+      CORTEX_GIT_SHA: ${{ github.sha }}
+      MEILI_MASTER_KEY: cortex-dev-master-key
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build cortex-eval
+        run: cargo build --release -p cortex-eval
+      - name: Start cortex-api stack
+        run: |
+          cargo run --release -p cortex-api -- --bind 0.0.0.0:17000 &
+          # Wait for cortex-api health endpoint
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:17000/v1/status >/dev/null; then break; fi
+            sleep 1
+          done
+      - name: Fetch baseline (from main branch artifact)
+        id: baseline
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: eval-baseline-${{ matrix.suite }}
+          branch: main
+          workflow: eval.yml
+          path: baseline/
+      - name: Run suite (with regression gate when baseline present)
+        run: |
+          BASELINE_FLAG=""
+          if [ -f "baseline/${{ matrix.suite }}.json" ]; then
+            BASELINE_FLAG="--baseline baseline/${{ matrix.suite }}.json"
+            echo "Comparing against main baseline."
+          else
+            echo "No baseline available — running advisory mode (acceptance floor only)."
+          fi
+          ./target/release/cortex-eval \
+            --suite ${{ matrix.suite }} \
+            --golden tests/golden/${{ matrix.suite }}.csv \
+            --output json \
+            $BASELINE_FLAG \
+            > report.json
+      - name: Upload report as baseline (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-baseline-${{ matrix.suite }}
+          path: report.json
+          retention-days: 90
+      - name: Upload report (PR diagnostics)
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-pr-${{ matrix.suite }}
+          path: report.json
+          retention-days: 14

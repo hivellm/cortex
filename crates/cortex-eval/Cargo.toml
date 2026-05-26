@@ -1,0 +1,31 @@
+[package]
+name = "cortex-eval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Golden-set eval harness for Cortex — retrieval / consolidation / classification quality regression gate (phase14c, ADR-018)."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "cortex-eval"
+path = "src/bin/cortex-eval.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+csv = "1.3"
+reqwest = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
