@@ -284,6 +284,51 @@ crates/cortex-mcp-server/
 - `PreThinkingTool` — calls `cortex_pre_thinking::pipeline::run` with a `QueryFn` that POSTs to `<api_url>/v1/query`.
 - `StatusTool` — reads `<api_url>/v1/status` (or the adapter's overflow WAL gauge file directly when the API is unreachable).
 
+### Phase19 — granular tool surface (registry 13 → 29)
+
+The MCP registry ships 29 tools after phase19. The 13 baseline
+tools (`cortex_query`, `cortex_pre_thinking`, `cortex_status`,
+`cortex_audit`, `cortex_capture_memory`, `cortex_session_replay`,
+`cortex_forget`, `cortex_keyword_search`, `cortex_vector_search`,
+`cortex_graph_query`, `cortex_active_work`,
+`cortex_similar_sessions`, `cortex_decision_chain`) keep their
+spec-11 / spec-12 / spec-22 contracts unchanged. Phase19 adds
+the 16 granular verbs below — every entry points at the matching
+endpoint on `cortex-api` (full wire shape + scope deviations
+live in spec 22 "Phase19 — Granular tool surface").
+
+#### Group A — envelope-shape granularity
+
+- `cortex_events_by_kind` → `POST /v1/search/events`
+- `cortex_session_timeline` → `GET /v1/sessions/{session_id}/timeline`
+- `cortex_tool_calls` → `POST /v1/search/tool-calls`
+- `cortex_files_touched` → `GET /v1/sessions/{session_id}/files-touched` OR `POST /v1/search/files-touched`
+- `cortex_topic_search` → `POST /v1/topic-cards/search`
+
+#### Group B — consolidation-first
+
+- `cortex_consolidation_get` → `GET /v1/consolidations/{id}`
+- `cortex_consolidations_recent` → `GET /v1/consolidations/recent`
+- `cortex_consolidations_by_entity` → `POST /v1/consolidations/by-entity`
+- `cortex_consolidations_search` → `POST /v1/consolidations/search`
+- `cortex_consolidation_lineage` → `GET /v1/consolidations/{id}/lineage`
+- `cortex_consolidations_diff` → `GET /v1/consolidations/diff`
+
+#### Group C — governance + telemetry
+
+- `cortex_law_violations` → `POST /v1/laws/violations`
+- `cortex_feedback_signals` → `POST /v1/feedback/list`
+- `cortex_decision_search` → `POST /v1/decisions/search`
+- `cortex_consolidation_costs` → `POST /v1/consolidations/costs`
+- `cortex_query_explain` → `POST /v1/query/explain`
+
+Each tool is implemented by a struct in
+`crates/cortex-mcp-server/src/tools.rs`, re-exported on
+`cortex_mcp_server::lib`, and registered in
+`ToolRegistry::default_set()`. The `tools/list` round-trip
+asserts `arr.len() == 29`
+(`crates/cortex-mcp-server/src/server.rs::tests::tools_list_returns_twentynine_descriptors`).
+
 ### Failure modes
 
 | Failure                                        | Handling                                                                |
@@ -313,7 +358,7 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 - [ ] `cortex-plugin/skills/`, `cortex-plugin/agents/`, `cortex-plugin/commands/` each contain the documented files; YAML frontmatter parses on every agent.
 - [ ] `cortex-mcp-server validate ./cortex-plugin` exits 0 on a clean tree and non-zero with a clear message when a required file is missing or malformed.
 - [ ] Spawning `cortex-mcp-server serve` and sending an `initialize` over stdio returns a valid response with `tools` capability advertised.
-- [ ] `tools/list` returns three descriptors; `cortex.query`'s descriptor matches `cortex_api::tool_descriptor()` byte-for-byte.
+- [ ] `tools/list` returns 29 descriptors (13 baseline + 16 phase19 granular verbs); `cortex_query`'s descriptor matches `cortex_api::tool_descriptor()` byte-for-byte.
 - [ ] `tools/call` for `cortex.query` against a wiremock'd `cortex-api` returns the spec-11 response shape.
 - [ ] `tools/call` for `cortex.pre_thinking` returns a Markdown bundle with the spec-12 `<!-- cortex: ... query_id=... -->` leading comment.
 - [ ] `tools/call` for `cortex.status` returns daemon pid + queue depth + WAL bytes.

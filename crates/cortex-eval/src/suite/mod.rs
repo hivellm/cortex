@@ -7,6 +7,7 @@
 
 pub mod classification;
 pub mod consolidation;
+pub mod mcp_search;
 pub mod retrieval;
 
 /// Canonical suite identifier. The CLI's `--suite` flag parses
@@ -22,6 +23,10 @@ pub enum SuiteName {
     /// `tests/golden/classification.csv` → per-kind F1 + macro-F1
     /// against the classifier worker.
     Classification,
+    /// Phase19 §5.3 — `tests/golden/mcp_search.csv` → recall@5
+    /// against each granular MCP tool (entity / topic / file-touched
+    /// lookups + the rest).
+    McpSearch,
 }
 
 impl SuiteName {
@@ -31,6 +36,7 @@ impl SuiteName {
             "retrieval" => Some(Self::Retrieval),
             "consolidation" => Some(Self::Consolidation),
             "classification" => Some(Self::Classification),
+            "mcp_search" => Some(Self::McpSearch),
             _ => None,
         }
     }
@@ -41,6 +47,7 @@ impl SuiteName {
             Self::Retrieval => "retrieval",
             Self::Consolidation => "consolidation",
             Self::Classification => "classification",
+            Self::McpSearch => "mcp_search",
         }
     }
 }
@@ -62,7 +69,7 @@ mod tests {
 
     #[test]
     fn suite_name_parse_round_trip() {
-        for s in ["retrieval", "consolidation", "classification"] {
+        for s in ["retrieval", "consolidation", "classification", "mcp_search"] {
             assert_eq!(SuiteName::parse(s).unwrap().as_str(), s);
         }
         assert!(SuiteName::parse("garbage").is_none());

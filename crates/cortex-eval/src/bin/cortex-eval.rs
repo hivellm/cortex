@@ -18,7 +18,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cortex_eval::report::{is_regression, SuiteReport};
-use cortex_eval::suite::{classification, consolidation, retrieval, AcceptanceVerdict, SuiteName};
+use cortex_eval::suite::{
+    classification, consolidation, mcp_search, retrieval, AcceptanceVerdict, SuiteName,
+};
 use cortex_eval::CI_REGRESSION_THRESHOLD;
 use tracing_subscriber::EnvFilter;
 
@@ -107,6 +109,7 @@ async fn run(cli: &Cli) -> Result<ExitCode> {
         SuiteName::Retrieval => run_retrieval(&http, &api_url, &golden).await?,
         SuiteName::Consolidation => run_consolidation(&http, &api_url, &golden).await?,
         SuiteName::Classification => run_classification(&http, &classifier_url, &golden).await?,
+        SuiteName::McpSearch => run_mcp_search(&http, &api_url, &golden).await?,
     };
 
     emit(&report, &cli.output)?;
@@ -288,6 +291,129 @@ async fn run_classification(
     let report = classification::build_report(&rows, &predicted);
     let verdict = classification::classification_acceptance(&report);
     Ok((report, verdict))
+}
+
+/// Phase19 §5.3 — `mcp_search` driver. Routes each row to the
+/// matching `cortex-api` endpoint per `row.tool` and folds the
+/// observed top-K identifier list back through `build_report`. A
+/// row whose `tool` is unknown is treated as empty so the suite
+/// still completes (the recall floor catches it).
+async fn run_mcp_search(
+    http: &reqwest::Client,
+    api_url: &str,
+    golden: &std::path::Path,
+) -> Result<(SuiteReport, AcceptanceVerdict)> {
+    let rows = mcp_search::load_csv(golden)?;
+    let mut observed: Vec<Vec<String>> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let ids = run_mcp_search_row(http, api_url, row).await;
+        observed.push(ids);
+    }
+    let report = mcp_search::build_report(&rows, &observed);
+    let verdict = mcp_search::mcp_search_acceptance(&report);
+    Ok((report, verdict))
+}
+
+/// Per-row dispatch. Returns the top-K identifier list. Each tool
+/// maps query/value semantics + the response shape; unknown tools
+/// log a warning and return an empty Vec.
+async fn run_mcp_search_row(
+    http: &reqwest::Client,
+    api_url: &str,
+    row: &mcp_search::McpSearchRow,
+) -> Vec<String> {
+    let base = api_url.trim_end_matches('/');
+    let (url, body, key) = match row.tool.as_str() {
+        "cortex_events_by_kind" => (
+            format!("{base}/v1/search/events"),
+            serde_json::json!({"kind": row.query, "repo": row.repo, "limit": 5}),
+            "event_id",
+        ),
+        "cortex_tool_calls" => (
+            format!("{base}/v1/search/tool-calls"),
+            serde_json::json!({"tool_name": row.query, "repo": row.repo, "limit": 5}),
+            "event_id",
+        ),
+        "cortex_topic_search" => (
+            format!("{base}/v1/topic-cards/search"),
+            serde_json::json!({"topic_prefix": row.query, "repo": row.repo, "limit": 5}),
+            "event_id",
+        ),
+        "cortex_consolidations_recent" => (
+            format!("{base}/v1/consolidations/recent?limit=5&repo={}", row.repo),
+            serde_json::Value::Null,
+            "event_id",
+        ),
+        "cortex_consolidations_by_entity" => (
+            format!("{base}/v1/consolidations/by-entity"),
+            serde_json::json!({
+                "entity": {"kind": "decision_id", "value": row.query},
+                "limit": 5
+            }),
+            "event_id",
+        ),
+        "cortex_consolidations_search" => (
+            format!("{base}/v1/consolidations/search"),
+            serde_json::json!({"query": row.query, "repo": row.repo, "k": 5}),
+            "event_id",
+        ),
+        "cortex_decision_search" => (
+            format!("{base}/v1/decisions/search"),
+            serde_json::json!({"status": row.query, "repo": row.repo, "limit": 5}),
+            "event_id",
+        ),
+        "cortex_law_violations" => (
+            format!("{base}/v1/laws/violations"),
+            serde_json::json!({"repo": row.repo, "law_id": row.query, "limit": 5}),
+            "event_id",
+        ),
+        "cortex_files_touched" => (
+            format!("{base}/v1/search/files-touched"),
+            serde_json::json!({"repo": row.repo, "limit": 5}),
+            "path",
+        ),
+        // Tools without a stable "top-K id list" semantic
+        // (`session_timeline`, `consolidation_get`, `consolidation_lineage`,
+        // `consolidations_diff`, `feedback_signals`,
+        // `consolidation_costs`, `query_explain`) are exercised by
+        // their wiremock ITs; the eval suite skips them so the
+        // recall@5 metric stays interpretable.
+        other => {
+            tracing::warn!(
+                row = %row.id,
+                tool = %other,
+                "mcp_search: tool not wired into eval driver, returning empty"
+            );
+            return Vec::new();
+        }
+    };
+    let resp = if body.is_null() {
+        http.get(&url).send().await
+    } else {
+        http.post(&url).json(&body).send().await
+    };
+    let resp = match resp {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(row = %row.id, error = %err, "mcp_search: HTTP error");
+            return Vec::new();
+        }
+    };
+    if !resp.status().is_success() {
+        tracing::warn!(row = %row.id, status = %resp.status(), "mcp_search: non-2xx");
+        return Vec::new();
+    }
+    let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    let hits = json
+        .get("hits")
+        .or_else(|| json.get("paths"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    hits.iter()
+        .filter_map(|h| h.get(key).and_then(|v| v.as_str()).map(String::from))
+        .take(5)
+        .collect()
 }
 
 #[cfg(test)]

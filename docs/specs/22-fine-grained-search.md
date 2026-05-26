@@ -291,3 +291,91 @@ curl -sS -X POST http://127.0.0.1:17000/v1/search/keyword \
   -H 'content-type: application/json' \
   -d '{"index":"cortex-cortex-consolidations","q":"","limit":3}'
 ```
+
+## Phase19 — Granular tool surface (16 new tools)
+
+> **Status**: 🟢 implemented (phase 19). Builds on the three
+> `/v1/search/{keyword,vector,graph}` proxies above by exposing
+> envelope-shape and consolidation-first verbs the fused
+> `cortex_query` cannot answer without post-filtering through a
+> pre-thinking budget. Registry size lands at 29 (13 baseline +
+> 16 phase19 verbs).
+
+### Group A — envelope-shape granularity (5)
+
+| Tool | Wire shape | Reads |
+|------|------------|-------|
+| `cortex_events_by_kind` | `POST /v1/search/events {kind, repo?, session_id?, since?, until?, q, limit≤50}` | Kind-routed Meili index per `kind_to_index()`; `occurred_at_ms` filter |
+| `cortex_session_timeline` | `GET /v1/sessions/{session_id}/timeline?limit≤200&kind?` | `cortex_storage::archive::scan_envelopes_by_session` (Parquet archive walk on a blocking task) |
+| `cortex_tool_calls` | `POST /v1/search/tool-calls {tool_name?, outcome?, repo?, since?, until?, q, limit≤50}` | `cortex_tool_calls` Meili index; `outcome` discriminator pinned to writer vocab (`ok`/`transient`/`rejected`/`task_failed`/`error`) |
+| `cortex_files_touched` | `GET /v1/sessions/{session_id}/files-touched?limit≤100` OR `POST /v1/search/files-touched {repo, since, until, limit≤100}` | Per-session: `scan_envelopes_by_session`; window: `walk_envelopes` filtered to `kind=ToolCall`. `touched: Vec<TouchedArtifact>` preferred; fallback to `input.{path,file_path,filename,file}` with `classify_op` |
+| `cortex_topic_search` | `POST /v1/topic-cards/search {topic_prefix, repo?, q, limit≤30}` | `cortex_topic_cards` Meili `topics` filter (trailing `:` stripped to bare-tag literal) |
+
+### Group B — consolidation-first (6)
+
+| Tool | Wire shape | Reads |
+|------|------------|-------|
+| `cortex_consolidation_get` | `GET /v1/consolidations/{id}` | ONE Meili call with OR filter `event_id="X" OR ext.consolidation.consolidation_id="X"` so re-emitted envelopes resolve via stable producer id |
+| `cortex_consolidations_recent` | `GET /v1/consolidations/recent?repo&grain&since&until&limit≤30` | `cortex_consolidations` Meili sorted `occurred_at:desc`; grain vocab pinned to producer enum |
+| `cortex_consolidations_by_entity` | `POST /v1/consolidations/by-entity {entity:{kind, value}, limit≤30}` | `repo`/`model` → authoritative Meili filter; `decision_id`/`file`/`function` → Meili keyword `q` fallback. `match_strategy` echoed |
+| `cortex_consolidations_search` | `POST /v1/consolidations/search {query, k≤20, intent_hint?, repo?, grain?}` | BM25 over `cortex_consolidations` (vector+RRF deferred to a future commit that wires `kinds` scope into `cortex_query`). `match_strategy = "bm25"` |
+| `cortex_consolidation_lineage` | `GET /v1/consolidations/{id}/lineage` | Doc-only projection: `topics` (`session:`/`file:`/`decision:`) + `DEC-\d{3,}` regex over title/summary/body + `ext.consolidation.model`. `match_strategy = "doc_only"` |
+| `cortex_consolidations_diff` | `GET /v1/consolidations/diff?since_ts=<ms>&repo&limit≤200` | `cortex_consolidations` Meili sorted `occurred_at:asc` (schema lacks `accumulated_at`); poll-cursor pattern |
+
+### Group C — governance + telemetry (5)
+
+| Tool | Wire shape | Reads |
+|------|------------|-------|
+| `cortex_law_violations` | `POST /v1/laws/violations {repo, session_id?, law_id?, since?, until?, limit≤50}` | Per-repo `cortex-<slug>-governance` Meili index with `kind="law_violation"` pinned. `repo` REQUIRED (global `cortex_laws` schema is filter-poor) |
+| `cortex_feedback_signals` | `POST /v1/feedback/list {helpful?, intent?, since?, until?, limit≤50}` | `pre_thinking_feedback` SQLite table via `MetadataStore::list_pre_thinking_feedback`. `repo` filter rejected with `bad_input` (table has no repo column) |
+| `cortex_decision_search` | `POST /v1/decisions/search {q?, status?, tag?, repo?, since?, until?, limit≤50}` | Global `cortex_decisions` Meili index; `tag` mapped to `topics` filterable. `supersedes`/`superseded_by` rejected — pivot via `cortex_decision_chain` |
+| `cortex_consolidation_costs` | `POST /v1/consolidations/costs {since, until, group_by:["grain"\|"model"\|"day"], repo?}` | `cortex_consolidations` Meili (cap 500 hits, `truncated` flag); local fold per axis. Cost cents/tokens `null` until writer projection lands |
+| `cortex_query_explain` | `POST /v1/query/explain {query, intent?, scope?}` | Dispatches `state.service.handle_with_headers(...)` and projects into `{per_lane_hits[], fusion_math{rrf_k, alpha, recency_decay_lambda, drops[]}, final_envelope}`. `match_strategy = "envelope_only"` |
+
+### Error taxonomy
+
+All 16 verbs use the canonical reason set
+(`crates/cortex-mcp-server/src/tools.rs`):
+
+| Reason | HTTP | Meaning |
+|--------|------|---------|
+| `bad_input` | 400 | Caller-side validation failure (unknown enum, malformed RFC3339, missing required field, schema-unsupported filter) |
+| `invalid_input` | — | Same as `bad_input` but surfaced through the MCP JSON-RPC `error` channel BEFORE the round-trip (MCP-side validation) |
+| `not_found` | 404 | The id resolved nowhere (e.g. `cortex_consolidation_get` for an unknown ULID) |
+| `api_unreachable` | 502 | The upstream backend (Meili / Vectorizer / Nexus) refused the connection |
+| `api_http_error` | 502 | The upstream backend returned a non-2xx status the proxy could not classify |
+| `tool_timeout` | 504 | Phase14i-shaped timeout fired while waiting for the backend response |
+| `budget_exceeded` | 413 | Phase11c byte-budget clipper trimmed the response below the caller's `budget_bytes` floor |
+| `rate_limited` | 429 | Caller's quota exhausted; `retry-after` header carries the back-off |
+| `scope_forbidden` | 403 | ACL denied the resolved scope (only `cortex_query_explain` surfaces this; the other verbs do not run through the ACL gate) |
+
+`match_strategy` (on the four tools that surface it —
+`cortex_consolidations_by_entity` / `cortex_consolidations_search`
+/ `cortex_consolidation_lineage` / `cortex_consolidation_costs` /
+`cortex_query_explain`) signals which projection produced the
+response so callers can detect partial / placeholder shapes
+without re-running the request. Values land in
+`{filter, q, bm25, doc_only, envelope_only}` today; the reserved
+`hybrid_rrf` / `with_lane_hits` / `joined` values track the
+follow-up wiring documented inline in each handler module.
+
+### Tests (phase19 §5)
+
+| Suite | Count | Covers |
+|-------|-------|--------|
+| `cortex-api::search::{events_by_kind,session_timeline,tool_calls,files_touched,topic_search}::tests` | 32 | filter assemblers, kind→index mapping, clamp_limit, RFC3339 parsing, classify_op |
+| `cortex-api::search::{consolidation_get,consolidations_recent,by_entity,search,lineage,diff}::tests` | 40 | id validators, grain/status/intent vocabs, build_filter shapes, plan_search routing, lineage extractors |
+| `cortex-api::search::{law_violations,decision_search,consolidation_costs,query_explain}::tests` | 25 | per-repo index uid, ADR lifecycle vocab, axis vocab + fold, drops/per-lane explain |
+| `cortex-api::feedback::tests` | 5 | UPSERT round-trip; SQL list lands in `cortex-storage` |
+| `cortex-storage::metadata::tests::list_pre_thinking_feedback*` | 1 | dynamic SQL: filter coverage + newest-first ordering |
+| `cortex-mcp-server::tests::*_it` (wiremock) | 78 | one IT file per tool: happy path, bad_input, api_unreachable, descriptor pin |
+| `cortex-mcp-server::server::tests::tools_list_returns_twentynine_descriptors` | 1 | `tools/list` round-trip post-phase19 |
+| `cortex-mcp-server::transport_stdio::tests::round_trips_initialize_and_tools_list_over_pipe` | 1 | stdio transport sees 29 tools |
+
+Live smoke verifying the consolidation-first surface
+end-to-end against the running stack:
+
+```bash
+curl -sS -X GET 'http://127.0.0.1:17000/v1/consolidations/recent?repo=cortex&grain=session&limit=3' \
+  -H 'content-type: application/json'
+```

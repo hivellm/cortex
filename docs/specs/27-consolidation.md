@@ -105,3 +105,49 @@ finishes before the loop re-checks the signal so producer-checkpoint
 writes never tear. The bin wires Ctrl-C via `tokio::signal::ctrl_c`
 plus SIGTERM via `tokio::signal::unix::SignalKind::terminate` on
 unix; Windows falls back to the Ctrl-C path only.
+
+## §7 MCP surface (phase19 consolidation-first verbs)
+
+Phase19 lands six consolidation-scoped MCP verbs against the
+`cortex_consolidations` Meili index that this daemon writes
+to. Full wire shape lives in spec 22 "Phase19 — Granular tool
+surface § Group B"; pointers from the daemon's perspective:
+
+- `cortex_consolidation_get` — single-doc lookup by `event_id`
+  OR producer-stable `consolidation_id`; resolves re-emitted
+  envelopes via OR filter
+  `event_id="X" OR ext.consolidation.consolidation_id="X"`.
+- `cortex_consolidations_recent` — chronological feed sorted
+  `occurred_at:desc` with optional `repo`/`grain` filter; grain
+  vocab pinned to the producer enum
+  (`ConsolidationGrain::{Session, Topic, DecisionTrace}` —
+  §1).
+- `cortex_consolidations_by_entity` — surfaces consolidations
+  referencing a `file`/`function`/`decision_id`/`repo`/`model`
+  via filter (`repo`/`model`) or keyword fallback
+  (everything else; classifier-extracted entities ship to
+  Nexus, not Meili).
+- `cortex_consolidations_search` — BM25 over title /
+  summary_markdown / topics / repo; reserved for hybrid+RRF
+  once `cortex_query` exposes a `kinds=consolidation` scope.
+- `cortex_consolidation_lineage` — doc-only projection
+  (`source_session_ids` from `topics:session:*`, `decisions`
+  from `topics:decision:*` ∪ `DEC-\d{3,}` body regex, `files`
+  from `topics:file:*`, `cost.model` from
+  `ext.consolidation.model`). Per-consolidation cost +
+  source-event-ids require a writer-side projection (§4 ledger
+  is in-process per-grain).
+- `cortex_consolidations_diff` — `occurred_at:asc` poll cursor
+  for "new consolidations since `since_ts`" (the schema lacks
+  `accumulated_at`, see deviation note in the handler).
+
+The cost-telemetry tool `cortex_consolidation_costs`
+aggregates counts from the same `cortex_consolidations` Meili
+index (NOT the in-process `CostLedger` of §4, which is not
+persisted and not addressable per-consolidation). Live spend
+remains on `/v1/health/coverage`.
+
+Every consolidation-first verb is exercised end-to-end by a
+wiremock IT in `crates/cortex-mcp-server/tests/`; cross-tool
+ordering is verified by the registry-size assertion in
+`crates/cortex-mcp-server/src/server.rs::tests`.
