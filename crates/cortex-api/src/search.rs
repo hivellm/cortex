@@ -14,6 +14,7 @@ pub mod cache;
 pub mod consolidation_get;
 pub mod consolidations_by_entity;
 pub mod consolidations_recent;
+pub mod consolidations_search;
 pub mod events_by_kind;
 pub mod files_touched;
 pub mod fusion;

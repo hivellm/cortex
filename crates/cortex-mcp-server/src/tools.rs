@@ -268,6 +268,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationGetTool::new()),
                 Arc::new(ConsolidationsRecentTool::new()),
                 Arc::new(ConsolidationsByEntityTool::new()),
+                Arc::new(ConsolidationsSearchTool::new()),
             ],
         }
     }
@@ -1929,6 +1930,114 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §2.4 — cortex_consolidations_search
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/consolidations/search`.
+pub struct ConsolidationsSearchTool;
+
+impl ConsolidationsSearchTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationsSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationsSearchTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidations_search"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidations_search",
+            "description": "Text-driven search restricted to the `cortex_consolidations` Meili index. Returns native consolidation envelopes without going through the `cortex_query` fusion projection. Today the lane is BM25-only (vector + RRF lands when the orchestrator exposes a `kind=consolidation` scope); the response surfaces `match_strategy = \"bm25\"` so callers can tell what actually ran. Optional `repo` / `grain` (`session`/`topic`/`decision_trace`) filters narrow the corpus; `intent_hint` is accepted + echoed for future lane-weight tuning.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {"type": "string", "description": "Free-text query against title / summary_markdown / topics / repo."},
+                    "k": {"type": "integer", "minimum": 1, "maximum": 20, "default": 10},
+                    "intent_hint": {
+                        "type": "string",
+                        "enum": [
+                            "pre_change_context", "decision_lookup", "similar_problems",
+                            "law_check", "free_search", "explain"
+                        ],
+                        "description": "Optional intent label (mirrors `cortex_query` Intent). Reserved for future RRF lane-weight tuning."
+                    },
+                    "repo": {"type": "string", "description": "Optional `repo` filter."},
+                    "grain": {
+                        "type": "string",
+                        "enum": ["session", "topic", "decision_trace"],
+                        "description": "Optional grain filter — matches the producer enum."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let query = args
+            .get("query")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`query` is required"))?
+            .to_string();
+        if let Some(g) = args
+            .get("grain")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !["session", "topic", "decision_trace"].contains(&g) {
+                return Err(ToolError::invalid_input(format!(
+                    "unknown grain `{g}`; allowed: session, topic, decision_trace"
+                )));
+            }
+        }
+        if let Some(h) = args
+            .get("intent_hint")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if ![
+                "pre_change_context",
+                "decision_lookup",
+                "similar_problems",
+                "law_check",
+                "free_search",
+                "explain",
+            ]
+            .contains(&h)
+            {
+                return Err(ToolError::invalid_input(format!(
+                    "unknown intent_hint `{h}`"
+                )));
+            }
+        }
+        let mut body = json!({ "query": query });
+        for field in ["k", "intent_hint", "repo", "grain"] {
+            if let Some(v) = args.get(field) {
+                if !v.is_null() {
+                    body[field] = v.clone();
+                }
+            }
+        }
+        proxy_search(ctx, "/v1/consolidations/search", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.5 — cortex_topic_search
 // ---------------------------------------------------------------------
 
@@ -2351,12 +2460,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentyone_tools_with_unique_names() {
+    fn registry_returns_twentytwo_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            21,
-            "phase19 §2.3 adds cortex_consolidations_by_entity (20 -> 21)"
+            22,
+            "phase19 §2.4 adds cortex_consolidations_search (21 -> 22)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2381,6 +2490,7 @@ mod tests {
             "cortex_consolidation_get",
             "cortex_consolidations_recent",
             "cortex_consolidations_by_entity",
+            "cortex_consolidations_search",
         ] {
             assert!(
                 names.contains(&expected),

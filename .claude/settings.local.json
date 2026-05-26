@@ -35,7 +35,12 @@
       "mcp__plugin_playwright_playwright__browser_console_messages",
       "mcp__plugin_playwright_playwright__browser_network_requests",
       "mcp__plugin_playwright_playwright__browser_network_request",
-      "mcp__plugin_playwright_playwright__browser_evaluate"
+      "mcp__plugin_playwright_playwright__browser_evaluate",
+      "PowerShell(Resolve-DnsName -Name ar-infra.email -Type TXT)",
+      "PowerShell(Resolve-DnsName -Name _dmarc.ar-infra.email -Type TXT)",
+      "PowerShell(Resolve-DnsName -Name 119.24.121.74.in-addr.arpa -Type PTR)",
+      "PowerShell(@\\('default','selector1','selector2','google','mail','s1','s2','k1','ses','amazonses'\\) | ForEach-Object { $sel = $_; try { $r = Resolve-DnsName -Name \"$sel._domainkey.ar-infra.email\" -Type TXT -ErrorAction Stop; \"${sel}: $\\($r.Strings -join ''\\)\" } catch { \"${sel}: -\" } })",
+      "PowerShell(Resolve-DnsName -Name ar-infra.email -Type MX)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

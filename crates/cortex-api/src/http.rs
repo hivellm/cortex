@@ -207,6 +207,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::consolidations_by_entity::handle_consolidations_by_entity),
         )
         .route(
+            "/v1/consolidations/search",
+            post(crate::consolidations_search::handle_consolidations_search),
+        )
+        .route(
             "/v1/consolidations/{id}",
             get(crate::consolidation_get::handle_consolidation_get),
         )
