@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cortex_api::health::pre_thinking::{
-    IntentByteQuantilesView, IntentHelpfulRateView, PreThinkingHealthReport,
-    PreThinkingHealthSource,
+    IntentByteQuantilesView, IntentHelpfulRateView, IntentMismatchView,
+    PreThinkingHealthReport, PreThinkingHealthSource,
 };
 
 use crate::breaker::{Breaker, BreakerState};
@@ -78,6 +78,13 @@ impl PreThinkingHealthSource for LivePreThinkingHealthSource {
                 )
             })
             .collect();
+        let intent_mismatch_top = self
+            .metrics
+            .intent_mismatch_snapshot()
+            .into_iter()
+            .map(|(from, to, count)| IntentMismatchView { from, to, count })
+            .collect();
+        let rewriter_path_total = self.metrics.rewriter_path_snapshot();
         PreThinkingHealthReport {
             breaker_state: state.to_string(),
             failures_in_window: self.breaker.failures_in_window(),
@@ -85,6 +92,8 @@ impl PreThinkingHealthSource for LivePreThinkingHealthSource {
             fail_open_sum,
             bundle_bytes_per_intent,
             helpful_rate_per_intent,
+            intent_mismatch_top,
+            rewriter_path_total,
         }
     }
 }

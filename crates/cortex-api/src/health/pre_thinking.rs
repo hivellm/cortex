@@ -88,6 +88,33 @@ pub struct PreThinkingHealthReport {
     /// Phase14f §4.2 — per-intent helpful-rate counters.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub helpful_rate_per_intent: BTreeMap<String, IntentHelpfulRateView>,
+    /// Phase14g §2.1 — `(from, to, count)` triples sorted by
+    /// count desc. Drives the `cortex-ops intent-stats` doctor
+    /// table.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub intent_mismatch_top: Vec<IntentMismatchView>,
+    /// Phase14g §3.3 — per-path rewriter cascade counts. Paths:
+    /// `sonnet_hit`, `sonnet_cache_hit`, `sonnet_timeout`,
+    /// `sonnet_error`, `deterministic_fallback`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rewriter_path_total: BTreeMap<String, u64>,
+}
+
+/// Phase14g §2.3 — per-pair intent mismatch row.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
+pub struct IntentMismatchView {
+    /// Intent the bundle was routed to.
+    pub from: String,
+    /// Intent the operator corrected to (or the model's actual
+    /// intent inferred from feedback).
+    pub to: String,
+    /// Total mismatch count for this `(from, to)` pair.
+    pub count: u64,
 }
 
 /// Source the handler reads from.
@@ -111,6 +138,8 @@ impl PreThinkingHealthSource for UnwiredPreThinkingHealthSource {
             fail_open_sum: 0,
             bundle_bytes_per_intent: BTreeMap::new(),
             helpful_rate_per_intent: BTreeMap::new(),
+            intent_mismatch_top: Vec::new(),
+            rewriter_path_total: BTreeMap::new(),
         }
     }
 }
@@ -190,6 +219,8 @@ mod tests {
             fail_open_sum: 5,
             bundle_bytes_per_intent: BTreeMap::new(),
             helpful_rate_per_intent: BTreeMap::new(),
+            intent_mismatch_top: Vec::new(),
+            rewriter_path_total: BTreeMap::new(),
         };
         let state = PreThinkingHealthState {
             source: Arc::new(StubSource(expected.clone())),

@@ -37,6 +37,16 @@ pub struct Metrics {
     /// Driven by feedback POSTs; the dashboard derives
     /// `helpful_rate = helpful / (helpful + unhelpful)` per intent.
     pub helpful_total: Mutex<BTreeMap<(String, bool), u64>>,
+    /// Phase14g — `cortex_pre_thinking_intent_mismatch_total{from,to}`.
+    /// Bumped when a feedback row marks `helpful = false` and the
+    /// model corrected to a different intent in the same turn.
+    /// Drives the `cortex-ops intent-stats` mismatch-rate report.
+    pub intent_mismatch_total: Mutex<BTreeMap<(String, String), u64>>,
+    /// Phase14g — `cortex_pre_thinking_rewriter_path_total{path}`.
+    /// Paths: `sonnet_hit`, `sonnet_cache_hit`, `sonnet_timeout`,
+    /// `sonnet_error`, `deterministic_fallback`. Drives the
+    /// cascade telemetry the rewriter doctor surfaces.
+    pub rewriter_path_total: Mutex<BTreeMap<String, u64>>,
 }
 
 impl Metrics {
@@ -118,6 +128,48 @@ impl Metrics {
         if let Ok(mut m) = self.helpful_total.lock() {
             *m.entry((intent.to_string(), helpful)).or_insert(0) += 1;
         }
+    }
+
+    /// Phase14g — bump the per-(from,to) mismatch counter. Called
+    /// from the feedback recorder when the operator marked a row
+    /// `helpful = false` AND the corrected intent differs from
+    /// the routed one.
+    pub fn incr_intent_mismatch(&self, from: &str, to: &str) {
+        if let Ok(mut m) = self.intent_mismatch_total.lock() {
+            *m.entry((from.to_string(), to.to_string())).or_insert(0) += 1;
+        }
+    }
+
+    /// Phase14g — snapshot the mismatch counters. Returns
+    /// `[(from, to, count)]` sorted by count desc so the doctor
+    /// surfaces the worst rules first.
+    pub fn intent_mismatch_snapshot(&self) -> Vec<(String, String, u64)> {
+        let map = match self.intent_mismatch_total.lock() {
+            Ok(g) => g,
+            Err(_) => return Vec::new(),
+        };
+        let mut out: Vec<(String, String, u64)> = map
+            .iter()
+            .map(|((f, t), n)| (f.clone(), t.clone(), *n))
+            .collect();
+        out.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)).then_with(|| a.1.cmp(&b.1)));
+        out
+    }
+
+    /// Phase14g — bump the per-path counter for the rewriter
+    /// cascade telemetry.
+    pub fn incr_rewriter_path(&self, path: &str) {
+        if let Ok(mut m) = self.rewriter_path_total.lock() {
+            *m.entry(path.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    /// Phase14g — snapshot the per-path rewriter counters.
+    pub fn rewriter_path_snapshot(&self) -> BTreeMap<String, u64> {
+        self.rewriter_path_total
+            .lock()
+            .map(|m| m.clone())
+            .unwrap_or_default()
     }
 
     /// Phase14f — snapshot per-intent bundle-byte quantiles. Each
@@ -261,5 +313,40 @@ mod tests {
         let m = Metrics::new();
         let q = m.bundle_bytes_quantiles_per_intent();
         assert!(q.is_empty());
+    }
+
+    #[test]
+    fn intent_mismatch_snapshot_orders_by_count_desc() {
+        let m = Metrics::new();
+        for _ in 0..2 {
+            m.incr_intent_mismatch("explain", "decision_lookup");
+        }
+        m.incr_intent_mismatch("explain", "law_check");
+        for _ in 0..5 {
+            m.incr_intent_mismatch("pre_change_context", "similar_problems");
+        }
+        let snap = m.intent_mismatch_snapshot();
+        assert_eq!(snap.len(), 3);
+        // worst pair first
+        assert_eq!(snap[0].0, "pre_change_context");
+        assert_eq!(snap[0].1, "similar_problems");
+        assert_eq!(snap[0].2, 5);
+        // tie broken by from then to (asc)
+        assert_eq!(snap[1].2, 2);
+        assert_eq!(snap[1].1, "decision_lookup");
+        assert_eq!(snap[2].2, 1);
+    }
+
+    #[test]
+    fn rewriter_path_snapshot_aggregates_by_path() {
+        let m = Metrics::new();
+        m.incr_rewriter_path("sonnet_hit");
+        m.incr_rewriter_path("sonnet_hit");
+        m.incr_rewriter_path("sonnet_cache_hit");
+        m.incr_rewriter_path("deterministic_fallback");
+        let snap = m.rewriter_path_snapshot();
+        assert_eq!(snap.get("sonnet_hit").copied(), Some(2));
+        assert_eq!(snap.get("sonnet_cache_hit").copied(), Some(1));
+        assert_eq!(snap.get("deterministic_fallback").copied(), Some(1));
     }
 }

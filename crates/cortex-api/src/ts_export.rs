@@ -31,7 +31,8 @@ use ts_rs::TS;
 use crate::dashboard::ConsolidationFilter;
 use crate::health::consolidator::{ConsolidatorHealthReport, GrainHealth};
 use crate::health::pre_thinking::{
-    IntentByteQuantilesView, IntentHelpfulRateView, PreThinkingHealthReport,
+    IntentByteQuantilesView, IntentHelpfulRateView, IntentMismatchView,
+    PreThinkingHealthReport,
 };
 use crate::health::{FreshnessRow, Severity};
 
@@ -47,6 +48,7 @@ pub fn export_all_wire_types() -> Result<(), ts_rs::ExportError> {
     PreThinkingHealthReport::export_all()?;
     IntentByteQuantilesView::export_all()?;
     IntentHelpfulRateView::export_all()?;
+    IntentMismatchView::export_all()?;
     Ok(())
 }
 

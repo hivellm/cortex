@@ -22,6 +22,9 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 regex = { workspace = true }
+# Phase14g — sha2 powers the rewriter cache key
+# (SHA256(query + intent)) used by the cascade.
+sha2 = { workspace = true }
 
 [dev-dependencies]
 cortex-core = { path = "../cortex-core" }

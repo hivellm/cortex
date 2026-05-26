@@ -20,6 +20,7 @@ pub mod implicit_feedback;
 pub mod intent_select;
 pub mod metrics;
 pub mod pipeline;
+pub mod rewriter;
 pub mod scope;
 
 pub use budget::{clip_to_budget, ClippedBundle, TrimStep};

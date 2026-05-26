@@ -38,18 +38,174 @@ pub struct MatchedIntent {
 }
 
 /// The default rule table, in evaluation order. Spec 12 §intent
-/// table. Phase6d — `Explain` first because its keywords
-/// (`how does`, `what is`, …) overlap meaningfully with prompts
-/// that would otherwise drift to `decision_lookup` ("why did") or
-/// the `pre_change_context` fallback. Decision-lookup keywords
-/// stay second so policy questions still beat the navigational
-/// dispatcher when both signals appear.
+/// table. Phase14g — reordered so longer / more-specific compound
+/// rules fire before single-word triggers. Two failure modes the
+/// reorder closes:
+///
+/// 1. **Single-word `explain` eating compound decision queries.**
+///    "explain why did we pick hnsw" used to route to `Explain`
+///    because `explain` matched first; phase14g lifts every
+///    compound decision-lookup rule (`why did we pick`, `decided
+///    to pick`, `chose to`, `we picked`, …) above the
+///    single-word `explain` so the user's actual question wins.
+///
+/// 2. **Common verbs (`change`, `edit`, `modify`) hijacking
+///    pre-change context.** Compound rules like `going to refactor`
+///    and `about to change` now fire first, with the bare verb
+///    `refactor` / `change` / `edit` as the catch-all fallback.
+///
+/// The table is grouped by intent for readability but the
+/// evaluation order is what matters: longest specific compounds
+/// first, then medium-length rules, then single-word fallbacks.
 pub const DEFAULT_RULES: &[Rule] = &[
-    // `Explain` — navigational / explanatory prompts (phase6d).
-    // These need to fire BEFORE `decision_lookup`'s "why" rules so
-    // a prompt like "explain why we picked X" still routes to
-    // explain rather than burning the decisions overlay budget on
-    // a code-reading question.
+    // ─────────── HIGH-SPECIFICITY COMPOUND RULES ───────────
+    // These run BEFORE any single-word triggers. They have ≥3
+    // tokens or anchor on a domain-specific phrase the operator
+    // would not say casually.
+
+    // decision_lookup — compound phrases that name a prior choice.
+    // phase14g §1.2 adds `decided to pick`, `chose to`,
+    // `we picked`, `we chose`, `rationale for`, `history behind`
+    // covering the observed mismatches.
+    Rule {
+        keyword: "why did we pick",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "why did we choose",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "why do we use",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "decided to pick",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "chose to",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "we picked",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "we chose",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "rationale for",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "history behind",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "history of",
+        intent: Intent::DecisionLookup,
+    },
+    Rule {
+        keyword: "who decided",
+        intent: Intent::DecisionLookup,
+    },
+
+    // similar_problems — compound debugging phrases.
+    Rule {
+        keyword: "have we seen",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "did we hit",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "broken since",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "regression on",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "fails intermittently",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "keep failing",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "keeps failing",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "kept failing",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "doesn't work",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "doesnt work",
+        intent: Intent::SimilarProblems,
+    },
+    Rule {
+        keyword: "isn't working",
+        intent: Intent::SimilarProblems,
+    },
+
+    // law_check — compound policy / permission queries.
+    Rule {
+        keyword: "is this allowed",
+        intent: Intent::LawCheck,
+    },
+    Rule {
+        keyword: "am i allowed",
+        intent: Intent::LawCheck,
+    },
+    Rule {
+        keyword: "would this violate",
+        intent: Intent::LawCheck,
+    },
+    Rule {
+        keyword: "is it allowed",
+        intent: Intent::LawCheck,
+    },
+    Rule {
+        keyword: "policy says",
+        intent: Intent::LawCheck,
+    },
+    Rule {
+        keyword: "rules forbid",
+        intent: Intent::LawCheck,
+    },
+    Rule {
+        keyword: "violates law",
+        intent: Intent::LawCheck,
+    },
+
+    // pre_change_context — compound action phrases. Run before
+    // bare verbs so "going to refactor X" is recorded with the
+    // compound trigger for audit.
+    Rule {
+        keyword: "going to refactor",
+        intent: Intent::PreChangeContext,
+    },
+    Rule {
+        keyword: "about to change",
+        intent: Intent::PreChangeContext,
+    },
+
+    // ─────────── EXPLAIN COMPOUNDS ───────────
+    // `Explain` compounds run AFTER the compound decision +
+    // policy + debug phrases above so a compound question that
+    // happens to contain `how does` near a decision keyword still
+    // routes to the more specific intent. Single-word `explain`
+    // sits in the medium tier below.
     Rule {
         keyword: "how does",
         intent: Intent::Explain,
@@ -60,10 +216,6 @@ pub const DEFAULT_RULES: &[Rule] = &[
     },
     Rule {
         keyword: "what's",
-        intent: Intent::Explain,
-    },
-    Rule {
-        keyword: "explain",
         intent: Intent::Explain,
     },
     Rule {
@@ -94,19 +246,11 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "definition of",
         intent: Intent::Explain,
     },
-    // `decision_lookup` — questions about prior choices.
-    Rule {
-        keyword: "why did we pick",
-        intent: Intent::DecisionLookup,
-    },
-    Rule {
-        keyword: "why do we use",
-        intent: Intent::DecisionLookup,
-    },
-    Rule {
-        keyword: "history of",
-        intent: Intent::DecisionLookup,
-    },
+
+    // ─────────── MEDIUM-SPECIFICITY RULES ───────────
+    // 2-token compounds. Decision-lookup queries lose to
+    // navigational `explain` here unless the longer compound
+    // (above) already matched.
     Rule {
         keyword: "why did",
         intent: Intent::DecisionLookup,
@@ -116,7 +260,7 @@ pub const DEFAULT_RULES: &[Rule] = &[
         intent: Intent::DecisionLookup,
     },
     Rule {
-        keyword: "who decided",
+        keyword: "why is",
         intent: Intent::DecisionLookup,
     },
     Rule {
@@ -124,66 +268,18 @@ pub const DEFAULT_RULES: &[Rule] = &[
         intent: Intent::DecisionLookup,
     },
     Rule {
-        keyword: "why is",
-        intent: Intent::DecisionLookup,
-    },
-    // `similar_problems` — debugging signals.
-    Rule {
-        keyword: "have we seen",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "did we hit",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "stuck",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "keep failing",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "keeps failing",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "kept failing",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "doesn't work",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "doesnt work",
-        intent: Intent::SimilarProblems,
-    },
-    Rule {
-        keyword: "isn't working",
-        intent: Intent::SimilarProblems,
-    },
-    // `law_check` — policy / permission queries.
-    Rule {
-        keyword: "is this allowed",
-        intent: Intent::LawCheck,
-    },
-    Rule {
-        keyword: "am i allowed",
-        intent: Intent::LawCheck,
-    },
-    Rule {
-        keyword: "would this violate",
-        intent: Intent::LawCheck,
-    },
-    Rule {
         keyword: "can i ",
         intent: Intent::LawCheck,
     },
+
+    // ─────────── SINGLE-WORD FALLBACKS ───────────
+    // Run last so they only fire when the prompt carries no
+    // compound signal. `explain` deliberately sits in this tier
+    // (was in the top tier before phase14g) so a compound
+    // decision/policy query wins.
     Rule {
-        keyword: "is it allowed",
-        intent: Intent::LawCheck,
+        keyword: "explain",
+        intent: Intent::Explain,
     },
     Rule {
         keyword: "blocked",
@@ -193,9 +289,10 @@ pub const DEFAULT_RULES: &[Rule] = &[
         keyword: "permitted",
         intent: Intent::LawCheck,
     },
-    // `pre_change_context` — code-change signals (last because the
-    // verbs are common; we still want the table to be deterministic
-    // when a prompt contains both kinds of signals).
+    Rule {
+        keyword: "stuck",
+        intent: Intent::SimilarProblems,
+    },
     Rule {
         keyword: "refactor",
         intent: Intent::PreChangeContext,
@@ -301,16 +398,25 @@ mod tests {
     }
 
     #[test]
-    fn first_matching_rule_wins() {
-        // Phase6d: "explain" fires before any of the why-did rules.
-        // A prompt mixing both signals routes to explain — the
-        // navigational intent — because the user is asking us to
-        // read the answer, not consult a decision record.
+    fn compound_decision_lookup_beats_single_word_explain() {
+        // Phase14g §1.4 regression — `"explain why did we pick
+        // hnsw"` used to route to Explain because the bare
+        // `explain` rule fired before any decision-lookup
+        // compound. The reorder puts `why did we pick` ahead of
+        // `explain` so a compound decision query lands on
+        // decision_lookup as the user intended.
+        let m = select_matched("explain why did we pick hnsw");
+        assert_eq!(m.intent, Intent::DecisionLookup);
+        assert_eq!(m.trigger, Some("why did we pick"));
+
+        // The compound `we picked` also beats explain.
         assert_eq!(
             select("explain why we picked hnsw_search?"),
-            Intent::Explain
+            Intent::DecisionLookup
         );
-        // Without `explain`, "why did" still beats `refactor`.
+
+        // Without a decision compound, `why did` (medium tier)
+        // still beats `refactor` (single-word fallback).
         assert_eq!(
             select("why did we refactor hnsw_search?"),
             Intent::DecisionLookup
@@ -457,5 +563,84 @@ mod tests {
         let m = select_matched("hi");
         assert_eq!(m.intent, Intent::PreChangeContext);
         assert_eq!(m.trigger, None);
+    }
+
+    // ───── Phase14g §1.3 — 5 fixture prompts per intent ─────
+
+    #[test]
+    fn pre_change_context_fixtures_route_correctly() {
+        let prompts = [
+            "refactor hnsw_search to take ef per call",
+            "modify the budget clipper to accept per-intent caps",
+            "rewrite the consolidator nightly entrypoint",
+            "going to refactor the lane projection",
+            "about to change the synap topic name",
+        ];
+        for p in prompts {
+            assert_eq!(select(p), Intent::PreChangeContext, "prompt: {p}");
+        }
+    }
+
+    #[test]
+    fn decision_lookup_fixtures_route_correctly() {
+        let prompts = [
+            "why did we pick HNSW over IVF-Flat?",
+            "history of the cortex-classifier-worker timeout config",
+            "who decided to drop the Cypher gate?",
+            "rationale for the 32 KB pre-thinking cap",
+            "we chose Synap because of streams, right?",
+        ];
+        for p in prompts {
+            assert_eq!(select(p), Intent::DecisionLookup, "prompt: {p}");
+        }
+    }
+
+    #[test]
+    fn similar_problems_fixtures_route_correctly() {
+        let prompts = [
+            "have we seen this Synap room-not-found error before?",
+            "did we hit a 401 from vectorizer last week?",
+            "the recall benchmark keeps failing",
+            "broken since the phase14a rebuild",
+            "the producer test fails intermittently after restart",
+        ];
+        for p in prompts {
+            assert_eq!(select(p), Intent::SimilarProblems, "prompt: {p}");
+        }
+    }
+
+    #[test]
+    fn law_check_fixtures_route_correctly() {
+        let prompts = [
+            "is this allowed under the no-shortcuts rule?",
+            "am i allowed to commit with --no-verify?",
+            "would this violate the sequential-editing rule?",
+            "the policy says I cannot rebase published commits",
+            "can i pass --no-verify to git commit?",
+        ];
+        for p in prompts {
+            assert_eq!(select(p), Intent::LawCheck, "prompt: {p}");
+        }
+    }
+
+    #[test]
+    fn explain_fixtures_route_correctly() {
+        let prompts = [
+            "how does the meili fan-out work?",
+            "what is the lane projection contract?",
+            "show me where ef_search is tuned",
+            "where does the audit envelope get stamped?",
+            "find usages of derive_decisions",
+        ];
+        for p in prompts {
+            assert_eq!(select(p), Intent::Explain, "prompt: {p}");
+        }
+    }
+
+    #[test]
+    fn explain_single_word_falls_through_when_no_compound_decision() {
+        // Bare `explain` with no decision compound still routes
+        // to Explain.
+        assert_eq!(select("explain hnsw indexing"), Intent::Explain);
     }
 }

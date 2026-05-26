@@ -989,6 +989,7 @@ export type {
   GrainHealth,
   IntentByteQuantilesView,
   IntentHelpfulRateView,
+  IntentMismatchView,
   PreThinkingHealthReport,
 } from "./api.generated";
 

@@ -37,6 +37,8 @@ mod graph_cmd;
 mod helpers;
 #[path = "cortex-ops/identity_coverage.rs"]
 mod identity_coverage;
+#[path = "cortex-ops/intent_stats.rs"]
+mod intent_stats;
 #[path = "cortex-ops/meili.rs"]
 mod meili;
 #[path = "cortex-ops/meili_audit.rs"]
@@ -699,6 +701,26 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase14g §2.3 — pre-thinking intent routing stats. Fetches
+    /// `/v1/health/pre-thinking` and reports per-(from, to) intent
+    /// mismatch counts + per-path rewriter cascade counts so the
+    /// operator can tune `DEFAULT_RULES` + spot Sonnet outages.
+    IntentStats {
+        /// cortex-api base URL. Defaults to `$CORTEX_API_URL`
+        /// then `http://127.0.0.1:17000`.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Window descriptor (`7d`, `24h`, etc.). Today the
+        /// endpoint returns lifetime counters; the flag is
+        /// accepted for forward-compat and stamped on the report
+        /// header so the operator records what window they
+        /// queried.
+        #[arg(long, default_value = "lifetime")]
+        since: String,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Cross-backend consistency checker. v1 (phase4d) covered the
     /// archive ↔ Meili axis; phase4h widens it to Vectorizer +
     /// Nexus. Each probe is opt-in via its own flag / env var so
@@ -1127,6 +1149,11 @@ fn main() -> ExitCode {
             adapter_toml,
             json,
         } => doctor::doctor_config(workspace, adapter_toml, json),
+        Command::IntentStats {
+            api_url,
+            since,
+            json,
+        } => intent_stats::run(api_url, since, json),
         Command::DoctorAlerts { state_dir, json } => doctor::doctor_alerts(state_dir, json),
         Command::DoctorCoverage { api_url, json } => doctor::doctor_coverage(api_url, json),
         Command::DoctorMeiliIndexes {

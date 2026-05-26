@@ -550,6 +550,40 @@ The pipeline now collects two kinds of feedback so bundle quality becomes measur
 
 GUI view `Pre-Thinking Quality` (`gui/src/views/PreThinkingQuality.tsx`) renders the breaker banner + per-intent bundle-bytes table (p50/p95/p99) + per-intent helpful-rate table.
 
+## Intent routing + rewriter cascade (phase14g)
+
+### Intent rule ordering
+
+`DEFAULT_RULES` is now grouped into three tiers, evaluated top-down with first-match-wins (F-002 fix):
+
+1. **High-specificity compounds** — multi-token decision / debug / policy / change phrases (`why did we pick`, `decided to pick`, `chose to`, `we picked`, `rationale for`, `history behind`, `who decided`, `have we seen`, `regression on`, `fails intermittently`, `is this allowed`, `would this violate`, `policy says`, `rules forbid`, `violates law`, `going to refactor`, `about to change`).
+2. **Explain compounds + medium tier** — navigational compounds (`how does`, `what is`, `show me`, `where is`, `find usages`, `definition of`) AND 2-token decision phrases (`why did`, `why do`, `why is`, `should we`, `can i `).
+3. **Single-word fallbacks** — bare `explain` / `blocked` / `permitted` / `stuck` / `refactor` / `modify` / `rewrite` / `change` / `edit`. These only fire when the prompt carries no compound signal.
+
+**Regression contract** (phase14g §1.4): `"explain why did we pick hnsw"` routes to `decision_lookup` (was `explain`). 5 fixture prompts per intent ship as tests in `intent_select::tests::*_fixtures_route_correctly`.
+
+### Mismatch metric
+
+`Metrics::intent_mismatch_total{(from, to)}` counter. Feedback recorder bumps it when a row marks `helpful = false` AND the corrected intent differs from the routed intent. `intent_mismatch_snapshot()` returns `[(from, to, count)]` sorted by count desc. Surfaced on `/v1/health/pre-thinking.intent_mismatch_top` and via `cortex-ops intent-stats [--since <window>] [--api-url URL] [--json]`.
+
+### Query rewriter cascade
+
+`cortex_pre_thinking::rewriter::cascade(query, intent, sonnet?, cache, metrics, config)` runs:
+
+1. **Cache lookup** — SHA256(query + intent) → `RewriteCache` (TTL 24 h, cap 10 000 entries; oldest evicted past cap). Hit → return tagged `sonnet_cache_hit`.
+2. **Sonnet** — invoke supplied [`SonnetRewriter`] under `CascadeConfig::sonnet_timeout` (default 800 ms). Success → cache + return `sonnet_hit`. `SonnetError::Timeout` → fall through tagged `sonnet_timeout`. `SonnetError::Other(...)` → fall through tagged `sonnet_error`. WARN logged with reason + intent.
+3. **Deterministic fallback** — `deterministic_rewrite(query)` (lowercase + whitespace collapse). Tags `deterministic_fallback`. When no Sonnet backend is wired, every call uses this path.
+
+Telemetry: every dispatch bumps `Metrics::rewriter_path_total{path}` so `/v1/health/pre-thinking.rewriter_path_total` + `cortex-ops intent-stats` render per-path cascade counts.
+
+### Operator playbook additions
+
+| Symptom | Action |
+|---|---|
+| `intent_mismatch_top` shows high `explain → decision_lookup` | look for compound decision phrase missing from `DEFAULT_RULES` — add a top-tier rule that pre-empts the bare `explain`. |
+| `rewriter_path_total.sonnet_timeout` rising | upstream Sonnet flaky; check `SONNET_TIMEOUT` (default 800 ms) and rate-limit headroom. |
+| `rewriter_path_total.deterministic_fallback` ≈ 100 % | no Sonnet backend wired — by design when `CORTEX_PRE_THINKING_REWRITER=deterministic` (env default until operator enables cascade). |
+
 ## References
 
 - Architecture §5.3 (query → context bundle), §8 (end-to-end example step 2).
