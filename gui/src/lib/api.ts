@@ -679,6 +679,12 @@ export const api = {
   // a daemon-status banner above the consolidation list.
   healthConsolidator: () =>
     getJson<ConsolidatorHealthReport>("/v1/health/consolidator"),
+  // phase14f — pre-thinking quality. Reuses the
+  // `/v1/health/pre-thinking` endpoint which carries breaker state
+  // plus per-intent bundle-size quantiles + helpful-rate counters
+  // (added in phase14f §4.1/§4.2).
+  preThinkingQuality: () =>
+    getJson<PreThinkingHealthReport>("/v1/health/pre-thinking"),
 
   // Phase9i — retention dashboard endpoints. `sweeps` is paginated
   // by `limit`; `state` is a compact snapshot. Both are cached via
@@ -974,10 +980,16 @@ export type CoverageReport = {
 // from "./api"`; `ConsolidatorHealthReport` is also imported
 // locally because the `api.healthConsolidator()` helper above
 // uses it as a `getJson<T>` type parameter.
-import type { ConsolidatorHealthReport } from "./api.generated";
+import type {
+  ConsolidatorHealthReport,
+  PreThinkingHealthReport,
+} from "./api.generated";
 export type {
   ConsolidatorHealthReport,
   GrainHealth,
+  IntentByteQuantilesView,
+  IntentHelpfulRateView,
+  PreThinkingHealthReport,
 } from "./api.generated";
 
 export type HealthSnapshot = {

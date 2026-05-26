@@ -20,8 +20,57 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 
+/// Phase14f §4.3 — per-intent bundle-byte quantile row.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
+pub struct IntentByteQuantilesView {
+    /// Sample count.
+    #[serde(default)]
+    pub count: u64,
+    /// 50th percentile (median bundle bytes for this intent).
+    #[serde(default)]
+    pub p50: u32,
+    /// 95th percentile bundle bytes.
+    #[serde(default)]
+    pub p95: u32,
+    /// 99th percentile bundle bytes.
+    #[serde(default)]
+    pub p99: u32,
+}
+
+/// Phase14f §4.3 — per-intent helpful-rate row driven by feedback
+/// POSTs. `rate = helpful / (helpful + unhelpful)`; `None` when
+/// no feedback has been recorded for this intent.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
+pub struct IntentHelpfulRateView {
+    /// helpful=true count.
+    #[serde(default)]
+    pub helpful: u64,
+    /// helpful=false count.
+    #[serde(default)]
+    pub unhelpful: u64,
+    /// `helpful / (helpful + unhelpful)`; serialised as `null`
+    /// when both halves are zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate: Option<f64>,
+}
+
 /// Top-level wire response for `/v1/health/pre-thinking`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
 pub struct PreThinkingHealthReport {
     /// Current breaker state (`closed` / `open` / `halfopen`).
     pub breaker_state: String,
@@ -32,6 +81,13 @@ pub struct PreThinkingHealthReport {
     /// Sum across every reason — convenience field so the
     /// dashboard can render a single counter.
     pub fail_open_sum: u64,
+    /// Phase14f §4.1 — per-intent bundle-bytes quantiles. Empty
+    /// when no samples have been observed yet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bundle_bytes_per_intent: BTreeMap<String, IntentByteQuantilesView>,
+    /// Phase14f §4.2 — per-intent helpful-rate counters.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub helpful_rate_per_intent: BTreeMap<String, IntentHelpfulRateView>,
 }
 
 /// Source the handler reads from.
@@ -53,6 +109,8 @@ impl PreThinkingHealthSource for UnwiredPreThinkingHealthSource {
             failures_in_window: 0,
             fail_open_total: BTreeMap::new(),
             fail_open_sum: 0,
+            bundle_bytes_per_intent: BTreeMap::new(),
+            helpful_rate_per_intent: BTreeMap::new(),
         }
     }
 }
@@ -130,6 +188,8 @@ mod tests {
             failures_in_window: 5,
             fail_open_total: total,
             fail_open_sum: 5,
+            bundle_bytes_per_intent: BTreeMap::new(),
+            helpful_rate_per_intent: BTreeMap::new(),
         };
         let state = PreThinkingHealthState {
             source: Arc::new(StubSource(expected.clone())),

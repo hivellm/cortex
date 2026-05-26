@@ -16,6 +16,7 @@ pub mod breaker;
 pub mod budget;
 pub mod formatter;
 pub mod health_source;
+pub mod implicit_feedback;
 pub mod intent_select;
 pub mod metrics;
 pub mod pipeline;

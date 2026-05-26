@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cortex_api::health::pre_thinking::{
-    PreThinkingHealthReport, PreThinkingHealthSource,
+    IntentByteQuantilesView, IntentHelpfulRateView, PreThinkingHealthReport,
+    PreThinkingHealthSource,
 };
 
 use crate::breaker::{Breaker, BreakerState};
@@ -46,11 +47,44 @@ impl PreThinkingHealthSource for LivePreThinkingHealthSource {
         };
         let fail_open_total = self.metrics.fail_open_snapshot();
         let fail_open_sum: u64 = fail_open_total.values().copied().sum();
+        let bundle_bytes_per_intent = self
+            .metrics
+            .bundle_bytes_quantiles_per_intent()
+            .into_iter()
+            .map(|(k, q)| {
+                (
+                    k,
+                    IntentByteQuantilesView {
+                        count: q.count,
+                        p50: q.p50,
+                        p95: q.p95,
+                        p99: q.p99,
+                    },
+                )
+            })
+            .collect();
+        let helpful_rate_per_intent = self
+            .metrics
+            .helpful_rate_per_intent()
+            .into_iter()
+            .map(|(k, r)| {
+                (
+                    k,
+                    IntentHelpfulRateView {
+                        helpful: r.helpful,
+                        unhelpful: r.unhelpful,
+                        rate: r.rate,
+                    },
+                )
+            })
+            .collect();
         PreThinkingHealthReport {
             breaker_state: state.to_string(),
             failures_in_window: self.breaker.failures_in_window(),
             fail_open_total,
             fail_open_sum,
+            bundle_bytes_per_intent,
+            helpful_rate_per_intent,
         }
     }
 }

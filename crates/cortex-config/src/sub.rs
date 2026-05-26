@@ -697,7 +697,8 @@ impl Default for CanaryConfig {
 /// Pre-thinking bundle knobs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PreThinkingConfig {
-    /// Bundle size cap in KiB.
+    /// Bundle size cap in KiB. Acts as the fallback for any
+    /// intent not present in [`Self::budget_per_intent`].
     /// Env: `CORTEX_PRE_THINKING_KB`.
     #[serde(default = "default_pre_thinking_kb")]
     pub bundle_kb: u32,
@@ -705,6 +706,17 @@ pub struct PreThinkingConfig {
     /// Env: `CORTEX_PRE_THINKING_TIMEOUT_MS`.
     #[serde(default = "default_pre_thinking_timeout")]
     pub timeout_ms: u32,
+    /// Phase14f §2 — per-intent bundle cap (KiB). Keyed on the
+    /// canonical lower-snake-case intent label
+    /// (`pre_change_context`, `explain`, `decision_lookup`,
+    /// `similar_problems`, `law_check`, `free_search`,
+    /// `coverage`). Missing keys fall through to
+    /// [`Self::bundle_kb`]. Defaults follow the F-005 spec table:
+    /// `pre_change_context`=32, `similar_problems`=32, `explain`=24,
+    /// `decision_lookup`=24, `coverage`=16, `law_check`=12,
+    /// `free_search`=16.
+    #[serde(default = "default_budget_per_intent")]
+    pub budget_per_intent: std::collections::BTreeMap<String, u32>,
 }
 
 fn default_pre_thinking_kb() -> u32 {
@@ -713,12 +725,38 @@ fn default_pre_thinking_kb() -> u32 {
 fn default_pre_thinking_timeout() -> u32 {
     1500
 }
+fn default_budget_per_intent() -> std::collections::BTreeMap<String, u32> {
+    let mut m = std::collections::BTreeMap::new();
+    m.insert("pre_change_context".to_string(), 32);
+    m.insert("similar_problems".to_string(), 32);
+    m.insert("explain".to_string(), 24);
+    m.insert("decision_lookup".to_string(), 24);
+    m.insert("coverage".to_string(), 16);
+    m.insert("law_check".to_string(), 12);
+    m.insert("free_search".to_string(), 16);
+    m
+}
+
+impl PreThinkingConfig {
+    /// Phase14f — resolve the per-intent cap in bytes. Returns
+    /// [`Self::budget_per_intent`] entry × 1 KiB when present,
+    /// else [`Self::bundle_kb`] × 1 KiB.
+    pub fn budget_bytes_for(&self, intent_label: &str) -> u32 {
+        let kb = self
+            .budget_per_intent
+            .get(intent_label)
+            .copied()
+            .unwrap_or(self.bundle_kb);
+        kb.saturating_mul(1024)
+    }
+}
 
 impl Default for PreThinkingConfig {
     fn default() -> Self {
         Self {
             bundle_kb: default_pre_thinking_kb(),
             timeout_ms: default_pre_thinking_timeout(),
+            budget_per_intent: default_budget_per_intent(),
         }
     }
 }
@@ -894,4 +932,45 @@ pub struct AdapterConfig {
     /// inside the adapter. Env: `CORTEX_ADAPTER_ADMIN_PORT`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter_admin_port: Option<u16>,
+}
+
+#[cfg(test)]
+mod tests_phase14f {
+    use super::*;
+
+    #[test]
+    fn default_budget_per_intent_carries_the_f005_table() {
+        let cfg = PreThinkingConfig::default();
+        assert_eq!(cfg.budget_per_intent.get("pre_change_context").copied(), Some(32));
+        assert_eq!(cfg.budget_per_intent.get("similar_problems").copied(), Some(32));
+        assert_eq!(cfg.budget_per_intent.get("explain").copied(), Some(24));
+        assert_eq!(cfg.budget_per_intent.get("decision_lookup").copied(), Some(24));
+        assert_eq!(cfg.budget_per_intent.get("coverage").copied(), Some(16));
+        assert_eq!(cfg.budget_per_intent.get("law_check").copied(), Some(12));
+        assert_eq!(cfg.budget_per_intent.get("free_search").copied(), Some(16));
+    }
+
+    #[test]
+    fn budget_bytes_for_returns_per_intent_when_set() {
+        let cfg = PreThinkingConfig::default();
+        assert_eq!(cfg.budget_bytes_for("law_check"), 12 * 1024);
+        assert_eq!(cfg.budget_bytes_for("pre_change_context"), 32 * 1024);
+    }
+
+    #[test]
+    fn budget_bytes_for_falls_back_to_bundle_kb_when_intent_missing() {
+        let mut cfg = PreThinkingConfig::default();
+        cfg.budget_per_intent.clear();
+        cfg.bundle_kb = 7;
+        assert_eq!(cfg.budget_bytes_for("explain"), 7 * 1024);
+    }
+
+    #[test]
+    fn toml_round_trips_per_intent_table() {
+        let cfg = PreThinkingConfig::default();
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: PreThinkingConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(back.budget_per_intent, cfg.budget_per_intent);
+        assert_eq!(back.bundle_kb, cfg.bundle_kb);
+    }
 }

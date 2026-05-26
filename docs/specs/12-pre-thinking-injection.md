@@ -483,6 +483,73 @@ Default state ships an `UnwiredPreThinkingHealthSource` that returns `closed` + 
 
 Live operator probe: `curl -s http://127.0.0.1:17000/v1/health/pre-thinking | jq`.
 
+## Feedback + per-intent budget (phase14f)
+
+The pipeline now collects two kinds of feedback so bundle quality becomes measurable and tunable.
+
+### Explicit feedback
+
+`POST /v1/pre-thinking/feedback`
+
+```json
+{
+  "query_id": "01HXQUERY00000000000000A",
+  "intent": "explain",
+  "helpful": true,
+  "files_cited": ["src/lib.rs", "docs/specs/12.md"],
+  "rating": 5,
+  "free_text": "clear and useful",
+  "implicit_score": 0.83
+}
+```
+
+- `query_id` is required + non-empty; the audit cross-check lands in a follow-up.
+- `helpful` is required.
+- `rating` ∈ [1, 5] when present.
+- `implicit_score` ∈ [0.0, 1.0] when present (operator can pre-compute via `cortex_pre_thinking::implicit_feedback::detect_citation`).
+- Idempotent: re-posting the same `query_id` overwrites the prior row (`upserted: false` in the response). Persists to `pre_thinking_feedback` SQLite table.
+
+### Implicit feedback
+
+`cortex_pre_thinking::implicit_feedback::detect_citation(reply, bundle_files)` returns a Jaccard overlap score in `[0.0, 1.0]` between (a) the file paths the bundle surfaced and (b) the file-shaped tokens in the model's first ~100-token reply window. The async detector stamps the score in `pre_thinking_feedback.implicit_score`; the explicit feedback row may carry an operator-supplied value to seed before the detector runs.
+
+### Per-intent budget
+
+`PreThinkingConfig.budget_per_intent` is a per-intent KiB cap. Defaults (F-005 spec table):
+
+| Intent              | KiB |
+|---------------------|-----|
+| `pre_change_context`| 32  |
+| `similar_problems`  | 32  |
+| `explain`           | 24  |
+| `decision_lookup`   | 24  |
+| `coverage`          | 16  |
+| `free_search`       | 16  |
+| `law_check`         | 12  |
+
+`PreThinkingConfig::budget_bytes_for(intent_label)` returns the per-intent entry × 1 KiB, falling back to `bundle_kb` when the intent is absent. Operator overrides via TOML + env (existing `cortex_config` pattern).
+
+### Quality dashboard
+
+`GET /v1/health/pre-thinking` carries additional fields:
+
+```json
+{
+  "breaker_state": "closed",
+  "failures_in_window": 0,
+  "fail_open_total": { "timeout": 0 },
+  "fail_open_sum": 0,
+  "bundle_bytes_per_intent": {
+    "explain": { "count": 10, "p50": 12000, "p95": 22000, "p99": 24000 }
+  },
+  "helpful_rate_per_intent": {
+    "explain": { "helpful": 7, "unhelpful": 3, "rate": 0.7 }
+  }
+}
+```
+
+GUI view `Pre-Thinking Quality` (`gui/src/views/PreThinkingQuality.tsx`) renders the breaker banner + per-intent bundle-bytes table (p50/p95/p99) + per-intent helpful-rate table.
+
 ## References
 
 - Architecture §5.3 (query → context bundle), §8 (end-to-end example step 2).

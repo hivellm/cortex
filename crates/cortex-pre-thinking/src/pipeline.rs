@@ -260,6 +260,9 @@ pub async fn run_with_breaker<Q: QueryFn>(
         metrics.incr_empty_bundle();
     } else {
         metrics.observe_bundle_bytes(clipped.bytes as u32);
+        // Phase14f §4.1 — per-intent histogram sample so the
+        // dashboard can render p50/p95/p99 per intent.
+        metrics.observe_bundle_bytes_per_intent(intent.label(), clipped.bytes as u32);
     }
     for step in &clipped.steps {
         metrics.incr_truncation_step(*step);

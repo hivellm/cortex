@@ -30,6 +30,9 @@ use ts_rs::TS;
 // the simpler symbol path.
 use crate::dashboard::ConsolidationFilter;
 use crate::health::consolidator::{ConsolidatorHealthReport, GrainHealth};
+use crate::health::pre_thinking::{
+    IntentByteQuantilesView, IntentHelpfulRateView, PreThinkingHealthReport,
+};
 use crate::health::{FreshnessRow, Severity};
 
 /// Drive `ts-rs` for every wire type registered with the bundle.
@@ -41,6 +44,9 @@ pub fn export_all_wire_types() -> Result<(), ts_rs::ExportError> {
     Severity::export_all()?;
     FreshnessRow::export_all()?;
     ConsolidationFilter::export_all()?;
+    PreThinkingHealthReport::export_all()?;
+    IntentByteQuantilesView::export_all()?;
+    IntentHelpfulRateView::export_all()?;
     Ok(())
 }
 

@@ -204,6 +204,21 @@ pub fn build_router_with_auth_and_cfg(
     router = router.merge(crate::health::pre_thinking::build_router(
         crate::health::pre_thinking::PreThinkingHealthState::default(),
     ));
+    // phase14f — feedback ingest endpoint. Default state carries
+    // an in-memory MetadataStore so the route is mountable
+    // standalone in tests; main.rs threads the shared metadata
+    // handle when wiring the full router.
+    {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+        let metadata = Arc::new(Mutex::new(
+            cortex_storage::MetadataStore::open_in_memory()
+                .expect("phase14f: open in-memory metadata for default feedback state"),
+        ));
+        router = router.merge(crate::feedback::build_router(
+            crate::feedback::FeedbackState { metadata },
+        ));
+    }
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
         // alongside the dashboard routes. Both endpoints share the

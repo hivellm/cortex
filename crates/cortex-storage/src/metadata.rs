@@ -70,6 +70,9 @@ impl MetadataStore {
         // the migrated table without coordinating its own migration.
         crate::identity::apply_phase13d_schema(conn)
             .map_err(|e| MetadataError::Internal(format!("phase13d schema: {e}")))?;
+        // Phase14f — pre-thinking feedback table. One row per
+        // query_id; subsequent posts overwrite via UPSERT.
+        apply_phase14f_schema(conn)?;
         // Phase9a — idempotent column-add for `retention_sweeps.status`.
         // Existing pre-phase9a databases lack the column; the
         // `CREATE TABLE IF NOT EXISTS` above is a no-op for them, so
@@ -344,6 +347,95 @@ impl MetadataStore {
             })?
             .collect();
         Ok(rows?)
+    }
+
+    /// Phase14f — UPSERT one feedback row keyed on `query_id`.
+    /// Re-posting the same query_id overwrites the prior row
+    /// (the wire endpoint exposes this as "idempotent overwrite"
+    /// semantic). `files_cited` is the JSON-encoded array of file
+    /// paths the operator says the model cited; `implicit_score`
+    /// is `None` when the asynchronous citation detector has not
+    /// run for this query yet.
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_pre_thinking_feedback(
+        &self,
+        query_id: &str,
+        intent: Option<&str>,
+        helpful: bool,
+        files_cited_json: &str,
+        rating: Option<i64>,
+        free_text: Option<&str>,
+        implicit_score: Option<f64>,
+        recorded_at: DateTime<Utc>,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO pre_thinking_feedback
+                (query_id, intent, helpful, files_cited, rating, free_text, implicit_score, recorded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(query_id) DO UPDATE SET
+                intent         = excluded.intent,
+                helpful        = excluded.helpful,
+                files_cited    = excluded.files_cited,
+                rating         = excluded.rating,
+                free_text      = excluded.free_text,
+                implicit_score = excluded.implicit_score,
+                recorded_at    = excluded.recorded_at",
+            params![
+                query_id,
+                intent,
+                helpful as i64,
+                files_cited_json,
+                rating,
+                free_text,
+                implicit_score,
+                recorded_at.to_rfc3339(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Phase14f — read one feedback row for `query_id`. Returns the
+    /// 8 columns the upsert wrote, with `helpful` projected back to
+    /// `bool` and `files_cited` returned as the raw JSON-array text
+    /// the caller can `serde_json::from_str` into `Vec<String>`.
+    #[allow(clippy::type_complexity)]
+    pub fn pre_thinking_feedback(
+        &self,
+        query_id: &str,
+    ) -> Result<
+        Option<(
+            String,
+            Option<String>,
+            bool,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<f64>,
+            String,
+        )>,
+        MetadataError,
+    > {
+        let mut stmt = self.conn.prepare(
+            "SELECT query_id, intent, helpful, files_cited, rating, free_text, implicit_score, recorded_at
+               FROM pre_thinking_feedback
+              WHERE query_id = ?1",
+        )?;
+        let row_opt = stmt
+            .query_row(params![query_id], |row| {
+                let helpful_i: i64 = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    helpful_i != 0,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<f64>>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })
+            .optional()?;
+        Ok(row_opt)
     }
 
     /// Phase13b — append one row to `producer_checkpoints`. ADR-010
@@ -991,6 +1083,36 @@ pub fn apply_phase10c_schema(conn: &Connection) -> Result<(), MetadataError> {
 /// never collide. `latest_producer_checkpoint(name, scope)`
 /// returns the row with the maximum `accumulated_at` to resume
 /// after kill.
+/// Phase14f — `pre_thinking_feedback` table. One row per `query_id`
+/// keyed on the audit envelope's query id; UPSERT semantics so a
+/// re-post of the same query_id overwrites the prior row.
+/// `files_cited` is stored as a JSON array text; `implicit_score`
+/// is the Jaccard overlap between the bundle's file set and the
+/// first-tokens of the model's reply (range [0.0, 1.0]).
+pub fn apply_phase14f_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS pre_thinking_feedback (
+            query_id        TEXT PRIMARY KEY,
+            intent          TEXT,
+            helpful         INTEGER NOT NULL,
+            files_cited     TEXT NOT NULL DEFAULT '[]',
+            rating          INTEGER,
+            free_text       TEXT,
+            implicit_score  REAL,
+            recorded_at     TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS pre_thinking_feedback_intent
+            ON pre_thinking_feedback (intent);
+        CREATE INDEX IF NOT EXISTS pre_thinking_feedback_recorded_at
+            ON pre_thinking_feedback (recorded_at DESC);",
+    )?;
+    Ok(())
+}
+
+/// Phase13b — assert the `producer_checkpoints` table exists on
+/// `conn`. Idempotent — every consumer that opens a
+/// [`MetadataStore`] calls this transitively via
+/// [`MetadataStore::migrate`].
 pub fn apply_phase13b_schema(conn: &Connection) -> Result<(), MetadataError> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS producer_checkpoints (
@@ -2396,5 +2518,53 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(r.last_offset, 20);
+    }
+
+    // ---- phase14f pre_thinking_feedback -----------------------------
+
+    #[test]
+    fn pre_thinking_feedback_upsert_then_lookup_round_trip() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        let now = Utc::now();
+        s.upsert_pre_thinking_feedback(
+            "q-1",
+            Some("explain"),
+            true,
+            "[\"a.rs\",\"b.rs\"]",
+            Some(5),
+            Some("clear and useful"),
+            Some(0.75),
+            now,
+        )
+        .unwrap();
+        let row = s.pre_thinking_feedback("q-1").unwrap().unwrap();
+        assert_eq!(row.0, "q-1");
+        assert_eq!(row.1.as_deref(), Some("explain"));
+        assert!(row.2);
+        assert_eq!(row.3, "[\"a.rs\",\"b.rs\"]");
+        assert_eq!(row.4, Some(5));
+        assert_eq!(row.5.as_deref(), Some("clear and useful"));
+        assert_eq!(row.6, Some(0.75));
+    }
+
+    #[test]
+    fn pre_thinking_feedback_overwrite_keeps_last_write() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        let t = Utc::now();
+        s.upsert_pre_thinking_feedback("q-x", Some("law_check"), false, "[]", None, None, None, t)
+            .unwrap();
+        s.upsert_pre_thinking_feedback("q-x", Some("law_check"), true, "[\"f.rs\"]", Some(4), Some("yes"), Some(0.5), t)
+            .unwrap();
+        let row = s.pre_thinking_feedback("q-x").unwrap().unwrap();
+        assert!(row.2, "helpful flipped to true");
+        assert_eq!(row.3, "[\"f.rs\"]");
+        assert_eq!(row.4, Some(4));
+        assert_eq!(row.6, Some(0.5));
+    }
+
+    #[test]
+    fn pre_thinking_feedback_lookup_unknown_returns_none() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        assert!(s.pre_thinking_feedback("never-existed").unwrap().is_none());
     }
 }
