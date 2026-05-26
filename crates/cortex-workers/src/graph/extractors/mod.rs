@@ -48,6 +48,7 @@ use super::patch::EdgeOp;
 use crate::embedder::EnrichedEvent;
 
 pub mod calls;
+pub mod contradicts;
 pub mod defines;
 pub mod imports;
 pub mod returns;
