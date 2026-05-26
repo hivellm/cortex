@@ -203,6 +203,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::law_violations::handle_law_violations),
         )
         .route(
+            "/v1/decisions/search",
+            post(crate::decision_search::handle_decision_search),
+        )
+        .route(
             "/v1/consolidations/diff",
             get(crate::consolidations_diff::handle_consolidations_diff),
         )

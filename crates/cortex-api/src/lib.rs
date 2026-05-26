@@ -94,6 +94,7 @@ pub use search::consolidations_by_entity;
 pub use search::consolidations_diff;
 pub use search::consolidations_recent;
 pub use search::consolidations_search;
+pub use search::decision_search;
 pub use search::events_by_kind;
 pub use search::files_touched;
 pub use search::fusion;

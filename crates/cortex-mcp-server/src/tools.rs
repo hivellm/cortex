@@ -273,6 +273,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationsDiffTool::new()),
                 Arc::new(LawViolationsTool::new()),
                 Arc::new(FeedbackSignalsTool::new()),
+                Arc::new(DecisionSearchTool::new()),
             ],
         }
     }
@@ -1934,6 +1935,99 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §3.3 — cortex_decision_search
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/decisions/search`.
+pub struct DecisionSearchTool;
+
+impl DecisionSearchTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for DecisionSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for DecisionSearchTool {
+    fn name(&self) -> &'static str {
+        "cortex_decision_search"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_decision_search",
+            "description": "List Decision envelopes from the global `cortex_decisions` Meili index filtered by `status` (`proposed` / `accepted` / `superseded` / `deprecated`) / `tag` (mapped to `topics`) / `repo` / RFC3339 `since`/`until`. Free-text `q` matches title / body / topics / repo. `supersedes` / `superseded_by` filters are unsupported on this index — pivot via `cortex_decision_chain` for chain walks. Sort hardcoded `occurred_at:desc`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "q": {"type": "string", "description": "Free-text query against title / body / topics / repo."},
+                    "status": {
+                        "type": "string",
+                        "enum": ["proposed", "accepted", "superseded", "deprecated"]
+                    },
+                    "tag": {"type": "string", "description": "Tag filter — mapped to the `topics` filterable array."},
+                    "repo": {"type": "string", "description": "Optional `repo` filter."},
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `occurred_at`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `occurred_at`."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        if let Some(v) = args
+            .get("supersedes")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Err(ToolError::invalid_input(format!(
+                "`supersedes` filter unsupported; pivot via `cortex_decision_chain` for `{v}`"
+            )));
+        }
+        if let Some(v) = args
+            .get("superseded_by")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Err(ToolError::invalid_input(format!(
+                "`superseded_by` filter unsupported; pivot via `cortex_decision_chain` for `{v}`"
+            )));
+        }
+        if let Some(s) = args
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !["proposed", "accepted", "superseded", "deprecated"].contains(&s) {
+                return Err(ToolError::invalid_input(format!(
+                    "unknown status `{s}`; allowed: proposed, accepted, superseded, deprecated"
+                )));
+            }
+        }
+        let mut body = json!({});
+        for field in ["q", "status", "tag", "repo", "since", "until", "limit"] {
+            if let Some(v) = args.get(field) {
+                if !v.is_null() {
+                    body[field] = v.clone();
+                }
+            }
+        }
+        proxy_search(ctx, "/v1/decisions/search", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §3.2 — cortex_feedback_signals
 // ---------------------------------------------------------------------
 
@@ -2740,12 +2834,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentysix_tools_with_unique_names() {
+    fn registry_returns_twentyseven_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            26,
-            "phase19 §3.2 adds cortex_feedback_signals (25 -> 26)"
+            27,
+            "phase19 §3.3 adds cortex_decision_search (26 -> 27)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2775,6 +2869,7 @@ mod tests {
             "cortex_consolidations_diff",
             "cortex_law_violations",
             "cortex_feedback_signals",
+            "cortex_decision_search",
         ] {
             assert!(
                 names.contains(&expected),

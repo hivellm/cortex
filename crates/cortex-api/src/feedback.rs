@@ -342,7 +342,16 @@ pub async fn feedback_list_handler(
     let rows: Vec<FeedbackRow> = raw
         .into_iter()
         .map(
-            |(query_id, intent, helpful, files_json, rating, free_text, implicit_score, recorded_at)| {
+            |(
+                query_id,
+                intent,
+                helpful,
+                files_json,
+                rating,
+                free_text,
+                implicit_score,
+                recorded_at,
+            )| {
                 let files_cited: Vec<String> =
                     serde_json::from_str(&files_json).unwrap_or_default();
                 FeedbackRow {
