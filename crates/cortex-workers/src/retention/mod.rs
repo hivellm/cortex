@@ -29,7 +29,10 @@
 
 pub mod cas_vacuum;
 pub mod cas_vacuum_sweep;
+pub mod cold_tier_prune;
 pub mod consolidation_prune_sweep;
+pub mod hot_tier_prune;
+pub mod identity_prune;
 pub mod meili_prune;
 pub mod meili_prune_sweep;
 pub mod metadata_reap;
