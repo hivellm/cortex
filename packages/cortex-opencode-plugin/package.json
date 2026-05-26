@@ -1,0 +1,33 @@
+{
+  "name": "@hivellm/cortex-opencode-plugin",
+  "version": "0.1.0",
+  "description": "OpenCode plugin bridging session lifecycle events to the cortex-adapter-claude-code daemon (spec 20 / phase11w).",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hivellm/cortex.git",
+    "directory": "packages/cortex-opencode-plugin"
+  },
+  "keywords": ["cortex", "opencode", "plugin", "hivellm"]
+}

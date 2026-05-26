@@ -1,6 +1,14 @@
 # cortex-adapter-claude-code
 
 > Spec: [`docs/specs/10-claude-code-adapter.md`](../../docs/specs/10-claude-code-adapter.md), [`docs/specs/12-pre-thinking-injection.md`](../../docs/specs/12-pre-thinking-injection.md)
+>
+> **Phase11w**: the same daemon serves OpenCode sessions via a new HTTP
+> listener (`IpcBinding::Http(addr)`) under
+> `CORTEX_ADAPTER_HTTP_BIND` (default `127.0.0.1:17004`). The TS
+> plugin that posts to it ships in
+> [`packages/cortex-opencode-plugin`](../../packages/cortex-opencode-plugin)
+> and the host-agnostic adapter spec lives at
+> [`docs/specs/20-opencode-adapter.md`](../../docs/specs/20-opencode-adapter.md).
 
 Claude Code adapter for Cortex. Captures every meaningful interaction
 inside a Claude Code session — user prompts, tool calls, agent calls,
@@ -53,6 +61,19 @@ The most relevant hooks today:
 | `Notification`    | Captured for telemetry.                                                                          |
 
 ## Configuration
+
+### Env knobs (phase11w additions)
+
+| Knob | Default | Purpose |
+|------|---------|---------|
+| `CORTEX_ADAPTER_HTTP_BIND` | unset (HTTP listener disabled) | When set, spawns the `IpcBinding::Http(addr)` listener alongside the primary socket/pipe binding. Default address `127.0.0.1:17004` when the knob is set without a value. The OpenCode TS plugin posts to `http://${bind}/hook` here. |
+
+The HTTP listener serves `POST /hook` accepting the same `HookFrame`
+JSON the socket / pipe paths accept; every frame funnels through the
+same `Dispatcher::dispatch` entrypoint so envelope shapes are
+byte-identical across transports.
+
+### Claude Code hook registration
 
 `cortex-adapter-claude install` patches `~/.claude/settings.json` to
 launch the **`cortex-hook`** native binary on every Claude Code hook

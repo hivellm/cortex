@@ -359,6 +359,23 @@ async fn run_daemon(
         timeout_ms = adapter.timeout_ms,
         "cortex-adapter-claude daemon starting"
     );
+
+    // Phase11w §2.4 — spawn the HTTP listener alongside the primary
+    // socket/pipe binding when `CORTEX_ADAPTER_HTTP_BIND` is set OR
+    // when the operator explicitly opts in via `--enable-http`. The
+    // OpenCode TS plugin posts here; the primary socket / named pipe
+    // keeps serving the Claude Code hook shims.
+    if std::env::var("CORTEX_ADAPTER_HTTP_BIND").is_ok() {
+        let http_binding = IpcBinding::default_http();
+        let http_dispatcher = dispatcher.clone();
+        let http_shutdown = shutdown.clone();
+        tokio::spawn(async move {
+            if let Err(e) = serve(http_binding, http_dispatcher, http_shutdown).await {
+                tracing::warn!(error = %e, "ipc http listener exited with error");
+            }
+        });
+    }
+
     serve(binding, dispatcher, shutdown).await
 }
 

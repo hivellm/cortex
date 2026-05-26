@@ -31,6 +31,14 @@ use crate::session::SessionManager;
 /// `tool` enum in `crates/cortex-core/schemas/envelope.schema.json`.
 pub const TOOL_CLAUDE_CODE: &str = "claude-code";
 
+/// Phase11w §2.2 — `tool` value the OpenCode plugin
+/// (`@hivellm/cortex-opencode-plugin`) stamps on every envelope it
+/// posts to the daemon's HTTP listener. The envelope schema's
+/// `tool` enum at `crates/cortex-core/schemas/envelope.schema.json`
+/// carries the matching `"opencode"` entry — both literals move
+/// together.
+pub const TOOL_OPENCODE: &str = "opencode";
+
 /// Coarse hook id Claude Code surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]

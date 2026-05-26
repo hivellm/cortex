@@ -26,6 +26,12 @@ pub enum IpcBinding {
     UnixSocket(PathBuf),
     /// Windows named pipe (e.g. `\\.\pipe\cortex-adapter-claude`).
     NamedPipe(String),
+    /// Phase11w §2.4 — HTTP `POST /hook` listener. The OpenCode TS
+    /// plugin (`@hivellm/cortex-opencode-plugin`) posts hook frames
+    /// here using the same JSON shape the socket/pipe paths accept.
+    /// Default bind reads from `CORTEX_ADAPTER_HTTP_BIND`
+    /// (`127.0.0.1:17004`).
+    Http(String),
 }
 
 impl IpcBinding {
@@ -45,6 +51,18 @@ impl IpcBinding {
                 .join("adapter-claude.sock"),
         )
     }
+
+    /// Phase11w §2.4 — default HTTP bind for the OpenCode plugin
+    /// transport. Reads `CORTEX_ADAPTER_HTTP_BIND` then falls back to
+    /// `127.0.0.1:17004` (loopback so the listener never accepts
+    /// off-host posts; bind addr is operator-configurable for
+    /// container scenarios where the plugin lives in another network
+    /// namespace).
+    pub fn default_http() -> Self {
+        let bind = std::env::var("CORTEX_ADAPTER_HTTP_BIND")
+            .unwrap_or_else(|_| "127.0.0.1:17004".to_string());
+        IpcBinding::Http(bind)
+    }
 }
 
 /// Run the IPC server until `shutdown` fires.
@@ -56,7 +74,57 @@ pub async fn serve(
     match binding {
         IpcBinding::UnixSocket(path) => serve_unix(path, dispatcher, shutdown).await,
         IpcBinding::NamedPipe(name) => serve_pipe(name, dispatcher, shutdown).await,
+        IpcBinding::Http(bind) => serve_http(bind, dispatcher, shutdown).await,
     }
+}
+
+/// Phase11w §2.4 — HTTP listener serving `POST /hook` for OpenCode-
+/// style plugin transports. The wire shape on the body is identical
+/// to the socket / pipe paths: a single [`HookFrame`] JSON object.
+/// The response is the canonical [`HookResponse`] JSON. Internal
+/// errors degrade to `200 OK` with an empty `{}` body so the session
+/// never breaks (spec 10 §Hook ↔ daemon protocol).
+pub async fn serve_http(
+    bind: String,
+    dispatcher: Arc<Dispatcher>,
+    shutdown: Arc<tokio::sync::Notify>,
+) -> Result<()> {
+    use axum::extract::State;
+    use axum::routing::post;
+    use axum::Json;
+    use axum::Router;
+
+    #[derive(Clone)]
+    struct HttpState {
+        dispatcher: Arc<Dispatcher>,
+    }
+
+    async fn hook_handler(
+        State(state): State<HttpState>,
+        Json(frame): Json<Value>,
+    ) -> Json<Value> {
+        let response = match serde_json::to_string(&frame) {
+            Ok(s) => handle_line(&s, state.dispatcher.clone()).await,
+            Err(_) => HookResponse::empty(),
+        };
+        Json(serde_json::to_value(&response).unwrap_or_else(|_| serde_json::json!({})))
+    }
+
+    let state = HttpState { dispatcher };
+    let app: Router = Router::new()
+        .route("/hook", post(hook_handler))
+        .with_state(state);
+
+    let addr: std::net::SocketAddr = bind.parse().map_err(|e| {
+        anyhow::anyhow!("CORTEX_ADAPTER_HTTP_BIND `{bind}` is not a valid socket address: {e}")
+    })?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!(addr = %addr, "ipc http listener up");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move { shutdown.notified().await })
+        .await?;
+    tracing::info!("ipc http listener shutdown");
+    Ok(())
 }
 
 #[cfg(not(windows))]

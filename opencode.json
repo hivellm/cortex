@@ -1,0 +1,19 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["AGENTS.md", "AGENTS.override.md"],
+  "mcp": {
+    "cortex": {
+      "type": "local",
+      "command": ["cortex-mcp-server", "serve"],
+      "env": {
+        "CORTEX_API_URL": "http://127.0.0.1:17000",
+        "CORTEX_ADAPTER_HTTP_BIND": "127.0.0.1:17004"
+      }
+    },
+    "rulebook": {
+      "type": "local",
+      "command": ["npx", "-y", "@hivehub/rulebook@latest", "mcp-server"]
+    }
+  },
+  "plugin": ["@hivellm/cortex-opencode-plugin"]
+}
