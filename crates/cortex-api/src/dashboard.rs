@@ -72,6 +72,9 @@ use self::overview::overview;
 mod timeline;
 use self::timeline::{timeline_recent, timeline_stream};
 
+mod session_timeline;
+pub use self::session_timeline::handle_session_timeline;
+
 mod stream;
 use self::stream::dashboard_stream;
 

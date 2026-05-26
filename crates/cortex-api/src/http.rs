@@ -178,6 +178,10 @@ pub fn build_router_with_auth_and_cfg(
             "/v1/search/events",
             post(crate::events_by_kind::handle_events_by_kind),
         )
+        .route(
+            "/v1/sessions/{session_id}/timeline",
+            get(crate::dashboard::handle_session_timeline),
+        )
         .with_state(state);
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from

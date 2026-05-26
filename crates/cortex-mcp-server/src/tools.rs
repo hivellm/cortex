@@ -261,6 +261,7 @@ impl ToolRegistry {
                 Arc::new(SimilarSessionsTool::new()),
                 Arc::new(DecisionChainTool::new()),
                 Arc::new(EventsByKindTool::new()),
+                Arc::new(SessionTimelineTool::new()),
             ],
         }
     }
@@ -1678,6 +1679,96 @@ fn is_ulid_safe(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §1.2 — cortex_session_timeline
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/sessions/{session_id}/timeline`.
+pub struct SessionTimelineTool;
+
+impl SessionTimelineTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SessionTimelineTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for SessionTimelineTool {
+    fn name(&self) -> &'static str {
+        "cortex_session_timeline"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_session_timeline",
+            "description": "Full chronological timeline for one session_id. Returns every captured envelope ordered by `ts asc` with kind + title + per-kind delta blob. Use this to rebuild 'what happened in session X' without a `cortex_query` fusion call.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["session_id"],
+                "properties": {
+                    "session_id": {"type": "string", "description": "26-char ULID identifying the session."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 100},
+                    "kind": {"type": "string", "description": "Optional kind filter (turn / tool_call / consolidation / ...)."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`session_id` is required"))?
+            .to_string();
+        // ULID is `[0-9A-HJ-KM-NP-TV-Z]{26}` — alphanumeric so URL
+        // encoding is unnecessary. Validate here so a typo surfaces
+        // as `invalid_input` instead of a 404 from cortex-api.
+        if !session_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(ToolError::invalid_input(
+                "session_id must be alphanumeric (ULID shape)",
+            ));
+        }
+        let mut qs: Vec<String> = Vec::new();
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            qs.push(format!("limit={limit}"));
+        }
+        if let Some(kind) = args
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            // `kind` is a controlled-vocab snake_case string; reject
+            // anything outside `[a-z_]+` so the URL stays clean
+            // without pulling a urlencoding dep.
+            if !kind.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+                return Err(ToolError::invalid_input(
+                    "kind must be lowercase snake_case",
+                ));
+            }
+            qs.push(format!("kind={kind}"));
+        }
+        let path = if qs.is_empty() {
+            format!("/v1/sessions/{session_id}/timeline")
+        } else {
+            format!("/v1/sessions/{session_id}/timeline?{}", qs.join("&"))
+        };
+        proxy_get(ctx, &path).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.1 — cortex_events_by_kind
 // ---------------------------------------------------------------------
 
@@ -1828,12 +1919,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_fourteen_tools_with_unique_names() {
+    fn registry_returns_fifteen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            14,
-            "phase19 §1.1 adds cortex_events_by_kind (13 -> 14)"
+            15,
+            "phase19 §1.2 adds cortex_session_timeline (14 -> 15)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -1851,6 +1942,7 @@ mod tests {
             "cortex_similar_sessions",
             "cortex_decision_chain",
             "cortex_events_by_kind",
+            "cortex_session_timeline",
         ] {
             assert!(
                 names.contains(&expected),
