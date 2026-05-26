@@ -262,6 +262,7 @@ impl ToolRegistry {
                 Arc::new(DecisionChainTool::new()),
                 Arc::new(EventsByKindTool::new()),
                 Arc::new(SessionTimelineTool::new()),
+                Arc::new(ToolCallsTool::new()),
             ],
         }
     }
@@ -1679,6 +1680,60 @@ fn is_ulid_safe(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §1.3 — cortex_tool_calls
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/search/tool-calls`.
+pub struct ToolCallsTool;
+
+impl ToolCallsTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ToolCallsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ToolCallsTool {
+    fn name(&self) -> &'static str {
+        "cortex_tool_calls"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_tool_calls",
+            "description": "Granular ToolCall envelope search. Filter by `tool_name` (Bash / Read / Edit / WebFetch / ...), `outcome` (ok / transient / rejected / task_failed / error), `repo`, and time window. Reads the `cortex_tool_calls` Meili index directly — no fusion, no per-kind cross-mixing. For per-session ordering use `cortex_session_timeline` with `kind=tool_call` instead.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string", "description": "Literal tool name as stamped by the adapter (e.g. `Bash`, `Read`)."},
+                    "outcome": {
+                        "type": "string",
+                        "enum": ["ok", "transient", "rejected", "task_failed", "error"],
+                        "description": "Outcome discriminator the worker stamps on the document."
+                    },
+                    "repo": {"type": "string", "description": "Optional repo filter."},
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `occurred_at`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `occurred_at`."},
+                    "q": {"type": "string", "description": "Free-text Meili query (matches summary / command_or_input / output_excerpt)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        proxy_search(ctx, "/v1/search/tool-calls", args).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.2 — cortex_session_timeline
 // ---------------------------------------------------------------------
 
@@ -1919,12 +1974,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_fifteen_tools_with_unique_names() {
+    fn registry_returns_sixteen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            15,
-            "phase19 §1.2 adds cortex_session_timeline (14 -> 15)"
+            16,
+            "phase19 §1.3 adds cortex_tool_calls (15 -> 16)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -1943,6 +1998,7 @@ mod tests {
             "cortex_decision_chain",
             "cortex_events_by_kind",
             "cortex_session_timeline",
+            "cortex_tool_calls",
         ] {
             assert!(
                 names.contains(&expected),

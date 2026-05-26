@@ -18,3 +18,4 @@ pub mod query_rewrite;
 pub mod relevance_config;
 pub mod search_proxy;
 pub mod strategies;
+pub mod tool_calls;

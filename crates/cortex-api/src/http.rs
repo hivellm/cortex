@@ -179,6 +179,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::events_by_kind::handle_events_by_kind),
         )
         .route(
+            "/v1/search/tool-calls",
+            post(crate::tool_calls::handle_tool_calls),
+        )
+        .route(
             "/v1/sessions/{session_id}/timeline",
             get(crate::dashboard::handle_session_timeline),
         )
