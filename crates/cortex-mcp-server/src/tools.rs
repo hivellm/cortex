@@ -267,6 +267,7 @@ impl ToolRegistry {
                 Arc::new(TopicSearchTool::new()),
                 Arc::new(ConsolidationGetTool::new()),
                 Arc::new(ConsolidationsRecentTool::new()),
+                Arc::new(ConsolidationsByEntityTool::new()),
             ],
         }
     }
@@ -1846,6 +1847,88 @@ impl Tool for ConsolidationsRecentTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §2.3 — cortex_consolidations_by_entity
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/consolidations/by-entity`.
+pub struct ConsolidationsByEntityTool;
+
+impl ConsolidationsByEntityTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationsByEntityTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationsByEntityTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidations_by_entity"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidations_by_entity",
+            "description": "List consolidation envelopes referencing an entity (file path, function name, decision id, repo, or model). Reads the `cortex_consolidations` Meili index. `repo` and `model` resolve via authoritative top-level Meili filter; `file` / `function` / `decision_id` fall back to Meili keyword search over title / summary_markdown / topics / repo because those entity types are not stamped as filterable on the consolidations index. The response surfaces `match_strategy` (`filter` or `q`) so callers can tell how authoritative the match is.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["entity"],
+                "properties": {
+                    "entity": {
+                        "type": "object",
+                        "required": ["kind", "value"],
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["file", "function", "decision_id", "repo", "model"]
+                            },
+                            "value": {"type": "string"}
+                        }
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 15}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let entity = args
+            .get("entity")
+            .ok_or_else(|| ToolError::invalid_input("`entity` is required"))?;
+        let kind = entity
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`entity.kind` is required"))?;
+        if !["file", "function", "decision_id", "repo", "model"].contains(&kind) {
+            return Err(ToolError::invalid_input(format!(
+                "unknown entity kind `{kind}`; allowed: file, function, decision_id, repo, model"
+            )));
+        }
+        let value = entity
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`entity.value` is required"))?;
+        let mut body = json!({
+            "entity": {"kind": kind, "value": value}
+        });
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            body["limit"] = Value::from(limit);
+        }
+        proxy_search(ctx, "/v1/consolidations/by-entity", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.5 — cortex_topic_search
 // ---------------------------------------------------------------------
 
@@ -2268,12 +2351,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twenty_tools_with_unique_names() {
+    fn registry_returns_twentyone_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            20,
-            "phase19 §2.2 adds cortex_consolidations_recent (19 -> 20)"
+            21,
+            "phase19 §2.3 adds cortex_consolidations_by_entity (20 -> 21)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2297,6 +2380,7 @@ mod tests {
             "cortex_topic_search",
             "cortex_consolidation_get",
             "cortex_consolidations_recent",
+            "cortex_consolidations_by_entity",
         ] {
             assert!(
                 names.contains(&expected),
