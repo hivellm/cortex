@@ -30,9 +30,15 @@ services:
       # cpu incident.
       - nexus-data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:15474/health >/dev/null || exit 1"]
-      interval: 5s
-      timeout: 3s
+      # nexus 2.x ships without curl/wget/grep — probe via bash
+      # /dev/tcp + bash regex (`[[ =~ ]]`) so we depend only on
+      # bash + head which the image carries.
+      test:
+        - "CMD-SHELL"
+        - |
+          bash -c 'exec 3<>/dev/tcp/127.0.0.1/15474 && printf "GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" >&3 && read -r status <&3 && [[ "$$status" =~ "200" ]] && exit 0; exit 1'
+      interval: 10s
+      timeout: 5s
       retries: 20
       start_period: 30s
     restart: unless-stopped

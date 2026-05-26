@@ -1306,11 +1306,27 @@ impl SynapTriggerSource {
 impl TriggerSource for SynapTriggerSource {
     async fn next_trigger(&self) -> anyhow::Result<Option<PendingTrigger>> {
         let offset = self.cursor.load(Ordering::Relaxed);
-        let events = self
+        let events = match self
             .streams
             .consume(&self.stream, Some(offset), Some(1))
             .await
-            .map_err(|e| anyhow::anyhow!("synap consume {}: {e}", self.stream))?;
+        {
+            Ok(evs) => evs,
+            Err(err) => {
+                // Synap creates rooms on first publish. Until the
+                // supervisor publishes its first trigger, the
+                // consume call returns "Room not found" which the
+                // SDK surfaces as a generic server error. Treat
+                // that as Idle so the daemon waits patiently
+                // instead of crash-looping under restart:
+                // unless-stopped.
+                let msg = err.to_string();
+                if msg.contains("not found") || msg.contains("Not Found") {
+                    return Ok(None);
+                }
+                return Err(anyhow::anyhow!("synap consume {}: {err}", self.stream));
+            }
+        };
         let Some(event) = events.into_iter().next() else {
             return Ok(None);
         };
