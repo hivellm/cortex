@@ -19,6 +19,7 @@ pub mod markdown;
 pub mod metrics;
 pub mod nexus_client;
 pub mod patch;
+pub mod projection;
 pub mod resolver;
 pub mod schema;
 pub mod stale_sweeper;

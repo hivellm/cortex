@@ -241,7 +241,7 @@ pub(crate) fn extract_via_classifier_relations(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
     use cortex_core::events::Kind;
