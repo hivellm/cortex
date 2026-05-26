@@ -281,6 +281,18 @@ for each collection in {turn, tool_call, code_chunk}:
 
 Same sweep also applies retention rules from spec 01 (PII tiers): `pii_risk=high` raw payloads are dropped at 30d (CAS blobs deleted, Parquet event row blanked-but-kept-for-audit), `medium` at 90d (re-summarized), `low` indefinite.
 
+#### Hot- and cold-tier prune (phase14b + ADR-013)
+
+Two additional sweeps land alongside the tier-transition cron above. Both are identity-driven — they walk the `event_identity` SQLite index (ADR-012) and derive each row's age from its `archive_partition` hour bucket (`year=YYYY/month=MM/day=DD/hour=HH/raw-NNNNN.parquet`):
+
+- **`hot_tier_prune`** — daily 04:00 UTC, default 90-day cutoff. Cascades per-event deletes across Meili (document) + Nexus (node) + Vectorizer (FP32/PQ per-event row). The parquet archive is preserved so the durable history stays intact until cold-tier runs. Cascade leg failure leaves the `event_identity` row in place so the next sweep retries.
+
+- **`cold_tier_prune`** — weekly Sunday 05:00 UTC, default 365-day cutoff. Cascades every backend including the parquet partition rewrite. After the per-event cascade lands it invokes `vectorizer_prune::reencode_collection("cortex.cold.binary", predicate)` (ADR-013) to evict cold-binary survivors whose `payload.occurred_at_ms < cutoff_ms`. The reencode is the only legal pruning path until Vectorizer SDK 3.2 ships a per-vector remove primitive.
+
+Synap is intentionally NOT in the cascade — Synap's id IS `event_id` per ADR-012 and Synap is event-stream-only with no per-event delete primitive. Synap stream retention is governed independently by the broker's TTL config.
+
+The cascade scope (which backends each policy hits) is encoded in `retention::identity_prune::CascadePolicy::{HOT, COLD}`; tests at `retention::{hot_tier_prune, cold_tier_prune}::tests` pin the behaviour against the in-memory `RecordingCascadeOps` fixture.
+
 ### Idempotency contracts
 
 - **Vectorizer:** upsert by `event_id` (primary key in collection metadata); re-running embed for the same event is a no-op.
