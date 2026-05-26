@@ -198,6 +198,10 @@ pub fn build_router_with_auth_and_cfg(
             "/v1/topic-cards/search",
             post(crate::topic_search::handle_topic_search),
         )
+        .route(
+            "/v1/consolidations/{id}",
+            get(crate::consolidation_get::handle_consolidation_get),
+        )
         .with_state(state);
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from

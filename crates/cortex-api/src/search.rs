@@ -11,6 +11,7 @@
 pub mod analyzer;
 pub mod budget;
 pub mod cache;
+pub mod consolidation_get;
 pub mod events_by_kind;
 pub mod files_touched;
 pub mod fusion;

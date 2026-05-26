@@ -265,6 +265,7 @@ impl ToolRegistry {
                 Arc::new(ToolCallsTool::new()),
                 Arc::new(FilesTouchedTool::new()),
                 Arc::new(TopicSearchTool::new()),
+                Arc::new(ConsolidationGetTool::new()),
             ],
         }
     }
@@ -1682,6 +1683,70 @@ fn is_ulid_safe(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §2.1 — cortex_consolidation_get
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/consolidations/{id}`.
+pub struct ConsolidationGetTool;
+
+impl ConsolidationGetTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationGetTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationGetTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidation_get"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidation_get",
+            "description": "Fetch one consolidation by `event_id` (envelope primary key) or by `consolidation_id` (stable producer-assigned id). Returns the full payload: summary_markdown, takeaways, source_event_ids, temporal_span, repos, tags, outcome_distribution, grain, scope, depth, model. Use this when you have a consolidation id from `cortex_query` / `cortex_similar_sessions` / `cortex_consolidations_recent` and need the full body without re-fetching through the fusion layer.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "ULID or slug — accepted on both `event_id` (envelope) and `consolidation_id` (producer-stable)."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let id = args
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`id` is required"))?
+            .to_string();
+        if !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            || id.len() > 128
+        {
+            return Err(ToolError::invalid_input(
+                "id must be alphanumeric (ULID or slug shape, ≤128 chars)",
+            ));
+        }
+        proxy_get(ctx, &format!("/v1/consolidations/{id}")).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.5 — cortex_topic_search
 // ---------------------------------------------------------------------
 
@@ -2104,12 +2169,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_eighteen_tools_with_unique_names() {
+    fn registry_returns_nineteen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            18,
-            "phase19 §1.5 adds cortex_topic_search (17 -> 18)"
+            19,
+            "phase19 §2.1 adds cortex_consolidation_get (18 -> 19)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2131,6 +2196,7 @@ mod tests {
             "cortex_tool_calls",
             "cortex_files_touched",
             "cortex_topic_search",
+            "cortex_consolidation_get",
         ] {
             assert!(
                 names.contains(&expected),
