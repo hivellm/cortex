@@ -47,6 +47,8 @@
 use super::patch::EdgeOp;
 use crate::embedder::EnrichedEvent;
 
+pub mod calls;
+
 /// Friendly re-export — `Edge` is the same shape as
 /// [`super::patch::EdgeOp`]; the alias lets each extractor file
 /// say `use super::Edge` without pulling the whole patch module.
