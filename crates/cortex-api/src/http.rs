@@ -183,8 +183,16 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::tool_calls::handle_tool_calls),
         )
         .route(
+            "/v1/search/files-touched",
+            post(crate::files_touched::handle_window_files_touched),
+        )
+        .route(
             "/v1/sessions/{session_id}/timeline",
             get(crate::dashboard::handle_session_timeline),
+        )
+        .route(
+            "/v1/sessions/{session_id}/files-touched",
+            get(crate::files_touched::handle_session_files_touched),
         )
         .with_state(state);
     // phase13g §2.3 — similar-sessions route. Lives on its own

@@ -29,8 +29,9 @@ pub use rpc::{
 };
 pub use server::{Server, ServerInfo, SERVER_NAME, SERVER_VERSION};
 pub use tools::{
-    EventsByKindTool, ForgetTool, PreThinkingTool, QueryTool, SessionTimelineTool, StatusTool,
-    Tool, ToolCallsTool, ToolContext, ToolError, ToolRegistry, ToolResult, MCP_TOOL_TIMEOUT_MS,
+    EventsByKindTool, FilesTouchedTool, ForgetTool, PreThinkingTool, QueryTool,
+    SessionTimelineTool, StatusTool, Tool, ToolCallsTool, ToolContext, ToolError, ToolRegistry,
+    ToolResult, MCP_TOOL_TIMEOUT_MS,
 };
 pub use validate::{validate_plugin, ValidationReport};
 

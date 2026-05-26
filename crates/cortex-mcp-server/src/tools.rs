@@ -263,6 +263,7 @@ impl ToolRegistry {
                 Arc::new(EventsByKindTool::new()),
                 Arc::new(SessionTimelineTool::new()),
                 Arc::new(ToolCallsTool::new()),
+                Arc::new(FilesTouchedTool::new()),
             ],
         }
     }
@@ -1680,6 +1681,86 @@ fn is_ulid_safe(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §1.4 — cortex_files_touched
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for the files-touched dual-route surface.
+///
+/// When the caller provides `session_id`, the tool routes to
+/// `GET /v1/sessions/{session_id}/files-touched`. Otherwise it
+/// posts `(repo?, since?, until?, limit?)` to
+/// `POST /v1/search/files-touched` and the handler scans the
+/// archive window.
+pub struct FilesTouchedTool;
+
+impl FilesTouchedTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for FilesTouchedTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for FilesTouchedTool {
+    fn name(&self) -> &'static str {
+        "cortex_files_touched"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_files_touched",
+            "description": "Aggregate every file path touched by ToolCall envelopes for one session OR a (repo, since, until) window. Returns per-path `{read_count, write_count, other_count, last_touched_ts}` sorted by total touches desc. Exactly one of `session_id` OR (`repo`/`since`/`until`) must be set.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "When set, returns paths for that session only."},
+                    "repo": {"type": "string", "description": "Repo filter for the window mode."},
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `occurred_at` (window mode)."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `occurred_at` (window mode)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let session_id = args
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(sid) = session_id {
+            if !sid
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+            {
+                return Err(ToolError::invalid_input(
+                    "session_id must be alphanumeric (ULID shape)",
+                ));
+            }
+            let mut path = format!("/v1/sessions/{sid}/files-touched");
+            if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+                path.push_str(&format!("?limit={limit}"));
+            }
+            return proxy_get(ctx, &path).await;
+        }
+        // Window mode — POST with the assembled body. Strip the
+        // `session_id` field if it landed empty.
+        let mut body = args.clone();
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("session_id");
+        }
+        proxy_search(ctx, "/v1/search/files-touched", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.3 — cortex_tool_calls
 // ---------------------------------------------------------------------
 
@@ -1974,12 +2055,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_sixteen_tools_with_unique_names() {
+    fn registry_returns_seventeen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            16,
-            "phase19 §1.3 adds cortex_tool_calls (15 -> 16)"
+            17,
+            "phase19 §1.4 adds cortex_files_touched (16 -> 17)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -1999,6 +2080,7 @@ mod tests {
             "cortex_events_by_kind",
             "cortex_session_timeline",
             "cortex_tool_calls",
+            "cortex_files_touched",
         ] {
             assert!(
                 names.contains(&expected),

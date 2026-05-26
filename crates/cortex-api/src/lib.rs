@@ -89,6 +89,7 @@ pub use search::analyzer;
 pub use search::budget;
 pub use search::cache;
 pub use search::events_by_kind;
+pub use search::files_touched;
 pub use search::fusion;
 pub use search::orchestrator;
 pub use search::query_rewrite;

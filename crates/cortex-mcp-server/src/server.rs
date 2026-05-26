@@ -273,8 +273,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            16,
-            "phase19 §1.3 adds cortex_tool_calls (15 -> 16)"
+            17,
+            "phase19 §1.4 adds cortex_files_touched (16 -> 17)"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
