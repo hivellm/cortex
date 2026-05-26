@@ -29,7 +29,13 @@
       "PowerShell(Get-Process -Id 146412)",
       "PowerShell(Get-WmiObject Win32_Process -Filter \"ProcessId = 146412\")",
       "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 146412\")",
-      "PowerShell($pid_for_5173 = \\(Get-NetTCPConnection -State Listen -LocalPort 5173 -ErrorAction SilentlyContinue\\).OwningProcess; if \\($pid_for_5173\\) { Stop-Process -Id $pid_for_5173 -Force; Write-Host \"stopped pid $pid_for_5173\" } else { Write-Host \"no listener on 5173\" })"
+      "PowerShell($pid_for_5173 = \\(Get-NetTCPConnection -State Listen -LocalPort 5173 -ErrorAction SilentlyContinue\\).OwningProcess; if \\($pid_for_5173\\) { Stop-Process -Id $pid_for_5173 -Force; Write-Host \"stopped pid $pid_for_5173\" } else { Write-Host \"no listener on 5173\" })",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "mcp__plugin_playwright_playwright__browser_console_messages",
+      "mcp__plugin_playwright_playwright__browser_network_requests",
+      "mcp__plugin_playwright_playwright__browser_network_request",
+      "mcp__plugin_playwright_playwright__browser_evaluate"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

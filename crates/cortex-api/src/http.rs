@@ -174,6 +174,10 @@ pub fn build_router_with_auth_and_cfg(
             "/v1/search/graph",
             post(crate::search_proxy::handle_graph_query),
         )
+        .route(
+            "/v1/search/events",
+            post(crate::events_by_kind::handle_events_by_kind),
+        )
         .with_state(state);
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from

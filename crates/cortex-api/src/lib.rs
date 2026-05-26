@@ -88,6 +88,7 @@ pub use mcp::topic_card as mcp_topic_card;
 pub use search::analyzer;
 pub use search::budget;
 pub use search::cache;
+pub use search::events_by_kind;
 pub use search::fusion;
 pub use search::orchestrator;
 pub use search::query_rewrite;

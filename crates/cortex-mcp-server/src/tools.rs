@@ -260,6 +260,7 @@ impl ToolRegistry {
                 Arc::new(ActiveWorkTool::new()),
                 Arc::new(SimilarSessionsTool::new()),
                 Arc::new(DecisionChainTool::new()),
+                Arc::new(EventsByKindTool::new()),
             ],
         }
     }
@@ -1676,6 +1677,71 @@ fn is_ulid_safe(s: &str) -> bool {
     })
 }
 
+// ---------------------------------------------------------------------
+// phase19 §1.1 — cortex_events_by_kind
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/search/events`.
+///
+/// Granular envelope listing filtered by `kind` (Turn / ToolCall /
+/// Consolidation / Decision / KnowledgeNote / LearningNote /
+/// TopicCard / Law / Memory / Analysis). Reads from the kind-routed
+/// Meili index so the response carries the native envelope shape —
+/// no fusion projection.
+pub struct EventsByKindTool;
+
+impl EventsByKindTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for EventsByKindTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for EventsByKindTool {
+    fn name(&self) -> &'static str {
+        "cortex_events_by_kind"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_events_by_kind",
+            "description": "List envelopes filtered by `kind` (turn / tool_call / consolidation / decision / analysis / memory / law / knowledge / learning / topic_card). Reads directly from the kind-routed Meili index — returns the native envelope shape, NOT a fusion projection. Use this when `cortex_query` would post-filter and drop candidates.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["kind"],
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": [
+                            "turn", "tool_call", "consolidation", "decision",
+                            "analysis", "memory", "law", "violation",
+                            "knowledge", "learning", "topic_card"
+                        ],
+                        "description": "Envelope kind discriminator. Accepts both snake_case (`tool_call`) and PascalCase (`ToolCall`)."
+                    },
+                    "repo": {"type": "string", "description": "Optional `source.repo` filter."},
+                    "session_id": {"type": "string", "description": "Optional `session_id` filter."},
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `occurred_at`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `occurred_at`."},
+                    "q": {"type": "string", "description": "Free-text Meili query. Empty string returns every match."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        proxy_search(ctx, "/v1/search/events", args).await
+    }
+}
+
 /// GET-mode sibling of [`proxy_search`]. Reads the response body
 /// verbatim into a `ToolResult`.
 async fn proxy_get(ctx: &ToolContext, path: &str) -> Result<ToolResult, ToolError> {
@@ -1762,12 +1828,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_thirteen_tools_with_unique_names() {
+    fn registry_returns_fourteen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            13,
-            "phase13g §3 adds cortex_decision_chain (12 -> 13)"
+            14,
+            "phase19 §1.1 adds cortex_events_by_kind (13 -> 14)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -1784,6 +1850,7 @@ mod tests {
             "cortex_active_work",
             "cortex_similar_sessions",
             "cortex_decision_chain",
+            "cortex_events_by_kind",
         ] {
             assert!(
                 names.contains(&expected),

@@ -11,6 +11,7 @@
 pub mod analyzer;
 pub mod budget;
 pub mod cache;
+pub mod events_by_kind;
 pub mod fusion;
 pub mod orchestrator;
 pub mod query_rewrite;
