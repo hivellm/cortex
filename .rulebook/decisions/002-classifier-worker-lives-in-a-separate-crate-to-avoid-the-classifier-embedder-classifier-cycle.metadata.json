@@ -1,0 +1,11 @@
+{
+  "id": 2,
+  "slug": "classifier-worker-lives-in-a-separate-crate-to-avoid-the-classifier-embedder-classifier-cycle",
+  "title": "Classifier worker lives in a separate crate to avoid the classifier -> embedder -> classifier cycle",
+  "status": "proposed",
+  "date": "2026-04-27",
+  "relatedTasks": [
+    "phase1_classifier_worker"
+  ],
+  "supersededBy": null
+}

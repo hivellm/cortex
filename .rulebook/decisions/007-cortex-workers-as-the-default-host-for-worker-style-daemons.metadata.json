@@ -1,0 +1,13 @@
+{
+  "id": 7,
+  "slug": "cortex-workers-as-the-default-host-for-worker-style-daemons",
+  "title": "cortex-workers as the default host for worker-style daemons",
+  "status": "proposed",
+  "date": "2026-05-03",
+  "relatedTasks": [
+    "phase11s_workers_consolidation_merge",
+    "phase11j_consolidation_tier",
+    "phase11r_topic_card_mcp_enrichment"
+  ],
+  "supersededBy": null
+}

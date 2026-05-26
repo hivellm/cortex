@@ -1,0 +1,19 @@
+{
+  "id": "per-stage-divergence-counters-detect-silent-pipeline-drops",
+  "type": "pattern",
+  "title": "Per-stage divergence counters detect silent pipeline drops",
+  "category": "observability",
+  "description": "Each pipeline stage exports a `last_*_ts_ms` gauge plus per-kind/per-hook counters via `/healthz` extras AND a parallel Prometheus-text `/metrics` endpoint mounted on the same listener. A central aggregator (cortex-api `/v1/health/freshness` + `/v1/health/divergence`) probes the same target list once and pivots adjacent-stage counter pairs to localise silent drops in seconds — instead of relying on per-component liveness.",
+  "example": "// adapter side\nmetrics.incr_envelopes_built(env.kind.schema_stem());\npublisher.publish(env).await;\n// publisher.flush_locked → on success → metrics.incr_envelopes_publish_ok(kind)\n// /v1/health/divergence pairs adapter.envelopes_built ↔ adapter.envelopes_publish_ok\n// → built=100, publish_ok=20 over 60s ⇒ delta_growth=80 ⇒ severity=critical",
+  "whenToUse": "Multi-stage pipelines where individual `/healthz` returning Ok masks a stalled data flow (e.g. JSON-truncation incident 2026-04-28). Pair every counter that bumps at the upstream side with the symmetric counter at the immediate downstream side; a sustained `delta_growth_60s > 10` is the smoking gun.",
+  "whenNotToUse": "Single-stage services (no adjacent boundary to pair). Stages where individual events naturally fan-out / fan-in (per-kind divergence becomes meaningless when the cardinality intentionally shifts between stages).",
+  "createdAt": "2026-04-29T17:58:08.559Z",
+  "tags": [
+    "phase8b",
+    "metrics",
+    "health",
+    "divergence",
+    "cortex"
+  ],
+  "source": "manual"
+}

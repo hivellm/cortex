@@ -1,0 +1,19 @@
+{
+  "id": "fixed-precedence-projection-chain-across-heterogeneous-document-kinds",
+  "type": "anti-pattern",
+  "title": "Fixed-precedence projection chain across heterogeneous document kinds",
+  "category": "retrieval",
+  "description": "When a search lane projects upstream documents into a unified hit shape, do NOT use a single fixed precedence chain (`summary > title > body`) when the documents have heterogeneous shapes per `kind`. Curated kinds (decisions, analyses, memories) have a real `summary` and benefit from `summary`-first; raw artifact kinds (code/doc files) have empty summaries and the file path as `title`, so the chain stops at the path and the actual searchable content (`body`) never reaches the snippet text. The bug is invisible from the index — Meili / Vectorizer rank correctly against `body` — but the projected snippet text is wrong, masking the right document behind a path string. Fix: switch to a kind-aware chain (`projection_chain(kind, &summary, &title, &body)`) that picks the most-content-bearing field per kind. Test guard: pin the artifact-with-body case so a regression to the fixed chain blows up immediately. Discovered in cortex 2026-04-28: `free_search \"JWT refresh\"` returned `main.rs` and `docker-compose.yml` but missed `vectorizer_lane.rs` — the only file containing `LoginCreds` / `refresh_token` — because every artifact hit projected `text = \"<path>\"`.",
+  "example": "// Anti-pattern (pre-phase6g):\nlet text = doc.summary.or(doc.title).or(doc.body).unwrap_or_default();\n// `kind=artifact` always lands as `text = \"<path>\"`.\n\n// Fix (phase6g):\nfn projection_chain<'a>(kind: Option<&str>, summary: &'a Option<String>,\n                        title: &'a Option<String>, body: &'a Option<String>)\n    -> [&'a Option<String>; 3] {\n    match kind {\n        Some(\"artifact\") | Some(\"law_violation\") => [body, summary, title],\n        Some(\"decision\") | Some(\"analysis\") | Some(\"memory\") => [summary, title, body],\n        Some(\"turn\") | Some(\"tool_call\") | Some(\"agent_call\") => [summary, body, title],\n        _ => [summary, title, body],\n    }\n}",
+  "whenNotToUse": "When all document kinds genuinely have the same field semantics. The kind-aware chain only pays off when the per-kind shapes differ (which they almost always do once you index more than one event source).",
+  "createdAt": "2026-04-29T16:26:10.306Z",
+  "tags": [
+    "analysis:relevance",
+    "phase6g",
+    "F-009",
+    "meili",
+    "projection",
+    "anti-pattern"
+  ],
+  "source": "manual"
+}

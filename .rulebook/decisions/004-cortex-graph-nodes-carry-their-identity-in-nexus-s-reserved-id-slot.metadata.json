@@ -1,0 +1,12 @@
+{
+  "id": 4,
+  "slug": "cortex-graph-nodes-carry-their-identity-in-nexus-s-reserved-id-slot",
+  "title": "Cortex graph nodes carry their identity in Nexus's reserved _id slot",
+  "status": "proposed",
+  "date": "2026-05-02",
+  "relatedTasks": [
+    "phase11k_graph_correlations",
+    "phase11l_nexus-external-ids-migration"
+  ],
+  "supersededBy": null
+}

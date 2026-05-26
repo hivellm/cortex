@@ -1,0 +1,11 @@
+{
+  "id": 6,
+  "slug": "governance-kinds-dual-write-to-per-repo-global-meili-indexes",
+  "title": "Governance kinds dual-write to per-repo + global Meili indexes",
+  "status": "proposed",
+  "date": "2026-05-03",
+  "relatedTasks": [
+    "phase11k_governance_lane_projection"
+  ],
+  "supersededBy": null
+}

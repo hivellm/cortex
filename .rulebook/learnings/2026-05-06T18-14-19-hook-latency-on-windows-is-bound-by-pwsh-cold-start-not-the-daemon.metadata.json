@@ -1,0 +1,18 @@
+{
+  "id": "2026-05-06T18-14-19-hook-latency-on-windows-is-bound-by-pwsh-cold-start-not-the-daemon",
+  "title": "Hook latency on Windows is bound by pwsh cold-start, not the daemon",
+  "content": "## Context\n\nThe Cortex Claude Code adapter shipped per-event hook shims as\n`.sh` (Linux/macOS) and `.ps1` (Windows). On Windows every hook\ninvocation cost ~730 ms wall-clock, and the project tracked the\nslowness as a \"daemon round-trip is slow\" problem for months.\n\n## Finding (2026-05-06 profiling)\n\nBench breakdown of a single hook on Windows (release adapter daemon up):\n\n| Component                              | ms    |\n|----------------------------------------|-------|\n| `pwsh -NoProfile` cold start           | 545   |\n| Script body (log appends, JSON build)  |  95   |\n| Named-pipe round-trip + daemon work    |  90   |\n| **Total per hook**                     | ~730  |\n\nDaemon work is **12 %** of per-hook cost on Windows. The dominant\ncost is just spawning PowerShell. PowerShell cold start is a\nstructural floor; `pwsh -NoProfile -Command \"exit 0\"` measures\n~545 ms by itself. The named-pipe round-trip — including the\ndaemon's `cortex-api /v1/query` pre-thinking call — is ~90 ms.\n\n## Lesson\n\nWhen a hook surface is slow on Windows, **profile process spawn\nfirst, daemon work last**. The shape of the latency sets the fix:\n\n- **Process-spawn-bound** (this case): replace the shim with a\n  native binary. Rust release bin starts in ~30–50 ms on Windows,\n  10× faster than `pwsh`. Phase 11x's `cortex-hook` cut total\n  per-hook cost from 730 ms → ~70 ms.\n- **Daemon-bound**: optimise the daemon's hot path (caching,\n  fewer round-trips, async batching). Premature optimisation here\n  while the cost is in `pwsh` is wasted effort.\n\n## Heuristic\n\nFor any agent-host integration on Windows that spawns a fresh\nshell per event:\n\n1. Measure `<shell> --no-profile -c \"exit 0\"` first.\n2. Subtract that floor from the wall-clock per-event cost.\n3. If the floor is >50 % of the total, ship a native bin shim\n   before touching the daemon code.\n\n## Evidence\n\n- Baseline: `crates/cortex-adapter-claude-code/benches/baseline-2026-05-06.txt`\n- Bin: `crates/cortex-adapter-claude-code/src/bin/cortex-hook.rs`\n- Per-turn delta on a 14-hook turn: ~10.2 s → ~0.9 s (= ~9.3 s / turn).\n\n## Anti-pattern\n\nAdding more hooks (extra log writes, env parsing, JSON tweaks)\nto a `.ps1` shim looking for the missing 100 ms while the\nunavoidable 545 ms `pwsh` cold start eats every win. Don't optimise\ninside the shell when the shell itself is the bottleneck.",
+  "source": "manual",
+  "relatedTask": "phase11x_cortex-hook-native-shim",
+  "tags": [
+    "performance",
+    "windows",
+    "hooks",
+    "powershell",
+    "profiling",
+    "claude-code",
+    "adapter",
+    "phase11x"
+  ],
+  "createdAt": "2026-05-06T18:14:19.616Z"
+}

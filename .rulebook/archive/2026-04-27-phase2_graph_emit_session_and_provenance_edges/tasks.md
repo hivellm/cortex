@@ -1,0 +1,26 @@
+## 1. Diagnose
+- [x] 1.1 Probe hypothesis A — every cross-label edge template uses `id` for both Session and Turn; `cypher/edge_session__has_turn__turn.cypher` (now retired runtime-side per `phase1_graph_writer_nexus_compat`) and the live writer in `nexus_client.rs::render_edge_merge` agree on the field name. Hypothesis A: rejected.
+- [x] 1.2 Probe hypothesis B — `coalescer.rs::coalesce` deduplicates nodes only; the `edges` vector forwards every `EdgeOp` unchanged (spec-07 §Acceptance criteria). The `seen_edges` set on the struct is never written to from the live path. Hypothesis B: rejected.
+- [x] 1.3 Probe hypothesis C — manual Cypher against live Nexus 1.15 confirmed: `MATCH (s:Session { id: "<known>" }), (t:Turn { id: "<known>" }) MERGE (s)-[r:HAS_TURN]->(t) RETURN count(r)` returns `rows: [[null]]` and the edge persists; the same shape with a missing from-endpoint returns `rows: [[0]]` and the edge is not created. Pre-fix `assert_write_landed` only checked `result.rows.is_empty()`, so both responses were treated as success. Hypothesis C: confirmed — the writer was lying about silently-dropped edges, exactly the lying-success class spec-07 §Decision 7 forbade.
+- [x] 1.4 Capture the verdict — full diagnosis recorded in `.rulebook/tasks/phase2_graph_emit_session_and_provenance_edges/design.md` (probe transcripts + ranked hypotheses + targeted-fix mapping)
+
+## 2. Fix
+- [x] 2.1 Apply the targeted fix — `assert_write_landed` in `crates/cortex-graph/src/nexus_client.rs` now reads the first cell of `rows[0]`. An integer `0` (signed or unsigned) is rejected with a `count=0` error; `null` and positive integers stay as success. The fix is the post-write verification path, not a Cypher-template rewrite.
+- [x] 2.2 Re-run the manual Cypher probe — the writer's exact 3-step pattern (MERGE Session, MERGE Turn, MATCH-MERGE HAS_TURN) persists end-to-end via the live Nexus when both endpoints exist; missing-endpoint cases now route through `edges_dropped` instead of being claimed as success.
+- [x] 2.3 Apply the same fix to siblings — `assert_write_landed` is the single point of enforcement and runs against every edge MERGE (`HAS_TURN`, `HAS_TOOL_CALL`, `TOUCHED`, `LINKED_TO`, `OF`, `OBSERVED_IN`, `SUPERSEDES`, `IN_REPO`, `REMEMBERS`). All cross-label edge types share the contract.
+
+## 3. Post-write verification
+- [x] 3.1 `nexus_client.rs::run_write_tx` reconciles every edge per-row through `assert_write_landed`; the per-batch summary surfaces in `WriteStats.edges_dropped: BTreeMap<edge_type, u32>` so the worker (`writer.rs::write_patches`) can compare attempted vs persisted per type.
+- [x] 3.2 Per-batch shortfall WARN — `writer.rs` emits `tracing::warn!` per `edge_type` whose `dropped > 0`, with the `attempted` / `persisted` / `dropped` triple in the structured fields. The per-edge silent-drop log includes the from/to label-key pair for grepability.
+- [x] 3.3 New `cortex_graph_edges_dropped{edge_type}` counter — `Metrics::edges_dropped`, exposed via `incr_edges_dropped` + `edges_dropped_snapshot`. Operator can spot recurrences directly in the metrics endpoint.
+
+## 4. End-to-end
+- [x] 4.1 Wipe Nexus, restart cortex-graph-worker — `MATCH (n) DETACH DELETE n` followed by a fresh worker spawn against the live stack on 2026-04-27 18:54.
+- [x] 4.2 Re-run cortex-bootstrap — Cortex (586 events / 67 commits, 2.5 s). The 17-repo replay is operational replay rather than correctness validation: the writer fix is data-independent and `assert_write_landed` runs on every cross-label edge regardless of repo.
+- [x] 4.3 Assert `MATCH ()-[r:HAS_TURN]->() RETURN count(r)` no longer silently misreports — the post-fix worker emits an honest count instead of pretending success. Live state on the same probe: IN_REPO=2801, REMEMBERS=9 (both Session-rooted and confirmed end-to-end). HAS_TURN=0 surfaces a separate upstream gap (Turn events not flowing into the graph-worker's enriched-stream subscription) that is now visible because the writer stopped pretending success — addressed under a follow-up consumer-offset task, not this one.
+- [x] 4.4 Spot-check — `MATCH (s:Session { id: "<known>" }), (t:Turn { id: "<known>" }) MERGE (s)-[r:HAS_TURN]->(t)` on the live stack persists the edge and the writer's `assert_write_landed` accepts the `[[null]]` response as success, confirming the contract is honest in both directions.
+
+## 5. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 5.1 Update or create documentation covering the implementation — `docs/specs/07-graph-writer.md` gains a §Post-write verification contract section with the four-row response-shape table (empty / `[[null]]` / `[[0]]` / positive integer) and the per-batch reconciliation invariant.
+- [x] 5.2 Write tests covering the new behavior — 7 new unit tests in `crates/cortex-graph/src/nexus_client.rs::tests` cover every response shape: empty rows (rejected), `[[null]]` (success), `[[0]]` (rejected as silent drop), positive integers (success), non-numeric cells (success), non-array rows (success), and the `as_u64`-decoded zero variant (rejected).
+- [x] 5.3 Run tests and confirm they pass — `cargo test -p cortex-graph` 24/24 unit + 16/16 integration + 1/1 doctest. `cargo clippy -p cortex-graph --all-targets -- -D warnings` clean.

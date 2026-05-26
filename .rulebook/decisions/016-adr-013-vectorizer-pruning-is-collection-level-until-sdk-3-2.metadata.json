@@ -1,0 +1,11 @@
+{
+  "id": 16,
+  "slug": "adr-013-vectorizer-pruning-is-collection-level-until-sdk-3-2",
+  "title": "ADR-013 — Vectorizer pruning is collection-level until SDK 3.2",
+  "status": "accepted",
+  "date": "2026-05-25",
+  "relatedTasks": [
+    "phase14b_pruning-sweep-impls-adr-013"
+  ],
+  "supersededBy": null
+}

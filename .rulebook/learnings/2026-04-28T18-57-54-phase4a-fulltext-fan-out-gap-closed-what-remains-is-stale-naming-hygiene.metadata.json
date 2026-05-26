@@ -1,0 +1,15 @@
+{
+  "id": "2026-04-28T18-57-54-phase4a-fulltext-fan-out-gap-closed-what-remains-is-stale-naming-hygiene",
+  "title": "phase4a: fulltext fan-out gap closed; what remains is stale-naming hygiene",
+  "content": "## Question\nThe 2026-04-27 22:36 UTC audit reported Meilisearch had only `Cortex` indexed (589 docs) while Vectorizer had `Cortex/Rulebook/Vectorizer`. Phase4a was scoped to fix that fan-out gap.\n\n## Re-probe (2026-04-28 / phase4a diagnostic)\nLive Meili at `127.0.0.1:17004` (auth `cortex-dev-master-key`) returns 35 indexes via `/stats`:\n\n```\ncortex-cortex-{code,decisions,docs,governance,misc,turns,analyses}    populated\ncortex-nexus-{code,decisions,docs,misc,turns}                          populated\ncortex-rulebook-{code,docs,misc,turns}                                 populated\ncortex-synap-{code,decisions,docs,misc,turns}                          populated\ncortex-tml-{code,docs,turns}                                           populated (TML=185k docs)\ncortex-vectorizer-{code,docs,misc,turns}                               populated\ncortex-{analyses,code,decisions,docs,governance,misc,turns}            ALL EMPTY (stale)\n```\n\n7 stale 2-token names exist, all with `numberOfDocuments == 0`. The audit's original \"Rulebook missing\" diagnosis is no longer true — phase4b's bootstrap (or a normal worker run after phase4b) populated rulebook + nexus + synap + tml + vectorizer. The 2-token names are residue from before the per-project naming migration.\n\n## Root cause\nTwo things, separable:\n\n1. The audit's \"fan-out gap\" was real at audit time but has been closed by intervening bootstrap runs. No code bug to fix on the fan-out path itself — `routing::index_for_event` correctly reads `event.context_repo` and slug-routes per project.\n2. The 7 stale 2-token indexes were never swept. They pollute `/indexes` listings and risk being targeted by old client code.\n\n## Implication for phase4a\n- The replay-missing-repos path (proposal §2) is a useful **defense in depth** but does not address an active gap today. Worth shipping for future regressions where a worker stops mid-replay.\n- The stale-sweep (proposal §3) is the active fix — those 7 indexes need to go.\n- The routing invariant guard (proposal §4) is preventive.\n\n## Probe artifacts\n- [scripts/probe_partitions.py](../../../scripts/probe_partitions.py) — counts `(repo_slug, family)` partitions in `~/.cortex/archive/events/**/*.parquet` so future audits can re-baseline without manual JSON-grep.\n- Re-run command: `python scripts/probe_partitions.py` — outputs each partition's projected index name.",
+  "source": "manual",
+  "relatedTask": "phase4a_fulltext_fanout_parity_and_stale_meili_cleanup",
+  "tags": [
+    "phase4a",
+    "fulltext",
+    "meilisearch",
+    "audit",
+    "diagnostic"
+  ],
+  "createdAt": "2026-04-28T18:57:54.098Z"
+}

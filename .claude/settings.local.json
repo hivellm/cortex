@@ -21,7 +21,8 @@
       "PowerShell($env:CORTEX_METADATA_DB=\"C:\\\\Users\\\\Bolado\\\\.cortex\\\\metadata.sqlite\"; .\\\\target\\\\release\\\\cortex-ops.exe schedule run-now retention.consolidator_nightly --metadata-db \"C:\\\\Users\\\\Bolado\\\\.cortex\\\\metadata.sqlite\" 2>&1 | Select-Object -Last 40)",
       "PowerShell(.\\\\target\\\\release\\\\cortex-ops.exe sessions-backfill --dry-run --json 2>&1)",
       "PowerShell(.\\\\target\\\\release\\\\cortex-ops.exe sessions-backfill --json 2>&1)",
-      "PowerShell(.\\\\target\\\\debug\\\\cortex-ops.exe doctor-config-audit --crates-root crates --json 2>&1 | Out-File -Encoding utf8 e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json; \"exit=$LASTEXITCODE\"; Get-Content e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json | Select-Object -First 4)"
+      "PowerShell(.\\\\target\\\\debug\\\\cortex-ops.exe doctor-config-audit --crates-root crates --json 2>&1 | Out-File -Encoding utf8 e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json; \"exit=$LASTEXITCODE\"; Get-Content e:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\_audit.json | Select-Object -First 4)",
+      "PowerShell(Stop-Process -Id 160676 -Force)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

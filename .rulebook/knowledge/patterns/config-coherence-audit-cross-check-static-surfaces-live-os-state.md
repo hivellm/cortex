@@ -1,0 +1,24 @@
+# Config coherence audit: cross-check static surfaces + live OS state
+
+**Category**: observability
+**Tags**: phase8d, config, audit, drift, cortex
+
+## Description
+
+A pure-function `ConfigAudit` reads every config surface (.env, adapter.toml, .mcp.json, hooks.json) plus the OS's live port table (netstat -ano / ss -tln) and cross-checks: adapter.toml endpoint == .env CORTEX_INGESTION_URL, .mcp.json CORTEX_API_URL == .env CORTEX_API_URL, every loopback *_URL env value's port appears in the live-port scan, etc. Findings carry Severity::{Ok|Warn|Critical} and the worst severity maps directly to CLI exit codes (0/1/2).
+
+## Example
+
+// Each finding has source + severity + message:
+// CRITICAL [cross-check] adapter.toml.endpoint = http://127.0.0.1:15010 but .env CORTEX_INGESTION_URL = http://127.0.0.1:17010
+// CRITICAL [live-ports] CORTEX_INGESTION_URL = http://127.0.0.1:17010 but no process listens on :17010
+let audit = run_audit_with(&paths, AuditOptions::full());
+match audit.worst_severity() { Ok=>0, Warn=>1, Critical=>2 }
+
+## When to Use
+
+Multi-process workspaces where config drift bites quietly: stale daemons holding old endpoints, port migrations that touched some files but not others, missing canonical hooks. Wire as a `/v1/health/config` HTTP endpoint AND a CLI (cortex-ops doctor-config) sharing the same pure-function audit so the dashboard and operator scripts never disagree.
+
+## When NOT to Use
+
+Single-process or single-config-file deployments — the checks devolve to `is the file valid?` which is already covered by the parser. Also: don't add `/healthz` reachability inside the config audit when an aggregator endpoint already does the same probe — the live-port scan is the strictly stronger OS-level check.

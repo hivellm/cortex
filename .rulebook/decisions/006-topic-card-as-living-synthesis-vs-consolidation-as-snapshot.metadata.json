@@ -1,0 +1,12 @@
+{
+  "id": 6,
+  "slug": "topic-card-as-living-synthesis-vs-consolidation-as-snapshot",
+  "title": "Topic card as living-synthesis vs. consolidation as snapshot",
+  "status": "proposed",
+  "date": "2026-05-03",
+  "relatedTasks": [
+    "phase11j_consolidation_tier",
+    "phase11r_topic_card_mcp_enrichment"
+  ],
+  "supersededBy": null
+}

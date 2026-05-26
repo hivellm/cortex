@@ -1,0 +1,20 @@
+{
+  "id": "synap-publisher-should-auto-create-rooms-on-first-not-found",
+  "type": "pattern",
+  "title": "Synap publisher should auto-create rooms on first \"not found\"",
+  "category": "architecture",
+  "description": "Synap 0.11 requires `stream.create` before any `stream.publish` call against a previously-untouched room. Publishers that hard-fail on the first publish create operational ordering constraints (the producer cannot start before someone has already touched the room). The clean fix is to make every Synap publisher self-heal: on a \"Room not found\" / \"Invalid request: Room ...\" error, call `streams.create_room(room, None)` once and retry the publish. This is what cortex-bootstrap and cortex-classifier-worker now do; cortex-ingestion/embedder/graph/fulltext should follow.",
+  "example": "match self.handle.streams().publish(room, kind, envelope.clone()).await {\n    Ok(_offset) => Ok(()),\n    Err(e) => {\n        let msg = e.to_string();\n        if msg.contains(\"not found\") || msg.contains(\"Room\") {\n            // Best-effort create then retry once.\n            let _ = self.handle.streams().create_room(room, None).await;\n            self.handle.streams().publish(room, kind, envelope.clone()).await\n                .map(|_| ()).map_err(|e| anyhow!(\"post-create publish: {e}\"))\n        } else {\n            Err(anyhow!(\"synap publish: {e}\"))\n        }\n    }\n}",
+  "whenToUse": "Any worker or producer that publishes to a Synap room that may not exist yet at first launch (bootstrap streams, side streams like cortex.events.invalid / cortex.events.embedded / cortex.events.graphed / cortex.events.fulltext_indexed).",
+  "whenNotToUse": "When the room genuinely should be pre-provisioned by an admin (multi-tenant boundaries, retention-tier rooms with non-default config). For those, pre-create with the right `max_events` cap.",
+  "createdAt": "2026-04-27T00:31:43.902Z",
+  "tags": [
+    "synap",
+    "publisher",
+    "self-healing",
+    "stream.create",
+    "cortex-bootstrap",
+    "cortex-classifier-worker"
+  ],
+  "source": "manual"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "2026-05-03T05-00-00-phase11s-sed-crate-to-super-needs-depth-awareness-inside-test-mods",
+  "title": "phase11s — `sed crate:: → super::` needs depth-awareness inside `mod tests` blocks",
+  "content": "Mechanical crate:: → super:: rewrites during a crate-merge refactor break inside nested mod tests blocks because the depth shifts. See file content for the worked example from phase11s §4.",
+  "source": "manual",
+  "relatedTask": "phase11s_workers_consolidation_merge",
+  "tags": [
+    "phase11s",
+    "refactor",
+    "rust",
+    "test-modules",
+    "module-paths"
+  ],
+  "createdAt": "2026-05-03T05:00:00.000Z"
+}

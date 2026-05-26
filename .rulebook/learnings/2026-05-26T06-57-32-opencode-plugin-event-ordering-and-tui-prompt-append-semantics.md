@@ -1,0 +1,18 @@
+# OpenCode plugin event ordering and tui.prompt.append semantics
+**Source**: manual
+**Date**: 2026-05-26
+**Related Task**: phase11w_opencode-adapter
+**Tags**: opencode, adapter, plugin, phase11w, spec-20, adr-017, tui.prompt.append, session.idle
+Phase11w spike answers for the OpenCode plugin contract (load-bearing across spec 20 + the @hivellm/cortex-opencode-plugin design):
+
+1. User-prompt event ordering: OpenCode emits `session.idle` (prior turn end, no-op on fresh session) → `message.updated` (user prompt staged, full parts payload visible) → `tool.execute.before` / `tool.execute.after` per tool call → `message.updated` (assistant reply, incremental streaming) → `session.idle` (turn end). The plugin treats `message.updated` where `role === "user"` AND `parts[*].type === "text"` is non-empty AND the message id is freshly seen as the canonical UserPromptSubmit equivalent, deduping per message.id.
+
+2. `tool.execute.before` blocks tool dispatch when the handler returns a Promise — async law-check round-trip via the daemon's `POST /hook` runs inline; a `"deny"` verdict short-circuits the tool by throwing.
+
+3. `tui.prompt.append` writes into the CURRENT prompt buffer being assembled for the next model invocation when called from inside the `message.updated` handler for the user prompt (which fires before the assistant's first `message.updated`). The bundle becomes part of the same model call. This matches Claude Code's `additionalContext` semantic and preserves the "pre-thinking lands before the model sees the prompt" contract. Selected as Path A for pre-thinking injection; Path B (`prompt.prepend` via SDK) is the next-turn headless fallback; Path C (`/cortex-prime` slash command) rejected because it requires the user to type explicitly.
+
+4. `permission.asked` reply with `"deny"` from a plugin DOES deny the tool call (vs. only recording the decision). Plugin maps this to the same `/v1/laws/check` round-trip Claude Code's `PreToolUse` uses; daemon-unreachable returns `"ask"` (fail-open).
+
+5. `session.idle` fires per-session boundary, including subagents (each subagent runs in its own logical session with `parent_id` set). Plugin discriminates: parent_id present → `SubagentStop`; absent → `Stop`. The outer `Stop` fires once every spawned subagent has stopped AND the parent session goes idle.
+
+These answers are derived from the public `@opencode-ai/plugin` contract. Operator-led smoke at docs/analysis/opencode-adapter/10-smoke-plan.md is the live confirmation step.

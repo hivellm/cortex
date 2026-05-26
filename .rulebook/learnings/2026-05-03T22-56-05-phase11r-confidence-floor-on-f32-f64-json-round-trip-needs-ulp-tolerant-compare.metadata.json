@@ -1,0 +1,17 @@
+{
+  "id": "2026-05-03T22-56-05-phase11r-confidence-floor-on-f32-f64-json-round-trip-needs-ulp-tolerant-compare",
+  "title": "phase11r — confidence floor on f32→f64 JSON round-trip needs ULP-tolerant compare",
+  "content": "During phase11r §4.1 the audit envelope for `cortex_topic_get` carries the `confidence: f32` value from the `TopicCardPayload` into a `serde_json::Value::Number`. Asserting `assert_eq!(envs[0][\"result\"][\"confidence\"], 0.82)` failed because `0.82_f32` widens to `0.81999999...` in f64 — JSON's number type is f64, so the wire shape carries the wider value.\n\nThe fix is to read the JSON number back as f64, cast to f32, and compare against the source f32 with `< f32::EPSILON`. This is a one-line change but the failure mode is non-obvious — the test passes locally with f64-clean values like 0.5 / 0.75 / 0.875 (representable exactly in both) and fails the moment a real-world tuned value (0.82, 0.6, 0.45) lands in the assertion.\n\nPattern that works:\n\n```rust\nlet recorded = envs[0][\"result\"][\"confidence\"]\n    .as_f64()\n    .expect(\"confidence is a number\");\nassert!((recorded as f32 - 0.82_f32).abs() < f32::EPSILON);\n```\n\nPattern that fails non-obviously:\n\n```rust\nassert_eq!(envs[0][\"result\"][\"confidence\"], 0.82);  // ← fails for non-binary-clean f32\n```\n\nThis applies anywhere a typed f32 round-trips through JSON and back into a test assertion. The same caveat applies to embedding scores, similarity floors, and any other confidence/probability field captured in audit envelopes. Worth pinning as a pattern across the cortex-api audit suite.",
+  "source": "manual",
+  "relatedTask": "phase11r_topic_card_mcp_enrichment",
+  "tags": [
+    "phase11r",
+    "audit",
+    "f32",
+    "json",
+    "tests",
+    "topic-card",
+    "confidence-floor"
+  ],
+  "createdAt": "2026-05-03T22:56:05.901Z"
+}

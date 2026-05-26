@@ -1,0 +1,21 @@
+{
+  "id": "cypher-unwind-write-and-param-write-substitution-silently-drop-in-nexus-1-15",
+  "type": "anti-pattern",
+  "title": "Cypher UNWIND-write and $param-write substitution silently drop in Nexus 1.15",
+  "category": "code",
+  "description": "Nexus 1.15.0 parses but does not persist any write that touches an UNWIND row, or that uses `$param` substitution inside a write clause (MERGE pattern, SET assignment). The HTTP call returns 200, `rows = []`, and no error — total silent failure. Reads with `$param` work fine; only the write substitution path is broken. cortex-graph hit this for ~1500 events: writer logged `nodes_upserted=271` per batch, but `MATCH (n)` returned 1. Workaround: render every write as a per-row Cypher statement with values escaped into the string literal (no `$param` on the write side), and use `result.rows.is_empty()` as the silent-drop signal (successful writes return `[[null]]`; dropped writes return `[]`).",
+  "example": "// BAD: silently dropped by Nexus 1.15\n//   UNWIND $rows AS row MERGE (n:Label { key: row.k }) SET n += row.props\n//   MERGE (n:Label { key: $k }) SET n += $props\n\n// GOOD: escape values into the literal, one statement per row\nfn render_node_merge(node: &NodeOp) -> String {\n    let key = serde_json::to_string(&node.natural_key).unwrap();\n    let mut cy = format!(\"MERGE (n:{} {{ natural_key: {} }})\", node.label, key);\n    if !node.props.is_empty() {\n        cy.push_str(\" SET \");\n        let parts: Vec<String> = node.props.iter()\n            .map(|(k, v)| format!(\"n.{k} = {}\", serde_json::to_string(v).unwrap()))\n            .collect();\n        cy.push_str(&parts.join(\", \"));\n    }\n    cy.push_str(\" RETURN n\");\n    cy\n}\n\n// And: don't trust RETURN values for writes — Nexus returns [[null]]\n// for successful writes. Use rows.is_empty() instead:\nif result.rows.is_empty() {\n    return Err(\"write silently dropped by Nexus\");\n}",
+  "whenToUse": "Any code that writes to Nexus 1.15.x. Until Nexus ships a fix for UNWIND-write and write-side $param substitution, every MERGE / CREATE / SET must inline its values into the Cypher string.",
+  "whenNotToUse": "Reads. UNWIND with RETURN-only patterns and reads with $params work fine. The bug is specifically write-side substitution.",
+  "createdAt": "2026-04-27T14:31:28.248Z",
+  "tags": [
+    "nexus",
+    "cypher",
+    "unwind",
+    "merge",
+    "write-substitution",
+    "cortex-graph",
+    "silent-failure"
+  ],
+  "source": "manual"
+}

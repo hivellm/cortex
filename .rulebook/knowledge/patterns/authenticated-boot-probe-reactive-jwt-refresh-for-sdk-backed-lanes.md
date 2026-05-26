@@ -1,0 +1,61 @@
+# Authenticated boot probe + reactive JWT refresh for SDK-backed lanes
+
+**Category**: architecture
+**Tags**: none
+
+## Description
+
+When a daemon wires an SDK-backed lane behind a service that has both an unauthenticated `/health` endpoint AND an authenticated request surface, the boot probe MUST exercise the authenticated path. Otherwise `/health` returns 200 against an anon or stale-JWT client, the lane goes "live", and only the first real request surfaces 401 — which is too late for the operator to react.
+
+Pattern (implemented for cortex-api's VectorizerLane in phase11a):
+
+1. **Two probes, not one.** Keep `probe()` (cheap, unauth) for backwards compat and CI smoke. Add `probe_authenticated()` that runs one authenticated round-trip the SDK already exposes (`list_collections`, `list_files`, `me`, etc.). The lane decides which one the boot path uses based on whether credentials were configured.
+
+2. **Refresh-and-retry inside the probe.** Mirror the per-call recovery shape: on 401, if cached creds exist, run `refresh_token()` once and retry the probe; otherwise return an error whose message names the env keys to set ("set CORTEX_VECTORIZER_USER + _PASSWORD..."). Operators read this in the daemon log instead of reverse-engineering it from `debug.errors.vector` later.
+
+3. **Loud-WARN at boot when URL set but no creds.** Anonymous boot is a valid path (dev stack, fallback paths still work) but every authenticated call WILL 401. The boot WARN must include the resolved URL AND the list of env keys checked, so a misconfigured-stack screenshot is self-explanatory.
+
+4. **Optional warmup loop, default disabled.** The reactive 401-then-refresh path covers the SLA. The proactive timer is only worth its overhead when the upstream's JWT TTL is short relative to call cadence (long idle periods → expired tokens add tail-latency on the first call after each idle). Gate behind `*_JWT_WARMUP_SECS=0` (off) so the default deployment never pays for an unneeded timer.
+
+5. **Test the refresh path with a `with_initial_jwt_for_test` constructor.** `with_login` consumes one `/auth/login` call up front, leaving the test unable to distinguish boot-time login from the post-401 refresh. A `#[doc(hidden)] pub fn with_initial_jwt_for_test(base_url, jwt, user, pass)` lets a `wiremock` test set up the JWT-the-server-will-reject AND the creds-the-refresh-will-use independently. Then assert with `wiremock::matchers::header("authorization", "Bearer <expected>")` that the right token reaches each endpoint.
+
+## Example
+
+// Lane:
+pub async fn probe_authenticated(&self) -> Result<(), String> {
+    let client = self.client.read().await.clone();
+    match client.list_collections().await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let msg = format!("probe_authenticated {}: {e}", self.base_url);
+            if !looks_like_auth_failure(&msg) { return Err(msg); }
+            if self.creds.is_none() {
+                return Err(format!("{msg}; no cached credentials..."));
+            }
+            self.refresh_token().await.map_err(|r| format!("{msg}; auth refresh failed: {r}"))?;
+            self.client.read().await.clone().list_collections().await
+                .map(|_| ())
+                .map_err(|e2| format!("{msg}; refresh-retry failed: {e2}"))
+        }
+    }
+}
+
+// Boot:
+let probe_result = if creds_configured {
+    live.probe_authenticated().await
+} else {
+    live.probe().await
+};
+
+// Test (wiremock):
+let lane = VectorizerLane::with_initial_jwt_for_test(server.uri(), &initial_jwt, "admin", "secret");
+// Mock /collections to 401 only when Authorization=Bearer <initial_jwt>;
+// Mock /collections to 200 only when Authorization=Bearer <refreshed_jwt>;
+// Mock /auth/login to mint <refreshed_jwt>.
+lane.probe_authenticated().await.expect("refresh-and-retry path returns Ok");
+
+## When to Use
+
+Any daemon that wires an SDK-backed external service (Vectorizer, Nexus, Synap, Meili, etc.) where the SDK exposes BOTH `/health` (unauthenticated) AND an authenticated surface, AND auth tokens are refresh-able. Especially valuable when the boot path falls back to in-memory doubles on probe failure — without the authenticated probe, every misconfigured-creds boot looks healthy until the first real query.</whenToUse>
+<parameter name="whenNotToUse">When the SDK's only readiness signal IS the unauthenticated probe (no cheap authenticated call exists), OR when auth is via a long-lived API key with no refresh flow (the reactive 401 retry then has nothing to retry with — fail loudly at boot instead). Also skip when the daemon's only purpose is to forward requests verbatim — the 401 will reach the caller anyway and the boot probe adds no signal.</whenNotToUse>
+<parameter name="tags">["phase11a", "auth", "jwt", "boot-probe", "vectorizer", "lane", "cortex-api", "sdk-integration"]

@@ -1,0 +1,20 @@
+{
+  "id": "living-synthesis-trigger-heuristic-3-way-or-with-cooldown-holds",
+  "type": "pattern",
+  "title": "Living-synthesis trigger heuristic: 3-way OR with cooldown holds",
+  "category": "architecture",
+  "description": "A \"living document\" tier that rewrites in place (rather than appending a new snapshot per window) needs a trigger function that decides Rewrite vs Hold on every incoming event. Phase11r's topic_cards module ships the canonical shape for this: a 3-way OR over independent heuristics + a typed Hold reason for observability.\n\nThe trigger fires Rewrite when ANY of:\n1. Burst — events_since_last_rev ≥ N (catch sustained activity).\n2. High-impact proximity — a new high-impact event lands within distance D AND is one of {Decision, LawViolation, high-impact outcome}.\n3. Stale + new evidence — synthesis_age_d ≥ M AND ≥ 1 new evidence cited.\n\nWhen NONE fire, the trigger returns Hold { reason: HoldReason } where the reason ∈ {Cooldown, LowImpact, NotRelevant}. Holds are silent (no envelope emitted), but the typed reason lets the dashboard surface why a card stayed stale.\n\nThe constants (N=8, D=0.30, M=14d in phase11r) are heuristic-tuned for the live corpus; they should be exposed as named constants per file (TRIGGER_EVENTS_THRESHOLD / TRIGGER_DISTANCE_THRESHOLD / TRIGGER_AGE_DAYS) so operators can grep + tune without a code search.\n\nThe trigger is a PURE function — takes the current card state + the new event + a \"now\" timestamp and returns Rewrite | Hold. No I/O, no async, no side-effects. This makes it cheap to unit-test every branch (one test per Rewrite path, one per Hold reason) and lets the orchestrator call it from any thread without lock concerns.",
+  "example": "```rust\npub fn evaluate(\n    card: Option<&TopicCardPayload>,\n    new_event: &EventClassifier,\n    distance: f32,\n    now_rfc3339: &str,\n) -> TriggerDecision {\n    let card = match card {\n        None => return TriggerDecision::Rewrite, // first emit always rewrites\n        Some(c) => c,\n    };\n\n    // Branch 1: burst\n    if card.events_since_last_rev >= TRIGGER_EVENTS_THRESHOLD {\n        return TriggerDecision::Rewrite;\n    }\n\n    // Branch 2: high-impact proximity\n    if distance < TRIGGER_DISTANCE_THRESHOLD && new_event.is_high_impact {\n        return TriggerDecision::Rewrite;\n    }\n\n    // Branch 3: stale + new evidence\n    let age_days = days_between(&card.last_rev_at, now_rfc3339);\n    if age_days >= TRIGGER_AGE_DAYS && card.events_since_last_rev > 0 {\n        return TriggerDecision::Rewrite;\n    }\n\n    // Hold with the load-bearing reason\n    let reason = if age_days < 1 {\n        HoldReason::Cooldown\n    } else if !new_event.is_high_impact {\n        HoldReason::LowImpact\n    } else {\n        HoldReason::NotRelevant\n    };\n    TriggerDecision::Hold { reason }\n}\n```",
+  "whenToUse": "Any time you have a \"living document\" / \"rolling synthesis\" / \"consolidated view\" tier that rewrites in place. The pattern decouples the WHEN (trigger) from the HOW (rewrite pipeline) — different signals (burst, proximity, staleness) compose without entangling.",
+  "whenNotToUse": "When the document is append-only (snapshot per window) — there's no \"rewrite vs hold\" decision to make, just emit. Also overkill for documents whose only trigger is a periodic timer (cron-style); a 3-way OR adds branches you'll never exercise.",
+  "createdAt": "2026-05-03T22:56:30.878Z",
+  "tags": [
+    "phase11r",
+    "trigger",
+    "living-synthesis",
+    "topic-card",
+    "heuristic",
+    "pure-function"
+  ],
+  "source": "manual"
+}

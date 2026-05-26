@@ -1,0 +1,11 @@
+{
+  "id": 9,
+  "slug": "cypher-gate-disabled-by-default-on-mcp-graph-surface",
+  "title": "Cypher gate disabled by default on the MCP graph surface",
+  "status": "proposed",
+  "date": "2026-05-07",
+  "relatedTasks": [
+    "phase11v_mcp-fine-grained-backend-search"
+  ],
+  "supersededBy": null
+}

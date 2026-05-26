@@ -1,0 +1,6 @@
+# phase4f — boot-time replay defense uses set-difference vs. raw-event filter
+**Source**: manual
+**Date**: 2026-04-28
+**Related Task**: phase4f_fulltext_replay_missing_partitions
+**Tags**: phase4f, cortex-fulltext, boot-replay, meili, operations
+When recovering missing Meili partitions from the event archive, computing `archive_set - meili_set` of `(repo_slug, family)` pairs first, then making a second archive pass to filter only the envelopes that route into a missing pair, is materially better than indexing every archived event. Two passes keep the per-pass logic simple and let the hot-path "everything in sync" case short-circuit before scanning any envelope payloads. Reusing `MeiliFulltextIndexer::index_batch` and `family_for_event(kind, &[], path)` (empty topics — no classifier on the replay path) keeps the routing in lockstep with the live worker so a green replay test implies a green live worker. Gating on `CORTEX_FULLTEXT_REPLAY_MISSING=1` (default off) avoids triggering multi-minute archive scans on hot restarts.

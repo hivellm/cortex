@@ -1,0 +1,12 @@
+{
+  "id": 10,
+  "slug": "adr-009-sweep-trait-as-single-contract-for-retention-digest-pruning-sweeps",
+  "title": "ADR-009 — Sweep trait as single contract for retention/digest/pruning sweeps",
+  "status": "accepted",
+  "date": "2026-05-19",
+  "relatedTasks": [
+    "phase13a_sweep-trait-adr-009",
+    "phase11v_retention-daemon-recovery"
+  ],
+  "supersededBy": null
+}

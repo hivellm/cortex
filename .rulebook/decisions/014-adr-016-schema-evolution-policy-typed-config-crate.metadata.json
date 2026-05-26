@@ -1,0 +1,9 @@
+{
+  "id": 14,
+  "slug": "adr-016-schema-evolution-policy-typed-config-crate",
+  "title": "ADR-016 — Schema-evolution policy + typed Config crate",
+  "status": "proposed",
+  "date": "2026-05-24",
+  "relatedTasks": [],
+  "supersededBy": null
+}

@@ -1,0 +1,14 @@
+{
+  "id": "2026-04-29T18-46-01-pull-early-return-out-of-complex-match-arms-when-a-sentinel-guard-pattern-is-non-exhaustive",
+  "title": "Pull early-return out of complex match arms when a sentinel guard pattern is non-exhaustive",
+  "content": "Rust's exhaustiveness checker doesn't see through `if let` guards on enum variant patterns when the same underlying tuple is matched. In the silent-drop state machine, `match (&prev.alert, above_warn, above_critical)` with a guard like `(state, _, true) if !matches!(state, Critical)` left `(AlertState::Ok, true, true)` and `(AlertState::Warn { .. }, true, true)` formally uncovered even though the guard logically catches them. Solution: pull the `above_critical = true` short-circuit out as an `if above_critical { ... return ... }` block BEFORE the match, so the match itself only covers the `above_critical = false` axis. The state-machine logic is unchanged but the exhaustiveness check now sees a 2-axis match (3 prev states × 2 above_warn values = 6 cells) it can validate cleanly.",
+  "source": "manual",
+  "relatedTask": "phase8e_silent_drop_detector",
+  "tags": [
+    "rust",
+    "match",
+    "exhaustiveness",
+    "phase8e"
+  ],
+  "createdAt": "2026-04-29T18:46:01.523Z"
+}

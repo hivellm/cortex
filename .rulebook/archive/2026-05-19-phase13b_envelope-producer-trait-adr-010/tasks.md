@@ -1,0 +1,32 @@
+## 1. ADR-010
+- [x] 1.1 `rulebook_decision_create` ADR-010 — "EnvelopeProducer trait + accumulating checkpoint". Status `proposed`. (decision id=11, slug `adr-010-envelopeproducer-trait-accumulating-checkpoint-table`)
+- [x] 1.2 Trade-off documented: refactor cost ~3 days × 4 producers; gain is kill-resume correctness, single operator-queryable checkpoint surface, and zero-cost adapter onboarding for phase16a–phase16d.
+
+## 2. Trait + checkpoint table
+- [x] 2.1 New module `crates/cortex-workers/src/producer/` with `mod.rs`, `trait.rs`, `ctx.rs`, `checkpoint.rs`.
+- [x] 2.2 `EnvelopeProducer` trait per ADR-010: `name() / produce(ctx) / resume_from(ctx, scope)`. `ProducerCtx` carries `ProducerMetadataHandle` (Arc<Mutex<MetadataStore>>), reference clock, logger target. Per-backend handles (Synap, Meili, Nexus, Vectorizer) live on each impl struct (design note in `ctx.rs`).
+- [x] 2.3 New SQLite table `producer_checkpoints` added to `schema.sql` + `cortex-storage::metadata::apply_phase13b_schema` (idempotent CREATE TABLE IF NOT EXISTS + supporting index). Append-only composite PK `(producer_name, scope, accumulated_at)`.
+- [x] 2.4 `MetadataStore::record_producer_checkpoint(name, scope, last_event_id, last_occurred_at, accumulated_at)` writes append-only rows. `latest_producer_checkpoint(name, scope)` returns the row with maximum `accumulated_at`. `list_producer_checkpoints_for(name, limit)` returns the full per-producer history. `ProducerCheckpointRow` re-exported at the storage crate root.
+- [x] 2.5 5 storage unit tests green (`producer_checkpoint_returns_none_when_table_empty`, `_round_trips_a_single_write`, `_returns_newest_row_when_multiple_per_scope`, `_lists_all_rows_per_producer_across_scopes`, `_scope_discriminates_between_sources`) + 4 worker-level trait tests (`producer_trait_is_object_safe`, `producer_ctx_is_send_sync`, `produce_writes_one_checkpoint_per_batch`, `resume_from_returns_latest_checkpoint_after_kill`, `resume_from_returns_none_when_no_checkpoint_exists`) + 3 checkpoint serde tests.
+
+## 3. Migrate 4 producers
+- [x] 3.1 `BootstrapProducer` wraps the existing `run_repo_with_dedup` runner behind the trait (file `crates/cortex-cli/src/bootstrap/producer.rs`). One `producer_checkpoints` row per `produce` call, carrying the final `last_file` cursor under `last_event_id`. `resume_from` reads the latest row. 2 unit tests green (`bootstrap_producer_writes_one_checkpoint_per_run`, `bootstrap_producer_resume_from_returns_latest_row`). The runner's per-file legacy cursor in `Checkpoint::repo_mut.last_file` continues to advance in parallel via the existing path; the producer trait integrates the run-level cursor with the new SQLite ledger so multi-repo state accumulates across invocations.
+- [x] 3.2 `ClaudeArchiveProducer` wraps the existing walker behind the trait (file `crates/cortex-workers/src/claude_archive/producer_trait.rs`). One row per project_dir scope, written under spawn_blocking. 3 tests green (empty walk → zero rows; synthetic 2-project archive → 2 rows; resume_from returns latest).
+- [x] 3.3 `TopicCardsProducer` wraps the existing `Orchestrator::run` pipeline behind the trait (file `crates/cortex-workers/src/topic_cards/producer_trait.rs`). One row per `topic_slug` scope; budget exhaustion surfaces as anyhow::Err so the supervisor halts. `StaticTopicCardInputs` provider for tests. 3 tests green.
+- [x] 3.4 `ConsolidatorProducer` wraps `Orchestrator::run_session` + `run_topic` + `run_decision_trace` behind the trait (file `crates/cortex-workers/src/consolidator/producer_trait.rs`). Scope policy: `session_id` for sessions, `topic:<label>` for topics, `decision:<event_id>` for decision-trace. `StaticConsolidatorInputs` + `ConsolidatorInputProvider` trait for testability. 3 tests green.
+- [x] 3.5 Per-producer ITs landed in-module (4 producers × 2-3 unit tests each = 11 tests total): each driver writes one `producer_checkpoints` row per scope and `resume_from` returns the latest row. The full canonical-registry IT for §4 reuses these wrappers in a single tokio runtime.
+
+## 4. Resume-after-kill IT
+- [x] 4.1 Fixture producer drives a synthetic 10 000-event corpus through the trait (file `crates/cortex-workers/tests/producer_resume_after_kill_it.rs`).
+- [x] 4.2 Phase 1 panics after emitting 30% (3 000 envelopes); the final pre-kill batch's checkpoint persists. Asserts the phase 1 cursor lands at `corpus[2_999]`.
+- [x] 4.3 Phase 2 wires a fresh producer against the same `producer_checkpoints` table; `latest_producer_checkpoint` advances `start_idx` past the kill point. Asserts no duplicates via a `BTreeSet` over the union of phase 1 + phase 2 emits.
+- [x] 4.4 Final emit count = 10 000 (no gaps); final cursor sits at `corpus.last()`. Test green; ADR-010 promoted to `accepted` (decision id=11).
+
+## 5. Tail (mandatory)
+- [x] 5.1 Updated `docs/specs/09-bootstrap-cli.md` § "Phase13b — BootstrapProducer migration" + new `docs/specs/24-producer-trait.md` + `CHANGELOG.md` Changed entry covering ADR-010, the trait surface, the four migrated producers, and the resume-after-kill IT.
+- [x] 5.2 Tests: 5 storage helper (§2.5) + 7 producer-mod (§2.x trait shape) + 2 bootstrap (§3.1) + 3 claude-archive (§3.2) + 3 topic-cards (§3.3) + 3 consolidator (§3.4) + 1 resume-after-kill IT (§4) = 24 directly new tests, all green.
+- [x] 5.3 `cargo test -p cortex-storage --lib producer_checkpoint` (5 pass) + `cargo test -p cortex-cli --lib bootstrap::producer` (2 pass) + `cargo test -p cortex-workers --lib producer::` (39 pass incl. surrounding mod tests) + `cargo test -p cortex-workers --lib --features claude-archive claude_archive::producer_trait` (3 pass) + `cargo test -p cortex-workers --lib consolidator::producer_trait` (3 pass) + `cargo test -p cortex-workers --lib topic_cards::producer_trait` (3 pass) + `cargo test -p cortex-workers --test producer_resume_after_kill_it` (1 pass). Pre-existing workspace-wide clippy warnings in unrelated modules remain out of scope for this phase.
+## 99. Mandatory tail (rulebook v5.3.0)
+- [x] 99.1 Update or create documentation covering the implementation. → new `docs/specs/24-producer-trait.md` + updated `docs/specs/09-bootstrap-cli.md` + `CHANGELOG.md` Changed entry + ADR-010 (`adr-010-envelopeproducer-trait-accumulating-checkpoint-table`) at accepted status.
+- [x] 99.2 Write tests covering the new behavior. → 24 tests across producer/, storage helpers, every migrated wrapper, plus the resume-after-kill IT.
+- [x] 99.3 Run tests and confirm they pass. → see §5.3.

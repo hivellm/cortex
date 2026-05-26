@@ -1,0 +1,11 @@
+{
+  "id": 17,
+  "slug": "adr-017-opencode-adapter-via-ts-plugin-shared-rust-daemon",
+  "title": "ADR-017 — OpenCode adapter via TS plugin + shared Rust daemon",
+  "status": "proposed",
+  "date": "2026-05-26",
+  "relatedTasks": [
+    "phase11w_opencode-adapter"
+  ],
+  "supersededBy": null
+}

@@ -1,0 +1,12 @@
+{
+  "id": 12,
+  "slug": "adr-011-typed-lanehit-overlay-replaces-extras-props-hashmap",
+  "title": "ADR-011 — Typed LaneHit overlay replaces extras: Props HashMap",
+  "status": "proposed",
+  "date": "2026-05-20",
+  "relatedTasks": [
+    "phase13c_lane-trait-typed-projected-hit-adr-011",
+    "phase11v_mcp-fine-grained-backend-search"
+  ],
+  "supersededBy": null
+}

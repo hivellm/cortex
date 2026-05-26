@@ -1,0 +1,9 @@
+{
+  "id": 13,
+  "slug": "adr-012-eventidentity-cross-backend-join-key-sqlite-identityindex",
+  "title": "ADR-012 — EventIdentity cross-backend join key + SQLite IdentityIndex",
+  "status": "proposed",
+  "date": "2026-05-24",
+  "relatedTasks": [],
+  "supersededBy": null
+}

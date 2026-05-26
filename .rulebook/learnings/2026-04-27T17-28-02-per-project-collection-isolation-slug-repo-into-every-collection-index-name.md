@@ -1,0 +1,16 @@
+# Per-project collection isolation: slug repo into every collection / index name
+**Source**: manual
+**Date**: 2026-04-27
+**Related Task**: phase2_per_project_collection_isolation
+**Tags**: per-project, collection-naming, spec-06, spec-08, spec-11, vectorizer, meilisearch
+Symptom: bootstrapping 17 sibling repos under the global `cortex-{family}` Vectorizer collections accumulated 120 877 vectors / 282 MB in 6 shared collections, mixing Cortex specs, Tml LLVM tests, CompressionPrompt benchmarks, and so on into the same retrieval space. No way to scope a query to "this repo only" because the lane had no per-repo dimension.
+
+Root cause: `cortex-embedder::routing::collection_for` and `cortex-fulltext::routing::index_for` ignored the event's `context_repo` and produced names like `cortex-docs` for every event regardless of source repo. The orchestrator's `cortex-api::strategies` mirrored the bug — it built lane requests against the same global names.
+
+Fix: thread `repo_id` through every routing surface. New helper `cortex_storage::names::slug_for_repo(&str) -> String` canonicalises a repo id (lowercase ASCII, non-`[a-z0-9-]` collapsed to `-`, leading/trailing dashes stripped, empty → `unknown`). Routing functions now produce `cortex-{repo_slug}-{family}` for both Vectorizer collections and Meilisearch indexes. The orchestrator pulls `req.scope.repo`, slugifies it, and builds lane requests against the per-repo name; empty scope falls back to `cortex-unknown-{family}` so callers always see well-formed names.
+
+Verified: `cargo test -p cortex-storage -p cortex-embedder -p cortex-fulltext -p cortex-api` green (~108 tests). New unit tests assert `context_repo = "Cortex"` lands in `cortex-cortex-{family}` and `None` lands in `cortex-unknown-{family}`. Live API smoke test on 2026-04-27 with `scope.repo = "Cortex"` produced `scope_resolved.repo = "Cortex"` echo confirming end-to-end propagation.
+
+Out of scope: multi-repo fan-out for unscoped queries (orchestrator currently returns empty when scope is empty — caller must scope or wait for the multi-collection fan-out follow-up). Nexus does not need collection-per-repo (nodes carry a `repo` property; per-repo isolation is a query-time filter via `phase2_scope_repo_resolution`).
+
+Side effect: when running `cargo build --release -p cortex-api` the dashboard route `/v1/dashboard/decisions/:id` panicked under the bumped axum 0.8 path-syntax check. Fix: rename to `/v1/dashboard/decisions/{id}` per the new axum convention. Caught only because the API binary failed to start during rollout, not by any unit test — a reminder that runtime-only behaviour like router init isn't covered by `cargo test`.

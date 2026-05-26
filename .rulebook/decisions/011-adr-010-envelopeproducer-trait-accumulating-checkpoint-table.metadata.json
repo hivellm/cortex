@@ -1,0 +1,16 @@
+{
+  "id": 11,
+  "slug": "adr-010-envelopeproducer-trait-accumulating-checkpoint-table",
+  "title": "ADR-010 — EnvelopeProducer trait + accumulating checkpoint table",
+  "status": "accepted",
+  "date": "2026-05-19",
+  "relatedTasks": [
+    "phase13b_envelope-producer-trait-adr-010",
+    "phase13a_sweep-trait-adr-009",
+    "phase16a_opencode-adapter-via-envelope-producer",
+    "phase16b_cursor-adapter",
+    "phase16c_codex-adapter",
+    "phase16d_gemini-adapter"
+  ],
+  "supersededBy": null
+}

@@ -1,0 +1,22 @@
+{
+  "id": "live-external-service-lane-with-in-memory-fallback-at-daemon-boot",
+  "type": "pattern",
+  "title": "Live external-service lane with in-memory fallback at daemon boot",
+  "category": "architecture",
+  "description": "When a Rust daemon depends on an external service (Meilisearch, Nexus, Vectorizer, etc.) but must stay usable on a cold dev stack, build a trait-object lane that probes the live service at startup and falls back to the existing in-memory test double on any failure. Both implementations stamp a single source-attribution invariant in `LaneHit.extras[\"source\"]` so downstream code (RRF fusion, dashboards) can't tell the difference. A `debug_assert!` on the invariant catches future regressions before they reach prod.",
+  "example": "// crates/cortex-api/src/main.rs — boot-time selection\nlet keyword: Arc<dyn KeywordLane> = if let Ok(url) = std::env::var(\"CORTEX_FULLTEXT_MEILI_URL\") {\n    match MeiliKeywordLane::new(&url, api_key) {\n        Ok(live) => match live.probe().await {\n            Ok(()) => Arc::new(live),\n            Err(reason) => { tracing::warn!(reason = %reason, \"fallback\"); keyword_memory.clone() }\n        },\n        Err(reason) => { tracing::warn!(reason = %reason, \"fallback\"); keyword_memory.clone() }\n    }\n} else { keyword_memory.clone() };\n\n// orchestrator.rs — invariant\ndebug_assert!(\n    keyword_result.hits.iter().all(|h| h.extras.get(\"source\").and_then(|v| v.as_str()) == Some(\"keyword\")),\n    \"keyword lane returned a hit without extras[\\\"source\\\"] = \\\"keyword\\\"\"\n);",
+  "whenToUse": "Any orchestrator/service crate that fans out to lanes / clients / providers and currently uses an in-memory double in production (the `MemoryKeywordLane` shape — search method ignores the request).",
+  "whenNotToUse": "When the in-memory double is genuinely the production implementation (pure CPU work, no I/O), or when probe latency is unacceptable on the hot path.",
+  "createdAt": "2026-04-27T23:46:33.956Z",
+  "tags": [
+    "rust",
+    "trait-object",
+    "fallback",
+    "fail-open",
+    "lanes",
+    "cortex-api",
+    "spec-08",
+    "spec-11"
+  ],
+  "source": "manual"
+}

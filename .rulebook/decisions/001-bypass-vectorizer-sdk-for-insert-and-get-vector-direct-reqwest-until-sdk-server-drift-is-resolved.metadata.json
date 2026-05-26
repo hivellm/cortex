@@ -1,0 +1,11 @@
+{
+  "id": 1,
+  "slug": "bypass-vectorizer-sdk-for-insert-and-get-vector-direct-reqwest-until-sdk-server-drift-is-resolved",
+  "title": "Bypass vectorizer-sdk for /insert and /get_vector — direct reqwest until SDK-server drift is resolved",
+  "status": "superseded",
+  "date": "2026-04-22",
+  "relatedTasks": [
+    "phase1_embedder"
+  ],
+  "supersededBy": null
+}

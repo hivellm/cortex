@@ -1,0 +1,6 @@
+# Memory* lane fallbacks make external-service stubs unnecessary in CI smoke runs
+**Source**: manual
+**Date**: 2026-04-29
+**Related Task**: phase8h_ci_smoke_workflow
+**Tags**: ci, smoke, stubs, phase8h
+cortex-api boots cleanly with no Vectorizer / Nexus / Synap / Meili thanks to the existing `MemoryVectorLane` / `MemoryKeywordLane` / `MemoryGraphLane` fallbacks. A phase8 CI smoke workflow that sets `CORTEX_VECTORIZER_URL` / `CORTEX_NEXUS_URL` / `CORTEX_FULLTEXT_MEILI_URL` to nothing relies on this — the stack reports `overall: degraded` (lanes empty, not down), the boot helper accepts that as ready, and the canary still round-trips via the IPC + ingestion + archive path that 2026-04-28 actually broke. Saves ~500 lines of stub-server maintenance per external service. The stronger argument: a stub returning canned 200s would make the gate weaker than the lane-fallback path because it would mask a real "service URL set but unreachable" regression as healthy. Live-service drift is a separate incident class that warrants its own nightly workflow once it's worth the runner cost.

@@ -1,0 +1,15 @@
+{
+  "id": "2026-04-28T21-16-52-phase4j-guard-the-ci-gate-by-grep-asserting-the-workflow-makefile-shape",
+  "title": "phase4j — guard the CI gate by grep-asserting the workflow + Makefile shape",
+  "content": "When the doctor binary's CI gate is wired through a Makefile target + a GitHub Actions workflow, the cheapest \"did anyone forget to update this when the cargo path moved\" guard is a `cargo test`-level test that reads `Makefile` and `.github/workflows/doctor.yml` and grep-asserts:\n\n1. The `.PHONY` declaration includes the new target name (so `make` re-runs when a stale file with that name exists).\n2. The Makefile recipe shells the canonical `cargo run -p cortex-ops -- doctor-consistency` command (loose match on whitespace).\n3. The workflow runs the cargo command in `--json` mode (the artifact upload only makes sense for the structured report, not the markdown table).\n4. The workflow uploads the artifact under the exact name referenced from the spec doc (`doctor-consistency-report`).\n5. The workflow brings up `docker compose up` AND runs `cortex-bootstrap --workspace` to seed the stack — without seeding, the doctor reports \"archive empty\" and the gate becomes vacuous.\n\nThe Live workflow run against a real CI environment can't be exercised from a dev host, but these grep guards catch the failure modes that actually fire when someone refactors the cargo path or the artifact name without updating the spec / Makefile in lockstep.",
+  "source": "manual",
+  "relatedTask": "phase4j_doctor_ci_gate",
+  "tags": [
+    "phase4j",
+    "ci",
+    "github-actions",
+    "makefile",
+    "doctor"
+  ],
+  "createdAt": "2026-04-28T21:16:52.459Z"
+}

@@ -1,0 +1,16 @@
+{
+  "id": "2026-05-01T22-52-30-phase11i-rwlock-wrapped-fusionconfig-sighup-reload-pattern",
+  "title": "phase11i — RwLock-wrapped FusionConfig + SIGHUP reload pattern",
+  "content": "When the orchestrator's tunable config needs to be reloadable at runtime (SIGHUP, dashboard endpoint, etc.) WITHOUT restarting the daemon, the cleanest pattern is `Arc<std::sync::RwLock<Config>>` on the orchestrator field + a `current_config()` snapshot accessor. Every clone of the orchestrator shares the same lock, so a single `replace_config(new)` call propagates to every in-flight handle.\n\nWhat worked:\n- Wrap the field: `pub fusion: Arc<std::sync::RwLock<FusionConfig>>` instead of `pub fusion: FusionConfig`.\n- Expose `current_fusion(&self) -> FusionConfig` that clones a snapshot under a short read lock. Cheap; in benchmarks it adds <1 µs per request.\n- Boot path keeps `Orchestrator::new(...).with_fusion(cfg)` chaining intact — `with_fusion` writes into the RwLock and returns `self`.\n- Reload path: `orchestrator.replace_fusion(new)` writes into the same lock. The SIGHUP listener is a tokio task spawned from `main.rs` cfg-gated `#[cfg(unix)]`; non-Unix targets log a one-shot WARN.\n- For request handling: `let snap = self.current_fusion(); rrf_fuse(..., &snap);` — pull the snapshot ONCE per request so the entire fan-out sees consistent values, even if a SIGHUP fires mid-flight.\n\nWhat to avoid:\n- Don't put the RwLock guard directly into the fan-out closure. The lock will be held across `.await` points and risks deadlock on contention with the writer.\n- Don't use `tokio::sync::RwLock` here — the read path is cheap and fully synchronous, std::sync is faster.\n- Don't split between `Arc<RwLock<…>>` and a plain field. Mixed ownership leads to \"the audit envelope still sees the old value but the fuse used the new value\" race conditions.\n\nLayered config precedence: file (`relevance.toml`) → env (`CORTEX_RRF_*`) → defaults. The reload re-runs the layering so an operator setting an env override AND editing the file gets both honoured.\n\nValidated in: `crates/cortex-api/src/orchestrator.rs`, `crates/cortex-api/src/main.rs::spawn_relevance_reload_task`, `crates/cortex-api/tests/relevance_config_reload_it.rs`.",
+  "source": "manual",
+  "relatedTask": "phase11i_claude_archive_indexer_and_relevance",
+  "tags": [
+    "phase11i",
+    "fusion-config",
+    "sighup-reload",
+    "rwlock",
+    "concurrency",
+    "cortex-api"
+  ],
+  "createdAt": "2026-05-01T22:52:30.479Z"
+}

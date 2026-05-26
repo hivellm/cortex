@@ -1,0 +1,14 @@
+{
+  "id": 15,
+  "slug": "adr-014-dashboard-handlers-are-pure-readers-state-lives-in-domain-reports",
+  "title": "ADR-014 — Dashboard handlers are pure readers; state lives in domain reports",
+  "status": "proposed",
+  "date": "2026-05-25",
+  "relatedTasks": [
+    "phase13f_dashboard-pure-reader-adr-014",
+    "phase13a_sweep-trait-adr-009",
+    "phase13b_envelope-producer-trait-adr-010",
+    "phase11v_retention-daemon-recovery"
+  ],
+  "supersededBy": null
+}

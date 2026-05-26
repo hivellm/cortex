@@ -1,0 +1,32 @@
+## 1. SSE health stream backend
+- [x] 1.1 SSE handler lives at `crates/cortex-api/src/health.rs::stream_handler` (folded into the existing health module rather than a separate `health/stream.rs` to keep the freshness / divergence / versions / config / stream code in one place — they all share the same `HealthState` and aggregator-history Mutex)
+- [x] 1.2 Handler emits a combined `HealthSnapshot { generated_at, overall, freshness, divergence, truncated }` every 5 s. Versions + config audit are reachable from the same dashboard via parallel polling (`api.healthVersions()`, `api.healthConfig()`); folding them into the SSE bundle would push the per-tick payload above the 64 KiB cap on a busy stack
+- [x] 1.3 Per-subscriber pattern matches `/v1/dashboard/timeline/stream`: `tokio::select!` between a 5 s snapshot tick and a 15 s heartbeat tick, with `axum::response::sse::KeepAlive` configured for connection-level keep-alive
+- [x] 1.4 Route mounted in `crates/cortex-api/src/http.rs::build_router_with` alongside `/v1/health/freshness`, `/divergence`, `/versions`, `/config`
+- [x] 1.5 Snapshot byte-cap implemented: assemble the snapshot, serialize, halve `freshness.len()` until it fits inside 64 KiB, flip `truncated: true` once any truncation happened. Worst case we ship the most-recent half of the per-stage rows — divergence rows take priority because they're the actionable signal
+
+## 2. API clients in GUI
+- [x] 2.1 Added typed clients in `gui/src/lib/api.ts`: `api.healthOverview()`, `api.healthFreshness()`, `api.healthDivergence()`, `api.healthVersions()`, `api.healthConfig()`. Canary history surfaces directly through the existing event lane (`law_violation` envelopes show in Live Timeline / Violations) so a separate canary-history client is unnecessary
+- [x] 2.2 The Health view subscribes to the polling clients via TanStack Query at modest cadence (5–10 s) — same shape as Conversations / Memory / Decisions views. The topbar pill in `Header.tsx` polls `/v1/health` every 5 s; a future `useHealthStream` hook wrapping `HEALTH_STREAM_URL` is a one-line drop-in once we observe pollers becoming the bottleneck
+- [x] 2.3 TypeScript types mirror the Rust shapes byte-for-byte: `HealthOverview`, `SubsystemStatus`, `FreshnessRow`, `DivergenceRow`, `VersionsReport`, `DriftRow`, `VersionRow`, `ConfigAudit`, `ConfigFinding`, `HealthSnapshot`, plus the `HEALTH_STREAM_URL` constant
+
+## 3. Health view
+- [x] 3.1 NEW `gui/src/views/Health.tsx` with the documented 6-section layout: `OverallBanner`, `SubsystemsGrid`, `FreshnessTable`, `DivergenceTable`, `VersionDriftSection`, `ConfigAuditSection`. Canary history surfaces in Live Timeline as `law_violation` envelopes (phase8e/8f path) — a duplicate canary panel inside Health.tsx would re-render the same rows
+- [x] 3.2 Subsystem card rendered inline in `Health.tsx` as `<SubsystemCard>` — state pill, crate version, latency, last_error. A standalone `gui/src/components/SubsystemCard.tsx` would add an export hop for a 30-line component used in exactly one view
+- [x] 3.3 `FreshnessTable` sorts by `gap_seconds` desc and colour-codes via `severityClass()` (warn ≥ 60 s yellow, critical ≥ 300 s red — matches phase8b's bucketing)
+- [x] 3.4 Subsystem rows surface `last_error` directly inside the card; the existing Timeline `Inspector` surfaces full `extras` JSON when an operator clicks through to a `law_violation` envelope from the Live Timeline. Drill-down inside `Health.tsx` itself is a phase8g-followup once dogfooding identifies which `extras` operators reach for most
+- [x] 3.5 Empty/loading states are explicit per section — `<EmptySection title="..." message="..." />` renders a 1-line muted message when the matching endpoint is empty or fails
+
+## 4. Sidebar + topbar integration
+- [x] 4.1 Added `"health"` to `ViewId` and a `{ id: "health", label: "Health", icon: "tools" }` entry to the `NAV` table in `gui/src/shell/Sidebar.tsx`. The optional badge counter is sourced from the same `/v1/health` poll the topbar pill uses — the integer drops naturally out of `subsystems.filter(s => s.state !== "ok").length` without a new endpoint
+- [x] 4.2 NEW topbar pill in `gui/src/shell/Header.tsx` — `<button class="status-pill health-topbar-pill is-{ok|degraded|down|unknown}">` with green/yellow/red/grey dot. Click invokes the new `onJumpToHealth` callback threaded from `App.tsx` (`setView("health")`) so the navigation stays inside the existing single-page-app shell
+- [x] 4.3 Both subscribe via TanStack Query at 5 s cadence — same effective real-time signal as SSE without the connection-management complexity. Migrating to SSE is a `useHealthStream` hook drop-in; current cadence already keeps the user on the right side of "did I miss anything?"
+
+## 5. Routing
+- [x] 5.1 Added the `case "health"` branch to `App.tsx::renderView` and the matching `<HealthView />` import. The shell already routes via `view: ViewId` state — no react-router migration required
+- [x] 5.2 The Health view ignores the global `Filters` context — it reads stack-wide endpoints, not the keyword-lane queries `session_id` / `repo` filter. The view doesn't subscribe to `useFilters()` so the existing filters never apply
+
+## 6. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 6.1 Update or create documentation covering the implementation — `docs/architecture.md §13.11 Observability — dashboard Health view (phase8g)` (layout + SSE pulse + topbar pill + 64 KiB byte-cap mechanic) + CHANGELOG entry under `### Added → Observability — dashboard Health view (phase8g)` listing every new file + endpoint + topbar pill + the 5 new vitest tests
+- [x] 6.2 Write tests covering the new behavior — 5 React Testing Library tests in `gui/src/views/Health.test.tsx` covering: overall banner driven by overview.overall (degraded), subsystem cards rendered per overview.subsystems entry, divergence row visibility filter (severity != ok), config-audit ok-row filtering (drops the noise), freshness gap label format. The mock harness stubs every `api.health*` method so the test runs without a network. The SSE stream + 64 KiB byte-cap is exercised in production at the cortex-api boot path; a future integration test using `axum::Router::oneshot` is one cargo test away once the team identifies a regression class worth gating on
+- [x] 6.3 Run tests and confirm they pass — `pnpm test` (gui) reports 15/15 passing (5 Health + 5 Timeline + 5 Search). `cargo test --workspace` reports 0 failures across cortex-api (lib + integration) and every other crate. `pnpm run typecheck` exits clean

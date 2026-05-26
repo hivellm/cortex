@@ -1,0 +1,12 @@
+{
+  "id": 5,
+  "slug": "consolidation-grain-choice-session-topic-decisiontrace",
+  "title": "Consolidation grain choice — Session / Topic / DecisionTrace",
+  "status": "proposed",
+  "date": "2026-05-03",
+  "relatedTasks": [
+    "phase11j_consolidation_tier",
+    "phase11o_vectorizer_demotion_api"
+  ],
+  "supersededBy": null
+}

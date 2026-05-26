@@ -4,6 +4,10 @@
 !/.rulebook/tasks/
 !/.rulebook/tasks/**/*.md
 !/.rulebook/rulebook.json
+!/.rulebook/archive/
+!/.rulebook/knowledge/
+!/.rulebook/decisions/
+!/.rulebook/learnings/
 
 # Patterns added by @hivellm/rulebook
 # Added at: 2026-04-17T23:10:27.856Z

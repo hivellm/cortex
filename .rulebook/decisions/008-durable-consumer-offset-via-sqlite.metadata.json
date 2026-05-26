@@ -1,0 +1,11 @@
+{
+  "id": 8,
+  "slug": "durable-consumer-offset-via-sqlite",
+  "title": "Durable consumer offset via SQLite (graph + fulltext workers)",
+  "status": "proposed",
+  "date": "2026-05-03",
+  "relatedTasks": [
+    "phase11s_pipeline_drainage_recovery"
+  ],
+  "supersededBy": null
+}

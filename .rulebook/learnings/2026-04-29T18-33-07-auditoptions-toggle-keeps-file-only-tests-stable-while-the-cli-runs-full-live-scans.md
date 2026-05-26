@@ -1,0 +1,6 @@
+# AuditOptions toggle keeps file-only tests stable while the CLI runs full live scans
+**Source**: manual
+**Date**: 2026-04-29
+**Related Task**: phase8d_config_coherence_check
+**Tags**: testing, audit, config, phase8d
+When a config audit composes pure file-reads with OS-level scans (netstat, cargo tree -d), unit tests must NOT depend on host state — a CI runner won't have your daemon's loopback ports bound. Solution: thread an `AuditOptions { scan_live_ports, scan_duplicate_deps }` knob through `run_audit_with(paths, opts)`. Tests use `AuditOptions::file_only()` (defaults to false), the CLI / `/v1/health/config` endpoint use `AuditOptions::full()`. Same audit logic, same Finding model, two profiles — fixtures stay deterministic and the CLI still surfaces the 2026-04-28 incident class. The pattern generalises: any `audit_*` style function that mixes pure + impure checks should accept an Options struct so tests can pin the impure path off.

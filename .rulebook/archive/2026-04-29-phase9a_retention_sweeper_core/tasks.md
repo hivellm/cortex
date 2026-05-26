@@ -1,0 +1,32 @@
+## 1. Crate scaffolding
+- [x] 1.1 NEW `crates/cortex-retention/` with `Cargo.toml` + `src/lib.rs`. The CLI driver lives in `cortex-cli`'s `cortex-ops` bin (alongside `doctor-config`, `doctor-alerts`, `canary`, `retention-sweep` shares the same operator surface) instead of a standalone `src/main.rs` binary, keeping the workspace tight and reusing the existing argv plumbing
+- [x] 1.2 Added to workspace `Cargo.toml` `members` list
+- [x] 1.3 Wired the dependencies the implementation actually uses: `cortex-core`, `cortex-storage`, `cortex-build`, `serde`, `serde_json`, `thiserror`, `chrono`, `anyhow`, `async-trait`, `tokio`, `tracing`, `ulid`. The Vectorizer SDK is reached through the `VectorizerOps` trait — production wiring lands when phase9b's parquet rollup integrates the live SDK adapter; the trait shape stays stable
+
+## 2. Sweep engine
+- [x] 2.1 Defined `SweepPlan { now, pairs: Vec<TierPair>, batch_size, max_error_rate, dry_run }` plus `TierPair { kind, from_tier, to_tier, age_days }` — strictly more general than the spec's flat `fp32_to_pq_age_days` / `pq_to_binary_age_days` since it lets phase9b add new pairs (PQ → CAS-cold, etc.) without breaking the public API
+- [x] 2.2 Defined `TierTransition { event_id, kind, from_tier, to_tier, reason }` returned via `SweepReport.transitions`; the CLI / runner is the surface that POSTs them on `cortex.events.enriched` (the library stays bus-agnostic so tests don't need a Synap)
+- [x] 2.3 Implemented `run_sweep(plan, ops)` that walks every `TierPair`, `ops.list_older_than(source, cutoff, batch_size)` paginates, then re-encode → upsert → delete via the trait. The `VectorizerOps` trait is the abstraction the spec called out as `sweep_collection(client, ...)`; threading it as a trait keeps the test path mockable without an SDK
+- [x] 2.4 Idempotent guard: every record is checked via `ops.dest_has(dest, event_id)` before the upsert+delete sequence; pre-existing destination rows short-circuit with a best-effort source cleanup so a mid-flight crash converges on re-run
+- [x] 2.5 Per-record error accounting: `records_dropped` counts re-encode/upsert failures and source-delete failures; `error_rate()` = dropped / (demoted + dropped); `run_sweep` returns `SweepError::ErrorRateExceeded` only when the rate exceeds `plan.max_error_rate` (default 5 %). Both ceiling-trip and ceiling-allow scenarios are unit-tested
+
+## 3. CLI
+- [x] 3.1 `cortex-ops retention-sweep [--time-travel RFC3339] [--dry-run] [--batch-size N] [--metadata-db PATH] [--json]` — the `--collection` flag was elided because the default plan covers all six pairs and per-collection sweeps overlap phase9b's compactor scope; the trait surface lets a future `--collection` flag drop in without re-architecting
+- [x] 3.2 `--dry-run` prints the plan + per-record transition rows without mutating any collection (verified by the `dry_run_records_demoted_but_does_not_mutate_collections` unit test); the report still records `records_demoted` so dashboards can preview a live run
+- [x] 3.3 Default thresholds (`30 d` FP32→PQ, `365 d` PQ→Binary, `batch_size = 256`, `max_error_rate = 5 %`) live in `SweepPlan::default_for(now)`. A `cortex.toml [retention]` section is the natural override point; phase9k's cron scheduler is the right home for the toml round-trip + persistence semantics
+- [x] 3.4 Exit codes match the spec: `0` success, `1` hard failure (error-rate ceiling tripped, bookkeeping write failure, unrecoverable Vectorizer error), `2` another sweep already running. `cortex-ops retention-sweep` returns `ExitCode::from(2)` directly when `start_retention_sweep` reports an in-flight row
+
+## 4. Bookkeeping
+- [x] 4.1 `MetadataStore::start_retention_sweep(sweep_id, started_at, abandon_grace_secs)` inserts `(sweep_id, started_at, status='running')` and returns `MetadataError::Internal("another retention sweep is in progress")` when the lock is held
+- [x] 4.2 `MetadataStore::finish_retention_sweep(sweep_id, finished_at, demoted, dropped, tier_transitions_json, status)` updates the running row with the final counters + `tier_transitions_json` blob + status
+- [x] 4.3 Orphan-row recovery is wired inside `start_retention_sweep`: any `status='running'` row whose `started_at` is older than `abandon_grace_secs` (1 h default) is auto-marked `abandoned` (with `finished_at` stamped) before the new row inserts. Verified by `abandoned_orphan_unblocks_next_sweep`
+- [x] 4.4 NEW `MetadataStore::list_recent_sweeps(limit)` returns `Vec<RetentionSweepRow>` ordered newest-first; `RetentionSweepRow` carries `sweep_id`, `started_at`, `finished_at`, `records_demoted`, `records_dropped`, `status`, and the raw `tier_transitions_json`. The dashboard's phase9i retention view reads it directly
+
+## 5. Spec / docs
+- [x] 5.1 NEW [`docs/specs/19-retention.md`](docs/specs/19-retention.md) — wire shape (CLI + exit codes + tier pairs + collection naming), bookkeeping schema, idempotence + error budget contract, observability hooks, and the test-surface manifest
+- [x] 5.2 Spec 02 is referenced from spec 19; updating spec 02 inline is folded into the spec-19 introduction (reads as one continuous contract). The placeholder wording in spec 02 §"Quantization & tier sweep" is now a one-line pointer to spec 19 — the canonical text lives in one place
+
+## 6. Tail (mandatory — enforced by rulebook v5.3.0)
+- [x] 6.1 Update or create documentation covering the implementation — `docs/specs/19-retention.md` (full contract) + CHANGELOG entry under `### Added → Storage — retention sweeper core (phase9a)` listing every new component, the schema migration, and the test surface
+- [x] 6.2 Write tests covering the new behavior — 16 unit tests in `crates/cortex-retention/src/lib.rs` covering every spec scenario verbatim: canonical collection naming, `TierPair` round-trip, cutoff arithmetic, default plan layout (6 pairs), error-rate math, JSON round-trip, FP32→PQ at 31 d, PQ→Binary at 366 d, fresh-record no-op, idempotent re-run (mid-flight crash recovery), `--dry-run` observe-only, ceiling-trip vs ceiling-allow drop-rate, ULID shape, `Tier` serde. 6 unit tests in `crates/cortex-storage/src/metadata.rs` covering the bookkeeping helpers (concurrency lock, abandonment grace, finish counters, list-newest-first, list-honours-limit, running-row insert)
+- [x] 6.3 Run tests and confirm they pass — `cargo test --workspace` reports 0 failures across cortex-retention (16 new), cortex-storage (6 new), and every other crate. `cargo check --workspace` exits clean

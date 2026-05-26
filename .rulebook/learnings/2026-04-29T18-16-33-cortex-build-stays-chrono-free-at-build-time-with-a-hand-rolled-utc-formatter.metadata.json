@@ -1,0 +1,14 @@
+{
+  "id": "2026-04-29T18-16-33-cortex-build-stays-chrono-free-at-build-time-with-a-hand-rolled-utc-formatter",
+  "title": "cortex-build stays chrono-free at build time with a hand-rolled UTC formatter",
+  "content": "When writing a workspace-shared `cortex-build` crate that emits `cargo:rustc-env` lines from each crate's `build.rs`, keep its dependency surface tiny. Pulling in chrono just for the build-timestamp would balloon every binary's build graph by ~50 transitive crates. A hand-rolled UTC RFC-3339 formatter (Howard Hinnant's date algorithms, public domain, simplified for years 1970..3000) keeps cortex-build at one runtime dep (serde) and zero build-time deps. The same trick works for `git_dirty` / `git_sha` (shell out via `std::process::Command` instead of pulling in git2). Also: emit `cargo:rerun-if-changed=.git/HEAD` + `.git/refs/heads` so a checkout-switch retriggers the rebuild and the embedded SHA refreshes — without it cargo only reruns build.rs when its own bytes change.",
+  "source": "manual",
+  "relatedTask": "phase8c_version_coherence",
+  "tags": [
+    "build-rs",
+    "cortex-build",
+    "phase8c",
+    "dependency-hygiene"
+  ],
+  "createdAt": "2026-04-29T18:16:33.984Z"
+}

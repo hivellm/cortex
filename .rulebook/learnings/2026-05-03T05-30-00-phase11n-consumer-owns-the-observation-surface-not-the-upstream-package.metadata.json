@@ -1,0 +1,15 @@
+{
+  "id": "2026-05-03T05-30-00-phase11n-consumer-owns-the-observation-surface-not-the-upstream-package",
+  "title": "phase11n — consumer owns the observation surface, not the upstream package",
+  "content": "The original phase11n premise was to extend @hivehub/rulebook with a Synap publisher hook. Rejected because it pollutes a generic upstream package with consumer-specific stream contracts. See file content for the full rationale + the SQLite WAL specifics that drove the polling-tail design.",
+  "source": "manual",
+  "relatedTask": "phase11n_rulebook_dashboard_publisher",
+  "tags": [
+    "phase11n",
+    "architecture",
+    "observability",
+    "consumer-vs-producer",
+    "spec-21"
+  ],
+  "createdAt": "2026-05-03T05:30:00.000Z"
+}

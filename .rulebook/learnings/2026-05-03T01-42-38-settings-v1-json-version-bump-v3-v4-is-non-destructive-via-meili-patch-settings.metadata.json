@@ -1,0 +1,15 @@
+{
+  "id": "2026-05-03T01-42-38-settings-v1-json-version-bump-v3-v4-is-non-destructive-via-meili-patch-settings",
+  "title": "Settings.v1.json version bump (v3 → v4) is non-destructive via Meili PATCH /settings",
+  "content": "Phase11j §3.4 bumped `crates/cortex-workers/settings/settings.v1.json` from v3 → v4 to add the `ext.consolidation.{grain, depth, model, consolidation_id}` axis fields. Concern: would the rollover lose data?\n\nAudit of `cortex-workers/src/fulltext/meili_client.rs::ensure_index` showed: settings push is `PATCH /indexes/{uid}/settings` (Meili 1.x), which is **additive** — new attributes land alongside existing ones; documents are untouched; the per-index settings task queue picks up the change idempotently. The `version` marker baked into `settings.v1.json` is stripped before forwarding (Meili rejects unknown top-level fields), so it's purely tooling-side metadata.\n\nImplication: every future settings bump is safe to roll forward via `cortex-bootstrap --apply-settings-only` (added in this task) without re-publishing events. The CLI walks `ALL_INDEXES` plus per-repo permutations, calls `ensure_index` against each, and reports per-index applied/failed counts. PATCH-on-existing returns 200/202; the worker's `ensured: BTreeSet<String>` cache is in-process so a daemon restart re-PATCHes naturally on the next batch anyway.\n\nLesson: when bumping a settings version, confirm the wire-protocol semantics (PATCH vs PUT vs DELETE+CREATE) before assuming destructiveness. Meili PATCH = safe; if it had been PUT-replace, the v3 → v4 bump would have wiped existing filterable attributes.",
+  "source": "manual",
+  "relatedTask": "phase11j_consolidation_tier",
+  "tags": [
+    "phase11j",
+    "meilisearch",
+    "settings-version",
+    "additive-patch",
+    "cortex-bootstrap"
+  ],
+  "createdAt": "2026-05-03T01:42:38.715Z"
+}

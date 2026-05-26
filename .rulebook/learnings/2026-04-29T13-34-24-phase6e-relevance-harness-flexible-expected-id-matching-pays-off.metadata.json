@@ -1,0 +1,15 @@
+{
+  "id": "2026-04-29T13-34-24-phase6e-relevance-harness-flexible-expected-id-matching-pays-off",
+  "title": "phase6e relevance harness — flexible expected-id matching pays off",
+  "content": "When the cortex-api `Snippet` response shape doesn't expose a stable `doc_id` field, hand-curating fixtures with synthetic ids (like `evt:cortex-Cortex-misc:01ABC`) becomes brittle — every chunker change rotates the hashes. The phase6e harness sidesteps this by building a multi-strategy matcher: try exact equality against the canonical composite id (`<repo>|<path>|<content_hash>`), then exact match on each individual snippet field (`repo`/`path`/`symbol`/`content_hash`/`collection`), and finally **substring match against `path`/`symbol` only**. The substring fallback lets curators write `\"crates/cortex-api/src/strategies.rs\"` once and have it match every chunk. We deliberately did NOT substring-match against snippet `text` to avoid accidental matches on arbitrary content.\n\nA second pragmatic call: `/v1/status` doesn't expose per-backend (Vectorizer / Meili / Nexus) health today, only `indexed_repos`. Rather than hard-fail when the field is missing, the harness omits an intent bucket only when the query's `scope.repo` is missing from the snapshot, and records `omitted_intents` in the report. When `/v1/status` itself is unreachable, every intent gets omitted and the run still succeeds — the report just shows zero rows. This keeps the regression gate useful when one backend is down for unrelated reasons.",
+  "source": "manual",
+  "relatedTask": "phase6e_relevance_recall_mrr_harness",
+  "tags": [
+    "phase6e",
+    "analysis:relevance",
+    "F-008",
+    "harness",
+    "fixtures"
+  ],
+  "createdAt": "2026-04-29T13:34:24.748Z"
+}

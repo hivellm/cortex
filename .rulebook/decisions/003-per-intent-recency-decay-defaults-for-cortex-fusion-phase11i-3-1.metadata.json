@@ -1,0 +1,11 @@
+{
+  "id": 3,
+  "slug": "per-intent-recency-decay-defaults-for-cortex-fusion-phase11i-3-1",
+  "title": "Per-intent recency-decay λ defaults for Cortex fusion (phase11i §3.1)",
+  "status": "proposed",
+  "date": "2026-05-01",
+  "relatedTasks": [
+    "phase11i_claude_archive_indexer_and_relevance"
+  ],
+  "supersededBy": null
+}

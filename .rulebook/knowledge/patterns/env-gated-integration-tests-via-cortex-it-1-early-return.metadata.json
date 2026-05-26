@@ -1,0 +1,19 @@
+{
+  "id": "env-gated-integration-tests-via-cortex-it-1-early-return",
+  "type": "pattern",
+  "title": "Env-gated integration tests via CORTEX_*_IT=1 early return",
+  "category": "integration",
+  "description": "Gate live-stack integration tests on an environment variable (`CORTEX_*_IT=1`) and early-return inside the `#[tokio::test]` when unset, rather than tagging with `#[ignore]`.\n\n```rust\nfn it_enabled() -> bool {\n    std::env::var(\"CORTEX_EMBEDDER_IT\").as_deref() == Ok(\"1\")\n}\n\n#[tokio::test]\nasync fn my_live_test() {\n    if !it_enabled() {\n        eprintln!(\"skipping: CORTEX_EMBEDDER_IT != 1\");\n        return;\n    }\n    // ... real live-stack assertions ...\n}\n```\n\n**Why this beats `#[ignore]`**:\n- Default `cargo test` is green in CI without any extra flag; no `-- --ignored` required.\n- Skipped tests report `ok` in the cargo output, so a ten-test suite that is mostly live still shows `test result: ok. 10 passed` on the default run — CI dashboards stay clean.\n- The early-return path can print a human-readable \"skipping\" line to stderr so local developers see why the test didn't exercise the live path.\n- No risk that `-- --ignored` masks real regressions by sweeping in tests that were never meant to run together.\n\nUsed in `crates/cortex-embedder/tests/common/mod.rs::it_enabled()` and every `#[tokio::test]` in `tests/it_vectorizer.rs`, `tests/it_end_to_end.rs`.",
+  "example": "// tests/common/mod.rs\npub fn skip_if_not_it() -> bool {\n    if !it_enabled() {\n        eprintln!(\"skipping: CORTEX_EMBEDDER_IT != 1\");\n        return true;\n    }\n    false\n}\n\n// tests/it_vectorizer.rs\n#[tokio::test]\nasync fn ensure_collection_is_idempotent() {\n    if skip_if_not_it() { return; }\n    // live assertions\n}",
+  "whenToUse": "For integration tests that require a live external service (Vectorizer, Synap, Nexus, etc.) and should be opt-in in CI.",
+  "whenNotToUse": "For pure-Rust tests that never hit the network — those should run unconditionally. Also not suitable when you need the test binary itself to exit non-zero on skip (use `#[ignore]` with a wrapper script instead).",
+  "createdAt": "2026-04-22T11:49:33.371Z",
+  "tags": [
+    "testing",
+    "integration",
+    "cargo-test",
+    "ci",
+    "cortex-embedder"
+  ],
+  "source": "manual"
+}

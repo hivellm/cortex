@@ -1,0 +1,16 @@
+# phase10f — memory kind filter with facets alias and 400 on unknown
+**Source**: manual
+**Date**: 2026-04-30
+**Related Task**: phase10f_memory_kind_filter
+**Tags**: dashboard, memory, kind-filter, phase10f, facets
+The 2026-04-29 audit caught `/v1/dashboard/memory?kind=decision` returning the most-recent rows regardless of the requested kind. The pre-phase10f handler accepted `kind: Option<String>` but the GUI's documented `?facets=` query never reached the lane, so callers got `tool_call`/`turn` even though the overview reported 26 decisions + 33 analyses sitting in the same lane.
+
+Phase10f wires the full filter contract:
+1. **Multi-value kind**: `kind: Vec<String>` + `facets: Vec<String>` (alias). Both repeated query params merge into a single allowed-set; empty selection means "all kinds".
+2. **Validation up-front**: `resolve_kind_filter` returns `Err(received)` on any value outside the canonical set (`turn`, `tool_call`, `agent_call`, `memory`, `decision`, `analysis`, `law_violation`, `knowledge`, `learning`). Handler short-circuits to `400 unknown_kind` with structured body before touching the lane snapshot.
+3. **Filter BEFORE pagination**: pre-phase10f sliced first then filtered, so `limit=2 & kind=decision` could drop every requested row. Filter now runs against the full snapshot before `.truncate(limit)`.
+4. **Knowledge/Learning routing**: `symbol_to_kind` recognised `decision`/`analysis`/`law_violation`/`memory` but not phase10e's new `knowledge`/`learning` symbols — added explicit branches so they don't collapse into the catch-all `turn` bucket.
+
+`axum_extra::extract::Query` was already in use for the dashboard handlers — supports repeated params natively, no new deserialiser needed.
+
+GUI chip row (`gui/src/views/Memory.tsx`) deferred: the backend contract is pinned by 4 new unit tests (returns-only-decisions, ORs-multiple-kinds, facets-alias, 400-unknown, before-pagination), so the front-end migration can land without changing the wire shape.

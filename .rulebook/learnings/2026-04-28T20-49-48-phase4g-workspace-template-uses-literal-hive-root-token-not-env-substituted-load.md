@@ -1,0 +1,6 @@
+# phase4g — workspace template uses literal ${HIVE_ROOT} token, not env-substituted load
+**Source**: manual
+**Date**: 2026-04-28
+**Related Task**: phase4g_bootstrap_workspace_runbook
+**Tags**: phase4g, cortex-bootstrap, workspace, operations, ci-guard
+For source-controlled config templates the operator personalises post-checkout, keeping a literal `${HIVE_ROOT}` token in the file and having the operator search-and-replace it post-clone is much cleaner than wiring env-substitution into the loader. The CI guard (`bootstrap_workspace_example_loads`) parses the template through `load_workspace` (TOML structure + 17 entries + per-entry shape) but skips `preflight_workspace` because the token-bearing paths do not resolve on CI. That keeps the lint cheap and hermetic — drift in entry count, missing fields, duplicate ids, or accidental token removal all fail the test before reaching the operator. The runbook documents the exact `sed` and PowerShell `Set-Content` invocations so the substitution step is mechanical, not a place where an operator has to be careful.

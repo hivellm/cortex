@@ -1,0 +1,14 @@
+# phase10c — bootstrap dedup ledger keyed on raw body hash
+**Source**: manual
+**Date**: 2026-04-30
+**Related Task**: phase10c_bootstrap_dedup
+**Tags**: bootstrap, dedup, metadata, walker, phase10c, content-hash
+The 2026-04-29 audit found bootstrap-emitted ULIDs piling up: 26 decisions for 2 ADRs on disk, 37 laws for 12 rule files. The walker keyed events on `(repo, path, run_id)`, so each invocation produced fresh ULIDs even for unchanged files. Downstream content_hash dedup absorbed the bytes but the lane carried multiple entries.
+
+Fix: add a `bootstrap_seen(repo, path, content_hash, last_run_id, last_emitted_at)` ledger to the metadata SQLite. Walker hashes the **raw file body** (`sha256(body)`) — NOT the canonical-JSON hash from BootstrapEvent. Reasons: (1) the body is the input to every downstream emit + redact pass, so identical bytes deterministically produce identical events; (2) a file may emit multiple events (spec-doc fan-out), so the per-event hash can't dedupe at the file level. Body-hash is the natural file-level key.
+
+Wired through opt-in `run_repo_with_dedup(...)` so existing call sites stay unchanged. The dedup store is `Arc<Mutex<MetadataStore>>` because `rusqlite::Connection` is `Send` but not `Sync` (same pattern as `DashboardState.metadata`). Suppressed files still extend the checkpoint cursor so resume points past them.
+
+Pre-flight helper `preflight_likely_duplicates(ledger_empty, disk, lane)` is pure (no I/O) — caller passes counts. Threshold: lane > 2 × disk AND disk > 0 AND ledger empty (a populated ledger means the dedup walker already ran).
+
+`cortex-ops bootstrap-dedup --dry-run --repo NAME` walks the ledger and reports `(content_hash, paths[])` groups of size ≥ 2 (same body emitted under different paths). `--apply` is reserved — today returns exit code 3 with a doc pointer because live-backend deletion (Vectorizer/Meili/Nexus) is significant new code.

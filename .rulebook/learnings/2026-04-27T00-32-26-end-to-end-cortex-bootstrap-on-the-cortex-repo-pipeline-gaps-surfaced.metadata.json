@@ -1,0 +1,17 @@
+{
+  "id": "2026-04-27T00-32-26-end-to-end-cortex-bootstrap-on-the-cortex-repo-pipeline-gaps-surfaced",
+  "title": "End-to-end Cortex bootstrap on the Cortex repo: pipeline gaps surfaced",
+  "content": "# Outcome\n\nClosed the spec-05-deferred classifier-worker bridge. With the new\n`cortex-classifier-worker` running, `cortex-bootstrap .` against the\nCortex repo published 519 events end-to-end in 0.6 s. Two of the three\nindexes lit up; the third surfaced a pre-existing bug.\n\n## What landed\n\n- **Meilisearch (full-text):** 519 docs across `cortex-docs` (462),\n  `cortex-turns` (42), `cortex-governance` (12), `cortex-misc` (3).\n  Search \"classifier\" returns 53 hits, including the very task files\n  created during this session (recursive self-indexing works).\n- **Nexus (graph):** writer logs claim `nodes_upserted=271` /\n  `edges_upserted=135` but `MATCH (n) RETURN labels(n), count(n)`\n  returns one unlabeled node. The graph-writer's batch transaction is\n  not actually persisting through to Nexus; the SDK call swallows\n  failures silently. **Pre-existing.**\n- **Vectorizer (embeddings):** 4 collections created (`cortex-docs`,\n  `cortex-governance`, `cortex-misc`, `cortex-turns`) but every batch\n  reports `total_failed=4-5` and 0 vectors persist. **Pre-existing\n  vectorizer-sdk 3.0.3 drift in the upsert path.**\n\n## Side fixes applied\n\n- `cortex-bootstrap` and `cortex-classifier-worker` publishers now\n  auto-create the Synap room on first \"Room not found\".\n- `cortex-fulltext` was hard-failing at boot because\n  `settings.v1.json` had a tooling-only `\"version\": \"v1\"` field that\n  Meili rejects on `PATCH /indexes/{uid}/settings`. Stripped at the\n  client boundary.\n- `cortex-classifier-worker` treats Synap \"Room not found\" on consume\n  as an empty batch so the worker can come up before bootstrap or\n  live capture.\n- `cortex-embedder` now `tracing::warn!`s the underlying chunker /\n  vectorizer error detail before swallowing it into the\n  publish-invalid path; this is what surfaced the pre-existing\n  vectorizer auth + upsert drift.\n\n## Operational notes\n\n- The embedder needs a JWT in `CORTEX_EMBEDDER_VECTORIZER_PASSWORD`,\n  not the plain admin password — the SDK 3.0.3 transport sniffs the\n  three-segment shape and only sends `Authorization: Bearer ...` when\n  the value looks like a JWT. Setting the plain password yields HTTP\n  401 on every request. Bootstrap script should call `/auth/login`\n  once and inject the access_token.\n\n## Follow-ups (separate tasks)\n\n1. **Nexus graph persistence drift.** The `nodes_upserted` count\n   from the writer does not match what `MATCH (n)` finds. Likely a\n   transaction-commit / Cypher-driver mismatch with Nexus 1.15.0.\n2. **Vectorizer SDK 3.0.3 partial-upsert failure.** Every batch loses\n   4-5 chunks and the surviving ones don't actually persist\n   (`vector_count=0`). The earlier ADR #1 (now superseded) about\n   bypassing the SDK for `/insert` and `/get_vector` is the right\n   precedent — the same drift may have re-emerged on `/upsert`.\n3. **Embedder JWT acquisition.** Embedder should call `/auth/login`\n   itself when `CORTEX_EMBEDDER_VECTORIZER_PASSWORD` looks like a\n   plain password (no dots), instead of letting it 401.",
+  "source": "manual",
+  "relatedTask": "phase1_classifier_worker",
+  "tags": [
+    "bootstrap",
+    "classifier-worker",
+    "synap",
+    "meilisearch",
+    "nexus",
+    "vectorizer",
+    "end-to-end"
+  ],
+  "createdAt": "2026-04-27T00:32:26.415Z"
+}
