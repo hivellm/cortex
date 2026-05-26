@@ -1,0 +1,16 @@
+{
+  "title": "MCP granular search verbs land — consolidations promoted to first-class corpus",
+  "source": "manual",
+  "date": "2026-05-26",
+  "related_task": "phase19_mcp-granular-search",
+  "tags": [
+    "mcp",
+    "search",
+    "consolidation",
+    "meili",
+    "sqlite",
+    "match-strategy",
+    "scope-deviation"
+  ],
+  "promoted": false
+}
