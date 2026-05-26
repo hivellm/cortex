@@ -50,6 +50,7 @@ use crate::embedder::EnrichedEvent;
 pub mod calls;
 pub mod contradicts;
 pub mod defines;
+pub mod emitted_by;
 pub mod imports;
 pub mod returns;
 pub mod supersedes;
