@@ -194,6 +194,10 @@ pub fn build_router_with_auth_and_cfg(
             "/v1/sessions/{session_id}/files-touched",
             get(crate::files_touched::handle_session_files_touched),
         )
+        .route(
+            "/v1/topic-cards/search",
+            post(crate::topic_search::handle_topic_search),
+        )
         .with_state(state);
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from

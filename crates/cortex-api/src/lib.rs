@@ -97,6 +97,7 @@ pub use search::relevance_config;
 pub use search::search_proxy;
 pub use search::strategies;
 pub use search::tool_calls;
+pub use search::topic_search;
 pub use security::acl;
 pub use security::audit;
 pub use security::audit_store;

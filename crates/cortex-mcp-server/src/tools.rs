@@ -264,6 +264,7 @@ impl ToolRegistry {
                 Arc::new(SessionTimelineTool::new()),
                 Arc::new(ToolCallsTool::new()),
                 Arc::new(FilesTouchedTool::new()),
+                Arc::new(TopicSearchTool::new()),
             ],
         }
     }
@@ -1681,6 +1682,54 @@ fn is_ulid_safe(s: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §1.5 — cortex_topic_search
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/topic-cards/search`.
+pub struct TopicSearchTool;
+
+impl TopicSearchTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for TopicSearchTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for TopicSearchTool {
+    fn name(&self) -> &'static str {
+        "cortex_topic_search"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_topic_search",
+            "description": "Search TopicCards by topic tag (`tool:claude-code`, `kind:Bash`, `repo:cortex`, `analysis:relevance`, ...). Reads the `cortex_topic_cards` Meili index directly with the `topics` filter. Combine with `q` for free-text search inside title / body / synthesis_markdown. A trailing colon (`tool:`) is stripped and matched as the bare tag.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["topic_prefix"],
+                "properties": {
+                    "topic_prefix": {"type": "string", "description": "Topic tag to match against the card's `topics` array."},
+                    "repo": {"type": "string", "description": "Optional repo filter on the card itself."},
+                    "q": {"type": "string", "description": "Free-text Meili query (title / body / synthesis_markdown)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 15}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        proxy_search(ctx, "/v1/topic-cards/search", args).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.4 — cortex_files_touched
 // ---------------------------------------------------------------------
 
@@ -2055,12 +2104,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_seventeen_tools_with_unique_names() {
+    fn registry_returns_eighteen_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            17,
-            "phase19 §1.4 adds cortex_files_touched (16 -> 17)"
+            18,
+            "phase19 §1.5 adds cortex_topic_search (17 -> 18)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2081,6 +2130,7 @@ mod tests {
             "cortex_session_timeline",
             "cortex_tool_calls",
             "cortex_files_touched",
+            "cortex_topic_search",
         ] {
             assert!(
                 names.contains(&expected),

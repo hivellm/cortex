@@ -20,3 +20,4 @@ pub mod relevance_config;
 pub mod search_proxy;
 pub mod strategies;
 pub mod tool_calls;
+pub mod topic_search;
