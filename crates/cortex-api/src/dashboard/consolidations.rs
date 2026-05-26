@@ -70,6 +70,11 @@ pub struct ConsolidationDetail {
 /// filtered against so the GUI never re-derives the active filter
 /// from URL state alone.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
 pub struct ConsolidationFilter {
     /// Repo allow-list after normalisation. Empty = no repo filter.
     #[serde(default)]

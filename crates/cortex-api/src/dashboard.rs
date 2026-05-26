@@ -117,8 +117,9 @@ use self::tasks::{tasks_detail, tasks_list, tasks_summary};
 mod retention;
 use self::retention::{retention_state, retention_sweeps};
 
-mod consolidations;
+pub mod consolidations;
 use self::consolidations::{consolidation_detail, consolidations};
+pub use self::consolidations::{ConsolidationFilter, ConsolidationReportView};
 
 mod coverage;
 use self::coverage::coverage;

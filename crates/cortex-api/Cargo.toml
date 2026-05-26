@@ -64,6 +64,23 @@ argon2 = { version = "0.5" }
 rand = { version = "0.8" }
 subtle = { version = "2.6" }
 data-encoding = { version = "2.7" }
+# Phase14d — ts-rs derive surfaces TypeScript declarations for the
+# wire types. Optional, behind the `ts-export` feature so the
+# production dep graph is unaffected. `chrono-impl` maps
+# `DateTime<Utc>` onto a TS `string`; `serde-compat` matches the
+# `#[serde(skip_serializing_if = ...)]` semantics so optional
+# fields render as `T | undefined` rather than nullable.
+ts-rs = { version = "10", optional = true, features = ["chrono-impl", "serde-compat"] }
+
+[features]
+default = []
+# Phase14d — `cargo test --features ts-export -p cortex-api` exports
+# every type that crosses the HTTP boundary into `gui-types/*.ts`
+# via the `ts-rs` derive. Used by `scripts/generate-gui-types.{sh,ps1}`
+# to refresh `gui/src/lib/api.generated.ts`. Gated so the production
+# build does not pull `ts-rs` and the type-export `Drop` test only
+# runs when the operator opts in.
+ts-export = ["dep:ts-rs"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

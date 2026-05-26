@@ -53,6 +53,8 @@ pub mod http;
 pub mod retention_daemon;
 pub mod service;
 pub mod storage;
+#[cfg(feature = "ts-export")]
+pub mod ts_export;
 pub mod types;
 
 // -- pre-bucket path preservation ------------------------------------------

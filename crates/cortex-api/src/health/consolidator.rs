@@ -24,6 +24,11 @@ use serde::{Deserialize, Serialize};
 
 /// Per-grain status row carried on the response.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
 pub struct GrainHealth {
     /// `finished_at` stamp of the most recent
     /// [`super::super::consolidator::ConsolidationReport`] row for
@@ -44,6 +49,11 @@ pub struct GrainHealth {
 
 /// Top-level wire response for `/v1/health/consolidator`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
 pub struct ConsolidatorHealthReport {
     /// Session-grain status row.
     pub session_grain: GrainHealth,

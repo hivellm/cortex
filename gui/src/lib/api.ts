@@ -968,23 +968,17 @@ export type CoverageReport = {
   overall_severity: "ok" | "warn" | "critical";
 };
 
-/// phase14a §4.1 wire shape of `/v1/health/consolidator`. Mirrors
-/// `cortex_api::health::consolidator::ConsolidatorHealthReport`.
-/// All four fields on `GrainHealth` are independently optional /
-/// defaulted — `last_run` + `last_status` are omitted when no run
-/// has landed yet; the two counters default to zero.
-export type GrainHealth = {
-  last_run?: string;
-  last_status?: string;
-  envelopes_emitted: number;
-  latency_ms: number;
-};
-
-export type ConsolidatorHealthReport = {
-  session_grain: GrainHealth;
-  topic_grain: GrainHealth;
-  decision_trace_grain: GrainHealth;
-};
+// phase14a §4.1 wire shape of `/v1/health/consolidator` —
+// generated from Rust via ts-rs (phase14d). Re-exported so
+// callers can keep `import { ConsolidatorHealthReport, ... }
+// from "./api"`; `ConsolidatorHealthReport` is also imported
+// locally because the `api.healthConsolidator()` helper above
+// uses it as a `getJson<T>` type parameter.
+import type { ConsolidatorHealthReport } from "./api.generated";
+export type {
+  ConsolidatorHealthReport,
+  GrainHealth,
+} from "./api.generated";
 
 export type HealthSnapshot = {
   generated_at: string;

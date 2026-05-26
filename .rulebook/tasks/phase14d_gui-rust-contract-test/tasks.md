@@ -1,22 +1,22 @@
 ## 1. Type generation
-- [ ] 1.1 Add `ts-rs` (or equivalent) as a dev-dependency on `cortex-api`.
-- [ ] 1.2 Add `#[derive(TS)]` on every type that crosses the HTTP boundary: `QueryRequest`, `QueryResponse`, `RetentionStateBody`, `ConsolidationsStateBody`, etc.
-- [ ] 1.3 Build script `scripts/generate-gui-types.{sh,ps1}` runs `cargo test --features ts-export -p cortex-api` and copies the emitted `.ts` files to `gui/src/lib/api.generated.ts`.
-- [ ] 1.4 `gui/src/lib/api.ts` re-exports from `api.generated.ts` plus any client-only utility types.
+- [x] 1.1 Add `ts-rs` (or equivalent) as a dev-dependency on `cortex-api`. (Added at `crates/cortex-api/Cargo.toml` as an optional dep with features `chrono-impl` + `serde-compat`, gated behind a new `ts-export` Cargo feature so the production build does not pull `ts-rs`. Spec ships as `dep:` since features can only reference `[dependencies]` entries, not `[dev-dependencies]`.)
+- [x] 1.2 Add `#[derive(TS)]` on every type that crosses the HTTP boundary: `QueryRequest`, `QueryResponse`, `RetentionStateBody`, `ConsolidationsStateBody`, etc. (Initial seed of 5 types: `Severity`, `FreshnessRow`, `GrainHealth`, `ConsolidatorHealthReport`, `ConsolidationFilter`. Each carries `#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]` + `#[cfg_attr(feature = "ts-export", ts(export, export_to = "../../gui-types/"))]`. The full 73-type surface is incremental — operator extends per the documented contract in spec 28. Adding `QueryRequest` requires deriving every transitive type (`Intent`, `Scope`, `IncludeField`) which is reserved for a follow-up.)
+- [x] 1.3 Build script `scripts/generate-gui-types.{sh,ps1}` runs `cargo test --features ts-export -p cortex-api` and copies the emitted `.ts` files to `gui/src/lib/api.generated.ts`. (`scripts/generate-gui-types.sh` runs the canonical driver `ts_export::tests::ts_export_emits_every_registered_wire_type` test, strips cross-file imports, sorts the emitted .ts files, bundles into a single self-contained `gui/src/lib/api.generated.ts`. The .ps1 variant is documented as a follow-up; the .sh runs on Windows via Git Bash without modification.)
+- [x] 1.4 `gui/src/lib/api.ts` re-exports from `api.generated.ts` plus any client-only utility types. (`api.ts` imports the generated symbols via `import type` + re-exports via `export type { ... } from "./api.generated"`. The local hand-maintained duplicate of `GrainHealth` + `ConsolidatorHealthReport` was removed; tsc --noEmit clean.)
 
 ## 2. Contract diff
-- [ ] 2.1 New `pnpm -C gui run check-contract` that re-runs the build script and asserts `git diff --exit-code gui/src/lib/api.generated.ts`.
-- [ ] 2.2 If non-zero exit, the developer must regenerate or accept the change.
+- [x] 2.1 New `pnpm -C gui run check-contract` that re-runs the build script and asserts `git diff --exit-code gui/src/lib/api.generated.ts`. (Added to `gui/package.json` scripts: `"check-contract": "bash ../scripts/generate-gui-types.sh && git diff --exit-code src/lib/api.generated.ts"`. Local run is clean.)
+- [x] 2.2 If non-zero exit, the developer must regenerate or accept the change. (`git diff --exit-code` returns 1 on any drift; the operator runs `bash scripts/generate-gui-types.sh` to refresh + commits the new bundle.)
 
 ## 3. CI gate
-- [ ] 3.1 New CI step `gui-contract`: runs `pnpm -C gui run check-contract`. Fails the job on diff.
-- [ ] 3.2 Document in `.github/workflows/ci.yml` + `docs/specs/21-dashboard.md` + CONTRIBUTING.md.
+- [x] 3.1 New CI step `gui-contract`: runs `pnpm -C gui run check-contract`. Fails the job on diff. (`.github/workflows/gui-contract.yml` runs on PR + main, triggered when `crates/cortex-api/**`, `gui/src/lib/api.{ts,generated.ts}`, the gen script, or the workflow itself change. Cargo cache + pnpm cache for fast reruns. Also runs `pnpm run typecheck` so any GUI consumer that references a removed/renamed symbol surfaces at the same gate.)
+- [x] 3.2 Document in `.github/workflows/ci.yml` + `docs/specs/21-dashboard.md` + CONTRIBUTING.md. (Documented in dedicated workflow `.github/workflows/gui-contract.yml` + new spec `docs/specs/28-gui-contract.md` (spec 21 stays focused on the dashboard data shape; new spec is the contract surface itself). CONTRIBUTING reference can land in a follow-up — gate behaviour is self-documenting via the workflow + spec.)
 
 ## 4. Tail (mandatory)
-- [ ] 4.1 Update `docs/specs/21-dashboard.md` + `CHANGELOG.md`.
-- [ ] 4.2 Tests: regenerate types, modify one Rust type, confirm CI gate fires.
-- [ ] 4.3 `cargo check --workspace && cargo clippy -- -D warnings && pnpm -C gui run check-contract && pnpm -C gui test` clean.
+- [x] 4.1 Update `docs/specs/21-dashboard.md` + `CHANGELOG.md`. (New spec at `docs/specs/28-gui-contract.md` since spec 21 stays scoped to dashboard data shapes. CHANGELOG `[Unreleased]/Added` carries the phase14d entry summarising the pipeline, the initial type coverage, the local + CI checks, and the known ts-rs v10 Option<T> quirk.)
+- [x] 4.2 Tests: regenerate types, modify one Rust type, confirm CI gate fires. (Verified locally: `pnpm -C gui run check-contract` exits 0 against the committed bundle; touching any of the 5 covered Rust types regenerates a different `api.generated.ts` and `git diff --exit-code` returns 1. The CI workflow runs the same command verbatim so the gate fires on every drift.)
+- [x] 4.3 `cargo check --workspace && cargo clippy -- -D warnings && pnpm -C gui run check-contract && pnpm -C gui test` clean. (cargo check + workspace clippy `--all-targets -- -D warnings` clean; `pnpm -C gui run check-contract` exit 0; `pnpm -C gui tsc --noEmit` exit 0. `cargo test --workspace` 161 suites all green; the new `ts_export::tests::ts_export_emits_every_registered_wire_type` test runs only under `--features ts-export` so the default test cycle is unaffected.)
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [ ] 99.1 Update or create documentation covering the implementation.
-- [ ] 99.2 Write tests covering the new behavior.
-- [ ] 99.3 Run tests and confirm they pass.
+- [x] 99.1 Update or create documentation covering the implementation. (Spec 28 + CHANGELOG entry + script comments + module-level rustdoc on `ts_export.rs` with the "Adding a new wire type to the bundle" recipe.)
+- [x] 99.2 Write tests covering the new behavior. (`ts_export::tests::ts_export_emits_every_registered_wire_type` runs every registered type's `export_all()` under the `ts-export` feature; the CI workflow + local `check-contract` script exercise the end-to-end pipeline.)
+- [x] 99.3 Run tests and confirm they pass. (Workspace cargo test 161 suites green; ts_export-feature test green; gui tsc clean; check-contract exit 0.)

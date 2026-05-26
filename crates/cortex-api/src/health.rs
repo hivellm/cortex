@@ -53,6 +53,11 @@ use serde_json::Value;
 /// Severity bucket the GUI colour-codes on.
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
 pub enum Severity {
     /// Within tolerance.
     Ok,
@@ -91,6 +96,11 @@ impl Severity {
 
 /// One row in the `/v1/health/freshness` table.
 #[derive(Debug, Clone, Serialize)]
+#[cfg_attr(feature = "ts-export", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "ts-export",
+    ts(export, export_to = "../../gui-types/")
+)]
 pub struct FreshnessRow {
     /// Stage + kind/hook key (e.g. `adapter.publisher.tool_call`).
     pub key: String,

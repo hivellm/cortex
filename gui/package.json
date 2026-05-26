@@ -16,7 +16,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.electron.json",
     "lint": "eslint src electron",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check-contract": "bash ../scripts/generate-gui-types.sh && git diff --exit-code src/lib/api.generated.ts"
   },
   "dependencies": {
     "@react-sigma/core": "^5.0.6",
