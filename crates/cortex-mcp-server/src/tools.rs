@@ -274,6 +274,7 @@ impl ToolRegistry {
                 Arc::new(LawViolationsTool::new()),
                 Arc::new(FeedbackSignalsTool::new()),
                 Arc::new(DecisionSearchTool::new()),
+                Arc::new(ConsolidationCostsTool::new()),
             ],
         }
     }
@@ -1935,6 +1936,99 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §3.4 — cortex_consolidation_costs
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/consolidations/costs`.
+pub struct ConsolidationCostsTool;
+
+impl ConsolidationCostsTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationCostsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationCostsTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidation_costs"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidation_costs",
+            "description": "Aggregate consolidation counts grouped by `grain` / `model` / `day` across an RFC3339 `[since, until]` window. Reads the `cortex_consolidations` Meili index and folds locally (no GROUP BY operator in Meili). Per-bucket `cost_cents` / `prompt_tokens` / `completion_tokens` are `null` today — the consolidator's `grain_costs` ledger is in-process only and not addressable per consolidation; live spend is on `/v1/health/coverage`. Response carries `match_strategy = \"doc_only\"`. When the underlying window has more than 500 hits the response is `truncated`.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["since", "until", "group_by"],
+                "properties": {
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `occurred_at`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `occurred_at`."},
+                    "group_by": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": ["grain", "model", "day"]},
+                        "minItems": 1,
+                        "description": "Axes to group on; order preserved in the bucket key."
+                    },
+                    "repo": {"type": "string", "description": "Optional repo filter applied BEFORE grouping."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let group_by = args
+            .get("group_by")
+            .and_then(Value::as_array)
+            .ok_or_else(|| ToolError::invalid_input("`group_by` array is required"))?;
+        if group_by.is_empty() {
+            return Err(ToolError::invalid_input(
+                "`group_by` must list at least one axis",
+            ));
+        }
+        for axis in group_by {
+            let s = axis.as_str().unwrap_or("");
+            if !["grain", "model", "day"].contains(&s) {
+                return Err(ToolError::invalid_input(format!(
+                    "unknown axis `{s}`; allowed: grain, model, day"
+                )));
+            }
+        }
+        for field in ["since", "until"] {
+            let s = args
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| ToolError::invalid_input(format!("`{field}` is required")))?;
+            if chrono::DateTime::parse_from_rfc3339(s).is_err() {
+                return Err(ToolError::invalid_input(format!(
+                    "`{s}` is not a valid RFC3339 timestamp"
+                )));
+            }
+        }
+        let mut body = json!({
+            "since": args.get("since").cloned().unwrap_or(Value::Null),
+            "until": args.get("until").cloned().unwrap_or(Value::Null),
+            "group_by": args.get("group_by").cloned().unwrap_or(Value::Null),
+        });
+        if let Some(v) = args.get("repo") {
+            if !v.is_null() {
+                body["repo"] = v.clone();
+            }
+        }
+        proxy_search(ctx, "/v1/consolidations/costs", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §3.3 — cortex_decision_search
 // ---------------------------------------------------------------------
 
@@ -2834,12 +2928,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentyseven_tools_with_unique_names() {
+    fn registry_returns_twentyeight_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            27,
-            "phase19 §3.3 adds cortex_decision_search (26 -> 27)"
+            28,
+            "phase19 §3.4 adds cortex_consolidation_costs (27 -> 28)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2870,6 +2964,7 @@ mod tests {
             "cortex_law_violations",
             "cortex_feedback_signals",
             "cortex_decision_search",
+            "cortex_consolidation_costs",
         ] {
             assert!(
                 names.contains(&expected),

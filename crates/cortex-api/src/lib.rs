@@ -88,6 +88,7 @@ pub use mcp::topic_card as mcp_topic_card;
 pub use search::analyzer;
 pub use search::budget;
 pub use search::cache;
+pub use search::consolidation_costs;
 pub use search::consolidation_get;
 pub use search::consolidation_lineage;
 pub use search::consolidations_by_entity;

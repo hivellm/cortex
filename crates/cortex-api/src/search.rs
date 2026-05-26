@@ -11,6 +11,7 @@
 pub mod analyzer;
 pub mod budget;
 pub mod cache;
+pub mod consolidation_costs;
 pub mod consolidation_get;
 pub mod consolidation_lineage;
 pub mod consolidations_by_entity;

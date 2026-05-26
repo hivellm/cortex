@@ -29,11 +29,12 @@ pub use rpc::{
 };
 pub use server::{Server, ServerInfo, SERVER_NAME, SERVER_VERSION};
 pub use tools::{
-    ConsolidationGetTool, ConsolidationLineageTool, ConsolidationsByEntityTool,
-    ConsolidationsDiffTool, ConsolidationsRecentTool, ConsolidationsSearchTool, DecisionSearchTool,
-    EventsByKindTool, FeedbackSignalsTool, FilesTouchedTool, ForgetTool, LawViolationsTool,
-    PreThinkingTool, QueryTool, SessionTimelineTool, StatusTool, Tool, ToolCallsTool, ToolContext,
-    ToolError, ToolRegistry, ToolResult, TopicSearchTool, MCP_TOOL_TIMEOUT_MS,
+    ConsolidationCostsTool, ConsolidationGetTool, ConsolidationLineageTool,
+    ConsolidationsByEntityTool, ConsolidationsDiffTool, ConsolidationsRecentTool,
+    ConsolidationsSearchTool, DecisionSearchTool, EventsByKindTool, FeedbackSignalsTool,
+    FilesTouchedTool, ForgetTool, LawViolationsTool, PreThinkingTool, QueryTool,
+    SessionTimelineTool, StatusTool, Tool, ToolCallsTool, ToolContext, ToolError, ToolRegistry,
+    ToolResult, TopicSearchTool, MCP_TOOL_TIMEOUT_MS,
 };
 pub use validate::{validate_plugin, ValidationReport};
 
