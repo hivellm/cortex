@@ -271,6 +271,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationsSearchTool::new()),
                 Arc::new(ConsolidationLineageTool::new()),
                 Arc::new(ConsolidationsDiffTool::new()),
+                Arc::new(LawViolationsTool::new()),
             ],
         }
     }
@@ -1932,6 +1933,79 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §3.1 — cortex_law_violations
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/laws/violations`.
+pub struct LawViolationsTool;
+
+impl LawViolationsTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for LawViolationsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for LawViolationsTool {
+    fn name(&self) -> &'static str {
+        "cortex_law_violations"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_law_violations",
+            "description": "List LawViolation envelopes for one repo with optional per-session / per-law / RFC3339 time-window narrowing. Reads the per-repo `cortex-<slug>-governance` Meili index (canonical home of LawViolation envelopes — see `cortex-workers/src/fulltext/routing.rs`). `repo` is REQUIRED because the global `cortex_laws` index does not declare `repo`/`session_id`/`ts` filterable; callers needing cross-repo aggregation should fan out one call per repo.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                    "repo": {"type": "string", "description": "Repo slug — resolves to `cortex-<lowercase>-governance` index."},
+                    "session_id": {"type": "string", "description": "Optional `session_id` filter."},
+                    "law_id": {"type": "string", "description": "Optional law identifier filter (`LAW-CORTEX-001`, `LAW-007`, ...)."},
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `ts`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `ts`."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let repo = args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`repo` is required"))?;
+        if !repo
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            || repo.len() > 128
+        {
+            return Err(ToolError::invalid_input(
+                "repo must be alphanumeric (`-` / `_` allowed, ≤128 chars)",
+            ));
+        }
+        let mut body = json!({ "repo": repo });
+        for field in ["session_id", "law_id", "since", "until", "limit"] {
+            if let Some(v) = args.get(field) {
+                if !v.is_null() {
+                    body[field] = v.clone();
+                }
+            }
+        }
+        proxy_search(ctx, "/v1/laws/violations", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §2.6 — cortex_consolidations_diff
 // ---------------------------------------------------------------------
 
@@ -2599,12 +2673,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentyfour_tools_with_unique_names() {
+    fn registry_returns_twentyfive_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            24,
-            "phase19 §2.6 adds cortex_consolidations_diff (23 -> 24) — closes Group B"
+            25,
+            "phase19 §3.1 adds cortex_law_violations (24 -> 25) — opens Group C"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2632,6 +2706,7 @@ mod tests {
             "cortex_consolidations_search",
             "cortex_consolidation_lineage",
             "cortex_consolidations_diff",
+            "cortex_law_violations",
         ] {
             assert!(
                 names.contains(&expected),

@@ -199,6 +199,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::topic_search::handle_topic_search),
         )
         .route(
+            "/v1/laws/violations",
+            post(crate::law_violations::handle_law_violations),
+        )
+        .route(
             "/v1/consolidations/diff",
             get(crate::consolidations_diff::handle_consolidations_diff),
         )

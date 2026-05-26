@@ -97,6 +97,7 @@ pub use search::consolidations_search;
 pub use search::events_by_kind;
 pub use search::files_touched;
 pub use search::fusion;
+pub use search::law_violations;
 pub use search::orchestrator;
 pub use search::query_rewrite;
 pub use search::relevance_config;
