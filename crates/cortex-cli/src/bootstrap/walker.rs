@@ -296,6 +296,28 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
         });
     }
 
+    // Sort entries by `rel_path` (ascending) so the iteration order is
+    // deterministic across OSes + reruns. The runner's resume filter
+    // (`runner.rs` — `if rel_path <= last { continue }`) assumes
+    // lexicographic order; the `ignore::WalkBuilder` returns entries
+    // in filesystem-native order (ext4 yields hash-table order on
+    // Linux), which breaks the resume contract — exactly the
+    // `idempotent_replay_reuses_checkpoint_resume` flap surfaced on
+    // Linux CI. Sorting fixes both this resume contract and any other
+    // downstream consumer that relies on deterministic ordering.
+    out.sort_by(|a, b| {
+        let ka = match a {
+            WalkEntry::Accepted { rel_path, .. } | WalkEntry::Dropped { rel_path, .. } => {
+                rel_path.as_str()
+            }
+        };
+        let kb = match b {
+            WalkEntry::Accepted { rel_path, .. } | WalkEntry::Dropped { rel_path, .. } => {
+                rel_path.as_str()
+            }
+        };
+        ka.cmp(kb)
+    });
     out
 }
 

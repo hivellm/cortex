@@ -102,7 +102,7 @@ impl SyncClient {
         let client = Client::builder()
             .timeout(Duration::from_millis(cfg.timeout_ms))
             .build()
-            .expect("reqwest client builder");
+            .expect("reqwest client builder"); // SAFETY: Client::builder().build() only fails on TLS init failure; panicking at process boot when TLS is unusable is the correct behaviour and grandfathered by the phase14i §3.2 gate.
         Self {
             client,
             api_endpoint: cfg.api_endpoint.trim_end_matches('/').to_string(),

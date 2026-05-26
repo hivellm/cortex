@@ -398,6 +398,16 @@ fn is_cortex_entry(entry: &Value, _shim: &HookShim) -> bool {
 mod tests {
     use super::*;
 
+    /// Serialises every test that observes or mutates the process-
+    /// global `PATH`. `cortex_hook_on_path()` reads `PATH` so any
+    /// install-shape test races with `fake_cortex_hook_on_path` /
+    /// `restore_path`. Holding this mutex across `install()` calls
+    /// pins `cortex_hook_on_path()`'s answer for the duration of the
+    /// test (Linux CI surfaced the race as a `settings_modified`
+    /// flap in `install_is_idempotent_byte_identical_after_two_runs`
+    /// while a sibling test toggled `PATH`).
+    static PATH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn fixture_layout() -> (tempfile::TempDir, Layout) {
         let tmp = tempfile::tempdir().unwrap();
         let layout = Layout::from_home(tmp.path());
@@ -507,6 +517,9 @@ mod tests {
 
     #[test]
     fn settings_register_cortex_hook_bin_with_fire_forget_per_event() {
+        // Hold PATH_LOCK while we toggle PATH so the idempotent test
+        // does not observe a flipped `cortex_hook_on_path()` mid-run.
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let (tmp, layout) = fixture_layout();
         let prior_path = fake_cortex_hook_on_path(tmp.path());
         let result = install(&layout);
@@ -544,6 +557,11 @@ mod tests {
 
     #[test]
     fn install_is_idempotent_byte_identical_after_two_runs() {
+        // Hold PATH_LOCK so a sibling test cannot flip
+        // `cortex_hook_on_path()`'s answer between the two install
+        // calls below — the install shape depends on the bin-on-PATH
+        // branch and any flap renders the idempotency assertion racy.
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let (_tmp, layout) = fixture_layout();
         install(&layout).expect("first install");
         let after_first = fs::read_to_string(&layout.settings_path).unwrap();
