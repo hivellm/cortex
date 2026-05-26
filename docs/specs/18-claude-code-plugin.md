@@ -339,6 +339,49 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 8. **Hooks ship inside the plugin tree.** The `hooks/` directory and `hooks/hooks.json` register capture at plugin-install time so a single `claude plugin install` covers both pull (MCP tools) and push (capture). The spec-10 standalone install path stays for non-plugin users; the new `--no-hooks` flag keeps both paths cohabitable.
 9. **Single source of truth for hook shims.** Canonical `cortex-*.{sh,ps1}` live under `crates/cortex-adapter-claude-code/hooks/`. The plugin tree mirrors them and a drift test refuses divergence — no need to re-author Bash scripts inside the plugin tree.
 
+## Timeout contract (phase14i)
+
+Every MCP tool call is bounded by a per-tool timeout enforced by
+the `cortex-mcp-server` dispatcher BEFORE the call reaches the
+tool body. Default is `MCP_TOOL_TIMEOUT_MS = 5_000` (5 s); per-tool
+overrides live on `ToolContext::tool_timeouts` and are populated
+from the env knobs `CORTEX_MCP_TOOL_TIMEOUT_MS` (default) and
+`CORTEX_MCP_TOOL_TIMEOUT_MS_{TOOL_NAME}` (per-tool override) when
+wired through the future `cortex_config::McpConfig`.
+
+Wire shape when a tool exceeds its budget:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": <request_id>,
+  "error": {
+    "code": -32603,
+    "message": "tool `<name>` exceeded timeout after <elapsed_ms> ms",
+    "data": {
+      "reason": "tool_timeout",
+      "elapsed_ms": <u64>,
+      "tool": "<mcp tool name>",
+      "request_id": <jsonrpc id>
+    }
+  }
+}
+```
+
+Callers pattern-match on `error.data.reason == "tool_timeout"`.
+The structured error replaces the legacy silent fall-through to a
+generic empty result (which was indistinguishable from "tool
+returned empty"). `cortex_mcp_server::tools::reasons::TOOL_TIMEOUT`
+is the canonical constant.
+
+`ToolError::timeout(tool, elapsed_ms)` is the in-crate constructor
+that surfaces this shape; tools that want to short-circuit early
+(e.g. with their own internal `tokio::time::timeout` around a
+slow sub-call) MAY return it directly. The dispatcher uses
+`tokio::time::timeout` around the join handle so a tool whose
+body never returns (deadlocked async loop, blocking syscall) is
+still cancelled and reported.
+
 ## Open questions
 
 1. **MCP stateful resources.** Should `cortex.session` expose the active turn / decisions / laws as MCP resources (URIs the host can subscribe to)? Defer to Phase 3.

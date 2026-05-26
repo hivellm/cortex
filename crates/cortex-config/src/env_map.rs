@@ -149,6 +149,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ),
     ("CORTEX_INGESTION_BIND", "/ingestion/bind"),
     ("CORTEX_INGESTION_URL", "/ingestion/ingestion_url"),
+    ("CORTEX_MCP_TOOL_TIMEOUT_MS", "/mcp/default_timeout_ms"),
     ("CORTEX_MEILI_REFRESH_SECS", "/dashboard/meili_refresh_secs"),
     ("CORTEX_METADATA_DB", "/ingestion/metadata_db"),
     ("CORTEX_NEXUS_API_KEY", "/nexus/nexus_api_key"),

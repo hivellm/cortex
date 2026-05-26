@@ -1,0 +1,68 @@
+name: Adapter no-unwrap grep gate
+
+# Phase14i §3.2 — forbid `.unwrap()` / `.expect(...)` in the
+# adapter's production paths. The dispatcher is the daemon's
+# single per-frame entry point; any production-path panic takes
+# the entire user session's hook capture down. The dispatcher +
+# core production modules MUST surface failures as structured
+# `AdapterError` instead of panicking.
+#
+# The gate scans every `*.rs` under `crates/cortex-adapter-claude-code/src/`
+# EXCEPT inside `#[cfg(test)] mod tests { ... }` blocks (line-based
+# heuristic: lines that follow a `#[cfg(test)]` marker in the same
+# file are excluded). Tests are still allowed to `unwrap()` —
+# this gate only protects the daemon dispatch loop.
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - "crates/cortex-adapter-claude-code/src/**"
+      - ".github/workflows/adapter-no-unwrap.yml"
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - "crates/cortex-adapter-claude-code/src/**"
+      - ".github/workflows/adapter-no-unwrap.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  grep-gate:
+    name: Adapter production paths — no unwrap/expect
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Assert zero unwrap/expect in adapter production paths
+        run: |
+          set -e
+          # Build the awk filter: skip everything after a
+          # `#[cfg(test)]` marker until the next module boundary
+          # (`mod ` declaration at indent 0 closing the cfg block,
+          # detected by `^}` after the cfg-test region). Hit is
+          # reported as `file:line: source` for the operator.
+          violations=$(awk '
+            FNR == 1 { in_test = 0 }
+            /^#\[cfg\(test\)\]/ { in_test = 1 }
+            in_test && /^\}/ { in_test = 0; next }
+            !in_test && /(\.unwrap\(\)|\.expect\()/ {
+              print FILENAME ":" FNR ": " $0
+            }
+          ' $(find crates/cortex-adapter-claude-code/src -name '*.rs' -print))
+          # Allow-list: a small set of grandfathered call sites
+          # whose context makes unwrap safe (e.g. compile-time
+          # constants). Each must carry a `// SAFETY:` comment on
+          # the preceding line; the awk pass surfaces every hit
+          # and the grep below removes the SAFETY-tagged ones.
+          remaining=$(echo "$violations" | grep -v ' // SAFETY: ' || true)
+          if [ -n "$remaining" ]; then
+            echo "::error::Adapter production path contains unwrap/expect (phase14i §1):"
+            echo "$remaining"
+            exit 1
+          fi
+          echo "Grep gate passed — zero unwrap/expect across adapter production paths."

@@ -6,7 +6,8 @@ use thiserror::Error;
 use crate::sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
     ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
-    IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig, RulebookConfig,
+    IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig,
+    RulebookConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -75,6 +76,9 @@ pub struct Config {
     /// Claude Code adapter knobs (hook shim + admin port).
     #[serde(default)]
     pub adapter: AdapterConfig,
+    /// Phase14i §2.3 — `cortex-mcp-server` per-tool timeout knobs.
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 fn default_schema_version() -> String {
@@ -101,6 +105,7 @@ impl Default for Config {
             analyzer: AnalyzerConfig::default(),
             claude_archive: ClaudeArchiveConfig::default(),
             adapter: AdapterConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 }

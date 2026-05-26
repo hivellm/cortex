@@ -101,6 +101,12 @@ pub enum InstallError {
     /// JSON serialise / parse failure.
     #[error("install json: {0}")]
     Json(#[from] serde_json::Error),
+    /// `settings.json` is not in the expected shape (root must be
+    /// an object, `hooks` must be an object). Phase14i §1.2 — we
+    /// surface this as a typed error instead of panicking so the
+    /// installer fails cleanly with an actionable message.
+    #[error("malformed settings.json: {0}")]
+    MalformedSettings(&'static str),
 }
 
 /// Layout describing where the install / uninstall actions read and
@@ -244,10 +250,16 @@ fn patch_settings(layout: &Layout) -> Result<bool, InstallError> {
 
     let hooks_map = existing
         .as_object_mut()
-        .expect("settings.json root must be an object")
+        .ok_or(InstallError::MalformedSettings(
+            "settings.json root must be an object",
+        ))?
         .entry("hooks")
         .or_insert_with(|| Value::Object(Map::new()));
-    let hooks_obj = hooks_map.as_object_mut().expect("hooks must be an object");
+    let hooks_obj = hooks_map
+        .as_object_mut()
+        .ok_or(InstallError::MalformedSettings(
+            "settings.json `hooks` must be an object",
+        ))?;
 
     let bin_available = cortex_hook_on_path();
     for shim in HOOK_SHIMS {

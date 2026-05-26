@@ -56,10 +56,23 @@ impl HttpPublisher {
         wal: Arc<OverflowWal>,
         metrics: Arc<Metrics>,
     ) -> Self {
-        let client = Client::builder()
-            .timeout(timeout)
-            .build()
-            .expect("reqwest client builder");
+        // Phase14i §1.2 — never panic on the daemon's boot path.
+        // A reqwest client-build failure is exceptional (TLS init
+        // catastrophe) but if it happens we fall back to the
+        // default Client + WARN log so the rest of the daemon
+        // (sync paths, dispatcher, IPC) keeps serving instead of
+        // taking the whole user-session capture down.
+        let client = match Client::builder().timeout(timeout).build() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    timeout_ms = timeout.as_millis() as u64,
+                    "reqwest client builder failed; falling back to default Client (per-call timeout unset)"
+                );
+                Client::new()
+            }
+        };
         Self {
             client,
             endpoint: endpoint.into(),

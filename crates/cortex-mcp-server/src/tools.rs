@@ -42,7 +42,15 @@ pub mod reasons {
     /// transport's hard cap. Adapter returns this instead of letting
     /// the transport reject the call (which dumps to a side-file).
     pub const BUDGET_EXCEEDED: &str = "budget_exceeded";
+    /// Phase14i §2.2 — the tool's `call` body exceeded the
+    /// configured timeout (default `MCP_TOOL_TIMEOUT_MS = 5_000`).
+    /// `error.data` carries `{ elapsed_ms, tool, request_id? }`.
+    pub const TOOL_TIMEOUT: &str = "tool_timeout";
 }
+
+/// Phase14i §2.3 — default per-call timeout for every MCP tool.
+/// Override per-tool via `cortex_config::McpConfig::tool_timeouts`.
+pub const MCP_TOOL_TIMEOUT_MS: u64 = 5_000;
 
 /// Caller name advertised on the `x-cortex-caller` header.
 pub const CALLER: &str = "claude-code-plugin";
@@ -66,6 +74,15 @@ pub struct ToolContext {
     pub pt_metrics: Arc<PreThinkingMetrics>,
     /// Server start instant — surfaced through `cortex_status`.
     pub started_at: std::time::Instant,
+    /// Phase14i §2.3 — default per-call timeout used when the
+    /// per-tool override is absent. Defaults to
+    /// [`MCP_TOOL_TIMEOUT_MS`].
+    pub tool_timeout_default: std::time::Duration,
+    /// Phase14i §2.3 — per-tool timeout overrides keyed by MCP
+    /// tool name. Populated from the env var
+    /// `CORTEX_MCP_TOOL_TIMEOUT_MS_{TOOL_NAME}` (the name is
+    /// upper-cased + non-alnum collapsed to `_`).
+    pub tool_timeouts: std::collections::BTreeMap<String, std::time::Duration>,
 }
 
 impl ToolContext {
@@ -80,7 +97,34 @@ impl ToolContext {
             http,
             pt_metrics: Arc::new(PreThinkingMetrics::new()),
             started_at: std::time::Instant::now(),
+            tool_timeout_default: std::time::Duration::from_millis(MCP_TOOL_TIMEOUT_MS),
+            tool_timeouts: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// Phase14i §2.3 — resolve the timeout for `tool_name`. Falls
+    /// back to [`Self::tool_timeout_default`] when no override is
+    /// configured.
+    pub fn tool_timeout(&self, tool_name: &str) -> std::time::Duration {
+        self.tool_timeouts
+            .get(tool_name)
+            .copied()
+            .unwrap_or(self.tool_timeout_default)
+    }
+
+    /// Phase14i §2.3 — register a per-tool timeout override. Tests
+    /// use this to inject short timeouts; production wiring reads
+    /// from `cortex_config::McpConfig` once it ships.
+    pub fn with_tool_timeout(mut self, tool_name: impl Into<String>, dur: std::time::Duration) -> Self {
+        self.tool_timeouts.insert(tool_name.into(), dur);
+        self
+    }
+
+    /// Phase14i §2.3 — override the default timeout. Builder form
+    /// so production wiring chains it after `new`.
+    pub fn with_default_tool_timeout(mut self, dur: std::time::Duration) -> Self {
+        self.tool_timeout_default = dur;
+        self
     }
 
     /// Test-friendly constructor that takes an explicit client.
@@ -90,6 +134,8 @@ impl ToolContext {
             http,
             pt_metrics: Arc::new(PreThinkingMetrics::new()),
             started_at: std::time::Instant::now(),
+            tool_timeout_default: std::time::Duration::from_millis(MCP_TOOL_TIMEOUT_MS),
+            tool_timeouts: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -150,6 +196,19 @@ impl ToolError {
         Self {
             reason: reasons::INVALID_INPUT.into(),
             message: message.into(),
+        }
+    }
+
+    /// Phase14i §2.2 — the tool's `call` body exceeded the
+    /// configured timeout. The dispatcher renders the wire shape as
+    /// `error.code = -32603` + `error.data = { reason: "tool_timeout",
+    /// elapsed_ms, tool, request_id? }`. `tool` MUST match the
+    /// MCP tool name so callers can pattern-match per-tool.
+    pub fn timeout(tool: impl Into<String>, elapsed_ms: u64) -> Self {
+        let tool = tool.into();
+        Self {
+            reason: reasons::TOOL_TIMEOUT.into(),
+            message: format!("tool `{tool}` exceeded timeout after {elapsed_ms} ms"),
         }
     }
 }

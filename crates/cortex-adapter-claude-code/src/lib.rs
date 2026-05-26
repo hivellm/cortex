@@ -12,6 +12,7 @@
 
 pub mod config;
 pub mod dispatcher;
+pub mod error;
 pub mod events;
 pub mod hook_log;
 pub mod install;
@@ -27,6 +28,7 @@ pub use config::{
     LawsSection, LoggingSection, PreThinkingSection, RedactionSection,
 };
 pub use dispatcher::{Dispatcher, HookResponse};
+pub use error::AdapterError;
 pub use events::{build_event, ClaudeCodeExtras, HookFrame, HookKind, TOOL_CLAUDE_CODE};
 pub use install::{
     install, install_with, uninstall, HookShim, InstallError, InstallOptions, InstallReport,

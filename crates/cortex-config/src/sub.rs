@@ -934,6 +934,90 @@ pub struct AdapterConfig {
     pub adapter_admin_port: Option<u16>,
 }
 
+// -------------------------------------------------------------
+// MCP server (cortex-mcp-server)
+// -------------------------------------------------------------
+
+/// Phase14i §2.3 — per-tool timeout knobs for `cortex-mcp-server`.
+///
+/// `default_timeout_ms` applies to every tool whose name is not in
+/// `tool_timeout_ms` (which holds per-tool overrides keyed by MCP
+/// tool name, e.g. `cortex_query`). Unset means the in-crate
+/// `MCP_TOOL_TIMEOUT_MS = 5_000` default applies.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct McpConfig {
+    /// Default per-call timeout in milliseconds. `None` falls back
+    /// to `cortex_mcp_server::MCP_TOOL_TIMEOUT_MS` (5_000 ms).
+    /// Env: `CORTEX_MCP_TOOL_TIMEOUT_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_timeout_ms: Option<u64>,
+    /// Per-tool timeout overrides keyed by MCP tool name. Env keys
+    /// follow the convention
+    /// `CORTEX_MCP_TOOL_TIMEOUT_MS_{TOOL_NAME_UPPER}`; the env
+    /// reader uppercases the tool name and replaces non-alnum
+    /// characters with `_`.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tool_timeout_ms: std::collections::BTreeMap<String, u64>,
+}
+
+impl McpConfig {
+    /// Resolve the timeout for `tool_name`. Returns `None` when no
+    /// override is configured at any level so the caller falls back
+    /// to the in-crate default.
+    pub fn timeout_ms_for(&self, tool_name: &str) -> Option<u64> {
+        self.tool_timeout_ms
+            .get(tool_name)
+            .copied()
+            .or(self.default_timeout_ms)
+    }
+}
+
+#[cfg(test)]
+mod tests_mcp_config {
+    use super::*;
+
+    #[test]
+    fn timeout_for_falls_back_to_default_when_per_tool_absent() {
+        let cfg = McpConfig {
+            default_timeout_ms: Some(7_000),
+            ..McpConfig::default()
+        };
+        assert_eq!(cfg.timeout_ms_for("cortex_query"), Some(7_000));
+    }
+
+    #[test]
+    fn per_tool_override_shadows_default() {
+        let mut tool_timeout_ms = std::collections::BTreeMap::new();
+        tool_timeout_ms.insert("cortex_query".to_string(), 12_000);
+        let cfg = McpConfig {
+            default_timeout_ms: Some(5_000),
+            tool_timeout_ms,
+        };
+        assert_eq!(cfg.timeout_ms_for("cortex_query"), Some(12_000));
+        assert_eq!(cfg.timeout_ms_for("cortex_status"), Some(5_000));
+    }
+
+    #[test]
+    fn unset_fields_return_none_so_caller_uses_in_crate_default() {
+        let cfg = McpConfig::default();
+        assert_eq!(cfg.timeout_ms_for("any_tool"), None);
+    }
+
+    #[test]
+    fn toml_round_trips_per_tool_map() {
+        let mut tool_timeout_ms = std::collections::BTreeMap::new();
+        tool_timeout_ms.insert("cortex_query".into(), 10_000u64);
+        tool_timeout_ms.insert("cortex_pre_thinking".into(), 8_000u64);
+        let cfg = McpConfig {
+            default_timeout_ms: Some(5_000),
+            tool_timeout_ms,
+        };
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: McpConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(back, cfg);
+    }
+}
+
 #[cfg(test)]
 mod tests_phase14f {
     use super::*;

@@ -339,6 +339,56 @@ Logs are structured JSON lines. The daemon exposes a tiny HTTP endpoint (`http:/
 6. **Drop-oldest under queue pressure.** Preserves ingestion continuity for the ongoing session; the WAL catches the history. Rationale: in a backlog, the newest events correlate with the current failure we're probably debugging.
 7. **Single binary for daemon + install.** Simpler distribution; subcommands.
 
+## Error handling — no production-path panics (phase14i)
+
+The adapter daemon's contract is that no production code path may
+`panic!` / `unwrap()` / `expect(...)`. A single panic in the
+dispatcher takes the entire user-session capture down.
+
+Structured failure type lives in `cortex_adapter_claude_code::error::AdapterError`:
+
+- `MalformedHook(String)` — incoming `HookFrame` failed validation;
+  reason label `"malformed_hook"`.
+- `MissingField(&'static str)` — required envelope field absent;
+  label `"missing_field"`.
+- `IpcWriteFailed(String)` — writing to the IPC transport (named
+  pipe on Windows, Unix domain socket elsewhere) failed; label
+  `"ipc_write_failed"`.
+- `EnvelopeBuildFailed(String)` — canonical envelope construction
+  failed; label `"envelope_build_failed"`.
+
+`reason_label()` returns a short, low-cardinality string for the
+`adapter_dispatch_errors_total{reason}` counter family.
+
+Production-path migrations landed in this phase:
+
+- `wal.rs::OverflowWal::append` / `drain` — recover from a
+  poisoned `Mutex` instead of panicking; a panicking thread
+  elsewhere in the daemon no longer drags the WAL down too.
+- `publisher.rs::HttpPublisher::new` — falls back to
+  `reqwest::Client::new()` with a WARN log when the per-publisher
+  `Client::builder().timeout(...).build()` fails (TLS init
+  catastrophe). The daemon's boot path never panics.
+- `install.rs::patch_settings` — surfaces malformed `settings.json`
+  shapes (root not an object, `hooks` not an object) as
+  `InstallError::MalformedSettings(&'static str)` instead of
+  `expect(...)`. The installer now fails cleanly with an
+  actionable message.
+
+The dispatcher's `dispatch` method has always returned
+`HookResponse` (never `Result`); every internal error degrades to
+`HookResponse::empty()` so the session never breaks. Phase14i
+ships a 100-payload fuzz test
+(`tests/dispatcher_fuzz.rs::dispatcher_survives_100_random_hook_payloads`)
+that pins this structurally — a future refactor re-introducing
+`unwrap()` on a frame field will surface as a fuzz failure.
+
+CI gate: `.github/workflows/adapter-no-unwrap.yml` walks every
+`*.rs` under `crates/cortex-adapter-claude-code/src/`, excludes
+`#[cfg(test)] mod tests { ... }` blocks line-wise, and fails the
+build on any `.unwrap()` / `.expect(` outside the SAFETY-tagged
+allow-list.
+
 ## Open questions
 
 1. **Session-resume correlation.** If the user `/clear`s mid-session and then issues another prompt, is that a new `Session` or a continuation? Leaning new Session with a `continues_from` edge in Nexus. Finalize when spec 11 defines the edge semantics.

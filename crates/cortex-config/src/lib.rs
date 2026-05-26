@@ -52,5 +52,6 @@ pub use load::default_toml_path;
 pub use sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
     ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
-    IngestionConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig, RulebookConfig,
+    IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig,
+    RulebookConfig,
 };

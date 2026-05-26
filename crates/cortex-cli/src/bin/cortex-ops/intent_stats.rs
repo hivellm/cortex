@@ -14,8 +14,13 @@ use std::time::Duration;
 use serde::Deserialize;
 
 pub fn run(api_url: Option<String>, since: String, json: bool) -> ExitCode {
+    // ADR-016 — resolve via the typed cortex_config::Config so the
+    // ad-hoc-env-read audit (`/v1/health/config` / `tests/workspace_audit_it`)
+    // stays green. Falls back to the localhost default when neither
+    // explicit nor configured.
+    let cfg = cortex_config::Config::load().unwrap_or_default();
     let base = api_url
-        .or_else(|| std::env::var("CORTEX_API_URL").ok())
+        .or(cfg.dashboard.api_url.clone())
         .unwrap_or_else(|| "http://127.0.0.1:17000".to_string());
     let url = format!("{}/v1/health/pre-thinking", base.trim_end_matches('/'));
     let report = match fetch(&url) {

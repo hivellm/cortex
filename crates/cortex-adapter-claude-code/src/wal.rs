@@ -59,7 +59,14 @@ impl OverflowWal {
     pub fn append(&self, value: &Value) -> Result<(), WalError> {
         let mut line = serde_json::to_vec(value)?;
         line.push(b'\n');
-        let mut guard = self.handle.lock().expect("wal mutex poisoned");
+        // Phase14i §1.2 — recover from a poisoned mutex instead of
+        // panicking. A panicking thread elsewhere in the daemon
+        // would otherwise drag the WAL down too, and we'd lose the
+        // overflow buffer on the next publish failure.
+        let mut guard = match self.handle.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let file = guard
             .as_mut()
             .ok_or_else(|| WalError::Io(std::io::Error::other("wal closed")))?;
@@ -78,7 +85,12 @@ impl OverflowWal {
     /// file. Used at daemon startup to replay drops from the previous
     /// run.
     pub fn drain(&self) -> Result<Vec<Value>, WalError> {
-        let mut guard = self.handle.lock().expect("wal mutex poisoned");
+        // Phase14i §1.2 — recover from a poisoned mutex; see
+        // `append` for the rationale.
+        let mut guard = match self.handle.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         // Drop the live handle so we can reopen for read+truncate.
         guard.take();
 

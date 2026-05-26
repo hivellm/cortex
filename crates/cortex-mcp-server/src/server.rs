@@ -173,17 +173,40 @@ impl Server {
         self.metrics.incr_invocation(&name);
         let started = std::time::Instant::now();
 
-        let outcome: Result<ToolResult, ToolError> =
-            match tokio::task::spawn(run_tool(tool, self.ctx.clone(), args)).await {
-                Ok(res) => res,
-                Err(join_err) => {
-                    self.metrics.incr_error(&name);
-                    return Response::error(
-                        id,
-                        RpcError::internal_error(format!("tool task panicked: {join_err}")),
-                    );
-                }
-            };
+        // Phase14i §2.1/§2.2 — every tool call is bounded by
+        // `MCP_TOOL_TIMEOUT_MS`. On timeout the MCP transport
+        // surfaces a structured `tool_timeout` error to the host
+        // instead of letting the call hang indefinitely (the
+        // legacy behavior was to fall through to a generic empty
+        // result, indistinguishable from "tool returned empty").
+        let timeout = self.ctx.tool_timeout(&name);
+        let join = tokio::task::spawn(run_tool(tool, self.ctx.clone(), args));
+        let outcome: Result<ToolResult, ToolError> = match tokio::time::timeout(timeout, join)
+            .await
+        {
+            Ok(Ok(res)) => res,
+            Ok(Err(join_err)) => {
+                self.metrics.incr_error(&name);
+                return Response::error(
+                    id,
+                    RpcError::internal_error(format!("tool task panicked: {join_err}")),
+                );
+            }
+            Err(_elapsed) => {
+                self.metrics.incr_error(&name);
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                let rpc_err = RpcError::internal_error(format!(
+                    "tool `{name}` exceeded timeout after {elapsed_ms} ms"
+                ))
+                .with_data(json!({
+                    "reason": crate::tools::reasons::TOOL_TIMEOUT,
+                    "elapsed_ms": elapsed_ms,
+                    "tool": name,
+                    "request_id": id.clone(),
+                }));
+                return Response::error(id, rpc_err);
+            }
+        };
 
         let elapsed = started.elapsed().as_millis() as u64;
         self.metrics.observe_latency(&name, elapsed);
