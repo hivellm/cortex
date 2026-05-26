@@ -272,6 +272,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationLineageTool::new()),
                 Arc::new(ConsolidationsDiffTool::new()),
                 Arc::new(LawViolationsTool::new()),
+                Arc::new(FeedbackSignalsTool::new()),
             ],
         }
     }
@@ -1933,6 +1934,72 @@ impl Tool for ConsolidationsByEntityTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §3.2 — cortex_feedback_signals
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/feedback/list`.
+pub struct FeedbackSignalsTool;
+
+impl FeedbackSignalsTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for FeedbackSignalsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for FeedbackSignalsTool {
+    fn name(&self) -> &'static str {
+        "cortex_feedback_signals"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_feedback_signals",
+            "description": "List pre-thinking feedback rows from the `pre_thinking_feedback` SQLite table (phase14f) filtered by `helpful` / `intent` / RFC3339 `since`/`until` window. Ordered newest-first by `recorded_at`. The `repo` filter from the original spec is unsupported — the table carries no `repo` column; passing a non-empty `repo` returns `bad_input` so the gap is visible.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "helpful": {"type": "boolean", "description": "Filter on the `helpful` boolean."},
+                    "intent": {"type": "string", "description": "Filter on the intent label (`explain`, `law_check`, ...)."},
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `recorded_at`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `recorded_at`."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        if let Some(repo) = args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Err(ToolError::invalid_input(format!(
+                "`repo` filter unsupported (table has no repo column); got `{repo}`"
+            )));
+        }
+        let mut body = json!({});
+        for field in ["helpful", "intent", "since", "until", "limit"] {
+            if let Some(v) = args.get(field) {
+                if !v.is_null() {
+                    body[field] = v.clone();
+                }
+            }
+        }
+        proxy_search(ctx, "/v1/feedback/list", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §3.1 — cortex_law_violations
 // ---------------------------------------------------------------------
 
@@ -2673,12 +2740,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentyfive_tools_with_unique_names() {
+    fn registry_returns_twentysix_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            25,
-            "phase19 §3.1 adds cortex_law_violations (24 -> 25) — opens Group C"
+            26,
+            "phase19 §3.2 adds cortex_feedback_signals (25 -> 26)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2707,6 +2774,7 @@ mod tests {
             "cortex_consolidation_lineage",
             "cortex_consolidations_diff",
             "cortex_law_violations",
+            "cortex_feedback_signals",
         ] {
             assert!(
                 names.contains(&expected),

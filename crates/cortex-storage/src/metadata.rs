@@ -438,6 +438,86 @@ impl MetadataStore {
         Ok(row_opt)
     }
 
+    /// Phase19 §3.2 — list feedback rows filtered by `helpful` /
+    /// `intent` / `recorded_at` window. Ordering: `recorded_at DESC`
+    /// (newest-first). The query string is built up dynamically so
+    /// every optional filter is omitted when `None`. `limit` is
+    /// clamped to `[1, 50]` by the caller.
+    #[allow(clippy::type_complexity)]
+    pub fn list_pre_thinking_feedback(
+        &self,
+        helpful: Option<bool>,
+        intent: Option<&str>,
+        since: Option<DateTime<Utc>>,
+        until: Option<DateTime<Utc>>,
+        limit: u32,
+    ) -> Result<
+        Vec<(
+            String,
+            Option<String>,
+            bool,
+            String,
+            Option<i64>,
+            Option<String>,
+            Option<f64>,
+            String,
+        )>,
+        MetadataError,
+    > {
+        let mut sql = String::from(
+            "SELECT query_id, intent, helpful, files_cited, rating, free_text, implicit_score, recorded_at\n             FROM pre_thinking_feedback",
+        );
+        let mut where_clauses: Vec<String> = Vec::new();
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        if let Some(h) = helpful {
+            where_clauses.push(format!("helpful = ?{}", args.len() + 1));
+            args.push(Box::new(h as i64));
+        }
+        if let Some(i) = intent {
+            where_clauses.push(format!("intent = ?{}", args.len() + 1));
+            args.push(Box::new(i.to_string()));
+        }
+        if let Some(s) = since {
+            where_clauses.push(format!("recorded_at >= ?{}", args.len() + 1));
+            args.push(Box::new(s.to_rfc3339()));
+        }
+        if let Some(u) = until {
+            where_clauses.push(format!("recorded_at <= ?{}", args.len() + 1));
+            args.push(Box::new(u.to_rfc3339()));
+        }
+        if !where_clauses.is_empty() {
+            sql.push_str("\n             WHERE ");
+            sql.push_str(&where_clauses.join(" AND "));
+        }
+        sql.push_str(&format!(
+            "\n             ORDER BY recorded_at DESC\n             LIMIT ?{}",
+            args.len() + 1
+        ));
+        args.push(Box::new(limit as i64));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_iter: Vec<&dyn rusqlite::ToSql> = args
+            .iter()
+            .map(|b| b.as_ref() as &dyn rusqlite::ToSql)
+            .collect();
+        let rows = stmt
+            .query_map(params_iter.as_slice(), |row| {
+                let helpful_i: i64 = row.get(2)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    helpful_i != 0,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<f64>>(6)?,
+                    row.get::<_, String>(7)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// Phase13b — append one row to `producer_checkpoints`. ADR-010
     /// requires the table be append-only so a kill-resume cycle
     /// never loses the prior cursor.
@@ -2575,5 +2655,61 @@ mod tests {
     fn pre_thinking_feedback_lookup_unknown_returns_none() {
         let s = MetadataStore::open_in_memory().unwrap();
         assert!(s.pre_thinking_feedback("never-existed").unwrap().is_none());
+    }
+
+    #[test]
+    fn list_pre_thinking_feedback_filters_and_orders_newest_first() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        let t1: DateTime<Utc> = "2026-05-25T09:00:00Z".parse().unwrap();
+        let t2: DateTime<Utc> = "2026-05-26T09:00:00Z".parse().unwrap();
+        let t3: DateTime<Utc> = "2026-05-27T09:00:00Z".parse().unwrap();
+        s.upsert_pre_thinking_feedback("q1", Some("explain"), true, "[]", None, None, None, t1)
+            .unwrap();
+        s.upsert_pre_thinking_feedback("q2", Some("law_check"), false, "[]", None, None, None, t2)
+            .unwrap();
+        s.upsert_pre_thinking_feedback("q3", Some("explain"), true, "[]", None, None, None, t3)
+            .unwrap();
+
+        // No filters → 3 rows newest first.
+        let all = s
+            .list_pre_thinking_feedback(None, None, None, None, 50)
+            .unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].0, "q3");
+        assert_eq!(all[1].0, "q2");
+        assert_eq!(all[2].0, "q1");
+
+        // Filter intent=explain → 2 rows.
+        let explain = s
+            .list_pre_thinking_feedback(None, Some("explain"), None, None, 50)
+            .unwrap();
+        assert_eq!(explain.len(), 2);
+        assert!(explain.iter().all(|r| r.1.as_deref() == Some("explain")));
+
+        // Filter helpful=false → 1 row.
+        let unhelpful = s
+            .list_pre_thinking_feedback(Some(false), None, None, None, 50)
+            .unwrap();
+        assert_eq!(unhelpful.len(), 1);
+        assert_eq!(unhelpful[0].0, "q2");
+
+        // Filter since=t2 → q2 + q3.
+        let since_t2 = s
+            .list_pre_thinking_feedback(None, None, Some(t2), None, 50)
+            .unwrap();
+        assert_eq!(since_t2.len(), 2);
+
+        // Filter until=t2 → q1 + q2.
+        let until_t2 = s
+            .list_pre_thinking_feedback(None, None, None, Some(t2), 50)
+            .unwrap();
+        assert_eq!(until_t2.len(), 2);
+
+        // Limit=1 returns only the newest.
+        let limit_one = s
+            .list_pre_thinking_feedback(None, None, None, None, 1)
+            .unwrap();
+        assert_eq!(limit_one.len(), 1);
+        assert_eq!(limit_one[0].0, "q3");
     }
 }

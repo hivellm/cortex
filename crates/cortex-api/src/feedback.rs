@@ -77,11 +77,14 @@ pub struct FeedbackState {
     pub metadata: Arc<Mutex<MetadataStore>>,
 }
 
-/// Build the `/v1/pre-thinking/feedback` sub-router.
+/// Build the `/v1/pre-thinking/feedback` + `/v1/feedback/list`
+/// sub-router (phase19 §3.2 lands the list surface alongside the
+/// existing UPSERT endpoint).
 pub fn build_router(state: FeedbackState) -> axum::Router {
     use axum::routing::post;
     axum::Router::new()
         .route("/v1/pre-thinking/feedback", post(feedback_handler))
+        .route("/v1/feedback/list", post(feedback_list_handler))
         .with_state(state)
 }
 
@@ -168,6 +171,195 @@ async fn handle(
         query_id: req.query_id,
         upserted: !prior_existed,
     })
+}
+
+// ---------------------------------------------------------------------
+// Phase19 §3.2 — `POST /v1/feedback/list`
+// ---------------------------------------------------------------------
+
+/// Default `limit` when omitted.
+const LIST_LIMIT_DEFAULT: u32 = 20;
+/// Maximum `limit` the handler honours.
+const LIST_LIMIT_MAX: u32 = 50;
+
+/// Wire request body for `POST /v1/feedback/list`.
+///
+/// ## Scope deviation from the original spec
+///
+/// The task spec listed `repo?` as a filter; the
+/// `pre_thinking_feedback` table at
+/// `crates/cortex-storage/src/metadata.rs` carries no `repo`
+/// column (the schema is `query_id` / `intent` / `helpful` /
+/// `files_cited` / `rating` / `free_text` / `implicit_score` /
+/// `recorded_at`). Adding a `repo` column would require a non-
+/// trivial migration + writer update on the feedback ingest
+/// path; the handler instead documents the gap by silently
+/// rejecting non-empty `repo` filters with `bad_input` so callers
+/// notice immediately rather than getting a misleading "no rows"
+/// response.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FeedbackListRequest {
+    /// Filter on the `helpful` boolean.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helpful: Option<bool>,
+    /// Filter on the `intent` label (`explain`, `law_check`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+    /// RFC3339 lower bound on `recorded_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
+    /// RFC3339 upper bound on `recorded_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<String>,
+    /// Reserved — surfaced as `bad_input` when non-empty (see
+    /// scope deviation above).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    /// Hits cap. Defaults to [`LIST_LIMIT_DEFAULT`]; clamped to
+    /// [`LIST_LIMIT_MAX`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// One row in the feedback list response.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FeedbackRow {
+    /// The `query_id` the feedback was keyed on.
+    pub query_id: String,
+    /// Intent label captured at upsert time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+    /// Operator-reported helpfulness.
+    pub helpful: bool,
+    /// Files the operator said the model cited (already
+    /// deserialised from the SQLite JSON column).
+    pub files_cited: Vec<String>,
+    /// 1..=5 star rating when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rating: Option<i64>,
+    /// Free-text operator note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub free_text: Option<String>,
+    /// Implicit-feedback Jaccard score when present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub implicit_score: Option<f64>,
+    /// RFC3339 timestamp the row was written.
+    pub recorded_at: String,
+}
+
+/// Wire response body.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct FeedbackListResponse {
+    /// Rows ordered by `recorded_at DESC` (newest-first).
+    pub rows: Vec<FeedbackRow>,
+    /// Equal to `rows.len()`; carried so consumers cannot drift.
+    pub total: u32,
+}
+
+#[allow(clippy::manual_clamp)]
+fn clamp_list_limit(limit: Option<u32>) -> u32 {
+    limit
+        .unwrap_or(LIST_LIMIT_DEFAULT)
+        .min(LIST_LIMIT_MAX)
+        .max(1)
+}
+
+fn parse_rfc3339(s: &str) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// Axum handler — `POST /v1/feedback/list`.
+pub async fn feedback_list_handler(
+    State(state): State<FeedbackState>,
+    Json(req): Json<FeedbackListRequest>,
+) -> Response {
+    if let Some(repo) = req.repo.as_deref().map(str::trim) {
+        if !repo.is_empty() {
+            return FeedbackError(
+                StatusCode::BAD_REQUEST,
+                "`repo` filter is not supported — `pre_thinking_feedback` table has no repo column"
+                    .into(),
+            )
+            .into_response();
+        }
+    }
+    let since = match req
+        .since
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => match parse_rfc3339(s) {
+            Some(dt) => Some(dt),
+            None => {
+                return FeedbackError(
+                    StatusCode::BAD_REQUEST,
+                    format!("`{s}` is not a valid RFC3339 timestamp"),
+                )
+                .into_response();
+            }
+        },
+        None => None,
+    };
+    let until = match req
+        .until
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(s) => match parse_rfc3339(s) {
+            Some(dt) => Some(dt),
+            None => {
+                return FeedbackError(
+                    StatusCode::BAD_REQUEST,
+                    format!("`{s}` is not a valid RFC3339 timestamp"),
+                )
+                .into_response();
+            }
+        },
+        None => None,
+    };
+    let intent = req
+        .intent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let limit = clamp_list_limit(req.limit);
+
+    let store = state.metadata.lock().await;
+    let raw = match store.list_pre_thinking_feedback(req.helpful, intent, since, until, limit) {
+        Ok(r) => r,
+        Err(e) => {
+            return FeedbackError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("metadata list: {e}"),
+            )
+            .into_response();
+        }
+    };
+    let rows: Vec<FeedbackRow> = raw
+        .into_iter()
+        .map(
+            |(query_id, intent, helpful, files_json, rating, free_text, implicit_score, recorded_at)| {
+                let files_cited: Vec<String> =
+                    serde_json::from_str(&files_json).unwrap_or_default();
+                FeedbackRow {
+                    query_id,
+                    intent,
+                    helpful,
+                    files_cited,
+                    rating,
+                    free_text,
+                    implicit_score,
+                    recorded_at,
+                }
+            },
+        )
+        .collect();
+    let total = rows.len() as u32;
+    (StatusCode::OK, Json(FeedbackListResponse { rows, total })).into_response()
 }
 
 #[cfg(test)]
