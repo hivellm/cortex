@@ -199,6 +199,10 @@ pub fn build_router_with_auth_and_cfg(
             post(crate::topic_search::handle_topic_search),
         )
         .route(
+            "/v1/consolidations/recent",
+            get(crate::consolidations_recent::handle_consolidations_recent),
+        )
+        .route(
             "/v1/consolidations/{id}",
             get(crate::consolidation_get::handle_consolidation_get),
         )

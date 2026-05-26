@@ -266,6 +266,7 @@ impl ToolRegistry {
                 Arc::new(FilesTouchedTool::new()),
                 Arc::new(TopicSearchTool::new()),
                 Arc::new(ConsolidationGetTool::new()),
+                Arc::new(ConsolidationsRecentTool::new()),
             ],
         }
     }
@@ -1747,6 +1748,104 @@ impl Tool for ConsolidationGetTool {
 }
 
 // ---------------------------------------------------------------------
+// phase19 §2.2 — cortex_consolidations_recent
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/consolidations/recent`.
+pub struct ConsolidationsRecentTool;
+
+impl ConsolidationsRecentTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ConsolidationsRecentTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ConsolidationsRecentTool {
+    fn name(&self) -> &'static str {
+        "cortex_consolidations_recent"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_consolidations_recent",
+            "description": "Chronological feed of consolidation envelopes from the `cortex_consolidations` Meili index, sorted newest-first by `occurred_at`. Filter by `repo`, `grain` (session / topic / decision_trace), and an RFC3339 `since`/`until` window. Returns the native envelope shape with `ext.consolidation.*` — no fusion projection, no `cortex_query` round-trip.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Optional `repo` filter."},
+                    "grain": {
+                        "type": "string",
+                        "enum": ["session", "topic", "decision_trace"],
+                        "description": "Optional grain discriminator — matches the producer enum (`ConsolidationGrain`)."
+                    },
+                    "since": {"type": "string", "description": "RFC3339 lower bound on `occurred_at`."},
+                    "until": {"type": "string", "description": "RFC3339 upper bound on `occurred_at`."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 15}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let mut qs: Vec<String> = Vec::new();
+        if let Some(repo) = args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            qs.push(format!("repo={}", urlencode(repo)));
+        }
+        if let Some(grain) = args
+            .get("grain")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if !grain.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') {
+                return Err(ToolError::invalid_input(
+                    "grain must be lowercase snake_case (`session` / `topic` / `decision_trace`)",
+                ));
+            }
+            qs.push(format!("grain={grain}"));
+        }
+        if let Some(since) = args
+            .get("since")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            qs.push(format!("since={}", urlencode(since)));
+        }
+        if let Some(until) = args
+            .get("until")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            qs.push(format!("until={}", urlencode(until)));
+        }
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            qs.push(format!("limit={limit}"));
+        }
+        let path = if qs.is_empty() {
+            "/v1/consolidations/recent".to_string()
+        } else {
+            format!("/v1/consolidations/recent?{}", qs.join("&"))
+        };
+        proxy_get(ctx, &path).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §1.5 — cortex_topic_search
 // ---------------------------------------------------------------------
 
@@ -2169,12 +2268,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_nineteen_tools_with_unique_names() {
+    fn registry_returns_twenty_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            19,
-            "phase19 §2.1 adds cortex_consolidation_get (18 -> 19)"
+            20,
+            "phase19 §2.2 adds cortex_consolidations_recent (19 -> 20)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -2197,6 +2296,7 @@ mod tests {
             "cortex_files_touched",
             "cortex_topic_search",
             "cortex_consolidation_get",
+            "cortex_consolidations_recent",
         ] {
             assert!(
                 names.contains(&expected),
