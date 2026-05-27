@@ -1034,6 +1034,31 @@ enum GraphCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Phase15b §3.3 — replay the archive through the phase15b
+    /// projection pipeline. Walks every envelope newer than
+    /// `--since`, runs all 12 edge extractors, and prints a
+    /// per-edge-kind count summary. Today the subcommand runs in
+    /// dry-run mode only: payload-driven extractors
+    /// (SUPERSEDES / CONTRADICTS / EMITTED_BY / ANSWERED_BY /
+    /// CITES body-regex) produce useful counts; classifier-
+    /// driven ones (CALLS / IMPORTS / DEFINES / RETURNS / ABOUT
+    /// / MENTIONS_FILE / RELATES_TO) need a classifier replay
+    /// that lands in a follow-up commit. Use the counts to seed
+    /// the §4.1 `doctor graph-coverage` thresholds.
+    Backfill {
+        /// RFC-3339 lower bound on `Envelope.occurred_at`. Omit
+        /// to walk the full archive.
+        #[arg(long)]
+        since: Option<String>,
+        /// Override the archive root. Defaults to
+        /// `cortex_config::IngestionConfig.archive_root` then
+        /// `~/.cortex/archive`.
+        #[arg(long)]
+        archive_root: Option<String>,
+        /// Emit JSON instead of plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase9b — granularity selector for `cortex-ops rollup`.
@@ -1431,6 +1456,11 @@ fn main() -> ExitCode {
                 metadata_db,
                 dry_run,
             } => graph_cmd::graph_replay(since, consumer_id, stream, metadata_db, dry_run),
+            GraphCommand::Backfill {
+                since,
+                archive_root,
+                json,
+            } => graph_cmd::graph_backfill(since, archive_root, json),
         },
         Command::SweepEmpty {
             meili,

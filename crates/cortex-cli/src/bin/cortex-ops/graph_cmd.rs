@@ -205,3 +205,147 @@ pub(super) fn graph_replay(
     println!("OK: offset rewound. Restart cortex-graph-worker to apply.");
     ExitCode::SUCCESS
 }
+
+/// Phase15b §3.3 — `cortex-ops graph backfill --since <RFC3339>`
+/// dispatcher. Walks the archive, projects every envelope newer
+/// than `--since` through `cortex_workers::graph::projection::project_envelope`,
+/// and reports the per-edge-kind count. `--dry-run` (default)
+/// prints the summary without touching Nexus; the live-Nexus
+/// writeback lands behind a follow-up commit that threads the
+/// `GraphWriter` chain through (today the archive walk lacks
+/// the classifier output that the §2.1-§2.4/§2.8/§2.11/§2.12
+/// extractors need, so the §3.3 commit ships the count-only
+/// surface to unblock the §4.1 doctor wiring; payload-driven
+/// extractors — SUPERSEDES / CONTRADICTS / EMITTED_BY /
+/// ANSWERED_BY / CITES-body-regex — produce useful counts even
+/// without a classifier replay).
+pub(super) fn graph_backfill(
+    since: Option<String>,
+    archive_root: Option<String>,
+    json: bool,
+) -> ExitCode {
+    use cortex_core::events::Envelope;
+    use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+    use cortex_workers::embedder::EnrichedEvent;
+    use cortex_workers::graph::projection::{project_envelope, registered_edge_kinds};
+    use std::path::PathBuf;
+
+    let archive_root: PathBuf = archive_root
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.ingestion.archive_root)
+        })
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            // Fallback: <HOME>/.cortex/archive via $HOME / $USERPROFILE.
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map(PathBuf::from)
+                .unwrap_or_default();
+            home.join(".cortex").join("archive")
+        });
+
+    if !archive_root.exists() {
+        eprintln!(
+            "ERROR: archive root does not exist: {}",
+            archive_root.display()
+        );
+        return ExitCode::from(1);
+    }
+
+    let since_filter = since.clone();
+    let envelopes =
+        match cortex_storage::archive::walk_envelopes(&archive_root, |env| match &since_filter {
+            Some(cursor) => env.occurred_at.as_str() >= cursor.as_str(),
+            None => true,
+        }) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("ERROR: walk archive {}: {e}", archive_root.display());
+                return ExitCode::from(1);
+            }
+        };
+
+    let ctx = cortex_workers::graph::extractors::ExtractCtx::new("phase15b-backfill-v1");
+    let mut per_kind: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for k in registered_edge_kinds() {
+        per_kind.insert(k.to_string(), 0);
+    }
+    let mut envelopes_walked: u64 = 0;
+    let mut edges_total: u64 = 0;
+
+    for env in &envelopes {
+        envelopes_walked += 1;
+        // Build a classifier-less EnrichedEvent. Payload-driven
+        // extractors still produce edges; classifier-driven ones
+        // emit nothing (documented scope cut).
+        let static_classifier = ClassifierOutput {
+            event_id: env.event_id.clone(),
+            kind_refinement: None,
+            topics: Vec::new(),
+            severity: Severity::Info,
+            pii_risk: PiiRisk::Low,
+            redaction_suggestions: Vec::new(),
+            summary: None,
+            entities: Vec::new(),
+            relations: Vec::new(),
+            source: ClassifierSource::StaticFallback,
+            prompt_version: "v1".into(),
+            model: "static-v1".into(),
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+        };
+        let enriched = EnrichedEvent {
+            event_id: env.event_id.clone(),
+            kind: env.kind,
+            content_hash: env.content_hash.clone(),
+            redacted_payload: env.payload.clone(),
+            classifier: static_classifier,
+            context_repo: env.context.repo.clone(),
+            // Envelope context has no `path` field — use cwd as a
+            // best-effort fallback; most extractors don't read it.
+            context_path: env.context.cwd.clone(),
+            parent_event_id: env.parent_event_id.clone(),
+            session_id: Some(env.session_id.clone()),
+        };
+        let patch = project_envelope(&enriched, &ctx);
+        for edge in &patch.edges {
+            *per_kind.entry(edge.edge_type.clone()).or_insert(0) += 1;
+            edges_total += 1;
+        }
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "mode": "dry-run",
+            "archive_root": archive_root.display().to_string(),
+            "since": since,
+            "envelopes_walked": envelopes_walked,
+            "edges_total": edges_total,
+            "by_kind": per_kind,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+    } else {
+        println!("cortex-ops graph backfill (dry-run)");
+        println!("  archive_root      = {}", archive_root.display());
+        println!(
+            "  since             = {}",
+            since.as_deref().unwrap_or("<unset>")
+        );
+        println!("  envelopes_walked  = {envelopes_walked}");
+        println!("  edges_total       = {edges_total}");
+        println!("  per_kind:");
+        for (k, v) in &per_kind {
+            println!("    {k:<14} = {v}");
+        }
+    }
+    // Unused for now — Envelope import retained for downstream
+    // wiring (suppress dead-code warning via a no-op cast).
+    let _: Option<Envelope> = None;
+    ExitCode::SUCCESS
+}
