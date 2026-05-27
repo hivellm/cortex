@@ -19,6 +19,15 @@ services:
       - "${VECTORIZER_RPC_HOST_PORT:-17011}:15503"
     volumes:
       - vec-data:/data
+      # Vectorizer 3.x writes its real persistent state (collections,
+      # vectors, auth keys, snapshots) to the XDG data dir
+      # (`/.local/share/vectorizer`), NOT `/data`. The `/data` mount
+      # only holds `config.yml`. Without this second mount, every
+      # `docker compose up` of `vectorizer` wipes every collection
+      # because the container writable layer resets. Discovered
+      # 2026-05-27 when post-restart coverage dropped to 2/567
+      # collections.
+      - vec-state:/.local/share/vectorizer
     restart: unless-stopped
 
   nexus:
@@ -516,6 +525,9 @@ networks:
 
 volumes:
   vec-data:
+  # Persistent home for Vectorizer's XDG-located collection store.
+  # See the inline note on the `vectorizer.volumes` block.
+  vec-state:
   nexus-data:
   synap-data:
   meili-data:

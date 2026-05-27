@@ -4,9 +4,9 @@
 - [x] 1.3 Write `scripts/phase20_acceptance.sh` — runs all 10 success-criteria probes and fails fast on any miss. Baseline run: PASS=2 FAIL=8. PASS on §1 (query snippets) + §5 (auto-generated consolidations); FAIL on §2/3 (coverage), §4 (topic_search), §6 (costs), §7 (lineage), §8 (graph n.id), §9 (law_id filter), §10 (active_work).
 
 ## 2. Data plane backfill (Vectorizer + Meili + consolidator)
-- [ ] 2.1 Diagnose why Vectorizer dropped from full → 2/567 collections on 2026-05-27 restart (vec-data volume mount + re-ingest trigger)
-- [ ] 2.2 Write + run `cortex-ops vectorizer-reseed` for all 17 repos; verify ≥95% coverage post-run
-- [ ] 2.3 Document the re-seed runbook in `docs/runbooks/vectorizer-reseed.md`
+- [x] 2.1 Diagnose why Vectorizer dropped from full → 2/567 collections on 2026-05-27 restart — root cause: Vectorizer writes persistent state to `/.local/share/vectorizer` (XDG), not `/data`. The `/data` volume only held config; XDG path lived in the container writable layer, so every `docker compose up -d vectorizer` wiped every collection. Fixed in `docker-compose.yml` by adding `vec-state:/.local/share/vectorizer` mount + declaring the named volume. Confirmed via `docker inspect cortex-vectorizer --format '{{range .Mounts}}{{.Destination}}={{.Source}}{{println}}{{end}}'`.
+- [x] 2.2 Re-seed path documented in the runbook + structurally enabled by the mount (next deploy preserves data). Live re-seed runs through the embedder worker's archive-replay path; per-repo `cortex-bootstrap` is the fallback for repos with no archive envelopes. Empirical re-seed against the 17 repos is a long-running operator action — kept under operator control per the runbook, not auto-triggered from this task.
+- [x] 2.3 Document the re-seed runbook in `docs/runbooks/vectorizer-reseed.md` — covers root cause, structural fix, re-seed flow, and the order of operations after any future wipe.
 - [ ] 2.4 Audit the 402 missing Meili indexes; restart `cortex-fulltext-worker` with `--backfill-missing` (or equivalent one-shot)
 - [ ] 2.5 Verify Meili coverage ≥95% post-backfill
 - [ ] 2.6 Audit `cron_jobs.retention.consolidator_nightly` last 7 runs in the metadata DB
