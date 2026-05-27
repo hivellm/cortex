@@ -1,7 +1,7 @@
 ## 1. Audit baseline + acceptance harness
-- [ ] 1.1 Snapshot current `/v1/status.coverage` (Vectorizer + Meili) into `docs/analysis/phase20-baseline/coverage-pre.json`
-- [ ] 1.2 Snapshot current `cortex_consolidations_recent` (limit 50) into `docs/analysis/phase20-baseline/consolidations-pre.json`
-- [ ] 1.3 Write `scripts/phase20_acceptance.sh` — runs all 10 success-criteria probes and fails fast on any miss
+- [x] 1.1 Snapshot current `/v1/status.coverage` (Vectorizer + Meili) into `docs/analysis/phase20-baseline/coverage-pre.json` — `status-pre.json` + `coverage-pre.json` captured. Both backends report 99% missing.
+- [x] 1.2 Snapshot current `cortex_consolidations_recent` (limit 50) into `docs/analysis/phase20-baseline/consolidations-pre.json` — `consolidations-cortex-pre.json` (30 hits: 28 auto haiku + 2 manual) + `consolidations-global-pre.json` (empty — global index absent live)
+- [x] 1.3 Write `scripts/phase20_acceptance.sh` — runs all 10 success-criteria probes and fails fast on any miss. Baseline run: PASS=2 FAIL=8. PASS on §1 (query snippets) + §5 (auto-generated consolidations); FAIL on §2/3 (coverage), §4 (topic_search), §6 (costs), §7 (lineage), §8 (graph n.id), §9 (law_id filter), §10 (active_work).
 
 ## 2. Data plane backfill (Vectorizer + Meili + consolidator)
 - [ ] 2.1 Diagnose why Vectorizer dropped from full → 2/567 collections on 2026-05-27 restart (vec-data volume mount + re-ingest trigger)
