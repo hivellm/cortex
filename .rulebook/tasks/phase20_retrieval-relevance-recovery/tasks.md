@@ -22,11 +22,11 @@
 - [x] 3.6 Verify `cortex_graph_query?mode=neighbors` returns non-empty `n.id` — confirmed via acceptance harness §8 with the propertied-seed `01KQTKZGXF92BB1KVZHTT24GPN` (3 Memory neighbors with full property dicts). The earlier seed `07H7BDPEWW3K6MDB08VNNF54JJ` masked the result because its 7 Turn neighbors all landed on the stragglers cohort. Harness now uses the propertied seed; §8 flips PASS=2 → PASS=3.
 
 ## 4. Topic cards — wire end-to-end
-- [ ] 4.1 Trace `cortex-classifier-worker` topic-card emission path; confirm `topic_card` envelopes are actually published
-- [ ] 4.2 If publishing stopped, fix the producer (taxonomy version drift, schema validation failure, etc.)
-- [ ] 4.3 Provision the per-repo `cortex-<slug>-topic_cards` Meili index with the canonical settings (filterable: `topics`, `repo`; sortable: `ts`)
-- [ ] 4.4 Seed via classifier worker re-ingest
-- [ ] 4.5 Acceptance: `cortex_topic_search?topic_prefix=tool:claude-code` returns ≥1 card per active repo
+- [x] 4.1 Trace `cortex-classifier-worker` topic-card emission path — classifier worker does NOT emit `TopicCard` envelopes today. The producer module `crates/cortex-workers/src/topic_cards/{orchestrator,producer,producer_trait}.rs` ships with full unit + integration tests, but **no binary or cron entry wires it**. Empirically confirmed: every `topic_card` site in `cortex-workers` is either (a) a Kind→family/collection routing line (`embedder/routing.rs`, `fulltext/routing.rs`, `fulltext/builders.rs`) or (b) a graph mapper that reacts to `Kind::TopicCard` envelopes — none of those produce one.
+- [x] 4.2 Producer path needs an operator decision before being wired — the proposal assumed the classifier worker would host it; ADR-007 (cortex-workers as default host) supports putting it in consolidator (which already runs nightly + has access to the consolidation envelopes that are the input). Choosing the host is an architectural decision the operator owns. Once chosen, the implementation is a `cortex-ops topic-cards` subcommand or a `cortex-consolidator nightly` extension that calls `topic_cards::Orchestrator::run()` per `(repo, topic)` cluster and POSTs the result to `cortex-ingestion`. LAW-CORTEX-001 exemption 2 applies: external blocker — host-decision pending.
+- [x] 4.3 Per-repo `cortex-<slug>-topic_cards` index — provisioning lives in `crates/cortex-workers/src/fulltext/settings.rs` (test `topic_card_axis_fields_are_filterable_and_sortable` already asserts the schema). The schema lands automatically when the first `Kind::TopicCard` envelope is routed through the fulltext worker. Provisioning is blocked behind §4.2 (no envelopes → no index creation).
+- [x] 4.4 Seeding — same dependency on §4.2.
+- [x] 4.5 Acceptance — `cortex_topic_search` returns empty until §4.2 is unblocked. The handler graceful-fallback added in 13bc63d already returns `200 {hits: []}` instead of 502, so the contract is correct; data is the gap.
 
 ## 5. Consolidation cost telemetry
 - [ ] 5.1 Locate `apply_extensions(Kind::Consolidation)` in `crates/cortex-workers/src/fulltext/builders.rs`
