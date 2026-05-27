@@ -81,28 +81,34 @@ except Exception as e:
 }
 
 # Reverse probe — pass when value is LOW (missing %)
+# Pulls from /v1/health/coverage where each backend exposes
+# `present` / `missing` / `unexpected` lists; pct = miss / (miss + pres).
 probe_le() {
     local name="$1"; shift
     local expected_max="$1"; shift
+    local backend_filter="$1"; shift
     local body
     body="$("$@" 2>&1)"
     local actual
-    actual="$(printf '%s' "$body" | python3 -c '
+    actual="$(printf '%s' "$body" | python3 -c "
 import json, sys
 try:
     d = json.loads(sys.stdin.read())
-    c = d.get("coverage", {}) if isinstance(d, dict) else {}
-    worst = 0
-    for b in c.get("backends", []):
-        exp = b.get("expected", 0) or 0
-        miss = b.get("missing", 0) or 0
-        if exp > 0:
-            pct = int(100 * miss / exp)
-            worst = max(worst, pct)
-    print(worst)
+    backends = d.get('backends', []) if isinstance(d, dict) else []
+    target = '$backend_filter'
+    pct = 100
+    for b in backends:
+        if b.get('backend') != target:
+            continue
+        pres = len(b.get('present', [])) if isinstance(b.get('present'), list) else (b.get('present', 0) or 0)
+        miss = len(b.get('missing', [])) if isinstance(b.get('missing'), list) else (b.get('missing', 0) or 0)
+        den = pres + miss
+        pct = int(100 * miss / max(1, den))
+        break
+    print(pct)
 except Exception:
     print(100)
-' 2>/dev/null)"
+" 2>/dev/null)"
     if [[ "$actual" -le "$expected_max" ]]; then
         green "PASS [$name] missing=${actual}% <= ${expected_max}%"
         PASS=$((PASS+1))
@@ -120,13 +126,12 @@ probe "1.query_snippets" 5 \
     --data-raw '{"intent":"free_search","query":"phase20 retrieval relevance","scope":{"repo":"cortex"},"limit":20}'
 
 # 2. Vectorizer coverage >=95% (missing <=5%)
-probe_le "2.vectorizer_coverage_missing_pct" 5 \
-    curl -sS "$API/v1/status"
+probe_le "2.vectorizer_coverage_missing_pct" 5 vectorizer \
+    curl -sS "$API/v1/health/coverage"
 
-# 3. Meili coverage >=95% (covered by same status backends array)
-#    (single probe covers both — recorded as one probe; flag separately if needed)
-probe_le "3.meili_coverage_missing_pct" 5 \
-    curl -sS "$API/v1/status"
+# 3. Meili coverage >=95%
+probe_le "3.meili_coverage_missing_pct" 5 meili \
+    curl -sS "$API/v1/health/coverage"
 
 # 4. topic_search returns >=1 hit
 probe "4.topic_search" 1 \
