@@ -186,16 +186,29 @@ pub async fn handle_consolidations_by_entity(
         SearchPlan::KeywordQuery(query) => (query.as_str(), None, "q"),
     };
 
+    // Route per-repo when the entity carries a repo discriminator
+    // (live Meili only has the per-repo `cortex-<slug>-consolidations`
+    // family — the global `cortex_consolidations` index does not
+    // exist today).
+    let repo_for_index: Option<&str> = if req.entity.kind == "repo" {
+        Some(req.entity.value.trim()).filter(|s| !s.is_empty())
+    } else {
+        None
+    };
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+        super::resolve_family_index(
+            repo_for_index,
+            "consolidations",
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+        )
     );
     let mut body = json!({ "q": q, "limit": limit });
     if let Some(f) = &filter {
         body["filter"] = Value::String(f.clone());
     }
-    body["sort"] = json!(["occurred_at:desc"]);
+    body["sort"] = json!(["ts:desc"]);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))

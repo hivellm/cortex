@@ -303,20 +303,24 @@ pub async fn handle_consolidation_costs(
         }
     };
 
-    let mut filter = format!("occurred_at >= {since_ms} AND occurred_at <= {until_ms}");
+    let mut filter = format!("ts >= {since_ms} AND ts <= {until_ms}");
     if let Some(repo) = req.repo.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         filter.push_str(&format!(" AND repo = \"{}\"", meili_escape(repo)));
     }
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+        super::resolve_family_index(
+            req.repo.as_deref(),
+            "consolidations",
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+        )
     );
     let body = json!({
         "q": "",
         "limit": FETCH_CAP,
         "filter": filter,
-        "sort": ["occurred_at:asc"],
+        "sort": ["ts:asc"],
     });
 
     let client = match reqwest::Client::builder()

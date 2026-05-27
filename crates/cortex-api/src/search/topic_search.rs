@@ -146,13 +146,17 @@ pub async fn handle_topic_search(
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_TOPIC_CARDS
+        super::resolve_family_index(
+            req.repo.as_deref(),
+            "topic_cards",
+            cortex_storage::names::INDEX_TOPIC_CARDS,
+        )
     );
     let mut body = json!({ "q": req.q, "limit": limit });
     if let Some(f) = &filter {
         body["filter"] = Value::String(f.clone());
     }
-    body["sort"] = json!(["updated_at:desc"]);
+    body["sort"] = json!(["ts:desc"]);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -193,6 +197,20 @@ pub async fn handle_topic_search(
         }
     };
     if !status.is_success() {
+        // Live Meili has no per-repo `cortex-<slug>-topic_cards`
+        // index until the consolidator emits topic cards. Surface a
+        // clean empty result rather than 502 so callers can treat
+        // "no cards" the same as "no matches".
+        let code = parsed.get("code").and_then(Value::as_str).unwrap_or("");
+        if code == "index_not_found" {
+            return Json(TopicSearchResponse {
+                topic_prefix: req.topic_prefix,
+                hits: Vec::new(),
+                processing_time_ms: 0,
+                estimated_total_hits: 0,
+            })
+            .into_response();
+        }
         let detail = parsed
             .get("message")
             .and_then(Value::as_str)

@@ -140,28 +140,65 @@ pub async fn handle_ingest(
             .into_response();
     }
 
-    // 4. Build canonical envelope.
+    // 4. Build canonical envelope matching `cortex_core::events::Envelope`
+    // shape — every required wire-schema field must be present so the
+    // ingestion validator does not reject the body.
     let event_id = cortex_core::event_id();
-    let content_hash = sha256_hex(req.body.as_bytes());
+    // The wire schema requires `sha256:<64-hex>` (see
+    // `cortex_core::validate`); the bare hex was rejected upstream.
+    let content_hash = format!("sha256:{}", sha256_hex(req.body.as_bytes()));
     let now = chrono::Utc::now().to_rfc3339();
-    let mut context = json!({ "repo": repo });
-    if let Some(t) = req.topic.as_deref().filter(|s| !s.is_empty()) {
-        context["topic"] = Value::String(t.to_string());
-    }
-    let mut envelope = json!({
-        "event_id": event_id,
-        "kind": kind,
-        "ts": now,
-        "context": context,
-        "payload": {
-            "body": req.body,
-            "content_hash": content_hash.clone(),
-            "captured_via": "cortex_capture_memory",
-        },
+    let session_id = cortex_core::event_id();
+    let context = json!({
+        "repo": repo,
+        "platform": std::env::consts::OS,
     });
-    if let Some(s) = req.severity.as_deref().filter(|s| !s.is_empty()) {
-        envelope["severity"] = Value::String(s.to_string());
-    }
+    let payload = match kind.as_str() {
+        "memory" => json!({
+            "op": "write",
+            "memory_type": "project",
+            "name": req
+                .topic
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("capture"),
+            "body": req.body,
+        }),
+        "knowledge" => json!({
+            "knowledge_id": event_id.clone(),
+            "title": req
+                .topic
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("captured knowledge"),
+            "category": "pattern",
+            "body": req.body,
+        }),
+        "learning" => json!({
+            "learning_id": event_id.clone(),
+            "title": req
+                .topic
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("captured learning"),
+            "body": req.body,
+        }),
+        _ => unreachable!("validated above"),
+    };
+    let envelope = json!({
+        "event_id": event_id,
+        "schema_version": "1",
+        "occurred_at": now,
+        "session_id": session_id,
+        "stream": "live",
+        // `tool` is restricted to the validator's allow-list; use the
+        // canonical "claude-code" sender for agent-curated captures.
+        "tool": "claude-code",
+        "kind": kind,
+        "context": context,
+        "payload": payload,
+        "content_hash": content_hash.clone(),
+    });
 
     // 5. Forward to cortex-ingestion.
     let upstream = state

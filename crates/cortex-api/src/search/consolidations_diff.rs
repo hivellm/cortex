@@ -13,7 +13,7 @@
 //! list `occurred_at` as the canonical sortable + filterable
 //! timestamp on every envelope index (`accumulated_at` is not on the
 //! schema). The handler therefore sorts on `occurred_at:asc` and
-//! filters `occurred_at >= since_ts` — the only timestamp the
+//! filters `ts >= since_ts` — the only timestamp the
 //! consolidations doc actually carries. Callers polling for "new
 //! consolidations since last cursor" pass the highest `occurred_at`
 //! they have seen so far.
@@ -98,10 +98,10 @@ fn clamp_limit(q: &ConsolidationsDiffQuery) -> u32 {
     q.limit.unwrap_or(LIMIT_DEFAULT).min(LIMIT_MAX).max(1)
 }
 
-/// Build the Meili filter expression. `occurred_at >= since_ts` is
+/// Build the Meili filter expression. `ts >= since_ts` is
 /// always present; `repo = "..."` joins via AND when supplied.
 pub(crate) fn build_filter(q: &ConsolidationsDiffQuery) -> String {
-    let mut clauses: Vec<String> = vec![format!("occurred_at >= {}", q.since_ts)];
+    let mut clauses: Vec<String> = vec![format!("ts >= {}", q.since_ts)];
     if let Some(repo) = q.repo.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         clauses.push(format!("repo = \"{}\"", meili_escape(repo)));
     }
@@ -128,13 +128,17 @@ pub async fn handle_consolidations_diff(
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+        super::resolve_family_index(
+            q.repo.as_deref(),
+            "consolidations",
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+        )
     );
     let body = json!({
         "q": "",
         "limit": limit,
         "filter": filter,
-        "sort": ["occurred_at:asc"],
+        "sort": ["ts:asc"],
     });
 
     let client = match reqwest::Client::builder()
@@ -222,7 +226,7 @@ mod tests {
     #[test]
     fn build_filter_always_includes_since_ts() {
         let f = build_filter(&q(1_700_000_000_000));
-        assert_eq!(f, "occurred_at >= 1700000000000");
+        assert_eq!(f, "ts >= 1700000000000");
     }
 
     #[test]
@@ -230,7 +234,7 @@ mod tests {
         let mut p = q(1_700_000_000_000);
         p.repo = Some("cortex".into());
         let f = build_filter(&p);
-        assert!(f.contains("occurred_at >= 1700000000000"));
+        assert!(f.contains("ts >= 1700000000000"));
         assert!(f.contains("repo = \"cortex\""));
         assert_eq!(f.matches(" AND ").count(), 1);
     }
@@ -248,7 +252,7 @@ mod tests {
         let mut p = q(1);
         p.repo = Some("   ".into());
         let f = build_filter(&p);
-        assert_eq!(f, "occurred_at >= 1");
+        assert_eq!(f, "ts >= 1");
     }
 
     #[test]

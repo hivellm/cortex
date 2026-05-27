@@ -617,6 +617,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase15b §4.1 — graph-edge coverage doctor. Queries Nexus
+    /// for `MATCH ()-[r]->() WHERE type(r) IN [...] RETURN type(r),
+    /// count(r)` across every edge kind the phase15b projection
+    /// pipeline registers, then renders a per-kind count + share
+    /// table. Threshold per §4.2: every kind MUST have ≥1% of
+    /// total edges — falls below trip a WARN. Exit codes: `0` all
+    /// kinds present + above floor, `1` any kind missing OR below
+    /// floor, `2` Nexus unreachable.
+    DoctorGraphCoverage {
+        /// Override the Nexus URL. Defaults to
+        /// `$CORTEX_GRAPH_NEXUS_URL` then `http://127.0.0.1:17002`.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Per-kind minimum share of total edges (0.0..=1.0).
+        /// Default 0.01 (1%) per §4.2.
+        #[arg(long, default_value_t = 0.01)]
+        floor: f64,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase12d §3 — Meili index settings drift checker. For every
     /// index in `cortex_storage::fulltext::INDEXES`, fetches the live
     /// `<meili>/indexes/{name}/settings` and compares the declared
@@ -1220,6 +1241,9 @@ fn main() -> ExitCode {
         } => intent_stats::run(api_url, since, json),
         Command::DoctorAlerts { state_dir, json } => doctor::doctor_alerts(state_dir, json),
         Command::DoctorCoverage { api_url, json } => doctor::doctor_coverage(api_url, json),
+        Command::DoctorGraphCoverage { nexus, floor, json } => {
+            graph_cmd::doctor_graph_coverage(nexus, floor, json)
+        }
         Command::DoctorMeiliIndexes {
             meili_url,
             master_key,

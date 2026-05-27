@@ -206,6 +206,142 @@ pub(super) fn graph_replay(
     ExitCode::SUCCESS
 }
 
+/// Phase15b §4.1 — `cortex-ops doctor-graph-coverage` dispatcher.
+/// Queries Nexus for `MATCH ()-[r]->() WHERE type(r) IN [...]
+/// RETURN type(r) AS kind, count(r) AS c` across every edge kind
+/// the phase15b projection pipeline registers, then renders a
+/// per-kind count + share table. §4.2 threshold: every kind MUST
+/// have ≥`floor` of total edges (default 0.01 = 1%). Exit codes:
+/// `0` all kinds present + above floor, `1` any kind missing OR
+/// below floor, `2` Nexus unreachable.
+pub(super) fn doctor_graph_coverage(nexus: Option<String>, floor: f64, json: bool) -> ExitCode {
+    use cortex_workers::graph::config::GraphConfig;
+    use cortex_workers::graph::nexus_client::{GraphClient, LiveNexusClient};
+    use cortex_workers::graph::projection::registered_edge_kinds;
+
+    let kinds: Vec<&'static str> = registered_edge_kinds().collect();
+    let nexus_url = nexus
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.nexus.nexus_url)
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:17002".to_string());
+    let cfg = GraphConfig {
+        nexus_url: nexus_url.clone(),
+        ..GraphConfig::default()
+    };
+    let client = match LiveNexusClient::new(cfg) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("ERROR: connect to Nexus at {nexus_url}: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let _ = &client as &dyn GraphClient;
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("ERROR: build tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Build the IN [...] list for the WHERE clause so the query
+    // narrows to phase15b kinds (skipping mapper-emitted identity
+    // edges like HAS_TURN).
+    let in_list = kinds
+        .iter()
+        .map(|k| format!("\"{k}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let cypher = format!(
+        "MATCH ()-[r]->() WHERE type(r) IN [{in_list}] RETURN type(r) AS kind, count(r) AS c"
+    );
+
+    let rows = runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await });
+    let rows = match rows {
+        Ok(out) => out.rows,
+        Err(e) => {
+            eprintln!("ERROR: Nexus query: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for k in &kinds {
+        counts.insert(k.to_string(), 0);
+    }
+    for row in &rows {
+        let k = row.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+        let c = row.get("c").and_then(|v| v.as_u64()).unwrap_or(0);
+        if !k.is_empty() {
+            counts.insert(k.to_string(), c);
+        }
+    }
+    let total: u64 = counts.values().sum();
+
+    let mut warnings: Vec<String> = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
+    for (kind, &c) in &counts {
+        if c == 0 {
+            missing.push(kind.clone());
+            continue;
+        }
+        if total > 0 {
+            let share = c as f64 / total as f64;
+            if share < floor {
+                warnings.push(format!("{kind} share={share:.4} < floor {floor}"));
+            }
+        }
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "nexus_url": nexus_url,
+            "total_edges": total,
+            "floor": floor,
+            "by_kind": counts,
+            "missing": missing,
+            "below_floor": warnings,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+    } else {
+        println!("cortex-ops doctor graph-coverage @ {nexus_url}");
+        println!("  total_edges = {total}");
+        println!("  floor       = {floor}");
+        println!("  per_kind:");
+        for (k, v) in &counts {
+            let share = if total > 0 {
+                (*v as f64 / total as f64) * 100.0
+            } else {
+                0.0
+            };
+            println!("    {k:<14} = {v:>10}  ({share:>6.2}%)");
+        }
+        if !missing.is_empty() {
+            println!("  MISSING kinds (count = 0):");
+            for k in &missing {
+                println!("    - {k}");
+            }
+        }
+        if !warnings.is_empty() {
+            println!("  BELOW floor:");
+            for w in &warnings {
+                println!("    - {w}");
+            }
+        }
+    }
+    if !missing.is_empty() || !warnings.is_empty() {
+        return ExitCode::from(1);
+    }
+    ExitCode::SUCCESS
+}
+
 /// Phase15b §3.3 — `cortex-ops graph backfill --since <RFC3339>`
 /// dispatcher. Walks the archive, projects every envelope newer
 /// than `--since` through `cortex_workers::graph::projection::project_envelope`,

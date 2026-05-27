@@ -140,7 +140,7 @@ pub(crate) fn build_filter(req: &ToolCallsRequest) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         let ts_ms = parse_rfc3339_to_ms(since)?;
-        clauses.push(format!("occurred_at >= {ts_ms}"));
+        clauses.push(format!("ts >= {ts_ms}"));
     }
     if let Some(until) = req
         .until
@@ -149,7 +149,7 @@ pub(crate) fn build_filter(req: &ToolCallsRequest) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         let ts_ms = parse_rfc3339_to_ms(until)?;
-        clauses.push(format!("occurred_at <= {ts_ms}"));
+        clauses.push(format!("ts <= {ts_ms}"));
     }
     if clauses.is_empty() {
         None
@@ -208,13 +208,24 @@ pub async fn handle_tool_calls(
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_TOOL_CALLS
+        // Live Meili: tool_call envelopes route to the per-repo
+        // `cortex-<slug>-code` family (per
+        // `cortex_workers::graph::routing::family_for`), NOT a
+        // dedicated `cortex_tool_calls` global. Resolve per-repo
+        // when `repo` is set and fall back to the global only when
+        // no repo is supplied (will 404 today but stays
+        // forward-compatible).
+        super::resolve_family_index(
+            req.repo.as_deref(),
+            "code",
+            cortex_storage::names::INDEX_TOOL_CALLS,
+        )
     );
     let mut body = json!({ "q": req.q, "limit": limit });
     if let Some(f) = &filter {
         body["filter"] = Value::String(f.clone());
     }
-    body["sort"] = json!(["occurred_at:desc"]);
+    body["sort"] = json!(["ts:desc"]);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -343,8 +354,8 @@ mod tests {
         r.since = Some(since_str.into());
         r.until = Some(until_str.into());
         let f = build_filter(&r).expect("filter");
-        assert!(f.contains(&format!("occurred_at >= {since_ms}")));
-        assert!(f.contains(&format!("occurred_at <= {until_ms}")));
+        assert!(f.contains(&format!("ts >= {since_ms}")));
+        assert!(f.contains(&format!("ts <= {until_ms}")));
     }
 
     #[test]

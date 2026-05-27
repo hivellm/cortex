@@ -48,7 +48,7 @@
 //! tell which lineage shape they got.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Response,
     Json,
@@ -262,9 +262,21 @@ pub(crate) fn resolved_consolidation_id(doc: &Value, fallback: &str) -> String {
 }
 
 /// Handler — `GET /v1/consolidations/{id}/lineage`.
+/// Optional `?repo=<slug>` query param so id-only lookups route
+/// to the per-repo `cortex-<slug>-consolidations` index when
+/// the global isn't seeded (current live setup).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConsolidationLineageQuery {
+    /// Optional repo scope for the lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
+/// Handler — `GET /v1/consolidations/{id}/lineage`.
 pub async fn handle_consolidation_lineage(
     State(_state): State<ApiState>,
     Path(id): Path<String>,
+    Query(q): Query<ConsolidationLineageQuery>,
 ) -> Response {
     use axum::response::IntoResponse;
 
@@ -277,21 +289,13 @@ pub async fn handle_consolidation_lineage(
         );
     }
 
-    let url = format!(
-        "{}/indexes/{}/search",
-        meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+    let base = meili_base_url();
+    let base = base.trim_end_matches('/');
+    let index = super::resolve_family_index(
+        q.repo.as_deref(),
+        "consolidations",
+        cortex_storage::names::INDEX_CONSOLIDATIONS,
     );
-    let filter = format!(
-        "event_id = \"{}\" OR ext.consolidation.consolidation_id = \"{}\"",
-        meili_escape(&id),
-        meili_escape(&id),
-    );
-    let body = json!({
-        "q": "",
-        "limit": 1,
-        "filter": filter,
-    });
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -306,12 +310,24 @@ pub async fn handle_consolidation_lineage(
             );
         }
     };
-    let mut request = client.post(&url).json(&body);
-    if let Some(key) = meili_api_key() {
-        request = request.bearer_auth(key);
+    let api_key = meili_api_key();
+
+    // Step 1: Meili document GET on the primary key (= envelope event_id).
+    // `event_id` is not filterable in per-repo indexes; primary-key lookup
+    // works without a filterable attribute.
+    let doc_url = format!("{}/indexes/{}/documents/{}", base, index, id);
+    let mut doc_req = client.get(&doc_url);
+    if let Some(ref key) = api_key {
+        doc_req = doc_req.bearer_auth(key);
     }
-    let resp = match request.send().await {
-        Ok(r) => r,
+    let mut doc_opt: Option<Value> = None;
+    match doc_req.send().await {
+        Ok(r) if r.status().is_success() => {
+            if let Ok(v) = r.json::<Value>().await {
+                doc_opt = Some(v);
+            }
+        }
+        Ok(_) => {}
         Err(e) => {
             return json_err(
                 StatusCode::BAD_GATEWAY,
@@ -319,31 +335,60 @@ pub async fn handle_consolidation_lineage(
                 format!("meili unreachable: {e}"),
             );
         }
-    };
-    let status = resp.status();
-    let parsed = match resp.json::<Value>().await {
-        Ok(v) => v,
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_GATEWAY,
-                "api_http_error",
-                format!("meili body parse: {e}"),
-            );
-        }
-    };
-    if !status.is_success() {
-        let detail = parsed
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("meili rejected the lookup")
-            .to_string();
-        return json_err(StatusCode::BAD_GATEWAY, "api_http_error", detail);
     }
-    let doc = parsed
-        .get("hits")
-        .and_then(Value::as_array)
-        .and_then(|v| v.first().cloned());
-    let Some(doc) = doc else {
+
+    // Step 2: fall back to `ext.consolidation.consolidation_id` filter.
+    if doc_opt.is_none() {
+        let url = format!("{}/indexes/{}/search", base, index);
+        let filter = format!(
+            "ext.consolidation.consolidation_id = \"{}\"",
+            meili_escape(&id),
+        );
+        let body = json!({
+            "q": "",
+            "limit": 1,
+            "filter": filter,
+        });
+        let mut request = client.post(&url).json(&body);
+        if let Some(ref key) = api_key {
+            request = request.bearer_auth(key);
+        }
+        let resp = match request.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                return json_err(
+                    StatusCode::BAD_GATEWAY,
+                    "api_unreachable",
+                    format!("meili unreachable: {e}"),
+                );
+            }
+        };
+        let status = resp.status();
+        let parsed = match resp.json::<Value>().await {
+            Ok(v) => v,
+            Err(e) => {
+                return json_err(
+                    StatusCode::BAD_GATEWAY,
+                    "api_http_error",
+                    format!("meili body parse: {e}"),
+                );
+            }
+        };
+        if !status.is_success() {
+            let detail = parsed
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("meili rejected the lookup")
+                .to_string();
+            return json_err(StatusCode::BAD_GATEWAY, "api_http_error", detail);
+        }
+        doc_opt = parsed
+            .get("hits")
+            .and_then(Value::as_array)
+            .and_then(|v| v.first().cloned());
+    }
+
+    let Some(doc) = doc_opt else {
         return json_err(
             StatusCode::NOT_FOUND,
             "not_found",

@@ -106,6 +106,62 @@ fn vectorizer_jwt() -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
+fn vectorizer_credentials() -> Option<(String, String)> {
+    let cfg = cortex_config::Config::load().ok()?;
+    let user = cfg.embedder.vectorizer_user;
+    let pwd = cfg.embedder.vectorizer_password?;
+    if user.trim().is_empty() || pwd.trim().is_empty() {
+        return None;
+    }
+    Some((user, pwd))
+}
+
+/// Mint a Vectorizer JWT via `POST /auth/login`. Used as a fallback
+/// when `vectorizer_jwt` is unset in the config — the embedder worker
+/// owns the persistent JWT cache, so this surface mints a short-lived
+/// token per call (debug path; not hot).
+async fn vectorizer_login(base: &str, user: &str, pwd: &str) -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .ok()?;
+    let url = format!("{}/auth/login", base.trim_end_matches('/'));
+    let resp = client
+        .post(&url)
+        .json(&json!({ "username": user, "password": pwd }))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: Value = resp.json().await.ok()?;
+    body.get("access_token")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+async fn resolve_vectorizer_bearer(base: &str) -> Option<String> {
+    if let Some(jwt) = vectorizer_jwt() {
+        tracing::debug!("vector_search: using preset jwt");
+        return Some(jwt);
+    }
+    let Some((user, pwd)) = vectorizer_credentials() else {
+        tracing::warn!("vector_search: no jwt + no credentials in config");
+        return None;
+    };
+    match vectorizer_login(base, &user, &pwd).await {
+        Some(t) => {
+            tracing::debug!("vector_search: minted jwt via /auth/login");
+            Some(t)
+        }
+        None => {
+            tracing::warn!(base, user, "vector_search: /auth/login failed");
+            None
+        }
+    }
+}
+
 fn meili_api_key() -> Option<String> {
     cortex_config::Config::load()
         .ok()
@@ -347,7 +403,7 @@ pub async fn handle_vector_search(
         }
     };
     let mut http = client.post(&url).json(&body);
-    if let Some(jwt) = vectorizer_jwt() {
+    if let Some(jwt) = resolve_vectorizer_bearer(&vectorizer_base_url()).await {
         http = http.bearer_auth(jwt);
     }
     let started = std::time::Instant::now();
@@ -493,30 +549,61 @@ pub async fn handle_graph_query(
                     "`node_id` is required",
                 );
             }
+            // Validate node_id shape before splicing into cypher.
+            // Nexus 2.2.0 does NOT substitute `$id` parameters at
+            // query-execution time (verified empirically — same
+            // query with `$id` returns 0 rows while the inlined
+            // form returns the expected neighbors). Inline the
+            // sanitized id directly. ULID + slug shape, ≤128.
+            let id_safe = id_trim
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>();
+            if id_safe.is_empty() || id_safe.len() > 128 || id_safe != id_trim {
+                return json_err(
+                    StatusCode::BAD_REQUEST,
+                    "bad_input",
+                    "`node_id` must be alphanumeric (ULID or slug, ≤128 chars)",
+                );
+            }
+            // Nexus 2.2.0 cypher syntax for multi-edge alternation
+            // is `:A|B|C` (single leading colon, pipe-separated).
+            // Backtick-quoted identifiers are rejected. Sanitize
+            // each kind to ASCII identifier chars before splicing.
             let cypher = match &edge_kinds {
                 Some(kinds) if !kinds.is_empty() => {
-                    let list = kinds
+                    let alt = kinds
                         .iter()
-                        .map(|k| format!(":`{}`", k.replace('`', "")))
+                        .filter_map(|k| {
+                            let stripped: String = k
+                                .chars()
+                                .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                                .collect();
+                            if stripped.is_empty() {
+                                None
+                            } else {
+                                Some(stripped)
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join("|");
-                    format!(
-                        "MATCH (s {{ event_id: $id }})-[r{}*1..{depth}]-(n) \
-                         RETURN s, r, n LIMIT 200",
-                        list
-                    )
+                    if alt.is_empty() {
+                        format!(
+                            "MATCH (s {{ id: '{id_safe}' }})-[r*1..{depth}]-(n) RETURN s, r, n LIMIT 200"
+                        )
+                    } else {
+                        format!(
+                            "MATCH (s {{ id: '{id_safe}' }})-[r:{alt}*1..{depth}]-(n) \
+                             RETURN s, r, n LIMIT 200"
+                        )
+                    }
                 }
                 _ => format!(
-                    "MATCH (s {{ event_id: $id }})-[r*1..{depth}]-(n) RETURN s, r, n LIMIT 200"
+                    "MATCH (s {{ id: '{id_safe}' }})-[r*1..{depth}]-(n) RETURN s, r, n LIMIT 200"
                 ),
             };
             let started = std::time::Instant::now();
-            let mut params = std::collections::HashMap::new();
-            params.insert(
-                "id".to_string(),
-                nexus_sdk::Value::String(id_trim.to_string()),
-            );
-            let res = nexus.execute_cypher(&cypher, Some(params)).await;
+            let res = nexus.execute_cypher(&cypher, None).await;
             let latency_ms = started.elapsed().as_millis() as u64;
             match res {
                 Ok(qres) => (

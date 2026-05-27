@@ -1721,7 +1721,7 @@ impl Tool for ConsolidationGetTool {
     fn descriptor(&self) -> Value {
         json!({
             "name": "cortex_consolidation_get",
-            "description": "Fetch one consolidation by `event_id` (envelope primary key) or by `consolidation_id` (stable producer-assigned id). Returns the full payload: summary_markdown, takeaways, source_event_ids, temporal_span, repos, tags, outcome_distribution, grain, scope, depth, model. Use this when you have a consolidation id from `cortex_query` / `cortex_similar_sessions` / `cortex_consolidations_recent` and need the full body without re-fetching through the fusion layer.",
+            "description": "Fetch one consolidation by `event_id` (envelope primary key) or by `consolidation_id` (stable producer-assigned id). Returns the full payload: summary_markdown, takeaways, source_event_ids, temporal_span, repos, tags, outcome_distribution, grain, scope, depth, model. Optional `repo` routes to the per-repo `cortex-<slug>-consolidations` index (the live Meili setup has no global `cortex_consolidations` index — pass `repo` to hit the per-repo family that actually holds the data).",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],
@@ -1729,6 +1729,10 @@ impl Tool for ConsolidationGetTool {
                     "id": {
                         "type": "string",
                         "description": "ULID or slug — accepted on both `event_id` (envelope) and `consolidation_id` (producer-stable)."
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Optional repo scope. Routes to `cortex-<lowercase>-consolidations`."
                     }
                 }
             }
@@ -1752,7 +1756,16 @@ impl Tool for ConsolidationGetTool {
                 "id must be alphanumeric (ULID or slug shape, ≤128 chars)",
             ));
         }
-        proxy_get(ctx, &format!("/v1/consolidations/{id}")).await
+        let path = match args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(r) => format!("/v1/consolidations/{id}?repo={}", urlencode(r)),
+            None => format!("/v1/consolidations/{id}"),
+        };
+        proxy_get(ctx, &path).await
     }
 }
 
@@ -2453,7 +2466,7 @@ impl Tool for ConsolidationLineageTool {
     fn descriptor(&self) -> Value {
         json!({
             "name": "cortex_consolidation_lineage",
-            "description": "Structured citation view for one consolidation: `{source_session_ids, decisions, files, cost{model, cents?, prompt_tokens?, completion_tokens?}}`. Derived from the consolidation envelope's own `topics` (`session:<ulid>`, `file:<path>`, `decision:DEC-…` conventions) + `DEC-NNN+` mentions in title/summary/body. Cost block today carries `model` only; per-consolidation cents/token telemetry requires writer-side projection (response surfaces `match_strategy = \"doc_only\"` so callers can detect the shape).",
+            "description": "Structured citation view for one consolidation: `{source_session_ids, decisions, files, cost{model, cents?, prompt_tokens?, completion_tokens?}}`. Derived from the consolidation envelope's own `topics` (`session:<ulid>`, `file:<path>`, `decision:DEC-…` conventions) + `DEC-NNN+` mentions in title/summary/body. Optional `repo` routes to the per-repo `cortex-<slug>-consolidations` index. Cost block today carries `model` only.",
             "inputSchema": {
                 "type": "object",
                 "required": ["id"],
@@ -2461,6 +2474,10 @@ impl Tool for ConsolidationLineageTool {
                     "id": {
                         "type": "string",
                         "description": "ULID or slug — accepted on both `event_id` (envelope) and `consolidation_id` (producer-stable)."
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Optional repo scope. Routes to `cortex-<lowercase>-consolidations`."
                     }
                 }
             }
@@ -2484,7 +2501,18 @@ impl Tool for ConsolidationLineageTool {
                 "id must be alphanumeric (ULID or slug shape, ≤128 chars)",
             ));
         }
-        proxy_get(ctx, &format!("/v1/consolidations/{id}/lineage")).await
+        let repo_qs = args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|r| format!("?repo={}", urlencode(r)))
+            .unwrap_or_default();
+        proxy_get(
+            ctx,
+            &format!("/v1/consolidations/{id}/lineage{repo_qs}"),
+        )
+        .await
     }
 }
 

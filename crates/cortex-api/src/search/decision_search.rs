@@ -148,7 +148,12 @@ pub(crate) fn build_filter(req: &DecisionSearchRequest) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        clauses.push(format!("status = \"{}\"", meili_escape(s)));
+        // Live Meili: the global `cortex_decisions` index actually
+        // carries the per-repo settings (top-level `decision_status`
+        // projection), not the bare `status` from
+        // `cortex_decisions.settings.v1.json`. Filter on the
+        // projected key the Document writer stamps.
+        clauses.push(format!("decision_status = \"{}\"", meili_escape(s)));
     }
     if let Some(t) = req.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         clauses.push(format!("topics = \"{}\"", meili_escape(t)));
@@ -163,7 +168,7 @@ pub(crate) fn build_filter(req: &DecisionSearchRequest) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         let ts_ms = parse_rfc3339_to_ms(since)?;
-        clauses.push(format!("occurred_at >= {ts_ms}"));
+        clauses.push(format!("ts >= {ts_ms}"));
     }
     if let Some(until) = req
         .until
@@ -172,7 +177,7 @@ pub(crate) fn build_filter(req: &DecisionSearchRequest) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         let ts_ms = parse_rfc3339_to_ms(until)?;
-        clauses.push(format!("occurred_at <= {ts_ms}"));
+        clauses.push(format!("ts <= {ts_ms}"));
     }
     if clauses.is_empty() {
         None
@@ -259,7 +264,11 @@ pub async fn handle_decision_search(
     if let Some(f) = &filter {
         body["filter"] = Value::String(f.clone());
     }
-    body["sort"] = json!(["occurred_at:desc"]);
+    // Live `cortex_decisions` index sortable attrs: `ts` (not
+    // `occurred_at`). Mirrors the per-repo Document writer's
+    // top-level `ts` projection — see
+    // `crates/cortex-workers/src/fulltext/document.rs`.
+    body["sort"] = json!(["ts:desc"]);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -370,7 +379,7 @@ mod tests {
         r.tag = Some("retention".into());
         r.repo = Some("cortex".into());
         let f = build_filter(&r).expect("filter");
-        assert!(f.contains("status = \"accepted\""));
+        assert!(f.contains("decision_status = \"accepted\""));
         assert!(f.contains("topics = \"retention\""));
         assert!(f.contains("repo = \"cortex\""));
         assert_eq!(f.matches(" AND ").count(), 2);
@@ -390,8 +399,8 @@ mod tests {
         r.since = Some(since_str.into());
         r.until = Some(until_str.into());
         let f = build_filter(&r).expect("filter");
-        assert!(f.contains(&format!("occurred_at >= {since_ms}")));
-        assert!(f.contains(&format!("occurred_at <= {until_ms}")));
+        assert!(f.contains(&format!("ts >= {since_ms}")));
+        assert!(f.contains(&format!("ts <= {until_ms}")));
     }
 
     #[test]

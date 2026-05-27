@@ -122,15 +122,18 @@ pub(crate) fn build_filter(q: &ConsolidationsRecentQuery) -> Option<String> {
         clauses.push(format!("repo = \"{}\"", meili_escape(repo)));
     }
     if let Some(grain) = q.grain.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        clauses.push(format!("grain = \"{}\"", meili_escape(grain)));
+        clauses.push(format!(
+            "ext.consolidation.grain = \"{}\"",
+            meili_escape(grain)
+        ));
     }
     if let Some(since) = q.since.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let ts_ms = parse_rfc3339_to_ms(since)?;
-        clauses.push(format!("occurred_at >= {ts_ms}"));
+        clauses.push(format!("ts >= {ts_ms}"));
     }
     if let Some(until) = q.until.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         let ts_ms = parse_rfc3339_to_ms(until)?;
-        clauses.push(format!("occurred_at <= {ts_ms}"));
+        clauses.push(format!("ts <= {ts_ms}"));
     }
     if clauses.is_empty() {
         None
@@ -179,13 +182,17 @@ pub async fn handle_consolidations_recent(
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+        super::resolve_family_index(
+            q.repo.as_deref(),
+            "consolidations",
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+        )
     );
     let mut body = json!({ "q": "", "limit": limit });
     if let Some(f) = &filter {
         body["filter"] = Value::String(f.clone());
     }
-    body["sort"] = json!(["occurred_at:desc"]);
+    body["sort"] = json!(["ts:desc"]);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -286,7 +293,7 @@ mod tests {
         p.grain = Some("topic".into());
         let f = build_filter(&p).expect("filter");
         assert!(f.contains("repo = \"cortex\""));
-        assert!(f.contains("grain = \"topic\""));
+        assert!(f.contains("ext.consolidation.grain = \"topic\""));
         assert_eq!(f.matches(" AND ").count(), 1);
     }
 
@@ -304,8 +311,8 @@ mod tests {
         p.since = Some(since_str.into());
         p.until = Some(until_str.into());
         let f = build_filter(&p).expect("filter");
-        assert!(f.contains(&format!("occurred_at >= {since_ms}")));
-        assert!(f.contains(&format!("occurred_at <= {until_ms}")));
+        assert!(f.contains(&format!("ts >= {since_ms}")));
+        assert!(f.contains(&format!("ts <= {until_ms}")));
     }
 
     #[test]

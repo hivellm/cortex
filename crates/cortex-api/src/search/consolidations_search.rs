@@ -160,7 +160,10 @@ pub(crate) fn build_filter(req: &ConsolidationsSearchRequest) -> Option<String> 
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        clauses.push(format!("grain = \"{}\"", meili_escape(grain)));
+        clauses.push(format!(
+            "ext.consolidation.grain = \"{}\"",
+            meili_escape(grain)
+        ));
     }
     if clauses.is_empty() {
         None
@@ -221,7 +224,11 @@ pub async fn handle_consolidations_search(
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+        super::resolve_family_index(
+            req.repo.as_deref(),
+            "consolidations",
+            cortex_storage::names::INDEX_CONSOLIDATIONS,
+        )
     );
     let mut body = json!({ "q": query, "limit": k });
     if let Some(f) = &filter {
@@ -349,7 +356,7 @@ mod tests {
         r.grain = Some("session".into());
         let f = build_filter(&r).expect("filter");
         assert!(f.contains("repo = \"cortex\""));
-        assert!(f.contains("grain = \"session\""));
+        assert!(f.contains("ext.consolidation.grain = \"session\""));
         assert_eq!(f.matches(" AND ").count(), 1);
     }
 

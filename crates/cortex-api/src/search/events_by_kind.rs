@@ -146,7 +146,7 @@ pub(crate) fn build_filter(req: &EventsByKindRequest) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         let ts_ms = parse_rfc3339_to_ms(since)?;
-        clauses.push(format!("occurred_at_ms >= {ts_ms}"));
+        clauses.push(format!("ts >= {ts_ms}"));
     }
     if let Some(until) = req
         .until
@@ -155,7 +155,7 @@ pub(crate) fn build_filter(req: &EventsByKindRequest) -> Option<String> {
         .filter(|s| !s.is_empty())
     {
         let ts_ms = parse_rfc3339_to_ms(until)?;
-        clauses.push(format!("occurred_at_ms <= {ts_ms}"));
+        clauses.push(format!("ts <= {ts_ms}"));
     }
     if clauses.is_empty() {
         None
@@ -178,7 +178,7 @@ pub async fn handle_events_by_kind(
 ) -> Response {
     use axum::response::IntoResponse;
 
-    let index = match kind_to_index(req.kind.trim()) {
+    let global_index = match kind_to_index(req.kind.trim()) {
         Some(i) => i,
         None => {
             return json_err(
@@ -187,6 +187,20 @@ pub async fn handle_events_by_kind(
                 format!("unknown kind `{}`", req.kind),
             );
         }
+    };
+    // Route per-repo when caller scopes by repo — live Meili only
+    // populates the per-repo `cortex-<slug>-<family>` indexes for
+    // most kinds (globals exist only for `cortex_decisions` +
+    // `cortex_laws`). Resolve the per-repo family from the kind so
+    // the read-side hits the same index the writer wrote to.
+    let kind_lower = req.kind.trim().to_ascii_lowercase();
+    let family = super::kind_to_family(&kind_lower);
+    let index: String = match (
+        req.repo.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        family,
+    ) {
+        (Some(r), Some(fam)) => format!("cortex-{}-{}", r.to_ascii_lowercase(), fam),
+        _ => global_index.to_string(),
     };
 
     // If the caller passed a since/until that fails to parse, the
@@ -212,15 +226,15 @@ pub async fn handle_events_by_kind(
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
-        index
+        index.as_str()
     );
     let mut body = json!({ "q": req.q, "limit": limit });
     if let Some(f) = &filter {
         body["filter"] = Value::String(f.clone());
     }
-    // Newest first — every envelope index has `occurred_at_ms` in
+    // Newest first — every envelope index has `ts` in
     // its sortableAttributes set per the canonical settings.
-    body["sort"] = json!(["occurred_at_ms:desc"]);
+    body["sort"] = json!(["ts:desc"]);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -285,7 +299,7 @@ pub async fn handle_events_by_kind(
 
     Json(EventsByKindResponse {
         kind: req.kind,
-        index: index.to_string(),
+        index,
         hits,
         processing_time_ms,
         estimated_total_hits,
@@ -394,8 +408,8 @@ mod tests {
             limit: None,
         };
         let f = build_filter(&req).expect("filter expected");
-        assert!(f.contains(&format!("occurred_at_ms >= {since_ms}")));
-        assert!(f.contains(&format!("occurred_at_ms <= {until_ms}")));
+        assert!(f.contains(&format!("ts >= {since_ms}")));
+        assert!(f.contains(&format!("ts <= {until_ms}")));
     }
 
     #[test]

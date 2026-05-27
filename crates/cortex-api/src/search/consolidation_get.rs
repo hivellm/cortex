@@ -8,7 +8,7 @@
 //! `repos`, `tags`, `outcome_distribution`, etc.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Response,
     Json,
@@ -17,6 +17,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::http::ApiState;
+
+/// Optional `?repo=<slug>` query param so id-only lookups can
+/// route to the per-repo `cortex-<slug>-consolidations` index.
+/// Live Meili has no global `cortex_consolidations`; without the
+/// hint the handler falls back to the global (which today returns
+/// 404).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConsolidationGetQuery {
+    /// Optional repo scope for the lookup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
 
 /// Default Meili URL when `CORTEX_FULLTEXT_MEILI_URL` is unset.
 const MEILI_URL_DEFAULT: &str = "http://127.0.0.1:17004";
@@ -78,6 +90,7 @@ pub(crate) fn id_is_valid(id: &str) -> bool {
 pub async fn handle_consolidation_get(
     State(_state): State<ApiState>,
     Path(id): Path<String>,
+    Query(q): Query<ConsolidationGetQuery>,
 ) -> Response {
     use axum::response::IntoResponse;
 
@@ -90,25 +103,14 @@ pub async fn handle_consolidation_get(
         );
     }
 
-    let url = format!(
-        "{}/indexes/{}/search",
-        meili_base_url().trim_end_matches('/'),
-        cortex_storage::names::INDEX_CONSOLIDATIONS
+    let base = meili_base_url();
+    let base = base.trim_end_matches('/');
+    let index = super::resolve_family_index(
+        q.repo.as_deref(),
+        "consolidations",
+        cortex_storage::names::INDEX_CONSOLIDATIONS,
     );
-    // Try the consolidation_id filter first (stable producer id);
-    // fall back to event_id on miss so re-emitted envelopes still
-    // resolve. The handler does one Meili call with an OR filter
-    // so the round-trip cost is bounded.
-    let filter = format!(
-        "event_id = \"{}\" OR ext.consolidation.consolidation_id = \"{}\"",
-        meili_escape(&id),
-        meili_escape(&id),
-    );
-    let body = json!({
-        "q": "",
-        "limit": 1,
-        "filter": filter,
-    });
+
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -122,8 +124,49 @@ pub async fn handle_consolidation_get(
             );
         }
     };
+    let api_key = meili_api_key();
+
+    // Step 1: Meili document GET on the primary key (= envelope event_id).
+    // `event_id` is not filterable in per-repo indexes, but it IS the doc
+    // primary key, so the cheapest lookup is /indexes/{idx}/documents/{id}.
+    let doc_url = format!("{}/indexes/{}/documents/{}", base, index, id);
+    let mut doc_req = client.get(&doc_url);
+    if let Some(ref key) = api_key {
+        doc_req = doc_req.bearer_auth(key);
+    }
+    match doc_req.send().await {
+        Ok(r) if r.status().is_success() => {
+            if let Ok(doc) = r.json::<Value>().await {
+                return Json(ConsolidationGetResponse {
+                    document: doc,
+                    matched_consolidation_id: false,
+                })
+                .into_response();
+            }
+        }
+        Ok(_) => {} // 404 → fall through to consolidation_id filter
+        Err(e) => {
+            return json_err(
+                StatusCode::BAD_GATEWAY,
+                "api_unreachable",
+                format!("meili unreachable: {e}"),
+            );
+        }
+    }
+
+    // Step 2: search by `ext.consolidation.consolidation_id` (filterable).
+    let url = format!("{}/indexes/{}/search", base, index);
+    let filter = format!(
+        "ext.consolidation.consolidation_id = \"{}\"",
+        meili_escape(&id),
+    );
+    let body = json!({
+        "q": "",
+        "limit": 1,
+        "filter": filter,
+    });
     let mut request = client.post(&url).json(&body);
-    if let Some(key) = meili_api_key() {
+    if let Some(ref key) = api_key {
         request = request.bearer_auth(key);
     }
     let resp = match request.send().await {
@@ -166,16 +209,9 @@ pub async fn handle_consolidation_get(
             format!("no consolidation matches id `{id}`"),
         );
     };
-    let matched_consolidation_id = doc
-        .get("ext")
-        .and_then(|e| e.get("consolidation"))
-        .and_then(|c| c.get("consolidation_id"))
-        .and_then(Value::as_str)
-        .map(|cid| cid == id)
-        .unwrap_or(false);
     Json(ConsolidationGetResponse {
         document: doc,
-        matched_consolidation_id,
+        matched_consolidation_id: true,
     })
     .into_response()
 }
