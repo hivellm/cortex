@@ -13,6 +13,10 @@ services:
       # default); the host-facing side moved to 17001 to dodge the
       # 15xxx conflict range.
       - "${VECTORIZER_HOST_PORT:-17001}:15002"
+      # Vectorizer binary RPC (v3.x default) — required by the
+      # `vectorizer://` SDK transport. Faster than the REST API and
+      # the canonical v3.x dial.
+      - "${VECTORIZER_RPC_HOST_PORT:-17011}:15503"
     volumes:
       - vec-data:/data
     restart: unless-stopped
@@ -23,6 +27,9 @@ services:
     networks: [cortex-net]
     ports:
       - "${NEXUS_HOST_PORT:-17002}:15474"
+      # Nexus binary RPC — required by the nexus-graph-sdk `nexus://`
+      # transport. RPC is faster than the REST `/cypher` path.
+      - "${NEXUS_RPC_HOST_PORT:-17012}:15475"
     volumes:
       # Nexus 2.x uses /app/data (Dockerfile WORKDIR=/app). The
       # earlier `/data` mount was a no-op — every recreate dropped
@@ -182,7 +189,7 @@ services:
     environment:
       CORTEX_EMBEDDER_BIND: 0.0.0.0:17022
       CORTEX_EMBEDDER_SYNAP_URL: http://synap:15500
-      CORTEX_EMBEDDER_VECTORIZER_URL: http://vectorizer:15002
+      CORTEX_EMBEDDER_VECTORIZER_URL: vectorizer://vectorizer:15503
       # phase11e §5 — credentials for the embedder's Vectorizer
       # write path. Without these, the worker hits 401 on every
       # `insert_texts` and the per-kind collections (decisions /
@@ -312,7 +319,17 @@ services:
       CORTEX_RULEBOOK_ROOTS: /workspaces/Cortex/.rulebook,/workspaces/Nexus/.rulebook,/workspaces/Synap/.rulebook,/workspaces/Vectorizer/.rulebook,/workspaces/Rulebook/.rulebook,/workspaces/Tml/.rulebook,/workspaces/HiveGPU/.rulebook,/workspaces/TmlDocs/.rulebook
       CORTEX_INGESTION_URL: http://cortex-ingestion:17010
       CORTEX_SYNAP_URL: http://synap:15500
+      # Nexus transport: HTTP is stable; RPC (nexus://nexus:15475)
+      # tested but nexus-graph-sdk 2.1 RPC connection does not
+      # auto-recover after a slow query and subsequent calls fail
+      # with `RPC id mismatch — connection is out of sync`. Stay
+      # on HTTP until the SDK ships a connection pool / reconnect
+      # path. See phase19 smoke notes.
       CORTEX_NEXUS_URL: http://nexus:15474
+      # Vectorizer URL: cortex-api uses raw reqwest for the vector
+      # lane probe + /auth/login fallback; keep HTTP here. The
+      # SDK-driven embedder worker uses its own
+      # `CORTEX_EMBEDDER_VECTORIZER_URL` that points at RPC.
       CORTEX_VECTORIZER_URL: http://vectorizer:15002
       # phase11v §1 — `cortex-ops consolidation-prune` reads
       # `CORTEX_EMBEDDER_VECTORIZER_URL` (with the EMBEDDER_ prefix)
@@ -320,7 +337,7 @@ services:
       # cannot resolve inside the cortex-api container. Mirror the
       # service URL onto the prefixed name so the prune job can log
       # in to the live Vectorizer instead of a dead loopback.
-      CORTEX_EMBEDDER_VECTORIZER_URL: http://vectorizer:15002
+      CORTEX_EMBEDDER_VECTORIZER_URL: vectorizer://vectorizer:15503
       CORTEX_EMBEDDER_VECTORIZER_USER: ${CORTEX_VECTORIZER_USER:-${CORTEX_EMBEDDER_VECTORIZER_USER:-admin}}
       CORTEX_EMBEDDER_VECTORIZER_PASSWORD: ${CORTEX_VECTORIZER_PASSWORD:-${CORTEX_EMBEDDER_VECTORIZER_PASSWORD:-cortex-dev-admin}}
       # phase11v §2 — `consolidation-prune` reads
