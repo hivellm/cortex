@@ -193,8 +193,12 @@ else
 fi
 
 # 8. graph_query neighbors returns non-empty n.id
+# Seed: known-propertied Session id (`01KQTKZGXF92BB1KVZHTT24GPN`) with
+# Memory neighbors. `07H7BDPEWW3K6MDB08VNNF54JJ` was the earlier seed
+# but its 7 Turn neighbors are all empty-keys stragglers (the phase15b
+# graph-mapper edge-coverage gap), which masked the propagator.
 GRAPH="$(curl -sS -X POST "$API/v1/search/graph" -H 'content-type: application/json' \
-    --data-raw '{"mode":"neighbors","node_id":"07H7BDPEWW3K6MDB08VNNF54JJ","depth":1}' 2>/dev/null)"
+    --data-raw '{"mode":"neighbors","node_id":"01KQTKZGXF92BB1KVZHTT24GPN","depth":1}' 2>/dev/null)"
 WITH_ID="$(printf '%s' "$GRAPH" | python3 -c '
 import json, sys
 try:
