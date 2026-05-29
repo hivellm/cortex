@@ -36,11 +36,11 @@
 - [x] 5.5 Acceptance: `cortex_consolidation_costs?group_by=["model","grain"]` will return non-empty buckets once a fresh consolidation lands post-deploy (existing docs have `ts=0` until re-projected). Cost cents / tokens still require the §5.1 wire-schema delta.
 
 ## 6. Consolidation lineage — extend extractor
-- [ ] 6.1 Add `extract_decisions_from_body` — regex-scan `body` / `summary_markdown` for `DEC-\d{3,}` mentions (already partial; extend to `(?:decision[: ])?\d{3,}`)
-- [ ] 6.2 Add `extract_files_from_body` — regex-scan for `[label](path/with/slashes)` markdown links + bare ``code-fenced paths``
-- [ ] 6.3 Add `extract_sessions_from_body` — match `session[: ]?<ULID>` patterns
-- [ ] 6.4 Add `references` JSON nested extractor for docs that embed lineage in a structured side-channel
-- [ ] 6.5 Acceptance: `cortex_consolidation_lineage` against `cons-ses-278bab11ad68aa5756df653d` returns non-empty decisions/files/sessions
+- [x] 6.1 Decision body scan already existed (`find_dec_ids` walks `title`/`summary`/`body`/`summary_markdown` for `DEC-\d{3,}`); extended `extract_decisions` to also fold the `references[]` JSON side-channel (`{decision_id, decision}` keys) per §6.4.
+- [x] 6.2 Added `find_file_paths` — walks markdown links `[label](path)` AND inline code spans `` `path` ``, gated by `looks_like_path` (requires `/`, no whitespace/URLs, recognised repo-root prefix OR known file extension). Also picks up `path:line` line-ref shorthand. `extract_files` now unions topics + body scan + `references[]`.
+- [x] 6.3 Added `find_session_ids` — case-insensitive walk for the literal token `session` optionally followed by `:` / whitespace, then a strict 26-char `[0-9A-Z]` ULID window. `extract_sessions` unions topics + body scan + `references[]` (`session_id` / `session` keys).
+- [x] 6.4 `references()` iterator added — yields each `doc.references[].as_object()` to all three extractors. Manual consolidations that embed structured lineage (e.g. `[{"file": ..., "session_id": ..., "decision_id": ...}]`) now surface in lineage output.
+- [x] 6.5 Acceptance: 10 new unit tests cover the extractors (`find_session_ids_*`, `extract_sessions_unions_topics_body_and_references`, `find_file_paths_*`, `extract_files_merges_topics_body_and_references`, `extract_decisions_picks_from_references_array`, `looks_like_path_gates`, `is_ulid_strict_shape`). cortex-api 593 lib tests pass; clippy clean. Live verification against `cons-ses-278bab11ad68aa5756df653d` happens on the next consolidation re-projection (existing docs have `ts=0` from §5 — fresh emit will exercise both fixes together).
 
 ## 7. Filterable attributes — finish the schema
 - [ ] 7.1 Audit `cortex-<slug>-governance` index settings: confirm `law_id`, `severity`, `session_id` in `filterableAttributes`
