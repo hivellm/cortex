@@ -55,6 +55,57 @@ pub mod keys {
 /// branches. The reserved name is fixed by ADR-019 §1.2.
 pub const DEFAULT_BRANCH: &str = "main";
 
+/// Phase18 §2.10 — backfill defaults for rows that pre-date the
+/// bitemporal stamp. The migration CLI walks every node and applies
+/// these rules when the column is absent:
+///
+/// - `valid_from` = `recorded_at` OR `created_at` OR `EPOCH_FALLBACK`.
+/// - `valid_to`   = NULL (absent).
+/// - `branch_id`  = `"main"`.
+/// - `lifecycle`  = derived from existing `status` when present:
+///     - `"superseded"` → superseded
+///     - `"deprecated"` → deprecated
+///     - anything else  → `"active"`
+/// - `project_id` = lower-cased `context_repo` OR `"unknown"`.
+///
+/// `EPOCH_FALLBACK` is the canonical pre-Cortex zero value — a
+/// node with no timestamp anchor lands here so range probes never
+/// see `valid_from = NULL`.
+pub const EPOCH_FALLBACK: &str = "1970-01-01T00:00:00Z";
+
+/// Phase18 §2.10 — derive a lifecycle label from an existing
+/// `status` value. Maps the historical Decision /
+/// LawViolation / Analysis `status` vocabulary onto the bitemporal
+/// `lifecycle` axis used by the temporal classifier (§3). Anything
+/// not in the table maps to `"active"`.
+pub fn lifecycle_from_status(status: Option<&str>) -> &'static str {
+    match status.map(str::trim).unwrap_or("") {
+        "superseded" => "superseded",
+        "deprecated" => "deprecated",
+        "abandoned" => "abandoned",
+        "merged" => "merged",
+        "proposed" => "proposed",
+        _ => "active",
+    }
+}
+
+/// Phase18 §2.10 — pick a `valid_from` per the backfill chain.
+/// `recorded_at` wins; `created_at` next; `EPOCH_FALLBACK` last.
+/// All inputs are RFC3339 strings; the helper does NOT re-parse —
+/// the migration CLI is responsible for normalising at read time.
+pub fn valid_from_fallback_chain<'a>(
+    recorded_at: Option<&'a str>,
+    created_at: Option<&'a str>,
+) -> &'a str {
+    if let Some(s) = recorded_at.map(str::trim).filter(|s| !s.is_empty()) {
+        return s;
+    }
+    if let Some(s) = created_at.map(str::trim).filter(|s| !s.is_empty()) {
+        return s;
+    }
+    EPOCH_FALLBACK
+}
+
 /// Apply the bitemporal stamp to every node in `patch`. Idempotent —
 /// values already set by the per-kind emitter survive. The call
 /// belongs at the END of `map_event_to_patch`.
@@ -272,6 +323,49 @@ mod tests {
                 .and_then(|v| v.as_str()),
             Some("unknown")
         );
+    }
+
+    #[test]
+    fn lifecycle_from_status_maps_known_values() {
+        assert_eq!(lifecycle_from_status(Some("superseded")), "superseded");
+        assert_eq!(lifecycle_from_status(Some("deprecated")), "deprecated");
+        assert_eq!(lifecycle_from_status(Some("abandoned")), "abandoned");
+        assert_eq!(lifecycle_from_status(Some("merged")), "merged");
+        assert_eq!(lifecycle_from_status(Some("proposed")), "proposed");
+    }
+
+    #[test]
+    fn lifecycle_from_status_defaults_to_active_for_unknown_or_empty() {
+        assert_eq!(lifecycle_from_status(None), "active");
+        assert_eq!(lifecycle_from_status(Some("")), "active");
+        assert_eq!(lifecycle_from_status(Some("   ")), "active");
+        assert_eq!(lifecycle_from_status(Some("accepted")), "active");
+        assert_eq!(lifecycle_from_status(Some("draft")), "active");
+    }
+
+    #[test]
+    fn valid_from_fallback_chain_prefers_recorded_then_created_then_epoch() {
+        assert_eq!(
+            valid_from_fallback_chain(Some("2026-04-01T00:00:00Z"), Some("2025-12-01T00:00:00Z")),
+            "2026-04-01T00:00:00Z"
+        );
+        assert_eq!(
+            valid_from_fallback_chain(None, Some("2025-12-01T00:00:00Z")),
+            "2025-12-01T00:00:00Z"
+        );
+        assert_eq!(valid_from_fallback_chain(None, None), EPOCH_FALLBACK);
+        // Empty / whitespace inputs skip the slot.
+        assert_eq!(
+            valid_from_fallback_chain(Some("   "), Some("2025-12-01T00:00:00Z")),
+            "2025-12-01T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn epoch_fallback_is_canonical_rfc3339() {
+        assert_eq!(EPOCH_FALLBACK, "1970-01-01T00:00:00Z");
+        assert!(EPOCH_FALLBACK.ends_with('Z'));
+        assert_eq!(EPOCH_FALLBACK.len(), "YYYY-MM-DDTHH:MM:SSZ".len());
     }
 
     #[test]
