@@ -266,9 +266,9 @@ mod tests {
             Some("2023-11-14T22:13:20Z")
         );
         assert_eq!(n.props.get(keys::LIFECYCLE).and_then(|v| v.as_str()), Some("active"));
-        assert!(n.props.get(keys::VALID_TO).is_none(), "valid_to defaults absent");
+        assert!(!n.props.contains_key(keys::VALID_TO), "valid_to defaults absent");
         assert!(
-            n.props.get(keys::SUPERSEDED_AT).is_none(),
+            !n.props.contains_key(keys::SUPERSEDED_AT),
             "superseded_at defaults absent"
         );
     }

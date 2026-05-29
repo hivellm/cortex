@@ -202,6 +202,12 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
         budget_bytes: None,
+        as_of: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
     };
     let req_beta = QueryRequest {
         intent: Intent::FreeSearch,
@@ -212,6 +218,12 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
         budget_bytes: None,
+        as_of: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
     };
     let (resp_alpha, _) = orch.run(&req_alpha).await;
     let (resp_beta, _) = orch.run(&req_beta).await;
@@ -264,6 +276,12 @@ async fn fail_open_when_vectorizer_unreachable_through_orchestrator() {
         include: vec![IncludeField::Snippets],
         budget_ms: 1000,
         budget_bytes: None,
+        as_of: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.snippets.is_empty());

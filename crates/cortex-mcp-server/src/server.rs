@@ -273,8 +273,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            30,
-            "phase20 §10 adds cortex_feedback_record (29 -> 30) — companion writer for cortex_feedback_signals"
+            35,
+            "phase18 §4.6 adds 5 timeline/branch tools (30 -> 35)"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [

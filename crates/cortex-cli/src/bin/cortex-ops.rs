@@ -63,6 +63,12 @@ mod rollup;
 mod schedule_cmd;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
+#[path = "cortex-ops/branch_cmd.rs"]
+mod branch_cmd;
+#[path = "cortex-ops/query_cmd.rs"]
+mod query_cmd;
+#[path = "cortex-ops/timeline.rs"]
+mod timeline;
 #[path = "cortex-ops/tool_call_digest_live.rs"]
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
@@ -935,6 +941,119 @@ enum Command {
         #[command(subcommand)]
         command: GraphCommand,
     },
+    /// Phase18 §4.3 — POST a query to `cortex-api`'s `/v1/query`
+    /// with the new optional `--as-of` / `--branch` / `--projects`
+    /// fields. The orchestrator's phase18 §3.3 wedge applies the
+    /// temporal classifier automatically.
+    Query {
+        /// Free-text prompt.
+        query: String,
+        /// Render the response as it would be believed at this
+        /// point in valid time. Accepts RFC-3339 or `YYYY-MM-DD`.
+        #[arg(long, value_name = "RFC3339|DATE")]
+        as_of: Option<String>,
+        /// Branch to retrieve from (defaults to `<project>:main`
+        /// per ADR-019). Composite id form: `<project>:<branch>`.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Cross-project axis activation: extra projects whose
+        /// facts the orchestrator unions into the candidate set
+        /// (default-off per ADR-020).
+        #[arg(long, value_name = "PROJECT", num_args = 0..)]
+        projects: Vec<String>,
+        /// Override the cortex-api base URL.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Override the intent label.
+        #[arg(long)]
+        intent: Option<String>,
+        /// Max snippets surfaced.
+        #[arg(long, default_value_t = 10)]
+        limit: u32,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase18 §4.3 — print every `TimelineEvent` row tagged with
+    /// the entity, ordered by `valid_from_unix DESC`. Optional
+    /// `--as-of` restricts to events recorded ≤ that time.
+    History {
+        /// Entity id to walk (ULID / ADR id / etc.).
+        entity_id: String,
+        /// Optional valid-time cap.
+        #[arg(long, value_name = "RFC3339|DATE")]
+        as_of: Option<String>,
+        /// Override the Nexus base URL.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Max rows returned.
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase18 §4.3 — walk the `SUPERSEDES` chain off the entity in
+    /// both directions. The classifier reads the same edges to
+    /// derive the SUPERSEDED state (ADR-023 §1.6).
+    Supersession {
+        /// Entity id at the centre of the lineage.
+        entity_id: String,
+        /// Override the Nexus base URL.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase18 §4.2 — branch operator commands. Manages `Branch`
+    /// nodes (spec 32): list / show / create / merge / abandon.
+    /// All five subcommands talk to Nexus directly via the
+    /// shared `LiveNexusClient`.
+    Branch {
+        #[command(subcommand)]
+        command: BranchCommand,
+    },
+    /// Phase18 §4.1 — render the timeline of `TimelineEvent` nodes
+    /// for a project. Reads from Nexus, applies the optional
+    /// branch / kind / valid-time / as-of filters, and prints
+    /// either a plain-text table or JSON. The branch filter
+    /// defaults to the project's `main` per ADR-019.
+    Timeline {
+        /// Project the timeline belongs to (matches
+        /// `TimelineEvent.project_id`).
+        project: String,
+        /// Render the timeline as it was believed at this point
+        /// in valid time. Accepts RFC-3339 or `YYYY-MM-DD`
+        /// (ADR-018). Defaults to "now".
+        #[arg(long, value_name = "RFC3339|DATE")]
+        as_of: Option<String>,
+        /// Branch name (matches `TimelineEvent.branch_id` under
+        /// `<project>:<branch>`). Defaults to `main`.
+        #[arg(long)]
+        branch: Option<String>,
+        /// Restrict to one timeline kind (see
+        /// `TimelineKind::as_str` for the discriminator set).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Lower bound on `valid_from_unix`. Same date forms as
+        /// `--as-of`.
+        #[arg(long, value_name = "RFC3339|DATE")]
+        from: Option<String>,
+        /// Upper bound on `valid_from_unix`.
+        #[arg(long, value_name = "RFC3339|DATE")]
+        to: Option<String>,
+        /// Max rows returned.
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+        /// Override the Nexus base URL. Defaults to
+        /// `$CORTEX_NEXUS_URL` then `http://127.0.0.1:17002`.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase11p §4.3 — dedupe `law.imported` documents on every
     /// `cortex-{slug}-governance` Meili index. Groups documents by
     /// `(law_id, content_hash)`; for each duplicate group, keeps the
@@ -996,6 +1115,91 @@ enum Command {
         #[arg(long)]
         apply: bool,
         /// Emit JSON instead of plain text.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
+#[derive(Subcommand)]
+enum BranchCommand {
+    /// List every branch for a project.
+    List {
+        /// Project slug.
+        project: String,
+        /// Nexus base URL override.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON instead of the table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one branch's full payload.
+    Show {
+        /// Project slug.
+        project: String,
+        /// Branch name (`main` reserved per ADR-019).
+        branch: String,
+        /// Nexus base URL override.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON instead of the indented payload.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fork a new branch off `<from>` at an optional `--valid-time`
+    /// anchor (RFC-3339 or `YYYY-MM-DD`).
+    Create {
+        /// Project slug.
+        project: String,
+        /// New branch name (ADR-019 regex).
+        #[arg(long)]
+        name: String,
+        /// Parent branch name to fork from.
+        #[arg(long)]
+        from: String,
+        /// Fork anchor in valid-time. Optional; ADR-018 second-precision.
+        #[arg(long, value_name = "RFC3339|DATE")]
+        valid_time: Option<String>,
+        /// Nexus base URL override.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Fold a branch into its parent with one of the ADR-021
+    /// merge strategies (`accept` / `partial` / `discard`).
+    Merge {
+        /// Project slug.
+        project: String,
+        /// Branch to merge.
+        branch: String,
+        /// Merge strategy.
+        #[arg(long, value_name = "accept|partial|discard")]
+        strategy: String,
+        /// Nexus base URL override.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Abandon a branch with a free-text reason (ADR-022). Updates
+    /// `status` + `abandonment_reason`; does not write a
+    /// `MERGED_INTO` edge.
+    Abandon {
+        /// Project slug.
+        project: String,
+        /// Branch to abandon.
+        branch: String,
+        /// Free-text reason (required).
+        #[arg(long)]
+        reason: String,
+        /// Nexus base URL override.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Emit JSON.
         #[arg(long)]
         json: bool,
     },
@@ -1466,6 +1670,74 @@ fn main() -> ExitCode {
             metadata_db,
             json,
         } => metadata::sessions_backfill_tool(tool, dry_run, apply, limit, metadata_db, json),
+        Command::Timeline {
+            project,
+            as_of,
+            branch,
+            kind,
+            from,
+            to,
+            limit,
+            nexus,
+            json,
+        } => timeline::timeline(project, as_of, branch, kind, from, to, limit, nexus, json),
+        Command::Query {
+            query,
+            as_of,
+            branch,
+            projects,
+            api_url,
+            intent,
+            limit,
+            json,
+        } => query_cmd::query(query, as_of, branch, projects, api_url, intent, limit, json),
+        Command::History {
+            entity_id,
+            as_of,
+            nexus,
+            limit,
+            json,
+        } => query_cmd::history(entity_id, as_of, nexus, limit, json),
+        Command::Supersession {
+            entity_id,
+            nexus,
+            json,
+        } => query_cmd::supersession(entity_id, nexus, json),
+        Command::Branch { command } => match command {
+            BranchCommand::List {
+                project,
+                nexus,
+                json,
+            } => branch_cmd::branch_list(project, nexus, json),
+            BranchCommand::Show {
+                project,
+                branch,
+                nexus,
+                json,
+            } => branch_cmd::branch_show(project, branch, nexus, json),
+            BranchCommand::Create {
+                project,
+                name,
+                from,
+                valid_time,
+                nexus,
+                json,
+            } => branch_cmd::branch_create(project, name, from, valid_time, nexus, json),
+            BranchCommand::Merge {
+                project,
+                branch,
+                strategy,
+                nexus,
+                json,
+            } => branch_cmd::branch_merge(project, branch, strategy, nexus, json),
+            BranchCommand::Abandon {
+                project,
+                branch,
+                reason,
+                nexus,
+                json,
+            } => branch_cmd::branch_abandon(project, branch, reason, nexus, json),
+        },
         Command::Graph { command } => match command {
             GraphCommand::Drop {
                 confirm,

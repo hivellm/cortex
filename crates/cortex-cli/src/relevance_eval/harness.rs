@@ -138,6 +138,12 @@ impl SnippetFetcher for HttpFetcher {
             include: query.include.clone().unwrap_or_else(default_include),
             budget_ms: self.budget_ms,
             budget_bytes: None,
+            as_of: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
         };
         let url = format!("{}/v1/query", self.base.trim_end_matches('/'));
         let resp = self

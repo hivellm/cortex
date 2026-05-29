@@ -236,6 +236,12 @@ pub async fn handle_query_explain(
         ],
         budget_ms: 500,
         budget_bytes: None,
+        as_of: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
     };
     let recency_lambda = resolve_recency_lambda(&query_req);
 
@@ -384,6 +390,12 @@ mod tests {
             include: vec![IncludeField::Snippets],
             budget_ms: 500,
             budget_bytes: None,
+            as_of: None,
+                branch: None,
+                projects: None,
+                include_history: None,
+                include_future: None,
+                include_branches: None,
         }
     }
 

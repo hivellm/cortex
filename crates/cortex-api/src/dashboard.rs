@@ -430,6 +430,12 @@ pub(crate) fn dashboard_memory_query(q: &str, limit: usize) -> QueryRequest {
         include: vec![IncludeField::Snippets],
         budget_ms: 200,
         budget_bytes: None,
+        as_of: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
     }
 }
 

@@ -63,6 +63,16 @@ pub const LANE_EXTRAS_KEYS: &[&str] = &[
     "summary",
     "law_id",
     "severity",
+    // Phase18 §3.3 — bitemporal axes. Stamped by Meili / Vectorizer
+    // projections when the upstream document carries them; the
+    // orchestrator reads them off `LaneHit::extras` to build a
+    // `temporal::classifier::Candidate` for the post-fusion wedge.
+    "project_id",
+    "branch_id",
+    "lifecycle",
+    "valid_from_unix",
+    "valid_to_unix",
+    "superseded_at_unix",
 ];
 
 /// Phase11e §3 — sentinel `doc_id` prefix for synthetic

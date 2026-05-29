@@ -106,6 +106,7 @@ pub use search::query_rewrite;
 pub use search::relevance_config;
 pub use search::search_proxy;
 pub use search::strategies;
+pub use search::timeline_routes;
 pub use search::tool_calls;
 pub use search::topic_search;
 pub use security::acl;

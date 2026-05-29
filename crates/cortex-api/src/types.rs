@@ -164,6 +164,33 @@ pub struct QueryRequest {
     /// tightens or loosens the clipper's budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_bytes: Option<usize>,
+    /// Phase18 §4.4/§4.5 — bitemporal `as_of` anchor (RFC-3339 or
+    /// `YYYY-MM-DD` per ADR-018). Missing defaults to wall-clock
+    /// "now" so existing callers stay unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
+    /// Phase18 §4.4/§4.5 — branch composite id (`<project>:<branch>`)
+    /// per ADR-019. Missing defaults to `<scope.repo>:main`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Phase18 §4.4/§4.5 — cross-project axis activation list per
+    /// ADR-020. Default empty (cross-project off); explicit
+    /// `Some(["a", "b"])` unions facts from those projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projects: Option<Vec<String>>,
+    /// Phase18 §4.4/§4.5 — opt-in to drop the classifier's default
+    /// `Drop` action for SUPERSEDED / EXPIRED hits (they get
+    /// demoted instead). Off by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_history: Option<bool>,
+    /// Phase18 §4.4/§4.5 — opt-in to keep NOT_YET_VALID hits
+    /// (planning queries). Off by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_future: Option<bool>,
+    /// Phase18 §4.4/§4.5 — opt-in to keep ABANDONED branch hits.
+    /// Off by default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_branches: Option<bool>,
 }
 
 fn default_limit() -> usize {

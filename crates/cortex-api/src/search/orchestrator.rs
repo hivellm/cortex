@@ -13,6 +13,11 @@ use serde_json::json;
 
 use crate::fusion::{rrf_fuse, FusionConfig};
 use crate::lanes::{is_collection_missing_marker, GraphLane, KeywordLane, LaneHit, VectorLane};
+use cortex_config::TemporalConfig;
+use cortex_workers::temporal::classifier::{
+    classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
+    TemporalConfig as ClassifierConfig,
+};
 use crate::query_rewrite::{PassthroughRewriter, QueryRewriter, RewrittenQuery};
 use crate::strategies::{build_plan, Overlay, Plan};
 use crate::types::{
@@ -40,6 +45,12 @@ pub struct Orchestrator {
     /// the active config in place; in-flight requests pick up the
     /// new snapshot on their next `current_fusion()` read.
     pub fusion: Arc<RwLock<FusionConfig>>,
+    /// Phase18 §3.3 — bitemporal classifier config. Mirrors the
+    /// fusion handle (Arc<RwLock<_>>) so SIGHUP-driven reloads swap
+    /// the snapshot in place. Default leaves the classifier
+    /// enabled with the design.md §2.2 tuning; the live binary
+    /// overrides via `with_temporal` at boot.
+    pub temporal: Arc<RwLock<TemporalConfig>>,
     /// Phase6f — pre-fan-out query rewriter. Defaults to
     /// [`PassthroughRewriter`] so existing constructors and tests
     /// reproduce today's behaviour. The live binary swaps in
@@ -63,8 +74,33 @@ impl Orchestrator {
             keyword,
             graph,
             fusion: Arc::new(RwLock::new(FusionConfig::default())),
+            temporal: Arc::new(RwLock::new(TemporalConfig::default())),
             rewriter: Arc::new(PassthroughRewriter),
         }
+    }
+
+    /// Phase18 §3.3 — install a non-default temporal config at boot.
+    /// Mirrors [`Orchestrator::with_fusion`] so the binary can
+    /// thread `relevance.toml`'s `[temporal]` block into the live
+    /// handle.
+    pub fn with_temporal(self, temporal: TemporalConfig) -> Self {
+        *self.temporal.write().expect("temporal lock poisoned") = temporal;
+        self
+    }
+
+    /// Phase18 §3.3 — hot-replace the live temporal config (SIGHUP
+    /// reload path; matches `replace_fusion`).
+    pub fn replace_temporal(&self, temporal: TemporalConfig) {
+        *self.temporal.write().expect("temporal lock poisoned") = temporal;
+    }
+
+    /// Phase18 §3.3 — clone the current temporal snapshot. Cheap
+    /// (single read lock) so the wedge can call it once per request.
+    pub fn current_temporal(&self) -> TemporalConfig {
+        self.temporal
+            .read()
+            .expect("temporal lock poisoned")
+            .clone()
     }
 
     /// Phase6c — replace the default fusion config with one parsed
@@ -282,6 +318,46 @@ impl Orchestrator {
             ],
             &fusion_snapshot,
         );
+
+        // Phase18 §3.3 — temporal classifier wedge. Runs after RRF
+        // fusion and before the anchor-dedupe + truncate so dropped
+        // hits never reach the snippet section, and demoted hits
+        // are reordered by the multiplier before truncation. The
+        // classifier reads the bitemporal axes
+        // (`valid_from_unix` / `valid_to_unix` / `superseded_at_unix`
+        // / `lifecycle`) off each `LaneHit::extras` map — projected
+        // there by the Meili / Vectorizer lane builders per
+        // phase18 §2.6. Hits that lack the axes (pre-migration
+        // rows) flow through as VALID via the
+        // `temporal::classifier::derive_state` defaults.
+        let temporal_snapshot = self.current_temporal();
+        if temporal_snapshot.enabled {
+            let as_of_override = parse_as_of_to_unix(req.as_of.as_deref());
+            let flag_overrides = IncludeFlags {
+                include_history: req.include_history.unwrap_or(false),
+                include_future: req.include_future.unwrap_or(false),
+                include_branches: req.include_branches.unwrap_or(false),
+            };
+            apply_temporal_classifier(
+                &mut fused,
+                &temporal_snapshot,
+                &response.query_id,
+                as_of_override,
+                flag_overrides,
+            );
+            // Phase18 §3.9 — branch_resolution envelope. Derives
+            // `project` from the canonical scope.repo (every live
+            // request resolves to a single repo at this point); the
+            // ancestry chain defaults to `<project>:main` when the
+            // request surface adds a caller-supplied branch (§4 P3).
+            let project = req.scope.repo.as_deref().unwrap_or("cortex");
+            emit_branch_resolution_envelope(
+                &response.query_id,
+                project,
+                req.branch.as_deref(),
+            );
+        }
+
         // Post-fusion dedupe + degenerate-hit filter. `rrf_fuse` only
         // dedupes by `doc_id`, so the same artifact lands twice when
         // the keyword lane (`meili|...`) and vector lane (`vec|...`)
@@ -376,6 +452,223 @@ struct LaneOutcome {
     hits: Vec<LaneHit>,
     elapsed_ms: Option<u64>,
     error: Option<String>,
+}
+
+/// Phase18 §3.3 — translate the cortex-config snapshot into the
+/// classifier's pure config struct (the workers crate intentionally
+/// stays decoupled from `cortex-config` so the classifier remains
+/// callable from non-API binaries).
+fn classifier_config_from(snapshot: &TemporalConfig) -> ClassifierConfig {
+    ClassifierConfig {
+        temporal_boost: snapshot.temporal_boost,
+        temporal_window_seconds: i64::from(snapshot.temporal_window_days) * 24 * 60 * 60,
+        demote_factor: snapshot.demote_factor,
+    }
+}
+
+/// Phase18 §3.3 — read a single `i64` epoch-second column from a
+/// `LaneHit::extras` map. The Meili / Vectorizer projection stamps
+/// the value as either an integer (`i64`) or a string (legacy
+/// rows); both shapes round-trip through `as_i64` first, then a
+/// numeric-string fallback. Absent / unparseable columns return
+/// `None` so the classifier treats the row as a pre-migration
+/// VALID hit instead of mis-dating it.
+fn extras_as_unix(hit: &LaneHit, key: &str) -> Option<i64> {
+    let v = hit.extras.get(key)?;
+    if let Some(n) = v.as_i64() {
+        return Some(n);
+    }
+    if let Some(s) = v.as_str() {
+        if let Ok(n) = s.parse::<i64>() {
+            return Some(n);
+        }
+    }
+    None
+}
+
+/// Phase18 §3.3 — Build a `Candidate` view of a fused hit. The
+/// classifier is pure, so this helper does no I/O — it just maps
+/// the `extras` map to the typed candidate the state machine
+/// expects.
+fn candidate_from_hit(hit: &LaneHit) -> TemporalCandidate {
+    let lifecycle = hit
+        .extras
+        .get("lifecycle")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "active" => Some("active"),
+            "deprecated" => Some("deprecated"),
+            "abandoned" => Some("abandoned"),
+            "archived" => Some("archived"),
+            _ => None,
+        });
+    TemporalCandidate {
+        valid_from_unix: extras_as_unix(hit, "valid_from_unix"),
+        valid_to_unix: extras_as_unix(hit, "valid_to_unix"),
+        superseded_at_unix: extras_as_unix(hit, "superseded_at_unix"),
+        lifecycle,
+    }
+}
+
+/// Phase18 §3.3 — wedge the temporal classifier between RRF fusion
+/// and the anchor-dedupe. Iterates the fused candidate list, runs
+/// `classify()` per hit, and applies the resulting action:
+///
+/// - `Drop`           → remove the hit from the candidate set.
+/// - `Pass {mult}`    → `hit.score *= mult` (`mult = 1.0` for VALID).
+/// - `Demote {factor}`→ `hit.score *= factor`.
+///
+/// After scoring the list is re-sorted descending by score so the
+/// downstream truncate keeps the top-K post-classifier. The
+/// `include_*` flags currently default to false (current-scope-only
+/// retrieval) until the request surface adds the
+/// `include_history` / `include_future` / `include_branches`
+/// switches (phase18 §4 P3 on the request type).
+fn apply_temporal_classifier(
+    fused: &mut Vec<LaneHit>,
+    snapshot: &TemporalConfig,
+    query_id: &str,
+    as_of_override: Option<i64>,
+    flag_overrides: IncludeFlags,
+) {
+    let classifier_cfg = classifier_config_from(snapshot);
+    let flags = IncludeFlags {
+        include_history: flag_overrides.include_history || snapshot.include_history_default,
+        include_future: flag_overrides.include_future,
+        include_branches: flag_overrides.include_branches,
+    };
+    // `as_of` defaults to the wall clock; the request surface
+    // (phase18 §4.4 / §4.5) lets the caller pin a historical
+    // instant via the body's `as_of` field. The orchestrator
+    // parses the RFC-3339 / day-precision string at the call
+    // site and threads the resulting epoch second through here.
+    let now = as_of_override.unwrap_or_else(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+            .unwrap_or(0)
+    });
+    let mut kept: Vec<LaneHit> = Vec::with_capacity(fused.len());
+    let mut state_counts: std::collections::BTreeMap<&'static str, u32> =
+        std::collections::BTreeMap::new();
+    let mut action_counts: std::collections::BTreeMap<&'static str, u32> =
+        std::collections::BTreeMap::new();
+    for mut hit in std::mem::take(fused) {
+        let candidate = candidate_from_hit(&hit);
+        let (state, action) = classify(&candidate, now, flags, &classifier_cfg);
+        *state_counts.entry(state.as_str()).or_insert(0) += 1;
+        let action_label = match action {
+            TemporalAction::Drop => "drop",
+            TemporalAction::Pass { multiplier } => {
+                if (multiplier - 1.0).abs() < f32::EPSILON {
+                    "pass"
+                } else {
+                    "boost"
+                }
+            }
+            TemporalAction::Demote { .. } => "demote",
+        };
+        *action_counts.entry(action_label).or_insert(0) += 1;
+        // Phase18 §3.9 — per-hit `temporal_classification` envelope
+        // on the `cortex_audit` tracing target. Operators tail this
+        // channel to debug "why did Cortex drop this fact" without
+        // having to run the query through the explain path.
+        tracing::event!(
+            target: "cortex_audit",
+            tracing::Level::INFO,
+            kind = "temporal_classification",
+            query_id = %query_id,
+            doc_id = %hit.doc_id,
+            state = %state.as_str(),
+            action = %action_label,
+            as_of_unix = now,
+        );
+        match action {
+            TemporalAction::Drop => continue,
+            TemporalAction::Pass { multiplier } => {
+                hit.score *= f64::from(multiplier);
+                kept.push(hit);
+            }
+            TemporalAction::Demote { factor } => {
+                hit.score *= f64::from(factor);
+                kept.push(hit);
+            }
+        }
+    }
+    // Stable sort by adjusted score, ties broken by original order.
+    kept.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    // Phase18 §3.9 — one rollup envelope per request so the
+    // dashboard can chart "evaluated / dropped / boosted / demoted"
+    // ratios without joining the per-hit stream.
+    tracing::event!(
+        target: "cortex_audit",
+        tracing::Level::INFO,
+        kind = "temporal_classification_summary",
+        query_id = %query_id,
+        evaluated = state_counts.values().sum::<u32>(),
+        valid = state_counts.get("valid").copied().unwrap_or(0),
+        temporal = state_counts.get("temporal").copied().unwrap_or(0),
+        superseded = state_counts.get("superseded").copied().unwrap_or(0),
+        expired = state_counts.get("expired").copied().unwrap_or(0),
+        not_yet_valid = state_counts.get("not_yet_valid").copied().unwrap_or(0),
+        abandoned = state_counts.get("abandoned").copied().unwrap_or(0),
+        drops = action_counts.get("drop").copied().unwrap_or(0),
+        boosts = action_counts.get("boost").copied().unwrap_or(0),
+        demotes = action_counts.get("demote").copied().unwrap_or(0),
+    );
+    *fused = kept;
+}
+
+/// Phase18 §3.9 — emit a `branch_resolution` envelope on the
+/// `cortex_audit` channel. Today's orchestrator does not yet
+/// receive a caller-supplied branch (phase18 §4 P3 extends the
+/// request surface with `branch`), so the default chain is the
+/// canonical root `<project>:main`. Once the request carries the
+/// branch + an in-process parent map, the wedge call site swaps
+/// the singleton chain for the full ancestry walk.
+fn emit_branch_resolution_envelope(query_id: &str, project: &str, branch_override: Option<&str>) {
+    use cortex_workers::temporal::branch_filter::{compose_id, DEFAULT_BRANCH};
+    // Resolve the requested branch composite id: an explicit `req.branch`
+    // either ships pre-composed (`<project>:<branch>`) or as the bare
+    // branch name. The walker normalises both shapes before stamping.
+    let resolved = match branch_override.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) if s.contains(':') => s.to_string(),
+        Some(s) => compose_id(project, s),
+        None => compose_id(project, DEFAULT_BRANCH),
+    };
+    // Today's call site does not hydrate a parent_map (phase18 §3.5 ships
+    // the helper; the per-request cache lands with the §4 surface). Stamp
+    // the singleton chain — the audit consumer sees the requested branch
+    // even when the parent walk is a no-op.
+    let chain = vec![resolved.clone()];
+    tracing::event!(
+        target: "cortex_audit",
+        tracing::Level::INFO,
+        kind = "branch_resolution",
+        query_id = %query_id,
+        branch = %resolved,
+        ancestry_chain = ?chain,
+    );
+}
+
+/// Phase18 §4.4 — parse the request's `as_of` field into epoch
+/// seconds. Accepts RFC-3339 or `YYYY-MM-DD` per ADR-018; empty
+/// / unparseable input falls through to `None` so the wedge uses
+/// the wall clock.
+fn parse_as_of_to_unix(raw: Option<&str>) -> Option<i64> {
+    let s = raw.map(str::trim).filter(|s| !s.is_empty())?;
+    let normalized = if s.len() == 10 && s.chars().filter(|c| *c == '-').count() == 2 {
+        format!("{s}T00:00:00Z")
+    } else {
+        s.to_string()
+    };
+    chrono::DateTime::parse_from_rfc3339(&normalized)
+        .ok()
+        .map(|dt| dt.timestamp())
 }
 
 /// Phase11e §3 — strip every synthetic missing-collection marker
@@ -980,5 +1273,133 @@ mod tests {
         // The vector-lane hit's `lane_label` MUST report the
         // typed source instead of the legacy extras fallback.
         assert_eq!(super::lane_label(&vector_hit), "vector");
+    }
+
+    // -----------------------------------------------------------
+    // Phase18 §3.3 — temporal classifier wedge pins.
+    // -----------------------------------------------------------
+
+    fn now_unix() -> i64 {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap()
+    }
+
+    fn hit_with_extras(doc_id: &str, score: f64, extras: &[(&str, serde_json::Value)]) -> LaneHit {
+        let mut props = crate::types::Props::new();
+        for (k, v) in extras {
+            props.insert((*k).to_string(), v.clone());
+        }
+        LaneHit {
+            doc_id: doc_id.to_string(),
+            text: format!("body-{doc_id}"),
+            repo: Some("cortex".into()),
+            path: Some(format!("path/{doc_id}.rs")),
+            symbol: Some(format!("sym_{doc_id}")),
+            content_hash: None,
+            score,
+            ts: 0,
+            severity: None,
+            extras: props,
+            overlay: crate::lanes::Overlay::default(),
+        }
+    }
+
+    #[test]
+    fn temporal_wedge_drops_superseded_hits_under_default_flags() {
+        // SUPERSEDED + include_history=false → drop.
+        let past = now_unix() - 86_400;
+        let mut hits = vec![
+            hit_with_extras("alive", 1.0, &[]),
+            hit_with_extras(
+                "dead",
+                2.0,
+                &[("superseded_at_unix", serde_json::json!(past))],
+            ),
+        ];
+        let cfg = TemporalConfig::default();
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        assert_eq!(hits.len(), 1, "superseded hit must drop by default");
+        assert_eq!(hits[0].doc_id, "alive");
+    }
+
+    #[test]
+    fn temporal_wedge_passes_valid_hits_unchanged() {
+        // No bitemporal columns ⇒ VALID ⇒ score unchanged.
+        let mut hits = vec![
+            hit_with_extras("a", 1.0, &[]),
+            hit_with_extras("b", 0.5, &[]),
+        ];
+        let cfg = TemporalConfig::default();
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        assert_eq!(hits.len(), 2);
+        // Sort is descending by score; `a` (1.0) must lead `b` (0.5).
+        assert_eq!(hits[0].doc_id, "a");
+        assert_eq!(hits[1].doc_id, "b");
+        assert!((hits[0].score - 1.0).abs() < 1e-9);
+        assert!((hits[1].score - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn temporal_wedge_boosts_temporal_state_by_configured_multiplier() {
+        // `valid_to` lands inside the recency window ⇒ TEMPORAL ⇒
+        // score *= 1.10 (design.md §2.2 default).
+        let now = now_unix();
+        let mut hits = vec![hit_with_extras(
+            "soon",
+            1.0,
+            &[("valid_to_unix", serde_json::json!(now + 3600))],
+        )];
+        let cfg = TemporalConfig::default();
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        assert_eq!(hits.len(), 1);
+        let expected = 1.0 * f64::from(cfg.temporal_boost);
+        assert!(
+            (hits[0].score - expected).abs() < 1e-6,
+            "score must be boosted by temporal_boost ({} got {})",
+            expected,
+            hits[0].score
+        );
+    }
+
+    #[test]
+    fn temporal_wedge_demotes_superseded_when_include_history_default_set() {
+        // `include_history_default = true` ⇒ SUPERSEDED demoted, not dropped.
+        let past = now_unix() - 86_400;
+        let mut hits = vec![hit_with_extras(
+            "dead",
+            2.0,
+            &[("superseded_at_unix", serde_json::json!(past))],
+        )];
+        let cfg = TemporalConfig {
+            include_history_default: true,
+            ..TemporalConfig::default()
+        };
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        assert_eq!(hits.len(), 1, "demoted hits are kept");
+        let expected = 2.0 * f64::from(cfg.demote_factor);
+        assert!((hits[0].score - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn temporal_wedge_reorders_post_score_descending() {
+        // Pre-wedge order: low-score VALID first, high-score TEMPORAL second.
+        // Post-wedge: TEMPORAL (boosted) must lead.
+        let now = now_unix();
+        let mut hits = vec![
+            hit_with_extras("low_valid", 1.0, &[]),
+            hit_with_extras(
+                "high_temporal",
+                0.95,
+                &[("valid_to_unix", serde_json::json!(now + 86_400))],
+            ),
+        ];
+        let cfg = TemporalConfig::default();
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        assert_eq!(hits[0].doc_id, "high_temporal");
     }
 }

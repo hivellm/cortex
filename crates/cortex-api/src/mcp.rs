@@ -115,6 +115,34 @@ fn input_schema() -> Value {
                 "default": 32768,
                 "description": "Max serialised JSON bytes for the response. Phase11c — keeps the bundle under the MCP transport's per-tool-result cap. Caller can tighten / loosen; omit for the 32 KiB default.",
             },
+            "as_of": {
+                "type": "string",
+                "description": "Phase18 §4.4 — render the response as it would be believed at this point in valid time (ADR-018 second-precision). Accepts RFC-3339 or `YYYY-MM-DD`. Missing defaults to wall-clock now.",
+            },
+            "branch": {
+                "type": "string",
+                "description": "Phase18 §4.4 — branch composite id `<project>:<branch>` (ADR-019). Missing defaults to `<scope.repo>:main`.",
+            },
+            "projects": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Phase18 §4.4 — cross-project axis activation list (ADR-020). Default off; explicit list unions facts from those projects into the candidate set.",
+            },
+            "include_history": {
+                "type": "boolean",
+                "default": false,
+                "description": "Phase18 §4.4 — demote SUPERSEDED/EXPIRED candidates instead of dropping them. Default off.",
+            },
+            "include_future": {
+                "type": "boolean",
+                "default": false,
+                "description": "Phase18 §4.4 — keep NOT_YET_VALID candidates (planning queries). Default off.",
+            },
+            "include_branches": {
+                "type": "boolean",
+                "default": false,
+                "description": "Phase18 §4.4 — keep ABANDONED branch hits when the caller scopes a specific branch. Default off.",
+            },
         },
     })
 }

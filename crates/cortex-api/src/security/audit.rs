@@ -291,6 +291,12 @@ mod tests {
             include: vec![IncludeField::Snippets],
             budget_ms: 500,
             budget_bytes: None,
+            as_of: None,
+                branch: None,
+                projects: None,
+                include_history: None,
+                include_future: None,
+                include_branches: None,
         };
         let resp = empty_response(&req);
         let env = build_envelope("dash", "pre_change_context", &resp);

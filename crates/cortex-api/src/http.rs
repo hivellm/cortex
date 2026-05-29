@@ -238,6 +238,36 @@ pub fn build_router_with_auth_and_cfg(
             "/v1/consolidations/{id}",
             get(crate::consolidation_get::handle_consolidation_get),
         )
+        // Phase18 §4.4 — timeline + branch + entity routes.
+        .route(
+            "/v1/timeline/{project}",
+            get(crate::timeline_routes::handle_timeline),
+        )
+        .route(
+            "/v1/branch/{project}",
+            get(crate::timeline_routes::handle_branch_list)
+                .post(crate::timeline_routes::handle_branch_create),
+        )
+        .route(
+            "/v1/branch/{project}/{branch}",
+            get(crate::timeline_routes::handle_branch_show),
+        )
+        .route(
+            "/v1/branch/{project}/{branch}/merge",
+            post(crate::timeline_routes::handle_branch_merge),
+        )
+        .route(
+            "/v1/branch/{project}/{branch}/abandon",
+            post(crate::timeline_routes::handle_branch_abandon),
+        )
+        .route(
+            "/v1/entity/{id}/history",
+            get(crate::timeline_routes::handle_entity_history),
+        )
+        .route(
+            "/v1/entity/{id}/supersession",
+            get(crate::timeline_routes::handle_entity_supersession),
+        )
         .with_state(state);
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from

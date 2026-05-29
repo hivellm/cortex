@@ -208,6 +208,12 @@ pub async fn run_with_breaker<Q: QueryFn>(
         // the pre-thinking trim ladder runs after this and tightens
         // further if `bundle_bytes` is smaller.
         budget_bytes: None,
+        as_of: None,
+        branch: None,
+        projects: None,
+        include_history: None,
+        include_future: None,
+        include_branches: None,
     };
 
     let total_budget = Duration::from_millis(input.budget.time_ms.max(1) as u64);

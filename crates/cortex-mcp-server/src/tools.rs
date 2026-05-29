@@ -277,6 +277,11 @@ impl ToolRegistry {
                 Arc::new(DecisionSearchTool::new()),
                 Arc::new(ConsolidationCostsTool::new()),
                 Arc::new(QueryExplainTool::new()),
+                Arc::new(TimelineTool::new()),
+                Arc::new(BranchListTool::new()),
+                Arc::new(BranchShowTool::new()),
+                Arc::new(HistoryTool::new()),
+                Arc::new(SupersessionTool::new()),
             ],
         }
     }
@@ -3161,17 +3166,367 @@ async fn proxy_search(ctx: &ToolContext, path: &str, args: Value) -> Result<Tool
     ))
 }
 
+// ---------------------------------------------------------------------
+// phase18 §4.6 — cortex_timeline
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/timeline/{project}`.
+pub struct TimelineTool;
+
+impl TimelineTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for TimelineTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for TimelineTool {
+    fn name(&self) -> &'static str {
+        "cortex_timeline"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_timeline",
+            "description": "Phase18 timeline view. Returns the `TimelineEvent` rows for one project ordered by `valid_from_unix DESC`. Filter by branch (defaults to `<project>:main`), TimelineKind discriminator, valid-time window, and `as_of` cap so the response renders as it was believed at that instant.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": {"type": "string", "description": "Project slug (matches `TimelineEvent.project_id`)."},
+                    "branch": {"type": "string", "description": "Optional branch name. Defaults to `main`."},
+                    "kind": {"type": "string", "description": "Optional `TimelineKind` discriminator filter."},
+                    "from": {"type": "string", "description": "Lower bound on `valid_from` (RFC-3339 / YYYY-MM-DD)."},
+                    "to": {"type": "string", "description": "Upper bound on `valid_from`."},
+                    "as_of": {"type": "string", "description": "Cap on `recorded_at` (ADR-018)."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let project = require_slug(&args, "project")?;
+        let mut qs: Vec<String> = Vec::new();
+        if let Some(branch) = optional_str(&args, "branch") {
+            qs.push(format!("branch={branch}"));
+        }
+        if let Some(kind) = optional_str(&args, "kind") {
+            qs.push(format!("kind={kind}"));
+        }
+        if let Some(from) = optional_str(&args, "from") {
+            qs.push(format!("from={from}"));
+        }
+        if let Some(to) = optional_str(&args, "to") {
+            qs.push(format!("to={to}"));
+        }
+        if let Some(as_of) = optional_str(&args, "as_of") {
+            qs.push(format!("as_of={as_of}"));
+        }
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            qs.push(format!("limit={limit}"));
+        }
+        let path = if qs.is_empty() {
+            format!("/v1/timeline/{project}")
+        } else {
+            format!("/v1/timeline/{project}?{}", qs.join("&"))
+        };
+        proxy_get(ctx, &path).await
+    }
+}
+
+// ---------------------------------------------------------------------
+// phase18 §4.6 — cortex_branch_list
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/branch/{project}`.
+pub struct BranchListTool;
+
+impl BranchListTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for BranchListTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for BranchListTool {
+    fn name(&self) -> &'static str {
+        "cortex_branch_list"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_branch_list",
+            "description": "Phase18 — list every `Branch` node for a project (status, parent_branch_id, merge_strategy, created_at). Reads directly from Nexus, sorted oldest-first so the reserved `main` branch leads the response.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["project"],
+                "properties": {
+                    "project": {"type": "string", "description": "Project slug."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let project = require_slug(&args, "project")?;
+        proxy_get(ctx, &format!("/v1/branch/{project}")).await
+    }
+}
+
+// ---------------------------------------------------------------------
+// phase18 §4.6 — cortex_branch_show
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/branch/{project}/{branch}`.
+pub struct BranchShowTool;
+
+impl BranchShowTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for BranchShowTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for BranchShowTool {
+    fn name(&self) -> &'static str {
+        "cortex_branch_show"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_branch_show",
+            "description": "Phase18 — full `Branch` payload by `<project>:<branch>` composite id (ADR-019). Returns the node's status, merge_strategy, fork_valid_time, abandonment_reason, created_at/by.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["project", "branch"],
+                "properties": {
+                    "project": {"type": "string"},
+                    "branch": {"type": "string", "description": "Branch name (`main` accepted; ADR-019 regex otherwise)."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let project = require_slug(&args, "project")?;
+        let branch = require_branch(&args, "branch")?;
+        proxy_get(ctx, &format!("/v1/branch/{project}/{branch}")).await
+    }
+}
+
+// ---------------------------------------------------------------------
+// phase18 §4.6 — cortex_history
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/entity/{id}/history`.
+pub struct HistoryTool;
+
+impl HistoryTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for HistoryTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for HistoryTool {
+    fn name(&self) -> &'static str {
+        "cortex_history"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_history",
+            "description": "Phase18 — return every `TimelineEvent` row tagged with the entity, ordered by `valid_from` DESC. Optional `as_of` caps `recorded_at` so the lineage renders as it was believed at that valid-time instant.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["entity_id"],
+                "properties": {
+                    "entity_id": {"type": "string", "description": "Entity ULID / ADR id / etc."},
+                    "as_of": {"type": "string", "description": "RFC-3339 or YYYY-MM-DD cap on `recorded_at`."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let entity_id = require_slug(&args, "entity_id")?;
+        let mut qs: Vec<String> = Vec::new();
+        if let Some(as_of) = optional_str(&args, "as_of") {
+            qs.push(format!("as_of={as_of}"));
+        }
+        if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
+            qs.push(format!("limit={limit}"));
+        }
+        let path = if qs.is_empty() {
+            format!("/v1/entity/{entity_id}/history")
+        } else {
+            format!("/v1/entity/{entity_id}/history?{}", qs.join("&"))
+        };
+        proxy_get(ctx, &path).await
+    }
+}
+
+// ---------------------------------------------------------------------
+// phase18 §4.6 — cortex_supersession
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/entity/{id}/supersession`.
+pub struct SupersessionTool;
+
+impl SupersessionTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for SupersessionTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for SupersessionTool {
+    fn name(&self) -> &'static str {
+        "cortex_supersession"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_supersession",
+            "description": "Phase18 — walk the `SUPERSEDES` chain off an entity in both directions (predecessors + successors, depth ≤ 10). The classifier reads the same edges to derive the SUPERSEDED state (ADR-023 §1.6).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["entity_id"],
+                "properties": {
+                    "entity_id": {"type": "string"}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let entity_id = require_slug(&args, "entity_id")?;
+        proxy_get(ctx, &format!("/v1/entity/{entity_id}/supersession")).await
+    }
+}
+
+// ---------------------------------------------------------------------
+// phase18 §4.6 — shared input validators for the timeline / branch /
+// entity tools above. Kept narrow on purpose: slug-shape ASCII for
+// project ids + entity ids, ADR-019 + reserved `main` for branch
+// names. Returning `invalid_input` early keeps a bad URL from
+// reaching cortex-api.
+// ---------------------------------------------------------------------
+
+fn require_slug(args: &Value, key: &'static str) -> Result<String, ToolError> {
+    let raw = args
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ToolError::invalid_input(format!("`{key}` is required")))?;
+    if !raw
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':' | b'/'))
+    {
+        return Err(ToolError::invalid_input(format!(
+            "`{key}` must be alphanumeric (`_`/`-`/`.`/`:`/`/` allowed)"
+        )));
+    }
+    Ok(raw.to_string())
+}
+
+fn require_branch(args: &Value, key: &'static str) -> Result<String, ToolError> {
+    let raw = args
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ToolError::invalid_input(format!("`{key}` is required")))?;
+    if raw == "main" {
+        return Ok(raw.to_string());
+    }
+    // Inline ADR-019 regex enforcement so cortex-mcp-server does not
+    // pull cortex-workers just for this validator:
+    // `^[a-z0-9][a-z0-9._/-]{0,62}[a-z0-9]$`.
+    if raw.len() < 2 || raw.len() > 64 {
+        return Err(ToolError::invalid_input(format!(
+            "`{key}` must be 2..=64 chars"
+        )));
+    }
+    let bytes = raw.as_bytes();
+    let first_ok = bytes[0].is_ascii_lowercase() || bytes[0].is_ascii_digit();
+    let last = bytes[bytes.len() - 1];
+    let last_ok = last.is_ascii_lowercase() || last.is_ascii_digit();
+    if !first_ok || !last_ok {
+        return Err(ToolError::invalid_input(format!(
+            "`{key}` must start and end with [a-z0-9]"
+        )));
+    }
+    if !bytes.iter().all(|b| {
+        b.is_ascii_lowercase()
+            || b.is_ascii_digit()
+            || matches!(*b, b'.' | b'_' | b'/' | b'-')
+    }) {
+        return Err(ToolError::invalid_input(format!(
+            "`{key}` chars must be [a-z0-9._/-]"
+        )));
+    }
+    Ok(raw.to_string())
+}
+
+fn optional_str(args: &Value, key: &str) -> Option<String> {
+    let raw = args
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(raw.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_thirty_tools_with_unique_names() {
+    fn registry_returns_thirty_five_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            30,
-            "phase20 §10 adds cortex_feedback_record (29 -> 30) — companion writer for cortex_feedback_signals"
+            35,
+            "phase18 §4.6 adds 5 timeline/branch tools (30 -> 35)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -3205,6 +3560,11 @@ mod tests {
             "cortex_decision_search",
             "cortex_consolidation_costs",
             "cortex_query_explain",
+            "cortex_timeline",
+            "cortex_branch_list",
+            "cortex_branch_show",
+            "cortex_history",
+            "cortex_supersession",
         ] {
             assert!(
                 names.contains(&expected),
@@ -3223,6 +3583,119 @@ mod tests {
     fn query_tool_descriptor_matches_cortex_api_source_of_truth() {
         let t = QueryTool::new();
         assert_eq!(t.descriptor(), cortex_api::tool_descriptor());
+    }
+
+    #[test]
+    fn query_tool_descriptor_advertises_phase18_bitemporal_fields() {
+        let t = QueryTool::new();
+        let d = t.descriptor();
+        let props = d["inputSchema"]["properties"]
+            .as_object()
+            .expect("properties is an object");
+        for k in [
+            "as_of",
+            "branch",
+            "projects",
+            "include_history",
+            "include_future",
+            "include_branches",
+        ] {
+            assert!(
+                props.contains_key(k),
+                "cortex_query must advertise the phase18 §4.4 field `{k}`; got keys {:?}",
+                props.keys().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_descriptor_requires_project() {
+        let d = TimelineTool::new().descriptor();
+        assert_eq!(d["name"], "cortex_timeline");
+        let req = d["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(req, vec!["project"]);
+    }
+
+    #[tokio::test]
+    async fn timeline_rejects_missing_project() {
+        let t = TimelineTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({}))
+            .await
+            .expect_err("missing project must reject");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[test]
+    fn branch_show_descriptor_requires_project_and_branch() {
+        let d = BranchShowTool::new().descriptor();
+        let req = d["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(req.contains(&"project"));
+        assert!(req.contains(&"branch"));
+    }
+
+    #[tokio::test]
+    async fn branch_show_rejects_uppercase_branch() {
+        let t = BranchShowTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "project": "cortex", "branch": "FeatureX" }))
+            .await
+            .expect_err("uppercase branch must reject");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn branch_show_accepts_main() {
+        // The reserved `main` branch must pass validation. The call
+        // surfaces an `API_UNREACHABLE` soft-error because the test
+        // does not stand up a live server — that is the expected
+        // outcome and still proves the validator did not reject.
+        let t = BranchShowTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let res = t
+            .call(&ctx, json!({ "project": "cortex", "branch": "main" }))
+            .await
+            .expect("validator must accept `main`");
+        assert!(
+            res.is_error,
+            "expected soft-error because no live API is up, got success"
+        );
+    }
+
+    #[test]
+    fn history_descriptor_requires_entity_id() {
+        let d = HistoryTool::new().descriptor();
+        let req = d["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(req, vec!["entity_id"]);
+    }
+
+    #[test]
+    fn supersession_descriptor_requires_entity_id() {
+        let d = SupersessionTool::new().descriptor();
+        let req = d["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(req, vec!["entity_id"]);
     }
 
     #[test]
