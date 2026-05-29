@@ -1,0 +1,11 @@
+{
+  "id": 18,
+  "slug": "phase18-1-1-bitemporal-time-precision-utc-rfc3339-with-second-precision-day-precision-for-adr-facing-tooling",
+  "title": "phase18 §1.1 — Bitemporal time precision: UTC RFC3339 with second precision; day-precision for ADR-facing tooling",
+  "status": "proposed",
+  "date": "2026-05-29",
+  "relatedTasks": [
+    "phase18_tlb-timeline-branching"
+  ],
+  "supersededBy": null
+}

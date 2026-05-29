@@ -1,10 +1,10 @@
 ## 1. P0 — Design ADRs (lock open questions)
-- [ ] 1.1 ADR: bitemporal time precision (UTC seconds storage; day-precision defaults for ADR/decision tooling). `rulebook_decision_create`.
-- [ ] 1.2 ADR: branch identifier scheme (`(project_id, branch_name)` unique pair; regex constraint).
-- [ ] 1.3 ADR: cross-project retrieval default scope (opt-in until eval evidence justifies opt-out).
-- [ ] 1.4 ADR: branch-merge representation in retrieval (keep-and-link; classifier handles fold-in).
-- [ ] 1.5 ADR: temporal retention and archival (never delete; archive `superseded`/`expired` after 5 years).
-- [ ] 1.6 ADR: consolidation vs supersession edge semantics (`EVOLVES_FROM` vs `SUPERSEDES` rules).
+- [x] 1.1 ADR-018 — `phase18 §1.1 — Bitemporal time precision: UTC RFC3339 with second precision; day-precision for ADR-facing tooling`. Storage second-precision; CLI day-precision input expands to range probes. `.rulebook/decisions/018-phase18-1-1-...md`.
+- [x] 1.2 ADR-019 — `phase18 §1.2 — Branch identifier scheme: (project_id, branch_name) unique pair with strict regex; main reserved`. Regex `^[a-z0-9][a-z0-9._/-]{0,62}[a-z0-9]$`, composite global id `<project>:<branch>`. `.rulebook/decisions/019-phase18-1-2-...md`.
+- [x] 1.3 ADR-020 — `phase18 §1.3 — Cross-project retrieval default: opt-in until eval evidence justifies opt-out`. Default OFF; `--projects` flag flips it. Reassess after CDC MRR@10 evidence. `.rulebook/decisions/020-phase18-1-3-...md`.
+- [x] 1.4 ADR-021 — `phase18 §1.4 — Branch merge representation: keep-and-link with classifier-driven fold-in`. No fact rewrite; `MERGED_INTO` edge + classifier-time strategy switch. `.rulebook/decisions/021-phase18-1-4-...md`.
+- [x] 1.5 ADR-022 — `phase18 §1.5 — Temporal retention: never delete; archive superseded/expired after 5 years`. Hot slice drops; cold Vectorizer/Meili archive slice keeps audit window; purge operator-controlled. `.rulebook/decisions/022-phase18-1-5-...md`.
+- [x] 1.6 ADR-023 — `phase18 §1.6 — Consolidation vs supersession edge semantics: SUPERSEDES / OBSOLETES / EVOLVES_FROM rules`. SUPERSEDES = replace (stamp superseded_at); EVOLVES_FROM = non-replacing precursor; OBSOLETES = deprecate without replace. `.rulebook/decisions/023-phase18-1-6-...md`.
 
 ## 2. P1 — Schema, migration, backfill
 - [ ] 2.1 Nexus schema migration: add bitemporal columns + `project_id` + `branch_id` + `lifecycle` to every entity node label.

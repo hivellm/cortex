@@ -1,0 +1,11 @@
+{
+  "id": 21,
+  "slug": "phase18-1-4-branch-merge-representation-keep-and-link-with-classifier-driven-fold-in",
+  "title": "phase18 §1.4 — Branch merge representation: keep-and-link with classifier-driven fold-in",
+  "status": "proposed",
+  "date": "2026-05-29",
+  "relatedTasks": [
+    "phase18_tlb-timeline-branching"
+  ],
+  "supersededBy": null
+}

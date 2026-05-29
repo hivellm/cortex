@@ -1,0 +1,11 @@
+{
+  "id": 19,
+  "slug": "phase18-1-2-branch-identifier-scheme-project-id-branch-name-unique-pair-with-strict-regex-main-reserved",
+  "title": "phase18 §1.2 — Branch identifier scheme: (project_id, branch_name) unique pair with strict regex; main reserved",
+  "status": "proposed",
+  "date": "2026-05-29",
+  "relatedTasks": [
+    "phase18_tlb-timeline-branching"
+  ],
+  "supersededBy": null
+}

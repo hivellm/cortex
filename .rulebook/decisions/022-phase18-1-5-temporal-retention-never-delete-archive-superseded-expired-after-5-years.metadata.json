@@ -1,0 +1,11 @@
+{
+  "id": 22,
+  "slug": "phase18-1-5-temporal-retention-never-delete-archive-superseded-expired-after-5-years",
+  "title": "phase18 §1.5 — Temporal retention: never delete; archive superseded/expired after 5 years",
+  "status": "proposed",
+  "date": "2026-05-29",
+  "relatedTasks": [
+    "phase18_tlb-timeline-branching"
+  ],
+  "supersededBy": null
+}

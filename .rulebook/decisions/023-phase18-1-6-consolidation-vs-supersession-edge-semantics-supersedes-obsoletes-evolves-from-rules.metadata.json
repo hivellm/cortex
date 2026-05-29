@@ -1,0 +1,11 @@
+{
+  "id": 23,
+  "slug": "phase18-1-6-consolidation-vs-supersession-edge-semantics-supersedes-obsoletes-evolves-from-rules",
+  "title": "phase18 §1.6 — Consolidation vs supersession edge semantics: SUPERSEDES / OBSOLETES / EVOLVES_FROM rules",
+  "status": "proposed",
+  "date": "2026-05-29",
+  "relatedTasks": [
+    "phase18_tlb-timeline-branching"
+  ],
+  "supersededBy": null
+}

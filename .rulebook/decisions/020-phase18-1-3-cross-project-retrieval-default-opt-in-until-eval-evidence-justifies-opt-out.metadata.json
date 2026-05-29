@@ -1,0 +1,11 @@
+{
+  "id": 20,
+  "slug": "phase18-1-3-cross-project-retrieval-default-opt-in-until-eval-evidence-justifies-opt-out",
+  "title": "phase18 §1.3 — Cross-project retrieval default: opt-in until eval evidence justifies opt-out",
+  "status": "proposed",
+  "date": "2026-05-29",
+  "relatedTasks": [
+    "phase18_tlb-timeline-branching"
+  ],
+  "supersededBy": null
+}
