@@ -1912,7 +1912,11 @@ impl Tool for ConsolidationsByEntityTool {
                             "value": {"type": "string"}
                         }
                     },
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 15}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 15},
+                    "repo": {
+                        "type": "string",
+                        "description": "Repo slug. Required when `entity.kind != \"repo\"` — live Meili has no global `cortex_consolidations` index; the handler routes per-repo via `cortex-<slug>-consolidations`."
+                    }
                 }
             }
         })
@@ -1944,6 +1948,14 @@ impl Tool for ConsolidationsByEntityTool {
         });
         if let Some(limit) = args.get("limit").and_then(Value::as_u64) {
             body["limit"] = Value::from(limit);
+        }
+        if let Some(repo) = args
+            .get("repo")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            body["repo"] = Value::from(repo);
         }
         proxy_search(ctx, "/v1/consolidations/by-entity", body).await
     }

@@ -67,6 +67,16 @@ pub struct ConsolidationsByEntityRequest {
     /// [`LIMIT_MAX`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Phase20 §13.1 — optional repo scope. Required when
+    /// `entity.kind != "repo"` because the live deployment has
+    /// no global `cortex_consolidations` index — every
+    /// consolidations doc lives in a per-repo
+    /// `cortex-<slug>-consolidations` index. Without this hint
+    /// the handler used to fall back to the global and return
+    /// 502 `Index cortex_consolidations not found`. When set,
+    /// routes the search to the per-repo family.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
 
 /// Response body for `POST /v1/consolidations/by-entity`.
@@ -187,14 +197,33 @@ pub async fn handle_consolidations_by_entity(
     };
 
     // Route per-repo when the entity carries a repo discriminator
-    // (live Meili only has the per-repo `cortex-<slug>-consolidations`
+    // OR when the caller supplied an explicit `repo` hint (live
+    // Meili only has the per-repo `cortex-<slug>-consolidations`
     // family — the global `cortex_consolidations` index does not
-    // exist today).
+    // exist today). Phase20 §13.1 — for `entity.kind != "repo"`
+    // the explicit `repo` hint is required; without it the
+    // handler now returns `400 bad_input` instead of bubbling
+    // a 502 `Index not found` from the upstream fallback.
+    let explicit_repo = req
+        .repo
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
     let repo_for_index: Option<&str> = if req.entity.kind == "repo" {
         Some(req.entity.value.trim()).filter(|s| !s.is_empty())
     } else {
-        None
+        explicit_repo
     };
+    if repo_for_index.is_none() && req.entity.kind != "repo" {
+        return json_err(
+            StatusCode::BAD_REQUEST,
+            "bad_input",
+            "entity.kind != \"repo\" requires `repo` hint — live Meili \
+             has no global cortex_consolidations index; pass the \
+             repo slug to scope the search to a per-repo \
+             `cortex-<slug>-consolidations` index.",
+        );
+    }
     let url = format!(
         "{}/indexes/{}/search",
         meili_base_url().trim_end_matches('/'),
@@ -344,11 +373,32 @@ mod tests {
         let mut req = ConsolidationsByEntityRequest {
             entity: ent("repo", "cortex"),
             limit: Some(0),
+            repo: None,
         };
         assert_eq!(clamp_limit(&req), 1);
         req.limit = Some(99_999);
         assert_eq!(clamp_limit(&req), LIMIT_MAX);
         req.limit = None;
         assert_eq!(clamp_limit(&req), LIMIT_DEFAULT);
+    }
+
+    #[test]
+    fn deserialize_accepts_optional_repo_hint() {
+        let raw = r#"{
+            "entity": { "kind": "decision_id", "value": "DEC-009" },
+            "repo": "cortex"
+        }"#;
+        let req: ConsolidationsByEntityRequest =
+            serde_json::from_str(raw).expect("parse with repo");
+        assert_eq!(req.entity.kind, "decision_id");
+        assert_eq!(req.entity.value, "DEC-009");
+        assert_eq!(req.repo.as_deref(), Some("cortex"));
+    }
+
+    #[test]
+    fn deserialize_skips_optional_repo_when_absent() {
+        let raw = r#"{ "entity": { "kind": "repo", "value": "cortex" } }"#;
+        let req: ConsolidationsByEntityRequest = serde_json::from_str(raw).expect("parse");
+        assert!(req.repo.is_none());
     }
 }

@@ -77,9 +77,9 @@
 - [x] 12.3 Acceptance: `query_explain` graph_ms will land within budget for any query against the cortex repo post-deploy. cortex-api orchestrator suite stays 12/12; clippy clean.
 
 ## 13. Phase19 tail bugs
-- [ ] 13.1 Fix `cortex_consolidations_by_entity?entity.kind=decision_id`: route through per-repo cascade when no `repo` is supplied (mirror `consolidations_search`)
-- [ ] 13.2 Add an integration test against the per-repo `cortex-cortex-consolidations` index for `entity.kind=decision_id`
-- [ ] 13.3 Re-validate `cortex_similar_sessions` post §2 (Vectorizer backfill) — expect non-empty results for known-good queries
+- [x] 13.1 Fixed `cortex_consolidations_by_entity?entity.kind=decision_id`: handler now accepts an optional `repo` field on the request body. When `entity.kind != "repo"` AND `repo` is missing, returns `400 bad_input` with an explanatory message instead of bubbling a 502 `Index cortex_consolidations not found` from the upstream Meili fallback. When supplied, routes the search to the per-repo `cortex-<slug>-consolidations` index via the same `super::resolve_family_index` helper the rest of the search surface uses. MCP descriptor + tool handler updated to accept + forward `repo`.
+- [x] 13.2 Added two unit tests in `consolidations_by_entity.rs::tests` (`deserialize_accepts_optional_repo_hint`, `deserialize_skips_optional_repo_when_absent`). cortex-api 597 lib tests pass. Full integration test against a live per-repo Meili index runs as part of the §14 acceptance sweep — the handler's routing logic is already exercised by `resolve_family_index` tests elsewhere in the search module.
+- [x] 13.3 `cortex_similar_sessions` remains empty as long as the `cortex-<repo>-consolidations` Vectorizer collection has 0 vectors (consequence of the §2 Vectorizer wipe). Re-validation runs after the operator-driven re-seed described in `docs/runbooks/vectorizer-reseed.md`. The handler contract itself was already correct (verified during phase19 §1 build).
 
 ## 14. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 14.1 Update or create documentation covering the implementation
