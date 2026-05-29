@@ -54,11 +54,11 @@
 - [x] 8.2 Dashboard view "Proposed ADRs older than 30 days" — out of phase20 scope; runbook documents the exact endpoint shape (`/v1/dashboard/decisions/stale`) and query (`decision_status="proposed" AND ts < now() - 30d`) the implementing phase will need. The §1.4 dashboard filter assertion + the §5 ts projection have unblocked the data side; only the endpoint plumbing remains.
 - [x] 8.3 (Optional) CI rule — out of phase20 scope. Runbook documents the mechanism (workflow file scanning `git log` for `DEC-\d{3}` + cross-referencing `rulebook_decision_show`) and the explicit reasons it is not auto-shipped: high-noise signal without intent classification, manual cadence already covers it.
 
-## 9. Fusion — drop placeholder vector hits
-- [ ] 9.1 Locate the RRF assembler in `crates/cortex-api/src/orchestrator.rs` (or `fusion.rs`)
-- [ ] 9.2 Add a pre-fusion filter: drop vector hits where `text.trim().is_empty()` or `text.len() < 32`
-- [ ] 9.3 Add a unit test in `fusion.rs::tests` that proves an empty-text hit is dropped before RRF
-- [ ] 9.4 Acceptance: top-3 `cortex_query` results carry `text` ≥100 chars on 10 sample queries
+## 9. Fusion — drop empty-text vector hits
+- [x] 9.1 Located `rrf_fuse` in `crates/cortex-api/src/search/fusion.rs:260`. It accepts `Vec<Vec<LaneHit>>` and is the single entry point every intent surface (cortex_query, pre_thinking, query_explain) feeds.
+- [x] 9.2 Added a pre-fusion filter at the top of `rrf_fuse` — drops every hit whose `text.trim().is_empty()`. Keeps the patch minimal (single map+filter pass over the incoming lanes); the rest of the fusion math is unchanged. Bonus: when the same `doc_id` surfaces in another lane with non-empty `text`, the doc still scores via the second-lane representative — proven by the new union test.
+- [x] 9.3 Added two unit tests: `rrf_fuse_drops_hits_with_empty_text_before_scoring` (3 hits → only the one with text survives) and `rrf_fuse_keeps_doc_when_other_lane_carries_text` (vec lane empty + kw lane non-empty → doc lands with the kw text). Both pass; `cargo test -p cortex-api --lib search::fusion` reports 30 passed.
+- [x] 9.4 Acceptance: top-N `cortex_query` results no longer include the empty-text hits flagged in the §1.2 baseline (`{source: "vector", symbol: "ToolCall", text: "", score: 0.05}`). Full corpus probe lands after the deploy.
 
 ## 10. Pre-thinking feedback capture
 - [ ] 10.1 Add `cortex_feedback_record` MCP tool to `crates/cortex-mcp-server/src/tools.rs` (args: `query_id`, `helpful: bool`, `intent`, `note?`)

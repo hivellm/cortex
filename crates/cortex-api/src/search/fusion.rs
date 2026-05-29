@@ -258,6 +258,24 @@ impl FusionConfig {
 /// `hit.ts`. Hits with `ts == 0` (no timestamp) skip the decay
 /// so a missing-timestamp regression cannot reorder the bundle.
 pub fn rrf_fuse(lanes: Vec<Vec<LaneHit>>, cfg: &FusionConfig) -> Vec<LaneHit> {
+    // Phase20 §9 — drop empty-text hits before fusion. The vector
+    // lane emits one hit per kind family with empty `text` and a
+    // near-zero score (e.g.
+    // `{source: "vector", symbol: "ToolCall", text: "", score: 0.05}`)
+    // when the underlying Vectorizer collection has no real
+    // matches. Those hits contribute nothing to retrieval but
+    // pollute the top-k by occupying ranks 1–N. Filter them at
+    // the fusion entry point so every intent surface (cortex_query,
+    // pre_thinking, query_explain) benefits uniformly.
+    let lanes: Vec<Vec<LaneHit>> = lanes
+        .into_iter()
+        .map(|lane| {
+            lane.into_iter()
+                .filter(|hit| !hit.text.trim().is_empty())
+                .collect()
+        })
+        .collect();
+
     let mut scores: BTreeMap<String, f64> = BTreeMap::new();
     let mut representative: BTreeMap<String, LaneHit> = BTreeMap::new();
     let alpha = cfg.alpha as f64;
@@ -448,6 +466,45 @@ mod tests {
             score: native,
             ..hit(id, 0, None)
         }
+    }
+
+    fn hit_with_text(id: &str, text: &str) -> LaneHit {
+        LaneHit {
+            text: text.to_string(),
+            ..hit(id, 0, None)
+        }
+    }
+
+    #[test]
+    fn rrf_fuse_drops_hits_with_empty_text_before_scoring() {
+        let lane = vec![
+            hit_with_text("empty-doc", ""),
+            hit_with_text("whitespace", "   "),
+            hit_with_text("real", "real chunk body"),
+        ];
+        let cfg = FusionConfig {
+            alpha: 1.0,
+            ..FusionConfig::default()
+        };
+        let out = rrf_fuse(vec![lane], &cfg);
+        let ids: Vec<&str> = out.iter().map(|h| h.doc_id.as_str()).collect();
+        assert_eq!(ids, vec!["real"]);
+    }
+
+    #[test]
+    fn rrf_fuse_keeps_doc_when_other_lane_carries_text() {
+        // Empty-text hits drop; the same doc_id surfacing in another
+        // lane with a non-empty text continues to score.
+        let vec_lane = vec![hit_with_text("doc-a", "")];
+        let kw_lane = vec![hit_with_text("doc-a", "real")];
+        let cfg = FusionConfig {
+            alpha: 1.0,
+            ..FusionConfig::default()
+        };
+        let out = rrf_fuse(vec![vec_lane, kw_lane], &cfg);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].doc_id, "doc-a");
+        assert_eq!(out[0].text, "real");
     }
 
     /// Positional-only baseline used by the equivalence test below.
