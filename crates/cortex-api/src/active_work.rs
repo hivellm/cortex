@@ -436,17 +436,31 @@ fn shared_loader() -> &'static ActiveWorkLoader {
 }
 
 fn resolve_workspace_rulebook_root() -> PathBuf {
-    // Resolve CORTEX_WORKSPACE_ROOT via the typed config — falls
-    // back to the current working directory when unset (matches
-    // how `tasks_loader` resolves today).
+    // Phase20 §11.2 — was reading `cfg.ingestion.home` which is
+    // unset in the live container (the actual value points at
+    // `/var/lib/cortex`, not a workspace path), so the loader
+    // resolved to a non-existent directory and every call
+    // returned `active_tasks: []`. Mirror how `main.rs` resolves
+    // task loaders: prefer `cortex_config.rulebook.roots`
+    // (`CORTEX_RULEBOOK_ROOTS=/path/A,/path/B,...`) when set, take
+    // the first entry, and fall back to `cortex_config.rulebook.root`
+    // before the CWD-based default.
     let cfg = cortex_config::Config::load().unwrap_or_default();
-    let workspace = cfg
-        .ingestion
-        .home
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-    workspace.join(".rulebook")
+    if let Some(roots) = cfg.rulebook.roots.as_deref() {
+        for raw in roots.split([',', ';']) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+    }
+    if let Some(single) = cfg.rulebook.root.as_deref() {
+        if !single.trim().is_empty() {
+            return PathBuf::from(single);
+        }
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    cwd.join(".rulebook")
 }
 
 /// Query params for `/v1/dashboard/active-work`.

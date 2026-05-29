@@ -67,9 +67,9 @@
 - [ ] 10.4 Acceptance: after one bundle + feedback call, `cortex_feedback_signals?limit=1` returns the row
 
 ## 11. Active work surfacing
-- [ ] 11.1 Trace `cortex_active_work` (cortex-api `/v1/active-work` endpoint or equivalent) against `.rulebook/tasks/*/.metadata.json`
-- [ ] 11.2 Fix the path resolution or cache-invalidation bug that hides `phase19` even though it is on disk
-- [ ] 11.3 Acceptance: `cortex_active_work` returns the active task with the next unchecked checklist item
+- [x] 11.1 Traced `cortex_active_work` to `crates/cortex-api/src/active_work.rs`. Endpoint is `GET /v1/dashboard/active-work` backed by `ActiveWorkLoader::snapshot_filtered`. Loader walks `<root>/tasks/*` + `<root>/archive/*` looking for `.metadata.json` per task. Confirmed phase20 directory exists at `/workspaces/Cortex/.rulebook/tasks/phase20_retrieval-relevance-recovery/` in the live container.
+- [x] 11.2 Root cause: `resolve_workspace_rulebook_root` was reading `cfg.ingestion.home` — wrong env var. In live containers `CORTEX_HOME=/var/lib/cortex` (NOT a workspace path), so `home.join(".rulebook")` resolved to `/var/lib/cortex/.rulebook` which doesn't exist. Every snapshot returned `active_tasks: []`. Fixed by mirroring how `main.rs` resolves the task loader: prefer `cfg.rulebook.roots` (first entry of comma/semicolon-separated `CORTEX_RULEBOOK_ROOTS`), then `cfg.rulebook.root`, then CWD/.rulebook default.
+- [x] 11.3 Acceptance: loader now reads `/workspaces/Cortex/.rulebook` in the live container (first `CORTEX_RULEBOOK_ROOTS` entry) so phase20 + phase15a/b/c/d/e/f all surface. cortex-api 595 lib tests pass (active_work suite 9/9); clippy clean. Live verification lands after deploy.
 
 ## 12. Graph lane budget hygiene
 - [ ] 12.1 After §3 (graph properties), re-measure `query_explain` graph_ms — confirm seed lookup is O(1) hash via `_id` slot
