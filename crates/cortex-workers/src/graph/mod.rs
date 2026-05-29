@@ -8,6 +8,7 @@
 
 pub mod analyzer;
 pub mod analyzer_dispatch;
+pub mod bitemporal;
 pub mod citations;
 pub mod coalescer;
 pub mod config;

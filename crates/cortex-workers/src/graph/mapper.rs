@@ -155,6 +155,16 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
     // dimension instead of relying on full-text hits alone.
     emit_classifier_entities(event, &mut patch);
 
+    // phase18 §2.1 — stamp the bitemporal scoping columns
+    // (`project_id`, `branch_id`, `valid_from`, `recorded_at`,
+    // `lifecycle`) on every node the patch carries. Idempotent on
+    // values already set by the per-kind emitter (Decision keeps
+    // its payload-derived status; etc.). The temporal classifier
+    // (phase18 §3, blocked on phase14c golden-set evidence) reads
+    // these columns at retrieval time to drop / demote /
+    // keep-as-VALID per ADRs 018–023.
+    super::bitemporal::stamp_bitemporal_props_on_patch(event, &mut patch);
+
     patch
 }
 
