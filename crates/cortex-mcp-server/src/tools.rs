@@ -273,6 +273,7 @@ impl ToolRegistry {
                 Arc::new(ConsolidationsDiffTool::new()),
                 Arc::new(LawViolationsTool::new()),
                 Arc::new(FeedbackSignalsTool::new()),
+                Arc::new(FeedbackRecordTool::new()),
                 Arc::new(DecisionSearchTool::new()),
                 Arc::new(ConsolidationCostsTool::new()),
                 Arc::new(QueryExplainTool::new()),
@@ -2304,6 +2305,112 @@ impl Tool for FeedbackSignalsTool {
 }
 
 // ---------------------------------------------------------------------
+// phase20 §10 — cortex_feedback_record
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/pre-thinking/feedback`. Lets a
+/// post-thinking hook record `helpful: bool` + optional fields on
+/// the bundle the model just consumed. Populates the
+/// `pre_thinking_feedback` SQLite table that `cortex_feedback_signals`
+/// reads back; without this write tool the read surface is always
+/// empty (phase20 §10 acceptance).
+pub struct FeedbackRecordTool;
+
+impl FeedbackRecordTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for FeedbackRecordTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for FeedbackRecordTool {
+    fn name(&self) -> &'static str {
+        "cortex_feedback_record"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_feedback_record",
+            "description": "Record post-thinking feedback on a Cortex bundle. Backs the `pre_thinking_feedback` SQLite table that `cortex_feedback_signals` reads; without this companion write tool, the read surface stays empty. Idempotent — re-posting the same `query_id` overwrites the prior row.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["query_id", "helpful"],
+                "properties": {
+                    "query_id": {
+                        "type": "string",
+                        "description": "ULID echoed by the bundle the model just consumed (`cortex_query` / `cortex_pre_thinking` response carries it as `query_id`)."
+                    },
+                    "helpful": {
+                        "type": "boolean",
+                        "description": "`true` when the bundle materially helped the answer."
+                    },
+                    "intent": {
+                        "type": "string",
+                        "description": "Intent label echoed from the bundle (`explain`, `decision_lookup`, `law_check`, ...). Optional but recommended so the feedback aggregates per-intent."
+                    },
+                    "files_cited": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Files the model cited from the bundle. Drives the implicit-feedback Jaccard score."
+                    },
+                    "rating": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "1–5 star rating. Optional."
+                    },
+                    "free_text": {
+                        "type": "string",
+                        "description": "Free-text operator note. Optional."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let query_id = args
+            .get("query_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`query_id` is required"))?;
+        let helpful = args
+            .get("helpful")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| ToolError::invalid_input("`helpful` is required (boolean)"))?;
+        let mut body = json!({
+            "query_id": query_id,
+            "helpful": helpful,
+        });
+        for field in ["intent", "free_text"] {
+            if let Some(s) = args
+                .get(field)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                body[field] = Value::from(s);
+            }
+        }
+        if let Some(arr) = args.get("files_cited").and_then(Value::as_array) {
+            body["files_cited"] = Value::Array(arr.clone());
+        }
+        if let Some(r) = args.get("rating").and_then(Value::as_i64) {
+            body["rating"] = Value::from(r);
+        }
+        proxy_search(ctx, "/v1/pre-thinking/feedback", body).await
+    }
+}
+
+// ---------------------------------------------------------------------
 // phase19 §3.1 — cortex_law_violations
 // ---------------------------------------------------------------------
 
@@ -3059,12 +3166,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_twentynine_tools_with_unique_names() {
+    fn registry_returns_thirty_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            29,
-            "phase19 §3.5 adds cortex_query_explain (28 -> 29) — closes Group C + the 16-tool surface"
+            30,
+            "phase20 §10 adds cortex_feedback_record (29 -> 30) — companion writer for cortex_feedback_signals"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -3094,6 +3201,7 @@ mod tests {
             "cortex_consolidations_diff",
             "cortex_law_violations",
             "cortex_feedback_signals",
+            "cortex_feedback_record",
             "cortex_decision_search",
             "cortex_consolidation_costs",
             "cortex_query_explain",

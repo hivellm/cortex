@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_twentynine_descriptors() {
+    async fn tools_list_returns_thirty_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
@@ -273,8 +273,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            29,
-            "phase19 §3.5 adds cortex_query_explain (28 -> 29) — closes Group C + the 16-tool surface"
+            30,
+            "phase20 §10 adds cortex_feedback_record (29 -> 30) — companion writer for cortex_feedback_signals"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
