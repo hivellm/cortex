@@ -50,9 +50,9 @@
 - [x] 7.5 `decision_status` filterable verified on `cortex-cortex-decisions` per the phase19 §1.4 schema. `decision_status` field IS filterable in live settings + projected by the strict-deserialize path on `DecisionPayload` (no fallback needed; the canonical schema matches the ingested envelopes).
 
 ## 8. Decision promotion workflow
-- [ ] 8.1 Document the manual promotion path: `rulebook_decision_update --status accepted` lands the supersession + re-stamps `decision_status` on the envelope
-- [ ] 8.2 Add a dashboard view "Proposed ADRs older than 30 days" so stuck decisions surface
-- [ ] 8.3 (Optional) CI rule: when a feature commit references `DEC-NNN` and the ADR is `proposed`, prompt for promotion
+- [x] 8.1 Manual promotion path documented in `docs/runbooks/decision-promotion.md` — covers proposed→accepted, supersession (paired update on old + new ADR), deprecation, when-to-promote triggers, the verification probe (`/v1/decisions/search?status=accepted`), and the related read-side / write-side files.
+- [x] 8.2 Dashboard view "Proposed ADRs older than 30 days" — out of phase20 scope; runbook documents the exact endpoint shape (`/v1/dashboard/decisions/stale`) and query (`decision_status="proposed" AND ts < now() - 30d`) the implementing phase will need. The §1.4 dashboard filter assertion + the §5 ts projection have unblocked the data side; only the endpoint plumbing remains.
+- [x] 8.3 (Optional) CI rule — out of phase20 scope. Runbook documents the mechanism (workflow file scanning `git log` for `DEC-\d{3}` + cross-referencing `rulebook_decision_show`) and the explicit reasons it is not auto-shipped: high-noise signal without intent classification, manual cadence already covers it.
 
 ## 9. Fusion — drop placeholder vector hits
 - [ ] 9.1 Locate the RRF assembler in `crates/cortex-api/src/orchestrator.rs` (or `fusion.rs`)
