@@ -6,4 +6,5 @@
 //! `valid_to`, `superseded_at`, `lifecycle`) per ADR-018..023, and
 //! emits a per-hit decision: pass / drop / boost.
 
+pub mod branch_filter;
 pub mod classifier;

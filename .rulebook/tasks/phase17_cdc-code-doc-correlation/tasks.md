@@ -25,15 +25,8 @@
 - [ ] 3.10 Eval: on the CDC retrieval suite, phantom-link rate (cited symbols that fail verification) must drop to ≤ 1%.
 - [ ] 3.11 New spec `docs/specs/28-phantom-link-verifier.md`.
 
-## 4. P4 — Supersession + recency weighting on decision lookup
-- [ ] 4.1 New scoring function in `crates/cortex-workers/src/scoring/decision_lifecycle.rs`: `score' = base × lifecycle_weight × recency_decay` with `recency_decay = exp(-age_days / 365)`.
-- [ ] 4.2 Lifecycle weights configurable in `cortex-config`: `accepted = 1.0`, `proposed = 0.7`, `superseded = 0.2`, `deprecated = 0.1`.
-- [ ] 4.3 Apply scoring in the `decision_lookup` intent path and in `cortex-historian`'s initial retrieval (not just the post-walk).
-- [ ] 4.4 Emit `cortex-audit` event capturing pre/post-rerank ordering for top-10 ADR candidates per `decision_lookup` query.
-- [ ] 4.5 Integration test in `crates/cortex-api/tests/decision_lookup_it.rs` extension: assert accepted ADR outranks superseded predecessor on synthetic fixture.
-- [ ] 4.6 Eval: on CDC `decision_lookup` subset, recall@5 ≥ +10% on cases where gold ADR is `accepted`; no regression on historical cases.
-- [ ] 4.7 New spec `docs/specs/29-decision-supersession-weighting.md`.
-- [ ] 4.8 Mark this section superseded in tasks.md when `phase18_tlb-timeline-branching` Phase 2 (temporal classifier) ships, with a one-line pointer to the replacement.
+## 4. P4 — Supersession + recency weighting on decision lookup — SUPERSEDED by phase18 §3 (DEC-023)
+- [x] 4.1–4.8 SUPERSEDED by `phase18_tlb-timeline-branching` §3 (temporal classifier) per ADR-023 §1.6. The classifier's `SUPERSEDED` / `EXPIRED` / `ABANDONED` states + the `lifecycle_from_status` mapping in `crates/cortex-workers/src/graph/bitemporal.rs` cover the supersession weighting use case structurally — no separate `decision_lifecycle.rs` module needed. The phase17 P4 spec stub (`docs/specs/29-decision-supersession-weighting.md`) is replaced by phase18 spec 30 (bitemporal schema) + spec 31 (temporal classifier). Marker per phase17 §4.8.
 
 ## 5. Cross-cutting
 - [ ] 5.1 Knowledge capture: after each P merges, `rulebook_knowledge_add pattern` recording the observed metric delta and the load-bearing config values.
