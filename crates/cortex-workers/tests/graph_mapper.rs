@@ -50,6 +50,7 @@ fn event(
         context_path: path.map(String::from),
         parent_event_id: parent.map(String::from),
         session_id: None,
+    occurred_at_ms: 0,
     }
 }
 

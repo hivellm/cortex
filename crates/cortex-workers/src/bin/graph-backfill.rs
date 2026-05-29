@@ -482,6 +482,12 @@ fn envelope_to_enriched(env: Envelope) -> EnrichedEvent {
         context_path,
         parent_event_id: env.parent_event_id,
         session_id,
+        // Phase20 §5.2 — backfill plumbs envelope occurred_at so
+        // replayed envelopes keep their original timestamp on the
+        // Meili sortable axis.
+        occurred_at_ms: chrono::DateTime::parse_from_rfc3339(&env.occurred_at)
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0),
     }
 }
 

@@ -65,6 +65,15 @@ pub struct EnrichedEvent {
     pub context_repo: Option<String>,
     /// Path hint from the envelope context.
     pub context_path: Option<String>,
+    /// Envelope occurrence time in epoch milliseconds. Stamped from
+    /// `Envelope.occurred_at` (RFC3339) by the classifier worker.
+    /// Defaults to 0 when an upstream did not parse / forward it —
+    /// keeps backwards compat with tests that build EnrichedEvent
+    /// without the field. The fulltext worker projects this to
+    /// `Document.ts` so the per-repo Meili sortable axis works
+    /// (phase20 §5.2 — was previously hard-coded to 0).
+    #[serde(default)]
+    pub occurred_at_ms: i64,
     /// Parent envelope event id (e.g. the `Turn` that emitted a child
     /// `Decision` / `LawViolation` / `Analysis`). Carried straight through
     /// from `Envelope.parent_event_id`. Consumed by the graph writer to
@@ -534,6 +543,7 @@ mod tests {
             context_path: path.map(String::from),
             parent_event_id: None,
             session_id: None,
+        occurred_at_ms: 0,
         }
     }
 

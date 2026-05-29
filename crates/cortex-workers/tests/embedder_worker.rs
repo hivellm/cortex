@@ -46,6 +46,7 @@ fn make_enriched(id: &str, content: &str, path: Option<&str>) -> EnrichedEvent {
         context_path: path.map(|s| s.to_string()),
         parent_event_id: None,
         session_id: None,
+    occurred_at_ms: 0,
     }
 }
 

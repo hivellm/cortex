@@ -94,7 +94,12 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         event_id: event.event_id.clone(),
         kind: kind_label.to_string(),
         content_hash: event.content_hash.clone(),
-        ts: 0, // Filled below if classifier latency_ms / event has a hint.
+        // Phase20 §5.2 — project the envelope's occurred_at (epoch ms)
+        // plumbed through the classifier worker. Was previously hard-
+        // coded 0, which left the per-repo `ts` sortable axis useless
+        // and made `consolidation_costs` return zero buckets for every
+        // time window.
+        ts: event.occurred_at_ms,
         repo: event.context_repo.clone(),
         path: event.context_path.clone(),
         topics: event.classifier.topics.clone(),
@@ -684,6 +689,7 @@ mod top_level_projection_tests {
             context_path: None,
             parent_event_id: None,
             session_id: None,
+        occurred_at_ms: 0,
         }
     }
 

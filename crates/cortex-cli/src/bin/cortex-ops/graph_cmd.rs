@@ -445,6 +445,9 @@ pub(super) fn graph_backfill(
             context_path: env.context.cwd.clone(),
             parent_event_id: env.parent_event_id.clone(),
             session_id: Some(env.session_id.clone()),
+            occurred_at_ms: chrono::DateTime::parse_from_rfc3339(&env.occurred_at)
+                .map(|dt| dt.timestamp_millis())
+                .unwrap_or(0),
         };
         let patch = project_envelope(&enriched, &ctx);
         for edge in &patch.edges {

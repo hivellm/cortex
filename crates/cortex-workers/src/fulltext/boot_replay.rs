@@ -312,6 +312,11 @@ fn envelope_to_enriched(env: Envelope) -> EnrichedEvent {
         context_path,
         parent_event_id: env.parent_event_id,
         session_id,
+        // Phase20 §5.2 — boot-time replay parses the envelope's
+        // `occurred_at` so re-indexed docs land with the real ts.
+        occurred_at_ms: chrono::DateTime::parse_from_rfc3339(&env.occurred_at)
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0),
     }
 }
 

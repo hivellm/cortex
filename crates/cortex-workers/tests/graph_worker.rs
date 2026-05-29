@@ -55,6 +55,7 @@ fn enriched(event_id: &str, kind: Kind, payload: Value, parent: Option<&str>) ->
         context_path: None,
         parent_event_id: parent.map(String::from),
         session_id: None,
+    occurred_at_ms: 0,
     }
 }
 
@@ -757,6 +758,7 @@ async fn static_analyzer_runs_on_artifact_event_with_rust_body() {
         context_path: Some("src/lib.rs".to_string()),
         parent_event_id: None,
         session_id: None,
+        occurred_at_ms: 0,
     };
     enqueue(&consumer, 0, &artifact);
 

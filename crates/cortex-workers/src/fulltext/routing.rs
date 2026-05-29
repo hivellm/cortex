@@ -355,6 +355,7 @@ mod tests {
             context_path: None,
             parent_event_id: None,
             session_id: None,
+        occurred_at_ms: 0,
         }
     }
 

@@ -278,6 +278,7 @@ pub(crate) mod tests {
             context_path: None,
             parent_event_id: None,
             session_id: Some("01HXSESS00000000000000000A".into()),
+        occurred_at_ms: 0,
         }
     }
 

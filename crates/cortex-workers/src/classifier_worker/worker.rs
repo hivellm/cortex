@@ -384,6 +384,13 @@ struct NormalisedEvent {
     /// re-deserialising the envelope.
     #[serde(default)]
     tool: Option<String>,
+    /// Phase20 §5.2 — envelope occurrence time (epoch ms). Parsed
+    /// from `Envelope.occurred_at` (RFC3339) on the canonical path,
+    /// stamped from `chrono::Utc::now()` on the bootstrap path.
+    /// Plumbed into `EnrichedEvent.occurred_at_ms` so the fulltext
+    /// worker can project `Document.ts` instead of leaving it 0.
+    #[serde(default)]
+    occurred_at_ms: i64,
 }
 
 impl NormalisedEvent {
@@ -416,6 +423,9 @@ impl NormalisedEvent {
         } else {
             Some(env.tool.clone())
         };
+        let occurred_at_ms = chrono::DateTime::parse_from_rfc3339(&env.occurred_at)
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0);
         Ok(Self {
             event_id: env.event_id,
             kind: env.kind,
@@ -426,6 +436,7 @@ impl NormalisedEvent {
             parent_event_id: env.parent_event_id,
             session_id,
             tool,
+            occurred_at_ms,
         })
     }
 
@@ -478,6 +489,16 @@ impl NormalisedEvent {
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
+        // Bootstrap envelopes may carry a top-level `occurred_at`
+        // (synthesized at bootstrap time). Parse when present; fall
+        // back to "now" so the projected `ts` is non-zero even on
+        // synthetic events from the bootstrap walker.
+        let occurred_at_ms = payload
+            .get("occurred_at")
+            .and_then(|v| v.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
         Ok(Self {
             event_id,
             kind,
@@ -488,6 +509,7 @@ impl NormalisedEvent {
             parent_event_id: None,
             session_id,
             tool,
+            occurred_at_ms,
         })
     }
 
@@ -516,6 +538,7 @@ impl NormalisedEvent {
             context_path: self.context_path,
             parent_event_id: self.parent_event_id,
             session_id: self.session_id,
+            occurred_at_ms: self.occurred_at_ms,
         }
     }
 }
