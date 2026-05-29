@@ -36,4 +36,5 @@ pub mod pruner;
 pub mod retention;
 pub mod sweep;
 pub mod synap_worker;
+pub mod temporal;
 pub mod topic_cards;

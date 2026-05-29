@@ -7,7 +7,7 @@ use crate::sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
     ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
     IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig,
-    RulebookConfig,
+    RulebookConfig, TemporalConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -79,6 +79,10 @@ pub struct Config {
     /// Phase14i §2.3 — `cortex-mcp-server` per-tool timeout knobs.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Phase18 §3.4 — temporal classifier config (timeline /
+    /// branching retrieval).
+    #[serde(default)]
+    pub temporal: TemporalConfig,
 }
 
 fn default_schema_version() -> String {
@@ -106,6 +110,7 @@ impl Default for Config {
             claude_archive: ClaudeArchiveConfig::default(),
             adapter: AdapterConfig::default(),
             mcp: McpConfig::default(),
+            temporal: TemporalConfig::default(),
         }
     }
 }

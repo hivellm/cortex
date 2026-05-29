@@ -183,6 +183,21 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_RULEBOOK_ROOT", "/rulebook/root"),
     ("CORTEX_RULEBOOK_ROOTS", "/rulebook/roots"),
     ("CORTEX_SYNAP_URL", "/ingestion/synap_url"),
+    // Phase18 §3.4 — temporal classifier knobs (sorted alphabetically
+    // among `CORTEX_T*` keys; the binary-search assertion in
+    // `tests::known_env_names_table_stays_sorted_for_binary_search`
+    // pins the ordering).
+    ("CORTEX_TEMPORAL_BOOST", "/temporal/temporal_boost"),
+    ("CORTEX_TEMPORAL_DEMOTE_FACTOR", "/temporal/demote_factor"),
+    ("CORTEX_TEMPORAL_ENABLED", "/temporal/enabled"),
+    (
+        "CORTEX_TEMPORAL_INCLUDE_HISTORY_DEFAULT",
+        "/temporal/include_history_default",
+    ),
+    (
+        "CORTEX_TEMPORAL_WINDOW_DAYS",
+        "/temporal/temporal_window_days",
+    ),
     ("CORTEX_VECTORIZER_API_KEY", "/embedder/vectorizer_api_key"),
     (
         "CORTEX_VECTORIZER_JWT_WARMUP_SECS",

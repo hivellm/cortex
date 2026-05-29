@@ -53,5 +53,5 @@ pub use sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
     ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
     IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig,
-    RulebookConfig,
+    RulebookConfig, TemporalConfig,
 };

@@ -1073,3 +1073,102 @@ mod tests_phase14f {
         assert_eq!(back.bundle_kb, cfg.bundle_kb);
     }
 }
+
+/// Phase18 §3.4 — temporal classifier config (timeline / branching
+/// retrieval). The classifier runs after fusion (BM25 + dense +
+/// graph) and before the cross-encoder reranker per design.md
+/// §2.2.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TemporalConfig {
+    /// Master switch — when `false` the classifier is bypassed and
+    /// every candidate passes through unchanged. Default `true`.
+    /// Env: `CORTEX_TEMPORAL_ENABLED`.
+    #[serde(default = "default_temporal_enabled")]
+    pub enabled: bool,
+    /// When `true`, the orchestrator passes `IncludeFlags::include_history = true`
+    /// by default so superseded / expired hits land in the bundle
+    /// (heavy-demoted, not dropped). Mostly useful for the
+    /// `cortex history` CLI; default `false`.
+    /// Env: `CORTEX_TEMPORAL_INCLUDE_HISTORY_DEFAULT`.
+    #[serde(default)]
+    pub include_history_default: bool,
+    /// Recency window in days — a fact whose `valid_to` lands
+    /// within `as_of + window` enters the TEMPORAL state and gets
+    /// the recency boost. Default 30 (design.md §2.2).
+    /// Env: `CORTEX_TEMPORAL_WINDOW_DAYS`.
+    #[serde(default = "default_temporal_window_days")]
+    pub temporal_window_days: u32,
+    /// Recency boost multiplier applied to TEMPORAL-state hits.
+    /// 1.10 = +10% (design.md §2.2 default).
+    /// Env: `CORTEX_TEMPORAL_BOOST`.
+    #[serde(default = "default_temporal_boost")]
+    pub temporal_boost: f32,
+    /// Demote factor for `include_*` keeps. 0.5 = halve the score.
+    /// Env: `CORTEX_TEMPORAL_DEMOTE_FACTOR`.
+    #[serde(default = "default_temporal_demote_factor")]
+    pub demote_factor: f32,
+}
+
+fn default_temporal_enabled() -> bool {
+    true
+}
+
+fn default_temporal_window_days() -> u32 {
+    30
+}
+
+fn default_temporal_boost() -> f32 {
+    1.10
+}
+
+fn default_temporal_demote_factor() -> f32 {
+    0.5
+}
+
+impl Default for TemporalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_temporal_enabled(),
+            include_history_default: false,
+            temporal_window_days: default_temporal_window_days(),
+            temporal_boost: default_temporal_boost(),
+            demote_factor: default_temporal_demote_factor(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_temporal_config {
+    use super::*;
+
+    #[test]
+    fn defaults_match_design_doc_2_2() {
+        let cfg = TemporalConfig::default();
+        assert!(cfg.enabled);
+        assert!(!cfg.include_history_default);
+        assert_eq!(cfg.temporal_window_days, 30);
+        assert!((cfg.temporal_boost - 1.10).abs() < 1e-6);
+        assert!((cfg.demote_factor - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn toml_round_trips_defaults() {
+        let cfg = TemporalConfig::default();
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: TemporalConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn partial_toml_keeps_serde_defaults_for_missing_fields() {
+        let raw = r#"
+enabled = false
+temporal_boost = 1.25
+"#;
+        let cfg: TemporalConfig = toml::from_str(raw).expect("parse");
+        assert!(!cfg.enabled);
+        assert!((cfg.temporal_boost - 1.25).abs() < 1e-6);
+        assert_eq!(cfg.temporal_window_days, 30);
+        assert!((cfg.demote_factor - 0.5).abs() < 1e-6);
+    }
+}
