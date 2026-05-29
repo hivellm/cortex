@@ -28,6 +28,12 @@ fn make_chunk(id: &str) -> Chunk {
             language: Some("rust".into()),
             source: ChunkSource::Code,
             prompt_version: None,
+            project_id: None,
+            branch_id: None,
+            lifecycle: None,
+            valid_from_unix: None,
+            valid_to_unix: None,
+            superseded_at_unix: None,
         },
     }
 }

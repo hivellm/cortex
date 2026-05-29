@@ -124,6 +124,25 @@ fn chunk_markdown(event: &EnrichedEvent, text: &str, collection: &str) -> Vec<Ch
         );
         let chunk_hash = sha256_hex(&section.text);
         let key = dedup_key(&event.event_id, ordinal, &chunk_hash);
+        let mut metadata = ChunkMetadata {
+            kind: event.kind,
+            topics: event.classifier.topics.clone(),
+            severity: event.classifier.severity,
+            repo: event.context_repo.clone(),
+            path: event.context_path.clone(),
+            symbol,
+            byte_range: Some(byte_range),
+            language: None,
+            source: ChunkSource::Doc,
+            prompt_version: None,
+            project_id: None,
+            branch_id: None,
+            lifecycle: None,
+            valid_from_unix: None,
+            valid_to_unix: None,
+            superseded_at_unix: None,
+        };
+        metadata.stamp_bitemporal(event);
         out.push(Chunk {
             dedup_key: key,
             parent_event_id: event.event_id.clone(),
@@ -131,18 +150,7 @@ fn chunk_markdown(event: &EnrichedEvent, text: &str, collection: &str) -> Vec<Ch
             chunk_content_hash: chunk_hash,
             collection: collection.to_string(),
             text: section.text.clone(),
-            metadata: ChunkMetadata {
-                kind: event.kind,
-                topics: event.classifier.topics.clone(),
-                severity: event.classifier.severity,
-                repo: event.context_repo.clone(),
-                path: event.context_path.clone(),
-                symbol,
-                byte_range: Some(byte_range),
-                language: None,
-                source: ChunkSource::Doc,
-                prompt_version: None,
-            },
+            metadata,
         });
         ordinal = ordinal.saturating_add(1);
     }
@@ -161,6 +169,25 @@ fn chunk_markdown(event: &EnrichedEvent, text: &str, collection: &str) -> Vec<Ch
         );
         let chunk_hash = sha256_hex(&fence.body);
         let key = dedup_key(&event.event_id, ordinal, &chunk_hash);
+        let mut metadata = ChunkMetadata {
+            kind: event.kind,
+            topics: event.classifier.topics.clone(),
+            severity: event.classifier.severity,
+            repo: event.context_repo.clone(),
+            path: event.context_path.clone(),
+            symbol,
+            byte_range: Some(byte_range),
+            language: fence.language.clone(),
+            source: ChunkSource::Code,
+            prompt_version: None,
+            project_id: None,
+            branch_id: None,
+            lifecycle: None,
+            valid_from_unix: None,
+            valid_to_unix: None,
+            superseded_at_unix: None,
+        };
+        metadata.stamp_bitemporal(event);
         out.push(Chunk {
             dedup_key: key,
             parent_event_id: event.event_id.clone(),
@@ -168,18 +195,7 @@ fn chunk_markdown(event: &EnrichedEvent, text: &str, collection: &str) -> Vec<Ch
             chunk_content_hash: chunk_hash,
             collection: collection.to_string(),
             text: fence.body.clone(),
-            metadata: ChunkMetadata {
-                kind: event.kind,
-                topics: event.classifier.topics.clone(),
-                severity: event.classifier.severity,
-                repo: event.context_repo.clone(),
-                path: event.context_path.clone(),
-                symbol,
-                byte_range: Some(byte_range),
-                language: fence.language.clone(),
-                source: ChunkSource::Code,
-                prompt_version: None,
-            },
+            metadata,
         });
         ordinal = ordinal.saturating_add(1);
     }

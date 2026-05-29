@@ -179,6 +179,25 @@ fn build_chunk(
 ) -> Chunk {
     let chunk_hash = sha256_hex(text);
     let key = dedup_key(&event.event_id, ordinal, &chunk_hash);
+    let mut metadata = ChunkMetadata {
+        kind: event.kind,
+        topics: event.classifier.topics.clone(),
+        severity: event.classifier.severity,
+        repo: event.context_repo.clone(),
+        path: event.context_path.clone(),
+        symbol: None,
+        byte_range: Some(byte_range),
+        language,
+        source: ChunkSource::FallbackWindow,
+        prompt_version: None,
+        project_id: None,
+        branch_id: None,
+        lifecycle: None,
+        valid_from_unix: None,
+        valid_to_unix: None,
+        superseded_at_unix: None,
+    };
+    metadata.stamp_bitemporal(event);
     Chunk {
         dedup_key: key,
         parent_event_id: event.event_id.clone(),
@@ -186,18 +205,7 @@ fn build_chunk(
         chunk_content_hash: chunk_hash,
         collection: collection.to_string(),
         text: text.to_string(),
-        metadata: ChunkMetadata {
-            kind: event.kind,
-            topics: event.classifier.topics.clone(),
-            severity: event.classifier.severity,
-            repo: event.context_repo.clone(),
-            path: event.context_path.clone(),
-            symbol: None,
-            byte_range: Some(byte_range),
-            language,
-            source: ChunkSource::FallbackWindow,
-            prompt_version: None,
-        },
+        metadata,
     }
 }
 

@@ -57,6 +57,76 @@ pub struct ChunkMetadata {
     pub source: ChunkSource,
     /// Prompt template version, when `source == Summary`.
     pub prompt_version: Option<String>,
+    // Phase18 §2.7 — bitemporal payload extension. Mirrors the
+    // Meili schema (§2.6) so the temporal classifier (§3) can
+    // pre-filter Vectorizer KNN hits on the same axes the Meili
+    // keyword lane uses. Every `*_unix` value is second-precision
+    // epoch per ADR-018; `valid_to_unix` and `superseded_at_unix`
+    // default to absent (NULL = still valid).
+    /// Project scope copied off `EnrichedEvent.context_repo`
+    /// (lower-cased; `"unknown"` fallback). Filterable so a
+    /// `cortex_vector_search?project_id=cortex` scopes the KNN walk
+    /// to one repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Branch scope (`"main"` until §2.12 ships per-project branches).
+    /// Filterable for branch-isolated retrievals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<String>,
+    /// `proposed | active | superseded | deprecated | abandoned | merged`
+    /// per ADR-018. Filterable so the classifier drops superseded /
+    /// abandoned rows from default retrievals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<String>,
+    /// When the fact starts being true (epoch seconds, UTC).
+    /// Sortable for time-window scopes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from_unix: Option<i64>,
+    /// When the fact stops; absent = still valid (ADR-018 §1.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to_unix: Option<i64>,
+    /// When Cortex stopped believing the version; absent = still
+    /// believed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_at_unix: Option<i64>,
+}
+
+impl ChunkMetadata {
+    /// Phase18 §2.7 — stamp the bitemporal payload columns from an
+    /// `EnrichedEvent`. Mirrors `graph::bitemporal::stamp_one_node`
+    /// and `fulltext::builders::apply_bitemporal_projection` so the
+    /// three writers (graph, Meili, Vectorizer) carry the same
+    /// values per event. `valid_to_unix` and `superseded_at_unix`
+    /// stay absent (NULL = still valid per ADR-018); the SUPERSEDES
+    /// backfill stamps them later on the target row of each
+    /// supersession event. Lifecycle defaults to `active`; callers
+    /// that already know a payload-derived override (e.g.
+    /// `DecisionPayload.status = "superseded"`) should set
+    /// `metadata.lifecycle` BEFORE calling this method.
+    pub fn stamp_bitemporal(&mut self, event: &crate::embedder::EnrichedEvent) {
+        if self.project_id.is_none() {
+            self.project_id = Some(
+                event
+                    .context_repo
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_ascii_lowercase())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            );
+        }
+        if self.branch_id.is_none() {
+            self.branch_id = Some("main".to_string());
+        }
+        if self.lifecycle.is_none() {
+            self.lifecycle = Some("active".to_string());
+        }
+        if self.valid_from_unix.is_none() && event.occurred_at_ms > 0 {
+            self.valid_from_unix = Some(event.occurred_at_ms / 1_000);
+        }
+        // `valid_to_unix` + `superseded_at_unix` stay absent —
+        // ADR-018 §1.1 treats NULL as "still valid / still believed".
+    }
 }
 
 /// Which chunker produced a chunk.

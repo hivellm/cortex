@@ -49,10 +49,33 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE CONSTRAINT violation_id IF NOT EXISTS FOR (v:LawViolation) REQUIRE v.id IS UNIQUE",
     "CREATE CONSTRAINT repo_name IF NOT EXISTS FOR (r:Repo) REQUIRE r.name IS UNIQUE",
     "CREATE CONSTRAINT spec_path IF NOT EXISTS FOR (s:Spec) REQUIRE s.path IS UNIQUE",
+    // Phase18 §2.2 — Branch identity. Composite `<project>:<name>`
+    // id per ADR-019.
+    "CREATE CONSTRAINT branch_id IF NOT EXISTS FOR (b:Branch) REQUIRE b.id IS UNIQUE",
+    // Phase18 §2.3 — TimelineEvent identity.
+    "CREATE CONSTRAINT timeline_event_id IF NOT EXISTS FOR (t:TimelineEvent) REQUIRE t.id IS UNIQUE",
     "CREATE INDEX artifact_repo_path IF NOT EXISTS FOR (a:Artifact) ON (a.repo, a.path)",
     "CREATE INDEX turn_ts IF NOT EXISTS FOR (t:Turn) ON (t.ts)",
     "CREATE INDEX tool_call_name IF NOT EXISTS FOR (tc:ToolCall) ON (tc.tool_name)",
     "CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name)",
+    // Phase18 §2.5 — bitemporal retrieval indexes per design.md §1.1.
+    // The temporal classifier (§3) walks `(project_id, valid_to)` to
+    // drop EXPIRED rows, `(project_id, branch_id, valid_from)` to
+    // scope branch retrievals, and `(superseded_at)` to drop
+    // SUPERSEDED rows. Indexed on every label that carries the
+    // bitemporal stamp (graph/bitemporal.rs writes the columns
+    // uniformly).
+    "CREATE INDEX decision_project_valid_to IF NOT EXISTS FOR (d:Decision) ON (d.project_id, d.valid_to)",
+    "CREATE INDEX decision_project_branch_valid_from IF NOT EXISTS FOR (d:Decision) ON (d.project_id, d.branch_id, d.valid_from)",
+    "CREATE INDEX decision_superseded_at IF NOT EXISTS FOR (d:Decision) ON (d.superseded_at)",
+    "CREATE INDEX memory_project_valid_to IF NOT EXISTS FOR (m:Memory) ON (m.project_id, m.valid_to)",
+    "CREATE INDEX memory_project_branch_valid_from IF NOT EXISTS FOR (m:Memory) ON (m.project_id, m.branch_id, m.valid_from)",
+    "CREATE INDEX memory_superseded_at IF NOT EXISTS FOR (m:Memory) ON (m.superseded_at)",
+    "CREATE INDEX analysis_project_valid_to IF NOT EXISTS FOR (a:Analysis) ON (a.project_id, a.valid_to)",
+    "CREATE INDEX analysis_superseded_at IF NOT EXISTS FOR (a:Analysis) ON (a.superseded_at)",
+    "CREATE INDEX law_violation_project_valid_to IF NOT EXISTS FOR (v:LawViolation) ON (v.project_id, v.valid_to)",
+    "CREATE INDEX timeline_event_project_branch_valid_time IF NOT EXISTS FOR (t:TimelineEvent) ON (t.project_id, t.branch_id, t.valid_time)",
+    "CREATE INDEX branch_project IF NOT EXISTS FOR (b:Branch) ON (b.project_id, b.status)",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like
@@ -138,6 +161,55 @@ mod tests {
             assert!(
                 stmt.contains("IF NOT EXISTS"),
                 "non-idempotent statement: {stmt}"
+            );
+        }
+    }
+
+    #[test]
+    fn phase18_branch_and_timeline_event_constraints_landed() {
+        // §2.2 + §2.3 pin: Branch + TimelineEvent identity
+        // constraints. Without these the temporal classifier's
+        // composite-id seek on `<project>:<branch>` would fall back
+        // to a label scan.
+        let joined = SCHEMA_STATEMENTS.join("\n");
+        assert!(
+            joined.contains("FOR (b:Branch) REQUIRE b.id IS UNIQUE"),
+            "phase18 §2.2 Branch identity constraint missing"
+        );
+        assert!(
+            joined.contains("FOR (t:TimelineEvent) REQUIRE t.id IS UNIQUE"),
+            "phase18 §2.3 TimelineEvent identity constraint missing"
+        );
+    }
+
+    #[test]
+    fn phase18_bitemporal_indexes_landed() {
+        // §2.5 pin: the temporal classifier MUST be able to seek by
+        // `(project_id, valid_to)`, `(project_id, branch_id,
+        // valid_from)`, and `(superseded_at)` on the lifecycle-
+        // tracking labels. A regression would force a full label
+        // scan on every retrieval.
+        let joined = SCHEMA_STATEMENTS.join("\n");
+        for required in [
+            // (project_id, valid_to)
+            "decision_project_valid_to",
+            "memory_project_valid_to",
+            "analysis_project_valid_to",
+            "law_violation_project_valid_to",
+            // (project_id, branch_id, valid_from)
+            "decision_project_branch_valid_from",
+            "memory_project_branch_valid_from",
+            // (superseded_at)
+            "decision_superseded_at",
+            "memory_superseded_at",
+            "analysis_superseded_at",
+            // TimelineEvent + Branch composite indexes
+            "timeline_event_project_branch_valid_time",
+            "branch_project",
+        ] {
+            assert!(
+                joined.contains(required),
+                "phase18 §2.5 index `{required}` missing"
             );
         }
     }

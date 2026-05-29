@@ -303,6 +303,28 @@ impl Chunker for CodeChunker {
             let symbol = extract_symbol(&child, bytes, lang);
             let chunk_hash = sha256_hex(decl_text);
             let key = dedup_key(&event.event_id, ordinal, &chunk_hash);
+            let mut metadata = ChunkMetadata {
+                kind: event.kind,
+                topics: event.classifier.topics.clone(),
+                severity: event.classifier.severity,
+                repo: event.context_repo.clone(),
+                path: event.context_path.clone(),
+                symbol: Some(symbol),
+                byte_range: Some((
+                    start.min(u32::MAX as usize) as u32,
+                    end.min(u32::MAX as usize) as u32,
+                )),
+                language: Some(lang.label().to_string()),
+                source: ChunkSource::Code,
+                prompt_version: None,
+                project_id: None,
+                branch_id: None,
+                lifecycle: None,
+                valid_from_unix: None,
+                valid_to_unix: None,
+                superseded_at_unix: None,
+            };
+            metadata.stamp_bitemporal(event);
             out.push(Chunk {
                 dedup_key: key,
                 parent_event_id: event.event_id.clone(),
@@ -310,21 +332,7 @@ impl Chunker for CodeChunker {
                 chunk_content_hash: chunk_hash,
                 collection: collection.clone(),
                 text: decl_text.to_string(),
-                metadata: ChunkMetadata {
-                    kind: event.kind,
-                    topics: event.classifier.topics.clone(),
-                    severity: event.classifier.severity,
-                    repo: event.context_repo.clone(),
-                    path: event.context_path.clone(),
-                    symbol: Some(symbol),
-                    byte_range: Some((
-                        start.min(u32::MAX as usize) as u32,
-                        end.min(u32::MAX as usize) as u32,
-                    )),
-                    language: Some(lang.label().to_string()),
-                    source: ChunkSource::Code,
-                    prompt_version: None,
-                },
+                metadata,
             });
             ordinal = ordinal.saturating_add(1);
         }
