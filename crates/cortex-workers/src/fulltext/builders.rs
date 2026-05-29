@@ -119,11 +119,18 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         law_severity: None,
         law_tier: None,
         turn_id: None,
+        project_id: None,
+        branch_id: None,
+        lifecycle: None,
+        valid_from_unix: None,
+        valid_to_unix: None,
+        superseded_at_unix: None,
         ext: BTreeMap::new(),
     };
 
     apply_extensions(event, &mut doc);
     apply_top_level_projection(event, &mut doc);
+    apply_bitemporal_projection(event, &mut doc);
     BuildOutcome::Ready(Box::new(doc))
 }
 
@@ -623,6 +630,58 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
             // contracts (if any) read from `ext.<family>.*` already.
         }
     }
+}
+
+/// Phase18 §2.6 — project the bitemporal scoping columns onto the
+/// Meili doc. Mirrors the graph-writer stamp in
+/// `crates/cortex-workers/src/graph/bitemporal.rs` so the temporal
+/// classifier (§3) can filter / sort Meili hits on the same axes
+/// the graph walk uses. The `*_unix` columns are second-precision
+/// epoch ints (per ADR-018) so Meili sortable range ops stay cheap.
+///
+/// `valid_from_unix` is always populated from the envelope's
+/// `occurred_at_ms` (phase20 §5.2). `valid_to_unix` and
+/// `superseded_at_unix` default to absent — the SUPERSEDES /
+/// OBSOLETES edges land them later via the consolidator-side stamp
+/// (§3.9 audit channel). `project_id` derives from
+/// `event.context_repo` (lower-cased; falls back to `"unknown"`
+/// matching the graph writer). `branch_id` is `"main"` until §2.12
+/// ships per-project branches. `lifecycle` is `"active"` by default;
+/// `apply_top_level_projection` may have already stamped a
+/// payload-derived override (e.g. `DecisionPayload.status =
+/// superseded`) — preserve it.
+fn apply_bitemporal_projection(event: &EnrichedEvent, doc: &mut Document) {
+    if doc.project_id.is_none() {
+        let project = event
+            .context_repo
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_else(|| "unknown".to_string());
+        doc.project_id = Some(project);
+    }
+    if doc.branch_id.is_none() {
+        doc.branch_id = Some("main".to_string());
+    }
+    if doc.lifecycle.is_none() {
+        // `decision_status` is the only payload-derived lifecycle
+        // signal projected at the top level today; map it onto the
+        // shared `lifecycle` axis so a single classifier rule
+        // applies across kinds. Anything else defaults to `active`.
+        let lifecycle = doc
+            .decision_status
+            .clone()
+            .unwrap_or_else(|| "active".to_string());
+        doc.lifecycle = Some(lifecycle);
+    }
+    if doc.valid_from_unix.is_none() && event.occurred_at_ms > 0 {
+        doc.valid_from_unix = Some(event.occurred_at_ms / 1_000);
+    }
+    // `valid_to_unix` and `superseded_at_unix` stay absent — the
+    // bitemporal contract treats NULL as "still valid" / "still
+    // believed" per ADR-018 §1.1. The SUPERSEDES backfill in §2.11
+    // stamps them on the target row of each supersession event.
 }
 
 /// Days between `last_rev_at` (RFC 3339) and now (UTC). Returns `0`

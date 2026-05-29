@@ -1,5 +1,5 @@
 {
-  "version": "v6",
+  "version": "v7",
   "searchableAttributes": [
     "title",
     "body",
@@ -46,10 +46,19 @@
     "law_id",
     "law_severity",
     "law_tier",
-    "turn_id"
+    "turn_id",
+    "project_id",
+    "branch_id",
+    "lifecycle",
+    "valid_from_unix",
+    "valid_to_unix",
+    "superseded_at_unix"
   ],
   "sortableAttributes": [
     "ts",
+    "valid_from_unix",
+    "valid_to_unix",
+    "superseded_at_unix",
     "ext.consolidation.grain",
     "ext.consolidation.depth",
     "ext.consolidation.model",

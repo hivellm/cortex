@@ -116,6 +116,41 @@ pub struct Document {
     /// overlay can group hits by turn.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    // Phase18 §2.6 — bitemporal projection. The fields below match the
+    // ADR-018..023 scoping columns the temporal classifier (§3) reads
+    // at retrieval time. `project_id` / `branch_id` / `lifecycle` carry
+    // the categorical axes; the `*_unix` columns are second-precision
+    // epoch ints so Meili sortable + filter range ops stay cheap. The
+    // RFC3339 string forms live on the graph side only — Meili never
+    // sees the human-readable shape.
+    /// Project scope copied off the graph stamp (lower-cased repo).
+    /// Filterable so per-project retrievals scope without a
+    /// `repo = "X"` clause.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Branch scope (`"main"` until §2.12 ships per-project branches).
+    /// Filterable for branch-isolated retrievals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_id: Option<String>,
+    /// `proposed | active | superseded | deprecated | abandoned | merged`.
+    /// Filterable so the classifier drops `superseded` / `abandoned`
+    /// rows from default retrievals.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<String>,
+    /// When the fact starts being true, epoch seconds (UTC). Filterable
+    /// + sortable; range probes use `valid_from_unix <= as_of_unix`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from_unix: Option<i64>,
+    /// When the fact stops; absent = still valid. Filterable +
+    /// sortable; `valid_to_unix EXISTS AND <= as_of_unix` selects
+    /// EXPIRED rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_to_unix: Option<i64>,
+    /// When Cortex stopped believing the version; absent = still
+    /// believed. Filterable + sortable; `superseded_at_unix EXISTS
+    /// AND <= as_of_unix` selects SUPERSEDED rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_at_unix: Option<i64>,
     /// Per-kind extensions keyed by kind family — schema is
     /// `ext.<family>.<field>`. Missing extensions are absent (no
     /// null-padding per spec 08).

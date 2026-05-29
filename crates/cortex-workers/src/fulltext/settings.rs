@@ -45,20 +45,60 @@ mod tests {
     #[test]
     fn baked_in_settings_parse() {
         let v = settings_v1_json().expect("v1 settings parse");
-        // Phase11r §3.3 — bumped to v6 so the settings-version
-        // watcher triggers a re-index pass that adds the
-        // `ext.topic_card.*` axis fields the topic-card lane needs
-        // for filtering / sorting / search. Phase11k's v5 added the
+        // Phase18 §2.6 — bumped to v7 so the settings-version
+        // watcher triggers a re-index pass that adds the bitemporal
+        // axis fields (`project_id` / `branch_id` / `lifecycle` /
+        // `valid_from_unix` / `valid_to_unix` / `superseded_at_unix`)
+        // the temporal classifier needs to filter / sort retrievals
+        // by ADRs 018–023. Phase11r's v6 added the
+        // `ext.topic_card.*` axis fields; phase11k's v5 added the
         // governance top-level projection (`decision_id` / `law_id` /
         // `turn_id` …); phase11j's v4 added `ext.consolidation.*`;
         // phase11i's v3 added `model` / `tool` / `session_id` /
         // `outcome`; phase11b's v2 introduced `path_prefixes`.
-        assert_eq!(v["version"], "v6");
+        assert_eq!(v["version"], "v7");
         assert!(v["searchableAttributes"].as_array().unwrap().len() >= 4);
         assert!(v["sortableAttributes"]
             .as_array()
             .unwrap()
             .contains(&Value::String("ts".to_string())));
+    }
+
+    #[test]
+    fn bitemporal_axis_fields_are_filterable_and_sortable() {
+        // Phase18 §2.6 — the temporal classifier (§3) and the
+        // branch-filtered retrieval lanes (Meili / Vectorizer /
+        // Nexus) MUST be able to filter on the bitemporal scoping
+        // columns and sort on the second-precision epoch-unix
+        // columns. Pin the contract here so a future settings
+        // revision cannot drop one without surfacing the regression
+        // first.
+        let v = settings_v1_json().expect("v1 settings parse");
+        let filterable = v["filterableAttributes"]
+            .as_array()
+            .expect("filterableAttributes is an array");
+        let sortable = v["sortableAttributes"]
+            .as_array()
+            .expect("sortableAttributes is an array");
+        for required in [
+            "project_id",
+            "branch_id",
+            "lifecycle",
+            "valid_from_unix",
+            "valid_to_unix",
+            "superseded_at_unix",
+        ] {
+            assert!(
+                filterable.contains(&Value::String(required.to_string())),
+                "filterableAttributes must include `{required}` for phase18 §2.6",
+            );
+        }
+        for required in ["valid_from_unix", "valid_to_unix", "superseded_at_unix"] {
+            assert!(
+                sortable.contains(&Value::String(required.to_string())),
+                "sortableAttributes must include `{required}` for phase18 §2.6",
+            );
+        }
     }
 
     #[test]
