@@ -9,6 +9,7 @@
 pub mod analyzer;
 pub mod analyzer_dispatch;
 pub mod bitemporal;
+pub mod branch;
 pub mod citations;
 pub mod coalescer;
 pub mod config;
@@ -19,6 +20,7 @@ pub mod mapper;
 pub mod markdown;
 pub mod metrics;
 pub mod nexus_client;
+pub mod temporal_edges;
 pub mod patch;
 pub mod projection;
 pub mod resolver;
