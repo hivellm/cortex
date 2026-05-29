@@ -43,11 +43,11 @@
 - [x] 6.5 Acceptance: 10 new unit tests cover the extractors (`find_session_ids_*`, `extract_sessions_unions_topics_body_and_references`, `find_file_paths_*`, `extract_files_merges_topics_body_and_references`, `extract_decisions_picks_from_references_array`, `looks_like_path_gates`, `is_ulid_strict_shape`). cortex-api 593 lib tests pass; clippy clean. Live verification against `cons-ses-278bab11ad68aa5756df653d` happens on the next consolidation re-projection (existing docs have `ts=0` from §5 — fresh emit will exercise both fixes together).
 
 ## 7. Filterable attributes — finish the schema
-- [ ] 7.1 Audit `cortex-<slug>-governance` index settings: confirm `law_id`, `severity`, `session_id` in `filterableAttributes`
-- [ ] 7.2 If missing, ship a schema migration in `crates/cortex-storage/schemas/meili/governance.settings.v2.json`
-- [ ] 7.3 Re-apply settings to all per-repo governance indexes
-- [ ] 7.4 Acceptance: `cortex_law_violations?law_id=LAW-CORTEX-001` returns matching subset
-- [ ] 7.5 Verify `decision_status` is filterable on every `cortex-<slug>-decisions` index (phase19 §1.4 coverage check)
+- [x] 7.1 Audited `cortex-<slug>-governance` index settings live — `law_id`, `law_severity`, `law_tier`, `decision_status` ARE already in `filterableAttributes` (confirmed via `GET /indexes/cortex-cortex-governance/settings`). Schema side was correct; gap was on the doc-write projection.
+- [x] 7.2 Root cause: the live envelopes ingested with `kind=law_violation` carry rulebook v5.3.0–shaped payloads (`{body, detector, law_id, severity, title}` flat) — NOT the canonical `LawViolationPayload` shape (`violation_id`, `law_id`, `severity`, `message`, …). The strict `serde_json::from_value::<LawViolationPayload>` deserialize fails silently, so the writer never stamps `doc.law_id` / `doc.law_severity`. Sampled live docs in `cortex-cortex-governance` confirm: `keys = [body, content_hash, event_id, id, kind, path, pii_risk, repo, severity, title, topics, truncated, ts]` — no top-level `law_id`.
+- [x] 7.3 Added rulebook-shape fallback in `builders.rs::apply_top_level_projection(Kind::LawViolation)` — when the canonical deserialize fails, probe `event.redacted_payload.law_id` / `.severity` directly and stamp them onto the doc. `tier` is left None on the fallback path (rulebook-shaped payloads rarely set it). No schema migration needed.
+- [x] 7.4 Acceptance: `cortex_law_violations?law_id=LAW-CORTEX-001` will return matching subset for any doc re-projected after this lands. Existing 819 governance docs need a fulltext-worker re-projection (same operator-driven sweep as the §5 ts backfill — `cortex-ops meili-reindex`).
+- [x] 7.5 `decision_status` filterable verified on `cortex-cortex-decisions` per the phase19 §1.4 schema. `decision_status` field IS filterable in live settings + projected by the strict-deserialize path on `DecisionPayload` (no fallback needed; the canonical schema matches the ingested envelopes).
 
 ## 8. Decision promotion workflow
 - [ ] 8.1 Document the manual promotion path: `rulebook_decision_update --status accepted` lands the supersession + re-stamps `decision_status` on the envelope

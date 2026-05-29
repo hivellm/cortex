@@ -575,6 +575,36 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
                 doc.law_id = Some(lv.law_id);
                 doc.law_severity = Some(lv.severity);
                 doc.law_tier = lv.tier.map(|t| t.to_string());
+            } else {
+                // Phase20 §7 — rulebook-shaped law payloads
+                // (`.claude/rules/*.md` + the rulebook v5.3.0
+                // generator) don't match the canonical
+                // LawViolationPayload schema; they ship a plain
+                // `{body, detector, law_id, severity, title}`
+                // object instead. Without this fallback the
+                // strict deserialize fails silently and the
+                // governance index never gets `law_id` /
+                // `law_severity` stamped, so
+                // `cortex_law_violations?law_id=...` returns
+                // empty for the entire corpus. Probe the raw
+                // payload for the same keys when the strict path
+                // fails so the filter axis works.
+                if let Some(id) = event
+                    .redacted_payload
+                    .get("law_id")
+                    .and_then(Value::as_str)
+                {
+                    doc.law_id = Some(id.to_string());
+                }
+                if let Some(sev) = event
+                    .redacted_payload
+                    .get("severity")
+                    .and_then(Value::as_str)
+                {
+                    doc.law_severity = Some(sev.to_string());
+                }
+                // `tier` is rarely set on rulebook-shaped payloads;
+                // leave it as None to avoid misclassification.
             }
         }
         Kind::Turn => {
