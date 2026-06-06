@@ -553,6 +553,90 @@ function applyFilters(params: URLSearchParams, filters?: Filters) {
   if (filters.content_hash) params.set("content_hash", filters.content_hash);
 }
 
+// ── Phase18 §7.7 — bitemporal timeline / branch / entity-history wire
+// types. Mirror the §4.4 HTTP route payloads (see docs/specs/33-timeline-api.md).
+// Distinct from the session-stream `TimelineEvent` above — these scope to a
+// project's bitemporal timeline. Nexus returns rows as JSON maps, so every
+// field is optional to tolerate absent columns.
+
+/// One row from `GET /v1/timeline/{project}` / `/v1/entity/{id}/history`.
+export type BitemporalTimelineEvent = {
+  id?: string;
+  kind?: string;
+  project_id?: string;
+  branch_id?: string;
+  entity_id?: string;
+  valid_from_unix?: number;
+  recorded_at_unix?: number;
+  title?: string;
+  summary?: string;
+};
+
+/// `GET /v1/timeline/{project}` response envelope.
+export type BitemporalTimelineResponse = {
+  project: string;
+  branch: string;
+  filters?: Record<string, unknown>;
+  events: BitemporalTimelineEvent[];
+};
+
+/// Optional filters for `GET /v1/timeline/{project}`.
+export type TimelineFilters = {
+  branch?: string;
+  kind?: string;
+  from?: string;
+  to?: string;
+  as_of?: string;
+  limit?: number;
+};
+
+/// One branch from `GET /v1/branch/{project}`.
+export type BranchMetadata = {
+  id?: string;
+  name?: string;
+  parent_branch_id?: string;
+  status?: string;
+  merge_strategy?: string;
+  merge_point_event_id?: string;
+  abandonment_reason?: string;
+  fork_valid_time?: string;
+  created_at?: string;
+  created_by?: string;
+};
+
+/// `GET /v1/branch/{project}` response envelope.
+export type BranchListResponse = {
+  project: string;
+  branches: BranchMetadata[];
+};
+
+/// `GET /v1/entity/{id}/history` response envelope.
+export type EntityHistoryResponse = {
+  entity_id: string;
+  as_of_unix?: number | null;
+  events: BitemporalTimelineEvent[];
+};
+
+/// One node in a supersession chain walk.
+export type SupersessionChainNode = {
+  id?: string;
+  kind?: string;
+};
+
+/// `GET /v1/entity/{id}/supersession` lineage payload.
+export type SupersessionLineage = {
+  id?: string;
+  label?: string;
+  predecessors?: SupersessionChainNode[];
+  successors?: SupersessionChainNode[];
+};
+
+/// `GET /v1/entity/{id}/supersession` response envelope.
+export type SupersessionResponse = {
+  entity_id: string;
+  lineage?: SupersessionLineage;
+};
+
 export const api = {
   overview: () => getJson<Overview>("/v1/dashboard/overview"),
   timelineRecent: (limit = 200, filters?: Filters) => {
@@ -725,6 +809,40 @@ export const api = {
   task: (id: string) =>
     getJson<TaskDetail>(`/v1/dashboard/tasks/${encodeURIComponent(id)}`),
   tasksSummary: () => getJson<TaskSummary>("/v1/dashboard/tasks/summary"),
+
+  // ── Phase18 §7.7 — bitemporal timeline / branch / entity-history
+  // fetchers over the §4.4 routes.
+  bitemporalTimeline: (project: string, filters?: TimelineFilters) => {
+    const qs = new URLSearchParams();
+    if (filters?.branch) qs.set("branch", filters.branch);
+    if (filters?.kind) qs.set("kind", filters.kind);
+    if (filters?.from) qs.set("from", filters.from);
+    if (filters?.to) qs.set("to", filters.to);
+    if (filters?.as_of) qs.set("as_of", filters.as_of);
+    if (filters?.limit !== undefined) qs.set("limit", String(filters.limit));
+    const tail = qs.toString();
+    return getJson<BitemporalTimelineResponse>(
+      `/v1/timeline/${encodeURIComponent(project)}${tail ? `?${tail}` : ""}`,
+    );
+  },
+  branches: (project: string) =>
+    getJson<BranchListResponse>(`/v1/branch/${encodeURIComponent(project)}`),
+  branchDetail: (project: string, branch: string) =>
+    getJson<{ branch_id: string; branch?: BranchMetadata }>(
+      `/v1/branch/${encodeURIComponent(project)}/${encodeURIComponent(branch)}`,
+    ),
+  entityHistory: (id: string, asOf?: string) => {
+    const qs = new URLSearchParams();
+    if (asOf) qs.set("as_of", asOf);
+    const tail = qs.toString();
+    return getJson<EntityHistoryResponse>(
+      `/v1/entity/${encodeURIComponent(id)}/history${tail ? `?${tail}` : ""}`,
+    );
+  },
+  entitySupersession: (id: string) =>
+    getJson<SupersessionResponse>(
+      `/v1/entity/${encodeURIComponent(id)}/supersession`,
+    ),
 };
 
 // phase5b — Tasks view types (mirror cortex-api's tasks_loader).
