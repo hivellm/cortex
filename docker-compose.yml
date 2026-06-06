@@ -1,6 +1,6 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:3.3.0
+    image: hivehub/vectorizer:3.4.0
     container_name: cortex-vectorizer
     user: "0:0"
     working_dir: /data
