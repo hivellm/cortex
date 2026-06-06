@@ -79,7 +79,9 @@
       "PowerShell(head -40)",
       "PowerShell(Get-Process cortex-mcp-server -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 1; Copy-Item -Force 'E:\\\\HiveLLM\\\\Cortex\\\\target\\\\release\\\\cortex-mcp-server.exe' \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cortex-mcp-server.exe\"; \\(Get-Item \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cortex-mcp-server.exe\"\\).LastWriteTime)",
       "PowerShell(Get-Process bash,sh,wsl -ErrorAction SilentlyContinue)",
-      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='bash.exe'\")"
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='bash.exe'\")",
+      "mcp__plugin_playwright_playwright__browser_click",
+      "mcp__plugin_playwright_playwright__browser_type"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
