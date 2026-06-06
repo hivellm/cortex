@@ -135,11 +135,31 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
 }
 
 fn compute_doc_id(event: &EnrichedEvent, bootstrap: bool) -> String {
-    if bootstrap {
-        // The bootstrap path needs `(repo, path, content_hash)`. Fall
+    // Phase22 P1 — content-addressable governance kinds (Decision,
+    // LawViolation, Knowledge, Learning) are file-backed
+    // (`.rulebook/{decisions,knowledge,learnings}`, `.claude/rules`)
+    // and never-deleted (ADR-022 retention). Re-emitting the same file
+    // must UPSERT, not duplicate. The live path keyed on the per-event
+    // ULID, so ADR-023 landed in `cortex_decisions` 5x — identical
+    // `content_hash`, distinct event ULIDs — burning recall slots
+    // (`cortex_decision_search` returned the same ADR five times). Key
+    // these kinds on the stable `(repo, path, content_hash)` tuple —
+    // the SAME id space the bootstrap path uses — so live re-emits and
+    // re-bootstraps both collapse to one Meili doc. Event-stream kinds
+    // (Turn/ToolCall/AgentCall/Artifact) and prune-by-event_id kinds
+    // (Memory via `cortex_forget`, Consolidation/TopicCard via the
+    // retention pruner) keep the ULID id so those delete paths still
+    // match on the primary key.
+    let content_addressable = matches!(
+        event.kind,
+        Kind::Decision | Kind::LawViolation | Kind::Knowledge | Kind::Learning
+    );
+    if bootstrap || content_addressable {
+        // The stable path needs `(repo, path, content_hash)`. Fall
         // back to the live id when the envelope can't supply both —
-        // the bootstrap CLI populates them, but defensive handling
-        // keeps replays from a partially-populated upstream usable.
+        // the bootstrap CLI + governance writers populate them, but
+        // defensive handling keeps replays from a partially-populated
+        // upstream usable.
         match (event.context_repo.as_deref(), event.context_path.as_deref()) {
             (Some(repo), Some(path)) => bootstrap_doc_id(repo, path, &event.content_hash),
             _ => live_doc_id(&event.event_id),
@@ -596,11 +616,7 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
                 // empty for the entire corpus. Probe the raw
                 // payload for the same keys when the strict path
                 // fails so the filter axis works.
-                if let Some(id) = event
-                    .redacted_payload
-                    .get("law_id")
-                    .and_then(Value::as_str)
-                {
+                if let Some(id) = event.redacted_payload.get("law_id").and_then(Value::as_str) {
                     doc.law_id = Some(id.to_string());
                 }
                 if let Some(sev) = event
@@ -778,7 +794,7 @@ mod top_level_projection_tests {
             context_path: None,
             parent_event_id: None,
             session_id: None,
-        occurred_at_ms: 0,
+            occurred_at_ms: 0,
         }
     }
 
@@ -840,6 +856,103 @@ mod top_level_projection_tests {
         // out of the wire payload entirely — pin that contract too.
         let raw = serde_json::to_value(&doc).expect("serialise");
         assert!(raw.get("decision_supersedes").is_none());
+    }
+
+    fn evt_with_source(
+        event_id: &str,
+        kind: Kind,
+        content_hash: &str,
+        repo: &str,
+        path: &str,
+        payload: serde_json::Value,
+    ) -> EnrichedEvent {
+        EnrichedEvent {
+            event_id: event_id.to_string(),
+            kind,
+            content_hash: content_hash.to_string(),
+            redacted_payload: payload,
+            classifier: classifier(event_id),
+            context_repo: Some(repo.to_string()),
+            context_path: Some(path.to_string()),
+            parent_event_id: None,
+            session_id: None,
+            occurred_at_ms: 0,
+        }
+    }
+
+    #[test]
+    fn live_decision_reemit_collapses_to_one_stable_doc_id() {
+        // Phase22 P1 — ADR-023 was ingested 5x via the live path
+        // (identical content_hash, distinct event ULIDs) and
+        // `cortex_decision_search` returned the same decision five
+        // times. Two live emits of the same decision file MUST yield
+        // the same Meili primary key so Meili upserts instead of
+        // duplicating.
+        let payload = json!({
+            "decision_id": "ADR-0023",
+            "title": "Supersession edges",
+            "status": "proposed",
+            "body": "SUPERSEDES / OBSOLETES / EVOLVES_FROM",
+            "tags": []
+        });
+        let a = ready(build_doc(
+            &evt_with_source(
+                "01LIVEAAA",
+                Kind::Decision,
+                "hash-adr-023",
+                "cortex",
+                ".rulebook/decisions/023.md",
+                payload.clone(),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        let b = ready(build_doc(
+            &evt_with_source(
+                "01LIVEBBB",
+                Kind::Decision,
+                "hash-adr-023",
+                "cortex",
+                ".rulebook/decisions/023.md",
+                payload,
+            ),
+            false,
+            1024 * 1024,
+        ));
+        assert_eq!(
+            a.id, b.id,
+            "live re-emit of the same decision must share a doc id"
+        );
+        assert!(
+            a.id.starts_with("bootstrap:"),
+            "content-addressable kinds use the stable id space, got {}",
+            a.id
+        );
+    }
+
+    #[test]
+    fn live_turn_keeps_per_event_id_even_with_repo_path() {
+        // Event-stream kinds must NOT collapse — two turns are distinct
+        // events even when they share a repo/path. Keep the ULID id so
+        // the retention pruner's delete-by-event_id still matches.
+        let mk = |id: &str| {
+            ready(build_doc(
+                &evt_with_source(
+                    id,
+                    Kind::Turn,
+                    "hash-same",
+                    "cortex",
+                    "src/lib.rs",
+                    json!({ "user_message": "hi", "assistant_message": "yo" }),
+                ),
+                false,
+                1024 * 1024,
+            ))
+        };
+        let a = mk("01TURNAAA");
+        let b = mk("01TURNBBB");
+        assert_ne!(a.id, b.id, "turns must keep distinct per-event ids");
+        assert_eq!(a.id, "01TURNAAA");
     }
 
     #[test]
