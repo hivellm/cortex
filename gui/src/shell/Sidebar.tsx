@@ -54,9 +54,15 @@ const NAV: NavItem[] = [
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
   { id: "health", label: "Health", icon: "tools" },
-  { id: "bitemporal-timeline", label: "Bitemporal Timeline", icon: "timeline" },
-  { id: "branch-explorer", label: "Branch Explorer", icon: "graph" },
-  { id: "entity-history", label: "Entity History", icon: "memory" },
+  // phase18 §7.4-7.6 — Bitemporal Timeline / Branch Explorer / Entity
+  // History are hidden from the nav until they surface something
+  // genuinely useful (the views + routes + ViewId variants + App.tsx
+  // switch arms stay wired, so re-enabling is a one-line uncomment per
+  // row). Re-add when the bitemporal feed/branch tree/entity trail
+  // carry real, useful signal.
+  // { id: "bitemporal-timeline", label: "Bitemporal Timeline", icon: "timeline" },
+  // { id: "branch-explorer", label: "Branch Explorer", icon: "graph" },
+  // { id: "entity-history", label: "Entity History", icon: "memory" },
   // Phase3 §5 — `connections` is intentionally NOT a sidebar
   // entry. The manage view opens only from the header
   // ConnectionSwitcher dropdown's "Manage…" item. ViewId stays
