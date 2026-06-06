@@ -240,8 +240,26 @@ impl Orchestrator {
         let total_budget = Duration::from_millis(req.budget_ms.max(1));
         let split = plan.split_pct;
 
+        // Phase22 P1 — the FastEmbed dense lane (all-MiniLM-L6-v2 embed
+        // on the Vectorizer server + KNN over `cortex-{slug}-code/docs`)
+        // measures 250–595ms on the live stack (the embed call is the
+        // dominant, high-variance term). The spec-11 default split
+        // (40% to vector) grants only ~200ms on the canonical
+        // `budget_ms = 500`, so the lane erodes to `budget exceeded` on
+        // most queries and the bundle silently degrades to keyword-only
+        // — see the §P1 dense-validation harness + `query_explain`
+        // dumps. Give the vector lane a 600ms floor so the p99 dense
+        // call lands within budget on a healthy stack. Vector is the
+        // dominant lane (keyword fans out in ~50ms in parallel), so the
+        // floor is capped at the FULL `total_budget`, not `/2` like the
+        // graph lane: spending the whole budget on the lane the caller
+        // most wants is the honest semantics and never delays the
+        // response beyond what the caller already authorised.
+        // Operator-tuned splits that already grant ≥600ms keep the
+        // computed value.
         let vector_budget = Duration::from_millis(req.budget_ms * split.vector as u64 / 100)
-            .max(Duration::from_millis(1));
+            .max(Duration::from_millis(600))
+            .min(total_budget);
         let keyword_budget = Duration::from_millis(req.budget_ms * split.keyword as u64 / 100)
             .max(Duration::from_millis(1));
         // Phase20 §12.2 — the spec-11 default split (20% to graph)

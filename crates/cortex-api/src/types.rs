@@ -200,7 +200,12 @@ fn default_k() -> usize {
     50
 }
 fn default_budget_ms() -> u64 {
-    500
+    // Phase22 P1 — raised 500 → 800 so the FastEmbed dense vector lane
+    // (250–386ms embed+KNN) plus RRF fusion + overlays complete without
+    // the caller having to pass an explicit budget. The 400ms vector
+    // floor in the orchestrator lands comfortably under this, leaving
+    // headroom for the post-fusion enrichment phase.
+    800
 }
 fn default_include() -> Vec<IncludeField> {
     vec![

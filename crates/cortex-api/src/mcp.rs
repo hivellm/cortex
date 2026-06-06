@@ -107,7 +107,7 @@ fn input_schema() -> Value {
                     ],
                 },
             },
-            "budget_ms": { "type": "integer", "minimum": 1, "default": 500 },
+            "budget_ms": { "type": "integer", "minimum": 1, "default": 800 },
             "budget_bytes": {
                 "type": "integer",
                 "minimum": 1024,
