@@ -327,12 +327,27 @@ impl LiveSynapConsumer {
 impl SynapConsumer for LiveSynapConsumer {
     async fn next_batch(&self, room: &str, max: usize) -> Result<Vec<ConsumedMessage>> {
         let offset = self.tracker.current();
-        let events: Vec<Event> = self
+        // A Synap restart drops every ephemeral room; the upstream
+        // publisher recreates it lazily on its next publish. Until
+        // then, consuming a missing room must read as an empty batch
+        // (not a hard error) so the worker idles instead of
+        // error-spinning. Mirrors the classifier consumer and the
+        // ingestion publisher's room-lifecycle handling.
+        let events: Vec<Event> = match self
             .handle
             .streams()
             .consume(room, Some(offset), Some(max))
             .await
-            .map_err(|e| anyhow::anyhow!("synap consume: {e}"))?;
+        {
+            Ok(v) => v,
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("not found") && msg.contains("Room") {
+                    return Ok(Vec::new());
+                }
+                return Err(anyhow::anyhow!("synap consume: {e}"));
+            }
+        };
 
         Ok(events
             .into_iter()
@@ -408,12 +423,42 @@ impl SynapPublisher for LiveSynapPublisher {
             .get("kind")
             .and_then(|v| v.as_str())
             .unwrap_or(room);
-        self.handle
+        // Publish-or-create-then-republish. Synap does not auto-create
+        // rooms, so the first publish to an output stream after a
+        // fresh or restarted Synap returns "Room … not found". Cortex
+        // owns the room lifecycle — create it and retry once. Mirrors
+        // the classifier and ingestion publishers.
+        match self
+            .handle
             .streams()
             .publish(room, kind, envelope.clone())
             .await
-            .map(|_offset| ())
-            .map_err(|e| anyhow::anyhow!("synap publish: {e}"))
+        {
+            Ok(_offset) => Ok(()),
+            Err(e) => {
+                let msg = e.to_string();
+                if !(msg.contains("not found") && msg.contains("Room")) {
+                    return Err(anyhow::anyhow!("synap publish: {e}"));
+                }
+                if let Err(create_err) = self.handle.streams().create_room(room, None).await {
+                    tracing::debug!(
+                        room,
+                        error = %create_err,
+                        "synap create_room returned an error; will still retry publish"
+                    );
+                }
+                self.handle
+                    .streams()
+                    .publish(room, kind, envelope.clone())
+                    .await
+                    .map(|_offset| ())
+                    .map_err(|e2| {
+                        anyhow::anyhow!(
+                            "synap publish after create_room still failed: {e2} (initial: {msg})"
+                        )
+                    })
+            }
+        }
     }
 }
 

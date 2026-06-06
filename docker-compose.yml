@@ -15,8 +15,13 @@ services:
       - "${VECTORIZER_HOST_PORT:-17001}:15002"
       # Vectorizer binary RPC (v3.x default) — required by the
       # `vectorizer://` SDK transport. Faster than the REST API and
-      # the canonical v3.x dial.
-      - "${VECTORIZER_RPC_HOST_PORT:-17011}:15503"
+      # the canonical v3.x dial. Host port moved off 17011 → 17005:
+      # 17011 is reserved for the host-side cortex-adapter-claude
+      # daemon admin /healthz (CORTEX_ADAPTER_ADMIN_URL), and the
+      # collision kept the adapter from binding. In-cluster consumers
+      # dial `vectorizer://vectorizer:15503` over the docker network,
+      # so the host-port change is host-access-only.
+      - "${VECTORIZER_RPC_HOST_PORT:-17005}:15503"
     volumes:
       - vec-data:/data
       # Vectorizer 3.x writes its real persistent state (collections,
@@ -198,7 +203,15 @@ services:
     environment:
       CORTEX_EMBEDDER_BIND: 0.0.0.0:17022
       CORTEX_EMBEDDER_SYNAP_URL: http://synap:15500
-      CORTEX_EMBEDDER_VECTORIZER_URL: vectorizer://vectorizer:15503
+      # REST endpoint (15002), NOT the binary-RPC dial (vectorizer://:15503).
+      # cortex's LiveVectorizerClient wraps vectorizer-sdk's HTTP
+      # `VectorizerClient`, which only parses http/https; a `vectorizer://`
+      # URL reaches `HttpTransport`/reqwest as an unknown scheme and fails
+      # at construction ("builder error for url … /auth/login"), crash-
+      # looping the worker. The RPC transport lives behind the SDK's
+      # separate `rpc` client, which this worker does not wire. Matches
+      # cortex-api's CORTEX_VECTORIZER_URL.
+      CORTEX_EMBEDDER_VECTORIZER_URL: http://vectorizer:15002
       # phase11e §5 — credentials for the embedder's Vectorizer
       # write path. Without these, the worker hits 401 on every
       # `insert_texts` and the per-kind collections (decisions /
