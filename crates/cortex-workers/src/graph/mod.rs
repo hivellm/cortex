@@ -22,13 +22,13 @@ pub mod markdown;
 pub mod metrics;
 pub mod migration;
 pub mod nexus_client;
-pub mod reindex_alias;
-pub mod temporal_edges;
 pub mod patch;
 pub mod projection;
+pub mod reindex_alias;
 pub mod resolver;
 pub mod schema;
 pub mod stale_sweeper;
+pub mod temporal_edges;
 pub mod worker;
 pub mod writer;
 

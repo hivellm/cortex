@@ -214,7 +214,7 @@ mod tests {
             context_path: Some(path.to_string()),
             parent_event_id: None,
             session_id: None,
-        occurred_at_ms: 0,
+            occurred_at_ms: 0,
         }
     }
 
@@ -230,7 +230,7 @@ mod tests {
             context_path: Some("src/lib.rs".to_string()),
             parent_event_id: None,
             session_id: None,
-        occurred_at_ms: 0,
+            occurred_at_ms: 0,
         }
     }
 

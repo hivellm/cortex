@@ -64,12 +64,7 @@ pub const ALL_TEMPORAL_EDGES: &[&str] = &[
 /// carries the bitemporal axis). The writer is responsible for
 /// stamping `to.lifecycle = deprecated` separately when this edge
 /// lands.
-pub fn build_obsoletes(
-    from_label: &str,
-    from_key: &str,
-    to_label: &str,
-    to_key: &str,
-) -> EdgeOp {
+pub fn build_obsoletes(from_label: &str, from_key: &str, to_label: &str, to_key: &str) -> EdgeOp {
     EdgeOp {
         edge_type: OBSOLETES.to_string(),
         from_label: from_label.to_string(),

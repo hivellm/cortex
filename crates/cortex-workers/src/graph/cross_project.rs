@@ -209,9 +209,7 @@ pub fn scan_version_mentions(text: &str) -> Vec<(String, String)> {
     let patterns: Vec<(&str, Regex)> = SIBLING_PROJECTS
         .iter()
         .filter_map(|&proj| {
-            let pat = format!(
-                r"(?i)\b{proj}\b[^\n0-9]{{0,16}}?v?(\d+\.\d+(?:\.\d+)?)"
-            );
+            let pat = format!(r"(?i)\b{proj}\b[^\n0-9]{{0,16}}?v?(\d+\.\d+(?:\.\d+)?)");
             Regex::new(&pat).ok().map(|re| (proj, re))
         })
         .collect();
@@ -315,10 +313,7 @@ mod tests {
         );
         assert_eq!(project_for_dependency("serde"), None);
         // case-insensitive
-        assert_eq!(
-            project_for_dependency("Nexus-Graph-SDK"),
-            Some("nexus")
-        );
+        assert_eq!(project_for_dependency("Nexus-Graph-SDK"), Some("nexus"));
     }
 
     #[test]
@@ -335,11 +330,17 @@ anyhow = "1"
         let deps = parse_cargo_deps(src);
         assert_eq!(deps.len(), 2, "expected nexus + vectorizer, got {:?}", deps);
 
-        let nexus = deps.iter().find(|d| d.dep_name == "nexus-graph-sdk").unwrap();
+        let nexus = deps
+            .iter()
+            .find(|d| d.dep_name == "nexus-graph-sdk")
+            .unwrap();
         assert_eq!(nexus.to_project, "nexus");
         assert_eq!(nexus.version_constraint, "2.1");
 
-        let vec_dep = deps.iter().find(|d| d.dep_name == "vectorizer-sdk").unwrap();
+        let vec_dep = deps
+            .iter()
+            .find(|d| d.dep_name == "vectorizer-sdk")
+            .unwrap();
         assert_eq!(vec_dep.to_project, "vectorizer");
         assert_eq!(vec_dep.version_constraint, "3.3.0");
     }
@@ -359,11 +360,17 @@ anyhow = "1"
         let deps = parse_package_json(src);
         assert_eq!(deps.len(), 2, "expected nexus + synap, got {:?}", deps);
 
-        let nexus = deps.iter().find(|d| d.dep_name == "@hivellm/nexus").unwrap();
+        let nexus = deps
+            .iter()
+            .find(|d| d.dep_name == "@hivellm/nexus")
+            .unwrap();
         assert_eq!(nexus.to_project, "nexus");
         assert_eq!(nexus.version_constraint, "2.1.0");
 
-        let synap = deps.iter().find(|d| d.dep_name == "@hivellm/synap").unwrap();
+        let synap = deps
+            .iter()
+            .find(|d| d.dep_name == "@hivellm/synap")
+            .unwrap();
         assert_eq!(synap.to_project, "synap");
         assert_eq!(synap.version_constraint, "0.12.0");
     }
@@ -401,7 +408,9 @@ anyhow = "1"
         assert_eq!(edge.to_label, BRANCH_LABEL);
         assert_eq!(edge.to_key, "nexus:main");
         assert_eq!(
-            edge.props.get("version_constraint").and_then(|v| v.as_str()),
+            edge.props
+                .get("version_constraint")
+                .and_then(|v| v.as_str()),
             Some("2.1")
         );
         assert_eq!(
@@ -432,7 +441,12 @@ anyhow = "1"
         let e3 = manifest_edge("cortex", &dep_v2, valid_from);
 
         let result = dedup_edges(vec![e1, e2, e3]);
-        assert_eq!(result.len(), 2, "expected 2 distinct edges, got {:?}", result);
+        assert_eq!(
+            result.len(),
+            2,
+            "expected 2 distinct edges, got {:?}",
+            result
+        );
 
         assert_eq!(
             result[0]

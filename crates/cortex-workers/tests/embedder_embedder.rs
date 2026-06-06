@@ -44,7 +44,7 @@ fn make_event(
         context_path: path.map(|s| s.to_string()),
         parent_event_id: None,
         session_id: None,
-    occurred_at_ms: 0,
+        occurred_at_ms: 0,
     }
 }
 

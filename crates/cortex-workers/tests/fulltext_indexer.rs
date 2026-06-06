@@ -42,7 +42,7 @@ fn event(event_id: &str, kind: Kind, payload: serde_json::Value) -> EnrichedEven
         context_path: None,
         parent_event_id: None,
         session_id: None,
-    occurred_at_ms: 0,
+        occurred_at_ms: 0,
     }
 }
 

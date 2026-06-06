@@ -33,7 +33,7 @@ fn make_event(path: &str, content: &str) -> EnrichedEvent {
         context_path: Some(path.into()),
         parent_event_id: None,
         session_id: None,
-    occurred_at_ms: 0,
+        occurred_at_ms: 0,
     }
 }
 

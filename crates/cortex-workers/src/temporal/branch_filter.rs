@@ -147,10 +147,7 @@ mod tests {
     fn meili_branch_clause_renders_in_disjunction_shape() {
         let chain = vec!["cortex:feat/x".to_string(), "cortex:main".to_string()];
         let clause = meili_branch_clause(&chain);
-        assert_eq!(
-            clause,
-            "branch_id IN [\"cortex:feat/x\", \"cortex:main\"]"
-        );
+        assert_eq!(clause, "branch_id IN [\"cortex:feat/x\", \"cortex:main\"]");
     }
 
     #[test]

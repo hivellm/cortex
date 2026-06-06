@@ -190,8 +190,8 @@ fn derive_valid_from(event: &EnrichedEvent) -> String {
         chrono::Utc::now().timestamp_millis()
     };
     let secs = ms / 1_000;
-    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0)
-        .unwrap_or_else(chrono::Utc::now);
+    let dt =
+        chrono::DateTime::<chrono::Utc>::from_timestamp(secs, 0).unwrap_or_else(chrono::Utc::now);
     // Format with seconds + `Z` suffix per ADR-018 §1.1.
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
@@ -255,8 +255,14 @@ mod tests {
         patch.nodes.push(make_node());
         stamp_bitemporal_props_on_patch(&event, &mut patch);
         let n = &patch.nodes[0];
-        assert_eq!(n.props.get(keys::PROJECT_ID).and_then(|v| v.as_str()), Some("cortex"));
-        assert_eq!(n.props.get(keys::BRANCH_ID).and_then(|v| v.as_str()), Some("main"));
+        assert_eq!(
+            n.props.get(keys::PROJECT_ID).and_then(|v| v.as_str()),
+            Some("cortex")
+        );
+        assert_eq!(
+            n.props.get(keys::BRANCH_ID).and_then(|v| v.as_str()),
+            Some("main")
+        );
         assert_eq!(
             n.props.get(keys::VALID_FROM).and_then(|v| v.as_str()),
             Some("2023-11-14T22:13:20Z")
@@ -265,8 +271,14 @@ mod tests {
             n.props.get(keys::RECORDED_AT).and_then(|v| v.as_str()),
             Some("2023-11-14T22:13:20Z")
         );
-        assert_eq!(n.props.get(keys::LIFECYCLE).and_then(|v| v.as_str()), Some("active"));
-        assert!(!n.props.contains_key(keys::VALID_TO), "valid_to defaults absent");
+        assert_eq!(
+            n.props.get(keys::LIFECYCLE).and_then(|v| v.as_str()),
+            Some("active")
+        );
+        assert!(
+            !n.props.contains_key(keys::VALID_TO),
+            "valid_to defaults absent"
+        );
         assert!(
             !n.props.contains_key(keys::SUPERSEDED_AT),
             "superseded_at defaults absent"

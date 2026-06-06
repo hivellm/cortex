@@ -25,10 +25,7 @@ pub const VECTORIZER_BITEMPORAL_ALIAS: &str = "cortex-vector-bitemporal-v1";
 /// Phase18 §2.8 — every alias the migration may need to flip /
 /// revert. Operators reference this slice in the `cortex-ops
 /// alias` subcommand (§2.9).
-pub const ALL_BITEMPORAL_ALIASES: &[&str] = &[
-    MEILI_BITEMPORAL_ALIAS,
-    VECTORIZER_BITEMPORAL_ALIAS,
-];
+pub const ALL_BITEMPORAL_ALIASES: &[&str] = &[MEILI_BITEMPORAL_ALIAS, VECTORIZER_BITEMPORAL_ALIAS];
 
 #[cfg(test)]
 mod tests {

@@ -16,8 +16,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::patch::{ConflictPolicy, GraphPatch, NodeOp};
 use super::bitemporal::{keys, DEFAULT_BRANCH};
+use super::patch::{ConflictPolicy, GraphPatch, NodeOp};
 
 /// Branch node label per ADR-019 §1.2. The reserved name `main`
 /// exists per project; auto-created by the migration CLI in §2.12.
@@ -358,13 +358,10 @@ pub fn validate_branch_name(name: &str) -> Result<(), String> {
         return Err("branch name must start and end with [a-z0-9]".to_string());
     }
     for (i, b) in bytes.iter().enumerate() {
-        let ok = b.is_ascii_lowercase()
-            || b.is_ascii_digit()
-            || matches!(*b, b'.' | b'_' | b'/' | b'-');
+        let ok =
+            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(*b, b'.' | b'_' | b'/' | b'-');
         if !ok {
-            return Err(format!(
-                "branch name char at index {i} not in [a-z0-9._/-]"
-            ));
+            return Err(format!("branch name char at index {i} not in [a-z0-9._/-]"));
         }
     }
     Ok(())
@@ -415,7 +412,10 @@ mod tests {
                 "branch NodeOp missing prop `{required}`"
             );
         }
-        assert_eq!(op.props.get("status").and_then(|v| v.as_str()), Some("merged"));
+        assert_eq!(
+            op.props.get("status").and_then(|v| v.as_str()),
+            Some("merged")
+        );
         assert_eq!(
             op.props.get("merge_strategy").and_then(|v| v.as_str()),
             Some("accept")
@@ -449,7 +449,10 @@ mod tests {
         };
         let op = ev.as_node_op();
         assert_eq!(op.label, TIMELINE_EVENT_LABEL);
-        assert_eq!(op.props.get("kind").and_then(|v| v.as_str()), Some("branch_fork"));
+        assert_eq!(
+            op.props.get("kind").and_then(|v| v.as_str()),
+            Some("branch_fork")
+        );
         assert_eq!(
             op.props.get("ref_entity_kind").and_then(|v| v.as_str()),
             Some(BRANCH_LABEL)
@@ -459,13 +462,7 @@ mod tests {
 
     #[test]
     fn validate_branch_name_accepts_canonical_shapes() {
-        for ok in [
-            "main",
-            "feat/spec-11-v2",
-            "fix.retry",
-            "exp_2026-04",
-            "a1",
-        ] {
+        for ok in ["main", "feat/spec-11-v2", "fix.retry", "exp_2026-04", "a1"] {
             assert!(validate_branch_name(ok).is_ok(), "should accept `{ok}`");
         }
     }
@@ -473,19 +470,16 @@ mod tests {
     #[test]
     fn validate_branch_name_rejects_off_shape_inputs() {
         for bad in [
-            "",                                                   // empty
-            "x",                                                  // too short
-            "feat/X",                                             // uppercase
-            "/leading-slash",                                     // leading punct
-            "trailing-",                                          // trailing punct
-            "with space",                                         // space
-            "tab\there",                                          // tab
-            "way-too-long-".repeat(10).as_str(),                  // > 64
+            "",                                  // empty
+            "x",                                 // too short
+            "feat/X",                            // uppercase
+            "/leading-slash",                    // leading punct
+            "trailing-",                         // trailing punct
+            "with space",                        // space
+            "tab\there",                         // tab
+            "way-too-long-".repeat(10).as_str(), // > 64
         ] {
-            assert!(
-                validate_branch_name(bad).is_err(),
-                "should reject `{bad}`"
-            );
+            assert!(validate_branch_name(bad).is_err(), "should reject `{bad}`");
         }
     }
 }
