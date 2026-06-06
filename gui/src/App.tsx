@@ -22,6 +22,9 @@ import { ConversationsView } from "./views/Conversations";
 import { HandoffsView } from "./views/Handoffs";
 import { ClassificationsView } from "./views/Classifications";
 import { HealthView } from "./views/Health";
+import { BitemporalTimelineView } from "./views/BitemporalTimeline";
+import { BranchExplorerView } from "./views/BranchExplorer";
+import { EntityHistoryView } from "./views/EntityHistory";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
 import type { Filters } from "./lib/api";
 import { useDashboardStream } from "./lib/useDashboardStream";
@@ -98,6 +101,12 @@ function AppShell() {
         return <GraphView />;
       case "health":
         return <HealthView />;
+      case "bitemporal-timeline":
+        return <BitemporalTimelineView />;
+      case "branch-explorer":
+        return <BranchExplorerView />;
+      case "entity-history":
+        return <EntityHistoryView />;
       case "connections":
         return <ConnectionsView />;
       default:

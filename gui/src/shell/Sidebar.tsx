@@ -21,6 +21,9 @@ export type ViewId =
   | "tools"
   | "graph"
   | "health"
+  | "bitemporal-timeline"
+  | "branch-explorer"
+  | "entity-history"
   | "connections";
 
 type NavItem = { id: ViewId; label: string; icon: IconName; countSource?: CountKey };
@@ -51,6 +54,9 @@ const NAV: NavItem[] = [
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
   { id: "health", label: "Health", icon: "tools" },
+  { id: "bitemporal-timeline", label: "Bitemporal Timeline", icon: "timeline" },
+  { id: "branch-explorer", label: "Branch Explorer", icon: "graph" },
+  { id: "entity-history", label: "Entity History", icon: "memory" },
   // Phase3 §5 — `connections` is intentionally NOT a sidebar
   // entry. The manage view opens only from the header
   // ConnectionSwitcher dropdown's "Manage…" item. ViewId stays
