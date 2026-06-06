@@ -1172,3 +1172,64 @@ temporal_boost = 1.25
         assert!((cfg.demote_factor - 0.5).abs() < 1e-6);
     }
 }
+
+/// Phase18 §5.3 — cross-project retrieval axis config. Gates the
+/// §5.2 propagation that walks `CROSS_PROJECT_REF` edges from the
+/// fused top-K into sibling projects. Default OFF per ADR-020: the
+/// axis stays opt-in until eval evidence (CDC MRR@10) justifies
+/// flipping the default.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CrossProjectConfig {
+    /// Master switch — when `false` (default) the orchestrator never
+    /// walks cross-project edges and every request stays single-
+    /// project, regardless of the request's `projects` field.
+    /// Env: `CORTEX_CROSS_PROJECT_ENABLED`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum number of `CROSS_PROJECT_REF` hops walked from the
+    /// seed top-K. Default 1 (design §2.4 — one hop into the directly
+    /// linked sibling project). Env: `CORTEX_CROSS_PROJECT_MAX_HOPS`.
+    #[serde(default = "default_cross_project_max_hops")]
+    pub max_hops: u32,
+}
+
+fn default_cross_project_max_hops() -> u32 {
+    1
+}
+
+impl Default for CrossProjectConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_hops: default_cross_project_max_hops(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_cross_project_config {
+    use super::*;
+
+    #[test]
+    fn defaults_match_adr_020_opt_in() {
+        let cfg = CrossProjectConfig::default();
+        assert!(!cfg.enabled, "ADR-020 keeps cross-project OFF by default");
+        assert_eq!(cfg.max_hops, 1);
+    }
+
+    #[test]
+    fn toml_round_trips_defaults() {
+        let cfg = CrossProjectConfig::default();
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: CrossProjectConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn partial_toml_keeps_serde_defaults_for_missing_fields() {
+        let raw = "enabled = true\n";
+        let cfg: CrossProjectConfig = toml::from_str(raw).expect("parse");
+        assert!(cfg.enabled);
+        assert_eq!(cfg.max_hops, 1);
+    }
+}

@@ -51,7 +51,7 @@ pub use env_map::{env_name_for, KNOWN_ENV_NAMES};
 pub use load::default_toml_path;
 pub use sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
-    ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
-    IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig,
-    RulebookConfig, TemporalConfig,
+    ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig, DoctorConfig,
+    EmbedderConfig, IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
+    RetentionConfig, RulebookConfig, TemporalConfig,
 };

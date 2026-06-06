@@ -5,9 +5,9 @@ use thiserror::Error;
 
 use crate::sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
-    ClaudeArchiveConfig, ConsolidatorConfig, DashboardConfig, DoctorConfig, EmbedderConfig,
-    IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig, RetentionConfig,
-    RulebookConfig, TemporalConfig,
+    ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig, DoctorConfig,
+    EmbedderConfig, IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
+    RetentionConfig, RulebookConfig, TemporalConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -83,6 +83,10 @@ pub struct Config {
     /// branching retrieval).
     #[serde(default)]
     pub temporal: TemporalConfig,
+    /// Phase18 §5.3 — cross-project retrieval axis config. Default
+    /// OFF per ADR-020.
+    #[serde(default)]
+    pub cross_project: CrossProjectConfig,
 }
 
 fn default_schema_version() -> String {
@@ -111,6 +115,7 @@ impl Default for Config {
             adapter: AdapterConfig::default(),
             mcp: McpConfig::default(),
             temporal: TemporalConfig::default(),
+            cross_project: CrossProjectConfig::default(),
         }
     }
 }

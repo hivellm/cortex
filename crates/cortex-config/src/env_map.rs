@@ -82,6 +82,8 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "CORTEX_COVERAGE_SLUGS_ONLY",
         "/dashboard/coverage_slugs_only",
     ),
+    ("CORTEX_CROSS_PROJECT_ENABLED", "/cross_project/enabled"),
+    ("CORTEX_CROSS_PROJECT_MAX_HOPS", "/cross_project/max_hops"),
     ("CORTEX_DASHBOARD_MEMORY_TAIL", "/dashboard/memory_tail"),
     ("CORTEX_DASHBOARD_WATCH", "/dashboard/watch"),
     ("CORTEX_DOCTOR_BENCH", "/doctor/bench"),
