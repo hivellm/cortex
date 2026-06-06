@@ -858,7 +858,17 @@ fn chunk_to_batch_request(chunk: &Chunk) -> BatchTextRequest {
 /// use this helper so the server sees identical keys regardless of code
 /// path.
 fn flatten_chunk_metadata(chunk: &Chunk) -> Vec<(String, String)> {
-    let mut out: Vec<(String, String)> = Vec::with_capacity(12);
+    let mut out: Vec<(String, String)> = Vec::with_capacity(13);
+    // Store the chunk text in the payload under `body` so the vector
+    // lane (`vectorizer_lane::project` → `get_str("body")`) can render a
+    // snippet. Without it, dense/KNN hits come back text-less and the
+    // orchestrator's snippet section drops them — the long-standing
+    // reason `source: vector` never surfaced in `cortex_query`. Clipped
+    // to keep the payload compact (the renderer caps snippets anyway).
+    out.push((
+        "body".into(),
+        chunk.text.chars().take(2000).collect::<String>(),
+    ));
     out.push(("parent_event_id".into(), chunk.parent_event_id.clone()));
     out.push((
         "parent_content_hash".into(),
