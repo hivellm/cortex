@@ -54,6 +54,13 @@ pub struct ClassifierWorkerConfig {
     /// rates and every classification fell back to the static path.
     /// Override with `CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS`.
     pub cli_timeout_secs: u64,
+    /// phase24 §2.1 — publish a `decision_landed` consolidator trigger
+    /// (spec 27 §3) onto `cortex.consolidator.triggers` for every
+    /// `Kind::Decision` event the worker enriches. Default **off**: the
+    /// decision-trace grain auto-promotes to Opus, so firing it per
+    /// decision is real Anthropic spend the operator must opt into.
+    /// Enable with `CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED=1`.
+    pub consolidator_trigger_enabled: bool,
 }
 
 impl Default for ClassifierWorkerConfig {
@@ -68,6 +75,7 @@ impl Default for ClassifierWorkerConfig {
             claude_bin: "claude".to_string(),
             model: "claude-haiku-4-5".to_string(),
             cli_timeout_secs: 90,
+            consolidator_trigger_enabled: false,
         }
     }
 }
@@ -104,7 +112,21 @@ impl ClassifierWorkerConfig {
             claude_bin: env::var("CLAUDE_CODE_BIN").unwrap_or(def.claude_bin),
             model: cfg.classifier.model.clone().unwrap_or(def.model),
             cli_timeout_secs: parse_u64("CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS", def.cli_timeout_secs),
+            consolidator_trigger_enabled: parse_bool(
+                "CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED",
+                def.consolidator_trigger_enabled,
+            ),
         }
+    }
+}
+
+fn parse_bool(key: &str, fallback: bool) -> bool {
+    match env::var(key) {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => fallback,
     }
 }
 
@@ -175,6 +197,7 @@ mod tests {
         "CLAUDE_CODE_BIN",
         "CORTEX_CLASSIFIER_MODEL",
         "CORTEX_CLASSIFIER_CLI_TIMEOUT_SECS",
+        "CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED",
     ];
     fn clear_all() {
         for k in ALL_KEYS {
@@ -234,6 +257,29 @@ mod tests {
         env::set_var("CORTEX_CLASSIFIER_SYNAP_URL", "http://specific:9100");
         let cfg2 = ClassifierWorkerConfig::from_env();
         assert_eq!(cfg2.synap_url, "http://specific:9100");
+        clear_all();
+    }
+
+    #[test]
+    fn consolidator_trigger_defaults_off_and_parses_truthy() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_all();
+        // Default off — firing the decision-trace grain is real spend.
+        assert!(!ClassifierWorkerConfig::from_env().consolidator_trigger_enabled);
+        for truthy in ["1", "true", "TRUE", "yes", "on"] {
+            env::set_var("CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED", truthy);
+            assert!(
+                ClassifierWorkerConfig::from_env().consolidator_trigger_enabled,
+                "`{truthy}` must enable the trigger producer"
+            );
+        }
+        for falsy in ["0", "false", "off", "garbage"] {
+            env::set_var("CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED", falsy);
+            assert!(
+                !ClassifierWorkerConfig::from_env().consolidator_trigger_enabled,
+                "`{falsy}` must leave the trigger producer off"
+            );
+        }
         clear_all();
     }
 

@@ -853,6 +853,31 @@ impl Worker {
         // still ticks, which keeps "we ran something" observable.
         self.record_spend(&enriched.classifier);
 
+        // 6. phase24 §1.4 — fan out a consolidator `decision_landed`
+        // trigger when this enriched event is a `Kind::Decision`. Gated
+        // behind a default-off config flag: the decision-trace grain
+        // auto-promotes to Opus, so this is opt-in spend. Non-fatal — a
+        // trigger publish failure must not block enrichment or the ack
+        // (re-triggers are idempotent via the daemon's
+        // `decision:<id>` producer checkpoint).
+        if self.config.consolidator_trigger_enabled {
+            if let Some(trigger) =
+                crate::consolidator::trigger_producer::decision_landed_trigger(&enriched)
+            {
+                if let Err(err) = self
+                    .publisher
+                    .publish(crate::consolidator::daemon::TRIGGER_STREAM, &trigger)
+                    .await
+                {
+                    tracing::warn!(
+                        error = %err,
+                        event_id = %enriched.event_id,
+                        "consolidator decision_landed trigger publish failed"
+                    );
+                }
+            }
+        }
+
         self.consumer.ack(stream, offset).await?;
         Ok(())
     }
@@ -1029,6 +1054,149 @@ mod tests {
         let norm = NormalisedEvent::from_canonical_envelope(&env_json).expect("normalise");
         assert_eq!(norm.tool.as_deref(), Some("claude-code"));
         assert_eq!(norm.kind, Kind::Turn);
+    }
+
+    // -----------------------------------------------------------------
+    // phase24 §1.4 — consolidator decision_landed trigger hook.
+    // -----------------------------------------------------------------
+
+    /// Publisher that records every (room, envelope) it is handed.
+    #[derive(Default)]
+    struct RecordingPublisher {
+        calls: std::sync::Mutex<Vec<(String, Value)>>,
+    }
+
+    #[async_trait]
+    impl SynapPublisher for RecordingPublisher {
+        async fn publish(&self, room: &str, envelope: &Value) -> Result<()> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((room.to_string(), envelope.clone()));
+            Ok(())
+        }
+    }
+
+    /// Consumer whose `ack` succeeds; `next_batch` is never called (the
+    /// tests drive `handle_message` directly).
+    struct AckOnlyConsumer;
+
+    #[async_trait]
+    impl SynapConsumer for AckOnlyConsumer {
+        async fn next_batch(&self, _room: &str, _max: usize) -> Result<Vec<ConsumedMessage>> {
+            Ok(Vec::new())
+        }
+        async fn ack(&self, _room: &str, _offset: u64) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn decision_message(offset: u64) -> ConsumedMessage {
+        ConsumedMessage {
+            offset,
+            kind: "decision".into(),
+            payload: json!({
+                "event_id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "schema_version": "1",
+                "occurred_at": "2026-06-06T12:00:00.000Z",
+                "session_id": "sess-d",
+                "stream": "live",
+                "tool": "claude-code",
+                "kind": "decision",
+                "context": {"repo": "cortex", "platform": "claude-code"},
+                "payload": {
+                    "decision_id": "ADR-0042",
+                    "title": "Adopt Meili",
+                    "status": "accepted",
+                    "body": "We pick Meili.",
+                    "tags": []
+                },
+                "content_hash": "sha256:dec"
+            }),
+            event_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".into()),
+        }
+    }
+
+    fn worker_with_trigger(enabled: bool, publisher: Arc<RecordingPublisher>) -> Worker {
+        let config = ClassifierWorkerConfig {
+            consolidator_trigger_enabled: enabled,
+            ..ClassifierWorkerConfig::default()
+        };
+        Worker::new(
+            config,
+            Arc::new(NoopClassifier),
+            Arc::new(AckOnlyConsumer),
+            publisher,
+        )
+    }
+
+    #[tokio::test]
+    async fn decision_event_publishes_trigger_when_enabled() {
+        let pub_ = Arc::new(RecordingPublisher::default());
+        let worker = worker_with_trigger(true, pub_.clone());
+        worker
+            .handle_message(STREAM_RAW, decision_message(1))
+            .await
+            .expect("handle decision");
+        let calls = pub_.calls.lock().unwrap();
+        // One enriched publish + one trigger publish.
+        let trigger = calls
+            .iter()
+            .find(|(room, _)| room == crate::consolidator::daemon::TRIGGER_STREAM)
+            .expect("a decision_landed trigger must be published");
+        assert_eq!(trigger.1["kind"], "decision_landed");
+        assert_eq!(trigger.1["decision_id"], "ADR-0042");
+    }
+
+    #[tokio::test]
+    async fn decision_event_publishes_no_trigger_when_disabled() {
+        let pub_ = Arc::new(RecordingPublisher::default());
+        let worker = worker_with_trigger(false, pub_.clone());
+        worker
+            .handle_message(STREAM_RAW, decision_message(2))
+            .await
+            .expect("handle decision");
+        let calls = pub_.calls.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .all(|(room, _)| room != crate::consolidator::daemon::TRIGGER_STREAM),
+            "no trigger must be published when the flag is off"
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_event_never_publishes_trigger_even_when_enabled() {
+        let pub_ = Arc::new(RecordingPublisher::default());
+        let worker = worker_with_trigger(true, pub_.clone());
+        let msg = ConsumedMessage {
+            offset: 3,
+            kind: "turn".into(),
+            payload: json!({
+                "event_id": "01ARZ3NDEKTSV4RRFFQ69G5FBT",
+                "schema_version": "1",
+                "occurred_at": "2026-06-06T12:00:00.000Z",
+                "session_id": "sess-t",
+                "stream": "live",
+                "tool": "claude-code",
+                "kind": "turn",
+                "context": {"repo": "cortex", "platform": "claude-code"},
+                "payload": {"user_message": "hi", "assistant_message": "yo", "tokens": null},
+                "content_hash": "sha256:turn"
+            }),
+            event_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FBT".into()),
+        };
+        worker
+            .handle_message(STREAM_RAW, msg)
+            .await
+            .expect("handle turn");
+        let calls = pub_.calls.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .all(|(room, _)| room != crate::consolidator::daemon::TRIGGER_STREAM),
+            "a turn must never trigger consolidation"
+        );
     }
 
     // -----------------------------------------------------------------

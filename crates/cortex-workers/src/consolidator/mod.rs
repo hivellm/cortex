@@ -51,6 +51,7 @@ pub mod source;
 pub mod summariser;
 pub mod summariser_cli;
 pub mod templates;
+pub mod trigger_producer;
 
 pub use consolidator_trait::{
     ConsolidationReport, Consolidator, ConsolidatorCtx, ConsolidatorError, TriggerLabel,

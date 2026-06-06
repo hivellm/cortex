@@ -76,6 +76,30 @@ Unknown kinds raise a warn-level log and advance the cursor (the
 daemon does not infinitely retry a malformed envelope). Missing
 required fields raise an error.
 
+### §3.1 Trigger producers (phase24)
+
+Triggers must be published by a producer; until phase24 only the smoke
+test wrote to the stream, so the live daemon ran with `dispatched=0`
+and the consolidation indexes were never created.
+
+`consolidator/trigger_producer.rs` builds the envelopes. The **decision
+-landed** producer is hosted in the classifier worker: it already
+enriches every envelope and holds a Synap publisher, so when an enriched
+event is `Kind::Decision` it fans out one `decision_landed` trigger via
+`decision_landed_trigger(&EnrichedEvent) -> Option<Value>`.
+
+The hook is gated behind `CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED`
+(default **off**): the decision-trace grain auto-promotes to Opus, so
+firing it per decision is opt-in spend. Re-triggering the same decision
+is safe — the daemon's `decision:<decision_id>` producer checkpoint
+(§2.4) skips a decision already consolidated. Trigger-publish failures
+are non-fatal: enrichment + ack proceed regardless.
+
+The **session-end** and **nightly-topic** producers require new session
+idle-tracking and a scheduler respectively and are not yet wired; the
+`run-session` / `run-topic` / `nightly` CLI subcommands remain the manual
+path for those grains.
+
 ## §4 Cost telemetry (phase14a §2.4)
 
 `ConsolidatorCtx` owns `Arc<Mutex<CostLedger>>`. Every grain calls

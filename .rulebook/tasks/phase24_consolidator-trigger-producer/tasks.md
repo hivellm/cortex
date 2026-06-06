@@ -1,12 +1,12 @@
 ## 1. Trigger producer
-- [ ] 1.1 Define the trigger-producer trait + envelope shape (session-end, topic-threshold, decision-landed) reading the existing grain rules
+- [x] 1.1 Define the trigger envelope builder (`consolidator/trigger_producer.rs`); reuse the daemon's `TRIGGER_STREAM` + the classifier worker's existing `SynapPublisher` instead of a new trait
 - [ ] 1.2 Implement session-end detection (idle window or explicit session-end envelope) and publish a session-grain trigger
 - [ ] 1.3 Implement topic-threshold detection via the existing topic_cards::trigger evaluator and publish a topic-grain trigger
-- [ ] 1.4 Implement decision-landed detection on Kind::Decision and publish a decision-trace trigger
+- [x] 1.4 Implement decision-landed detection on Kind::Decision and publish a decision-trace trigger
 
 ## 2. Stack wiring
-- [ ] 2.1 Host the producer in classifier-worker (already consumes the event stream); guard with a config flag
-- [ ] 2.2 Confirm the daemon dispatches (dispatched>0) end-to-end against the live Synap stream
+- [x] 2.1 Host the producer in classifier-worker (already consumes the event stream); guard with config flag `CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED` (default off)
+- [ ] 2.2 Confirm the daemon dispatches (dispatched>0) end-to-end against the live Synap stream (requires enabling the flag — opt-in Opus spend)
 
 ## 3. Backfill
 - [ ] 3.1 Run `cortex-consolidator estimate` to preview spend before any live run
