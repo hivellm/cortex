@@ -25,13 +25,24 @@ function statusTone(status: string | undefined): "ok" | "warn" | "info" | "defau
   }
 }
 
-/** Build a parent → children map from a flat branch list. */
+/** Build a parent → children map from a flat branch list. The reserved
+ * `main` branch is implicit (never in the list), so any branch whose
+ * parent is absent, points at `main`, or points at an id not present in
+ * the set is re-keyed under `mainId` — this makes `main` the single
+ * synthetic root and prevents orphan branches from being silently
+ * dropped. */
 function buildTree(
   branches: BranchMetadata[],
+  mainId: string,
 ): Map<string | null, BranchMetadata[]> {
+  const knownIds = new Set(branches.map((b) => b.id).filter(Boolean));
   const map = new Map<string | null, BranchMetadata[]>();
   for (const b of branches) {
-    const parent = b.parent_branch_id ?? null;
+    const rawParent = b.parent_branch_id ?? null;
+    const parent =
+      rawParent === null || rawParent === mainId || !knownIds.has(rawParent)
+        ? mainId
+        : rawParent;
     const existing = map.get(parent) ?? [];
     existing.push(b);
     map.set(parent, existing);
@@ -52,7 +63,8 @@ export function BranchExplorerView() {
   });
 
   const branches = data?.branches ?? [];
-  const tree = buildTree(branches);
+  const mainId = `${project}:main`;
+  const tree = buildTree(branches, mainId);
 
   return (
     <div className="view">
@@ -107,10 +119,35 @@ export function BranchExplorerView() {
       ) : (
         <div style={{ display: "flex", gap: 24 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
+            {/* Synthetic reserved-`main` root — never in the branch list,
+                but every other branch forks from it (directly or via an
+                ancestor), so it anchors the tree. */}
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "6px 0",
+                fontWeight: 600,
+              }}
+            >
+              <span className="mono">{mainId}</span>
+              <span
+                style={{
+                  fontSize: 10,
+                  padding: "1px 6px",
+                  borderRadius: 4,
+                  background: "var(--bg-3)",
+                  color: "var(--fg-3)",
+                }}
+              >
+                reserved
+              </span>
+            </div>
             <BranchTree
               tree={tree}
-              parentId={null}
-              depth={0}
+              parentId={mainId}
+              depth={1}
               selected={selected}
               onSelect={setSelected}
             />

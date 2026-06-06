@@ -65,6 +65,29 @@ fn clamp_limit(limit: Option<u32>) -> u32 {
     limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT)
 }
 
+/// Nexus returns each Cypher row as a positional array keyed by the
+/// separate `columns` list. The HTTP surface (and the GUI / spec 33)
+/// contract is keyed objects (`{ id, kind, title, ... }`), so zip the
+/// columns with each row's cells into a JSON object. Rows that are
+/// already objects (or scalars) pass through unchanged.
+fn key_rows(columns: &[String], rows: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|row| match row.as_array() {
+            Some(cells) => {
+                let mut obj = serde_json::Map::with_capacity(columns.len());
+                for (i, col) in columns.iter().enumerate() {
+                    obj.insert(
+                        col.clone(),
+                        cells.get(i).cloned().unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                serde_json::Value::Object(obj)
+            }
+            None => row.clone(),
+        })
+        .collect()
+}
+
 // ============================================================================
 // GET /v1/timeline/{project}
 // ============================================================================
@@ -161,7 +184,7 @@ pub async fn handle_timeline(
                     "to_unix": to_unix,
                     "limit": limit,
                 },
-                "events": out.rows,
+                "events": key_rows(&out.columns, &out.rows),
             })),
         )
             .into_response(),
@@ -199,7 +222,7 @@ pub async fn handle_branch_list(
             StatusCode::OK,
             Json(json!({
                 "project": project,
-                "branches": out.rows,
+                "branches": key_rows(&out.columns, &out.rows),
             })),
         )
             .into_response(),
@@ -286,7 +309,7 @@ pub async fn handle_branch_create(
                 "branch_id": child_id,
                 "parent_branch_id": parent_id,
                 "status": "active",
-                "result": out.rows.first(),
+                "result": key_rows(&out.columns, &out.rows).into_iter().next(),
             })),
         )
             .into_response(),
@@ -332,7 +355,7 @@ pub async fn handle_branch_show(
             }
             (
                 StatusCode::OK,
-                Json(json!({ "branch_id": id, "branch": out.rows.first() })),
+                Json(json!({ "branch_id": id, "branch": key_rows(&out.columns, &out.rows).into_iter().next() })),
             )
                 .into_response()
         }
@@ -426,7 +449,7 @@ pub async fn handle_branch_merge(
                 "strategy": body.strategy,
                 "merge_point_event_id": merge_event_id,
                 "merged_at": now_rfc3339,
-                "result": out.rows.first(),
+                "result": key_rows(&out.columns, &out.rows).into_iter().next(),
             })),
         )
             .into_response(),
@@ -492,7 +515,7 @@ pub async fn handle_branch_abandon(
                     "branch_id": id,
                     "status": "abandoned",
                     "abandonment_reason": body.reason,
-                    "result": out.rows.first(),
+                    "result": key_rows(&out.columns, &out.rows).into_iter().next(),
                 })),
             )
                 .into_response()
@@ -556,7 +579,7 @@ pub async fn handle_entity_history(
             Json(json!({
                 "entity_id": entity_id,
                 "as_of_unix": as_of_unix,
-                "events": out.rows,
+                "events": key_rows(&out.columns, &out.rows),
             })),
         )
             .into_response(),
@@ -602,7 +625,7 @@ pub async fn handle_entity_supersession(
                 StatusCode::OK,
                 Json(json!({
                     "entity_id": entity_id,
-                    "lineage": out.rows.first(),
+                    "lineage": key_rows(&out.columns, &out.rows).into_iter().next(),
                 })),
             )
                 .into_response()
