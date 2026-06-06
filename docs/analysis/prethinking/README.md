@@ -76,6 +76,22 @@ user_prompt + cwd + recent_files
 9. **Documented Under** (DOCUMENTED_BY graph edges)
 10. **Cited From** (CITES graph edges)
 
+#### Phase18 temporal anchor bands (rendered first, before the grounding block)
+
+Added by phase18 §6.1/§6.2 (`crates/cortex-pre-thinking/src/formatter.rs`),
+these surface bitemporal context *before* the query so the LLM has explicit
+time anchors. Each is self-byte-capped, omitted when empty, and counted in
+the audit via `formatter::count_sections`:
+
+- **Timeline window** — recent `TimelineEvent`s on the active project+branch
+  as of the query instant (`TIMELINE_WINDOW_EVENTS=8`, 1400 bytes).
+- **Supersession overlay** — active decisions + recently superseded
+  `(new, old)` pairs for the scope (1000 bytes).
+- **Branch context** — current branch + active sibling branches + recently
+  merged (800 bytes).
+
+See `docs/specs/35-temporal-pre-thinking.md` for the full contract.
+
 ---
 
 ## 4. Key Design Decisions
@@ -129,6 +145,7 @@ user_prompt + cwd + recent_files
 - [Complete Findings](findings.md) — 16 numbered findings with evidence
 - [Execution Plan](execution-plan.md) — phased plan to maximize pre-thinking impact
 - Spec 12: `docs/specs/12-pre-thinking-injection.md`
+- Spec 35 (phase18 temporal anchors): `docs/specs/35-temporal-pre-thinking.md`
 - Architecture: `docs/architecture.md`
 - PRD: `docs/prd.md`
 - Source: `crates/cortex-pre-thinking/src/`
