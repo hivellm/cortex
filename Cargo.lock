@@ -754,6 +754,7 @@ dependencies = [
  "cortex-build",
  "cortex-config",
  "cortex-pre-thinking",
+ "jsonschema",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

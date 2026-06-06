@@ -95,6 +95,21 @@ fn cypher_for(template: &str) -> Option<&'static str> {
                     coalesce(l.title, l.id) AS label \
              LIMIT 50",
         ),
+        // Phase18 §5.2 — cross-project reference edges. Invoked
+        // directly by the orchestrator's propagation helper (not via
+        // the strategies layer) so the `$q` param carries the active
+        // project's canonical branch id (`<project>:main`). Returns
+        // the edge's version constraint and bitemporal validity window
+        // so the propagation helper can classify them via the same
+        // temporal wedge used for regular hits.
+        "cross_project_ref" => Some(
+            "MATCH (a:Branch)-[r:CROSS_PROJECT_REF]->(b:Branch) \
+             WHERE a.id CONTAINS $q \
+             RETURN a.id AS edge_from, b.id AS edge_to, type(r) AS edge_type, 1 AS hops, \
+                    coalesce(b.id, a.id) AS label, r.version_constraint AS version_constraint, \
+                    r.valid_from AS valid_from, r.valid_to AS valid_to \
+             LIMIT 50",
+        ),
         _ => None,
     }
 }
@@ -105,7 +120,8 @@ impl GraphLane for NexusGraphLane {
         let cy = cypher_for(&req.template).ok_or_else(|| {
             LaneError::Rejected(format!(
                 "unknown graph template: {} (whitelist: edge_artifact_touched_neighbours, \
-                 decision_supersedes_chain, turn_analysis_decision_chain, law_violations_last_30d)",
+                 decision_supersedes_chain, turn_analysis_decision_chain, law_violations_last_30d, \
+                 cross_project_ref)",
                 req.template
             ))
         })?;
@@ -176,6 +192,37 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
     extras.insert("edge_type".to_string(), Value::String(edge_type.clone()));
     extras.insert("hops".to_string(), Value::Number(hops.into()));
     extras.insert("template".to_string(), Value::String(template.to_string()));
+
+    // Phase18 §5.2 — cross_project_ref edges carry three extra cells
+    // (cells 5/6/7: version_constraint, valid_from, valid_to). Read
+    // them only for this template so a 5-cell row from any other
+    // template is unaffected. `source_project` is derived from the
+    // target branch id by splitting on ':' and taking the prefix
+    // (e.g. "nexus:main" → "nexus").
+    if template == "cross_project_ref" {
+        if let Some(vc) = cells.get(5).and_then(Value::as_str) {
+            extras.insert(
+                "version_constraint".to_string(),
+                Value::String(vc.to_string()),
+            );
+        }
+        if let Some(vf) = cells.get(6).and_then(Value::as_str) {
+            extras.insert("valid_from".to_string(), Value::String(vf.to_string()));
+        }
+        if let Some(vt) = cells.get(7).and_then(Value::as_str) {
+            extras.insert("valid_to".to_string(), Value::String(vt.to_string()));
+        }
+        // Derive source_project from edge_to ("project:branch" → "project").
+        let source_project = edge_to
+            .split_once(':')
+            .map(|(proj, _)| proj)
+            .unwrap_or(edge_to.as_str())
+            .to_string();
+        extras.insert(
+            "source_project".to_string(),
+            Value::String(source_project),
+        );
+    }
 
     // ADR-011 — typed overlay alongside extras. Graph lane owns
     // edge_from / edge_to / hops; the rest stay None.
@@ -289,5 +336,19 @@ mod tests {
             max_hops: 2,
             scope: Scope::default(),
         };
+    }
+
+    // Phase18 §5.2 — the cross_project_ref template is invoked
+    // directly by the orchestrator's propagation helper (not via the
+    // strategies layer), so it is NOT included in the
+    // `cypher_resolves_for_every_strategy_template` list above. This
+    // test confirms the template resolves independently so a rename
+    // in `cypher_for` is caught at compile-time.
+    #[test]
+    fn cross_project_ref_template_resolves() {
+        assert!(
+            cypher_for("cross_project_ref").is_some(),
+            "cross_project_ref must resolve to a Cypher string",
+        );
     }
 }

@@ -12,8 +12,10 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::fusion::{rrf_fuse, FusionConfig};
-use crate::lanes::{is_collection_missing_marker, GraphLane, KeywordLane, LaneHit, VectorLane};
-use cortex_config::TemporalConfig;
+use crate::lanes::{
+    is_collection_missing_marker, GraphLane, GraphRequest, KeywordLane, LaneHit, VectorLane,
+};
+use cortex_config::{CrossProjectConfig, TemporalConfig};
 use cortex_workers::temporal::classifier::{
     classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
     TemporalConfig as ClassifierConfig,
@@ -51,6 +53,11 @@ pub struct Orchestrator {
     /// enabled with the design.md §2.2 tuning; the live binary
     /// overrides via `with_temporal` at boot.
     pub temporal: Arc<RwLock<TemporalConfig>>,
+    /// Phase18 §5.2 — cross-project propagation config. Mirrors the
+    /// temporal handle (Arc<RwLock<_>>) so SIGHUP-driven reloads swap
+    /// the snapshot in place. Default OFF per ADR-020; the live binary
+    /// overrides via `with_cross_project` at boot.
+    pub cross_project: Arc<RwLock<CrossProjectConfig>>,
     /// Phase6f — pre-fan-out query rewriter. Defaults to
     /// [`PassthroughRewriter`] so existing constructors and tests
     /// reproduce today's behaviour. The live binary swaps in
@@ -75,6 +82,7 @@ impl Orchestrator {
             graph,
             fusion: Arc::new(RwLock::new(FusionConfig::default())),
             temporal: Arc::new(RwLock::new(TemporalConfig::default())),
+            cross_project: Arc::new(RwLock::new(CrossProjectConfig::default())),
             rewriter: Arc::new(PassthroughRewriter),
         }
     }
@@ -100,6 +108,37 @@ impl Orchestrator {
         self.temporal
             .read()
             .expect("temporal lock poisoned")
+            .clone()
+    }
+
+    /// Phase18 §5.2 — install a non-default cross-project config at boot.
+    /// Mirrors [`Orchestrator::with_temporal`] so the binary can
+    /// thread `relevance.toml`'s `[cross_project]` block into the live
+    /// handle.
+    pub fn with_cross_project(self, cfg: CrossProjectConfig) -> Self {
+        *self
+            .cross_project
+            .write()
+            .expect("cross_project lock poisoned") = cfg;
+        self
+    }
+
+    /// Phase18 §5.2 — hot-replace the live cross-project config (SIGHUP
+    /// reload path; matches `replace_temporal`).
+    pub fn replace_cross_project(&self, cfg: CrossProjectConfig) {
+        *self
+            .cross_project
+            .write()
+            .expect("cross_project lock poisoned") = cfg;
+    }
+
+    /// Phase18 §5.2 — clone the current cross-project snapshot. Cheap
+    /// (single read lock) so the propagation helper can call it once
+    /// per request.
+    pub fn current_cross_project(&self) -> CrossProjectConfig {
+        self.cross_project
+            .read()
+            .expect("cross_project lock poisoned")
             .clone()
     }
 
@@ -358,6 +397,23 @@ impl Orchestrator {
             );
         }
 
+        // Phase18 §5.2 — cross-project propagation. Gated by the
+        // §5.3 `CrossProjectConfig` (default OFF per ADR-020). When
+        // enabled and the request names sibling `projects`, walk the
+        // active project's `CROSS_PROJECT_REF` edges, classify each
+        // discovered reference by the edge's temporal window, and
+        // fuse the survivors in with `source_project` provenance.
+        if self.current_cross_project().enabled {
+            let as_of_override = parse_as_of_to_unix(req.as_of.as_deref());
+            self.propagate_cross_project(
+                &mut fused,
+                req,
+                as_of_override,
+                &response.query_id,
+            )
+            .await;
+        }
+
         // Post-fusion dedupe + degenerate-hit filter. `rrf_fuse` only
         // dedupes by `doc_id`, so the same artifact lands twice when
         // the keyword lane (`meili|...`) and vector lane (`vec|...`)
@@ -441,6 +497,154 @@ impl Orchestrator {
             response.results.similar_turns.clear();
         }
         (response, rewritten)
+    }
+
+    /// Phase18 §5.2 — walk `CROSS_PROJECT_REF` edges from the active
+    /// project into the requested sibling projects, classify each
+    /// discovered reference via the same temporal wedge, and fuse
+    /// surviving hits (with `source_project` provenance) into `fused`.
+    ///
+    /// Returns immediately when `cross_project.enabled` is `false` or
+    /// when `req.projects` is empty — no graph I/O in those cases.
+    async fn propagate_cross_project(
+        &self,
+        fused: &mut Vec<LaneHit>,
+        req: &QueryRequest,
+        as_of_unix: Option<i64>,
+        query_id: &str,
+    ) {
+        let cfg = self.current_cross_project();
+        if !cfg.enabled {
+            return;
+        }
+        let projects = req.projects.clone().unwrap_or_default();
+        if projects.is_empty() {
+            return;
+        }
+        let active = req
+            .scope
+            .repo
+            .as_deref()
+            .unwrap_or("cortex")
+            .to_lowercase();
+        let gr = GraphRequest {
+            template: "cross_project_ref".into(),
+            params: serde_json::json!({ "query": format!("{active}:main") }),
+            max_hops: u8::try_from(cfg.max_hops).unwrap_or(1).max(1),
+            scope: req.scope.clone(),
+        };
+        let edges = match self.graph.query(&gr).await {
+            Ok(e) => e,
+            Err(err) => {
+                tracing::event!(
+                    target: "cortex_audit",
+                    tracing::Level::INFO,
+                    kind = "cross_project_propagation",
+                    query_id = %query_id,
+                    active_project = %active,
+                    error = %err,
+                );
+                return;
+            }
+        };
+        let discovered = edges.len();
+        let projects_lower: Vec<String> =
+            projects.iter().map(|p| p.to_ascii_lowercase()).collect();
+
+        let now = as_of_unix.unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+                .unwrap_or(0)
+        });
+        let flags = IncludeFlags {
+            include_history: req.include_history.unwrap_or(false),
+            include_future: req.include_future.unwrap_or(false),
+            include_branches: req.include_branches.unwrap_or(false),
+        };
+        let classifier_cfg = classifier_config_from(&self.current_temporal());
+
+        let mut kept_count = 0usize;
+        let mut propagated: Vec<LaneHit> = Vec::new();
+
+        for mut hit in edges {
+            let source_project = hit
+                .extras
+                .get("source_project")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_default();
+            if !projects_lower.contains(&source_project) {
+                continue;
+            }
+            kept_count += 1;
+
+            // Convert RFC-3339 (or YYYY-MM-DD) valid_from / valid_to
+            // strings to epoch seconds and stamp them as JSON numbers so
+            // `candidate_from_hit` picks them up via `extras_as_unix`.
+            if let Some(vf_str) = hit
+                .extras
+                .get("valid_from")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            {
+                if let Some(unix) = rfc3339_to_unix(&vf_str) {
+                    hit.extras.insert(
+                        "valid_from_unix".to_string(),
+                        serde_json::Value::Number(unix.into()),
+                    );
+                }
+            }
+            if let Some(vt_str) = hit
+                .extras
+                .get("valid_to")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            {
+                if let Some(unix) = rfc3339_to_unix(&vt_str) {
+                    hit.extras.insert(
+                        "valid_to_unix".to_string(),
+                        serde_json::Value::Number(unix.into()),
+                    );
+                }
+            }
+
+            let candidate = candidate_from_hit(&hit);
+            let (_state, action) = classify(&candidate, now, flags, &classifier_cfg);
+            match action {
+                TemporalAction::Drop => continue,
+                TemporalAction::Pass { multiplier } => {
+                    hit.score *= f64::from(multiplier);
+                }
+                TemporalAction::Demote { factor } => {
+                    hit.score *= f64::from(factor);
+                }
+            }
+            propagated.push(hit);
+        }
+
+        let dropped = kept_count.saturating_sub(propagated.len());
+        tracing::event!(
+            target: "cortex_audit",
+            tracing::Level::INFO,
+            kind = "cross_project_propagation",
+            query_id = %query_id,
+            active_project = %active,
+            requested = projects.len(),
+            discovered = discovered,
+            kept = kept_count,
+            propagated = propagated.len(),
+            dropped = dropped,
+        );
+
+        fused.append(&mut propagated);
+        // Stable sort by adjusted score so propagated hits interleave
+        // by score — mirrors the sort in `apply_temporal_classifier`.
+        fused.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 }
 
@@ -669,6 +873,15 @@ fn parse_as_of_to_unix(raw: Option<&str>) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(&normalized)
         .ok()
         .map(|dt| dt.timestamp())
+}
+
+/// Phase18 §5.2 — parse an RFC-3339 / `YYYY-MM-DD` timestamp (as stored
+/// on a `CROSS_PROJECT_REF` edge's `valid_from` / `valid_to` props) to
+/// epoch seconds. Thin wrapper over [`parse_as_of_to_unix`] so the
+/// cross-project propagation path shares the exact same date grammar
+/// the temporal wedge uses.
+fn rfc3339_to_unix(s: &str) -> Option<i64> {
+    parse_as_of_to_unix(Some(s))
 }
 
 /// Phase11e §3 — strip every synthetic missing-collection marker
