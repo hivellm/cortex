@@ -33,6 +33,7 @@ CLAUDE.local.md
 .rulebook/handoff/_pending.md
 .rulebook/handoff/.urgent
 .playwright-mcp
+.cortex-logs
 
 # Rust
 target

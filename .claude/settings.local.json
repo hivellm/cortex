@@ -76,7 +76,10 @@
       "PowerShell(docker exec cortex-nexus sh -c \"ls /app && ls /app/config 2>/dev/null\")",
       "PowerShell(docker exec cortex-nexus sh -c \"ls -la /app/config/ ; echo --- ; find /app -maxdepth 3 -type f 2>/dev/null | head -20\")",
       "PowerShell(docker exec cortex-nexus /usr/local/bin/nexus-server --help 2>&1)",
-      "PowerShell(head -40)"
+      "PowerShell(head -40)",
+      "PowerShell(Get-Process cortex-mcp-server -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 1; Copy-Item -Force 'E:\\\\HiveLLM\\\\Cortex\\\\target\\\\release\\\\cortex-mcp-server.exe' \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cortex-mcp-server.exe\"; \\(Get-Item \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\cortex-mcp-server.exe\"\\).LastWriteTime)",
+      "PowerShell(Get-Process bash,sh,wsl -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='bash.exe'\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
