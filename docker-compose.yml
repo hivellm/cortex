@@ -1,6 +1,6 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:3.4.0
+    image: hivehub/vectorizer:3.4.0-fastembed
     container_name: cortex-vectorizer
     user: "0:0"
     working_dir: /data
@@ -219,13 +219,14 @@ services:
       # never created. Same precedence as cortex-api (phase11a).
       CORTEX_EMBEDDER_VECTORIZER_USER: ${CORTEX_EMBEDDER_VECTORIZER_USER:-${CORTEX_VECTORIZER_USER:-admin}}
       CORTEX_EMBEDDER_VECTORIZER_PASSWORD: ${CORTEX_EMBEDDER_VECTORIZER_PASSWORD:-${CORTEX_VECTORIZER_PASSWORD:-cortex-dev-admin}}
-      # phase11e §5 — dim must match the live Vectorizer's default
-      # embedder. `hivehub/vectorizer:3.0.x` ships BM25-512, so any
-      # collection created with the worker's compiled-in default
-      # (768) gets `Invalid dimension` on every insert. .env.example
-      # already pins this at 512 for the host CLI run; the worker
-      # container needs the same value to avoid a default mismatch.
-      CORTEX_EMBEDDER_DIM: ${CORTEX_EMBEDDER_DIM:-512}
+      # Dim MUST match the Vectorizer's active embedding provider.
+      # `vectorizer:3.4.0-fastembed` with `embedding.model:
+      # "fastembed:all-MiniLM-L6-v2"` in its config.yml serves a DENSE
+      # 384-dim provider (issue #306); collections created without an
+      # explicit provider inherit it. 384 = all-MiniLM-L6-v2 dim — a
+      # mismatch yields `Invalid dimension` on insert. (BM25-only builds
+      # use 512; switch this value AND config.embedding.model together.)
+      CORTEX_EMBEDDER_DIM: ${CORTEX_EMBEDDER_DIM:-384}
     restart: unless-stopped
 
   # cortex-fulltext-worker ─ Meili indexer.
