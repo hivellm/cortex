@@ -12,9 +12,12 @@ import { useConnKey } from "../lib/connections/useConnKey";
 const STORAGE_KEY = "cortex.bitemporal-timeline.filters";
 
 const TIMELINE_KINDS = [
+  "session",
   "commit",
   "adr",
   "decision",
+  "analysis",
+  "memory",
   "release",
   "incident",
   "learning",

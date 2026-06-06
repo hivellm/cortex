@@ -32,13 +32,11 @@ const SOURCE_LABELS: &[(&str, &str)] = &[
     ("LawViolation", "incident"),
     ("Learning", "learning"),
     ("Knowledge", "learning"),
-    // Turn carries the per-project work/commit history — the only
-    // progress signal the non-cortex repos (nexus / vectorizer / gui /
-    // dashboard) have. Mapped to `commit` so the GUI commit chip
-    // filters it. Title comes from the coalesced display field below
-    // (Turn has no `title`).
-    ("Turn", "commit"),
 ];
+// Turns are chat / work turns (not commits). They are aggregated
+// separately into ONE `session` event per `session_id` (see the
+// session pass below) so the timeline shows work sessions per project
+// instead of one noisy row per message.
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -66,6 +64,12 @@ pub(super) fn timeline_backfill(
     let mut errors = 0usize;
     let mut by_label: HashMap<String, usize> = HashMap::new();
     let mut by_project: HashMap<String, usize> = HashMap::new();
+    // Nexus closes a connection per request, so Windows exhausts
+    // ephemeral sockets after a few hundred sequential writes
+    // (`IncompleteMessage`). Collect every MERGE fragment and flush
+    // them in batches of one chained Cypher statement, cutting the
+    // request count ~40x. `(fragment, label, project)` per write.
+    let mut pending: Vec<(String, String, String)> = Vec::new();
 
     for (label, kind) in SOURCE_LABELS {
         let cypher = format!(
@@ -152,32 +156,172 @@ pub(super) fn timeline_backfill(
             let title_s = sanitize_literal(&display_title);
             let summary_s = sanitize_literal(&summary);
 
-            let merge_cypher = format!(
-                "MERGE (t:TimelineEvent {{ id: '{tl_id_s}' }}) \
-                 SET t.kind='{kind_s}', \
-                     t.project_id='{project_id_s}', \
-                     t.branch_id='{branch_id_s}', \
-                     t.entity_id='{entity_id_s}', \
-                     t.valid_from_unix={valid_from_unix}, \
-                     t.recorded_at_unix={recorded_at_unix}, \
-                     t.title='{title_s}', \
-                     t.summary='{summary_s}' \
-                 RETURN t.id"
+            // Each chained MERGE in a batch MUST bind a UNIQUE variable —
+            // reusing `t` across clauses cross-applies every SET to the
+            // wrong nodes. Key the variable off the global push index.
+            let v = format!("e{}", pending.len());
+            let fragment = format!(
+                "MERGE ({v}:TimelineEvent {{ id: '{tl_id_s}' }}) \
+                 SET {v}.kind='{kind_s}', \
+                     {v}.project_id='{project_id_s}', \
+                     {v}.branch_id='{branch_id_s}', \
+                     {v}.entity_id='{entity_id_s}', \
+                     {v}.valid_from_unix={valid_from_unix}, \
+                     {v}.recorded_at_unix={recorded_at_unix}, \
+                     {v}.title='{title_s}', \
+                     {v}.summary='{summary_s}'"
             );
+            pending.push((fragment, label.to_string(), project_id.clone()));
+        }
+    }
 
-            match runtime
-                .block_on(async { client.sdk().execute_cypher(&merge_cypher, None).await })
+    // ── Turn → session aggregation ──────────────────────────────────────────────
+    // Turns are individual chat/work messages, not progress events. Collapse
+    // every Turn into ONE `session` TimelineEvent per `session_id`: the
+    // session's earliest valid_from anchors it, its first user message is the
+    // title, and the turn count is the summary. This is the only progress
+    // signal the non-cortex repos have, and it stays one clean row per work
+    // session instead of hundreds of noisy message rows.
+    {
+        // Group Turns into sessions in Nexus (small payload — streaming
+        // every turn to the client corrupted the keep-alive connection
+        // before the writes). One row per (session, project).
+        let agg = "MATCH (n:Turn) WHERE n.session_id IS NOT NULL AND n.valid_from IS NOT NULL \
+             RETURN n.session_id AS sid, n.project_id AS project_id, \
+                    min(n.valid_from) AS first, count(n) AS turns"
+            .to_string();
+        let rows = match runtime.block_on(async { client.sdk().execute_cypher(&agg, None).await }) {
+            Ok(out) => out.rows,
+            Err(e) => {
+                eprintln!("WARN: timeline-backfill: query Turn sessions: {e}");
+                errors += 1;
+                Vec::new()
+            }
+        };
+        for row in &rows {
+            let arr = match row.as_array() {
+                Some(a) => a,
+                None => continue,
+            };
+            let sid = cell_str(arr, 0);
+            let project_id = cell_str(arr, 1);
+            let first_raw = cell_str(arr, 2);
+            let turns = arr.get(3).and_then(|v| v.as_i64()).unwrap_or(0);
+            if sid.is_empty() || project_id.is_empty() {
+                continue;
+            }
+            let valid_from_unix = match parse_rfc3339_or_date(Some(&first_raw)) {
+                Ok(Some(v)) => v,
+                _ => continue,
+            };
+            // The session's first user message becomes the title (small
+            // per-session query, ordered by valid_from).
+            // Clip the message IN Cypher: a full user_message can be a
+            // multi-KB paste (e.g. a task-notification), and returning it
+            // whole makes Nexus close the keep-alive connection, which
+            // then breaks the following write (`IncompleteMessage`).
+            // substring keeps the response tiny so the connection stays
+            // healthy for the MERGE.
+            let title_q = format!(
+                "MATCH (n:Turn {{ session_id: '{}' }}) \
+                 WHERE n.user_message IS NOT NULL AND n.project_id = '{}' \
+                 RETURN substring(n.user_message, 0, 100) ORDER BY n.valid_from LIMIT 1",
+                sanitize_literal(&sid),
+                sanitize_literal(&project_id),
+            );
+            let raw_title = match runtime
+                .block_on(async { client.sdk().execute_cypher(&title_q, None).await })
             {
-                Ok(_) => {
-                    *by_label.entry(label.to_string()).or_insert(0) += 1;
-                    *by_project.entry(project_id.clone()).or_insert(0) += 1;
+                Ok(out) => out
+                    .rows
+                    .first()
+                    .and_then(|r| r.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                Err(_) => String::new(),
+            };
+            let title = if raw_title.trim().is_empty() {
+                format!("Session {}", sid.chars().take(8).collect::<String>())
+            } else {
+                clip(raw_title.trim(), 100)
+            };
+            let summary = format!("{turns} turns - {project_id}");
+            // Include project in the synthetic id: the same session_id can
+            // appear under more than one project (cross-repo session).
+            let tl_id = format!(
+                "tl:session:{}:{}",
+                sanitize_literal(&project_id),
+                sanitize_literal(&sid)
+            );
+            if dry_run {
+                if !json {
+                    println!("{tl_id} <- session ({project_id}) {turns} turns @ {first_raw}");
+                }
+                *by_label.entry("session".to_string()).or_insert(0) += 1;
+                *by_project.entry(project_id.clone()).or_insert(0) += 1;
+                total += 1;
+                continue;
+            }
+            let branch_id = format!("{project_id}:main");
+            let v = format!("e{}", pending.len());
+            let fragment = format!(
+                "MERGE ({v}:TimelineEvent {{ id: '{id}' }}) \
+                 SET {v}.kind='session', {v}.project_id='{proj}', {v}.branch_id='{branch}', \
+                     {v}.entity_id='{ent}', {v}.valid_from_unix={vf}, {v}.recorded_at_unix={vf}, \
+                     {v}.title='{title}', {v}.summary='{summary}'",
+                id = sanitize_literal(&tl_id),
+                proj = sanitize_literal(&project_id),
+                branch = sanitize_literal(&branch_id),
+                ent = sanitize_literal(&sid),
+                vf = valid_from_unix,
+                title = sanitize_literal(&title),
+                summary = sanitize_literal(&summary),
+            );
+            pending.push((fragment, "session".to_string(), project_id.clone()));
+        }
+    }
+
+    // ── Batch flush ─────────────────────────────────────────────────────────────
+    // Chain up to BATCH MERGE clauses into one Cypher statement so the
+    // whole backfill costs ~N/BATCH write requests instead of N — under
+    // the per-process connection ceiling that was failing the sessions.
+    const BATCH: usize = 40;
+    for chunk in pending.chunks(BATCH) {
+        let joined = chunk
+            .iter()
+            .map(|(f, _, _)| f.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let batch_cypher = format!("{joined} RETURN 1 AS ok");
+        match exec_with_retry(&runtime, &client, &batch_cypher) {
+            Ok(_) => {
+                for (_, label, project) in chunk {
+                    *by_label.entry(label.clone()).or_insert(0) += 1;
+                    *by_project.entry(project.clone()).or_insert(0) += 1;
                     total += 1;
                 }
-                Err(e) => {
-                    eprintln!(
-                        "WARN: timeline-backfill: merge {tl_id}: {e}"
-                    );
-                    errors += 1;
+            }
+            Err(_) => {
+                // A single malformed fragment makes Nexus reject the
+                // whole chained statement (it closes the connection →
+                // IncompleteMessage). Fall back to per-item writes so
+                // the one poison fragment fails alone and every other
+                // event in the chunk still lands.
+                for (fragment, label, project) in chunk {
+                    let single = format!("{fragment} RETURN 1 AS ok");
+                    match exec_with_retry(&runtime, &client, &single) {
+                        Ok(_) => {
+                            *by_label.entry(label.clone()).or_insert(0) += 1;
+                            *by_project.entry(project.clone()).or_insert(0) += 1;
+                            total += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("WARN: timeline-backfill: write [{label}/{project}]: {e}");
+                            errors += 1;
+                        }
+                    }
                 }
             }
         }
@@ -262,12 +406,57 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, ExitCode> {
 }
 
 /// Sanitize a string value for inline interpolation into a Cypher
-/// query.  Drops characters that could break string literals or
-/// inject Cypher: `' " \ \n \r`.
+/// query. Drops quotes / backslash / backtick, all ASCII control
+/// chars, AND every non-ASCII character. Nexus 2.2.0's request-body
+/// JSON parser rejects non-ASCII bytes ("invalid unicode code point")
+/// and drops the connection, so accented text / em-dashes / `·` etc.
+/// must be stripped to keep the write alive. Lossy but Nexus-safe.
 fn sanitize_literal(s: &str) -> String {
     s.chars()
-        .filter(|c| !matches!(c, '\'' | '"' | '\\' | '\n' | '\r'))
+        .filter(|c| c.is_ascii() && !c.is_ascii_control())
+        .filter(|c| !matches!(c, '\'' | '"' | '\\' | '`'))
         .collect()
+}
+
+/// Execute a write Cypher with up to 3 attempts. Nexus closes
+/// keep-alive connections server-side, so a pooled connection can be
+/// stale and fail the send with `IncompleteMessage`; reqwest does not
+/// auto-retry POSTs, so retry here (a fresh connection succeeds). A
+/// short backoff lets the dead connection drain from the pool.
+fn exec_with_retry(
+    runtime: &tokio::runtime::Runtime,
+    client: &cortex_workers::graph::nexus_client::LiveNexusClient,
+    cypher: &str,
+) -> Result<(), String> {
+    let mut last = String::new();
+    const ATTEMPTS: u32 = 6;
+    for attempt in 0..ATTEMPTS {
+        match runtime.block_on(async { client.sdk().execute_cypher(cypher, None).await }) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last = format!("{e:?}");
+                if attempt + 1 < ATTEMPTS {
+                    // Exponential backoff lets the server-closed
+                    // connection drain from the pool before the retry
+                    // grabs a fresh one: 120, 240, 480, 960, 1920 ms.
+                    let backoff = 120u64 * (1u64 << attempt);
+                    std::thread::sleep(std::time::Duration::from_millis(backoff));
+                }
+            }
+        }
+    }
+    Err(last)
+}
+
+/// Clip a string to at most `max` chars, appending `…` when truncated.
+fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max).collect();
+        out.push('…');
+        out
+    }
 }
 
 /// Resolve the Nexus URL without constructing a live client (used in
