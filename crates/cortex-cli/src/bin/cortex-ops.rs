@@ -63,6 +63,8 @@ mod rollup;
 mod schedule_cmd;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
+#[path = "cortex-ops/backfill_cross_project.rs"]
+mod backfill_cross_project;
 #[path = "cortex-ops/branch_cmd.rs"]
 mod branch_cmd;
 #[path = "cortex-ops/query_cmd.rs"]
@@ -1118,6 +1120,28 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase18 §5.1 — scan manifests (Cargo.toml / package.json) and
+    /// ADR decision files for cross-project version references and
+    /// upsert `CROSS_PROJECT_REF` edges into Nexus. Idempotent:
+    /// each edge is a `MERGE` so re-running is safe. `--dry-run`
+    /// prints the edge list without writing anything.
+    BackfillCrossProject {
+        /// Repo root holding the manifests + .rulebook/decisions to scan. Defaults to ".".
+        #[arg(long, default_value = ".")]
+        root: String,
+        /// The `project_id` these edges originate from (the `from` side). Defaults to "cortex".
+        #[arg(long, default_value = "cortex")]
+        project: String,
+        /// Override the Nexus base URL. Defaults to $CORTEX_NEXUS_URL then http://127.0.0.1:17002.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Scan + report the edges but write nothing to Nexus.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -1411,6 +1435,24 @@ enum PlanSlice {
 }
 
 fn main() -> ExitCode {
+    // The Windows main-thread stack is 1 MiB. clap's parse/help
+    // machinery for this large `Command` enum overflows it in debug
+    // builds — even `cortex-ops --help` aborts before reaching any
+    // subcommand. Run the real entrypoint on a worker thread with a
+    // generous stack so every subcommand (and `--help`) works.
+    match std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(run)
+    {
+        Ok(handle) => handle.join().unwrap_or(ExitCode::FAILURE),
+        Err(e) => {
+            eprintln!("ERROR: spawn cortex-ops worker thread: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Command::Plan { pretty, slice } => match plan::emit_plan(pretty, slice) {
@@ -1771,6 +1813,13 @@ fn main() -> ExitCode {
             apply,
             json,
         } => bootstrap::dedupe_laws(meili, meili_key, index, apply, json),
+        Command::BackfillCrossProject {
+            root,
+            project,
+            nexus,
+            dry_run,
+            json,
+        } => backfill_cross_project::backfill_cross_project(root, project, nexus, dry_run, json),
     }
 }
 

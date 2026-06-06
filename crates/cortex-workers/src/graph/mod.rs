@@ -13,6 +13,7 @@ pub mod branch;
 pub mod citations;
 pub mod coalescer;
 pub mod config;
+pub mod cross_project;
 pub mod cypher;
 pub mod extractors;
 pub mod identity;
