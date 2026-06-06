@@ -3579,6 +3579,44 @@ mod tests {
         }
     }
 
+    /// Phase18 §4.8 — the repo ships no `mcp validate` binary; the
+    /// honest equivalent is compiling every advertised `inputSchema`
+    /// as a JSON Schema and asserting the MCP descriptor envelope
+    /// (`name` / `description` / `inputSchema`) is well-formed. A tool
+    /// whose schema fails to compile would be rejected by any spec-
+    /// compliant MCP client at `tools/list` time, so this gate stands
+    /// in for that client-side validation. Covers all 35 tools incl.
+    /// the 5 phase18 §4.6 timeline/branch additions.
+    #[test]
+    fn every_tool_descriptor_inputschema_is_valid_json_schema() {
+        let reg = ToolRegistry::default_set();
+        for d in reg.descriptors() {
+            let name = d
+                .get("name")
+                .and_then(Value::as_str)
+                .expect("descriptor carries a string name");
+            assert!(
+                d.get("description").and_then(Value::as_str).is_some(),
+                "{name}: descriptor must carry a string description"
+            );
+            let schema = d
+                .get("inputSchema")
+                .unwrap_or_else(|| panic!("{name}: descriptor must carry inputSchema"));
+            assert_eq!(
+                schema.get("type").and_then(Value::as_str),
+                Some("object"),
+                "{name}: inputSchema.type must be \"object\""
+            );
+            assert!(
+                schema.get("properties").map(Value::is_object).unwrap_or(false),
+                "{name}: inputSchema must carry a properties object"
+            );
+            jsonschema::validator_for(schema).unwrap_or_else(|e| {
+                panic!("{name}: inputSchema is not a valid JSON Schema: {e}")
+            });
+        }
+    }
+
     #[test]
     fn query_tool_descriptor_matches_cortex_api_source_of_truth() {
         let t = QueryTool::new();
