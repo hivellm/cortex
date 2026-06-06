@@ -1023,6 +1023,108 @@ pub struct BranchContext {
     pub recently_merged: Vec<BranchRefRow>,
 }
 
+/// Phase18 §6.2 — return a count of every bundle section that would
+/// be rendered when `format_bundle` is called with `response` and
+/// `opts`. Counts are capped the same way the formatter caps them.
+/// Only sections with a non-zero rendered count are included so the
+/// audit envelope stays compact.
+///
+/// | Key | Source |
+/// |-----|--------|
+/// | `"laws"` | `response.laws_active` capped by `opts.laws_cap` |
+/// | `"decisions"` | `response.results.decisions` capped by `opts.decisions_cap` |
+/// | `"similar_turns"` | `response.results.similar_turns` capped by `opts.similar_turns_cap` |
+/// | `"snippets"` | `response.results.snippets` capped by `opts.snippets_cap` |
+/// | `"graph_neighbors"` | `response.results.graph_neighbors` capped by `opts.graph_cap` |
+/// | `"consolidations"` | `response.results.consolidations` capped by `opts.consolidations_cap` |
+/// | `"topic_cards"` | `response.results.topic_cards` capped by `opts.topic_cards_cap` |
+/// | `"active_work"` | `opts.grounding.active_work` (self-capped) |
+/// | `"similar_sessions"` | `opts.grounding.similar_sessions` (self-capped) |
+/// | `"adr_provenance"` | `opts.grounding.adr_provenance` (self-capped) |
+/// | `"timeline_window"` | `recent_events` in `opts.grounding.timeline_window`, clamped to [`section_caps::TIMELINE_WINDOW_EVENTS`] |
+/// | `"supersession_overlay"` | `active_decisions.len() + recently_superseded.len()` |
+/// | `"branch_context"` | `active_sibling_branches.len() + recently_merged.len()` |
+pub fn count_sections(
+    response: &QueryResponse,
+    opts: &FormatOptions,
+) -> std::collections::BTreeMap<String, u32> {
+    let mut map = std::collections::BTreeMap::new();
+
+    let laws = response.laws_active.len().min(opts.laws_cap) as u32;
+    if laws > 0 {
+        map.insert("laws".to_string(), laws);
+    }
+    let decisions = response.results.decisions.len().min(opts.decisions_cap) as u32;
+    if decisions > 0 {
+        map.insert("decisions".to_string(), decisions);
+    }
+    let similar_turns = response.results.similar_turns.len().min(opts.similar_turns_cap) as u32;
+    if similar_turns > 0 {
+        map.insert("similar_turns".to_string(), similar_turns);
+    }
+    let snippets = response.results.snippets.len().min(opts.snippets_cap) as u32;
+    if snippets > 0 {
+        map.insert("snippets".to_string(), snippets);
+    }
+    let graph_neighbors = response.results.graph_neighbors.len().min(opts.graph_cap) as u32;
+    if graph_neighbors > 0 {
+        map.insert("graph_neighbors".to_string(), graph_neighbors);
+    }
+    let consolidations = response
+        .results
+        .consolidations
+        .len()
+        .min(opts.consolidations_cap) as u32;
+    if consolidations > 0 {
+        map.insert("consolidations".to_string(), consolidations);
+    }
+    let topic_cards = response.results.topic_cards.len().min(opts.topic_cards_cap) as u32;
+    if topic_cards > 0 {
+        map.insert("topic_cards".to_string(), topic_cards);
+    }
+    let active_work = opts.grounding.active_work.len() as u32;
+    if active_work > 0 {
+        map.insert("active_work".to_string(), active_work);
+    }
+    let similar_sessions = opts.grounding.similar_sessions.len() as u32;
+    if similar_sessions > 0 {
+        map.insert("similar_sessions".to_string(), similar_sessions);
+    }
+    let adr_provenance = opts.grounding.adr_provenance.len() as u32;
+    if adr_provenance > 0 {
+        map.insert("adr_provenance".to_string(), adr_provenance);
+    }
+    let timeline_window = opts
+        .grounding
+        .timeline_window
+        .as_ref()
+        .map(|w| w.recent_events.len().min(section_caps::TIMELINE_WINDOW_EVENTS) as u32)
+        .unwrap_or(0);
+    if timeline_window > 0 {
+        map.insert("timeline_window".to_string(), timeline_window);
+    }
+    let supersession_overlay = opts
+        .grounding
+        .supersession_overlay
+        .as_ref()
+        .map(|o| (o.active_decisions.len() + o.recently_superseded.len()) as u32)
+        .unwrap_or(0);
+    if supersession_overlay > 0 {
+        map.insert("supersession_overlay".to_string(), supersession_overlay);
+    }
+    let branch_context = opts
+        .grounding
+        .branch_context
+        .as_ref()
+        .map(|b| (b.active_sibling_branches.len() + b.recently_merged.len()) as u32)
+        .unwrap_or(0);
+    if branch_context > 0 {
+        map.insert("branch_context".to_string(), branch_context);
+    }
+
+    map
+}
+
 /// Minimum trimmed `user_prompt` length (chars) before the
 /// orchestrator should fan out to `cortex_similar_sessions`. Below
 /// this floor the query is too short to embed meaningfully — the
@@ -2513,6 +2615,119 @@ mod tests {
         assert!(
             !bundle.contains("Branch context"),
             "Branch context must be absent with default grounding"
+        );
+    }
+
+    // ============================================================
+    // Phase18 §6.2 — count_sections tests.
+    // ============================================================
+
+    #[test]
+    fn count_sections_temporal_keys_populated() {
+        // Populate all three temporal sections and verify that the
+        // count_sections function returns the expected counts.
+        let resp = sample_response_with_laws();
+        let mut opts = FormatOptions::default();
+
+        // timeline_window: 10 events → clamped to TIMELINE_WINDOW_EVENTS (8)
+        opts.grounding.timeline_window = Some(TimelineWindow {
+            project: "Cortex".into(),
+            as_of: "2026-06-06".into(),
+            branch: "Cortex:main".into(),
+            recent_events: (0..10).map(make_timeline_event).collect(),
+        });
+        // supersession_overlay: 2 active + 1 superseded = 3
+        opts.grounding.supersession_overlay = Some(SupersessionOverlay {
+            active_decisions: vec![
+                ActiveDecisionRow {
+                    decision_id: "DEC-001".into(),
+                    title: "First".into(),
+                },
+                ActiveDecisionRow {
+                    decision_id: "DEC-002".into(),
+                    title: "Second".into(),
+                },
+            ],
+            recently_superseded: vec![SupersessionPairRow {
+                successor_id: "DEC-002".into(),
+                successor_title: "Second".into(),
+                predecessor_id: "DEC-001".into(),
+                predecessor_title: "First".into(),
+            }],
+        });
+        // branch_context: 1 sibling + 1 merged = 2
+        opts.grounding.branch_context = Some(BranchContext {
+            current_branch: "Cortex:main".into(),
+            active_sibling_branches: vec![BranchRefRow {
+                branch_id: "Cortex:feature-auth".into(),
+                status: "active".into(),
+            }],
+            recently_merged: vec![BranchRefRow {
+                branch_id: "Cortex:phase18-done".into(),
+                status: "merged".into(),
+            }],
+        });
+
+        let counts = count_sections(&resp, &opts);
+
+        assert_eq!(
+            counts.get("timeline_window").copied().unwrap_or(0),
+            section_caps::TIMELINE_WINDOW_EVENTS as u32,
+            "timeline_window should be clamped to TIMELINE_WINDOW_EVENTS"
+        );
+        assert_eq!(
+            counts.get("supersession_overlay").copied().unwrap_or(0),
+            3,
+            "supersession_overlay should sum active_decisions + recently_superseded"
+        );
+        assert_eq!(
+            counts.get("branch_context").copied().unwrap_or(0),
+            2,
+            "branch_context should sum active_sibling_branches + recently_merged"
+        );
+    }
+
+    #[test]
+    fn count_sections_temporal_keys_absent_when_none() {
+        // When grounding temporal fields are None, count_sections must not
+        // insert those keys (keeping the audit envelope compact).
+        let resp = sample_response_with_laws();
+        let opts = FormatOptions::default(); // grounding fields are all None/empty
+
+        let counts = count_sections(&resp, &opts);
+
+        assert!(
+            !counts.contains_key("timeline_window"),
+            "timeline_window key must be absent when grounding.timeline_window is None"
+        );
+        assert!(
+            !counts.contains_key("supersession_overlay"),
+            "supersession_overlay key must be absent when grounding.supersession_overlay is None"
+        );
+        assert!(
+            !counts.contains_key("branch_context"),
+            "branch_context key must be absent when grounding.branch_context is None"
+        );
+    }
+
+    #[test]
+    fn count_sections_timeline_window_events_clamped() {
+        // Verify that fewer events than the cap produces the exact count,
+        // not the cap value.
+        let resp = sample_response_with_laws();
+        let mut opts = FormatOptions::default();
+        opts.grounding.timeline_window = Some(TimelineWindow {
+            project: "Cortex".into(),
+            as_of: String::new(),
+            branch: String::new(),
+            recent_events: vec![make_timeline_event(0), make_timeline_event(1)],
+        });
+
+        let counts = count_sections(&resp, &opts);
+        assert_eq!(
+            counts.get("timeline_window").copied().unwrap_or(0),
+            2,
+            "count must match actual event count when below TIMELINE_WINDOW_EVENTS cap"
         );
     }
 }

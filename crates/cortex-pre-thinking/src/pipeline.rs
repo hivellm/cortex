@@ -275,14 +275,12 @@ pub async fn run_with_breaker<Q: QueryFn>(
     for step in &clipped.steps {
         metrics.incr_truncation_step(*step);
     }
-    metrics.observe_section_count("laws", response.laws_active.len() as u32);
-    metrics.observe_section_count("decisions", response.results.decisions.len() as u32);
-    metrics.observe_section_count("similar_turns", response.results.similar_turns.len() as u32);
-    metrics.observe_section_count("snippets", response.results.snippets.len() as u32);
-    metrics.observe_section_count(
-        "graph_neighbors",
-        response.results.graph_neighbors.len() as u32,
-    );
+    // Phase18 §6.2 — emit every section count from the clipped bundle
+    // (incl. temporal sections + grounding sections) instead of the
+    // five hardcoded keys. Counts reflect the FINAL post-trim caps.
+    for (section, count) in &clipped.section_counts {
+        metrics.observe_section_count(section, *count);
+    }
 
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     metrics.observe_latency_ms(latency_ms);
@@ -293,7 +291,7 @@ pub async fn run_with_breaker<Q: QueryFn>(
         intent = %intent.label(),
         query_id = %response.query_id,
         bundle_bytes = clipped.bytes,
-        sections = response_section_summary(&response),
+        sections = response_section_summary(&clipped.section_counts),
         steps = ?clipped.steps,
         latency_ms = latency_ms,
         "pre-thinking bundle assembled"
@@ -311,15 +309,16 @@ pub async fn run_with_breaker<Q: QueryFn>(
     }
 }
 
-fn response_section_summary(r: &QueryResponse) -> String {
-    format!(
-        "laws={} decisions={} turns={} snippets={} graph={}",
-        r.laws_active.len(),
-        r.results.decisions.len(),
-        r.results.similar_turns.len(),
-        r.results.snippets.len(),
-        r.results.graph_neighbors.len(),
-    )
+/// Phase18 §6.2 — build a compact one-line summary of every rendered
+/// section from the post-trim `section_counts` map. Format:
+/// `key=N key=N …` in BTreeMap order (alphabetical) so the log line
+/// is deterministic and grep-friendly.
+fn response_section_summary(section_counts: &std::collections::BTreeMap<String, u32>) -> String {
+    section_counts
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]

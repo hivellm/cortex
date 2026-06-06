@@ -14,7 +14,7 @@
 use cortex_api::QueryResponse;
 use serde::{Deserialize, Serialize};
 
-use crate::formatter::{format_bundle, FormatOptions, SnippetTrim};
+use crate::formatter::{self, format_bundle, FormatOptions, SnippetTrim};
 
 /// One step of the trim ladder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +45,11 @@ pub struct ClippedBundle {
     pub steps: Vec<TrimStep>,
     /// Final byte length of `bundle`.
     pub bytes: usize,
+    /// Phase18 §6.2 — per-section rendered counts reflecting the
+    /// FINAL (post-trim) caps. Only sections with count > 0 are
+    /// present. Built from [`formatter::count_sections`] after every
+    /// return point so the counts always match the opts actually used.
+    pub section_counts: std::collections::BTreeMap<String, u32>,
 }
 
 /// Clip `bundle_bytes`-bound bundle. Returns the result plus the
@@ -54,15 +59,25 @@ pub fn clip_to_budget(
     response: &QueryResponse,
     bundle_bytes: usize,
 ) -> ClippedBundle {
+    // Build a `ClippedBundle` with section_counts reflecting `opts` at
+    // whichever point in the trim ladder we stop. Extracted so every
+    // return site uses identical construction.
+    let finish = |bundle: String, steps: Vec<TrimStep>, opts: &FormatOptions| -> ClippedBundle {
+        let bytes = bundle.len();
+        let section_counts = formatter::count_sections(response, opts);
+        ClippedBundle {
+            bundle,
+            steps,
+            bytes,
+            section_counts,
+        }
+    };
+
     let mut opts = FormatOptions::default();
     let mut steps: Vec<TrimStep> = Vec::new();
     let mut bundle = format_bundle(intent, response, &opts);
     if bundle.len() <= bundle_bytes {
-        return ClippedBundle {
-            bytes: bundle.len(),
-            bundle,
-            steps,
-        };
+        return finish(bundle, steps, &opts);
     }
 
     // Step 1 — drop graph neighbours.
@@ -71,11 +86,7 @@ pub fn clip_to_budget(
         bundle = format_bundle(intent, response, &opts);
         steps.push(TrimStep::DropGraph);
         if bundle.len() <= bundle_bytes {
-            return ClippedBundle {
-                bytes: bundle.len(),
-                bundle,
-                steps,
-            };
+            return finish(bundle, steps, &opts);
         }
     }
 
@@ -85,11 +96,7 @@ pub fn clip_to_budget(
         bundle = format_bundle(intent, response, &opts);
         steps.push(TrimStep::SlimSnippets);
         if bundle.len() <= bundle_bytes {
-            return ClippedBundle {
-                bytes: bundle.len(),
-                bundle,
-                steps,
-            };
+            return finish(bundle, steps, &opts);
         }
     }
 
@@ -99,11 +106,7 @@ pub fn clip_to_budget(
         bundle = format_bundle(intent, response, &opts);
         steps.push(TrimStep::HalveSnippets);
         if bundle.len() <= bundle_bytes {
-            return ClippedBundle {
-                bytes: bundle.len(),
-                bundle,
-                steps,
-            };
+            return finish(bundle, steps, &opts);
         }
     }
 
@@ -113,11 +116,7 @@ pub fn clip_to_budget(
         bundle = format_bundle(intent, response, &opts);
         steps.push(TrimStep::HalveTurns);
         if bundle.len() <= bundle_bytes {
-            return ClippedBundle {
-                bytes: bundle.len(),
-                bundle,
-                steps,
-            };
+            return finish(bundle, steps, &opts);
         }
     }
 
@@ -127,11 +126,7 @@ pub fn clip_to_budget(
         bundle = format_bundle(intent, response, &opts);
         steps.push(TrimStep::TruncateDecisions);
         if bundle.len() <= bundle_bytes {
-            return ClippedBundle {
-                bytes: bundle.len(),
-                bundle,
-                steps,
-            };
+            return finish(bundle, steps, &opts);
         }
     }
 
@@ -142,11 +137,7 @@ pub fn clip_to_budget(
         steps.push(TrimStep::DropSnippets);
     }
 
-    ClippedBundle {
-        bytes: bundle.len(),
-        bundle,
-        steps,
-    }
+    finish(bundle, steps, &opts)
 }
 
 #[cfg(test)]
@@ -330,5 +321,61 @@ mod tests {
         assert!(clipped.bundle.is_empty());
         assert_eq!(clipped.bytes, 0);
         assert!(clipped.steps.is_empty());
+    }
+
+    #[test]
+    fn section_counts_snippets_reflect_post_trim_cap() {
+        // Phase18 §6.2 — after a trim step that drops snippets, the
+        // section_counts map must NOT contain a "snippets" key (or must
+        // contain 0), reflecting the final opts.snippets_cap == 0.
+        //
+        // Build a response large enough that the clipper walks all the
+        // way to DropSnippets (step 6). A sub-100-byte budget with 5
+        // fat snippets guarantees that path.
+        let resp = fat_response();
+        let clipped = clip_to_budget("pre_change_context", &resp, 200);
+
+        // The DropSnippets step must have been applied.
+        assert!(
+            clipped.steps.contains(&TrimStep::DropSnippets),
+            "expected DropSnippets to be applied; steps: {:?}",
+            clipped.steps
+        );
+        // After dropping snippets, the count must be absent or zero.
+        let snippet_count = clipped.section_counts.get("snippets").copied().unwrap_or(0);
+        assert_eq!(
+            snippet_count, 0,
+            "section_counts[\"snippets\"] must be 0 after DropSnippets step"
+        );
+    }
+
+    #[test]
+    fn section_counts_present_when_no_trim_needed() {
+        // When the bundle fits without trimming, section_counts should
+        // reflect the default caps.
+        let mut resp = fat_response();
+        // Shrink all content so it fits easily.
+        for s in resp.results.snippets.iter_mut() {
+            s.text = "small".into();
+        }
+        for d in resp.results.decisions.iter_mut() {
+            d.title = "T".into();
+        }
+        let clipped = clip_to_budget("pre_change_context", &resp, 32 * 1024);
+        assert!(clipped.steps.is_empty());
+        // Laws, decisions, turns, snippets should all be present in counts.
+        assert!(
+            clipped.section_counts.contains_key("laws"),
+            "laws must appear in section_counts"
+        );
+        assert!(
+            clipped.section_counts.contains_key("snippets"),
+            "snippets must appear in section_counts"
+        );
+        // graph_neighbors is 0 by default (graph_cap == 0) → key must be absent.
+        assert!(
+            !clipped.section_counts.contains_key("graph_neighbors"),
+            "graph_neighbors must be absent when graph_cap is 0"
+        );
     }
 }
