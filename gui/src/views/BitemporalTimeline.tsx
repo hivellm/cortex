@@ -171,6 +171,20 @@ export function BitemporalTimelineView() {
             }}
             aria-label="Project name"
           />
+          <button
+            type="button"
+            className={`btn btn--sm ${stored.project === "_all" ? "" : "btn--ghost"}`}
+            onClick={() =>
+              setStored((p) => ({
+                ...p,
+                project: p.project === "_all" ? "cortex" : "_all",
+                branch: "",
+              }))
+            }
+            title="Union every project's events into one cross-project progress feed"
+          >
+            All projects
+          </button>
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -308,6 +322,7 @@ function EventRow({ ev }: { ev: BitemporalTimelineEvent }) {
       style={{ display: "flex", flexDirection: "column", gap: 4 }}
     >
       <div className="decision__head">
+        {ev.project_id ? <Tag tone="accent">{ev.project_id}</Tag> : null}
         {ev.kind ? <Tag tone="info">{ev.kind}</Tag> : null}
         <span className="decision__title">{ev.title ?? "(no title)"}</span>
         <span

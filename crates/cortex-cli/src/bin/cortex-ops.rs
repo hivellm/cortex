@@ -73,6 +73,8 @@ mod query_cmd;
 mod temporal_digest;
 #[path = "cortex-ops/timeline.rs"]
 mod timeline;
+#[path = "cortex-ops/timeline_backfill.rs"]
+mod timeline_backfill;
 #[path = "cortex-ops/tool_call_digest_live.rs"]
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
@@ -1154,6 +1156,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Derive synthetic `TimelineEvent` nodes from the real progress-
+    /// bearing nodes already in Nexus (`Decision`, `Analysis`,
+    /// `Memory`, `LawViolation`, `Learning`, `Knowledge`) across ALL
+    /// projects.  Each source node with a non-null `valid_from` becomes
+    /// one idempotent `TimelineEvent` whose `id` is
+    /// `tl:<Label>:<source-id>` so the Bitemporal Timeline view shows
+    /// real cross-project history without requiring every writer to
+    /// emit `TimelineEvent` nodes directly.  Re-running is safe
+    /// (MERGE-based).
+    TimelineBackfill {
+        /// Override the Nexus base URL. Defaults to
+        /// `$CORTEX_NEXUS_URL` then `http://127.0.0.1:17002`.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Scan + report candidate events but write nothing to Nexus.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -1835,6 +1858,11 @@ fn run() -> ExitCode {
         Command::TemporalDigest { api_url, json } => {
             temporal_digest::temporal_digest(api_url, json)
         }
+        Command::TimelineBackfill {
+            nexus,
+            dry_run,
+            json,
+        } => timeline_backfill::timeline_backfill(nexus, dry_run, json),
     }
 }
 

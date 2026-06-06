@@ -140,15 +140,26 @@ pub async fn handle_timeline(
         Ok(v) => v,
         Err(e) => return err(StatusCode::BAD_REQUEST, "bad_input", format!("to: {e}")),
     };
+    // `_all` / `*` is the cross-project sentinel: union every project's
+    // events (and every branch) so the timeline shows the progress of
+    // the whole workspace, not one repo. Otherwise scope to the project
+    // + the requested branch (default `main`).
+    let all_projects = matches!(project.as_str(), "_all" | "*");
     let branch_name = q.branch.as_deref().unwrap_or("main");
     let branch_id = compose_id(&project, branch_name);
     let limit = clamp_limit(q.limit);
 
-    let mut clauses = vec![format!(
-        "t.project_id = '{}'",
-        sanitize_literal(&project)
-    )];
-    clauses.push(format!("t.branch_id = '{}'", sanitize_literal(&branch_id)));
+    let mut clauses: Vec<String> = Vec::new();
+    if !all_projects {
+        clauses.push(format!("t.project_id = '{}'", sanitize_literal(&project)));
+        // Only constrain the branch when the caller named one — in the
+        // single-project default we still union across branches unless
+        // an explicit `branch` filter is supplied, so a project's full
+        // progress shows by default.
+        if q.branch.as_deref().filter(|s| !s.is_empty()).is_some() {
+            clauses.push(format!("t.branch_id = '{}'", sanitize_literal(&branch_id)));
+        }
+    }
     if let Some(k) = q.kind.as_deref().filter(|s| !s.is_empty()) {
         clauses.push(format!("t.kind = '{}'", sanitize_literal(k)));
     }
@@ -161,15 +172,19 @@ pub async fn handle_timeline(
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));
     }
+    let where_clause = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {} ", clauses.join(" AND "))
+    };
     let cypher = format!(
-        "MATCH (t:TimelineEvent) WHERE {where_} \
+        "MATCH (t:TimelineEvent) {where_clause}\
          RETURN t.id AS id, t.kind AS kind, t.project_id AS project_id, \
                 t.branch_id AS branch_id, t.entity_id AS entity_id, \
                 t.valid_from_unix AS valid_from_unix, \
                 t.recorded_at_unix AS recorded_at_unix, \
                 t.title AS title, t.summary AS summary \
          ORDER BY t.valid_from_unix DESC LIMIT {limit}",
-        where_ = clauses.join(" AND "),
     );
     match nexus.execute_cypher(&cypher, None).await {
         Ok(out) => (
