@@ -78,6 +78,14 @@ pub mod section_caps {
     /// Conditional — the orchestrator only renders it when an ADR
     /// id appears in the query or fusion result.
     pub const ADR_PROVENANCE_BYTES: usize = 800;
+    /// Phase18 §6.1 — byte budget for the bitemporal "Timeline window" section.
+    pub const TIMELINE_WINDOW_BYTES: usize = 1_400;
+    /// Max timeline events rendered in the window.
+    pub const TIMELINE_WINDOW_EVENTS: usize = 8;
+    /// Phase18 §6.1 — byte budget for the "Supersession overlay" section.
+    pub const SUPERSESSION_OVERLAY_BYTES: usize = 1_000;
+    /// Phase18 §6.1 — byte budget for the "Branch context" section.
+    pub const BRANCH_CONTEXT_BYTES: usize = 800;
 }
 
 /// Trim mode applied by the budget clipper to snippets. Spec 12
@@ -148,6 +156,12 @@ pub struct GroundingSections {
     /// "ADR provenance" section is skipped (phase13g §4.3
     /// conditional).
     pub adr_provenance: Vec<AdrProvenanceRow>,
+    /// Phase18 §6.1 — bitemporal timeline window. None ⇒ section skipped.
+    pub timeline_window: Option<TimelineWindow>,
+    /// Phase18 §6.1 — supersession overlay. None ⇒ section skipped.
+    pub supersession_overlay: Option<SupersessionOverlay>,
+    /// Phase18 §6.1 — branch context. None ⇒ section skipped.
+    pub branch_context: Option<BranchContext>,
 }
 
 impl Default for FormatOptions {
@@ -251,6 +265,27 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
             )
             .ok();
         }
+        out.push('\n');
+    }
+
+    // Phase18 §6.1 — temporal anchors render at the top of the
+    // grounding block, immediately after the header comment and
+    // before all other grounding sections. Explicit temporal
+    // anchors (timeline, supersession, branch) land first so the
+    // LLM sees them before the query body.
+    let tw = render_timeline_window(&opts.grounding.timeline_window);
+    if !tw.is_empty() {
+        out.push_str(&tw);
+        out.push('\n');
+    }
+    let so = render_supersession_overlay(&opts.grounding.supersession_overlay);
+    if !so.is_empty() {
+        out.push_str(&so);
+        out.push('\n');
+    }
+    let bc = render_branch_context(&opts.grounding.branch_context);
+    if !bc.is_empty() {
+        out.push_str(&bc);
         out.push('\n');
     }
 
@@ -906,6 +941,88 @@ pub struct AdrProvenanceRow {
     pub title: String,
 }
 
+/// One event row in the timeline-window section. Mirrors the
+/// `TimelineEvent` shape the §4.4 `/v1/timeline` route returns.
+#[derive(Debug, Clone, Default)]
+pub struct TimelineEventRow {
+    /// Event ULID or identifier.
+    pub event_id: String,
+    /// TimelineKind discriminator (e.g. `decision`, `task`, `session`).
+    pub kind: String,
+    /// Display title.
+    pub title: String,
+    /// RFC-3339 / day-precision valid-from timestamp.
+    pub valid_from: String,
+    /// One-line summary of the event.
+    pub summary: String,
+}
+
+/// Bitemporal timeline window for the active project+branch (design §3.4).
+#[derive(Debug, Clone, Default)]
+pub struct TimelineWindow {
+    /// Project identifier.
+    pub project: String,
+    /// As-of timestamp; empty string means "now".
+    pub as_of: String,
+    /// Composite `<project>:<branch>`; empty string means main.
+    pub branch: String,
+    /// Recent events ordered newest-first.
+    pub recent_events: Vec<TimelineEventRow>,
+}
+
+/// A (successor, predecessor) supersession pair.
+#[derive(Debug, Clone, Default)]
+pub struct SupersessionPairRow {
+    /// ULID / id of the successor decision.
+    pub successor_id: String,
+    /// Display title of the successor decision.
+    pub successor_title: String,
+    /// ULID / id of the decision that was superseded.
+    pub predecessor_id: String,
+    /// Display title of the predecessor decision.
+    pub predecessor_title: String,
+}
+
+/// Active-decision reference for the supersession overlay.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveDecisionRow {
+    /// Decision identifier.
+    pub decision_id: String,
+    /// Display title.
+    pub title: String,
+}
+
+/// Supersession overlay (design §3.4): active decisions + recently
+/// superseded (new, old) pairs for the scope.
+#[derive(Debug, Clone, Default)]
+pub struct SupersessionOverlay {
+    /// Decisions currently in an active lifecycle state.
+    pub active_decisions: Vec<ActiveDecisionRow>,
+    /// Recently-superseded (successor, predecessor) pairs.
+    pub recently_superseded: Vec<SupersessionPairRow>,
+}
+
+/// A branch reference for the branch-context section.
+#[derive(Debug, Clone, Default)]
+pub struct BranchRefRow {
+    /// Composite `<project>:<branch>` identifier.
+    pub branch_id: String,
+    /// Lifecycle status (`active` / `merged` / `abandoned`).
+    pub status: String,
+}
+
+/// Branch context (design §3.4): the current branch + active siblings
+/// + recently merged.
+#[derive(Debug, Clone, Default)]
+pub struct BranchContext {
+    /// The branch that is currently active.
+    pub current_branch: String,
+    /// Other branches in an `active` state alongside the current one.
+    pub active_sibling_branches: Vec<BranchRefRow>,
+    /// Branches that have been merged recently.
+    pub recently_merged: Vec<BranchRefRow>,
+}
+
 /// Minimum trimmed `user_prompt` length (chars) before the
 /// orchestrator should fan out to `cortex_similar_sessions`. Below
 /// this floor the query is too short to embed meaningfully — the
@@ -1005,6 +1122,147 @@ pub fn render_adr_provenance(rows: &[AdrProvenanceRow]) -> String {
             break;
         }
         out.push_str(&line);
+    }
+    out
+}
+
+/// Phase18 §6.1 — render the "Timeline window" section. Returns an
+/// empty string when `w` is `None` or contains no events. Bounded
+/// by [`section_caps::TIMELINE_WINDOW_BYTES`]; capped at
+/// [`section_caps::TIMELINE_WINDOW_EVENTS`] events. Rows that would
+/// exceed the byte budget are dropped and a truncation tail is
+/// appended.
+pub fn render_timeline_window(w: &Option<TimelineWindow>) -> String {
+    let window = match w {
+        Some(w) => w,
+        None => return String::new(),
+    };
+    if window.recent_events.is_empty() {
+        return String::new();
+    }
+    let n = window.recent_events.len().min(section_caps::TIMELINE_WINDOW_EVENTS);
+    let project = &window.project;
+    let branch = if window.branch.is_empty() {
+        "main".to_string()
+    } else {
+        window.branch.clone()
+    };
+    let as_of = if window.as_of.is_empty() {
+        "now".to_string()
+    } else {
+        window.as_of.clone()
+    };
+    let mut out = String::new();
+    let _ = writeln!(
+        &mut out,
+        "## Timeline window — {project}@{branch} as of {as_of} ({n} events)"
+    );
+    for (i, ev) in window.recent_events.iter().take(n).enumerate() {
+        let summary = trim_one_line(&ev.summary);
+        let line = format!(
+            "{}. [{}] {} · {}\n   {}\n",
+            i + 1,
+            ev.kind,
+            ev.valid_from,
+            ev.title,
+            summary,
+        );
+        if out.len() + line.len() > section_caps::TIMELINE_WINDOW_BYTES {
+            out.push_str("… (truncated)\n");
+            break;
+        }
+        out.push_str(&line);
+    }
+    out
+}
+
+/// Phase18 §6.1 — render the "Supersession overlay" section. Returns
+/// an empty string when `o` is `None` or both lists are empty. Bounded
+/// by [`section_caps::SUPERSESSION_OVERLAY_BYTES`].
+pub fn render_supersession_overlay(o: &Option<SupersessionOverlay>) -> String {
+    let overlay = match o {
+        Some(o) => o,
+        None => return String::new(),
+    };
+    if overlay.active_decisions.is_empty() && overlay.recently_superseded.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    out.push_str("## Supersession overlay\n");
+    if !overlay.active_decisions.is_empty() {
+        out.push_str("Active decisions:\n");
+        for ad in &overlay.active_decisions {
+            let line = format!("- {} · {}\n", ad.decision_id, trim_one_line(&ad.title));
+            if out.len() + line.len() > section_caps::SUPERSESSION_OVERLAY_BYTES {
+                out.push_str("- … (truncated)\n");
+                return out;
+            }
+            out.push_str(&line);
+        }
+    }
+    if !overlay.recently_superseded.is_empty() {
+        out.push_str("Recently superseded:\n");
+        for sp in &overlay.recently_superseded {
+            let line = format!(
+                "- {} ({}) \u{2283} supersedes {} ({})\n",
+                sp.successor_id,
+                trim_one_line(&sp.successor_title),
+                sp.predecessor_id,
+                trim_one_line(&sp.predecessor_title),
+            );
+            if out.len() + line.len() > section_caps::SUPERSESSION_OVERLAY_BYTES {
+                out.push_str("- … (truncated)\n");
+                return out;
+            }
+            out.push_str(&line);
+        }
+    }
+    out
+}
+
+/// Phase18 §6.1 — render the "Branch context" section. Returns an
+/// empty string when `b` is `None` or the current branch is empty
+/// and both sibling/merged lists are empty. Bounded by
+/// [`section_caps::BRANCH_CONTEXT_BYTES`].
+pub fn render_branch_context(b: &Option<BranchContext>) -> String {
+    let ctx = match b {
+        Some(b) => b,
+        None => return String::new(),
+    };
+    if ctx.current_branch.is_empty()
+        && ctx.active_sibling_branches.is_empty()
+        && ctx.recently_merged.is_empty()
+    {
+        return String::new();
+    }
+    let mut out = String::new();
+    let current = if ctx.current_branch.is_empty() {
+        "—".to_string()
+    } else {
+        ctx.current_branch.clone()
+    };
+    let _ = writeln!(&mut out, "## Branch context — {current}");
+    if !ctx.active_sibling_branches.is_empty() {
+        out.push_str("Active siblings:\n");
+        for br in &ctx.active_sibling_branches {
+            let line = format!("- {} [{}]\n", br.branch_id, br.status);
+            if out.len() + line.len() > section_caps::BRANCH_CONTEXT_BYTES {
+                out.push_str("- … (truncated)\n");
+                return out;
+            }
+            out.push_str(&line);
+        }
+    }
+    if !ctx.recently_merged.is_empty() {
+        out.push_str("Recently merged:\n");
+        for br in &ctx.recently_merged {
+            let line = format!("- {} [{}]\n", br.branch_id, br.status);
+            if out.len() + line.len() > section_caps::BRANCH_CONTEXT_BYTES {
+                out.push_str("- … (truncated)\n");
+                return out;
+            }
+            out.push_str(&line);
+        }
     }
     out
 }
@@ -2045,6 +2303,216 @@ mod tests {
         assert!(
             sum < PRE_THINKING_CEILING,
             "{sum} >= {PRE_THINKING_CEILING}"
+        );
+    }
+
+    // ============================================================
+    // Phase18 §6.1 — temporal grounding section tests.
+    // ============================================================
+
+    fn make_timeline_event(i: usize) -> TimelineEventRow {
+        TimelineEventRow {
+            event_id: format!("ev-{i:04}"),
+            kind: "decision".into(),
+            title: format!("Event {i} title"),
+            valid_from: format!("2026-05-{:02}", (i % 28) + 1),
+            summary: format!("Summary of event {i} with some text to consume budget"),
+        }
+    }
+
+    #[test]
+    fn render_timeline_window_emits_events_and_caps() {
+        // 12 events supplied; renderer must cap at TIMELINE_WINDOW_EVENTS (8)
+        // and stay under TIMELINE_WINDOW_BYTES; when the byte budget is hit
+        // before the count cap, a truncation tail must appear.
+        let events: Vec<TimelineEventRow> = (0..12).map(make_timeline_event).collect();
+        let window = Some(TimelineWindow {
+            project: "Cortex".into(),
+            as_of: "2026-06-06".into(),
+            branch: "Cortex:main".into(),
+            recent_events: events,
+        });
+        let out = render_timeline_window(&window);
+        // Section must be non-empty.
+        assert!(!out.is_empty(), "expected non-empty output");
+        // Must not exceed the byte budget (allow one truncation-tail line
+        // of overhead, mirroring the pattern used in other renderers).
+        assert!(
+            out.len() <= section_caps::TIMELINE_WINDOW_BYTES + 96,
+            "section too large: {} bytes",
+            out.len()
+        );
+        // Must not render more than TIMELINE_WINDOW_EVENTS entries.
+        let event_lines = out.lines().filter(|l| l.starts_with(|c: char| c.is_ascii_digit())).count();
+        assert!(
+            event_lines <= section_caps::TIMELINE_WINDOW_EVENTS,
+            "rendered {event_lines} events, cap is {}",
+            section_caps::TIMELINE_WINDOW_EVENTS
+        );
+        // Header must contain expected metadata.
+        assert!(out.contains("Timeline window"), "missing header in:\n{out}");
+        assert!(out.contains("Cortex@Cortex:main"), "missing project@branch");
+        assert!(out.contains("as of 2026-06-06"), "missing as_of");
+    }
+
+    #[test]
+    fn render_timeline_window_empty_is_blank() {
+        // None input → empty string.
+        assert!(render_timeline_window(&None).is_empty());
+        // Some but no events → empty string.
+        let empty_window = Some(TimelineWindow {
+            project: "Cortex".into(),
+            as_of: String::new(),
+            branch: String::new(),
+            recent_events: vec![],
+        });
+        assert!(render_timeline_window(&empty_window).is_empty());
+    }
+
+    #[test]
+    fn render_supersession_overlay_lists_active_and_superseded() {
+        let overlay = Some(SupersessionOverlay {
+            active_decisions: vec![
+                ActiveDecisionRow {
+                    decision_id: "DEC-0042".into(),
+                    title: "Adopt Meilisearch".into(),
+                },
+                ActiveDecisionRow {
+                    decision_id: "DEC-0043".into(),
+                    title: "Use HNSW for dense recall".into(),
+                },
+            ],
+            recently_superseded: vec![SupersessionPairRow {
+                successor_id: "DEC-0043".into(),
+                successor_title: "Use HNSW for dense recall".into(),
+                predecessor_id: "DEC-0001".into(),
+                predecessor_title: "Brute-force search baseline".into(),
+            }],
+        });
+        let out = render_supersession_overlay(&overlay);
+        assert!(!out.is_empty());
+        assert!(out.contains("## Supersession overlay"), "missing header");
+        assert!(out.contains("Active decisions:"), "missing active decisions header");
+        assert!(out.contains("DEC-0042"), "missing DEC-0042");
+        assert!(out.contains("DEC-0043"), "missing DEC-0043");
+        assert!(out.contains("Recently superseded:"), "missing recently superseded header");
+        assert!(out.contains("supersedes"), "missing supersedes keyword");
+        assert!(out.contains("DEC-0001"), "missing predecessor");
+
+        // None and empty → blank.
+        assert!(render_supersession_overlay(&None).is_empty());
+        let empty = Some(SupersessionOverlay {
+            active_decisions: vec![],
+            recently_superseded: vec![],
+        });
+        assert!(render_supersession_overlay(&empty).is_empty());
+    }
+
+    #[test]
+    fn render_branch_context_lists_siblings_and_merged() {
+        let ctx = Some(BranchContext {
+            current_branch: "Cortex:feature-auth".into(),
+            active_sibling_branches: vec![
+                BranchRefRow {
+                    branch_id: "Cortex:feature-search".into(),
+                    status: "active".into(),
+                },
+            ],
+            recently_merged: vec![
+                BranchRefRow {
+                    branch_id: "Cortex:phase18-bootstrap".into(),
+                    status: "merged".into(),
+                },
+            ],
+        });
+        let out = render_branch_context(&ctx);
+        assert!(!out.is_empty());
+        assert!(out.contains("## Branch context — Cortex:feature-auth"), "missing header");
+        assert!(out.contains("Active siblings:"), "missing active siblings header");
+        assert!(out.contains("Cortex:feature-search [active]"), "missing sibling row");
+        assert!(out.contains("Recently merged:"), "missing recently merged header");
+        assert!(out.contains("Cortex:phase18-bootstrap [merged]"), "missing merged row");
+
+        // None and all-empty → blank.
+        assert!(render_branch_context(&None).is_empty());
+        let empty = Some(BranchContext {
+            current_branch: String::new(),
+            active_sibling_branches: vec![],
+            recently_merged: vec![],
+        });
+        assert!(render_branch_context(&empty).is_empty());
+    }
+
+    #[test]
+    fn format_bundle_includes_temporal_sections_when_populated() {
+        // At least one main section must be non-empty so the
+        // empty-bundle short-circuit does not fire.
+        let mut resp = sample_response_with_laws();
+        // Add one consolidation to ensure the bundle is non-empty past
+        // the short-circuit gate.
+        resp.results.consolidations = vec![cortex_api::ConsolidationRef {
+            consolidation_id: "cons-ses-tw-test".to_string(),
+            grain: "session".to_string(),
+            ts: 1_700_000_000_000,
+            title: "temporal test session".to_string(),
+            outcome: Some("success".to_string()),
+            score: 0.75,
+        }];
+        let mut opts = FormatOptions::default();
+        opts.grounding.timeline_window = Some(TimelineWindow {
+            project: "Cortex".into(),
+            as_of: "2026-06-06".into(),
+            branch: "Cortex:main".into(),
+            recent_events: vec![make_timeline_event(0)],
+        });
+        opts.grounding.supersession_overlay = Some(SupersessionOverlay {
+            active_decisions: vec![ActiveDecisionRow {
+                decision_id: "DEC-0099".into(),
+                title: "Test decision".into(),
+            }],
+            recently_superseded: vec![],
+        });
+        opts.grounding.branch_context = Some(BranchContext {
+            current_branch: "Cortex:main".into(),
+            active_sibling_branches: vec![],
+            recently_merged: vec![],
+        });
+
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(bundle.contains("Timeline window"), "Timeline window header missing");
+        assert!(bundle.contains("Supersession overlay"), "Supersession overlay header missing");
+        assert!(bundle.contains("Branch context"), "Branch context header missing");
+
+        // Temporal sections must appear before Active operator work
+        // (and before the consolidation block).
+        let tw_pos = bundle.find("Timeline window").expect("Timeline window");
+        let so_pos = bundle.find("Supersession overlay").expect("Supersession overlay");
+        let bc_pos = bundle.find("Branch context").expect("Branch context");
+        let cons_pos = bundle.find("Consolidated context").expect("Consolidated context");
+        // Order: timeline → supersession → branch → … → consolidations.
+        assert!(tw_pos < so_pos, "timeline must precede supersession");
+        assert!(so_pos < bc_pos, "supersession must precede branch context");
+        assert!(bc_pos < cons_pos, "branch context must precede consolidated context");
+    }
+
+    #[test]
+    fn format_bundle_omits_temporal_sections_when_none() {
+        // Default grounding has None for all three temporal sections;
+        // none of the three headers should appear in the bundle.
+        let resp = sample_response_with_laws();
+        let opts = FormatOptions::default();
+        let bundle = format_bundle("pre_change_context", &resp, &opts);
+        assert!(
+            !bundle.contains("Timeline window"),
+            "Timeline window must be absent with default grounding"
+        );
+        assert!(
+            !bundle.contains("Supersession overlay"),
+            "Supersession overlay must be absent with default grounding"
+        );
+        assert!(
+            !bundle.contains("Branch context"),
+            "Branch context must be absent with default grounding"
         );
     }
 }
