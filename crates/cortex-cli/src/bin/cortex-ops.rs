@@ -69,6 +69,8 @@ mod backfill_cross_project;
 mod branch_cmd;
 #[path = "cortex-ops/query_cmd.rs"]
 mod query_cmd;
+#[path = "cortex-ops/temporal_digest.rs"]
+mod temporal_digest;
 #[path = "cortex-ops/timeline.rs"]
 mod timeline;
 #[path = "cortex-ops/tool_call_digest_live.rs"]
@@ -1142,6 +1144,16 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase18 §7.3 — export a digest of the temporal/branch/cross-project
+    /// signals from cortex-api's /metrics endpoint.
+    TemporalDigest {
+        /// cortex-api base URL. Defaults to $CORTEX_API_URL then http://127.0.0.1:17000.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the Markdown digest.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -1820,6 +1832,9 @@ fn run() -> ExitCode {
             dry_run,
             json,
         } => backfill_cross_project::backfill_cross_project(root, project, nexus, dry_run, json),
+        Command::TemporalDigest { api_url, json } => {
+            temporal_digest::temporal_digest(api_url, json)
+        }
     }
 }
 
