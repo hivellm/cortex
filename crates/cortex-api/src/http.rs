@@ -345,10 +345,14 @@ pub fn build_router_with_auth_and_cfg(
         // (which already exposes one) so an external scraper picks
         // up every stage uniformly.
         let metrics_state = dash.loader_metrics.clone();
+        // Phase18 §7.2 — temporal metrics render alongside the loader
+        // metrics so a single `/metrics` scrape covers both families.
+        let temporal_metrics_state = dash.temporal_metrics.clone();
         let metrics_router = Router::new().route(
             "/metrics",
             get({
                 let m = metrics_state.clone();
+                let t = temporal_metrics_state.clone();
                 move || async move {
                     (
                         StatusCode::OK,
@@ -356,7 +360,7 @@ pub fn build_router_with_auth_and_cfg(
                             axum::http::header::CONTENT_TYPE,
                             "text/plain; version=0.0.4",
                         )],
-                        m.render_prom(),
+                        format!("{}{}", m.render_prom(), t.render_prom()),
                     )
                 }
             }),

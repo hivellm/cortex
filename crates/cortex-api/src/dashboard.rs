@@ -55,6 +55,11 @@ pub struct DashboardState {
     /// `/healthz` extras and the new `/v1/health/freshness`
     /// endpoint so a stalled loader localises immediately.
     pub loader_metrics: Arc<crate::LoaderMetrics>,
+    /// Phase18 §7.2 — shared temporal/branch/cross-project metrics
+    /// registry. Bumped from the orchestrator's classifier + branch +
+    /// cross-project wedges; rendered alongside `loader_metrics` on
+    /// the Prometheus `/metrics` endpoint.
+    pub temporal_metrics: Arc<crate::TemporalMetrics>,
     /// Phase11m §2.4 — push channel carrying dashboard delta events
     /// from the file-system watcher (and, in §4, the Synap consumer).
     /// SSE subscribers on `/v1/dashboard/stream` fan these out to GUI

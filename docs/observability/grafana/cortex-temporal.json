@@ -1,0 +1,92 @@
+{
+  "title": "Cortex — Temporal / Branch / Cross-Project (phase18 §7.2)",
+  "uid": "cortex-temporal",
+  "schemaVersion": 39,
+  "tags": ["cortex", "phase18", "temporal"],
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "title": "As-of query ratio",
+      "description": "Fraction of queries that pinned a non-now as_of (point-in-time retrieval). Source: cortex_temporal_queries_as_of_total / cortex_temporal_queries_total.",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(cortex_temporal_queries_as_of_total[5m])) / clamp_min(sum(rate(cortex_temporal_queries_total[5m])), 1)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "id": 2,
+      "title": "Classifier state distribution",
+      "description": "Candidates classified per temporal state. Source: cortex_temporal_classified_total{state}.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 9, "x": 6, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (state) (rate(cortex_temporal_classified_total[5m]))",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Classifier action distribution",
+      "description": "Per-action outcomes (pass/boost/demote/drop). Source: cortex_temporal_action_total{action}.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 9, "x": 15, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (action) (rate(cortex_temporal_action_total[5m]))",
+          "legendFormat": "{{action}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Branch usage (main vs non-main)",
+      "description": "Branch-scoped query distribution. Source: cortex_branch_queries_total{kind}.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(cortex_branch_queries_total[5m]))",
+          "legendFormat": "{{kind}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Cross-project hit ratio",
+      "description": "Propagated / discovered CROSS_PROJECT_REF edges. Source: cortex_cross_project_propagated_total / cortex_cross_project_discovered_total.",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(cortex_cross_project_propagated_total[5m])) / clamp_min(sum(rate(cortex_cross_project_discovered_total[5m])), 1)"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "id": 6,
+      "title": "Cross-project propagation runs",
+      "description": "Requests that ran cross-project propagation. Source: cortex_cross_project_propagation_runs_total.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(cortex_cross_project_propagation_runs_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

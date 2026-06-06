@@ -43,6 +43,7 @@ fn build_test_router() -> Router {
         )])),
         metadata: None,
         loader_metrics: Arc::new(LoaderMetrics::new()),
+        temporal_metrics: Arc::new(cortex_api::TemporalMetrics::new()),
         events_bus: cortex_api::dashboard_watcher::DashboardEventBus::new(),
     };
     build_router_with(service, Some(dashboard))

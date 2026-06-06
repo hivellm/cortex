@@ -32,6 +32,7 @@ fn build_router(events_bus: DashboardEventBus) -> axum::Router {
         tasks: Arc::new(cortex_api::MultiTaskLoader::new(vec![TaskLoader::new(tmp)])),
         metadata: None,
         loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
+        temporal_metrics: Arc::new(cortex_api::TemporalMetrics::new()),
         events_bus,
     };
     build_dashboard_router(state)

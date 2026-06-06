@@ -29,6 +29,7 @@ pub mod query_rewrite;
 pub mod relevance_config;
 pub mod search_proxy;
 pub mod strategies;
+pub mod temporal_metrics;
 pub mod timeline_routes;
 pub mod tool_calls;
 pub mod topic_search;

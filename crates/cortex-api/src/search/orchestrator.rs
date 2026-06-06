@@ -65,6 +65,11 @@ pub struct Orchestrator {
     /// [`crate::query_rewrite::SonnetRewriter`] based on
     /// `CORTEX_QUERY_REWRITER`.
     pub rewriter: Arc<dyn QueryRewriter>,
+    /// Phase18 §7.2 — optional Prometheus metrics handle. When `Some`,
+    /// the temporal / branch / cross-project wedges record counters
+    /// into this registry. `None` (the default) is a no-op so all
+    /// existing `Orchestrator::new` call sites compile unchanged.
+    pub temporal_metrics: Option<Arc<crate::TemporalMetrics>>,
 }
 
 impl Orchestrator {
@@ -84,6 +89,7 @@ impl Orchestrator {
             temporal: Arc::new(RwLock::new(TemporalConfig::default())),
             cross_project: Arc::new(RwLock::new(CrossProjectConfig::default())),
             rewriter: Arc::new(PassthroughRewriter),
+            temporal_metrics: None,
         }
     }
 
@@ -175,6 +181,15 @@ impl Orchestrator {
     /// [`PassthroughRewriter`] (today's behaviour).
     pub fn with_rewriter(mut self, rewriter: Arc<dyn QueryRewriter>) -> Self {
         self.rewriter = rewriter;
+        self
+    }
+
+    /// Phase18 §7.2 — attach a `TemporalMetrics` handle. When set,
+    /// every temporal/branch/cross-project wedge records counters.
+    /// Omitting this builder leaves `temporal_metrics = None` and all
+    /// record calls become no-ops (existing tests are unaffected).
+    pub fn with_temporal_metrics(mut self, m: Arc<crate::TemporalMetrics>) -> Self {
+        self.temporal_metrics = Some(m);
         self
     }
 
@@ -377,13 +392,23 @@ impl Orchestrator {
                 include_future: req.include_future.unwrap_or(false),
                 include_branches: req.include_branches.unwrap_or(false),
             };
+            let metrics = self.temporal_metrics.as_deref();
             apply_temporal_classifier(
                 &mut fused,
                 &temporal_snapshot,
                 &response.query_id,
                 as_of_override,
                 flag_overrides,
+                metrics,
             );
+            // Phase18 §7.2 — per-request counters: one query + an
+            // as-of bump when the caller pinned a historical instant.
+            if let Some(m) = metrics {
+                m.record_query();
+                if as_of_override.is_some() {
+                    m.record_as_of();
+                }
+            }
             // Phase18 §3.9 — branch_resolution envelope. Derives
             // `project` from the canonical scope.repo (every live
             // request resolves to a single repo at this point); the
@@ -394,6 +419,7 @@ impl Orchestrator {
                 &response.query_id,
                 project,
                 req.branch.as_deref(),
+                metrics,
             );
         }
 
@@ -636,6 +662,10 @@ impl Orchestrator {
             propagated = propagated.len(),
             dropped = dropped,
         );
+        // Phase18 §7.2 — cross-project propagation counters.
+        if let Some(m) = self.temporal_metrics.as_deref() {
+            m.record_cross_project(discovered as u64, propagated.len() as u64);
+        }
 
         fused.append(&mut propagated);
         // Stable sort by adjusted score so propagated hits interleave
@@ -734,6 +764,7 @@ fn apply_temporal_classifier(
     query_id: &str,
     as_of_override: Option<i64>,
     flag_overrides: IncludeFlags,
+    metrics: Option<&crate::TemporalMetrics>,
 ) {
     let classifier_cfg = classifier_config_from(snapshot);
     let flags = IncludeFlags {
@@ -824,6 +855,16 @@ fn apply_temporal_classifier(
         boosts = action_counts.get("boost").copied().unwrap_or(0),
         demotes = action_counts.get("demote").copied().unwrap_or(0),
     );
+    // Phase18 §7.2 — push per-state/per-action counts into the
+    // Prometheus registry when a handle is wired.
+    if let Some(m) = metrics {
+        for (state, n) in &state_counts {
+            m.record_state(state, u64::from(*n));
+        }
+        for (action, n) in &action_counts {
+            m.record_action(action, u64::from(*n));
+        }
+    }
     *fused = kept;
 }
 
@@ -834,7 +875,12 @@ fn apply_temporal_classifier(
 /// canonical root `<project>:main`. Once the request carries the
 /// branch + an in-process parent map, the wedge call site swaps
 /// the singleton chain for the full ancestry walk.
-fn emit_branch_resolution_envelope(query_id: &str, project: &str, branch_override: Option<&str>) {
+fn emit_branch_resolution_envelope(
+    query_id: &str,
+    project: &str,
+    branch_override: Option<&str>,
+    metrics: Option<&crate::TemporalMetrics>,
+) {
     use cortex_workers::temporal::branch_filter::{compose_id, DEFAULT_BRANCH};
     // Resolve the requested branch composite id: an explicit `req.branch`
     // either ships pre-composed (`<project>:<branch>`) or as the bare
@@ -844,6 +890,11 @@ fn emit_branch_resolution_envelope(query_id: &str, project: &str, branch_overrid
         Some(s) => compose_id(project, s),
         None => compose_id(project, DEFAULT_BRANCH),
     };
+    // Phase18 §7.2 — branch-usage counter, bucketed main vs non-main
+    // to keep the metric cardinality bounded.
+    if let Some(m) = metrics {
+        m.record_branch(resolved.ends_with(":main"));
+    }
     // Today's call site does not hydrate a parent_map (phase18 §3.5 ships
     // the helper; the per-request cache lands with the §4 surface). Stamp
     // the singleton chain — the audit consumer sees the requested branch
@@ -1535,7 +1586,7 @@ mod tests {
             ),
         ];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
         assert_eq!(hits.len(), 1, "superseded hit must drop by default");
         assert_eq!(hits[0].doc_id, "alive");
     }
@@ -1548,7 +1599,7 @@ mod tests {
             hit_with_extras("b", 0.5, &[]),
         ];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
         assert_eq!(hits.len(), 2);
         // Sort is descending by score; `a` (1.0) must lead `b` (0.5).
         assert_eq!(hits[0].doc_id, "a");
@@ -1568,7 +1619,7 @@ mod tests {
             &[("valid_to_unix", serde_json::json!(now + 3600))],
         )];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
         assert_eq!(hits.len(), 1);
         let expected = 1.0 * f64::from(cfg.temporal_boost);
         assert!(
@@ -1592,7 +1643,7 @@ mod tests {
             include_history_default: true,
             ..TemporalConfig::default()
         };
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
         assert_eq!(hits.len(), 1, "demoted hits are kept");
         let expected = 2.0 * f64::from(cfg.demote_factor);
         assert!((hits[0].score - expected).abs() < 1e-6);
@@ -1612,7 +1663,7 @@ mod tests {
             ),
         ];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default());
+        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
         assert_eq!(hits[0].doc_id, "high_temporal");
     }
 }

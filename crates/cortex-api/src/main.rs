@@ -697,6 +697,10 @@ async fn main() -> Result<()> {
         }
     };
 
+    // Phase18 §7.2 — temporal metrics registry, shared between the
+    // orchestrator wedges (which bump it) and the `/metrics` renderer
+    // (which reads it via DashboardState).
+    let temporal_metrics = Arc::new(cortex_api::TemporalMetrics::new());
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword_memory.clone(),
         nexus: nexus_client,
@@ -704,6 +708,7 @@ async fn main() -> Result<()> {
         tasks,
         metadata,
         loader_metrics: loader_metrics.clone(),
+        temporal_metrics: temporal_metrics.clone(),
         events_bus: dashboard_bus,
     };
 
@@ -727,7 +732,8 @@ async fn main() -> Result<()> {
     let rewriter = resolve_query_rewriter_from_env();
     let orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
         .with_fusion(fusion)
-        .with_rewriter(rewriter);
+        .with_rewriter(rewriter)
+        .with_temporal_metrics(temporal_metrics.clone());
     spawn_relevance_reload_task(orchestrator.clone(), relevance_path.clone());
     // Phase11e §6 — coverage snapshot handle, shared between the
     // boot-time audit (which writes the result here) and `/v1/status`

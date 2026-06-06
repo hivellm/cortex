@@ -339,6 +339,7 @@ mod tests {
             ])),
             metadata: None,
             loader_metrics: Arc::new(crate::LoaderMetrics::new()),
+            temporal_metrics: Arc::new(crate::TemporalMetrics::new()),
             events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         }
     }

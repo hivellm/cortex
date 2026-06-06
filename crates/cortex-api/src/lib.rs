@@ -106,6 +106,7 @@ pub use search::query_rewrite;
 pub use search::relevance_config;
 pub use search::search_proxy;
 pub use search::strategies;
+pub use search::temporal_metrics;
 pub use search::timeline_routes;
 pub use search::tool_calls;
 pub use search::topic_search;
@@ -137,6 +138,7 @@ pub use lanes::{
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
 pub use loader_metrics::LoaderMetrics;
+pub use temporal_metrics::TemporalMetrics;
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
 pub use mcp_topic_card::{
     invoke_synthesize, invoke_topic_diff, invoke_topic_drill, invoke_topic_get,

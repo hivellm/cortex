@@ -498,6 +498,7 @@ mod tests {
             ])),
             metadata: metadata.map(|m| Arc::new(std::sync::Mutex::new(m))),
             loader_metrics: Arc::new(crate::LoaderMetrics::new()),
+            temporal_metrics: Arc::new(crate::TemporalMetrics::new()),
             events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
         }
     }
