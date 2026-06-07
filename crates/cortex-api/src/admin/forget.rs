@@ -138,8 +138,10 @@ impl NexusPurgeOps for LiveNexusPurger {
             "MATCH (n {{ event_id: {} }}) DETACH DELETE n",
             escape_cypher_string(event_id),
         );
+        // phase25 §2.3 — empty param map, not `None`: Nexus 2.3.0's REST
+        // `/cypher` rejects a null `parameters` field (HTTP 422).
         self.client
-            .execute_cypher(&cypher, None)
+            .execute_cypher(&cypher, Some(std::collections::HashMap::new()))
             .await
             .map_err(|e| NexusPurgeError::Server(e.to_string()))?;
         Ok(())

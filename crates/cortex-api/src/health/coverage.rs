@@ -227,7 +227,14 @@ pub async fn fetch_nexus_repo_names(
     timeout: std::time::Duration,
 ) -> Result<BTreeSet<String>, String> {
     let cypher = "MATCH (r:Repo) RETURN r.name AS name";
-    let res = tokio::time::timeout(timeout, client.execute_cypher(cypher, None))
+    // phase25 §2.3 — pass an empty param map, not `None`: Nexus 2.3.0's
+    // REST `/cypher` rejects a null `parameters` field
+    // (`invalid type: null, expected a map`, HTTP 422). An empty map
+    // serialises to `parameters: {}` which it accepts.
+    let res = tokio::time::timeout(
+        timeout,
+        client.execute_cypher(cypher, Some(std::collections::HashMap::new())),
+    )
         .await
         .map_err(|_| format!("nexus query timeout after {:?}", timeout))?
         .map_err(|e| format!("nexus execute_cypher: {e}"))?;

@@ -5,6 +5,10 @@
 - [ ] 1.4b Make read-side `MATCH (n:Label {prop:val})` use the property index (still an 81ms label scan in 2.3.0; needed so the edge endpoint MATCH is fast)
 - [x] 1.4 Property-store corruption (dangling prop_ptr) — repaired in 2.3.0 (0 `not found in property_store` warns on boot); BUT legacy nodes carry null `id`/`name` (see §4 rebuild)
 
+## 1b. Nexus REST param contract (2.3.0 regression)
+- [ ] 1b.1 Nexus 2.3.0 REST `/cypher` rejects a null/absent `parameters` field (`invalid type: null, expected a map`, HTTP 422); the published nexus-graph-sdk 2.1.0 omits it on `None`. Make `parameters` optional server-side (default empty map) — one change restores compat with the published SDK + all 12+ Cortex no-param call sites (search_proxy.rs, timeline_routes.rs ×10, coverage, forget). Alternative: publish an SDK that always sends `parameters: {}`.
+- [x] 1b.2 Cortex stop-gap: pass `Some(empty map)` at the dashboard-visible REST sites (coverage repo-probe + forget purge) so the coverage panel + purge stop 422'ing. Remaining sites (timeline GUI reads) still rely on the §1b.1 server fix.
+
 ## 2. Cortex edge-write pattern
 - [ ] 2.1 Rewrite the edge MERGE Cypher (cypher.rs / nexus_client.rs) into a planner-indexable form (separate MATCH clauses or USING INDEX) — only helps once §1.4b lands
 - [ ] 2.2 Verify via the Nexus slow-query log that edge MERGE latency drops from minutes to ms
