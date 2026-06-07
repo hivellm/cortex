@@ -126,18 +126,47 @@ impl NexusPurgeOps for LiveNexusPurger {
         // `event_id` as a property (set by the graph mapper). A
         // zero-row delete is the idempotent path — Nexus returns
         // success without raising an error.
-        let mut params: std::collections::HashMap<String, nexus_sdk::Value> =
-            std::collections::HashMap::new();
-        params.insert(
-            "id".to_string(),
-            nexus_sdk::Value::String(event_id.to_string()),
+        //
+        // phase25 §2.3 — inline the event_id as an escaped Cypher string
+        // literal instead of a bound `$id` parameter. Nexus 2.3.0
+        // rejects the bound form (`ERR_MISSING_PARAMETER: $id not
+        // provided`), so every purge silently failed and re-fired,
+        // never pruning the node while full-scanning the graph. The rest
+        // of Cortex's Nexus writes (graph mapper node/edge MERGE)
+        // already inline escaped literals — mirror that.
+        let cypher = format!(
+            "MATCH (n {{ event_id: {} }}) DETACH DELETE n",
+            escape_cypher_string(event_id),
         );
         self.client
-            .execute_cypher("MATCH (n { event_id: $id }) DETACH DELETE n", Some(params))
+            .execute_cypher(&cypher, None)
             .await
             .map_err(|e| NexusPurgeError::Server(e.to_string()))?;
         Ok(())
     }
+}
+
+/// Escape a string into a double-quoted Cypher literal. phase25 §2.3 —
+/// values are inlined (Nexus 2.3.0 does not bind `$`-params from the SDK
+/// call), so mirror the graph mapper's escaping (quotes, backslashes,
+/// control chars, non-ASCII) to stay injection-safe.
+fn escape_cypher_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push(' '),
+            c if (c as u32) < 0x80 => out.push(c),
+            _ => out.push('?'),
+        }
+    }
+    out.push('"');
+    out
 }
 
 // ----------------------------------------------------------------------
@@ -462,6 +491,26 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
+
+    // ------------------- §2.3 cypher literal escaping -------------------
+
+    #[test]
+    fn escape_cypher_string_wraps_and_escapes() {
+        // Normal ULID event_id: wrapped in quotes, untouched inside.
+        assert_eq!(
+            escape_cypher_string("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+            "\"01ARZ3NDEKTSV4RRFFQ69G5FAV\""
+        );
+        // Injection attempt: quotes + backslashes are escaped so the
+        // value cannot break out of the literal.
+        assert_eq!(
+            escape_cypher_string("a\"b\\c"),
+            "\"a\\\"b\\\\c\""
+        );
+        // Control chars are neutralised; non-ASCII collapses to `?`.
+        assert_eq!(escape_cypher_string("x\ny"), "\"x\\ny\"");
+        assert_eq!(escape_cypher_string("café"), "\"caf?\"");
+    }
 
     // ------------------- §1.1 resolve_target_collections -------------------
 
