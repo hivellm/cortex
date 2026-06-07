@@ -388,7 +388,7 @@ fn looks_like_path(s: &str) -> bool {
         ".claude/",
         "scripts/",
         "gui/",
-        "cortex-plugin/",
+        "packages/",
     ];
     if ROOT_PREFIXES.iter().any(|p| s.starts_with(p)) {
         return true;

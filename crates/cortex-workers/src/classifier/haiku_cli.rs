@@ -25,7 +25,7 @@ use tokio::process::Command;
 /// Path to a per-process Claude Code config directory whose
 /// `settings.json` declares no plugins / hooks. The classifier passes
 /// this to every `claude` subprocess via `CLAUDE_CONFIG_DIR` so the
-/// child does NOT load the host's `cortex-plugin` (which would fire
+/// child does NOT load the host's `packages/cortex-claude-plugin` (which would fire
 /// SessionStart / UserPromptSubmit / Stop / tool hooks straight back
 /// at the live cortex-adapter, looping classification output back
 /// through the bus as fresh turn / tool_call envelopes).
@@ -181,7 +181,7 @@ impl Classifier for HaikuCliClassifier {
             cmd.env(k, v);
         }
         // Point the subprocess at a hook-free Claude Code config dir
-        // so it doesn't load the cortex-plugin and dispatch hooks
+        // so it doesn't load the packages/cortex-claude-plugin and dispatch hooks
         // back at the live adapter. See `hookless_config_dir` above
         // for the full incident write-up. Belt-and-suspenders:
         // CORTEX_ADAPTER_DISABLE is also set so any hook that

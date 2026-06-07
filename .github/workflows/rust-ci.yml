@@ -16,7 +16,7 @@ on:
       - ".github/workflows/codespell.yml"
       - ".github/workflows/version-coherence.yml"
       - ".github/workflows/dashboard-grep-gate.yml"
-      - "cortex-plugin/**"
+      - "packages/cortex-claude-plugin/**"
       - "scripts/**"
   pull_request:
     branches: [main, master, develop]
@@ -27,7 +27,7 @@ on:
       - ".github/workflows/codespell.yml"
       - ".github/workflows/version-coherence.yml"
       - ".github/workflows/dashboard-grep-gate.yml"
-      - "cortex-plugin/**"
+      - "packages/cortex-claude-plugin/**"
       - "scripts/**"
 
 permissions:

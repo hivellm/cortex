@@ -120,7 +120,7 @@ impl ConfigAudit {
 
 /// Where to read config from. The default builder picks the
 /// canonical paths: workspace `.env`, `~/.cortex/adapter.toml`, and
-/// the workspace `cortex-plugin/` files. Tests pass an explicit
+/// the workspace `packages/cortex-claude-plugin/` files. Tests pass an explicit
 /// builder pointing at a fixture directory.
 #[derive(Debug, Clone)]
 pub struct AuditPaths {
@@ -128,9 +128,9 @@ pub struct AuditPaths {
     pub env_file: PathBuf,
     /// Path to `~/.cortex/adapter.toml`.
     pub adapter_toml: PathBuf,
-    /// Path to `cortex-plugin/.mcp.json`.
+    /// Path to `packages/cortex-claude-plugin/.mcp.json`.
     pub mcp_json: PathBuf,
-    /// Path to `cortex-plugin/hooks/hooks.json`.
+    /// Path to `packages/cortex-claude-plugin/hooks/hooks.json`.
     pub hooks_json: PathBuf,
 }
 
@@ -143,9 +143,13 @@ impl AuditPaths {
         Self {
             env_file: workspace_root.join(".env"),
             adapter_toml: PathBuf::from(home).join(".cortex").join("adapter.toml"),
-            mcp_json: workspace_root.join("cortex-plugin").join(".mcp.json"),
+            mcp_json: workspace_root
+                .join("packages")
+                .join("cortex-claude-plugin")
+                .join(".mcp.json"),
             hooks_json: workspace_root
-                .join("cortex-plugin")
+                .join("packages")
+                .join("cortex-claude-plugin")
                 .join("hooks")
                 .join("hooks.json"),
         }
@@ -616,7 +620,7 @@ pub fn read_adapter_toml(path: &Path) -> Result<AdapterConfigSnapshot, ReadError
 }
 
 /// Read `mcpServers.cortex.env.CORTEX_API_URL` from
-/// `cortex-plugin/.mcp.json`.
+/// `packages/cortex-claude-plugin/.mcp.json`.
 pub fn read_mcp_json(path: &Path) -> Result<String, ReadError> {
     let raw = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -647,7 +651,7 @@ pub fn read_mcp_json(path: &Path) -> Result<String, ReadError> {
     Ok(url)
 }
 
-/// Read the registered hook names from `cortex-plugin/hooks/hooks.json`.
+/// Read the registered hook names from `packages/cortex-claude-plugin/hooks/hooks.json`.
 /// The file's shape is `{ "hooks": { "<name>": [...], ... } }` so we
 /// just collect the keys of the top-level `hooks` map.
 pub fn read_hooks_json(path: &Path) -> Result<Vec<String>, ReadError> {

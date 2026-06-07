@@ -45,7 +45,7 @@ hoc inspection:
 cargo run --release -p cortex-mcp-server | jq
 ```
 
-The plugin manifest under [`cortex-plugin/`](../../cortex-plugin/)
+The plugin manifest under [`packages/cortex-claude-plugin/`](../../packages/cortex-claude-plugin/)
 registers this binary with Claude Code; users add it via
 `/plugin add cortex` (or the equivalent flow in their MCP client).
 

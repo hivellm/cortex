@@ -720,13 +720,14 @@ enum Command {
     },
     /// Phase8d — config-coherence audit. Read-only static analysis
     /// of every config surface (`.env`, `~/.cortex/adapter.toml`,
-    /// `cortex-plugin/.mcp.json`, `cortex-plugin/hooks/hooks.json`)
+    /// `packages/cortex-claude-plugin/.mcp.json`,
+    /// `packages/cortex-claude-plugin/hooks/hooks.json`)
     /// plus cross-checks (e.g. adapter.endpoint must match
     /// CORTEX_INGESTION_URL). Exit codes: `0` all ok, `1` any warn,
     /// `2` any critical.
     DoctorConfig {
         /// Workspace root (defaults to current dir). The audit
-        /// expects `.env` and `cortex-plugin/` under this path.
+        /// expects `.env` and `packages/cortex-claude-plugin/` under this path.
         #[arg(long)]
         workspace: Option<String>,
         /// Override `~/.cortex/adapter.toml` location (CI / fixtures).

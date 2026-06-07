@@ -98,7 +98,7 @@ The conceptual pipeline: **adapter / bootstrap → `cortex.events.raw` (or `cort
 - ✅ SSE timeline stream + reconnect ladder (commit `ac10b5e`).
 - 🟡 **Result quality unmeasured.** No retrieval-quality benchmark (recall@k, MRR). Phase 4 hardening line item.
 
-### H. Pre-thinking + MCP — `cortex-pre-thinking`, `cortex-mcp-server`, `cortex-plugin`
+### H. Pre-thinking + MCP — `cortex-pre-thinking`, `cortex-mcp-server`, `packages/cortex-claude-plugin`
 
 - ✅ MCP server with identifier-safe tool names + camelCase schemas (commit `9f14ef6`).
 - ✅ Spec-18 (Claude Code plugin) marked 🟢 — `cortex_query`, `cortex_pre_thinking`, `cortex_status` exposed.

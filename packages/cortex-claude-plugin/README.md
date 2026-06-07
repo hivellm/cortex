@@ -51,7 +51,7 @@ backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
 ### Local development
 
 ```bash
-claude --plugin-dir ./cortex-plugin
+claude --plugin-dir ./packages/cortex-claude-plugin
 ```
 
 ### Local marketplace (development) — re-syncing assets after edits
@@ -67,7 +67,7 @@ After editing the plugin assets in the source tree, force the cache
 to refresh by running
 
 ```bash
-bash cortex-plugin/scripts/sync-cache.sh
+bash packages/cortex-claude-plugin/scripts/sync-cache.sh
 ```
 
 The script copies the source dir into the cache without needing a
@@ -103,7 +103,7 @@ Override per-machine by editing `.mcp.json` in your local plugin install.
 ## Verifying the install
 
 ```bash
-cortex-mcp-server validate ./cortex-plugin
+cortex-mcp-server validate ./packages/cortex-claude-plugin
 ```
 
 Exits 0 on a clean tree. Non-zero if any required asset is missing or
@@ -113,7 +113,7 @@ broken `.mcp.json`).
 ## Layout
 
 ```
-cortex-plugin/
+packages/cortex-claude-plugin/
 ├── .claude-plugin/
 │   ├── plugin.json
 │   └── marketplace.json

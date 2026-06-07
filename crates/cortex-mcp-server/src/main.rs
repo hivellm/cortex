@@ -34,7 +34,7 @@ struct Cli {
 enum Cmd {
     /// Run the JSON-RPC stdio bridge.
     Serve,
-    /// Lint a `cortex-plugin/` directory.
+    /// Lint a `packages/cortex-claude-plugin/` directory.
     Validate {
         /// Path to the plugin directory.
         plugin_dir: PathBuf,

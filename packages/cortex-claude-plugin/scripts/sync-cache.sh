@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync the cortex-plugin source tree into Claude Code's plugin cache.
+# Sync the cortex-claude-plugin source tree into Claude Code's plugin cache.
 #
 # Workaround for a Claude Code limitation: when a plugin marketplace
 # uses `source: { type: directory, path: ... }`, `claude plugin install`
@@ -16,7 +16,7 @@
 # loader picks up the new files.
 #
 # Usage:
-#   bash cortex-plugin/scripts/sync-cache.sh
+#   bash packages/cortex-claude-plugin/scripts/sync-cache.sh
 #
 # Override the cache root via CORTEX_PLUGIN_CACHE if your install
 # lives elsewhere (e.g. a non-default $HOME).

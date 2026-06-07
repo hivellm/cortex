@@ -82,7 +82,7 @@ projects: **~2.4 M docs**.
 
 ## 5. Hooks already firing (today)
 
-Cortex plugin hooks under `cortex-plugin/hooks/`:
+Cortex plugin hooks under `packages/cortex-claude-plugin/hooks/`:
 
 | Hook | Status | Notes |
 |---|---|---|

@@ -1,4 +1,4 @@
-//! Drift guard — the hook shims under `cortex-plugin/hooks/` must
+//! Drift guard — the hook shims under `packages/cortex-claude-plugin/hooks/` must
 //! stay byte-identical to the canonical sources under
 //! `crates/cortex-adapter-claude-code/hooks/`.
 //!
@@ -24,7 +24,7 @@ fn workspace_root() -> PathBuf {
 fn plugin_hook_shims_match_adapter_canonical_sources() {
     let root = workspace_root();
     let adapter_dir = root.join("crates/cortex-adapter-claude-code/hooks");
-    let plugin_dir = root.join("cortex-plugin/hooks");
+    let plugin_dir = root.join("packages/cortex-claude-plugin/hooks");
 
     let mut canonical: Vec<String> = fs::read_dir(&adapter_dir)
         .expect("adapter hooks dir exists")
@@ -93,7 +93,7 @@ fn plugin_hook_shims_match_adapter_canonical_sources() {
 fn hook_shims_carry_cortex_hook_bin_preference_branch() {
     let root = workspace_root();
     let dirs = [
-        root.join("cortex-plugin/hooks"),
+        root.join("packages/cortex-claude-plugin/hooks"),
         root.join("crates/cortex-adapter-claude-code/hooks"),
     ];
 

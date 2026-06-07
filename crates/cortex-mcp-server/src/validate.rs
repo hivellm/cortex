@@ -1,4 +1,4 @@
-//! Lints the `cortex-plugin/` directory against the Claude Code
+//! Lints the `packages/cortex-claude-plugin/` directory against the Claude Code
 //! plugin reference. Spec 18 §CI validates the asset tree.
 //!
 //! Runs as `cortex-mcp-server validate <plugin-dir>`. Exits non-zero

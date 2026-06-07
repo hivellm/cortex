@@ -733,8 +733,8 @@ across surfaces**.
 Surfaces audited:
 - `.env` — `CORTEX_*_URL` family, plus arbitrary `KEY=VALUE` lines
 - `~/.cortex/adapter.toml` — `[adapter] endpoint`, `api_endpoint`
-- `cortex-plugin/.mcp.json` — `mcpServers.cortex.env.CORTEX_API_URL`
-- `cortex-plugin/hooks/hooks.json` — registered hooks list
+- `packages/cortex-claude-plugin/.mcp.json` — `mcpServers.cortex.env.CORTEX_API_URL`
+- `packages/cortex-claude-plugin/hooks/hooks.json` — registered hooks list
 
 Cross-checks:
 - `adapter.toml.endpoint` MUST equal `.env CORTEX_INGESTION_URL`

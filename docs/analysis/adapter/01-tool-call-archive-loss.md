@@ -218,7 +218,7 @@ Observed 2026-04-28 22:20 (same session, post-fix):
 ```
 
 The pwsh hook in
-[`cortex-plugin/hooks/cortex-post-tool.ps1`](../../../cortex-plugin/hooks/cortex-post-tool.ps1)
+[`packages/cortex-claude-plugin/hooks/cortex-post-tool.ps1`](../../../packages/cortex-claude-plugin/hooks/cortex-post-tool.ps1)
 opens a fresh `NamedPipeClientStream` per invocation, writes the frame,
 calls `Flush()`. When two hooks fire concurrently (e.g. PreToolUse +
 PostToolUse for back-to-back tool calls), the

@@ -18,8 +18,8 @@ A Claude Code plugin is a **directory of text + config**, not a Rust crate. The 
 ## Scope
 
 **In:**
-- `cortex-plugin/` directory at the workspace root with the canonical Claude Code plugin layout.
-- `cortex-mcp-server` Rust crate — language-agnostic MCP server binary referenced from `cortex-plugin/.mcp.json`. JSON-RPC 2.0 over stdio (canonical MCP transport).
+- `packages/cortex-claude-plugin/` directory at the workspace root with the canonical Claude Code plugin layout.
+- `cortex-mcp-server` Rust crate — language-agnostic MCP server binary referenced from `packages/cortex-claude-plugin/.mcp.json`. JSON-RPC 2.0 over stdio (canonical MCP transport).
 - Three MCP tools backed by existing services: `cortex_query` (spec 11), `cortex_pre_thinking` (spec 12), `cortex_status` (Cortex daemon health).
 - Three skills authored as Markdown: `cortex-context`, `cortex-audit`, `cortex-laws`.
 - Three sub-agents authored as Markdown: `cortex-historian`, `cortex-lawkeeper`, `cortex-context-curator`.
@@ -38,7 +38,7 @@ A Claude Code plugin is a **directory of text + config**, not a Rust crate. The 
 ### Plugin directory layout
 
 ```
-cortex-plugin/                          # workspace-root plugin directory
+packages/cortex-claude-plugin/                          # workspace-root plugin directory
 ├── .claude-plugin/
 │   ├── plugin.json                    # required manifest (per Claude Code docs)
 │   └── marketplace.json               # marketplace listing (used when this repo is added as a marketplace)
@@ -244,7 +244,7 @@ The plugin ships the spec-10 hook shims directly so capture activates the moment
       "source": {
         "type": "git",
         "url": "https://github.com/hivellm/cortex",
-        "path": "cortex-plugin"
+        "path": "packages/cortex-claude-plugin"
       }
     }
   ]
@@ -257,7 +257,7 @@ Users add the marketplace once (`/plugin marketplace add hivellm/cortex`) and in
 
 ### Plugin directory at workspace root
 
-The plugin directory lives at `cortex-plugin/` — separate from `crates/` since it's not a Rust crate. Authored as text + JSON, no build step. CI lints it via a small Rust binary (`cortex-mcp-server` ships a `validate` sub-command that checks every asset against the Claude Code reference schema).
+The plugin directory lives at `packages/cortex-claude-plugin/` — separate from `crates/` since it's not a Rust crate. Authored as text + JSON, no build step. CI lints it via a small Rust binary (`cortex-mcp-server` ships a `validate` sub-command that checks every asset against the Claude Code reference schema).
 
 ### `cortex-mcp-server` Rust crate
 
@@ -273,7 +273,7 @@ crates/cortex-mcp-server/
 │   ├── server.rs             (handshake state, dispatch loop)
 │   ├── tools.rs              (Tool trait + registry + 3 concrete tools)
 │   ├── transport_stdio.rs    (newline-delimited JSON over stdin/stdout)
-│   ├── validate.rs           (lint cortex-plugin/ against the Claude Code reference)
+│   ├── validate.rs           (lint packages/cortex-claude-plugin/ against the Claude Code reference)
 │   └── metrics.rs            (cortex.plugin.* counters)
 └── tests/
 ```
@@ -353,10 +353,10 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 
 ## Acceptance criteria
 
-- [ ] `cortex-plugin/.claude-plugin/plugin.json` parses as a valid Claude Code plugin manifest (`name`, `description`, `version`, `author`).
-- [ ] `cortex-plugin/.mcp.json` references `cortex-mcp-server` with the documented env vars.
-- [ ] `cortex-plugin/skills/`, `cortex-plugin/agents/`, `cortex-plugin/commands/` each contain the documented files; YAML frontmatter parses on every agent.
-- [ ] `cortex-mcp-server validate ./cortex-plugin` exits 0 on a clean tree and non-zero with a clear message when a required file is missing or malformed.
+- [ ] `packages/cortex-claude-plugin/.claude-plugin/plugin.json` parses as a valid Claude Code plugin manifest (`name`, `description`, `version`, `author`).
+- [ ] `packages/cortex-claude-plugin/.mcp.json` references `cortex-mcp-server` with the documented env vars.
+- [ ] `packages/cortex-claude-plugin/skills/`, `packages/cortex-claude-plugin/agents/`, `packages/cortex-claude-plugin/commands/` each contain the documented files; YAML frontmatter parses on every agent.
+- [ ] `cortex-mcp-server validate ./packages/cortex-claude-plugin` exits 0 on a clean tree and non-zero with a clear message when a required file is missing or malformed.
 - [ ] Spawning `cortex-mcp-server serve` and sending an `initialize` over stdio returns a valid response with `tools` capability advertised.
 - [ ] `tools/list` returns 29 descriptors (13 baseline + 16 phase19 granular verbs); `cortex_query`'s descriptor matches `cortex_api::tool_descriptor()` byte-for-byte.
 - [ ] `tools/call` for `cortex.query` against a wiremock'd `cortex-api` returns the spec-11 response shape.
@@ -364,11 +364,11 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 - [ ] `tools/call` for `cortex.status` returns daemon pid + queue depth + WAL bytes.
 - [ ] Unknown tool name → JSON-RPC `-32601 method not found`.
 - [ ] Malformed JSON frame → `-32700 parse error` and the server stays alive for the next message.
-- [ ] Local install drill: `claude --plugin-dir ./cortex-plugin` boots, `/plugin list` shows `cortex`, `tools/list` over the embedded MCP server returns the three tools.
-- [ ] Marketplace listing: `cortex-plugin/.claude-plugin/marketplace.json` parses and points at this repo's `cortex-plugin/` path.
+- [ ] Local install drill: `claude --plugin-dir ./packages/cortex-claude-plugin` boots, `/plugin list` shows `cortex`, `tools/list` over the embedded MCP server returns the three tools.
+- [ ] Marketplace listing: `packages/cortex-claude-plugin/.claude-plugin/marketplace.json` parses and points at this repo's `packages/cortex-claude-plugin/` path.
 - [ ] Telemetry counters non-zero after a 5-tool-call recorded session.
-- [ ] `cortex-plugin/hooks/hooks.json` parses; every script it references exists; every shim under `hooks/` is referenced from `hooks.json`; `cortex-mcp-server validate` enforces both invariants.
-- [ ] Hook shims under `cortex-plugin/hooks/cortex-*.{sh,ps1}` are byte-identical to the canonical sources under `crates/cortex-adapter-claude-code/hooks/` (drift test fails the build otherwise).
+- [ ] `packages/cortex-claude-plugin/hooks/hooks.json` parses; every script it references exists; every shim under `hooks/` is referenced from `hooks.json`; `cortex-mcp-server validate` enforces both invariants.
+- [ ] Hook shims under `packages/cortex-claude-plugin/hooks/cortex-*.{sh,ps1}` are byte-identical to the canonical sources under `crates/cortex-adapter-claude-code/hooks/` (drift test fails the build otherwise).
 - [ ] After `claude plugin install cortex@hivellm-cortex`, a fresh Claude Code session emits `UserPromptSubmit` events that reach `~/.cortex/adapter-claude.sock` and the spec-10 daemon publishes them upstream (capture round-trip).
 - [ ] `cortex-adapter-claude install --no-hooks` keeps `~/.claude/settings.json` byte-identical to its pre-install state and writes zero shims, so spec-18 plugin users can run the standalone install side-by-side without duplicate hook firing.
 
@@ -378,8 +378,8 @@ Every tool invocation also emits a structured tracing event with `tool`, `latenc
 2. **Stdio is canonical.** SSE is reserved for future browser-side scenarios; v1 ships stdio only.
 3. **Tool descriptors live in `cortex-api`.** `cortex.query` reuses `cortex_api::tool_descriptor()` so the schema source-of-truth stays in one crate.
 4. **Plugin lives at workspace root, not under `crates/`.** It's an artifact, not a Rust package.
-5. **CI validates the asset tree.** `cortex-mcp-server validate ./cortex-plugin` runs in CI; the plugin can't ship with a missing file or a malformed agent frontmatter.
-6. **Distribution via a Cortex marketplace.** `cortex-plugin/.claude-plugin/marketplace.json` lets users `/plugin marketplace add hivellm/cortex` and pull updates from this repo.
+5. **CI validates the asset tree.** `cortex-mcp-server validate ./packages/cortex-claude-plugin` runs in CI; the plugin can't ship with a missing file or a malformed agent frontmatter.
+6. **Distribution via a Cortex marketplace.** `packages/cortex-claude-plugin/.claude-plugin/marketplace.json` lets users `/plugin marketplace add hivellm/cortex` and pull updates from this repo.
 7. **JSON-RPC errors carry the spec-11 reason in `data`.** Hosts that surface error messages to the user get a deterministic string they can pattern-match on.
 8. **Hooks ship inside the plugin tree.** The `hooks/` directory and `hooks/hooks.json` register capture at plugin-install time so a single `claude plugin install` covers both pull (MCP tools) and push (capture). The spec-10 standalone install path stays for non-plugin users; the new `--no-hooks` flag keeps both paths cohabitable.
 9. **Single source of truth for hook shims.** Canonical `cortex-*.{sh,ps1}` live under `crates/cortex-adapter-claude-code/hooks/`. The plugin tree mirrors them and a drift test refuses divergence — no need to re-author Bash scripts inside the plugin tree.

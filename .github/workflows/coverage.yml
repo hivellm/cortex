@@ -20,7 +20,7 @@ on:
       - ".github/workflows/codespell.yml"
       - ".github/workflows/version-coherence.yml"
       - ".github/workflows/dashboard-grep-gate.yml"
-      - "cortex-plugin/**"
+      - "packages/cortex-claude-plugin/**"
       - "scripts/**"
   schedule:
     - cron: "0 2 * * *"

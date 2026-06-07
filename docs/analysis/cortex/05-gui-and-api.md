@@ -83,6 +83,6 @@ Stack: Electron + React + TypeScript + Vite + React Query + Cytoscape (graph). S
 
 ## Plugin / MCP UX
 
-The `cortex-plugin/` Claude Code plugin (spec 18, 🟢) registers `mcp__cortex__*` tools. The user's `MEMORY.md` confirms the daemon is the integration boundary the user actually uses — not the standalone Electron GUI.
+The `packages/cortex-claude-plugin/` Claude Code plugin (spec 18, 🟢) registers `mcp__cortex__*` tools. The user's `MEMORY.md` confirms the daemon is the integration boundary the user actually uses — not the standalone Electron GUI.
 
 Implication: MCP tool quality (descriptors, response shape, error messages) is at least as important as GUI polish, because that's the surface the user himself touches every session.

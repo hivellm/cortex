@@ -27,7 +27,7 @@ Reference: [README.md](../../../README.md), [docs/architecture.md](../../archite
 | `cortex-pre-thinking`              | Bundle assembly used by adapter and MCP server (spec 12)            |
 | `cortex-mcp-server`                | MCP exposure of pre-thinking + query (spec 18)                      |
 
-Plus the `gui/` Electron + React dashboard and the `cortex-plugin/` Claude Code plugin.
+Plus the `gui/` Electron + React dashboard and the `packages/cortex-claude-plugin/` Claude Code plugin.
 
 Approximate codebase size: **~44k LOC** of Rust (`find crates -name "*.rs" | xargs wc -l`), **291 unit-test functions** in **58 test files** (`grep -r '^#\[test\]\|^#\[tokio::test\]'`).
 
