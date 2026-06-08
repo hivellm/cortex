@@ -15,7 +15,7 @@
 - [x] 2.3 Fix forget purge param binding: `admin/forget.rs::delete_node_by_event_id` sends `MATCH (n {event_id:$id}) DETACH DELETE n` with params `{id:..}` but Nexus 2.3.0 logs `ERR_MISSING_PARAMETER: $id not provided` → unbound → repeated full-scan delete attempts that never prune + add load. Verify nexus-sdk param wire-format vs 2.3.0 (`params` vs `parameters`); inline the literal if the SDK can't bind.
 
 ## 3. Bootstrap index-ensure
-- [x] 3.1 single-prop MERGE-key indexes added to SCHEMA_STATEMENTS (commit 695c056) issuing the 18 idempotent `CREATE INDEX FOR (n:Label) ON (n.prop)` statements (Artifact->natural_key, Repo->name, rest->id)
+- [x] 3.1 single-prop MERGE-key indexes in SCHEMA_STATEMENTS (695c056) + live worker ensures schema on startup (2ecc3fb) — root-cause fix: worker never indexed before issuing the 18 idempotent `CREATE INDEX FOR (n:Label) ON (n.prop)` statements (Artifact->natural_key, Repo->name, rest->id)
 - [ ] 3.2 Confirm a fresh stack starts indexed (SHOW INDEXES lists all 18)
 
 ## 4. Graph rebuild
