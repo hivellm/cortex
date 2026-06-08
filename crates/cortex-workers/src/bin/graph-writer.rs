@@ -67,6 +67,35 @@ async fn main() -> Result<()> {
         tracing::info!(statements = stmts.len(), "ensured graph schema (indexes)");
     }
 
+    // phase25 §3 — periodic schema re-ensure. nexus#11: Nexus drops every
+    // property index on restart, so a Nexus-only restart (without the
+    // worker restarting) silently leaves the graph un-indexed → the next
+    // write burst melts the server. Re-running the idempotent
+    // `CREATE ... IF NOT EXISTS` bootstrap on a timer restores the
+    // indexes within one interval of any Nexus restart. Cheap: each
+    // statement is a fast catalog check when the index is present. Set
+    // `CORTEX_GRAPH_SCHEMA_ENSURE_SECS=0` to disable (e.g. once Nexus
+    // persists indexes across restart).
+    let ensure_secs = std::env::var("CORTEX_GRAPH_SCHEMA_ENSURE_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(120);
+    if ensure_secs > 0 {
+        let schema_client = client.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(ensure_secs));
+            ticker.tick().await; // skip the immediate first tick (startup already ensured)
+            let stmts = schema::statements();
+            loop {
+                ticker.tick().await;
+                if let Err(e) = schema_client.ensure_schema(&stmts).await {
+                    tracing::warn!(error = %e, "periodic schema re-ensure failed (will retry)");
+                }
+            }
+        });
+        tracing::info!(interval_secs = ensure_secs, "periodic schema re-ensure armed");
+    }
+
     let metrics = Arc::new(Metrics::new());
     let writer = Arc::new(NexusGraphWriter::new(
         config.clone(),
