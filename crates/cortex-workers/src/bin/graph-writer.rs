@@ -16,8 +16,9 @@ use cortex_workers::admin_health::{
 };
 use cortex_workers::graph::{
     cypher::{load_from_dir, REQUIRED_TEMPLATES},
+    schema,
     worker::{LiveSynapConsumer, LiveSynapPublisher, SynapHandle, STREAM_ENRICHED},
-    GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter, Worker,
+    GraphClient, GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter, Worker,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -47,6 +48,25 @@ async fn main() -> Result<()> {
         LiveNexusClient::new(config.clone())
             .map_err(|e| anyhow::anyhow!("failed to build Nexus client: {e}"))?,
     );
+
+    // phase25 §3 — apply the graph schema (constraints + the single-prop
+    // MERGE-key indexes that Nexus NodeIndexSeek / index-backed MERGE
+    // need) on startup. The live worker previously NEVER ensured schema
+    // (only the backfill did), so every node/edge MERGE fell back to an
+    // O(N) label scan and melted Nexus under write load — the original
+    // meltdown. Idempotent (`CREATE ... IF NOT EXISTS`); also restores
+    // indexes dropped by a Nexus restart (nexus#11) on the worker's next
+    // boot. A schema failure is fatal: running un-indexed is worse than
+    // not running.
+    {
+        let stmts = schema::statements();
+        client
+            .ensure_schema(&stmts)
+            .await
+            .map_err(|e| anyhow::anyhow!("ensure graph schema: {e}"))?;
+        tracing::info!(statements = stmts.len(), "ensured graph schema (indexes)");
+    }
+
     let metrics = Arc::new(Metrics::new());
     let writer = Arc::new(NexusGraphWriter::new(
         config.clone(),
