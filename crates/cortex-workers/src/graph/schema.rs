@@ -76,6 +76,36 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE INDEX law_violation_project_valid_to IF NOT EXISTS FOR (v:LawViolation) ON (v.project_id, v.valid_to)",
     "CREATE INDEX timeline_event_project_branch_valid_time IF NOT EXISTS FOR (t:TimelineEvent) ON (t.project_id, t.branch_id, t.valid_time)",
     "CREATE INDEX branch_project IF NOT EXISTS FOR (b:Branch) ON (b.project_id, b.status)",
+    // phase25 §3 — single-property indexes on every node-MERGE key.
+    // The writer upserts each node as `MERGE (n:Label { <key>: <v> })`
+    // (key = `LiveNexusClient::key_field_for`: Artifact->natural_key,
+    // Repo->name, all others->id). Nexus 2.3.1's NodeIndexSeek (#8) +
+    // index-backed MERGE existence (#9) only engage when a *single-prop*
+    // property index covers `(label, key)`. A unique CONSTRAINT does
+    // NOT back a planner-usable index on 2.3.1 (verified: a seek on a
+    // constraint-only id still emits `UnindexedPropertyAccess`), and
+    // the composite `artifact_repo_path` / `symbol_repo_name` indexes
+    // above do not cover the natural_key / id MERGE key. Without these
+    // the edge-upsert endpoint MATCH falls back to an O(N) label scan
+    // and edge writes melt the server on a large graph.
+    "CREATE INDEX artifact_natural_key_seek IF NOT EXISTS FOR (a:Artifact) ON (a.natural_key)",
+    "CREATE INDEX repo_name_idx IF NOT EXISTS FOR (r:Repo) ON (r.name)",
+    "CREATE INDEX session_id_idx IF NOT EXISTS FOR (s:Session) ON (s.id)",
+    "CREATE INDEX turn_id_idx IF NOT EXISTS FOR (t:Turn) ON (t.id)",
+    "CREATE INDEX tool_call_id_idx IF NOT EXISTS FOR (tc:ToolCall) ON (tc.id)",
+    "CREATE INDEX agent_call_id_idx IF NOT EXISTS FOR (ac:AgentCall) ON (ac.id)",
+    "CREATE INDEX symbol_id_idx IF NOT EXISTS FOR (s:Symbol) ON (s.id)",
+    "CREATE INDEX decision_id_idx IF NOT EXISTS FOR (d:Decision) ON (d.id)",
+    "CREATE INDEX memory_id_idx IF NOT EXISTS FOR (m:Memory) ON (m.id)",
+    "CREATE INDEX analysis_id_idx IF NOT EXISTS FOR (a:Analysis) ON (a.id)",
+    "CREATE INDEX knowledge_id_idx IF NOT EXISTS FOR (k:Knowledge) ON (k.id)",
+    "CREATE INDEX learning_id_idx IF NOT EXISTS FOR (l:Learning) ON (l.id)",
+    "CREATE INDEX law_id_idx IF NOT EXISTS FOR (l:Law) ON (l.id)",
+    "CREATE INDEX law_violation_id_idx IF NOT EXISTS FOR (v:LawViolation) ON (v.id)",
+    "CREATE INDEX consolidation_id_idx IF NOT EXISTS FOR (c:Consolidation) ON (c.id)",
+    "CREATE INDEX topic_card_id_idx IF NOT EXISTS FOR (tc:TopicCard) ON (tc.id)",
+    "CREATE INDEX branch_id_idx IF NOT EXISTS FOR (b:Branch) ON (b.id)",
+    "CREATE INDEX timeline_event_id_idx IF NOT EXISTS FOR (t:TimelineEvent) ON (t.id)",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like
@@ -96,9 +126,30 @@ mod tests {
         // ExternalIdIndex enforces uniqueness on `_id` structurally.
         // A regression here means the writer is back to declaring
         // redundant constraints that conflict with the index seek path.
+        //
+        // phase25 §3 nuance: the retirement is about the *constraints*,
+        // not the property. The writer still upserts Artifact by
+        // `natural_key` (`key_field_for(Artifact)`), and Nexus 2.3.1's
+        // NodeIndexSeek (#8) needs a single-prop INDEX on that key — so
+        // exactly one `CREATE INDEX ... ON (a.natural_key)` is allowed
+        // (and required). What stays forbidden is any natural_key
+        // CONSTRAINT.
         let joined = SCHEMA_STATEMENTS.join("\n");
+        for stmt in SCHEMA_STATEMENTS {
+            assert!(
+                !(stmt.contains("CONSTRAINT") && stmt.contains("natural_key")),
+                "phase11l §4.1: natural_key CONSTRAINTs are retired; got `{stmt}`"
+            );
+        }
+        // The single Artifact natural_key SEEK index is present (phase25
+        // §3) — without it the Artifact MERGE/endpoint MATCH is an O(N)
+        // label scan.
+        assert!(
+            joined.contains("FOR (a:Artifact) ON (a.natural_key)"),
+            "phase25 §3: the Artifact natural_key seek index must be present"
+        );
+        // No legacy per-label natural_key CONSTRAINTs sneak back.
         for retired in [
-            "artifact_natural_key",
             "symbol_natural_key",
             "external_package_natural_key",
             "unresolved_import_natural_key",
@@ -109,11 +160,6 @@ mod tests {
                 "phase11l §4.1 dropped `{retired}`; it must not return to SCHEMA_STATEMENTS"
             );
         }
-        // Sanity: no statement still references `natural_key` at all.
-        assert!(
-            !joined.contains("natural_key"),
-            "no SCHEMA_STATEMENT may still reference the legacy `natural_key` property"
-        );
     }
 
     #[test]
