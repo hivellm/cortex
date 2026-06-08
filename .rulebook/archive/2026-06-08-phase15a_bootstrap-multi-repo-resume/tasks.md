@@ -19,6 +19,6 @@
 - [x] 4.3 `cargo check -p cortex-cli` + `cargo clippy -p cortex-cli --bins --lib -- -D warnings` + `cargo test -p cortex-cli` all clean (75 bin tests + lib green).
 - [x] 4.4 Parallel dispatch is unit-covered (`run_repos_parallel`); the live 3-repo wall-clock comparison is an operator-run benchmark (needs the full stack + the 17 repos) and is recorded in the spec as the acceptance check rather than run in CI.
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [x] 99.1 Docs: spec 09 § Multi-repo progress status + CHANGELOG entry.
-- [x] 99.2 Tests: record_emit + repo_stalled/fmt_dur/truncate + end-to-end status run.
-- [x] 99.3 `cargo test -p cortex-cli` green (75 + lib).
+- [x] 99.1 Update or create documentation covering the implementation. — spec 09 § Multi-repo progress status + CHANGELOG [Unreleased] Added.
+- [x] 99.2 Write tests covering the new behavior. — record_emit rate-window + repo_stalled/fmt_dur/truncate + end-to-end status run.
+- [x] 99.3 Run tests and confirm they pass. — `cargo test -p cortex-cli` green (75 + lib).
