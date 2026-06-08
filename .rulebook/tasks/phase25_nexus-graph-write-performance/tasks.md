@@ -35,3 +35,4 @@
 - Cortex side COMPLETE + resilient: worker ensures schema on startup + periodic re-ensure (survives Nexus restart), forget label-scoped indexed, 2.3.1 deployed.
 - BLOCKED on Nexus (issues filed): #11 indexes lost on restart (mitigated Cortex-side), #12 stall under sustained write (blocks full backfill), #13 UNWIND-write silent-drop (blocks §4.2 batched writes).
 - §4 rebuild: clean indexed graph live; full historical replay pending #12/#13.
+- §4.2 edge writes + full historical backfill: SET ASIDE pending nexus#14 (edge UNWIND). Operator will not upgrade Nexus now. Cortex side done: node-UNWIND batched, worker indexes on startup, forget label-scoped, resilient. Resume the backfill once nexus#14 lands.
