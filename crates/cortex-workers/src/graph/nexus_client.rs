@@ -350,13 +350,6 @@ fn classify_schema_error(err: NexusError, stmt: &str) -> Option<GraphClientError
     Some(GraphClientError::classify(err, "schema"))
 }
 
-/// phase25 §4.2 — max in-flight per-row writes within one patch flush.
-/// Each write is one HTTP round-trip; serial execution capped throughput
-/// at ~1-2/s. Bounded concurrency keeps Nexus busy without unbounded
-/// connection pressure. 16 is a safe default on the live stack (Nexus
-/// 2.3.2 handles concurrent transactions; #12 stall is fixed).
-const WRITE_CONCURRENCY: usize = 16;
-
 #[async_trait]
 impl GraphClient for LiveNexusClient {
     async fn ensure_schema(&self, statements: &[String]) -> GraphClientResult<()> {
@@ -390,42 +383,29 @@ impl GraphClient for LiveNexusClient {
         // The `_templates` registry is kept as a parameter for API
         // stability; the live writer no longer reads from it. See task
         // `phase1_graph_writer_nexus_compat` for the full diagnosis.
-        // phase25 §4.2 — pipeline the per-row writes concurrently
-        // (bounded by WRITE_CONCURRENCY). Nexus 2.3.2 fixed the
-        // sustained-write 100% CPU stall (#12) so concurrency is safe;
-        // this lifts batch throughput from ~1-2 writes/s (one HTTP
-        // round-trip per MERGE, serial) toward the network's limit.
-        // Nodes are written first (edges MATCH their endpoints), each
-        // phase fully concurrent. UNWIND batching would be faster still
-        // but Nexus silently drops UNWIND writes — see nexus#13; revisit
-        // once that lands.
-        use futures::stream::{StreamExt, TryStreamExt};
-
-        // Sort for deterministic Cypher shape (stable retries / test
-        // diffs); the concurrent execution order is non-deterministic
-        // but node MERGEs are independent + idempotent.
-        let mut nodes_sorted: Vec<&NodeOp> = patch.nodes.iter().collect();
-        nodes_sorted.sort_by(|a, b| {
-            a.label
-                .cmp(&b.label)
-                .then_with(|| a.natural_key.cmp(&b.natural_key))
-        });
-        // Pre-render owned Cypher + identity strings so the concurrent
-        // futures borrow only `self` (avoids a higher-ranked-lifetime
-        // tangle from also borrowing each &NodeOp across the stream).
-        let node_writes: Vec<(String, String, String)> = nodes_sorted
-            .iter()
-            .map(|n| (render_node_merge(n), n.label.clone(), n.natural_key.clone()))
-            .collect();
-        let nodes_upserted = node_writes.len() as u32;
-        futures::stream::iter(node_writes.into_iter().map(|(cypher, label, key)| async move {
+        // phase25 §4.2 — UNWIND-batch node upserts. The nexus_sdk client
+        // shares one transport (requests serialize), so per-row writes
+        // are round-trip bound (~1-2/s); batching collapses N MERGEs into
+        // one statement per (label, prop-shape) group. Nexus 2.3.2
+        // persists UNWIND+MERGE node writes (nexus#13). Edges still go
+        // per-row below: UNWIND+MATCH+MERGE is rejected server-side
+        // (nexus#14), and the single transport serializes anyway.
+        //
+        // Group nodes by (label, prop-key signature) so each batch has a
+        // uniform SET clause. `props` is a BTreeMap, so the key order is
+        // deterministic.
+        let nodes_upserted = patch.nodes.len() as u32;
+        let mut node_groups: std::collections::BTreeMap<(&str, Vec<&str>), Vec<&NodeOp>> =
+            std::collections::BTreeMap::new();
+        for n in &patch.nodes {
+            let sig: Vec<&str> = n.props.keys().map(String::as_str).collect();
+            node_groups.entry((n.label.as_str(), sig)).or_default().push(n);
+        }
+        for ((label, prop_keys), group) in &node_groups {
+            let cypher = render_node_unwind(label, prop_keys, group);
             let result = self.execute_with_retry(&cypher, None).await?;
-            assert_write_landed(&result, "node", &label, &key)?;
-            Ok::<(), GraphClientError>(())
-        }))
-        .buffer_unordered(WRITE_CONCURRENCY)
-        .try_collect::<Vec<()>>()
-        .await?;
+            assert_write_landed(&result, "node-batch", label, &format!("{} rows", group.len()))?;
+        }
 
         let mut edges_sorted: Vec<&EdgeOp> = patch.edges.iter().collect();
         edges_sorted.sort_by(|a, b| {
@@ -446,41 +426,20 @@ impl GraphClient for LiveNexusClient {
         });
         let mut edges_dropped: std::collections::BTreeMap<String, u32> =
             std::collections::BTreeMap::new();
-        // Edges concurrently (after all nodes landed). Each edge MATCHes
-        // its own endpoints, so order within the phase is irrelevant.
-        // Edges Nexus silently drops (MATCH found no endpoint) are
-        // tallied and isolated — a cross-batch endpoint race resolves on
-        // the next replay — rather than aborting the whole batch.
-        let edge_writes: Vec<(String, String, String)> = edges_sorted
-            .iter()
-            .map(|e| {
-                (
-                    render_edge_merge(e),
-                    e.edge_type.clone(),
-                    format!("{}->{}", e.from_key, e.to_key),
-                )
-            })
-            .collect();
-        let edge_outcomes: Vec<(String, Result<(), GraphClientError>)> =
-            futures::stream::iter(edge_writes.into_iter().map(|(cypher, edge_type, pair)| {
-                async move {
-                    let outcome = match self.execute_with_retry(&cypher, None).await {
-                        Ok(result) => assert_write_landed(&result, "edge", &edge_type, &pair),
-                        Err(e) => Err(e),
-                    };
-                    (edge_type, outcome)
-                }
-            }))
-            .buffer_unordered(WRITE_CONCURRENCY)
-            .collect()
-            .await;
-
+        // Edges per-row after the nodes land. UNWIND+MATCH+MERGE is
+        // unsupported server-side (nexus#14) and the single transport
+        // serializes anyway, so there is no batched/concurrent path here
+        // yet. Endpoint-missing rows are tallied + isolated (a cross-batch
+        // race resolves on the next replay) rather than aborting the batch.
         let mut edges_upserted = 0u32;
-        for (edge_type, outcome) in edge_outcomes {
-            match outcome {
+        for edge in edges_sorted {
+            let cypher = render_edge_merge(edge);
+            let result = self.execute_with_retry(&cypher, None).await?;
+            let pair = format!("{}->{}", edge.from_key, edge.to_key);
+            match assert_write_landed(&result, "edge", &edge.edge_type, &pair) {
                 Ok(()) => edges_upserted = edges_upserted.saturating_add(1),
                 Err(GraphClientError::Nexus(detail)) if detail.contains("count=0") => {
-                    *edges_dropped.entry(edge_type).or_insert(0) += 1;
+                    *edges_dropped.entry(edge.edge_type.clone()).or_insert(0) += 1;
                 }
                 Err(other) => return Err(other),
             }
@@ -488,7 +447,7 @@ impl GraphClient for LiveNexusClient {
         if !edges_dropped.is_empty() {
             tracing::warn!(
                 dropped = ?edges_dropped,
-                "edges silently dropped by Nexus (MATCH found no endpoint); will resolve on replay"
+                "edges with missing endpoints; will resolve on replay"
             );
         }
 
@@ -524,40 +483,7 @@ impl GraphClient for LiveNexusClient {
     }
 }
 
-// ---------- Per-row Cypher renderers (Nexus 1.15 compat) ----------------
-
-/// Render one node-MERGE statement with every value already escaped into
-/// the Cypher string literal. Format:
-///
-/// ```text
-/// MERGE (n:<Label> { <key_field>: "<key>" }) SET n.prop_a = "v", n.prop_b = 42 RETURN count(n) AS written
-/// ```
-///
-/// `RETURN count(n) AS written` lets the caller assert the write
-/// actually landed (Nexus 1.15 returns 0 for the silently-dropped
-/// shapes; a real persist returns 1).
-fn render_node_merge(node: &NodeOp) -> String {
-    let key_field = LiveNexusClient::key_field_for(&node.label);
-    let mut cy = format!(
-        "MERGE (n:{label} {{ {kf}: {key} }})",
-        label = node.label,
-        kf = key_field,
-        key = cypher_string_literal(&node.natural_key),
-    );
-    if !node.props.is_empty() {
-        cy.push_str(" SET ");
-        let mut first = true;
-        for (k, v) in &node.props {
-            if !first {
-                cy.push_str(", ");
-            }
-            first = false;
-            cy.push_str(&format!("n.{k} = {}", value_to_cypher_literal(v)));
-        }
-    }
-    cy.push_str(" RETURN count(n) AS written");
-    cy
-}
+// ---------- Per-row / batched Cypher renderers (Nexus compat) -----------
 
 /// Render one edge-MERGE statement (MATCH endpoints, MERGE the
 /// relationship, optional SET on the relationship). Endpoints must
@@ -596,6 +522,48 @@ fn render_edge_merge(edge: &EdgeOp) -> String {
     }
     cy.push_str(" RETURN count(r) AS written");
     cy
+}
+
+/// phase25 §4.2 — render one UNWIND batch that MERGEs many same-shape
+/// nodes (same label + same `prop_keys` set) in a single statement.
+/// Values are inlined as escaped Cypher literals (Nexus rejects `$param`
+/// writes); the merge key rides under `row._k`. Nexus 2.3.2 persists
+/// UNWIND+MERGE node writes (nexus#13), so this collapses N per-row
+/// round-trips into one. `RETURN count(n)` lets the caller assert the
+/// batch landed.
+fn render_node_unwind(label: &str, prop_keys: &[&str], nodes: &[&NodeOp]) -> String {
+    let kf = LiveNexusClient::key_field_for(label);
+    let mut rows = String::from("[");
+    for (i, n) in nodes.iter().enumerate() {
+        if i > 0 {
+            rows.push(',');
+        }
+        rows.push_str("{_k:");
+        rows.push_str(&cypher_string_literal(&n.natural_key));
+        for pk in prop_keys {
+            if let Some(v) = n.props.get(*pk) {
+                rows.push(',');
+                rows.push_str(pk);
+                rows.push(':');
+                rows.push_str(&value_to_cypher_literal(v));
+            }
+        }
+        rows.push('}');
+    }
+    rows.push(']');
+    let set_clause = if prop_keys.is_empty() {
+        String::new()
+    } else {
+        let sets: Vec<String> = prop_keys
+            .iter()
+            .map(|pk| format!("n.{pk} = row.{pk}"))
+            .collect();
+        format!(" SET {}", sets.join(", "))
+    };
+    format!(
+        "UNWIND {rows} AS row MERGE (n:{label} {{ {kf}: row._k }}){set_clause} \
+         RETURN count(n) AS written"
+    )
 }
 
 /// Encode a string as a Cypher double-quoted string literal.
