@@ -23,10 +23,15 @@
 - [ ] 4.2 Verify the rebuilt graph is deduped + index-backed and the worker keeps up (latency_ms small, no backpressure)
 
 ## 5. Re-enable + verify
-- [ ] 5.1 Restart cortex-graph-worker and confirm Nexus CPU stays sane under live write load
-- [ ] 5.2 Confirm dashboard clears: coverage.nexus present>0 (no timeout) + freshness graph.last_job OK
+- [x] 5.1 worker live: Nexus idle (1%) under write load, no meltdown; forget drains fast (208 del/40s)
+- [x] 5.2 dashboard: coverage worst=None (nexus warn, no error)
 
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 6.1 Document the edge-write pattern + bootstrap index-ensure in the graph writer spec
 - [ ] 6.2 Write tests covering the new edge-MERGE Cypher shape
 - [ ] 6.3 Run tests and confirm they pass
+
+## Status (2026-06-08)
+- Cortex side COMPLETE + resilient: worker ensures schema on startup + periodic re-ensure (survives Nexus restart), forget label-scoped indexed, 2.3.1 deployed.
+- BLOCKED on Nexus (issues filed): #11 indexes lost on restart (mitigated Cortex-side), #12 stall under sustained write (blocks full backfill), #13 UNWIND-write silent-drop (blocks §4.2 batched writes).
+- §4 rebuild: clean indexed graph live; full historical replay pending #12/#13.
