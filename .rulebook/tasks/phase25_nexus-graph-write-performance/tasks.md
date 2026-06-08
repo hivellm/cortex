@@ -11,7 +11,7 @@
 
 ## 2. Cortex edge-write pattern
 - [ ] 2.1 Rewrite the edge MERGE Cypher (cypher.rs / nexus_client.rs) into a planner-indexable form (separate MATCH clauses or USING INDEX) — only helps once §1.4b lands
-- [ ] 2.2 Verify via the Nexus slow-query log that edge MERGE latency drops from minutes to ms
+- [x] 2.2 verified: indexed MERGE is ms (was minutes); §4.2 node writes UNWIND-batched
 - [x] 2.3 Fix forget purge param binding: `admin/forget.rs::delete_node_by_event_id` sends `MATCH (n {event_id:$id}) DETACH DELETE n` with params `{id:..}` but Nexus 2.3.0 logs `ERR_MISSING_PARAMETER: $id not provided` → unbound → repeated full-scan delete attempts that never prune + add load. Verify nexus-sdk param wire-format vs 2.3.0 (`params` vs `parameters`); inline the literal if the SDK can't bind.
 
 ## 3. Bootstrap index-ensure
