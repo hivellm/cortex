@@ -119,31 +119,55 @@ impl LiveNexusPurger {
     }
 }
 
+/// Node labels whose primary key is the event id. The graph mapper
+/// (`graph/mapper.rs::anchor_natural_key`) upserts every kind EXCEPT
+/// Artifact (keyed by `repo|path|content_hash`) and Repo (keyed by
+/// `name`) under `id == event_id`. Those two are code/structure nodes
+/// that retention never forgets, so the forget cascade targets exactly
+/// this set. phase25 §2.3.
+const FORGETTABLE_LABELS: &[&str] = &[
+    "Turn",
+    "ToolCall",
+    "AgentCall",
+    "Session",
+    "Memory",
+    "Decision",
+    "Analysis",
+    "Knowledge",
+    "Learning",
+    "Consolidation",
+    "TopicCard",
+    "Law",
+    "LawViolation",
+    "TimelineEvent",
+    "Branch",
+    "Symbol",
+];
+
 #[async_trait]
 impl NexusPurgeOps for LiveNexusPurger {
     async fn delete_node_by_event_id(&self, event_id: &str) -> Result<(), NexusPurgeError> {
-        // Single Cypher pass: every Cortex-owned node carries
-        // `event_id` as a property (set by the graph mapper). A
-        // zero-row delete is the idempotent path — Nexus returns
-        // success without raising an error.
-        //
-        // phase25 §2.3 — inline the event_id as an escaped Cypher string
-        // literal instead of a bound `$id` parameter. Nexus 2.3.0
-        // rejects the bound form (`ERR_MISSING_PARAMETER: $id not
-        // provided`), so every purge silently failed and re-fired,
-        // never pruning the node while full-scanning the graph. The rest
-        // of Cortex's Nexus writes (graph mapper node/edge MERGE)
-        // already inline escaped literals — mirror that.
-        let cypher = format!(
-            "MATCH (n {{ event_id: {} }}) DETACH DELETE n",
-            escape_cypher_string(event_id),
-        );
-        // phase25 §2.3 — empty param map, not `None`: Nexus 2.3.0's REST
-        // `/cypher` rejects a null `parameters` field (HTTP 422).
-        self.client
-            .execute_cypher(&cypher, Some(std::collections::HashMap::new()))
-            .await
-            .map_err(|e| NexusPurgeError::Server(e.to_string()))?;
+        // phase25 §2.3 — delete the event's node via the INDEXED `id`
+        // key, one seek per candidate label. The graph mapper upserts
+        // every non-Artifact node under `id == event_id`, and the
+        // `event_id` property only lives on EDGES — so the old
+        // label-less `MATCH (n { event_id: X })` was both wrong (no
+        // node carries that property) and an O(N) full scan that pinned
+        // Nexus on a purge backlog. An indexed `MATCH (n:Label {id: X})`
+        // (covered by the §3 schema indexes / NodeIndexSeek) is an
+        // O(log N) seek. The node carries exactly one label, so the
+        // other seeks are index-miss no-ops. Idempotent: a missing node
+        // is success.
+        let id_lit = escape_cypher_string(event_id);
+        for label in FORGETTABLE_LABELS {
+            let cypher = format!("MATCH (n:{label} {{ id: {id_lit} }}) DETACH DELETE n");
+            // Empty param map, not `None`: Nexus rejects a null
+            // `parameters` field on the REST `/cypher` path (HTTP 422).
+            self.client
+                .execute_cypher(&cypher, Some(std::collections::HashMap::new()))
+                .await
+                .map_err(|e| NexusPurgeError::Server(e.to_string()))?;
+        }
         Ok(())
     }
 }
@@ -495,6 +519,24 @@ mod tests {
     use std::sync::Mutex;
 
     // ------------------- §2.3 cypher literal escaping -------------------
+
+    #[test]
+    fn forgettable_labels_exclude_non_event_keyed_kinds() {
+        // The forget cascade deletes by the indexed `id == event_id`
+        // key. Artifact (natural_key) and Repo (name) are NOT keyed by
+        // event_id and are never forgotten — they must stay out of the
+        // set, or a seek would silently miss the real node.
+        assert!(!FORGETTABLE_LABELS.is_empty());
+        assert!(!FORGETTABLE_LABELS.contains(&"Artifact"));
+        assert!(!FORGETTABLE_LABELS.contains(&"Repo"));
+        // The high-volume retention/PII targets must be present.
+        for required in ["Turn", "ToolCall", "Memory"] {
+            assert!(
+                FORGETTABLE_LABELS.contains(&required),
+                "forget must target {required}"
+            );
+        }
+    }
 
     #[test]
     fn escape_cypher_string_wraps_and_escapes() {
