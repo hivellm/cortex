@@ -36,7 +36,7 @@ services:
     restart: unless-stopped
 
   nexus:
-    image: hivehub/nexus:2.3.1
+    image: hivehub/nexus:2.3.2
     container_name: cortex-nexus
     networks: [cortex-net]
     ports:
