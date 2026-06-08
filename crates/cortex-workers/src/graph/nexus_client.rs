@@ -350,6 +350,13 @@ fn classify_schema_error(err: NexusError, stmt: &str) -> Option<GraphClientError
     Some(GraphClientError::classify(err, "schema"))
 }
 
+/// phase25 §4.2 — max in-flight per-row writes within one patch flush.
+/// Each write is one HTTP round-trip; serial execution capped throughput
+/// at ~1-2/s. Bounded concurrency keeps Nexus busy without unbounded
+/// connection pressure. 16 is a safe default on the live stack (Nexus
+/// 2.3.2 handles concurrent transactions; #12 stall is fixed).
+const WRITE_CONCURRENCY: usize = 16;
+
 #[async_trait]
 impl GraphClient for LiveNexusClient {
     async fn ensure_schema(&self, statements: &[String]) -> GraphClientResult<()> {
@@ -383,23 +390,42 @@ impl GraphClient for LiveNexusClient {
         // The `_templates` registry is kept as a parameter for API
         // stability; the live writer no longer reads from it. See task
         // `phase1_graph_writer_nexus_compat` for the full diagnosis.
-        let mut nodes_upserted = 0u32;
-        let mut edges_upserted = 0u32;
+        // phase25 §4.2 — pipeline the per-row writes concurrently
+        // (bounded by WRITE_CONCURRENCY). Nexus 2.3.2 fixed the
+        // sustained-write 100% CPU stall (#12) so concurrency is safe;
+        // this lifts batch throughput from ~1-2 writes/s (one HTTP
+        // round-trip per MERGE, serial) toward the network's limit.
+        // Nodes are written first (edges MATCH their endpoints), each
+        // phase fully concurrent. UNWIND batching would be faster still
+        // but Nexus silently drops UNWIND writes — see nexus#13; revisit
+        // once that lands.
+        use futures::stream::{StreamExt, TryStreamExt};
 
-        // Iterate in deterministic order so retries hit the same Cypher
-        // shape every time and integration-test diffs are stable.
+        // Sort for deterministic Cypher shape (stable retries / test
+        // diffs); the concurrent execution order is non-deterministic
+        // but node MERGEs are independent + idempotent.
         let mut nodes_sorted: Vec<&NodeOp> = patch.nodes.iter().collect();
         nodes_sorted.sort_by(|a, b| {
             a.label
                 .cmp(&b.label)
                 .then_with(|| a.natural_key.cmp(&b.natural_key))
         });
-        for node in nodes_sorted {
-            let cypher = render_node_merge(node);
+        // Pre-render owned Cypher + identity strings so the concurrent
+        // futures borrow only `self` (avoids a higher-ranked-lifetime
+        // tangle from also borrowing each &NodeOp across the stream).
+        let node_writes: Vec<(String, String, String)> = nodes_sorted
+            .iter()
+            .map(|n| (render_node_merge(n), n.label.clone(), n.natural_key.clone()))
+            .collect();
+        let nodes_upserted = node_writes.len() as u32;
+        futures::stream::iter(node_writes.into_iter().map(|(cypher, label, key)| async move {
             let result = self.execute_with_retry(&cypher, None).await?;
-            assert_write_landed(&result, "node", &node.label, &node.natural_key)?;
-            nodes_upserted = nodes_upserted.saturating_add(1);
-        }
+            assert_write_landed(&result, "node", &label, &key)?;
+            Ok::<(), GraphClientError>(())
+        }))
+        .buffer_unordered(WRITE_CONCURRENCY)
+        .try_collect::<Vec<()>>()
+        .await?;
 
         let mut edges_sorted: Vec<&EdgeOp> = patch.edges.iter().collect();
         edges_sorted.sort_by(|a, b| {
@@ -420,32 +446,50 @@ impl GraphClient for LiveNexusClient {
         });
         let mut edges_dropped: std::collections::BTreeMap<String, u32> =
             std::collections::BTreeMap::new();
-        for edge in edges_sorted {
-            let cypher = render_edge_merge(edge);
-            let result = self.execute_with_retry(&cypher, None).await?;
-            let pair = format!("{}->{}", edge.from_key, edge.to_key);
-            // Edges that Nexus silently drops (MATCH found no endpoint)
-            // are isolated from the rest of the batch: we tally them
-            // for the operator and continue, rather than aborting an
-            // otherwise-good transaction. Cross-batch endpoint races
-            // resolve themselves on the next replay.
-            match assert_write_landed(&result, "edge", &edge.edge_type, &pair) {
-                Ok(()) => {
-                    edges_upserted = edges_upserted.saturating_add(1);
+        // Edges concurrently (after all nodes landed). Each edge MATCHes
+        // its own endpoints, so order within the phase is irrelevant.
+        // Edges Nexus silently drops (MATCH found no endpoint) are
+        // tallied and isolated — a cross-batch endpoint race resolves on
+        // the next replay — rather than aborting the whole batch.
+        let edge_writes: Vec<(String, String, String)> = edges_sorted
+            .iter()
+            .map(|e| {
+                (
+                    render_edge_merge(e),
+                    e.edge_type.clone(),
+                    format!("{}->{}", e.from_key, e.to_key),
+                )
+            })
+            .collect();
+        let edge_outcomes: Vec<(String, Result<(), GraphClientError>)> =
+            futures::stream::iter(edge_writes.into_iter().map(|(cypher, edge_type, pair)| {
+                async move {
+                    let outcome = match self.execute_with_retry(&cypher, None).await {
+                        Ok(result) => assert_write_landed(&result, "edge", &edge_type, &pair),
+                        Err(e) => Err(e),
+                    };
+                    (edge_type, outcome)
                 }
+            }))
+            .buffer_unordered(WRITE_CONCURRENCY)
+            .collect()
+            .await;
+
+        let mut edges_upserted = 0u32;
+        for (edge_type, outcome) in edge_outcomes {
+            match outcome {
+                Ok(()) => edges_upserted = edges_upserted.saturating_add(1),
                 Err(GraphClientError::Nexus(detail)) if detail.contains("count=0") => {
-                    *edges_dropped.entry(edge.edge_type.clone()).or_insert(0) += 1;
-                    tracing::warn!(
-                        edge_type = %edge.edge_type,
-                        from_label = %edge.from_label,
-                        from_key = %edge.from_key,
-                        to_label = %edge.to_label,
-                        to_key = %edge.to_key,
-                        "edge silently dropped by Nexus (MATCH found no endpoint)"
-                    );
+                    *edges_dropped.entry(edge_type).or_insert(0) += 1;
                 }
                 Err(other) => return Err(other),
             }
+        }
+        if !edges_dropped.is_empty() {
+            tracing::warn!(
+                dropped = ?edges_dropped,
+                "edges silently dropped by Nexus (MATCH found no endpoint); will resolve on replay"
+            );
         }
 
         Ok(WriteStats {
