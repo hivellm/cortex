@@ -939,6 +939,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// phase15a §3 — report multi-repo bootstrap progress from the
+    /// checkpoint file: per-repo events emitted, last position, last-emit
+    /// age, recent emit rate, and ETA. Exit 0 when every not-`done` repo
+    /// emitted within the last 5 min; exit 2 when any is stalled.
+    BootstrapStatus {
+        /// Bootstrap checkpoint file (matches `cortex-bootstrap
+        /// --checkpoint`). Defaults to `.cortex-bootstrap.state.json`.
+        #[arg(long, default_value = ".cortex-bootstrap.state.json")]
+        checkpoint: PathBuf,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// Phase11l §7 — graph-side admin operations. Today the only
     /// subcommand is `drop`, used during the Nexus external-id
     /// migration to wipe the Cortex graph DB so a fresh
@@ -1733,6 +1746,9 @@ fn run() -> ExitCode {
             metadata_db,
             json,
         } => bootstrap::bootstrap_dedup(repo, dry_run, apply, metadata_db, json),
+        Command::BootstrapStatus { checkpoint, json } => {
+            bootstrap::bootstrap_status(checkpoint, json)
+        }
         Command::RepoCanonicalize {
             repo,
             dry_run,

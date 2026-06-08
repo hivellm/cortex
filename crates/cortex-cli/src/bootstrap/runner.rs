@@ -291,6 +291,9 @@ pub async fn run_repo_with_dedup(
                     p.events_emitted += events.len() as u64;
                     p.files_walked += 1;
                     p.last_file = Some(rel_path.clone());
+                    // phase15a §3 — stamp emit time + roll the rate window
+                    // so `bootstrap status` can report freshness + ETA.
+                    p.record_emit(Utc::now());
                     // phase10c — record the (repo, path,
                     // content_hash) tuple so the next run can
                     // suppress duplicate publications for this
@@ -364,6 +367,8 @@ pub async fn run_repo_with_dedup(
                     p.events_emitted += 1;
                     p.commits_walked += 1;
                     p.last_git_ref = Some(c.sha.clone());
+                    // phase15a §3 — emit-time + rate window (see file walk).
+                    p.record_emit(Utc::now());
                 }
             }
             Err(e) => {

@@ -491,6 +491,34 @@ After re-bootstrapping a repo:
 4. `curl http://127.0.0.1:17000/v1/dashboard/laws` shows the
    per-section laws under `LAW-{stem}-NN-{slug}` ids.
 
+## Multi-repo progress status (phase15a §3)
+
+Multi-repo runs (`--workspace <TOML>` / multiple positional roots / `--only` /
+the exclude filter, dispatched in parallel via `--parallelism`) write one
+`RepoProgress` row per repo id into the checkpoint
+(`.cortex-bootstrap.state.json`). Each emit stamps `last_emit_at` (RFC-3339)
+and maintains a rolling rate window (`rate_sample_at` / `rate_sample_events`,
+advanced once the window reaches 60s).
+
+`cortex-ops bootstrap-status [--checkpoint <FILE>] [--json]` reads that
+checkpoint and reports per repo:
+
+| column | source |
+|--------|--------|
+| EVENTS | `events_emitted` |
+| FILES | `files_walked / files_total` |
+| LAST_EMIT | age of `last_emit_at` |
+| RATE/s | events over the most recent ≥60s window (`rate_sample_*`); run-lifetime average until the window matures |
+| ETA | `remaining_events / rate`, where `remaining_events` extrapolates from file progress |
+
+The resume position per repo is the checkpointed `last_file` /
+`last_git_ref` (what `--resume` resumes after).
+
+**Exit policy** (§3.3): `0` when every not-`done` repo emitted within the last
+5 minutes; `2` when any repo is stalled (no emit in 5 min and not `done`);
+`1` on a checkpoint read/parse error. The stalled repo is flagged with a
+trailing `!` on its status in the table.
+
 ## Acceptance criteria
 
 - [ ] `cortex-bootstrap Vectorizer/ --estimate` completes on a cold cache, prints the sizing block, writes no events.

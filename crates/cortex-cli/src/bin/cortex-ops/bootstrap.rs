@@ -571,3 +571,187 @@ async fn dedupe_laws_async(
     }
     Ok(())
 }
+
+/// phase15a §3 — `cortex-ops bootstrap status`. Reads the bootstrap
+/// checkpoint and prints a per-repo progress table: events emitted, last
+/// resume position, last-emit age, recent-window emit rate, and ETA.
+///
+/// §3.2 — the rate is computed over the most recent >=60s window the
+/// runner stamped (`rate_sample_*`), falling back to the run-lifetime
+/// average when the window is too young. §3.3 exit policy: `0` when every
+/// not-yet-`done` repo emitted within the last 5 min; `2` when any repo is
+/// stalled (no emit in 5 min and not `done`); `1` on read/parse error.
+pub(super) fn bootstrap_status(checkpoint: std::path::PathBuf, json: bool) -> ExitCode {
+    use chrono::{DateTime, Utc};
+    let cp = match cortex_cli::bootstrap::load_checkpoint(&checkpoint) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("bootstrap status: load {}: {e}", checkpoint.display());
+            return ExitCode::from(1);
+        }
+    };
+    let now = Utc::now();
+    const STALE_SECS: i64 = 300;
+    let parse = |s: &Option<String>| -> Option<DateTime<Utc>> {
+        s.as_deref()
+            .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+            .map(|t| t.with_timezone(&Utc))
+    };
+    let started = DateTime::parse_from_rfc3339(&cp.started_at)
+        .ok()
+        .map(|t| t.with_timezone(&Utc));
+
+    let mut any_stalled = false;
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let mut table: Vec<String> = vec![format!(
+        "{:<22} {:<10} {:>9} {:>13} {:>10} {:>8} {:>10}",
+        "REPO", "STATUS", "EVENTS", "FILES", "LAST_EMIT", "RATE/s", "ETA"
+    )];
+    for (repo, p) in &cp.repos {
+        let last_emit = parse(&p.last_emit_at);
+        let age = last_emit.map(|t| (now - t).num_seconds());
+        let stalled = repo_stalled(&p.status, age, STALE_SECS);
+        any_stalled |= stalled;
+
+        // §3.2 recent-window emit rate (events/sec), run-avg fallback.
+        let sample_at = parse(&p.rate_sample_at);
+        let rate = match (sample_at, last_emit) {
+            (Some(s), Some(l)) if (l - s).num_seconds() >= 5 => {
+                p.events_emitted.saturating_sub(p.rate_sample_events) as f64
+                    / (l - s).num_seconds() as f64
+            }
+            _ => match (started, last_emit) {
+                (Some(s), Some(l)) if (l - s).num_seconds() >= 1 => {
+                    p.events_emitted as f64 / (l - s).num_seconds() as f64
+                }
+                _ => 0.0,
+            },
+        };
+        // ETA: extrapolate remaining events from file progress.
+        let est_total = if p.files_walked > 0 && p.files_total > p.files_walked {
+            p.events_emitted.saturating_mul(p.files_total) / p.files_walked
+        } else {
+            p.events_emitted
+        };
+        let remaining = est_total.saturating_sub(p.events_emitted);
+        let eta: Option<f64> = if p.status == "done" || remaining == 0 {
+            Some(0.0)
+        } else if rate > 0.0 {
+            Some(remaining as f64 / rate)
+        } else {
+            None
+        };
+
+        table.push(format!(
+            "{:<22} {:<10} {:>9} {:>13} {:>10} {:>8.1} {:>10}",
+            truncate(repo, 22),
+            if stalled {
+                format!("{}!", p.status)
+            } else {
+                p.status.clone()
+            },
+            p.events_emitted,
+            format!("{}/{}", p.files_walked, p.files_total),
+            age.map(fmt_dur).unwrap_or_else(|| "-".into()),
+            rate,
+            eta.map(|s| fmt_dur(s as i64)).unwrap_or_else(|| "?".into()),
+        ));
+        rows.push(serde_json::json!({
+            "repo": repo,
+            "status": p.status,
+            "events_emitted": p.events_emitted,
+            "files_walked": p.files_walked,
+            "files_total": p.files_total,
+            "last_file": p.last_file,
+            "last_git_ref": p.last_git_ref,
+            "last_emit_at": p.last_emit_at,
+            "age_secs": age,
+            "rate_per_sec": rate,
+            "eta_secs": eta,
+            "stalled": stalled,
+        }));
+    }
+
+    if json {
+        let out = serde_json::json!({
+            "started_at": cp.started_at,
+            "now": now.to_rfc3339(),
+            "any_stalled": any_stalled,
+            "repos": rows,
+        });
+        println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
+    } else if cp.repos.is_empty() {
+        println!("(no repos in checkpoint {})", checkpoint.display());
+    } else {
+        for line in &table {
+            println!("{line}");
+        }
+    }
+    if any_stalled {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Format a second count as a compact human duration.
+fn fmt_dur(secs: i64) -> String {
+    if secs < 0 {
+        return "-".into();
+    }
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
+/// Truncate a string to `max` chars for fixed-width table columns.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        s.chars().take(max.saturating_sub(1)).collect::<String>() + "_"
+    }
+}
+
+/// phase15a §3.3 — a repo is stalled when it is not `done` and has had no
+/// emit within `stale_secs` (a missing `last_emit_at`, i.e. `age = None`,
+/// counts as stalled).
+fn repo_stalled(status: &str, age_secs: Option<i64>, stale_secs: i64) -> bool {
+    status != "done" && age_secs.map(|a| a > stale_secs).unwrap_or(true)
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::{fmt_dur, repo_stalled, truncate};
+
+    #[test]
+    fn repo_stalled_policy() {
+        // done is never stalled, even with an old/absent emit.
+        assert!(!repo_stalled("done", Some(99_999), 300));
+        assert!(!repo_stalled("done", None, 300));
+        // fresh in_progress is not stalled.
+        assert!(!repo_stalled("in_progress", Some(30), 300));
+        // old in_progress is stalled.
+        assert!(repo_stalled("in_progress", Some(301), 300));
+        // never-emitted (no timestamp) and not done -> stalled.
+        assert!(repo_stalled("pending", None, 300));
+    }
+
+    #[test]
+    fn fmt_dur_buckets() {
+        assert_eq!(fmt_dur(-5), "-");
+        assert_eq!(fmt_dur(45), "45s");
+        assert_eq!(fmt_dur(125), "2m5s");
+        assert_eq!(fmt_dur(5400), "1h30m");
+    }
+
+    #[test]
+    fn truncate_caps_width() {
+        assert_eq!(truncate("short", 22), "short");
+        assert_eq!(truncate("0123456789", 5).chars().count(), 5);
+    }
+}

@@ -40,10 +40,48 @@ pub struct RepoProgress {
     /// after it.
     #[serde(default)]
     pub last_git_ref: Option<String>,
+    /// phase15a §3 — RFC-3339 timestamp of the most recent emit for this
+    /// repo. Drives the `bootstrap status` freshness check (§3.3) and the
+    /// ETA denominator (§3.2). `None` until the first emit.
+    #[serde(default)]
+    pub last_emit_at: Option<String>,
+    /// phase15a §3.2 — start of the current ≥60s rate window
+    /// (RFC-3339). The runner advances it once the window is ≥60s old so
+    /// `status` can compute a recent-rate ETA rather than a run-lifetime
+    /// average.
+    #[serde(default)]
+    pub rate_sample_at: Option<String>,
+    /// `events_emitted` captured at `rate_sample_at`. The windowed rate
+    /// is `(events_emitted - rate_sample_events) / (last_emit_at -
+    /// rate_sample_at)`.
+    #[serde(default)]
+    pub rate_sample_events: u64,
 }
 
 fn default_status() -> String {
     "pending".into()
+}
+
+impl RepoProgress {
+    /// phase15a §3 — stamp the emit time and roll the rate window.
+    /// Call after `events_emitted` has been bumped for the batch. The
+    /// rate sample is advanced once the window reaches 60s so
+    /// `bootstrap status` reports a recent-rate ETA (§3.2) instead of a
+    /// run-lifetime average.
+    pub fn record_emit(&mut self, now: chrono::DateTime<chrono::Utc>) {
+        let now_s = now.to_rfc3339();
+        let roll = match self.rate_sample_at.as_deref() {
+            None => true,
+            Some(ts) => chrono::DateTime::parse_from_rfc3339(ts)
+                .map(|t| (now - t.with_timezone(&chrono::Utc)).num_seconds() >= 60)
+                .unwrap_or(true),
+        };
+        if roll {
+            self.rate_sample_at = Some(now_s.clone());
+            self.rate_sample_events = self.events_emitted;
+        }
+        self.last_emit_at = Some(now_s);
+    }
 }
 
 /// Top-level checkpoint shape.
@@ -134,6 +172,33 @@ pub fn write_atomic(path: &Path, checkpoint: &Checkpoint) -> Result<(), Checkpoi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_emit_stamps_time_and_rolls_rate_window() {
+        use chrono::{Duration, Utc};
+        let t0 = Utc::now();
+        let mut p = RepoProgress::default();
+        // First emit: stamps last_emit_at + seeds the rate sample.
+        p.events_emitted = 100;
+        p.record_emit(t0);
+        assert_eq!(p.last_emit_at.as_deref(), Some(t0.to_rfc3339()).as_deref());
+        assert_eq!(p.rate_sample_at.as_deref(), Some(t0.to_rfc3339()).as_deref());
+        assert_eq!(p.rate_sample_events, 100);
+
+        // 30s later (< 60s window): last_emit advances, sample does NOT roll.
+        let t1 = t0 + Duration::seconds(30);
+        p.events_emitted = 250;
+        p.record_emit(t1);
+        assert_eq!(p.last_emit_at.as_deref(), Some(t1.to_rfc3339()).as_deref());
+        assert_eq!(p.rate_sample_events, 100, "sample must hold under 60s");
+
+        // 70s after the sample (>= 60s): the window rolls to the new point.
+        let t2 = t0 + Duration::seconds(70);
+        p.events_emitted = 500;
+        p.record_emit(t2);
+        assert_eq!(p.rate_sample_at.as_deref(), Some(t2.to_rfc3339()).as_deref());
+        assert_eq!(p.rate_sample_events, 500, "sample rolls past the 60s window");
+    }
 
     #[test]
     fn round_trip_through_disk() {
