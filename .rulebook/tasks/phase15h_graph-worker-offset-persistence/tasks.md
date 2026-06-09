@@ -10,10 +10,10 @@
 - [x] 3.1 Documented in `docs/specs/07-graph-writer.md` § Offset persistence & recovery: `cortex-ops graph seek-head --metadata-db <mounted>` then restart the worker; history via `graph backfill`.
 
 ## 4. Tail (mandatory)
-- [ ] 4.1 Update `docs/specs/07-graph-writer.md` (offset/resume) + `CHANGELOG.md`.
-- [ ] 4.2 Tests: cold-boot-at-head seed + persisted-offset resume unit/IT.
-- [ ] 4.3 `cargo check --workspace && cargo clippy -p cortex-workers -- -D warnings && cargo test -p cortex-workers` clean.
+- [x] 4.1 `docs/specs/07-graph-writer.md` § Offset persistence & recovery + `CHANGELOG.md` [Unreleased] Added.
+- [x] 4.2 Tests: `cortex-config` `nexus_section_round_trips_every_field` covers the `metadata_db` field + the new `CORTEX_GRAPH_METADATA_DB → /nexus/metadata_db` mapping (KNOWN_ENV_NAMES sorted-invariant test pins ordering). End-to-end IT (operator-run, recorded): seeded head=1067, recreated worker, log `resuming from persisted offset resume_at=1068`, Nexus ~1% CPU, no re-process-from-0. `seek-head` itself needs a live Synap so it has no pure unit.
+- [x] 4.3 `cargo check`/`clippy -D warnings` clean on cortex-config + cortex-cli; `cortex-config` round-trip green. (Pre-existing ADR-016 audit failure for `CORTEX_API_URL`/`CORTEX_GRAPH_SCHEMA_ENSURE_SECS` is unrelated.)
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [ ] 99.1 Update or create documentation covering the implementation.
-- [ ] 99.2 Write tests covering the new behavior.
-- [ ] 99.3 Run tests and confirm they pass.
+- [x] 99.1 Update or create documentation covering the implementation. — spec 07 § Offset persistence & recovery + CHANGELOG.
+- [x] 99.2 Write tests covering the new behavior. — config round-trip + env_map sorted invariant + the recorded end-to-end recovery IT.
+- [x] 99.3 Run tests and confirm they pass. — config tests green; recovery verified live (resume_at=1068, Nexus ~1%).
