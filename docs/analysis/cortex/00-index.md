@@ -1,4 +1,4 @@
-# Cortex — System Analysis (2026-04-28)
+# Cortex — System Analysis Index
 
 > **Author:** automated audit · **Source data:** repo snapshot at commit `c41dab0` + bootstrap state + rulebook learnings (most recent dated 2026-04-27).
 > **Scope:** end-to-end review of the Cortex platform — what is implemented, what is producing results, what is degraded, and what to fix next.
@@ -19,8 +19,10 @@ This index points to ten focused files. Each file is self-contained: read in ord
 | 08 | [task-backlog](08-task-backlog.md)                              | Active and pending Rulebook tasks, prioritized.                      |
 | 09 | [risks-and-debt](09-risks-and-debt.md)                          | Recurring drifts, tech debt, structural traps.                       |
 | 10 | [improvement-roadmap](10-improvement-roadmap.md)                | Prioritized recommendations with rationale and effort estimates.     |
+| 11 | [platform-vision-analysis](11-platform-vision-analysis.md)      | **June 2026** — full inventory + tool validation + roadmap to general assistance platform. |
+| 12 | [live-audit-2026-06-09](12-live-audit-2026-06-09.md)            | **Live audit** — 10 bugs ativos encontrados via queries diretas ao stack real. |
 
-## Headline findings
+## Headline findings (April 2026)
 
 1. **Specs 01–12 + 18 are flagged 🟢; specs 13–17 are still 🟡.** The indexing/retrieval/pre-thinking loop is structurally complete; governance, deep analysis, multi-adapter, and dashboard polish are not.
 2. **Pipeline lights up end-to-end on the `Cortex` repo.** Bootstrap → classifier-worker → embedder/graph/fulltext → query API works. The classifier-worker bridge that gated this for weeks landed on 2026-04-27.
@@ -32,3 +34,7 @@ This index points to ten focused files. Each file is self-contained: read in ord
 8. **Sonnet-backed session analyzer just landed (commit `a62fcbd`).** This is the first cross-event analysis layer — sits above per-event Haiku classification.
 
 If you read only one follow-up file, read [10-improvement-roadmap.md](10-improvement-roadmap.md).
+
+## Update — June 2026
+
+See [11-platform-vision-analysis.md](11-platform-vision-analysis.md) for a full updated inventory (14 crates, MCP tool validation, governance gaps, and the roadmap for expanding Cortex into a general company assistance platform covering both code and business knowledge).
