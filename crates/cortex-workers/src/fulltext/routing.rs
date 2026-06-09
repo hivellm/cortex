@@ -106,7 +106,7 @@ pub fn family_for(kind: Kind) -> &'static str {
         // `cortex-turns` keeps "what did the assistant do this turn"
         // queries deterministic.
         Kind::Turn | Kind::AgentCall => "turns",
-        Kind::LawViolation => "governance",
+        Kind::Law | Kind::LawViolation => "governance",
         // Analysis events get their own family so audit / deep-analysis
         // reports do not get diluted in the catch-all `misc` bucket and
         // the dashboard's Analysis view can scope to a single index.

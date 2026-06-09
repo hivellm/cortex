@@ -352,6 +352,7 @@ fn kind_label(k: cortex_core::events::Kind) -> &'static str {
         Kind::Memory => "memory",
         Kind::Decision => "decision",
         Kind::Analysis => "analysis",
+        Kind::Law => "law",
         Kind::LawViolation => "law_violation",
         Kind::Artifact => "artifact",
         Kind::Knowledge => "knowledge",

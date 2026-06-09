@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use super::chunker::ChunkSource;
+use super::vectorizer_client::VectorizerErrorKind;
 
 /// Embedder metrics registry.
 #[derive(Debug, Default)]
@@ -33,8 +34,16 @@ pub struct Metrics {
     pub upsert_batch_size: Mutex<Vec<u32>>,
     /// `cortex.embedder.dedup.hits`.
     pub dedup_hits: AtomicU64,
-    /// `cortex.embedder.vectorizer.errors` — per HTTP-status bucket.
+    /// `cortex.embedder.vectorizer.errors` — total across all kinds (for /healthz).
     pub vectorizer_errors: AtomicU64,
+    /// Per-kind: retriable transport / rate-limit failures.
+    pub ve_transport: AtomicU64,
+    /// Per-kind: authentication / authorization failures (HTTP 4xx except 429).
+    pub ve_auth: AtomicU64,
+    /// Per-kind: local schema drift vs. remote collection.
+    pub ve_schema: AtomicU64,
+    /// Per-kind: all other non-retriable failures.
+    pub ve_other: AtomicU64,
     /// `cortex.embedder.backpressure.active` — 0 / 1.
     pub backpressure_active: AtomicU64,
     /// `cortex.embedder.oversize_without_summary`.
@@ -92,9 +101,16 @@ impl Metrics {
         self.dedup_hits.fetch_add(n, Ordering::Relaxed);
     }
 
-    /// Increment the Vectorizer-error counter.
-    pub fn incr_vectorizer_errors(&self, n: u64) {
-        self.vectorizer_errors.fetch_add(n, Ordering::Relaxed);
+    /// Increment the Vectorizer-error counter, broken down by kind.
+    pub fn incr_vectorizer_error(&self, kind: VectorizerErrorKind) {
+        self.vectorizer_errors.fetch_add(1, Ordering::Relaxed);
+        let bucket = match kind {
+            VectorizerErrorKind::Transport => &self.ve_transport,
+            VectorizerErrorKind::Auth => &self.ve_auth,
+            VectorizerErrorKind::Schema => &self.ve_schema,
+            VectorizerErrorKind::Other => &self.ve_other,
+        };
+        bucket.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Flip the backpressure-active gauge.
@@ -168,11 +184,18 @@ impl Metrics {
             self.chunks_written_total()
         );
         out.push_str("# TYPE cortex_embedder_vectorizer_errors_total counter\n");
-        let _ = writeln!(
-            out,
-            "cortex_embedder_vectorizer_errors_total {}",
-            self.vectorizer_errors_total()
-        );
+        for (label, val) in [
+            ("transport", self.ve_transport.load(Ordering::Relaxed)),
+            ("auth", self.ve_auth.load(Ordering::Relaxed)),
+            ("schema", self.ve_schema.load(Ordering::Relaxed)),
+            ("other", self.ve_other.load(Ordering::Relaxed)),
+        ] {
+            let _ = writeln!(
+                out,
+                r#"cortex_embedder_vectorizer_errors_total{{error_type="{}"}} {}"#,
+                label, val
+            );
+        }
         out.push_str("# TYPE cortex_embedder_dedup_hits_total counter\n");
         let _ = writeln!(
             out,

@@ -438,8 +438,8 @@ fn extract_tool_calls(
         };
         let payload = match kind {
             EnvelopeKind::AgentCall => serde_json::json!({
-                "agent_type": input.get("subagent_type").cloned().unwrap_or(Value::Null),
-                "description": input.get("description").cloned().unwrap_or(Value::Null),
+                "agent_type": input.get("subagent_type").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("unknown"),
+                "description": input.get("description").and_then(|v| v.as_str()).filter(|s| !s.is_empty()).unwrap_or("agent call"),
                 "prompt": input.get("prompt").cloned().unwrap_or(Value::Null),
                 "team_name": input.get("team_name").cloned().unwrap_or(Value::Null),
             }),

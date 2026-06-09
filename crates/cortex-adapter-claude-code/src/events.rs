@@ -482,7 +482,8 @@ fn build_agent_call_payload(redacted: &Value) -> Value {
         .unwrap_or_else(|| "unknown".into());
     let description = read_string_field(redacted, "description")
         .or_else(|| read_string_field(redacted, "task"))
-        .unwrap_or_default();
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "agent call".into());
     let prompt = read_string_field(redacted, "prompt");
     let model = read_string_field(redacted, "model");
     let team_name = read_string_field(redacted, "team_name");
@@ -957,5 +958,57 @@ mod tests {
         .unwrap();
         let value = serde_json::to_value(&env).unwrap();
         cortex_core::validate_event(&value).expect("adapter envelope must satisfy spec-04 schema");
+    }
+
+    #[test]
+    fn subagent_stop_with_no_description_defaults_to_agent_call_string() {
+        let mgr = SessionManager::new();
+        // SubagentStop frame with no description field — mirrors the live hook payload
+        let env = build_event(
+            HookKind::SubagentStop,
+            &frame("SubagentStop", json!({ "subagent_type": "code-reviewer" })),
+            &mgr,
+            42,
+        )
+        .expect("SubagentStop must publish");
+        assert_eq!(env.kind, Kind::AgentCall);
+        let payload: cortex_core::events::AgentCall =
+            serde_json::from_value(env.payload).unwrap();
+        assert_eq!(payload.agent_type, "code-reviewer");
+        assert_eq!(payload.description, "agent call");
+        assert!(!payload.description.is_empty(), "description must be non-empty for schema minLength:1");
+    }
+
+    #[test]
+    fn subagent_stop_with_empty_description_defaults_to_agent_call_string() {
+        let mgr = SessionManager::new();
+        let env = build_event(
+            HookKind::SubagentStop,
+            &frame("SubagentStop", json!({ "subagent_type": "researcher", "description": "" })),
+            &mgr,
+            42,
+        )
+        .expect("SubagentStop must publish");
+        let payload: cortex_core::events::AgentCall =
+            serde_json::from_value(env.payload).unwrap();
+        assert_eq!(payload.description, "agent call");
+    }
+
+    #[test]
+    fn subagent_stop_with_description_preserves_it() {
+        let mgr = SessionManager::new();
+        let env = build_event(
+            HookKind::SubagentStop,
+            &frame(
+                "SubagentStop",
+                json!({ "subagent_type": "implementer", "description": "Implement feature X" }),
+            ),
+            &mgr,
+            42,
+        )
+        .expect("SubagentStop must publish");
+        let payload: cortex_core::events::AgentCall =
+            serde_json::from_value(env.payload).unwrap();
+        assert_eq!(payload.description, "Implement feature X");
     }
 }

@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 
 use cortex_core::events::{
     AgentCall as AgentCallPayload, AnalysisPayload, DecisionPayload, EvidenceKind, Kind,
-    LawViolationPayload, MemoryPayload, ToolCall as ToolCallPayload, TopicCardPayload,
+    LawPayload, LawViolationPayload, MemoryPayload, ToolCall as ToolCallPayload, TopicCardPayload,
     TouchedArtifact, Turn as TurnPayload,
 };
 use serde_json::{json, Value};
@@ -115,6 +115,7 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
         Kind::Memory => emit_memory(event, &session_id, &mut patch),
         Kind::Decision => emit_decision(event, &mut patch),
         Kind::Analysis => emit_analysis(event, &mut patch),
+        Kind::Law => emit_law(event, &mut patch),
         Kind::LawViolation => emit_law_violation(event, &mut patch),
         Kind::Artifact => emit_artifact(event, &mut patch),
         // phase10e — knowledge / learnings ride alongside the
@@ -315,6 +316,7 @@ fn anchor_label_for_kind(kind: Kind) -> &'static str {
         Kind::Memory => "Memory",
         Kind::Decision => "Decision",
         Kind::Analysis => "Analysis",
+        Kind::Law => "Law",
         Kind::LawViolation => "LawViolation",
         Kind::Artifact => "Artifact",
         Kind::Knowledge => "Knowledge",
@@ -1172,6 +1174,50 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
             }
         }
     }
+}
+
+fn emit_law(event: &EnrichedEvent, patch: &mut GraphPatch) {
+    let payload: Option<LawPayload> =
+        serde_json::from_value(event.redacted_payload.clone()).ok();
+
+    let law_key = payload
+        .as_ref()
+        .map(|p| p.law_id.clone())
+        .unwrap_or_else(|| event.event_id.clone());
+
+    let mut props = BTreeMap::new();
+    props.insert("id".to_string(), Value::String(law_key.clone()));
+    let display = payload
+        .as_ref()
+        .map(|p| {
+            p.title
+                .as_deref()
+                .map(|t| format!("{}: {t}", p.law_id))
+                .unwrap_or_else(|| p.law_id.clone())
+        })
+        .unwrap_or_else(|| format!("Law {law_key}"));
+    stamp_display_label(&mut props, &clip_display(&display, 96));
+    if let Some(p) = payload.as_ref() {
+        if let Some(title) = p.title.as_deref() {
+            props.insert("title".to_string(), Value::String(title.to_string()));
+        }
+        if let Some(sev) = p.severity.as_deref() {
+            props.insert("severity".to_string(), Value::String(sev.to_string()));
+        }
+        if let Some(det) = p.detector.as_deref() {
+            props.insert("detector".to_string(), Value::String(det.to_string()));
+        }
+        if let Some(sp) = p.source_path.as_deref() {
+            props.insert("source_path".to_string(), Value::String(sp.to_string()));
+        }
+    }
+    patch.nodes.push(NodeOp {
+        label: "Law".to_string(),
+        natural_key: law_key.clone(),
+        external_id: Some(law_key),
+        conflict_policy: ConflictPolicy::default(),
+        props,
+    });
 }
 
 /// Pick the most useful target string for a [`ToolCallPayload`] —

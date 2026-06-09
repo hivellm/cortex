@@ -24,7 +24,7 @@ fn family_for(kind: &Kind) -> &'static str {
         Kind::Artifact => "docs",
         Kind::Decision => "decisions",
         Kind::Turn => "turns",
-        Kind::LawViolation => "governance",
+        Kind::Law | Kind::LawViolation => "governance",
         // Audit / deep-analysis reports get their own per-repo
         // collection so the dashboard's Analysis view can scope to a
         // single index instead of fishing them out of the catch-all

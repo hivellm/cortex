@@ -175,6 +175,7 @@ services:
     environment:
       CORTEX_CLASSIFIER_BIND: 0.0.0.0:17021
       CORTEX_CLASSIFIER_SYNAP_URL: http://synap:15500
+      CORTEX_CLASSIFIER_MODE: ${CORTEX_CLASSIFIER_MODE:-static}
     restart: unless-stopped
 
   # cortex-embedder-worker ─ chunks + Vectorizer upserts.

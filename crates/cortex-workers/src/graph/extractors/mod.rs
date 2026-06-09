@@ -148,6 +148,7 @@ pub(crate) fn kind_to_label(kind: cortex_core::events::Kind) -> &'static str {
         Kind::Memory => "Memory",
         Kind::Decision => "Decision",
         Kind::Analysis => "Analysis",
+        Kind::Law => "Law",
         Kind::LawViolation => "LawViolation",
         Kind::Artifact => "Artifact",
         Kind::Knowledge => "Knowledge",

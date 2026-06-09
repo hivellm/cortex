@@ -32,6 +32,8 @@ pub const KIND_IDS: &[&str] = &[
     "memory",
     "decision",
     "analysis",
+    // phase26a §4 — law definitions (rules files) distinct from violations.
+    "law",
     "law_violation",
     "artifact",
     // phase10e — auto-imported `.rulebook/{knowledge,learnings}` corpora.
@@ -79,6 +81,7 @@ mod tests {
             Kind::Memory,
             Kind::Decision,
             Kind::Analysis,
+            Kind::Law,
             Kind::LawViolation,
             Kind::Artifact,
             Kind::Knowledge,

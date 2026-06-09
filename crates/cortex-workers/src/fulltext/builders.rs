@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use crate::classifier::{ClassifierOutput, PiiRisk, Severity};
 use cortex_core::events::{
     AgentCall, AnalysisPayload, ArtifactPayload, DecisionPayload, Kind, KnowledgePayload,
-    LawViolationPayload, LearningPayload, MemoryPayload, ToolCall, Turn,
+    LawPayload, LawViolationPayload, LearningPayload, MemoryPayload, ToolCall, Turn,
 };
 use serde_json::{json, Value};
 
@@ -241,6 +241,21 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
+        Kind::Law => {
+            match serde_json::from_value::<LawPayload>(event.redacted_payload.clone()) {
+                Ok(lp) => {
+                    let mut out = lp.body.clone();
+                    if let Some(title) = lp.title.as_deref() {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(title);
+                    }
+                    (out, Some(lp.law_id))
+                }
+                Err(_) => (fallback_text(&event.redacted_payload), None),
+            }
+        }
         Kind::LawViolation => {
             match serde_json::from_value::<LawViolationPayload>(event.redacted_payload.clone()) {
                 Ok(lv) => {
@@ -369,6 +384,16 @@ fn derive_title(event: &EnrichedEvent, raw: &str) -> String {
         Kind::Analysis => serde_json::from_value::<AnalysisPayload>(event.redacted_payload.clone())
             .map(|a| a.question)
             .unwrap_or_else(|_| event.event_id.clone()),
+        Kind::Law => {
+            serde_json::from_value::<LawPayload>(event.redacted_payload.clone())
+                .map(|lp| {
+                    lp.title
+                        .as_deref()
+                        .map(|t| format!("{}: {t}", lp.law_id))
+                        .unwrap_or_else(|| lp.law_id.clone())
+                })
+                .unwrap_or_else(|_| event.event_id.clone())
+        }
         Kind::LawViolation => {
             serde_json::from_value::<LawViolationPayload>(event.redacted_payload.clone())
                 .map(|lv| format!("{}: {}", lv.law_id, lv.message))
@@ -454,6 +479,21 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
                     payload["tags"] = Value::Array(d.tags.into_iter().map(Value::String).collect());
                 }
                 doc.ext.insert("decision".to_string(), payload);
+            }
+        }
+        Kind::Law => {
+            if let Ok(lp) = serde_json::from_value::<LawPayload>(event.redacted_payload.clone()) {
+                let mut payload = json!({ "law_id": lp.law_id });
+                if let Some(t) = lp.title {
+                    payload["title"] = Value::String(t);
+                }
+                if let Some(s) = lp.severity {
+                    payload["severity"] = Value::String(s);
+                }
+                if let Some(d) = lp.detector {
+                    payload["detector"] = Value::String(d);
+                }
+                doc.ext.insert("law".to_string(), payload);
             }
         }
         Kind::LawViolation => {
@@ -630,6 +670,19 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
                 // leave it as None to avoid misclassification.
             }
         }
+        Kind::Law => {
+            if let Ok(lp) = serde_json::from_value::<LawPayload>(event.redacted_payload.clone()) {
+                doc.law_id = Some(lp.law_id);
+                doc.law_severity = lp.severity;
+            } else {
+                if let Some(id) = event.redacted_payload.get("law_id").and_then(Value::as_str) {
+                    doc.law_id = Some(id.to_string());
+                }
+                if let Some(sev) = event.redacted_payload.get("severity").and_then(Value::as_str) {
+                    doc.law_severity = Some(sev.to_string());
+                }
+            }
+        }
         Kind::Turn => {
             doc.turn_id = Some(event.event_id.clone());
         }
@@ -728,6 +781,7 @@ fn kind_label(kind: Kind) -> &'static str {
         Kind::Memory => "memory",
         Kind::Decision => "decision",
         Kind::Analysis => "analysis",
+        Kind::Law => "law",
         Kind::LawViolation => "law_violation",
         Kind::Artifact => "artifact",
         Kind::Knowledge => "knowledge",

@@ -174,6 +174,48 @@ fn is_collection_not_found(err: &VectorizerError) -> bool {
     }
 }
 
+/// Heuristic "collection already exists" detector. v3's HTTP transport maps
+/// 409 Conflict to `VectorizerError::Server { message: "HTTP 409" }` via the
+/// wildcard in `map_http_error`. A 409 on `create_collection` is idempotent —
+/// the collection exists, which is the desired state.
+fn is_collection_already_exists(err: &VectorizerError) -> bool {
+    match err {
+        VectorizerError::Server { message } => {
+            let lower = message.to_ascii_lowercase();
+            lower.contains("http 409")
+                || lower.contains("already exists")
+                || lower.contains("conflict")
+        }
+        _ => false,
+    }
+}
+
+/// Classification of a [`VectorizerClientError`] for metric labelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VectorizerErrorKind {
+    /// Retriable transport failure (5xx, network, timeout, rate-limit).
+    Transport,
+    /// Non-retriable authentication / authorization failure.
+    Auth,
+    /// Local schema drift vs. remote collection.
+    Schema,
+    /// Any other non-retriable failure.
+    Other,
+}
+
+impl From<&VectorizerClientError> for VectorizerErrorKind {
+    fn from(err: &VectorizerClientError) -> Self {
+        match err {
+            VectorizerClientError::Transport(_) | VectorizerClientError::RateLimited => {
+                Self::Transport
+            }
+            VectorizerClientError::Http(_) => Self::Auth,
+            VectorizerClientError::SchemaMismatch { .. } => Self::Schema,
+            VectorizerClientError::Other(_) => Self::Other,
+        }
+    }
+}
+
 /// Map a raw SDK error onto [`VectorizerClientError`], preserving retry
 /// classification.
 fn sdk_error(err: VectorizerError) -> VectorizerClientError {
@@ -647,10 +689,15 @@ impl VectorizerClient for LiveVectorizerClient {
         let metric: SimilarityMetric = schema.metric.into();
         with_retry(self.max_retry, || async {
             let sdk = self.sdk.read().await;
-            sdk.create_collection(name, schema.dim as usize, Some(metric))
+            match sdk
+                .create_collection(name, schema.dim as usize, Some(metric))
                 .await
-                .map(|_| ())
-                .map_err(sdk_error)
+            {
+                Ok(_) => Ok(()),
+                // 409 Conflict: collection was created concurrently — idempotent success.
+                Err(err) if is_collection_already_exists(&err) => Ok(()),
+                Err(other) => Err(sdk_error(other)),
+            }
         })
         .await
     }
@@ -1200,5 +1247,81 @@ impl VectorizerClient for MemoryVectorizerClient {
             failed,
             results,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_collection_already_exists_detects_http_409() {
+        let err = VectorizerError::Server {
+            message: "HTTP 409".to_string(),
+        };
+        assert!(is_collection_already_exists(&err));
+    }
+
+    #[test]
+    fn is_collection_already_exists_detects_conflict_keyword() {
+        let err = VectorizerError::Server {
+            message: "409 Conflict: collection already exists".to_string(),
+        };
+        assert!(is_collection_already_exists(&err));
+    }
+
+    #[test]
+    fn is_collection_already_exists_false_for_404() {
+        let err = VectorizerError::Server {
+            message: "HTTP 404 Not Found".to_string(),
+        };
+        assert!(!is_collection_already_exists(&err));
+    }
+
+    #[test]
+    fn is_collection_already_exists_false_for_typed_not_found() {
+        let err = VectorizerError::CollectionNotFound {
+            collection: "test".to_string(),
+        };
+        assert!(!is_collection_already_exists(&err));
+    }
+
+    #[test]
+    fn vectorizer_error_kind_transport_variants() {
+        assert_eq!(
+            VectorizerErrorKind::from(&VectorizerClientError::Transport("timeout".into())),
+            VectorizerErrorKind::Transport
+        );
+        assert_eq!(
+            VectorizerErrorKind::from(&VectorizerClientError::RateLimited),
+            VectorizerErrorKind::Transport
+        );
+    }
+
+    #[test]
+    fn vectorizer_error_kind_auth() {
+        assert_eq!(
+            VectorizerErrorKind::from(&VectorizerClientError::Http("401".into())),
+            VectorizerErrorKind::Auth
+        );
+    }
+
+    #[test]
+    fn vectorizer_error_kind_schema() {
+        assert_eq!(
+            VectorizerErrorKind::from(&VectorizerClientError::SchemaMismatch {
+                collection: "c".into(),
+                detail: "dim mismatch".into(),
+            }),
+            VectorizerErrorKind::Schema
+        );
+    }
+
+    #[test]
+    fn vectorizer_error_kind_other() {
+        assert_eq!(
+            VectorizerErrorKind::from(&VectorizerClientError::Other("HTTP 409".into())),
+            VectorizerErrorKind::Other
+        );
     }
 }

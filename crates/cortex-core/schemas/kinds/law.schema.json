@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hivellm.org/cortex/schemas/kinds/law.schema.json",
+  "title": "LawPayload",
+  "description": "Governance law or rule definition imported from rules files (spec 09).",
+  "type": "object",
+  "required": ["law_id", "body"],
+  "additionalProperties": true,
+  "properties": {
+    "law_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Unique law identifier (e.g. LAW-007 or synthesised stem from filename)."
+    },
+    "title": {
+      "type": ["string", "null"],
+      "description": "Short title extracted from the rule heading."
+    },
+    "severity": {
+      "type": ["string", "null"],
+      "enum": ["info", "notable", "critical", null],
+      "description": "Declared severity; null when not specified."
+    },
+    "detector": {
+      "type": ["string", "null"],
+      "description": "Optional detector reference (e.g. hook:pre_commit_no_skip)."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Full rule body text."
+    },
+    "section_index": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Zero-based section index when the source file was split per ## heading."
+    },
+    "source_path": {
+      "type": ["string", "null"],
+      "description": "Relative path of the source file within the repo."
+    }
+  }
+}

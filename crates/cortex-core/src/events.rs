@@ -72,6 +72,8 @@ pub enum Kind {
     Decision,
     /// Deep-analysis report.
     Analysis,
+    /// Governance law or rule definition (imported from rules files).
+    Law,
     /// Law detector fired.
     LawViolation,
     /// Stand-alone artifact.
@@ -110,7 +112,7 @@ impl Kind {
     /// compile-time assertion next to [`crate::vocab::KIND_IDS`] so
     /// adding a variant without updating the vocab fails `cargo
     /// check`. Bump together with the enum.
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 13;
 
     /// Filename stem for the matching per-kind schema file.
     pub fn schema_stem(self) -> &'static str {
@@ -121,6 +123,7 @@ impl Kind {
             Kind::Memory => "memory",
             Kind::Decision => "decision",
             Kind::Analysis => "analysis",
+            Kind::Law => "law",
             Kind::LawViolation => "law_violation",
             Kind::Artifact => "artifact",
             Kind::Knowledge => "knowledge",
@@ -728,6 +731,30 @@ pub struct AnalysisScope {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     /// Files to focus on.
     pub files: Vec<String>,
+}
+
+/// Payload for [`Kind::Law`] — a governance rule or law definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LawPayload {
+    /// Law identifier (e.g. `LAW-007` or synthesised from filename).
+    pub law_id: String,
+    /// Short title extracted from the rule heading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Declared severity; `None` when not specified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
+    /// Optional detector reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detector: Option<String>,
+    /// Full rule body text.
+    pub body: String,
+    /// Zero-based section index when the source file was split per `##` heading.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_index: Option<u32>,
+    /// Relative source path within the repo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
 }
 
 /// Payload for [`Kind::LawViolation`].

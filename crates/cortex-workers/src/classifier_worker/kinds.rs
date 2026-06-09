@@ -22,7 +22,8 @@ pub fn kind_from_bootstrap(kind: &str) -> Result<Kind, KindMapError> {
         "artifact.code" | "artifact.doc" | "artifact" => Ok(Kind::Artifact),
         "turn.historical" | "turn" => Ok(Kind::Turn),
         "decision.imported" | "decision" => Ok(Kind::Decision),
-        "law.imported" | "law" | "law_violation" | "law.violation" => Ok(Kind::LawViolation),
+        "law.imported" | "law" => Ok(Kind::Law),
+        "law_violation" | "law.violation" => Ok(Kind::LawViolation),
         "memory.imported" | "memory" => Ok(Kind::Memory),
         "tool_call" | "tool.call" => Ok(Kind::ToolCall),
         "agent_call" | "agent.call" => Ok(Kind::AgentCall),
@@ -75,9 +76,19 @@ mod tests {
     }
 
     #[test]
-    fn law_imported_maps_to_law_violation() {
+    fn law_imported_maps_to_law() {
+        assert_eq!(kind_from_bootstrap("law.imported").unwrap(), Kind::Law);
+        assert_eq!(kind_from_bootstrap("law").unwrap(), Kind::Law);
+    }
+
+    #[test]
+    fn law_violation_maps_to_law_violation() {
         assert_eq!(
-            kind_from_bootstrap("law.imported").unwrap(),
+            kind_from_bootstrap("law_violation").unwrap(),
+            Kind::LawViolation
+        );
+        assert_eq!(
+            kind_from_bootstrap("law.violation").unwrap(),
             Kind::LawViolation
         );
     }

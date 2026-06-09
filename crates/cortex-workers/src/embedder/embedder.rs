@@ -36,7 +36,7 @@ use super::identity::dedup_key;
 use super::metrics::Metrics;
 use super::routing::collection_for;
 use super::vectorizer_client::{
-    CollectionSchema, UpsertedChunk, VectorizerClient, VectorizerClientError,
+    CollectionSchema, UpsertedChunk, VectorizerClient, VectorizerClientError, VectorizerErrorKind,
 };
 
 /// Raw-payload size threshold above which a chunk is summary-substituted.
@@ -421,7 +421,7 @@ impl Embedder for VectorizerEmbedder {
                     event_id: victim_event,
                     detail: err.to_string(),
                 });
-                self.metrics.incr_vectorizer_errors(1);
+                self.metrics.incr_vectorizer_error(VectorizerErrorKind::from(&err));
                 report.latency_ms = elapsed_ms(start);
                 return Ok(report);
             }
@@ -445,7 +445,7 @@ impl Embedder for VectorizerEmbedder {
                     tracing::debug!(
                         %collection, error = %err, "exists pre-check failed; continuing"
                     );
-                    self.metrics.incr_vectorizer_errors(1);
+                    self.metrics.incr_vectorizer_error(VectorizerErrorKind::from(&err));
                     BTreeSet::new()
                 }
             };
@@ -475,7 +475,7 @@ impl Embedder for VectorizerEmbedder {
                         report.new_records.extend(rep.new_entries);
                     }
                     Err(err) => {
-                        self.metrics.incr_vectorizer_errors(1);
+                        self.metrics.incr_vectorizer_error(VectorizerErrorKind::from(&err));
                         // Attribute the failure to the first event of this
                         // collection.
                         let victim_event = events

@@ -35,6 +35,7 @@ use synap_sdk::{SynapClient, SynapConfig};
 use super::config::EmbedderConfig;
 use super::embedder::{EmbedError, EmbedReport, Embedder, EnrichedEvent};
 use super::metrics::Metrics;
+use super::vectorizer_client::VectorizerErrorKind;
 
 /// Default stream name for enriched events.
 pub const STREAM_ENRICHED: &str = "cortex.events.enriched";
@@ -595,7 +596,7 @@ impl Worker {
             Err(err) => {
                 // Fatal embedder error (not a per-event issue).
                 tracing::warn!(error = %err, event_id = %event.event_id, "embed_batch failed");
-                self.metrics.incr_vectorizer_errors(1);
+                self.metrics.incr_vectorizer_error(VectorizerErrorKind::Other);
                 self.publish_invalid(&event.event_id, "embedder_error", &err.to_string())
                     .await;
                 self.ack(STREAM_ENRICHED, offset).await;
@@ -638,11 +639,17 @@ impl Worker {
             }
             EmbedError::Vectorizer { event_id, detail } => {
                 tracing::warn!(event_id = %event_id, detail = %detail, "embed vectorizer_error");
-                self.metrics.incr_vectorizer_errors(1);
-                // Detect rate-limit signatures coming back from the client
-                // so we can apply backpressure without the trait surface
-                // needing a dedicated discriminator.
+                // Detect rate-limit / transport signatures from the detail string
+                // since the typed error was flattened into EmbedError::Vectorizer.
                 let lower = detail.to_ascii_lowercase();
+                let kind = if lower.contains("rate") || lower.contains("429") || lower.contains("transport") {
+                    VectorizerErrorKind::Transport
+                } else if lower.contains("auth") || lower.contains("401") || lower.contains("403") {
+                    VectorizerErrorKind::Auth
+                } else {
+                    VectorizerErrorKind::Other
+                };
+                self.metrics.incr_vectorizer_error(kind);
                 if lower.contains("rate") || lower.contains("429") {
                     self.backpressure.record_rate_limit();
                     self.metrics.set_backpressure(true);
@@ -791,7 +798,7 @@ impl crate::synap_worker::SynapWorker for Worker {
     }
 
     fn on_run_once_err(&self, _err: &anyhow::Error, _consecutive: u32) {
-        self.metrics.incr_vectorizer_errors(1);
+        self.metrics.incr_vectorizer_error(VectorizerErrorKind::Other);
     }
 
     fn on_backpressure_pause(&self) {

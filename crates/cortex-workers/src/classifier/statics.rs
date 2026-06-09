@@ -189,6 +189,17 @@ fn classify_one(kind: &Kind, payload: &Value) -> (Option<String>, Vec<String>, S
             topics.push("analysis".into());
             severity = Severity::Notable;
         }
+        Kind::Law => {
+            topics.push("law".into());
+            topics.push("governance".into());
+            if let Some(s) = payload.get("severity").and_then(|v| v.as_str()) {
+                severity = match s {
+                    "critical" => Severity::Critical,
+                    "notable" => Severity::Notable,
+                    _ => Severity::Info,
+                };
+            }
+        }
         Kind::LawViolation => {
             topics.push("law".into());
             topics.push("governance".into());
