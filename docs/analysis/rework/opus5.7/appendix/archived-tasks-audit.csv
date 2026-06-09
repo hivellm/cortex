@@ -1,0 +1,149 @@
+task_id,status,affected_files,status_reason
+phase0_cortex-core,no-affected-code,,no parseable code path in proposal
+phase0_event-schema,no-affected-code,,no parseable code path in proposal
+phase0_local-stack,dead-code-candidate,scripts/seed-*.sh,0/1 present; all gone
+phase0_storage-layout,no-affected-code,,no parseable code path in proposal
+phase1_classifier,no-affected-code,,no parseable code path in proposal
+phase1_bootstrap-cli,no-affected-code,,no parseable code path in proposal
+phase1_claude-code-adapter,no-affected-code,,no parseable code path in proposal
+phase1_embedder,no-affected-code,,no parseable code path in proposal
+phase1_fulltext-indexer,no-affected-code,,no parseable code path in proposal
+phase1_graph-writer,no-affected-code,,no parseable code path in proposal
+phase1_pre-thinking,no-affected-code,,no parseable code path in proposal
+phase1_query-api,no-affected-code,,no parseable code path in proposal
+phase2_claude-code-plugin,no-affected-code,,no parseable code path in proposal
+phase2_envelope-schema-align,no-affected-code,,no parseable code path in proposal
+phase2_graph-observed-in-edge,no-affected-code,,no parseable code path in proposal
+phase2_plugin-hooks-merge,still-live,crates/cortex-mcp-server/src/validate.rs,1/1 present
+phase2_plugin-hooks-windows-fix,still-live,crates/cortex-adapter-claude-code/hooks/,1/1 present
+phase1_adapter_pre_thinking_contract_fix,no-affected-code,,no parseable code path in proposal
+phase1_graph_writer_nexus_compat,no-affected-code,,no parseable code path in proposal
+phase2_bootstrap_skip_oversize_files,no-affected-code,,no parseable code path in proposal
+phase2_cortex_api_dashboard_real_backends,no-affected-code,,no parseable code path in proposal
+phase2_fulltext_routing_per_kind_topic,no-affected-code,,no parseable code path in proposal
+phase2_graph_emit_session_and_provenance_edges,no-affected-code,,no parseable code path in proposal
+phase2_keyword_lane_live_meilisearch,no-affected-code,,no parseable code path in proposal
+phase2_mcp_server_contract_fix,no-affected-code,,no parseable code path in proposal
+phase2_per_project_collection_isolation,no-affected-code,,no parseable code path in proposal
+phase2_scope_repo_resolution,no-affected-code,,no parseable code path in proposal
+phase2_static_classifier_summary_preserves_text,no-affected-code,,no parseable code path in proposal
+phase2_tool_call_text_preservation,no-affected-code,,no parseable code path in proposal
+phase2a_gui_atoms_and_sidebar,no-affected-code,,no parseable code path in proposal
+phase2b_gui_timeline_stats_and_stream_controls,no-affected-code,,no parseable code path in proposal
+phase2c_gui_inspector_richer,no-affected-code,,no parseable code path in proposal
+phase2d_gui_decisions_and_laws_polish,no-affected-code,,no parseable code path in proposal
+phase2e_gui_tweaks_panel,no-affected-code,,no parseable code path in proposal
+phase2f_dashboard_sse_stream_and_auth,partial-live,crates/cortex-api/src/dashboard.rs;crates/cortex-api/src/bin/admin.rs;crates/cortex-api/src/storage/api_keys.rs,2/3 present; gone: crates/cortex-api/src/bin/admin.rs
+phase1_classifier_worker,no-affected-code,,no parseable code path in proposal
+phase2_graph_lane_live_in_orchestrator,no-affected-code,,no parseable code path in proposal
+phase2_rulebook_artifact_indexer,no-affected-code,,no parseable code path in proposal
+phase2_vector_lane_live_vectorizer,no-affected-code,,no parseable code path in proposal
+phase2g_dashboard_enriched_metrics,still-live,crates/cortex-api/src/dashboard.rs;crates/cortex-api/src/lanes.rs,2/2 present
+phase2h_dashboard_decision_chain_and_graph_richness,still-live,crates/cortex-api/src/dashboard.rs,1/1 present
+phase4a_fulltext_fanout_parity_and_stale_meili_cleanup,no-affected-code,,no parseable code path in proposal
+phase4b_bootstrap_resume_remaining_repos,no-affected-code,,no parseable code path in proposal
+phase4c_graph_richer_edges_defines,no-affected-code,,no parseable code path in proposal
+phase4d_indexing_consistency_doctor,no-affected-code,,no parseable code path in proposal
+phase4e_bootstrap_analysis_promotion,no-affected-code,,no parseable code path in proposal
+phase4e_graph_symbol_backfill_runbook,superseded-by-restructure,scripts/backfill-graph-symbols.sh;crates/cortex-graph/*,crates/cortex-graph -> crates/cortex-workers/src/graph
+phase4f_fulltext_replay_missing_partitions,no-affected-code,,no parseable code path in proposal
+phase4g_bootstrap_workspace_runbook,still-live,docs/operations/bootstrap-workspace.md,1/1 present
+phase4h_doctor_vec_nexus_probes,no-affected-code,,no parseable code path in proposal
+phase4i_doctor_query_overlap_mode,no-affected-code,,no parseable code path in proposal
+phase4j_doctor_ci_gate,no-affected-code,,no parseable code path in proposal
+phase5a_dashboard_tasks_backend,partial-live,crates/cortex-api/src/tasks_loader.rs;crates/cortex-api/src/dashboard.rs;crates/cortex-api/src/lib.rs,2/3 present; gone: crates/cortex-api/src/tasks_loader.rs
+phase7a_status_indexed_repos_and_repo_not_indexed_notice,partial-live,crates/cortex-api/src/http.rs;crates/cortex-api/src/service.rs;crates/cortex-api/src/types.rs;crates/cortex-api/src/orchestrator.rs;crates/cortex-api/src/lanes/memory.rs;crates/cortex-mcp-server/src/tools.rs;crates/cortex-pre-thinking/src/pipeline.rs,5/7 present; gone: crates/cortex-api/src/orchestrator.rs;crates/cortex-api/src/lanes/memory.rs
+phase2_dashboard,no-affected-code,,no parseable code path in proposal
+phase3_tool_call_hash_preview,no-affected-code,,no parseable code path in proposal
+phase6a_relevance_scope_default_enforce,partial-live,crates/cortex-api/src/service.rs;crates/cortex-api/src/types.rs;crates/cortex-api/src/audit.rs;crates/cortex-mcp-server/src/tools.rs,3/4 present; gone: crates/cortex-api/src/audit.rs
+phase6b_relevance_lane_extras_contract,superseded-by-restructure,crates/cortex-api/src/meili_lane.rs;crates/cortex-api/src/vectorizer_lane.rs;crates/cortex-api/src/lane_contract.rs,crates/cortex-api/src/meili_lane.rs -> cortex-api/src/search/; crates/cortex-api/src/vectorizer_lane.rs -> cortex-api/src/search/; crates/cortex-api/src/lane_contract.rs -> cortex-api/src/search/
+phase6c_relevance_score_aware_rrf,partial-live,crates/cortex-api/src/fusion.rs;crates/cortex-api/src/lanes.rs;crates/cortex-api/src/audit.rs;crates/cortex-api/src/main.rs,2/4 present; gone: crates/cortex-api/src/fusion.rs;crates/cortex-api/src/audit.rs
+phase6d_relevance_intent_table_expansion,partial-live,crates/cortex-pre-thinking/src/intent_select.rs;crates/cortex-pre-thinking/src/strategies.rs;crates/cortex-api/src/types.rs;crates/cortex-api/src/audit.rs,2/4 present; gone: crates/cortex-pre-thinking/src/strategies.rs;crates/cortex-api/src/audit.rs
+phase6e_relevance_recall_mrr_harness,superseded-by-restructure,crates/cortex-relevance-eval/;.github/workflows/ci-relevance.yaml,crates/cortex-relevance-eval -> crates/cortex-cli/src/relevance_eval
+phase6f_relevance_query_rewriting_pre_pass,partial-live,crates/cortex-api/src/query_rewrite.rs;crates/cortex-api/src/orchestrator.rs;crates/cortex-api/src/audit.rs;crates/cortex-api/src/main.rs;crates/cortex-api/src/analyzer.rs,1/5 present; gone: crates/cortex-api/src/query_rewrite.rs;crates/cortex-api/src/orchestrator.rs;crates/cortex-api/src/audit.rs;crates/cortex-api/src/analyzer.rs
+phase6g_relevance_meili_body_projection,superseded-by-restructure,crates/cortex-api/src/meili_lane.rs;crates/cortex-fulltext/src/builders.rs,crates/cortex-api/src/meili_lane.rs -> cortex-api/src/search/; crates/cortex-fulltext -> crates/cortex-workers/src/fulltext
+phase8a_health_endpoints_per_crate,no-affected-code,,no parseable code path in proposal
+phase8b_pipeline_stage_metrics,no-affected-code,,no parseable code path in proposal
+phase8c_version_coherence,no-affected-code,,no parseable code path in proposal
+phase8d_config_coherence_check,no-affected-code,,no parseable code path in proposal
+phase8e_silent_drop_detector,no-affected-code,,no parseable code path in proposal
+phase8f_synthetic_e2e_canary,no-affected-code,,no parseable code path in proposal
+phase8g_dashboard_health_view,no-affected-code,,no parseable code path in proposal
+phase8h_ci_smoke_workflow,no-affected-code,,no parseable code path in proposal
+phase9a_retention_sweeper_core,partial-live,crates/cortex-retention/;crates/cortex-storage/src/metadata.rs;crates/cortex-ops/,1/3 present; gone: crates/cortex-retention/;crates/cortex-ops/
+phase9b_parquet_rollup_compactor,superseded-by-restructure,crates/cortex-retention/src/parquet_rollup.rs,crates/cortex-retention -> crates/cortex-workers/src/retention
+phase9c_cas_vacuum,partial-live,crates/cortex-retention/src/cas_vacuum.rs;crates/cortex-storage/src/cas.rs,1/2 present; gone: crates/cortex-retention/src/cas_vacuum.rs
+phase9d_pii_retention_enforcement,superseded-by-restructure,crates/cortex-retention/src/pii_enforce.rs;crates/cortex-classifier/src/client.rs,crates/cortex-retention -> crates/cortex-workers/src/retention; crates/cortex-classifier -> crates/cortex-workers/src/classifier
+phase9e_llm_turn_digest_summarizer,superseded-by-restructure,crates/cortex-retention/src/turn_digest.rs;crates/cortex-classifier/src/prompts.rs,crates/cortex-retention -> crates/cortex-workers/src/retention; crates/cortex-classifier -> crates/cortex-workers/src/classifier
+phase9f_meili_archival_pruner,superseded-by-restructure,crates/cortex-retention/src/meili_prune.rs;crates/cortex-fulltext/src/meili_client.rs,crates/cortex-retention -> crates/cortex-workers/src/retention; crates/cortex-fulltext -> crates/cortex-workers/src/fulltext
+phase9g_sqlite_metadata_reaper,partial-live,crates/cortex-retention/src/metadata_reap.rs;crates/cortex-storage/schemas/sqlite/schema.sql;crates/cortex-ops/,1/3 present; gone: crates/cortex-retention/src/metadata_reap.rs;crates/cortex-ops/
+phase9h_auto_memory_consolidator,superseded-by-restructure,crates/cortex-ops/src/memory_consolidate.rs,crates/cortex-ops -> crates/cortex-cli/src/bin/cortex-ops
+phase9i_dashboard_retention_view,still-live,crates/cortex-api/src/dashboard.rs,1/1 present
+phase10a_query_lane_wiring,superseded-by-restructure,crates/cortex-api/src/orchestrator.rs;crates/cortex-api/src/strategies.rs;crates/cortex-api/src/meili_lane.rs;crates/cortex-api/src/vectorizer_lane.rs;crates/cortex-api/src/nexus_graph_lane.rs;crates/cortex-api/src/fusion.rs,crates/cortex-api/src/orchestrator.rs -> cortex-api/src/search/; crates/cortex-api/src/strategies.rs -> cortex-api/src/search/; crates/cortex-api/src/meili_lane.rs -> cortex-api/src/search/; crates/cortex-api/src/vectorizer_lane.rs -> cortex-api/src/search/; crates/cortex-api/src/nexus_graph_lane.rs -> cortex-api/src/search/; crates/cortex-api/src/fusion.rs -> cortex-api/src/search/
+phase10b_snippet_body_capture,partial-live,crates/cortex-api/src/lanes.rs;crates/cortex-api/src/types.rs;crates/cortex-pre-thinking/src/bundle.rs,2/3 present; gone: crates/cortex-pre-thinking/src/bundle.rs
+phase10c_bootstrap_dedup,still-live,crates/cortex-cli/src/bootstrap/runner.rs;crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-storage/schemas/sqlite/schema.sql;crates/cortex-storage/src/metadata.rs,4/4 present
+phase10d_repo_casing_normalization,still-live,crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-api/src/lanes.rs,2/2 present
+phase10e_knowledge_learnings_walker,still-live,crates/cortex-storage/src/collections.rs;crates/cortex-storage/src/fulltext.rs;crates/cortex-storage/src/graph.rs;crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-workers/src/embedder/;crates/cortex-pre-thinking/src/scope.rs,6/6 present
+phase10f_memory_kind_filter,still-live,crates/cortex-api/src/dashboard.rs,1/1 present
+phase10g_health_route_registration,still-live,crates/cortex-api/src/dashboard.rs;crates/cortex-cli/src/ops/doctor.rs,2/2 present
+phase10h_query_scope_filters,partial-live,crates/cortex-api/src/types.rs;crates/cortex-api/src/meili_lane.rs;crates/cortex-api/src/vectorizer_lane.rs;crates/cortex-api/src/nexus_graph_lane.rs;crates/cortex-pre-thinking/src/scope.rs,2/5 present; gone: crates/cortex-api/src/meili_lane.rs;crates/cortex-api/src/vectorizer_lane.rs;crates/cortex-api/src/nexus_graph_lane.rs
+phase10i_session_metadata_capture,still-live,crates/cortex-adapter-claude-code/src/events.rs;crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-storage/src/metadata.rs,3/3 present
+phase10j_mcp_audit_capture,still-live,crates/cortex-mcp-server/src/;crates/cortex-api/src/dashboard.rs;crates/cortex-api/src/types.rs,3/3 present
+phase10k_retention_daemon,partial-live,crates/cortex-retention/;crates/cortex-cli/src/ops/;crates/cortex-api/src/,2/3 present; gone: crates/cortex-retention/
+phase5b_gui_tasks_view,no-affected-code,,no parseable code path in proposal
+phase9j_ci_retention_canary,partial-live,crates/cortex-retention/tests/canary.rs;.github/workflows/retention-canary.yml,1/2 present; gone: crates/cortex-retention/tests/canary.rs
+phase9k_cron_scheduler_for_sweeps,superseded-by-restructure,crates/cortex-ops/src/scheduler.rs;crates/cortex-ops/,crates/cortex-ops -> crates/cortex-cli/src/bin/cortex-ops
+phase11a_vectorizer_jwt_credential_cache,no-affected-code,,no parseable code path in proposal
+phase11b_meili_filter_path_prefix,no-affected-code,,no parseable code path in proposal
+phase11c_free_search_bundle_clipping,no-affected-code,,no parseable code path in proposal
+phase11d_vectorizer_search_payload_drift,no-affected-code,,no parseable code path in proposal
+phase11e_intent_collection_fanout_audit,no-affected-code,,no parseable code path in proposal
+phase11f_indexer_vue_md_visibility,still-live,crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-workers/src/fulltext/routing.rs;crates/cortex-cli/tests/bootstrap_runner.rs;crates/cortex-workers/tests/fulltext_routing.rs,4/4 present
+phase11h_cortex_query_recall_recovery,partial-live,crates/cortex-bootstrap/;crates/cortex-api/;crates/cortex-mcp-server/,2/3 present; gone: crates/cortex-bootstrap/
+phase11i_claude_archive_indexer_and_relevance,no-affected-code,,no parseable code path in proposal
+phase3_gui_multi_connection,no-affected-code,,no parseable code path in proposal
+phase11k_graph_correlations,no-affected-code,,no parseable code path in proposal
+phase11l_nexus-external-ids-migration,no-affected-code,,no parseable code path in proposal
+phase11k_governance_lane_projection,no-affected-code,,no parseable code path in proposal
+phase11m_dashboard_push_cache,no-affected-code,,no parseable code path in proposal
+phase11n_rulebook_dashboard_publisher,no-affected-code,,no parseable code path in proposal
+phase11p_corpus_cleanup_sweep,still-live,crates/cortex-cli/src/bin/cortex-ops.rs;crates/cortex-workers/src/fulltext/sweep.rs;docs/cortex/redeploy-after-phase11k.md,3/3 present
+phase11q_corpus_consolidation_run,dead-code-candidate,scripts/run-corpus-consolidation.ps1,0/1 present; all gone
+phase11r_topic_card_mcp_enrichment,no-affected-code,,no parseable code path in proposal
+phase11s_pipeline_drainage_recovery,partial-live,crates/cortex-workers/src/classifier/worker.rs;crates/cortex-workers/src/graph/worker.rs;crates/cortex-workers/src/embedder/worker.rs;crates/cortex-workers/src/embedder/vectorizer_client.rs;crates/cortex-cli/src/bin/cortex-ops.rs,4/5 present; gone: crates/cortex-workers/src/classifier/worker.rs
+phase11s_workers_consolidation_merge,no-affected-code,,no parseable code path in proposal
+phase11j_consolidation_tier,no-affected-code,,no parseable code path in proposal
+phase11o_vectorizer_demotion_api,partial-live,crates/cortex-claude-archive/;crates/cortex-mcp-server/;crates/cortex-api/src/health.rs,2/3 present; gone: crates/cortex-claude-archive/
+phase11p_consolidator-live-read-path,partial-live,crates/cortex-workers/src/consolidator/source/session.rs;crates/cortex-workers/src/consolidator/source/topic.rs;crates/cortex-workers/src/consolidator/source/decision_trace.rs;crates/cortex-workers/src/bin/cortex-consolidator.rs;crates/cortex-workers/src/retention/scheduler.rs::default_jobs(,4/5 present; gone: crates/cortex-workers/src/retention/scheduler.rs::default_jobs(
+phase11t_cortex-forget-mcp-tool,still-live,crates/cortex-mcp-server/src/tools.rs;crates/cortex-mcp-server/src/lib.rs,2/2 present
+phase11v_mcp-fine-grained-backend-search,partial-live,crates/cortex-api/src/search_proxy.rs;crates/cortex-api/src/http.rs;crates/cortex-mcp-server/src/tools.rs;crates/cortex-mcp-server/src/lib.rs,3/4 present; gone: crates/cortex-api/src/search_proxy.rs
+phase11v_retention-daemon-recovery,no-affected-code,,no parseable code path in proposal
+phase11x_cortex-hook-native-shim,no-affected-code,,no parseable code path in proposal
+phase12a_consolidator-publish-fallback,partial-live,crates/cortex-workers/src/consolidator/publisher.rs;crates/cortex-workers/src/consolidator/metrics.rs;crates/cortex-cli/src/bin/cortex-ops.rs,2/3 present; gone: crates/cortex-workers/src/consolidator/publisher.rs
+phase12b_retention-archive-purge-cron,partial-live,crates/cortex-cli/src/bin/cortex-ops.rs;crates/cortex-storage/src/archive_purge.rs;crates/cortex-workers/src/retention/scheduler.rs::seed_defaults,2/3 present; gone: crates/cortex-workers/src/retention/scheduler.rs::seed_defaults
+phase12c_digest-defaults-and-shared-helper,partial-live,crates/cortex-storage/src/archive_purge.rs;crates/cortex-storage/src/lib.rs;crates/cortex-workers/src/retention/scheduler.rs;crates/cortex-workers/src/retention/digest_purge.rs;crates/cortex-cli/src/bin/cortex-ops.rs,4/5 present; gone: crates/cortex-workers/src/retention/digest_purge.rs
+phase12d_missing-event-schemas-and-meili-defs,partial-live,crates/cortex-core/schemas/knowledge.schema.json;crates/cortex-core/schemas/learning.schema.json;crates/cortex-core/src/validate.rs;crates/cortex-workers/src/fulltext/bootstrap.rs;crates/cortex-cli/src/bin/cortex-ops.rs,2/5 present; gone: crates/cortex-core/schemas/knowledge.schema.json;crates/cortex-core/schemas/learning.schema.json;crates/cortex-workers/src/fulltext/bootstrap.rs
+phase12e_vocab-kind-ids-complete,partial-live,crates/cortex-classifier/src/vocab.rs;crates/cortex-classifier/src/metrics.rs;crates/cortex-core/src/events.rs,1/3 present; gone: crates/cortex-classifier/src/vocab.rs;crates/cortex-classifier/src/metrics.rs
+phase12f_record-cron-run-toctou,still-live,crates/cortex-storage/src/metadata.rs,1/1 present
+phase12g_meili-index-audit-rulebook-vectorizer,partial-live,crates/cortex-cli/src/bin/cortex-ops.rs;crates/cortex-workers/src/fulltext/audit.rs;crates/cortex-workers/src/fulltext/reindex.rs,2/3 present; gone: crates/cortex-workers/src/fulltext/reindex.rs
+phase13a_sweep-trait-adr-009,still-live,crates/cortex-workers/src/sweep/trait.rs;crates/cortex-workers/src/sweep/ctx.rs;crates/cortex-workers/src/sweep/report.rs;crates/cortex-workers/src/retention/*.rs;crates/cortex-workers/src/retention/scheduler.rs;crates/cortex-api/src/dashboard.rs,6/6 present
+phase13b_envelope-producer-trait-adr-010,still-live,crates/cortex-workers/src/producer/trait.rs;crates/cortex-workers/src/producer/ctx.rs;crates/cortex-workers/src/producer/checkpoint.rs;crates/cortex-storage/src/metadata.rs;crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-workers/src/topic_cards/*.rs;crates/cortex-workers/src/consolidator/*.rs,7/7 present
+phase13c_lane-trait-typed-projected-hit-adr-011,partial-live,crates/cortex-api/src/lanes.rs;crates/cortex-api/src/types.rs;crates/cortex-api/src/orchestrator.rs,2/3 present; gone: crates/cortex-api/src/orchestrator.rs
+phase13d_event-identity-index-adr-012,partial-live,crates/cortex-storage/src/identity.rs;crates/cortex-storage/src/metadata.rs;crates/cortex-workers/src/embedder/projection.rs;crates/cortex-workers/src/fulltext/projection.rs;crates/cortex-workers/src/graph/projection.rs;crates/cortex-cli/src/bin/cortex-doctor.rs,3/6 present; gone: crates/cortex-workers/src/embedder/projection.rs;crates/cortex-workers/src/fulltext/projection.rs;crates/cortex-cli/src/bin/cortex-doctor.rs
+phase13e_cortex-config-crate-adr-016,still-live,crates/cortex-config/,1/1 present
+phase13f_dashboard-pure-reader-adr-014,partial-live,crates/cortex-api/src/dashboard.rs;crates/cortex-api/src/dashboard/consolidations.rs;crates/cortex-api/src/dashboard/coverage.rs;crates/cortex-api/src/dashboard/producers.rs;crates/cortex-workers/src/sweep/report.rs;crates/cortex-workers/src/producer/report.rs;crates/cortex-workers/src/coverage/report.rs;crates/cortex-cli/src/bin/cortex-ops/identity_coverage.rs,7/8 present; gone: crates/cortex-workers/src/coverage/report.rs
+phase13g_mcp-grounding-tools,still-live,crates/cortex-api/src/active_work.rs;crates/cortex-api/src/similar_sessions.rs;crates/cortex-api/src/decision_chain.rs;crates/cortex-api/src/http.rs;crates/cortex-mcp-server/src/tools.rs;crates/cortex-pre-thinking/src/formatter.rs,6/6 present
+phase14a_consolidator-daemon-trait-impls,partial-live,crates/cortex-workers/src/consolidator/trait.rs;crates/cortex-workers/src/consolidator/session.rs;crates/cortex-workers/src/consolidator/topic.rs;crates/cortex-workers/src/consolidator/decision_trace.rs;crates/cortex-workers/src/consolidator/cost_telemetry.rs;crates/cortex-workers/src/bin/cortex-consolidator.rs;crates/cortex-api/src/dashboard/consolidations.rs,3/7 present; gone: crates/cortex-workers/src/consolidator/trait.rs;crates/cortex-workers/src/consolidator/session.rs;crates/cortex-workers/src/consolidator/topic.rs;crates/cortex-workers/src/consolidator/decision_trace.rs
+phase11w_opencode-adapter,no-affected-code,,no parseable code path in proposal
+phase14b_pruning-sweep-impls-adr-013,still-live,crates/cortex-workers/src/retention/hot_tier_prune.rs;crates/cortex-workers/src/retention/cold_tier_prune.rs;crates/cortex-workers/src/embedder/vectorizer_prune.rs,3/3 present
+phase14c_golden-set-eval-harness,partial-live,crates/cortex-eval/;.github/workflows/ci.yml,1/2 present; gone: .github/workflows/ci.yml
+phase14d_gui-rust-contract-test,partial-live,crates/cortex-api/src/types.rs;scripts/generate-gui-types.sh;scripts/generate-gui-types.ps1,2/3 present; gone: scripts/generate-gui-types.ps1
+phase14e_pre-thinking-circuit-breaker,still-live,crates/cortex-pre-thinking/src/pipeline.rs;crates/cortex-pre-thinking/src/metrics.rs;crates/cortex-pre-thinking/src/breaker.rs;crates/cortex-pre-thinking/src/formatter.rs;crates/cortex-cli/src/bin/cortex-ops.rs,5/5 present
+phase14f_pre-thinking-feedback-and-budget,still-live,crates/cortex-pre-thinking/src/budget.rs;crates/cortex-pre-thinking/src/metrics.rs;crates/cortex-api/src/http.rs;crates/cortex-api/src/feedback.rs;crates/cortex-storage/src/metadata.rs,5/5 present
+phase14g_intent-routing-and-rewriter,still-live,crates/cortex-pre-thinking/src/intent_select.rs;crates/cortex-pre-thinking/src/rewriter.rs;crates/cortex-pre-thinking/src/metrics.rs;crates/cortex-cli/src/bin/cortex-ops.rs,4/4 present
+phase14h_synap-worker-shared-module,partial-live,crates/cortex-workers/src/synap_worker/;crates/cortex-workers/src/embedder/synap_consumer.rs;crates/cortex-workers/src/fulltext/synap_consumer.rs;crates/cortex-workers/src/graph/synap_consumer.rs;crates/cortex-workers/src/classifier/synap_consumer.rs,1/5 present; gone: crates/cortex-workers/src/embedder/synap_consumer.rs;crates/cortex-workers/src/fulltext/synap_consumer.rs;crates/cortex-workers/src/graph/synap_consumer.rs;crates/cortex-workers/src/classifier/synap_consumer.rs
+phase14i_adapter-no-panic-and-mcp-timeout,still-live,crates/cortex-adapter-claude-code/src/dispatcher.rs;crates/cortex-adapter-claude-code/src/events.rs;crates/cortex-adapter-claude-code/src/ipc.rs;crates/cortex-mcp-server/src/tools.rs,4/4 present
+phase19_mcp-granular-search,no-affected-code,,no parseable code path in proposal
+phase20_retrieval-relevance-recovery,no-affected-code,,no parseable code path in proposal
+phase15a_bootstrap-multi-repo-resume,still-live,crates/cortex-cli/src/bootstrap/walker.rs;crates/cortex-cli/src/bin/cortex-bootstrap.rs;crates/cortex-cli/src/bin/cortex-ops.rs,3/3 present
+phase15b_graph-mapper-edge-expansion,still-live,crates/cortex-workers/src/graph/projection.rs;crates/cortex-workers/src/graph/extractors/calls.rs;crates/cortex-workers/src/graph/extractors/imports.rs;crates/cortex-workers/src/graph/extractors/defines.rs;crates/cortex-workers/src/graph/extractors/returns.rs;crates/cortex-workers/src/graph/extractors/supersedes.rs;crates/cortex-workers/src/graph/extractors/contradicts.rs;crates/cortex-workers/src/graph/extractors/emitted_by.rs;crates/cortex-workers/src/graph/extractors/about.rs;crates/cortex-workers/src/graph/extractors/answered_by.rs;crates/cortex-workers/src/graph/extractors/cites.rs;crates/cortex-workers/src/graph/extractors/mentions_file.rs;crates/cortex-workers/src/graph/extractors/relates_to.rs,13/13 present
