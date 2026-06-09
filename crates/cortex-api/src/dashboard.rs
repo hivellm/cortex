@@ -135,6 +135,9 @@ use self::coverage::coverage;
 mod producers;
 use self::producers::producers;
 
+mod canary;
+use self::canary::canary;
+
 // Loaders + lifecycle modules absorbed into `dashboard/` during the
 // 2026-05-25 reorg. Their pre-bucket paths (`crate::tasks_loader`,
 // `crate::memory_tail`, `crate::dashboard_consumer`,
@@ -194,6 +197,7 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/retention/state", get(retention_state))
         .route("/v1/dashboard/coverage", get(coverage))
         .route("/v1/dashboard/producers", get(producers))
+        .route("/v1/dashboard/canary", get(canary))
         .route(
             "/v1/dashboard/active-work",
             get(crate::active_work::active_work_handler),

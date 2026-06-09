@@ -73,6 +73,9 @@ impl MetadataStore {
         // Phase14f — pre-thinking feedback table. One row per
         // query_id; subsequent posts overwrite via UPSERT.
         apply_phase14f_schema(conn)?;
+        // Phase15f — canary_runs table: one row per pre-thinking health
+        // canary tick. Rows older than 24h are cleaned up each tick.
+        apply_phase15f_schema(conn)?;
         // Phase9a — idempotent column-add for `retention_sweeps.status`.
         // Existing pre-phase9a databases lack the column; the
         // `CREATE TABLE IF NOT EXISTS` above is a no-op for them, so
@@ -1134,6 +1137,57 @@ impl MetadataStore {
         }
         Ok(out)
     }
+
+    /// Phase15f — append one row to `canary_runs`.
+    pub fn insert_canary_run(
+        &self,
+        ts: &str,
+        status: &str,
+        latency_ms: Option<i64>,
+        error_message: Option<&str>,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO canary_runs (ts, status, latency_ms, error_message)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![ts, status, latency_ms, error_message],
+        )?;
+        Ok(())
+    }
+
+    /// Phase15f — delete rows with `ts < cutoff` (an RFC-3339 timestamp).
+    /// Lexicographic comparison is safe because all `ts` values are
+    /// RFC-3339 UTC strings produced by `chrono::Utc::now().to_rfc3339()`.
+    /// The caller computes `cutoff = (Utc::now() - Duration::hours(24)).to_rfc3339()`.
+    pub fn cleanup_canary_runs(&self, cutoff: &str) -> Result<usize, MetadataError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM canary_runs WHERE ts < ?1",
+            params![cutoff],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Phase15f — return up to `limit` most-recent canary run rows.
+    pub fn list_canary_runs(&self, limit: usize) -> Result<Vec<CanaryRun>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ts, status, latency_ms, error_message
+             FROM canary_runs
+             ORDER BY ts DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |r| {
+            Ok(CanaryRun {
+                ts: r.get(0)?,
+                status: r.get(1)?,
+                latency_ms: r.get(2)?,
+                error_message: r.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
 }
 
 /// Phase10c — assert the bootstrap dedup ledger exists on `conn`.
@@ -1268,6 +1322,22 @@ pub fn apply_phase9g_schema(conn: &Connection) -> Result<(), MetadataError> {
             tokens_out     INTEGER NOT NULL DEFAULT 0,
             est_usd_cents  INTEGER NOT NULL DEFAULT 0
         );",
+    )?;
+    Ok(())
+}
+
+/// Phase15f — assert the `canary_runs` table exists on `conn`.
+/// Called from [`MetadataStore::migrate`] at every open. Idempotent.
+pub fn apply_phase15f_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS canary_runs (
+            ts              TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            latency_ms      INTEGER,
+            error_message   TEXT
+        );
+        CREATE INDEX IF NOT EXISTS canary_runs_ts
+            ON canary_runs (ts DESC);",
     )?;
     Ok(())
 }
@@ -1723,6 +1793,19 @@ pub struct ClassifierSpendMonthlyRow {
     pub tokens_out: u64,
     /// Sum of estimated spend in US cents.
     pub est_usd_cents: u64,
+}
+
+/// Phase15f — one row from `canary_runs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CanaryRun {
+    /// RFC-3339 timestamp of the canary tick.
+    pub ts: String,
+    /// `"ok"` or `"error"`.
+    pub status: String,
+    /// Round-trip latency in milliseconds, or `None` on error.
+    pub latency_ms: Option<i64>,
+    /// Error detail, or `None` on success.
+    pub error_message: Option<String>,
 }
 
 #[cfg(test)]
@@ -2711,5 +2794,62 @@ mod tests {
             .unwrap();
         assert_eq!(limit_one.len(), 1);
         assert_eq!(limit_one[0].0, "q3");
+    }
+
+    // Phase15f — canary_runs CRUD
+    #[test]
+    fn canary_runs_insert_and_list_round_trip() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.insert_canary_run("2026-06-09T12:00:00Z", "ok", Some(10), None)
+            .unwrap();
+        s.insert_canary_run("2026-06-09T12:01:00Z", "error", None, Some("http 500"))
+            .unwrap();
+        let rows = s.list_canary_runs(10).unwrap();
+        // Newest first (DESC by ts).
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].ts, "2026-06-09T12:01:00Z");
+        assert_eq!(rows[0].status, "error");
+        assert_eq!(rows[0].latency_ms, None);
+        assert_eq!(rows[0].error_message.as_deref(), Some("http 500"));
+        assert_eq!(rows[1].ts, "2026-06-09T12:00:00Z");
+        assert_eq!(rows[1].status, "ok");
+        assert_eq!(rows[1].latency_ms, Some(10));
+        assert!(rows[1].error_message.is_none());
+    }
+
+    #[test]
+    fn canary_runs_cleanup_removes_rows_older_than_24h() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        // Old row (>24h before "now").
+        s.insert_canary_run("2026-06-08T10:00:00Z", "ok", Some(5), None)
+            .unwrap();
+        // Recent row (<24h before "now").
+        s.insert_canary_run("2026-06-09T12:00:00Z", "ok", Some(8), None)
+            .unwrap();
+        // cutoff = now - 24h = "2026-06-09T12:30:00Z" - 24h = "2026-06-08T12:30:00Z"
+        // The old row "2026-06-08T10:00:00Z" < "2026-06-08T12:30:00Z" → deleted.
+        // The recent row "2026-06-09T12:00:00Z" >= "2026-06-08T12:30:00Z" → kept.
+        let cutoff = "2026-06-08T12:30:00+00:00";
+        let deleted = s.cleanup_canary_runs(cutoff).unwrap();
+        assert_eq!(deleted, 1, "exactly one old row should be deleted");
+        let rows = s.list_canary_runs(10).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ts, "2026-06-09T12:00:00Z");
+    }
+
+    #[test]
+    fn canary_runs_list_respects_limit() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        for i in 0..5u8 {
+            s.insert_canary_run(
+                &format!("2026-06-09T12:0{}:00Z", i),
+                "ok",
+                Some(i as i64),
+                None,
+            )
+            .unwrap();
+        }
+        let rows = s.list_canary_runs(3).unwrap();
+        assert_eq!(rows.len(), 3);
     }
 }

@@ -25,6 +25,7 @@ import { HealthView } from "./views/Health";
 import { BitemporalTimelineView } from "./views/BitemporalTimeline";
 import { BranchExplorerView } from "./views/BranchExplorer";
 import { EntityHistoryView } from "./views/EntityHistory";
+import { CanaryView } from "./views/Canary";
 import { EMPTY_FILTERS, FiltersContext, type FiltersContextValue } from "./lib/filters";
 import type { Filters } from "./lib/api";
 import { useDashboardStream } from "./lib/useDashboardStream";
@@ -101,6 +102,8 @@ function AppShell() {
         return <GraphView />;
       case "health":
         return <HealthView />;
+      case "canary":
+        return <CanaryView />;
       case "bitemporal-timeline":
         return <BitemporalTimelineView />;
       case "branch-explorer":

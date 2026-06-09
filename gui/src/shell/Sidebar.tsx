@@ -21,6 +21,7 @@ export type ViewId =
   | "tools"
   | "graph"
   | "health"
+  | "canary"
   | "bitemporal-timeline"
   | "branch-explorer"
   | "entity-history"
@@ -54,6 +55,7 @@ const NAV: NavItem[] = [
   { id: "tools", label: "Tool analytics", icon: "tools", countSource: "tools" },
   { id: "graph", label: "Graph explorer", icon: "graph" },
   { id: "health", label: "Health", icon: "tools" },
+  { id: "canary", label: "Canary", icon: "tools" },
   // phase18 §7.4-7.6 — Bitemporal Timeline / Branch Explorer / Entity
   // History are hidden from the nav until they surface something
   // genuinely useful (the views + routes + ViewId variants + App.tsx

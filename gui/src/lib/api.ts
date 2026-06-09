@@ -729,6 +729,7 @@ export const api = {
   coverage: () => getJson<CoverageReportView>("/v1/dashboard/coverage"),
   producers: () =>
     getJson<ProducerCheckpointsReportView>("/v1/dashboard/producers"),
+  dashboardCanary: () => getJson<CanaryReport>("/v1/dashboard/canary"),
   /// Pull the graph panorama. `repos` narrows the canvas to the
   /// listed projects' artifacts (sessions / decisions / memories
   /// stay regardless so the cross-project knowledge spine remains
@@ -1090,6 +1091,20 @@ export type CoverageReport = {
   families: string[];
   backends: CoverageBackend[];
   overall_severity: "ok" | "warn" | "critical";
+};
+
+/// Phase15f — one canary tick row from `GET /v1/dashboard/canary`.
+export type CanaryRunView = {
+  ts: string;
+  status: "ok" | "error";
+  latency_ms: number | null;
+  error_message: string | null;
+};
+
+/// Phase15f — response body from `GET /v1/dashboard/canary`.
+export type CanaryReport = {
+  runs: CanaryRunView[];
+  last_failure: CanaryRunView | null;
 };
 
 // phase14a §4.1 wire shape of `/v1/health/consolidator` —

@@ -584,6 +584,44 @@ Telemetry: every dispatch bumps `Metrics::rewriter_path_total{path}` so `/v1/hea
 | `rewriter_path_total.sonnet_timeout` rising | upstream Sonnet flaky; check `SONNET_TIMEOUT` (default 800 ms) and rate-limit headroom. |
 | `rewriter_path_total.deterministic_fallback` ≈ 100 % | no Sonnet backend wired — by design when `CORTEX_PRE_THINKING_REWRITER=deterministic` (env default until operator enables cascade). |
 
+## Canary (phase15f)
+
+### Default change
+
+`CanaryConfig.enabled` defaults to `true` from phase15f onward (was `false`). Existing operator `cortex.toml` files that do not include `[canary]` or include it without `enabled` will automatically pick up the new default on next restart; no migration is needed.
+
+### Pre-thinking health canary loop
+
+A second background loop (`run_pre_thinking_health_canary_loop`) ticks every `canary.pre_thinking_health_secs` seconds (default `60`). On each tick it:
+
+1. Calls `GET /v1/health/pre-thinking` on the running cortex-api.
+2. Records the result in the `canary_runs` SQLite table (`cortex-storage::metadata`): `ts` (RFC-3339), `status` (`"ok"` or `"error"`), `latency_ms`, `error_message`.
+3. On **two consecutive failures** emits a structured WARN that the Prometheus scrape pipeline picks up:
+   ```
+   tracing::warn!(target: "canary", consecutive_failures, last_error, "canary alarm")
+   ```
+4. Resets the consecutive counter on the first successful tick.
+5. Trims rows older than 24 h each tick.
+
+### Configuration
+
+```toml
+[canary]
+enabled                   = true   # master switch (now on by default)
+interval_secs             = 300    # IPC round-trip canary interval
+deadline_secs             = 10     # IPC round-trip deadline
+pre_thinking_health_secs  = 60     # pre-thinking health canary interval
+```
+
+Environment override: `CORTEX_CANARY_PRE_THINKING_HEALTH_SECS`.
+
+### Operator playbook
+
+| Symptom | Action |
+|---|---|
+| `"canary alarm"` WARN in log with `consecutive_failures >= 2` | pre-thinking health endpoint is returning errors; run `curl /v1/health/pre-thinking` to inspect breaker state. |
+| No `canary_runs` rows in metadata DB | canary loop not started; check that `canary.enabled = true` in config and the loop is wired in `cortex-api`. |
+
 ## References
 
 - Architecture §5.3 (query → context bundle), §8 (end-to-end example step 2).

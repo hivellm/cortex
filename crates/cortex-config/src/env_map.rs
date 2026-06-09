@@ -48,6 +48,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_CANARY_DEADLINE_SECS", "/canary/deadline_secs"),
     ("CORTEX_CANARY_ENABLED", "/canary/enabled"),
     ("CORTEX_CANARY_INTERVAL_SECS", "/canary/interval_secs"),
+    (
+        "CORTEX_CANARY_PRE_THINKING_HEALTH_SECS",
+        "/canary/pre_thinking_health_secs",
+    ),
     ("CORTEX_CAS_DB", "/ingestion/cas_db"),
     ("CORTEX_CLASSIFIER_HEALTH_URL", "/classifier/health_url"),
     (

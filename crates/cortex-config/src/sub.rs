@@ -661,19 +661,26 @@ pub struct RulebookConfig {
 // Canary
 // -------------------------------------------------------------
 
-/// Opt-in synthetic canary runner knobs.
+/// Canary runner knobs (phase15f: enabled by default).
 ///
-/// When `enabled = true`, the API fires a fake hook frame through
-/// the real IPC pipe every `interval_secs` and asserts it lands
-/// in the archive within `deadline_secs`. On failure a
-/// `law_violation` envelope is emitted.
+/// Two canary paths run when `enabled = true`:
+/// 1. IPC round-trip (phase8f): fires a fake hook frame through the
+///    real IPC pipe every `interval_secs` and asserts it lands in
+///    the archive within `deadline_secs`. On failure a
+///    `law_violation` envelope is emitted.
+/// 2. Pre-thinking health ping (phase15f): calls
+///    `/v1/health/pre-thinking` every `pre_thinking_health_secs`
+///    and records the result in the `canary_runs` SQLite table.
+///    On 2 consecutive failures a structured WARN is emitted.
+///
+/// Set `CORTEX_CANARY_ENABLED=false` to disable both paths.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CanaryConfig {
-    /// Enable the canary runner. Default `false`.
+    /// Enable the canary runner. Default `true`.
     /// Env: `CORTEX_CANARY_ENABLED`.
-    #[serde(default)]
+    #[serde(default = "default_canary_enabled")]
     pub enabled: bool,
-    /// Fire interval in seconds (minimum 10).
+    /// IPC canary fire interval in seconds (minimum 10).
     /// Env: `CORTEX_CANARY_INTERVAL_SECS`.
     #[serde(default = "default_canary_interval")]
     pub interval_secs: u64,
@@ -681,21 +688,32 @@ pub struct CanaryConfig {
     /// Env: `CORTEX_CANARY_DEADLINE_SECS`.
     #[serde(default = "default_canary_deadline")]
     pub deadline_secs: u64,
+    /// Pre-thinking health ping interval in seconds (minimum 10).
+    /// Env: `CORTEX_CANARY_PRE_THINKING_HEALTH_SECS`.
+    #[serde(default = "default_pre_thinking_health_secs")]
+    pub pre_thinking_health_secs: u64,
 }
 
+fn default_canary_enabled() -> bool {
+    true
+}
 fn default_canary_interval() -> u64 {
     300
 }
 fn default_canary_deadline() -> u64 {
     10
 }
+fn default_pre_thinking_health_secs() -> u64 {
+    60
+}
 
 impl Default for CanaryConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_canary_enabled(),
             interval_secs: default_canary_interval(),
             deadline_secs: default_canary_deadline(),
+            pre_thinking_health_secs: default_pre_thinking_health_secs(),
         }
     }
 }

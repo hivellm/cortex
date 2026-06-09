@@ -475,6 +475,99 @@ async fn emit_failure_alert(cfg: &CanaryConfig, hook: &str, outcome: &CanaryOutc
     }
 }
 
+/// Phase15f — background pre-thinking health canary.
+///
+/// Ticks every `interval_secs` seconds, calls `GET /v1/health/pre-thinking`
+/// on the running cortex-api, records the result in the `canary_runs` SQLite
+/// table, and emits a structured `tracing::warn!` when two consecutive ticks
+/// fail. The consecutive counter resets on the first successful tick.
+/// Rows older than 24 h are deleted each tick.
+pub async fn run_pre_thinking_health_canary_loop(
+    interval_secs: u64,
+    api_url: String,
+    metadata_path: std::path::PathBuf,
+) {
+    let interval = Duration::from_secs(interval_secs.max(5));
+    tracing::info!(
+        interval_secs = interval.as_secs(),
+        api_url = %api_url,
+        "pre-thinking health canary started"
+    );
+
+    let store = match cortex_storage::metadata::MetadataStore::open(&metadata_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "pre-thinking canary: failed to open metadata db");
+            return;
+        }
+    };
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "pre-thinking canary: failed to build http client");
+            return;
+        }
+    };
+
+    let url = format!(
+        "{}/v1/health/pre-thinking",
+        api_url.trim_end_matches('/')
+    );
+
+    let mut ticker = tokio::time::interval(interval);
+    ticker.tick().await; // skip immediate first tick
+    let mut consecutive_failures: u64 = 0;
+
+    loop {
+        ticker.tick().await;
+
+        let tick_start = std::time::Instant::now();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let (status, latency_ms, error_message) = match client.get(&url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                let latency = u64::try_from(tick_start.elapsed().as_millis()).unwrap_or(0);
+                ("ok".to_string(), Some(latency as i64), None)
+            }
+            Ok(resp) => {
+                let latency = u64::try_from(tick_start.elapsed().as_millis()).unwrap_or(0);
+                let msg = format!("http {}", resp.status().as_u16());
+                ("error".to_string(), Some(latency as i64), Some(msg))
+            }
+            Err(e) => ("error".to_string(), None, Some(e.to_string())),
+        };
+
+        if let Err(e) =
+            store.insert_canary_run(&now, &status, latency_ms, error_message.as_deref())
+        {
+            tracing::warn!(error = %e, "pre-thinking canary: failed to insert run row");
+        }
+
+        if status == "ok" {
+            consecutive_failures = 0;
+        } else {
+            consecutive_failures += 1;
+            if consecutive_failures >= 2 {
+                tracing::warn!(
+                    target: "canary",
+                    consecutive_failures,
+                    last_error = error_message.as_deref().unwrap_or("unknown"),
+                    "canary alarm"
+                );
+            }
+        }
+
+        let cutoff = (chrono::Utc::now() - chrono::Duration::hours(24)).to_rfc3339();
+        if let Err(e) = store.cleanup_canary_runs(&cutoff) {
+            tracing::debug!(error = %e, "pre-thinking canary: cleanup failed");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

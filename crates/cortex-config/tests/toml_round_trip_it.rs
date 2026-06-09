@@ -434,3 +434,46 @@ fn env_overlay_round_trips_a_knob_from_each_section() {
     assert_eq!(cfg.claude_archive.poll_ms, Some(321));
     assert_eq!(cfg.adapter.adapter_admin_port, Some(17092));
 }
+
+/// Phase15f §1.3 — an existing `cortex.toml` that contains a `[canary]`
+/// section WITHOUT `enabled` or `pre_thinking_health_secs` loads with both
+/// fields taking the new defaults (`enabled = true`,
+/// `pre_thinking_health_secs = 60`). Simulates an operator toml written
+/// before phase15f that only sets `interval_secs`.
+#[test]
+fn phase15f_canary_enabled_defaults_to_true_when_field_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = r#"
+        [canary]
+        interval_secs = 120
+    "#;
+    let path = write_fixture(dir.path(), toml);
+    let cfg = Config::load_from(&path, |_| None).expect("load");
+    assert!(
+        cfg.canary.enabled,
+        "canary.enabled must default to true when field is absent"
+    );
+    assert_eq!(cfg.canary.interval_secs, 120);
+    assert_eq!(
+        cfg.canary.pre_thinking_health_secs, 60,
+        "pre_thinking_health_secs must default to 60 when field is absent"
+    );
+}
+
+/// Phase15f §1.3 (complement) — a toml with NO `[canary]` section at all
+/// also loads with `enabled = true` and `pre_thinking_health_secs = 60`.
+#[test]
+fn phase15f_canary_enabled_defaults_to_true_when_section_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let toml = r#"
+        [ingestion]
+        bind = "0.0.0.0:17010"
+    "#;
+    let path = write_fixture(dir.path(), toml);
+    let cfg = Config::load_from(&path, |_| None).expect("load");
+    assert!(
+        cfg.canary.enabled,
+        "canary.enabled must default to true when section is absent"
+    );
+    assert_eq!(cfg.canary.pre_thinking_health_secs, 60);
+}
