@@ -5,13 +5,14 @@ type SparklineProps = {
   color?: string;
   filled?: boolean;
   height?: number;
-  /** When `true`, connect the line across `null` buckets instead of
-   * lifting the pen. Right for a gauge (e.g. P95 latency) where a
-   * sample-less minute means "no new reading", not "value dropped":
-   * bridging the gap draws the continuous trend between real
-   * measurements — matching the gap-free feel of the zero-filled
-   * count series — without faking a floor. X-positions still use the
-   * original bucket index so the time axis stays honest. */
+  /** When `true`, drop `null` buckets and spread the present samples
+   * evenly across the full width — one continuous line. Right for a
+   * gauge (e.g. P95 latency) where a sample-less minute means "no new
+   * reading", not "value dropped". A series with only recent readings
+   * then fills the card like the dense zero-filled count series
+   * instead of hugging the right edge. Trades exact time-axis spacing
+   * (the sparkline has no axis labels) for a gap-free trend; it never
+   * fabricates a zero floor. */
   bridgeGaps?: boolean;
 };
 
@@ -31,28 +32,35 @@ export function Sparkline({
   const max = Math.max(...present);
   const min = Math.min(...present);
   const range = max - min || 1;
-  const step = (w - pad * 2) / (data.length - 1 || 1);
-  // Walk the series and emit `M<x>,<y>` whenever we cross a null gap
-  // — that produces a polyline that "lifts the pen" over missing
-  // buckets instead of drawing a fake floor.
+  const yOf = (v: number) => h - pad - ((v - min) / range) * (h - pad * 2);
   const segments: [number, number][][] = [];
-  let current: [number, number][] = [];
-  data.forEach((v, i) => {
-    if (v == null) {
-      // Bridging: skip the null but keep the running segment open so
-      // the next real point connects straight across the gap.
-      if (!bridgeGaps && current.length > 0) {
-        segments.push(current);
-        current = [];
+  if (bridgeGaps) {
+    // Gauge mode: drop the null buckets entirely and spread the
+    // present samples evenly across the FULL width, so a series that
+    // only has recent readings still fills the card like the dense
+    // zero-filled count series instead of hugging the right edge. The
+    // sparkline is a trend glyph (no time-axis labels), so compressing
+    // the sample-less span is the honest trade — it shows the shape of
+    // the readings that exist without fabricating a floor.
+    const pstep = (w - pad * 2) / (present.length - 1 || 1);
+    segments.push(present.map((v, j) => [pad + j * pstep, yOf(v)]));
+  } else {
+    // Honest time axis: x = bucket index; "lift the pen" over null
+    // buckets so a missing slot reads as a gap, not a fake floor.
+    const step = (w - pad * 2) / (data.length - 1 || 1);
+    let current: [number, number][] = [];
+    data.forEach((v, i) => {
+      if (v == null) {
+        if (current.length > 0) {
+          segments.push(current);
+          current = [];
+        }
+        return;
       }
-      return;
-    }
-    current.push([
-      pad + i * step,
-      h - pad - ((v - min) / range) * (h - pad * 2),
-    ]);
-  });
-  if (current.length > 0) segments.push(current);
+      current.push([pad + i * step, yOf(v)]);
+    });
+    if (current.length > 0) segments.push(current);
+  }
   if (segments.length === 0) return null;
   const path = segments
     .map((seg) =>

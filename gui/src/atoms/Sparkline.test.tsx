@@ -33,16 +33,24 @@ describe("Sparkline gap handling", () => {
     expect(moveCount(linePath(container))).toBe(1);
   });
 
-  it("bridgeGaps preserves the original bucket x-positions (gap spans real time)", () => {
-    // 3 buckets over width 120 (pad 1): step = 118/2 = 59.
-    // bucket 0 -> x=1, bucket 2 -> x=119. The bridged line must span
-    // both ends, not collapse the two points to adjacent x's.
+  it("bridgeGaps spreads present samples across the full width (fills the card)", () => {
+    // Leading null + two present samples. The present points must span
+    // the full width — pad(1) .. w-pad(119) — so a sparse, recent-only
+    // series fills the card instead of hugging the right edge.
     const { container } = render(
-      <Sparkline data={[10, null, 20]} filled={false} bridgeGaps />,
+      <Sparkline data={[null, 10, 20]} filled={false} bridgeGaps />,
     );
     const d = linePath(container);
-    expect(d).toContain("M1,");
-    expect(d).toContain("L119,");
+    expect(d).toContain("M1,"); // first present sample at the left edge
+    expect(d).toContain("L119,"); // last present sample at the right edge
+  });
+
+  it("bridgeGaps fills the width even when all data is in the trailing buckets", () => {
+    // 5 buckets, only the last two present — must still reach x=1.
+    const { container } = render(
+      <Sparkline data={[null, null, null, 5, 9]} filled={false} bridgeGaps />,
+    );
+    expect(linePath(container)).toContain("M1,");
   });
 
   it("still renders nothing when every bucket is null", () => {
