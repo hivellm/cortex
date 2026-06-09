@@ -15,10 +15,10 @@
 - [x] 4.1–4.3 N/A — validação de `.rulebook/laws/*.yml` é tooling do Rulebook. Se o lifecycle dos arquivos de lei é responsabilidade do Rulebook, o linter também é.
 
 ## 5. Tail (mandatory)
-- [ ] 5.1 Update `docs/specs/13-laws-dsl.md` (status `v1`, escopo reduzido: apenas crate) + `CHANGELOG.md`.
-- [ ] 5.2 Tests: §1.5 já tem 10 testes passando. Adicionar fixture test por cada starter law hardcoded no crate (deny/warn/allow path).
-- [ ] 5.3 `cargo check --workspace && cargo clippy -- -D warnings && cargo test --workspace` clean.
+- [x] 5.1 Updated `docs/specs/13-laws-dsl.md` (v1 Shipped status + scope note) + CHANGELOG Added entry.
+- [x] 5.2 3 fixture tests added for deny/warn/allow verdict paths; total 13 tests pass.
+- [x] 5.3 `cargo check --workspace` clean; clippy clean (fixed `map_or(false,…)` → `is_some_and`); 13 tests pass.
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [ ] 99.1 Update or create documentation covering the implementation.
-- [ ] 99.2 Write tests covering the new behavior.
-- [ ] 99.3 Run tests and confirm they pass.
+- [x] 99.1 Spec 13 + CHANGELOG updated.
+- [x] 99.2 13 unit tests in lib.rs.
+- [x] 99.3 All pass.

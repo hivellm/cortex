@@ -13,6 +13,7 @@ members = [
     "crates/cortex-health",
     "crates/cortex-build",
     "crates/cortex-eval",
+    "crates/cortex-laws",
 ]
 
 [workspace.package]
@@ -24,6 +25,7 @@ repository = "https://github.com/hivellm/cortex"
 
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
 serde_json = { version = "1.0", features = ["preserve_order"] }
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }

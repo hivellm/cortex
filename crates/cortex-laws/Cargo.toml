@@ -1,0 +1,18 @@
+[package]
+name = "cortex-laws"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Laws DSL v1 — YAML law registry and evaluator for Cortex governance."
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile = { workspace = true }

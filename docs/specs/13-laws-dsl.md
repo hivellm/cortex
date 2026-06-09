@@ -1,6 +1,27 @@
 # 13 — Laws DSL + detector contract
 
-> **Status:** 🟡 Draft · **Owner:** Core team · **Depends on:** 01, 04
+> **Status:** 🟢 v1 Shipped (phase15d) · **Owner:** Core team · **Depends on:** 01, 04
+
+## V1 Implementation Note (phase15d)
+
+**What shipped:** `crates/cortex-laws` — a YAML-based law loader and evaluator. Laws are `.yml`
+files with `id`, `severity`, `trigger` (tool / action / args_match regex), `rule.verdict`
+(allow/deny/warn), and `rationale`. The registry loads from a directory, rejects duplicates, and
+evaluates an `EvalContext` against all compiled laws. 13 unit tests pass.
+
+**What is deferred to a future spec phase:**
+- Deno/TypeScript detector sandbox
+- Blocking / observational execution modes
+- Law CLI (`cortex laws lint/list/test`)
+- Versioning, supersession, hot-reload
+- Governance engine integration (spec 14)
+- Dashboard authoring UX (spec 16)
+
+Laws enforcement (blocking tool calls, punishment) is out of scope for Cortex core — it belongs to
+the adapter / Rulebook layer. The `cortex-laws` crate provides the record-and-retrieve engine that
+indexes `kind: "law"` events arriving via ingestion and evaluates YAML-defined triggers.
+
+---
 
 ## Goal
 
@@ -8,17 +29,19 @@ Define the on-disk representation of a **Law** (YAML frontmatter + Markdown body
 
 ## Scope
 
-**In:**
-- `cortex-laws` crate: loader, validator, detector sandbox, registry.
-- File format: `laws/<area>/<id>.md` with YAML frontmatter.
+**In (v1 — shipped):**
+- `cortex-laws` crate: YAML loader, args-match regex compiler, registry, `evaluate()`.
+- File format: `laws/**/*.yml` (flat YAML, no Markdown body in v1).
+
+**In (future phases):**
 - Detector execution sandbox (Deno / Node with strict no-network / no-fs / bounded CPU & memory).
 - Two execution modes: **blocking** (synchronous, `PreToolUse`, ≤100 ms) and **observational** (async, post-event).
 - Versioning + supersession.
 - Law CLI (`cortex laws lint`, `cortex laws list`, `cortex laws test`).
 - Registry export API for adapters/governance engine.
 
-**Out:**
-- Enforcement / punishment (spec 14).
+**Out (permanently):**
+- Enforcement / punishment (spec 14 — governance engine owns this).
 - Human authoring UX (dashboard view — spec 16).
 - Bulk import from existing rule files (handled by spec 09 `law.imported` events).
 - Distributed detector execution (single-node in v1).
