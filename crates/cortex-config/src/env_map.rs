@@ -128,6 +128,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_GRAPH_CYPHER_ENABLED", "/nexus/cypher_enabled"),
     ("CORTEX_GRAPH_FLUSH_MS", "/nexus/flush_ms"),
     ("CORTEX_GRAPH_MAX_RETRY", "/nexus/max_retry"),
+    ("CORTEX_GRAPH_METADATA_DB", "/nexus/metadata_db"),
     ("CORTEX_GRAPH_NEXUS_PASSWORD", "/nexus/nexus_password"),
     ("CORTEX_GRAPH_NEXUS_URL", "/nexus/nexus_url"),
     ("CORTEX_GRAPH_NEXUS_USER", "/nexus/nexus_user"),
