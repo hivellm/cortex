@@ -35,6 +35,8 @@ mod consolidation;
 mod digest;
 #[path = "cortex-ops/doctor.rs"]
 mod doctor;
+#[path = "cortex-ops/doctor_redaction_coverage.rs"]
+mod doctor_redaction_coverage;
 #[path = "cortex-ops/doctor_synap_workers.rs"]
 mod doctor_synap_workers;
 #[path = "cortex-ops/graph_cmd.rs"]
@@ -1191,6 +1193,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase15e §4 — redaction coverage audit. Samples 100 recent
+    /// envelopes from `cortex.events.raw` (or a custom stream) and
+    /// runs `PATTERN_CATALOG_V1` against each payload JSON. Any match
+    /// is reported as an `unredacted-candidate` with field path, byte
+    /// offset, and a truncated preview (first 16 chars plus SHA-256
+    /// hash) so the operator can identify the leak without the full
+    /// secret appearing in logs. Exit `0` when zero candidates are
+    /// found; exit `2` when any match is found.
+    DoctorRedactionCoverage {
+        /// Synap base URL. Defaults to `$CORTEX_SYNAP_URL`,
+        /// `$SYNAP_URL`, then `http://127.0.0.1:17003`.
+        #[arg(long)]
+        synap_url: Option<String>,
+        /// Override the stream to sample. Defaults to
+        /// `cortex.events.raw`.
+        #[arg(long)]
+        stream: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -1936,6 +1959,11 @@ fn run() -> ExitCode {
             dry_run,
             json,
         } => timeline_backfill::timeline_backfill(nexus, dry_run, json),
+        Command::DoctorRedactionCoverage {
+            synap_url,
+            stream,
+            json,
+        } => doctor_redaction_coverage::run(synap_url, stream, json),
     }
 }
 

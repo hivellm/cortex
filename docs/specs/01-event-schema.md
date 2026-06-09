@@ -246,6 +246,31 @@ secret:pattern:bearer_token:tool_call.input.command:offset=42:length=64
 
 Tokens follow the form `secret:<class>:<locator>` and are produced by the redactor (spec 04). Locators reference paths into the *redacted* payload so reviewers can find the redaction site without seeing the secret.
 
+#### PATTERN_CATALOG_V1 (phase15e)
+
+The catalog is additive-only. Patterns are compiled once at startup from `cortex-core::redact::PATTERN_CATALOG_V1`.
+
+| Class | Pattern summary |
+|-------|----------------|
+| `aws_access_key_id` | `(AKIA\|ASIA\|AIDA\|AGPA\|AROA\|AIPA)[0-9A-Z]{16}` |
+| `aws_secret_access_key` | `aws_secret_access_key\s*=\s*[A-Za-z0-9/+=]{40}` |
+| `github_token` | `(ghp\|gho\|ghu\|ghs\|ghr)_[A-Za-z0-9]{36,}` |
+| `slack_token` | `xox[abpsr]-[A-Za-z0-9-]{10,}` |
+| `openai_api_key` | `sk-[A-Za-z0-9]{20,}` |
+| `anthropic_api_key` | `sk-ant-[A-Za-z0-9_-]{32,}` |
+| `google_api_key` | `AIza[0-9A-Za-z_-]{35}` |
+| `stripe_live_key` | `sk_live_[0-9A-Za-z]{20,}` |
+| `bearer_token` | `Bearer\s+[A-Za-z0-9\-_.=]+` |
+| `private_key_pem` | `-----BEGIN ... PRIVATE KEY-----` block |
+| `jwt` | `eyJ[...].eyJ[...].[...]` (three-part base64url) |
+| `generic_env_secret` | `[A-Z0-9_]*(KEY\|TOKEN\|SECRET\|PASSWORD\|PASS\|PWD)[A-Z0-9_]*=\S+` |
+
+Replacement placeholder: `[REDACTED:<class>]`. Matches within the same string field are replaced in catalog order; subsequent patterns re-scan the already-replaced string.
+
+#### Operational verification
+
+`cortex-ops doctor-redaction-coverage` (phase15e §4) samples the 100 most-recent envelopes from `cortex.events.raw` and re-runs `PATTERN_CATALOG_V1` against each payload. Any match is an `unredacted-candidate` — it means the adapter published a secret that the redaction pass missed. Exit 2 from the command triggers a cron alert. The preview field truncates the matched text to 16 chars and appends the first 8 hex digits of SHA-256(full match) for correlation without logging the secret.
+
 ### Examples (round-trip test fixtures)
 
 `cortex-core/tests/fixtures/events/` will hold one sample per `kind` plus a few edge cases (max-size payload, deeply nested agent call, tool call with truncated output, redacted tool call). These fixtures double as documentation and as the basis for adapter conformance tests.
