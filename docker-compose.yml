@@ -294,6 +294,11 @@ services:
       CORTEX_GRAPH_SYNAP_URL: http://synap:15500
       CORTEX_GRAPH_NEXUS_URL: http://nexus:15474
       CORTEX_GRAPH_CYPHER_DIR: /opt/cortex/cypher
+      # phase15c — projection kill-switch. OFF until Nexus can absorb
+      # the semantic-edge projection write volume (nexus#12 sustained-
+      # write stall). With this false the worker does structural
+      # mapping only; flip to true once Nexus is upgraded.
+      CORTEX_GRAPH_PROJECTION_ENABLED: "false"
     restart: unless-stopped
 
   # cortex-api ─ POST /v1/query + dashboard JSON + retention scheduler.

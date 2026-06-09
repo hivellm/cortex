@@ -137,6 +137,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ),
     ("CORTEX_GRAPH_PATCH_BATCH", "/nexus/patch_batch"),
     (
+        "CORTEX_GRAPH_PROJECTION_ENABLED",
+        "/nexus/projection_enabled",
+    ),
+    (
         "CORTEX_GRAPH_SWEEPER_INTERVAL_SECS",
         "/nexus/sweeper_interval_secs",
     ),

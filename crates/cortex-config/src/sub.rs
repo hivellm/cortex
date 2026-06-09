@@ -373,6 +373,15 @@ pub struct NexusConfig {
     /// compile-time default. Env: `CORTEX_GRAPH_SWEEPER_INTERVAL_SECS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sweeper_interval_secs: Option<u64>,
+    /// phase15c — kill-switch for the semantic-edge projection pass
+    /// (worker batch step 3b). Default `true`. Set `false` to run the
+    /// graph worker structural-mapping-only — the projection's
+    /// anchor-node + per-edge writes amplify write volume enough to
+    /// trip Nexus 2.3.2's sustained-write stall (nexus#12), so it must
+    /// be disable-able without redeploying a reverted binary.
+    /// Env: `CORTEX_GRAPH_PROJECTION_ENABLED`.
+    #[serde(default = "default_true")]
+    pub projection_enabled: bool,
 }
 
 fn default_graph_transport() -> String {
@@ -420,6 +429,7 @@ impl Default for NexusConfig {
             consumer_id: None,
             cypher_enabled: false,
             sweeper_interval_secs: None,
+            projection_enabled: true,
         }
     }
 }

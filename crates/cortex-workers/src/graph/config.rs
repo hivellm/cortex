@@ -56,6 +56,11 @@ pub struct GraphConfig {
     /// for its `turn.start`, in seconds, before fabricating an orphan
     /// Turn.
     pub out_of_order_buffer_secs: u64,
+    /// phase15c — when `false`, the worker skips the semantic-edge
+    /// projection pass (batch step 3b) and runs structural-mapping
+    /// only. Kill-switch for the projection's write amplification that
+    /// trips nexus#12. Default `true`.
+    pub projection_enabled: bool,
 }
 
 impl Default for GraphConfig {
@@ -88,6 +93,7 @@ impl GraphConfig {
             nexus_user: t.nexus_user,
             nexus_password: t.nexus_password,
             out_of_order_buffer_secs: t.out_of_order_buffer_secs,
+            projection_enabled: t.projection_enabled,
         }
     }
 }

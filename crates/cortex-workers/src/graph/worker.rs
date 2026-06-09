@@ -915,17 +915,24 @@ impl Worker {
 
         // 3b. Phase15b §3.1 — semantic-edge projection pass. Runs the
         // 12 registered extractors (CALLS / IMPORTS / ... / RELATES_TO)
-        // over every ready event and appends the resulting edge-only
-        // patch to the batch. The coalescer merges it with the
-        // structural patch from step 3 under the `(from, to, kind)`
-        // unique constraint, so re-projecting the same envelope is a
-        // no-op. One `ExtractCtx` per batch pins a single `now_ms`.
-        let extract_ctx =
-            super::extractors::ExtractCtx::new(super::projection::PROJECTION_ANALYZER_VERSION);
-        for event in &ready.events {
-            let semantic_patch = super::projection::project_envelope(event, &extract_ctx);
-            if !semantic_patch.edges.is_empty() {
-                patches.push(semantic_patch);
+        // over every ready event and appends the resulting patch (edges
+        // + phase15c §1.3 endpoint anchors) to the batch. The coalescer
+        // merges it with the structural patch from step 3. One
+        // `ExtractCtx` per batch pins a single `now_ms`.
+        //
+        // phase15c — gated by `projection_enabled`. The anchor-node +
+        // per-edge writes amplify write volume enough to trip Nexus
+        // 2.3.2's sustained-write stall (nexus#12); operators run the
+        // worker structural-only (`CORTEX_GRAPH_PROJECTION_ENABLED=false`)
+        // until Nexus can absorb the projection load.
+        if self.config.projection_enabled {
+            let extract_ctx =
+                super::extractors::ExtractCtx::new(super::projection::PROJECTION_ANALYZER_VERSION);
+            for event in &ready.events {
+                let semantic_patch = super::projection::project_envelope(event, &extract_ctx);
+                if !semantic_patch.edges.is_empty() {
+                    patches.push(semantic_patch);
+                }
             }
         }
 
