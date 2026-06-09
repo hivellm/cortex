@@ -32,8 +32,9 @@ use super::extractors::{
     about, answered_by, calls, cites, contradicts, defines, emitted_by, imports, mentions_file,
     relates_to, returns, supersedes, Edge, ExtractCtx,
 };
-use super::patch::GraphPatch;
+use super::patch::{GraphPatch, NodeOp};
 use crate::embedder::EnrichedEvent;
+use std::collections::BTreeSet;
 
 /// Stable analyzer-version label the live worker stamps on every
 /// projection edge (via [`ExtractCtx`]). Mirrors
@@ -69,14 +70,47 @@ const EXTRACTORS: &[(&str, ExtractorFn)] = &[
 /// Returns an empty patch when no extractor matches the
 /// envelope's kind / payload.
 ///
-/// The function does NOT touch [`super::mapper`]'s identity-only
-/// patch path; the writer chain merges both streams via the
-/// existing coalescer.
+/// The patch carries the §2 semantic edges plus one bare **endpoint
+/// anchor node** per distinct edge endpoint (phase15c §1.3). The
+/// writer renders edges as `MATCH (a),(b) MERGE (a)-[r]->(b)` and
+/// silently drops any edge whose endpoints don't exist, so an edge to
+/// a label the mapper never mints — `Tool[tool_name]` / `Model[model]`
+/// for `EMITTED_BY`, or a referenced `Decision` / `Evidence` not in
+/// this batch — would vanish. Emitting the anchor node guarantees the
+/// MATCH succeeds.
+///
+/// Anchors are intentionally **empty-props** [`NodeOp::with_identity`]
+/// (idempotent `ConflictPolicy::Match`): the coalescer unions props
+/// via `extend`, so an empty anchor never clobbers a richer node the
+/// mapper or static analyzer stamped for the same `(label,
+/// natural_key)` — it only fills the gap when nothing else created the
+/// endpoint. The function still does NOT reach into
+/// [`super::mapper`]'s path; the writer chain merges both streams via
+/// the existing coalescer.
 pub fn project_envelope(env: &EnrichedEvent, ctx: &ExtractCtx) -> GraphPatch {
     let mut patch = GraphPatch::empty();
     for (_name, extractor) in EXTRACTORS {
         let edges = extractor(env, ctx);
         patch.edges.extend(edges);
+    }
+    // §1.3 — emit an endpoint anchor for every distinct (label, key)
+    // an edge references, in first-seen order so re-projection stays
+    // byte-identical (the §3.2 idempotency invariant).
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    let endpoints: Vec<(String, String)> = patch
+        .edges
+        .iter()
+        .flat_map(|e| {
+            [
+                (e.from_label.clone(), e.from_key.clone()),
+                (e.to_label.clone(), e.to_key.clone()),
+            ]
+        })
+        .collect();
+    for (label, key) in endpoints {
+        if seen.insert((label.clone(), key.clone())) {
+            patch.nodes.push(NodeOp::with_identity(label, key));
+        }
     }
     patch
 }
@@ -229,17 +263,71 @@ mod tests {
     }
 
     #[test]
-    fn project_envelope_never_touches_nodes_only_edges() {
-        // The §2 extractors emit edges only; the mapper handles
-        // nodes. Pin this so a future regression that starts
-        // pushing nodes into the projection pipeline fails the
-        // unit test rather than silently corrupting the patch
-        // contract.
+    fn project_envelope_emits_an_empty_anchor_node_for_every_edge_endpoint() {
+        // §1.3 — every edge endpoint must have a matching node in the
+        // patch so the writer's MATCH-MERGE never drops the edge.
         let mut env = fixture_envelope("01HXTURN02", Kind::Turn);
         env.classifier.topics = vec!["x".into()];
         env.redacted_payload = serde_json::json!({"user_message": "x", "tool_call_event_ids": []});
         let patch = project_envelope(&env, &ctx());
-        assert!(patch.nodes.is_empty(), "projection MUST not emit nodes");
         assert!(!patch.edges.is_empty(), "projection MUST emit edges");
+        assert!(
+            !patch.nodes.is_empty(),
+            "projection MUST emit endpoint anchor nodes"
+        );
+        let node_keys: std::collections::BTreeSet<(&str, &str)> = patch
+            .nodes
+            .iter()
+            .map(|n| (n.label.as_str(), n.natural_key.as_str()))
+            .collect();
+        for e in &patch.edges {
+            assert!(
+                node_keys.contains(&(e.from_label.as_str(), e.from_key.as_str())),
+                "missing anchor for {} from {}:{}",
+                e.edge_type,
+                e.from_label,
+                e.from_key
+            );
+            assert!(
+                node_keys.contains(&(e.to_label.as_str(), e.to_key.as_str())),
+                "missing anchor for {} to {}:{}",
+                e.edge_type,
+                e.to_label,
+                e.to_key
+            );
+        }
+        // Anchors carry no props so the coalescer never clobbers a
+        // richer mapper/static node for the same (label, key).
+        assert!(
+            patch.nodes.iter().all(|n| n.props.is_empty()),
+            "anchor nodes MUST be empty-props"
+        );
+    }
+
+    #[test]
+    fn project_envelope_anchor_nodes_are_deduped() {
+        // EMITTED_BY ToolCall->Tool: 2 endpoints, 2 distinct anchors,
+        // no duplicates even though each edge contributes a `from`.
+        let env = {
+            let mut e = fixture_envelope("01HXTC10", Kind::ToolCall);
+            e.redacted_payload =
+                serde_json::json!({"tool_name": "Bash", "input": {}, "outcome": "success"});
+            e
+        };
+        let patch = project_envelope(&env, &ctx());
+        let unique: std::collections::BTreeSet<(&str, &str)> = patch
+            .nodes
+            .iter()
+            .map(|n| (n.label.as_str(), n.natural_key.as_str()))
+            .collect();
+        assert_eq!(
+            unique.len(),
+            patch.nodes.len(),
+            "anchor nodes must be unique per (label, key)"
+        );
+        assert!(
+            unique.contains(&("Tool", "Bash")),
+            "Tool[Bash] anchor present"
+        );
     }
 }
