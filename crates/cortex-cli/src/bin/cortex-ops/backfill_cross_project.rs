@@ -79,10 +79,7 @@ pub(super) fn backfill_cross_project(
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .and_then(|stem| {
-                    let numeric: String = stem
-                        .chars()
-                        .take_while(|c| c.is_ascii_digit())
-                        .collect();
+                    let numeric: String = stem.chars().take_while(|c| c.is_ascii_digit()).collect();
                     numeric.parse::<u32>().ok()
                 })
                 .map(|n| format!("ADR-{n:03}"));

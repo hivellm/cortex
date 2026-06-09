@@ -130,10 +130,7 @@ pub(super) fn branch_show(
     }
     let row = &rows[0];
     if json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(row).unwrap_or_default()
-        );
+        println!("{}", serde_json::to_string_pretty(row).unwrap_or_default());
     } else {
         println!("cortex-ops branch show @ {nexus_url}\n  id={composite}");
         println!("{}", serde_json::to_string_pretty(row).unwrap_or_default());
@@ -166,11 +163,7 @@ pub(super) fn branch_create(
     };
 
     let now_rfc3339 = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let fork_valid_time = match valid_time
-        .as_deref()
-        .map(parse_rfc3339_or_date)
-        .transpose()
-    {
+    let fork_valid_time = match valid_time.as_deref().map(parse_rfc3339_or_date).transpose() {
         Ok(v) => v.flatten(),
         Err(e) => {
             eprintln!("ERROR: --from @<date>: {e}");
@@ -280,18 +273,18 @@ pub(super) fn branch_merge(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let parent_branch_id = match runtime
-        .block_on(async { client.sdk().execute_cypher(&lookup_cypher, None).await })
-    {
-        Ok(out) => out
-            .rows
-            .first()
-            .and_then(|row| row.get("parent_branch_id").and_then(|v| v.as_str()).map(String::from)),
-        Err(e) => {
-            eprintln!("ERROR: nexus lookup: {e}");
-            return ExitCode::from(2);
-        }
-    };
+    let parent_branch_id =
+        match runtime.block_on(async { client.sdk().execute_cypher(&lookup_cypher, None).await }) {
+            Ok(out) => out.rows.first().and_then(|row| {
+                row.get("parent_branch_id")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            }),
+            Err(e) => {
+                eprintln!("ERROR: nexus lookup: {e}");
+                return ExitCode::from(2);
+            }
+        };
     let Some(parent_id) = parent_branch_id else {
         eprintln!(
             "ERROR: branch {child_id:?} either does not exist or carries no parent_branch_id (the `main` branch cannot be merged)"
@@ -358,7 +351,9 @@ pub(super) fn branch_abandon(
         return ExitCode::from(2);
     }
     if reason.trim().is_empty() {
-        eprintln!("ERROR: --reason must be non-empty (ADR-022: abandoned branches always carry a reason)");
+        eprintln!(
+            "ERROR: --reason must be non-empty (ADR-022: abandoned branches always carry a reason)"
+        );
         return ExitCode::from(2);
     }
     let (client, nexus_url) = match connect_nexus(nexus) {
@@ -471,7 +466,13 @@ fn parse_rfc3339_or_date(raw: &str) -> Result<Option<String>, String> {
         s.to_string()
     };
     DateTime::parse_from_rfc3339(&normalized)
-        .map(|dt| Some(dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string()))
+        .map(|dt| {
+            Some(
+                dt.with_timezone(&Utc)
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string(),
+            )
+        })
         .map_err(|e| format!("parse {normalized:?}: {e}"))
 }
 

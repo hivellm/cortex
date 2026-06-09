@@ -93,7 +93,10 @@ async fn main() -> Result<()> {
                 }
             }
         });
-        tracing::info!(interval_secs = ensure_secs, "periodic schema re-ensure armed");
+        tracing::info!(
+            interval_secs = ensure_secs,
+            "periodic schema re-ensure armed"
+        );
     }
 
     let metrics = Arc::new(Metrics::new());

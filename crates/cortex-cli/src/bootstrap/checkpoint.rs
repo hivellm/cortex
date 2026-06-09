@@ -182,7 +182,10 @@ mod tests {
         p.events_emitted = 100;
         p.record_emit(t0);
         assert_eq!(p.last_emit_at.as_deref(), Some(t0.to_rfc3339()).as_deref());
-        assert_eq!(p.rate_sample_at.as_deref(), Some(t0.to_rfc3339()).as_deref());
+        assert_eq!(
+            p.rate_sample_at.as_deref(),
+            Some(t0.to_rfc3339()).as_deref()
+        );
         assert_eq!(p.rate_sample_events, 100);
 
         // 30s later (< 60s window): last_emit advances, sample does NOT roll.
@@ -196,8 +199,14 @@ mod tests {
         let t2 = t0 + Duration::seconds(70);
         p.events_emitted = 500;
         p.record_emit(t2);
-        assert_eq!(p.rate_sample_at.as_deref(), Some(t2.to_rfc3339()).as_deref());
-        assert_eq!(p.rate_sample_events, 500, "sample rolls past the 60s window");
+        assert_eq!(
+            p.rate_sample_at.as_deref(),
+            Some(t2.to_rfc3339()).as_deref()
+        );
+        assert_eq!(
+            p.rate_sample_events, 500,
+            "sample rolls past the 60s window"
+        );
     }
 
     #[test]

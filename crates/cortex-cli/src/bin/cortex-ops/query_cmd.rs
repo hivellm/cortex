@@ -86,7 +86,10 @@ pub(super) fn query(
         if !status.is_success() {
             return Err(format!(
                 "{status}: {}",
-                String::from_utf8_lossy(&bytes).chars().take(256).collect::<String>()
+                String::from_utf8_lossy(&bytes)
+                    .chars()
+                    .take(256)
+                    .collect::<String>()
             ));
         }
         serde_json::from_slice::<Value>(&bytes).map_err(|e| format!("parse response: {e}"))
@@ -129,10 +132,8 @@ pub(super) fn history(
             return ExitCode::from(2);
         }
     };
-    let mut clauses: Vec<String> = vec![format!(
-        "t.entity_id = '{}'",
-        sanitize_literal(&entity_id)
-    )];
+    let mut clauses: Vec<String> =
+        vec![format!("t.entity_id = '{}'", sanitize_literal(&entity_id))];
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));
     }
@@ -197,11 +198,7 @@ pub(super) fn history(
 }
 
 /// Phase18 §4.3 — `cortex-ops supersession <entity-id>`.
-pub(super) fn supersession(
-    entity_id: String,
-    nexus: Option<String>,
-    json_out: bool,
-) -> ExitCode {
+pub(super) fn supersession(entity_id: String, nexus: Option<String>, json_out: bool) -> ExitCode {
     let (client, nexus_url) = match connect_nexus(nexus) {
         Ok(c) => c,
         Err(code) => return code,
@@ -247,9 +244,7 @@ pub(super) fn supersession(
         return ExitCode::SUCCESS;
     }
     let row = &rows[0];
-    println!(
-        "cortex-ops supersession @ {nexus_url}\n  entity_id={entity_id}",
-    );
+    println!("cortex-ops supersession @ {nexus_url}\n  entity_id={entity_id}",);
     let pred = row.get("predecessors").cloned().unwrap_or(Value::Null);
     let succ = row.get("successors").cloned().unwrap_or(Value::Null);
     println!(
@@ -379,10 +374,7 @@ mod tests {
 
     #[test]
     fn resolve_api_url_prefers_explicit_arg() {
-        assert_eq!(
-            resolve_api_url(Some("http://x".into())),
-            "http://x"
-        );
+        assert_eq!(resolve_api_url(Some("http://x".into())), "http://x");
     }
 
     #[test]
@@ -401,7 +393,9 @@ mod tests {
 
     #[test]
     fn parse_rfc3339_to_unix_round_trips() {
-        let unix = parse_rfc3339_to_unix("2026-04-01T00:00:00Z").unwrap().unwrap();
+        let unix = parse_rfc3339_to_unix("2026-04-01T00:00:00Z")
+            .unwrap()
+            .unwrap();
         assert_eq!(format_unix_day(unix), "2026-04-01");
     }
 

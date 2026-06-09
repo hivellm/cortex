@@ -74,8 +74,7 @@ fn resolve_api_url(opt: Option<String>) -> String {
 }
 
 fn fetch_metrics(url: &str) -> Result<String, String> {
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| format!("build tokio runtime: {e}"))?;
+    let rt = tokio::runtime::Runtime::new().map_err(|e| format!("build tokio runtime: {e}"))?;
     rt.block_on(async {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(15))
@@ -87,10 +86,7 @@ fn fetch_metrics(url: &str) -> Result<String, String> {
             .await
             .map_err(|e| format!("connect: {e}"))?;
         let status = resp.status();
-        let text = resp
-            .text()
-            .await
-            .map_err(|e| format!("read body: {e}"))?;
+        let text = resp.text().await.map_err(|e| format!("read body: {e}"))?;
         if !status.is_success() {
             return Err(format!(
                 "HTTP {status}: {}",
@@ -138,17 +134,11 @@ pub(super) fn parse_temporal_metrics(body: &str) -> TemporalDigestData {
             parse_labelled(line, "cortex_branch_queries_total", "kind")
         {
             data.branch.insert(label_val, v);
-        } else if let Some(v) =
-            parse_scalar(line, "cortex_cross_project_propagation_runs_total")
-        {
+        } else if let Some(v) = parse_scalar(line, "cortex_cross_project_propagation_runs_total") {
             data.cross_runs = v;
-        } else if let Some(v) =
-            parse_scalar(line, "cortex_cross_project_discovered_total")
-        {
+        } else if let Some(v) = parse_scalar(line, "cortex_cross_project_discovered_total") {
             data.cross_discovered = v;
-        } else if let Some(v) =
-            parse_scalar(line, "cortex_cross_project_propagated_total")
-        {
+        } else if let Some(v) = parse_scalar(line, "cortex_cross_project_propagated_total") {
             data.cross_propagated = v;
         }
         // All other lines (loader metrics, etc.) fall through and are ignored.
@@ -313,10 +303,7 @@ fn print_markdown(data: &TemporalDigestData) {
     if data.branch.is_empty() {
         println!("| _(none)_ | 0 | — |");
     }
-    println!(
-        "\nMain-branch share: {:.1}%",
-        r.branch_main_share * 100.0
-    );
+    println!("\nMain-branch share: {:.1}%", r.branch_main_share * 100.0);
     println!();
 
     // -- Cross-project ---------------------------------------------------------

@@ -86,10 +86,7 @@ pub(super) fn timeline(
     // 2.2.0's parameter substitution path is bug-affected
     // (upstream issue #3) — every other `cortex-ops` handler
     // already inlines its filters for the same reason.
-    let mut clauses: Vec<String> = vec![format!(
-        "t.project_id = '{}'",
-        sanitize_literal(&project)
-    )];
+    let mut clauses: Vec<String> = vec![format!("t.project_id = '{}'", sanitize_literal(&project))];
     clauses.push(format!("t.branch_id = '{}'", sanitize_literal(&branch_id)));
     if let Some(k) = kind.as_deref().filter(|s| !s.is_empty()) {
         clauses.push(format!("t.kind = '{}'", sanitize_literal(k)));
@@ -123,9 +120,7 @@ pub(super) fn timeline(
         }
     };
 
-    let rows = match runtime.block_on(async {
-        client.sdk().execute_cypher(&cypher, None).await
-    }) {
+    let rows = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus cypher: {e}");

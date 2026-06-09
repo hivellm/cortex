@@ -41,11 +41,7 @@ const SOURCE_LABELS: &[(&str, &str)] = &[
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /// Entry point for `cortex-ops timeline-backfill`.
-pub(super) fn timeline_backfill(
-    nexus: Option<String>,
-    dry_run: bool,
-    json: bool,
-) -> ExitCode {
+pub(super) fn timeline_backfill(nexus: Option<String>, dry_run: bool, json: bool) -> ExitCode {
     let nexus_url = resolve_nexus_url(nexus.clone());
 
     // Connect + runtime (skipped in dry-run mode — we still iterate
@@ -81,16 +77,15 @@ pub(super) fn timeline_backfill(
              LIMIT 5000"
         );
 
-        let rows = match runtime
-            .block_on(async { client.sdk().execute_cypher(&cypher, None).await })
-        {
-            Ok(out) => out.rows,
-            Err(e) => {
-                eprintln!("WARN: timeline-backfill: query {label}: {e}");
-                errors += 1;
-                continue;
-            }
-        };
+        let rows =
+            match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+                Ok(out) => out.rows,
+                Err(e) => {
+                    eprintln!("WARN: timeline-backfill: query {label}: {e}");
+                    errors += 1;
+                    continue;
+                }
+            };
 
         for row in &rows {
             // Rows are positional arrays: [0]=id [1]=title [2]=project_id
@@ -358,10 +353,8 @@ pub(super) fn timeline_backfill(
         if !by_project.is_empty() {
             let mut proj_pairs: Vec<_> = by_project.iter().collect();
             proj_pairs.sort_by_key(|(k, _)| k.as_str());
-            let proj_line: Vec<String> = proj_pairs
-                .iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect();
+            let proj_line: Vec<String> =
+                proj_pairs.iter().map(|(k, v)| format!("{k}={v}")).collect();
             println!("  by_project: {}", proj_line.join("  "));
         }
     }
