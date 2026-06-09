@@ -290,6 +290,40 @@ pub(super) fn graph_seek_head(
 /// have ≥`floor` of total edges (default 0.01 = 1%). Exit codes:
 /// `0` all kinds present + above floor, `1` any kind missing OR
 /// below floor, `2` Nexus unreachable.
+/// Parse a `RETURN type(r) AS kind, count(r) AS c` Nexus result into a
+/// per-kind count map. Nexus returns each row as a POSITIONAL array
+/// aligned to `columns` (not an object), so resolve `kind` / `c` by
+/// column index — an object lookup (`row.get("kind")`) silently reads
+/// nothing and reports every kind as 0 (the bug this replaces). Every
+/// entry in `kinds` is seeded to 0 so absent kinds still surface.
+fn kind_counts_from_result(
+    columns: &[String],
+    rows: &[serde_json::Value],
+    kinds: &[&str],
+) -> std::collections::BTreeMap<String, u64> {
+    let kind_idx = columns.iter().position(|c| c == "kind");
+    let count_idx = columns.iter().position(|c| c == "c");
+    let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
+    for k in kinds {
+        counts.insert((*k).to_string(), 0);
+    }
+    for row in rows {
+        let Some(arr) = row.as_array() else { continue };
+        let k = kind_idx
+            .and_then(|i| arr.get(i))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let c = count_idx
+            .and_then(|i| arr.get(i))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if !k.is_empty() {
+            counts.insert(k.to_string(), c);
+        }
+    }
+    counts
+}
+
 /// Phase15b §4.2 — pure threshold policy. Given per-kind edge
 /// counts and the minimum acceptable share (`floor`, e.g. 0.01 =
 /// 1%), returns `(missing, below_floor)`: kinds with zero edges and
@@ -364,26 +398,15 @@ pub(super) fn doctor_graph_coverage(nexus: Option<String>, floor: f64, json: boo
         "MATCH ()-[r]->() WHERE type(r) IN [{in_list}] RETURN type(r) AS kind, count(r) AS c"
     );
 
-    let rows = runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await });
-    let rows = match rows {
-        Ok(out) => out.rows,
+    let out = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+        Ok(out) => out,
         Err(e) => {
             eprintln!("ERROR: Nexus query: {e}");
             return ExitCode::from(2);
         }
     };
 
-    let mut counts: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
-    for k in &kinds {
-        counts.insert(k.to_string(), 0);
-    }
-    for row in &rows {
-        let k = row.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let c = row.get("c").and_then(|v| v.as_u64()).unwrap_or(0);
-        if !k.is_empty() {
-            counts.insert(k.to_string(), c);
-        }
-    }
+    let counts = kind_counts_from_result(&out.columns, &out.rows, &kinds);
     let total: u64 = counts.values().sum();
     let (missing, warnings) = classify_coverage(&counts, floor);
 
@@ -721,6 +744,30 @@ mod tests {
         let (missing, below) = classify_coverage(&c, 0.01);
         assert_eq!(missing.len(), 2);
         assert!(below.is_empty(), "no share computed when total == 0");
+    }
+
+    #[test]
+    fn kind_counts_parses_positional_rows_not_object_keys() {
+        use serde_json::json;
+        // Nexus shape: columns + positional-array rows.
+        let columns = vec!["kind".to_string(), "c".to_string()];
+        let rows = vec![json!(["EMITTED_BY", 551]), json!(["ABOUT", 28])];
+        let kinds = ["EMITTED_BY", "ABOUT", "CALLS"];
+        let counts = super::kind_counts_from_result(&columns, &rows, &kinds);
+        assert_eq!(counts.get("EMITTED_BY"), Some(&551));
+        assert_eq!(counts.get("ABOUT"), Some(&28));
+        // Absent kind is seeded to 0, not dropped.
+        assert_eq!(counts.get("CALLS"), Some(&0));
+    }
+
+    #[test]
+    fn kind_counts_tolerates_swapped_column_order() {
+        use serde_json::json;
+        // count first, kind second — index resolution must follow columns.
+        let columns = vec!["c".to_string(), "kind".to_string()];
+        let rows = vec![json!([42, "CITES"])];
+        let counts = super::kind_counts_from_result(&columns, &rows, &["CITES"]);
+        assert_eq!(counts.get("CITES"), Some(&42));
     }
 
     #[test]
