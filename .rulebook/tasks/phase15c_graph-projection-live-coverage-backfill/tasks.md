@@ -11,6 +11,6 @@
 - [ ] ⏸ 3.1 `cortex-ops doctor-graph-coverage` reports all 12 kinds present and above the §4.2 floor; capture the JSON output as the acceptance artifact. — Blocked on §2 (nexus#12). Also a noted distribution tension: EMITTED_BY fires on every tool call so it dominates (~29k of ~30k projected), which structurally pushes rare kinds (CONTRADICTS / RELATES_TO) below the 1% floor — "all 12 above floor" may need a per-kind floor or a presence-only bar rather than a global 1% share. Resolve when the projection can run live.
 
 ## 4. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 4.1 Update or create documentation covering the implementation
-- [ ] 4.2 Write tests covering the new behavior
-- [ ] 4.3 Run tests and confirm they pass
+- [x] 4.1 Update or create documentation covering the implementation. — `docs/specs/07-graph-writer.md` § Semantic-edge projection extended with Endpoint anchors (§1.3), the projection kill-switch, and `graph backfill --apply`; `CHANGELOG.md` [Unreleased] Added entry. (Covers §1.1–§1.3 + the kill-switch; §2/§3 remain blocked on nexus#12.)
+- [x] 4.2 Write tests covering the new behavior. — 8 projection units (idempotency + every-endpoint-anchored + dedup), 5 `classify_coverage` policy units, 3 `render_edge_merge` units (propless/inline-stable/deterministic), `NexusConfig` round-trip (covers `projection_enabled`).
+- [x] 4.3 Run tests and confirm they pass. — `cargo test -p cortex-workers projection::` (8) + `nexus_client render_edge` (3) + `cortex-cli graph_cmd` (5) + `cortex-config nexus round-trip` green; clippy `-D warnings` clean on the changed crates. (Pre-existing ADR-016 audit failure for `CORTEX_API_URL` / `CORTEX_GRAPH_SCHEMA_ENSURE_SECS` is unrelated to this task.)
