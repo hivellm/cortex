@@ -21,12 +21,14 @@
 //! [`super::mapper::map_event_to_patch`] keeps emitting the
 //! identity-only patches (`HAS_TURN` / `HAS_TOOL_CALL` /
 //! `TOUCHED` / `IN_REPO` / `REMEMBERS`). The projection pipeline
-//! returns ONLY the §2 semantic edges so the two streams compose
-//! at the writer (the patch coalescer already merges multi-source
-//! patches without conflict). Future work can fold the mapper's
-//! identity path into the same dispatch table once every
-//! identity edge has an extractor counterpart; not in this
-//! phase.
+//! returns the §2 semantic edges plus one empty-props endpoint
+//! anchor node per distinct edge endpoint (phase15c §1.3) so edges
+//! to labels the mapper never mints still MATCH at the writer. The
+//! two streams compose at the writer — the patch coalescer merges
+//! multi-source patches without conflict and an empty anchor never
+//! clobbers a richer node. Future work can fold the mapper's
+//! identity path into the same dispatch table once every identity
+//! edge has an extractor counterpart; not in this phase.
 
 use super::extractors::{
     about, answered_by, calls, cites, contradicts, defines, emitted_by, imports, mentions_file,
