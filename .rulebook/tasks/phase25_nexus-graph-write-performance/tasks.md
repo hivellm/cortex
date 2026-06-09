@@ -36,3 +36,8 @@
 - BLOCKED on Nexus (issues filed): #11 indexes lost on restart (mitigated Cortex-side), #12 stall under sustained write (blocks full backfill), #13 UNWIND-write silent-drop (blocks §4.2 batched writes).
 - §4 rebuild: clean indexed graph live; full historical replay pending #12/#13.
 - §4.2 edge writes + full historical backfill: SET ASIDE pending nexus#14 (edge UNWIND). Operator will not upgrade Nexus now. Cortex side done: node-UNWIND batched, worker indexes on startup, forget label-scoped, resilient. Resume the backfill once nexus#14 lands.
+
+## 7. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 7.1 Update or create documentation covering the implementation
+- [ ] 7.2 Write tests covering the new behavior
+- [ ] 7.3 Run tests and confirm they pass

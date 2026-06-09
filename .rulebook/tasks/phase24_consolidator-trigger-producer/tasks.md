@@ -21,3 +21,8 @@
 - [ ] 5.1 Update docs/specs/27-consolidation.md with the live producer wiring
 - [ ] 5.2 Write tests covering the trigger producer (one per grain condition)
 - [ ] 5.3 Run tests and confirm they pass
+
+## 6. Tail (mandatory — enforced by rulebook v5.3.0)
+- [ ] 6.1 Update or create documentation covering the implementation
+- [ ] 6.2 Write tests covering the new behavior
+- [ ] 6.3 Run tests and confirm they pass
