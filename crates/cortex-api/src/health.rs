@@ -645,15 +645,22 @@ pub(crate) fn build_divergence_pairs(
     let adapter = by_name.get("cortex-adapter");
     let ingestion = by_name.get("cortex-ingestion");
 
-    // Pair 1 — IPC parsed vs envelopes built (per kind we don't pivot;
-    // the aggregate suffices because they should match envelope
-    // production rate).
+    // Pair 1 — capture frames parsed vs envelopes built.
+    // PreToolUse and UserPromptSubmit fire on every tool invocation but
+    // produce no envelope; including them makes the upstream counter grow
+    // ~2× faster than envelopes_built, generating a permanent false-critical.
     if let Some(a) = adapter {
-        let parsed_total = sum_u64_map(a.extras.get("frames_parsed_total"));
+        const NON_CAPTURE_HOOKS: &[&str] = &["PreToolUse", "UserPromptSubmit"];
+        let frames_by_hook = parse_u64_map(a.extras.get("frames_parsed_total"));
+        let capture_frames: u64 = frames_by_hook
+            .iter()
+            .filter(|(hook, _)| !NON_CAPTURE_HOOKS.contains(&hook.as_str()))
+            .map(|(_, n)| *n)
+            .sum();
         let built_total = sum_u64_map(a.extras.get("envelopes_built_total"));
         out.push((
             "adapter.frames_parsed -> adapter.envelopes_built".to_string(),
-            parsed_total,
+            capture_frames,
             built_total,
         ));
         // Pair 2 — built vs publish_ok (queue drops + WAL spills).

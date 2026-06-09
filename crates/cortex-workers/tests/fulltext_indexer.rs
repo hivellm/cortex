@@ -135,7 +135,10 @@ async fn index_batch_groups_events_per_index() {
 }
 
 #[tokio::test]
-async fn empty_payload_event_is_counted_as_skipped() {
+async fn empty_payload_event_uses_minimal_fallback_and_is_upserted() {
+    // Empty payloads now use the minimal fallback ("artifact <event_id>")
+    // instead of being skipped — fixes the 85% fulltext skip rate (bug #6).
+    // skipped_empty should stay 0; documents_upserted should be 1.
     let (_client, indexer, metrics) = build_indexer();
     let events = vec![event(
         "evt-empty",
@@ -143,13 +146,13 @@ async fn empty_payload_event_is_counted_as_skipped() {
         json!({ "artifact_type": "file" }),
     )];
     let report = indexer.index_batch(&events).await.expect("index_batch");
-    assert_eq!(report.documents_upserted, 0);
-    assert_eq!(report.documents_skipped, 1);
+    assert_eq!(report.documents_upserted, 1);
+    assert_eq!(report.documents_skipped, 0);
     assert_eq!(
         metrics
             .skipped_empty
             .load(std::sync::atomic::Ordering::Relaxed),
-        1
+        0
     );
 }
 

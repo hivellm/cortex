@@ -572,6 +572,20 @@ impl SilentDropWatcher {
         let rows = compute_divergence_rows(self.aggregator.clone()).await;
         for (row, severity) in self.step(&rows) {
             let now_ms = chrono::Utc::now().timestamp_millis();
+
+            // Structured WARN — replaces the former synthetic law_violation POST.
+            // Posting to ingestion injected fabricated law_violation events that
+            // polluted the archive and divergence counters.
+            tracing::warn!(
+                pair = %row.pair,
+                upstream = row.upstream,
+                downstream = row.downstream,
+                delta = row.delta,
+                delta_growth = row.delta_growth,
+                severity = ?severity,
+                "silent-drop: divergence transition detected"
+            );
+
             // 1. Lane insert — Live Timeline / Violations dashboard
             //    surfaces the alert in <1s without waiting for the
             //    archive_loader refresh.
@@ -579,14 +593,12 @@ impl SilentDropWatcher {
             for index in ["cortex-code", "cortex-docs", "cortex-decisions"] {
                 lane.seed(index, vec![hit.clone()]);
             }
-            // 2. Envelope POST to ingestion so the alert lands in
-            //    the durable archive too.
-            let envelope = build_alert_envelope(&row, severity);
-            post_envelope_to_ingestion(client, &self.cfg.ingestion_url, &envelope).await;
-            // 3. Optional webhook + handoff escalation.
+            // 2. Optional webhook escalation (envelope format kept for interop).
             if let Some(url) = self.cfg.webhook_url.clone() {
+                let envelope = build_alert_envelope(&row, severity);
                 post_to_webhook(client, &url, &envelope).await;
             }
+            // 3. Optional handoff file annotation.
             if self.cfg.write_to_handoff && severity == AlertSeverity::Critical {
                 let workspace =
                     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));

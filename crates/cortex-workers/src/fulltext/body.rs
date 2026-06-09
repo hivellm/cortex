@@ -24,8 +24,11 @@ pub enum BodySource {
     Summary,
     /// Took the redacted raw text directly.
     Raw,
-    /// Both summary and raw produced empty strings — caller drops the
-    /// event with a counter increment per spec 08 §Failure modes.
+    /// Took the minimal fallback string (kind + event_id) because all
+    /// other extraction paths produced empty text.
+    Fallback,
+    /// All extraction paths (summary, raw, fallback) produced empty
+    /// strings — caller drops the event per spec 08 §Failure modes.
     Empty,
 }
 
@@ -46,7 +49,14 @@ pub struct SelectedBody {
 /// `raw` is the redacted payload text. `summary` is the classifier's
 /// optional short summary. `max_body_bytes` is the per-document size
 /// cap (default 10 MB, configurable on bootstrap restores).
-pub fn select_body(raw: &str, summary: Option<&str>, max_body_bytes: usize) -> SelectedBody {
+/// `minimal` is the last-resort fallback string (e.g. `"tool_call <event_id>"`);
+/// pass `""` to keep the original strict-empty behaviour.
+pub fn select_body(
+    raw: &str,
+    summary: Option<&str>,
+    max_body_bytes: usize,
+    minimal: &str,
+) -> SelectedBody {
     let raw_len = raw.len();
     let oversize = raw_len > OVERSIZE_BODY_BYTES;
 
@@ -57,6 +67,8 @@ pub fn select_body(raw: &str, summary: Option<&str>, max_body_bytes: usize) -> S
         }
     } else if !raw.trim().is_empty() {
         (raw.to_string(), BodySource::Raw)
+    } else if !minimal.trim().is_empty() {
+        (minimal.to_string(), BodySource::Fallback)
     } else {
         return SelectedBody {
             body: String::new(),
@@ -96,7 +108,7 @@ mod tests {
 
     #[test]
     fn small_raw_uses_raw_directly() {
-        let out = select_body("hello world", None, 1024);
+        let out = select_body("hello world", None, 1024, "");
         assert_eq!(out.body, "hello world");
         assert_eq!(out.source, BodySource::Raw);
         assert!(!out.truncated);
@@ -105,7 +117,7 @@ mod tests {
     #[test]
     fn oversize_with_summary_uses_summary() {
         let raw = "x".repeat(OVERSIZE_BODY_BYTES + 1);
-        let out = select_body(&raw, Some("brief summary"), 1024);
+        let out = select_body(&raw, Some("brief summary"), 1024, "");
         assert_eq!(out.body, "brief summary");
         assert_eq!(out.source, BodySource::Summary);
         assert!(!out.truncated);
@@ -114,28 +126,28 @@ mod tests {
     #[test]
     fn oversize_without_summary_falls_back_to_raw() {
         let raw = "x".repeat(OVERSIZE_BODY_BYTES + 1);
-        let out = select_body(&raw, None, 1024 * 1024);
+        let out = select_body(&raw, None, 1024 * 1024, "");
         assert_eq!(out.source, BodySource::Raw);
         assert_eq!(out.body.len(), OVERSIZE_BODY_BYTES + 1);
     }
 
     #[test]
     fn empty_raw_returns_empty_branch() {
-        let out = select_body("", None, 1024);
+        let out = select_body("", None, 1024, "");
         assert_eq!(out.source, BodySource::Empty);
         assert!(out.body.is_empty());
     }
 
     #[test]
     fn whitespace_only_raw_returns_empty_branch() {
-        let out = select_body("   \n\t", None, 1024);
+        let out = select_body("   \n\t", None, 1024, "");
         assert_eq!(out.source, BodySource::Empty);
     }
 
     #[test]
     fn body_is_truncated_to_max_bytes() {
         let raw = "y".repeat(50);
-        let out = select_body(&raw, None, 10);
+        let out = select_body(&raw, None, 10, "");
         assert_eq!(out.body.len(), 10);
         assert!(out.truncated);
     }
@@ -148,5 +160,20 @@ mod tests {
         let (body, truncated) = truncate_to(raw.to_string(), 5);
         assert!(truncated);
         assert_eq!(body, "éé");
+    }
+
+    #[test]
+    fn empty_raw_uses_minimal_fallback_when_provided() {
+        let out = select_body("", None, 1024, "tool_call 01ABC");
+        assert_eq!(out.source, BodySource::Fallback);
+        assert_eq!(out.body, "tool_call 01ABC");
+        assert!(!out.truncated);
+    }
+
+    #[test]
+    fn whitespace_minimal_falls_through_to_empty() {
+        let out = select_body("", None, 1024, "   ");
+        assert_eq!(out.source, BodySource::Empty);
+        assert!(out.body.is_empty());
     }
 }

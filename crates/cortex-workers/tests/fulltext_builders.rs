@@ -204,7 +204,9 @@ fn bootstrap_doc_id_uses_repo_path_hash() {
 }
 
 #[test]
-fn empty_payload_returns_skipped_outcome() {
+fn empty_payload_uses_minimal_fallback_not_skipped() {
+    // Artifacts with no body now fall back to "artifact <event_id>" instead
+    // of being silently dropped — fixes the 85% fulltext skip rate (bug #6).
     let evt = event(
         "evt-empty",
         Kind::Artifact,
@@ -214,7 +216,12 @@ fn empty_payload_returns_skipped_outcome() {
         None,
     );
     let out = build_doc(&evt, false, 1024 * 1024);
-    assert_eq!(out, BuildOutcome::Skipped);
+    let doc = match out {
+        BuildOutcome::Ready(d) => *d,
+        BuildOutcome::Skipped => panic!("empty artifact must use minimal fallback, not be skipped"),
+    };
+    assert_eq!(doc.body, "artifact evt-empty");
+    assert!(!doc.truncated);
 }
 
 #[test]

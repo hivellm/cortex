@@ -54,7 +54,10 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         .summary
         .as_deref()
         .or(summary_override.as_deref());
-    let chosen = select_body(&raw, summary, max_body_bytes);
+    // Minimal fallback: kind label + event_id so genuinely empty payloads
+    // still produce an indexable document rather than being silently dropped.
+    let minimal = format!("{} {}", kind_label(event.kind), event.event_id);
+    let chosen = select_body(&raw, summary, max_body_bytes, &minimal);
     if matches!(chosen.source, BodySource::Empty) {
         return BuildOutcome::Skipped;
     }
