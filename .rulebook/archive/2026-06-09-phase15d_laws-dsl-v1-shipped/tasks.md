@@ -19,6 +19,6 @@
 - [x] 5.2 3 fixture tests added for deny/warn/allow verdict paths; total 13 tests pass.
 - [x] 5.3 `cargo check --workspace` clean; clippy clean (fixed `map_or(false,…)` → `is_some_and`); 13 tests pass.
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [x] 99.1 Spec 13 + CHANGELOG updated.
-- [x] 99.2 13 unit tests in lib.rs.
-- [x] 99.3 All pass.
+- [x] 99.1 Update or create documentation covering the implementation. docs/specs/13-laws-dsl.md + CHANGELOG.
+- [x] 99.2 Write tests covering the new behavior. 13 unit tests in crates/cortex-laws/src/lib.rs.
+- [x] 99.3 Run tests and confirm they pass. cargo test -p cortex-laws: 13/13 pass.

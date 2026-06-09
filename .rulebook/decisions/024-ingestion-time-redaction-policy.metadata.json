@@ -1,0 +1,11 @@
+{
+  "id": 24,
+  "slug": "ingestion-time-redaction-policy",
+  "title": "Ingestion-time redaction policy",
+  "status": "proposed",
+  "date": "2026-06-09",
+  "relatedTasks": [
+    "phase15e_ingestion-redaction-policy-adr-017"
+  ],
+  "supersededBy": null
+}

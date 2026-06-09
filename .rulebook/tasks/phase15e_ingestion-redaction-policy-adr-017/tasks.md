@@ -1,6 +1,6 @@
 ## 1. ADR-017
-- [ ] 1.1 `rulebook_decision_create` ADR-017 — "Ingestion-time redaction policy". Status `proposed`.
-- [ ] 1.2 Trade-off: redaction adds <1ms per envelope; gain is secrets stay out of the embedder + archive.
+- [x] 1.1 ADR-017 created via rulebook_decision_create — "Ingestion-time redaction policy", id=24, status=proposed.
+- [x] 1.2 Trade-off documented in ADR consequences: <1ms synchronous cost in adapter hook path (within 300ms PreToolUse budget); secrets never reach embedder/fulltext/graph/archive; conservative patterns allow false-negatives, mitigated by doctor coverage check.
 
 ## 2. Redaction module
 - [ ] 2.1 New `crates/cortex-core/src/redaction.rs` exposing `pub fn redact(env: Envelope) -> Envelope`.

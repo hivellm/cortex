@@ -10,17 +10,11 @@
 |--------|------|----------|-------------|
 | ⬚ | phase15c_graph-projection-live-coverage-backfill | 6/9 | graph projection live coverage backfill |
 
-## phase15d
-
-| Status | Task | Progress | Description |
-|--------|------|----------|-------------|
-| ⬚ | phase15d_laws-dsl-v1-shipped | 0/23 | laws dsl v1 shipped |
-
 ## phase15e
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase15e_ingestion-redaction-policy-adr-017 | 0/17 | ingestion redaction policy adr 017 |
+| ⬚ | phase15e_ingestion-redaction-policy-adr-017 | 2/17 | ingestion redaction policy adr 017 |
 
 ## phase15f
 
@@ -98,11 +92,17 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase24_consolidator-trigger-producer | 3/17 | consolidator trigger producer |
+| ⬚ | phase24_consolidator-trigger-producer | 4/17 | consolidator trigger producer |
 
 ## phase25
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase25_nexus-graph-write-performance | 13/22 | nexus graph write performance |
+
+## phase26d
+
+| Status | Task | Progress | Description |
+|--------|------|----------|-------------|
+| ⬚ | phase26d_audit-retrieval-quality-live-verify | 0/9 | audit retrieval quality live verify |
 
