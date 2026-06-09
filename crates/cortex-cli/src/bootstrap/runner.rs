@@ -190,6 +190,7 @@ pub async fn run_repo_with_dedup(
             WalkEntry::Accepted {
                 rel_path,
                 size_bytes,
+                class,
                 ..
             } => {
                 if resume_filter_active {
@@ -224,7 +225,13 @@ pub async fn run_repo_with_dedup(
                 let body_hash = sha256_of_body(&body);
                 if let Some(store) = dedup.as_ref() {
                     if let Some(prev) = lookup_seen(store, &repo_id, rel_path) {
-                        if prev.content_hash == body_hash {
+                        // phase26c §3.3 — decision files bypass hash
+                        // suppression so that status changes made
+                        // before phase10i status parsing existed are
+                        // picked up on the next bootstrap run. Decision
+                        // upserts are idempotent (keyed on decision_id
+                        // = filename stem) so re-emitting is safe.
+                        if prev.content_hash == body_hash && *class != FileClass::Decision {
                             files_suppressed += 1;
                             // Refresh the ledger so observers can
                             // tell which files were re-walked vs.

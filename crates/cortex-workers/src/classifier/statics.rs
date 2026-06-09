@@ -89,14 +89,19 @@ impl Classifier for StaticClassifier {
                 severity,
                 pii_risk,
                 redaction_suggestions: Vec::new(),
-                // No synthesised summary — the static path has no
-                // model to summarise with, and the previous
-                // `"static summary: N chars"` marker was being
-                // copied into Meilisearch's `body` field by the
-                // fulltext worker, destroying full-text search on
-                // every artifact. Downstream consumers fall back to
-                // the source `text` when this is `None`.
-                summary: None,
+                // phase26c §1.2 — deterministic template summary so
+                // the fulltext worker has a non-null body candidate
+                // for oversize payloads and the vector embedder has
+                // a readable string to embed. No LLM required; the
+                // previous `"static summary: N chars"` marker that
+                // was blindly copied into the Meilisearch body has
+                // been replaced with a real `{kind} in {location}:
+                // {snippet}` string.
+                summary: Some(static_summary(
+                    &input.kind,
+                    &input.redacted_payload,
+                    input.context_repo.as_deref(),
+                )),
                 entities: Vec::new(),
                 relations: Vec::new(),
                 source: ClassifierSource::StaticFallback,
@@ -109,6 +114,29 @@ impl Classifier for StaticClassifier {
         }
         Ok(out)
     }
+}
+
+/// Build the deterministic summary for the Static classifier output.
+/// Format: `"{kind} in {location}: {first 120 chars of payload text}"`.
+/// The previous path emitted `"static summary: N chars"` which destroyed
+/// fulltext search. This template is readable and embeddable without an LLM.
+fn static_summary(kind: &Kind, payload: &Value, context_repo: Option<&str>) -> String {
+    // Kind label via its snake_case serde representation.
+    let kind_raw = serde_json::to_string(kind).unwrap_or_default();
+    let kind_str = kind_raw.trim_matches('"');
+
+    // Prefer an explicit `path` field in the payload; fall back to context_repo.
+    let location = payload
+        .get("path")
+        .and_then(|v| v.as_str())
+        .or(context_repo)
+        .unwrap_or("unknown");
+
+    // Snippet: first 120 Unicode scalar values of the flat JSON string.
+    let flat = payload_to_string(payload);
+    let snippet: String = flat.chars().take(120).collect();
+
+    format!("{kind_str} in {location}: {snippet}")
 }
 
 fn classify_one(kind: &Kind, payload: &Value) -> (Option<String>, Vec<String>, Severity, PiiRisk) {
@@ -288,15 +316,13 @@ fn payload_to_string(payload: &Value) -> String {
 mod tests {
     use super::*;
 
-    /// Regression: the static path used to emit
-    /// `summary = "static summary: <N> chars"` for any payload over
-    /// 4 KB. The fulltext worker copied that string into Meilisearch's
-    /// `body` field, and full-text search broke for every artifact —
-    /// the indexed body had no real tokens. Verify the static path
-    /// now returns `summary: None` so downstream consumers fall back
-    /// to the source `text`.
+    /// phase26c §1.2 — the static path now emits a deterministic
+    /// `{kind} in {location}: {snippet}` summary so oversize events
+    /// have a readable body candidate for the fulltext worker.
+    /// Guard: the old `"static summary: N chars"` garbage marker must
+    /// never come back.
     #[tokio::test]
-    async fn static_classifier_emits_no_summary_even_for_oversize_payloads() {
+    async fn static_classifier_emits_deterministic_template_summary() {
         let big = "x".repeat(20_000);
         let input = EnrichmentInput {
             event_id: "evt-static-summary".into(),
@@ -310,10 +336,20 @@ mod tests {
             .await
             .expect("classify");
         assert_eq!(out.len(), 1);
+        let summary = out[0].summary.as_deref().expect("summary must be Some");
         assert!(
-            out[0].summary.is_none(),
-            "static path must not synthesise a summary string; got: {:?}",
-            out[0].summary
+            summary.starts_with("artifact in"),
+            "summary must start with 'artifact in'; got: {summary:?}"
+        );
+        assert!(
+            !summary.contains("static summary"),
+            "old garbage marker must not reappear; got: {summary:?}"
+        );
+        // Template caps snippet at 120 chars — total length is bounded.
+        assert!(
+            summary.len() <= 200,
+            "summary must be short; got {} chars",
+            summary.len()
         );
     }
 }

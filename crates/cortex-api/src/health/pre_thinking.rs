@@ -89,6 +89,12 @@ pub struct PreThinkingHealthReport {
     /// `sonnet_error`, `deterministic_fallback`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub rewriter_path_total: BTreeMap<String, u64>,
+    /// phase26c §2.3 — bundle-cache hit count since adapter boot.
+    #[serde(default)]
+    pub cache_hit_total: u64,
+    /// phase26c §2.3 — bundle-cache miss count since adapter boot.
+    #[serde(default)]
+    pub cache_miss_total: u64,
 }
 
 /// Phase14g §2.3 — per-pair intent mismatch row.
@@ -128,6 +134,8 @@ impl PreThinkingHealthSource for UnwiredPreThinkingHealthSource {
             helpful_rate_per_intent: BTreeMap::new(),
             intent_mismatch_top: Vec::new(),
             rewriter_path_total: BTreeMap::new(),
+            cache_hit_total: 0,
+            cache_miss_total: 0,
         }
     }
 }
@@ -207,6 +215,8 @@ mod tests {
             helpful_rate_per_intent: BTreeMap::new(),
             intent_mismatch_top: Vec::new(),
             rewriter_path_total: BTreeMap::new(),
+            cache_hit_total: 0,
+            cache_miss_total: 0,
         };
         let state = PreThinkingHealthState {
             source: Arc::new(StubSource(expected.clone())),

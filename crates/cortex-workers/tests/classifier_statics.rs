@@ -77,11 +77,11 @@ async fn redacted_content_marks_high_pii() {
 /// The static path used to emit `summary = "static summary: <N> chars"`
 /// for any payload over 4 KB. The fulltext worker then copied that
 /// string verbatim into Meilisearch's `body` field, destroying full-text
-/// search on every artifact (the indexed body had no real tokens). The
-/// static path now returns `summary: None` and downstream consumers
-/// fall back to the source `text`. Test pinned to lock the contract.
+/// phase26c §1.2 — the static path now emits a deterministic
+/// `{kind} in {location}: {snippet}` summary. Guard: the old
+/// `"static summary: N chars"` garbage marker must never come back.
 #[tokio::test]
-async fn oversize_payload_does_not_synthesise_summary() {
+async fn oversize_payload_emits_template_summary_not_garbage_marker() {
     let c = StaticClassifier::new();
     let big = "x".repeat(5000);
     let out = c
@@ -93,10 +93,14 @@ async fn oversize_payload_does_not_synthesise_summary() {
         )])
         .await
         .unwrap();
+    let summary = out[0].summary.as_deref().expect("summary must be Some");
     assert!(
-        out[0].summary.is_none(),
-        "static path must not synthesise a summary; got: {:?}",
-        out[0].summary
+        summary.starts_with("turn in"),
+        "summary must start with kind label; got: {summary:?}"
+    );
+    assert!(
+        !summary.contains("static summary"),
+        "old garbage marker must not reappear; got: {summary:?}"
     );
 }
 

@@ -13,8 +13,9 @@
 //! Both fail-open on timeout / error: the session continues
 //! unchanged.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cortex_api::{QueryRequest, QueryResponse};
@@ -25,9 +26,84 @@ use cortex_pre_thinking::Metrics as PreThinkingMetrics;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::config::AdapterSection;
 use crate::metrics::Metrics;
+
+// ── Bundle cache ─────────────────────────────────────────────────────────────
+// phase26c §2.2 — In-process LRU bundle cache keyed on
+// sha256(prompt + NUL + cwd). TTL = 60 s, max = 256 entries.
+// Keeps identical pre-thinking queries within a session fast.
+
+const BUNDLE_CACHE_TTL: Duration = Duration::from_secs(60);
+const BUNDLE_CACHE_MAX: usize = 256;
+
+#[derive(Clone)]
+struct CachedBundle {
+    bundle: String,
+    fail_open: bool,
+    inserted_at: Instant,
+}
+
+struct BundleCache {
+    inner: Mutex<HashMap<[u8; 32], CachedBundle>>,
+    metrics: Arc<PreThinkingMetrics>,
+}
+
+impl BundleCache {
+    fn new(metrics: Arc<PreThinkingMetrics>) -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+            metrics,
+        }
+    }
+
+    fn cache_key(prompt: &str, cwd: &str) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(prompt.as_bytes());
+        h.update(b"\0");
+        h.update(cwd.as_bytes());
+        h.finalize().into()
+    }
+
+    fn get(&self, key: &[u8; 32]) -> Option<CachedBundle> {
+        let inner = self.inner.lock().ok()?;
+        let entry = inner.get(key)?;
+        if entry.inserted_at.elapsed() > BUNDLE_CACHE_TTL {
+            return None;
+        }
+        self.metrics.incr_cache_hit();
+        Some(entry.clone())
+    }
+
+    fn insert(&self, key: [u8; 32], bundle: String, fail_open: bool) {
+        self.metrics.incr_cache_miss();
+        let mut inner = match self.inner.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if inner.len() >= BUNDLE_CACHE_MAX {
+            // Evict the oldest entry.
+            if let Some(oldest) = inner
+                .iter()
+                .min_by_key(|(_, v)| v.inserted_at)
+                .map(|(k, _)| *k)
+            {
+                inner.remove(&oldest);
+            }
+        }
+        inner.insert(
+            key,
+            CachedBundle {
+                bundle,
+                fail_open,
+                inserted_at: Instant::now(),
+            },
+        );
+    }
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Result of the pre-thinking sync path.
 #[derive(Debug, Clone, Default)]
@@ -39,6 +115,9 @@ pub struct PreThinkingResult {
     /// `true` when the call was throttled by `enabled = false` or
     /// timed out and we returned the empty bundle.
     pub fail_open: bool,
+    /// phase26c §2.2 — `true` when the bundle was served from the
+    /// in-process LRU cache (< 10 ms response time).
+    pub cache_hit: bool,
 }
 
 /// Result of the law-check sync path.
@@ -94,6 +173,13 @@ pub struct SyncClient {
     laws_timeout: Duration,
     laws_block_on_critical: bool,
     metrics: Arc<Metrics>,
+    /// phase26c §2.2 — in-process bundle cache. Shared across all
+    /// `pre_thinking()` calls on this client so a second identical
+    /// query within the TTL is served from memory.
+    bundle_cache: Arc<BundleCache>,
+    /// Shared pre-thinking metrics — accumulated across calls so
+    /// the health source can read cache hit/miss counters.
+    prethink_metrics: Arc<PreThinkingMetrics>,
 }
 
 impl SyncClient {
@@ -103,6 +189,8 @@ impl SyncClient {
             .timeout(Duration::from_millis(cfg.timeout_ms))
             .build()
             .expect("reqwest client builder"); // SAFETY: Client::builder().build() only fails on TLS init failure; panicking at process boot when TLS is unusable is the correct behaviour and grandfathered by the phase14i §3.2 gate.
+        let prethink_metrics = Arc::new(PreThinkingMetrics::new());
+        let bundle_cache = Arc::new(BundleCache::new(prethink_metrics.clone()));
         Self {
             client,
             api_endpoint: cfg.api_endpoint.trim_end_matches('/').to_string(),
@@ -112,7 +200,16 @@ impl SyncClient {
             laws_timeout: Duration::from_millis(cfg.laws.timeout_ms),
             laws_block_on_critical: cfg.laws.block_on_critical,
             metrics,
+            bundle_cache,
+            prethink_metrics,
         }
+    }
+
+    /// Expose the shared pre-thinking metrics handle so the health
+    /// source can read cache counters from the same registry the
+    /// cache bumps.
+    pub fn prethink_metrics(&self) -> Arc<PreThinkingMetrics> {
+        self.prethink_metrics.clone()
     }
 
     /// Run the pre-thinking sync call. Always returns a value —
@@ -131,6 +228,7 @@ impl SyncClient {
             return PreThinkingResult {
                 bundle: String::new(),
                 fail_open: true,
+                cache_hit: false,
             };
         }
         let timeout = self.pre_thinking_timeout;
@@ -178,7 +276,21 @@ impl SyncClient {
             }
         }));
 
-        let cwd_path = cwd.map(Path::new).unwrap_or_else(|| Path::new("."));
+        let cwd_str = cwd.unwrap_or(".");
+        let cwd_path = Path::new(cwd_str);
+
+        // phase26c §2.2 — check bundle cache before the full pipeline.
+        let cache_key = BundleCache::cache_key(prompt, cwd_str);
+        if let Some(cached) = self.bundle_cache.get(&cache_key) {
+            let bundle_bytes = u32::try_from(cached.bundle.len()).unwrap_or(u32::MAX);
+            self.metrics.observe_bundle_bytes(bundle_bytes);
+            return PreThinkingResult {
+                bundle: cached.bundle,
+                fail_open: cached.fail_open,
+                cache_hit: true,
+            };
+        }
+
         let budget_bytes = u32::try_from(max_bytes).unwrap_or(u32::MAX);
         let budget_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
         let input = PreThinkingInput {
@@ -193,14 +305,18 @@ impl SyncClient {
             },
         };
 
-        let prethink_metrics = Arc::new(PreThinkingMetrics::new());
-        let output = pre_thinking_run(&input, query_fn, prethink_metrics).await;
+        let output = pre_thinking_run(&input, query_fn, self.prethink_metrics.clone()).await;
         let bundle_bytes = u32::try_from(output.bundle.len()).unwrap_or(u32::MAX);
         self.metrics.observe_bundle_bytes(bundle_bytes);
+
+        // Populate the cache for the next identical query.
+        self.bundle_cache
+            .insert(cache_key, output.bundle.clone(), output.fail_open);
 
         PreThinkingResult {
             bundle: output.bundle,
             fail_open: output.fail_open,
+            cache_hit: false,
         }
     }
 
@@ -278,6 +394,70 @@ mod tests {
     use super::*;
     use crate::config::AdapterSection;
     use serde_json::json;
+
+    // ── BundleCache unit tests (phase26c §4.2) ──────────────────────────────
+
+    #[test]
+    fn bundle_cache_miss_counter_increments_on_insert() {
+        let m = Arc::new(PreThinkingMetrics::new());
+        let cache = BundleCache::new(m.clone());
+        let key = BundleCache::cache_key("hello", "/repo");
+        cache.insert(key, "bundle".to_string(), false);
+        let (_, miss) = m.cache_counters();
+        assert_eq!(miss, 1);
+    }
+
+    #[test]
+    fn bundle_cache_hit_counter_increments_on_get() {
+        let m = Arc::new(PreThinkingMetrics::new());
+        let cache = BundleCache::new(m.clone());
+        let key = BundleCache::cache_key("hello", "/repo");
+        cache.insert(key, "bundle_text".to_string(), false);
+        let entry = cache.get(&key);
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().bundle, "bundle_text");
+        let (hit, _) = m.cache_counters();
+        assert_eq!(hit, 1);
+    }
+
+    #[test]
+    fn bundle_cache_different_prompts_produce_different_keys() {
+        let k1 = BundleCache::cache_key("prompt A", "/repo");
+        let k2 = BundleCache::cache_key("prompt B", "/repo");
+        let k3 = BundleCache::cache_key("prompt A", "/other");
+        assert_ne!(k1, k2);
+        assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn bundle_cache_same_inputs_produce_same_key() {
+        let k1 = BundleCache::cache_key("same", "/repo");
+        let k2 = BundleCache::cache_key("same", "/repo");
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn bundle_cache_evicts_oldest_at_max_capacity() {
+        let m = Arc::new(PreThinkingMetrics::new());
+        let cache = BundleCache::new(m.clone());
+        for i in 0..BUNDLE_CACHE_MAX {
+            let key = BundleCache::cache_key(&format!("prompt_{i}"), "/repo");
+            cache.insert(key, format!("bundle_{i}"), false);
+        }
+        {
+            let inner = cache.inner.lock().unwrap();
+            assert_eq!(inner.len(), BUNDLE_CACHE_MAX);
+        }
+        // One more entry should evict the oldest and keep the cap.
+        let overflow_key = BundleCache::cache_key("overflow", "/repo");
+        cache.insert(overflow_key, "overflow_bundle".to_string(), false);
+        {
+            let inner = cache.inner.lock().unwrap();
+            assert_eq!(inner.len(), BUNDLE_CACHE_MAX);
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn pre_thinking_disabled_returns_empty_fail_open() {

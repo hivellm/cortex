@@ -47,6 +47,13 @@ pub struct Metrics {
     /// `sonnet_error`, `deterministic_fallback`. Drives the
     /// cascade telemetry the rewriter doctor surfaces.
     pub rewriter_path_total: Mutex<BTreeMap<String, u64>>,
+    /// phase26c §2.3 — bundle-cache hit counter. Bumped by the
+    /// adapter's `BundleCache` on every cache hit so the operator
+    /// can read the hit rate on `/v1/health/pre-thinking`.
+    pub cache_hit_total: AtomicU64,
+    /// phase26c §2.3 — bundle-cache miss counter. Bumped by the
+    /// adapter's `BundleCache` on every cache miss (pipeline ran).
+    pub cache_miss_total: AtomicU64,
 }
 
 impl Metrics {
@@ -174,6 +181,24 @@ impl Metrics {
             .lock()
             .map(|m| m.clone())
             .unwrap_or_default()
+    }
+
+    /// phase26c §2.3 — bump the bundle-cache hit counter.
+    pub fn incr_cache_hit(&self) {
+        self.cache_hit_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// phase26c §2.3 — bump the bundle-cache miss counter.
+    pub fn incr_cache_miss(&self) {
+        self.cache_miss_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// phase26c §2.3 — read the current hit/miss counts as a tuple.
+    pub fn cache_counters(&self) -> (u64, u64) {
+        (
+            self.cache_hit_total.load(Ordering::Relaxed),
+            self.cache_miss_total.load(Ordering::Relaxed),
+        )
     }
 
     /// Phase14f — snapshot per-intent bundle-byte quantiles. Each

@@ -85,6 +85,7 @@ impl PreThinkingHealthSource for LivePreThinkingHealthSource {
             .map(|(from, to, count)| IntentMismatchView { from, to, count })
             .collect();
         let rewriter_path_total = self.metrics.rewriter_path_snapshot();
+        let (cache_hit_total, cache_miss_total) = self.metrics.cache_counters();
         PreThinkingHealthReport {
             breaker_state: state.to_string(),
             failures_in_window: self.breaker.failures_in_window(),
@@ -94,6 +95,8 @@ impl PreThinkingHealthSource for LivePreThinkingHealthSource {
             helpful_rate_per_intent,
             intent_mismatch_top,
             rewriter_path_total,
+            cache_hit_total,
+            cache_miss_total,
         }
     }
 }

@@ -634,18 +634,22 @@ async fn rerun_with_no_changes_publishes_zero_new_events() {
     )
     .await
     .unwrap();
+    // phase26c §3.3 — decision files bypass hash suppression so status
+    // changes (pre-phase10i) are picked up on each run. The fixture has
+    // one decision file, so a re-run without edits still publishes
+    // exactly that one decision event.
     assert_eq!(
-        report2.events_published, 0,
-        "re-run with no file changes must publish zero events"
+        report2.events_published, 1,
+        "re-run publishes only the decision re-emit (phase26c §3.3 bypass)"
     );
     assert!(
         report2.files_suppressed > 0,
-        "files_suppressed must surface the dedup count"
+        "files_suppressed must surface the dedup count for non-decision files"
     );
     assert_eq!(
         publisher2.count(),
-        0,
-        "publisher must NOT receive duplicate events on a re-run"
+        1,
+        "publisher receives exactly one event — the decision re-emit"
     );
 }
 
@@ -709,13 +713,16 @@ async fn rerun_after_editing_one_file_publishes_only_that_file() {
     )
     .await
     .unwrap();
+    // phase26c §3.3 — decision files bypass dedup unconditionally, so the
+    // fixture's decision file also publishes even without edits. 2 = the
+    // edited code file + the decision re-emit.
     assert_eq!(
-        report2.events_published, 1,
-        "exactly one event published — the one edited file"
+        report2.events_published, 2,
+        "edited code file + decision re-emit (phase26c §3.3)"
     );
     assert!(
-        report2.files_suppressed >= 4,
-        "every other file is suppressed"
+        report2.files_suppressed >= 3,
+        "every non-decision, non-edited file is suppressed"
     );
     let code_events = publisher2.by_kind("artifact.code");
     assert_eq!(code_events.len(), 1);
