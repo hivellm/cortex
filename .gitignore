@@ -76,3 +76,6 @@ __pycache__/
 *.sqlite-wal
 *.sqlite.bak
 *.sqlite.bak.*
+
+# phase15h — graph-worker offset state (bind-mounted metadata DB)
+.cortex-state/

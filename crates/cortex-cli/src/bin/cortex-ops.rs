@@ -1332,6 +1332,34 @@ enum GraphCommand {
         #[arg(long)]
         dry_run: bool,
     },
+    /// phase15h — seed the graph consumer offset at the CURRENT Synap
+    /// stream head, so the worker resumes from there (capturing new
+    /// events forward) instead of re-consuming the whole stream from
+    /// 0. Recovery lever for a graph-worker whose ephemeral offset was
+    /// lost: re-projecting all history live trips nexus#12. Run this
+    /// against the worker's (volume-mounted) metadata DB, then restart
+    /// the worker. History stays available via `graph backfill`.
+    SeekHead {
+        /// Synap base URL. Defaults to `$CORTEX_GRAPH_SYNAP_URL` then
+        /// `http://127.0.0.1:17003`.
+        #[arg(long)]
+        synap: Option<String>,
+        /// Consumer id partition (must match the worker's). Default
+        /// `cortex-graph-0`.
+        #[arg(long, default_value = "cortex-graph-0")]
+        consumer_id: String,
+        /// Synap stream the consumer reads. Default
+        /// `cortex.events.enriched`.
+        #[arg(long, default_value = "cortex.events.enriched")]
+        stream: String,
+        /// SQLite metadata DB path (the worker's). Defaults to the same
+        /// resolution chain as `graph replay`.
+        #[arg(long)]
+        metadata_db: Option<String>,
+        /// Print the discovered head + planned write without mutating.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Phase15b §3.3 — replay the archive through the phase15b
     /// projection pipeline. Walks every envelope newer than
     /// `--since`, runs all 12 edge extractors, and prints a
@@ -1864,6 +1892,13 @@ fn run() -> ExitCode {
                 metadata_db,
                 dry_run,
             } => graph_cmd::graph_replay(since, consumer_id, stream, metadata_db, dry_run),
+            GraphCommand::SeekHead {
+                synap,
+                consumer_id,
+                stream,
+                metadata_db,
+                dry_run,
+            } => graph_cmd::graph_seek_head(synap, consumer_id, stream, metadata_db, dry_run),
             GraphCommand::Backfill {
                 since,
                 archive_root,

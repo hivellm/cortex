@@ -206,6 +206,82 @@ pub(super) fn graph_replay(
     ExitCode::SUCCESS
 }
 
+/// phase15h — discover the current Synap stream head (`stream.stats`
+/// `max_offset`) and write it as the graph consumer's committed offset,
+/// so the next worker boot resumes from `head + 1` (new events forward)
+/// instead of re-consuming the whole stream from 0. Re-projecting all
+/// history live trips nexus#12; history is loaded via `graph backfill`.
+pub(super) fn graph_seek_head(
+    synap: Option<String>,
+    consumer_id: String,
+    stream: String,
+    metadata_db: Option<String>,
+    dry_run: bool,
+) -> ExitCode {
+    use cortex_storage::MetadataStore;
+    use cortex_workers::graph::worker::SynapHandle;
+
+    let synap_url = synap
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .map(|c| c.nexus.synap_url)
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:17003".to_string());
+
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("ERROR: build tokio runtime: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let head = runtime.block_on(async {
+        let handle = SynapHandle::new(&synap_url)?;
+        let stats = handle.streams().stats(&stream).await?;
+        Ok::<u64, anyhow::Error>(stats.max_offset)
+    });
+    let head = match head {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("ERROR: query Synap stream head ({synap_url}, {stream}): {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    let db_path = match metadata_db {
+        Some(p) => std::path::PathBuf::from(p),
+        None => resolve_metadata_db_path(),
+    };
+    println!(
+        "graph seek-head: synap={synap_url} stream={stream}\n  head_offset={head} (worker resumes from {resume})\n  consumer_id={consumer_id} metadata_db={db_path:?}",
+        resume = head.saturating_add(1),
+    );
+    if dry_run {
+        println!("dry-run: no rows written");
+        return ExitCode::SUCCESS;
+    }
+
+    if !db_path.exists() {
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+    }
+    let store = match MetadataStore::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("ERROR: open metadata DB at {db_path:?}: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    if let Err(e) = store.consumer_offset_set(&consumer_id, &stream, head) {
+        eprintln!("ERROR: consumer_offset_set: {e}");
+        return ExitCode::from(1);
+    }
+    println!("OK: offset seeded at head. Restart cortex-graph-worker to apply.");
+    ExitCode::SUCCESS
+}
+
 /// Phase15b §4.1 — `cortex-ops doctor-graph-coverage` dispatcher.
 /// Queries Nexus for `MATCH ()-[r]->() WHERE type(r) IN [...]
 /// RETURN type(r) AS kind, count(r) AS c` across every edge kind

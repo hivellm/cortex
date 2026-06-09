@@ -299,6 +299,16 @@ services:
       # write stall). With this false the worker does structural
       # mapping only; flip to true once Nexus is upgraded.
       CORTEX_GRAPH_PROJECTION_ENABLED: "false"
+      # phase15h — persist the consumer offset across recreates. Without
+      # this the metadata DB lives in the ephemeral container FS, so
+      # every recreate re-consumes cortex.events.enriched from offset 0
+      # and re-MERGEs the whole graph in a burst (trips nexus#12). The
+      # host bind-mount also lets `cortex-ops graph seek-head` seed the
+      # offset at the stream head to recover without re-projecting all
+      # history.
+      CORTEX_GRAPH_METADATA_DB: /var/lib/cortex-graph/metadata.sqlite
+    volumes:
+      - ./.cortex-state/graph:/var/lib/cortex-graph
     restart: unless-stopped
 
   # cortex-api ─ POST /v1/query + dashboard JSON + retention scheduler.
