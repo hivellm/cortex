@@ -4,11 +4,11 @@
 - [x] 1.3 Endpoint-node creation — done (commit fff14c6): `project_envelope` appends one empty-props `NodeOp::with_identity` per distinct edge endpoint (both `from` and `to`, deduped, first-seen order → byte-identical re-projection). Empty props + `ConflictPolicy::Match` mean the coalescer (props union via `extend`) never clobbers a richer mapper/static node for the same `(label, key)`. Generalises beyond Tool/Model — every projection edge kind now has guaranteed endpoints, including CONTRADICTS's non-event `from`. 8 projection unit tests green (idempotency + every-endpoint-anchored + dedup).
 
 ## 2. Classifier-replay for classifier-driven kinds
-- [ ] 2.1 Re-enrich a bounded window of archived envelopes through the live classifier so CALLS / IMPORTS / DEFINES / RETURNS / ABOUT / MENTIONS_FILE / RELATES_TO carry real relations/entities/topics.
-- [ ] 2.2 Project the enriched window live; gate the window size so sustained edge-writes stay under the nexus#12 stall threshold.
+- [ ] ⏸ 2.1 Re-enrich a bounded window of archived envelopes through the live classifier so CALLS / IMPORTS / DEFINES / RETURNS / ABOUT / MENTIONS_FILE / RELATES_TO carry real relations/entities/topics. — Blocked on nexus#12. Discovered live (2026-06-09): deploying the full projection to the worker pinned Nexus 2.3.2 at 100% CPU and it stayed wedged until restarted — the projection's anchor-node + per-edge writes amplify volume past the sustained-write stall, especially on a backlog drain. A live classifier-replay + projection at scale is exactly this write pattern. Gated on the same nexus#12 fix phase25 is parked on. Mitigation shipped: `CORTEX_GRAPH_PROJECTION_ENABLED` kill-switch (commit 33a5061) — worker runs structural-only until Nexus can absorb the load.
+- [ ] ⏸ 2.2 Project the enriched window live; gate the window size so sustained edge-writes stay under the nexus#12 stall threshold. — Same nexus#12 block; the kill-switch is the gate. Bounded backfill (`graph backfill --apply --limit N`) already exists for controlled offline runs once Nexus is upgraded.
 
 ## 3. Acceptance
-- [ ] 3.1 `cortex-ops doctor-graph-coverage` reports all 12 kinds present and above the §4.2 floor; capture the JSON output as the acceptance artifact.
+- [ ] ⏸ 3.1 `cortex-ops doctor-graph-coverage` reports all 12 kinds present and above the §4.2 floor; capture the JSON output as the acceptance artifact. — Blocked on §2 (nexus#12). Also a noted distribution tension: EMITTED_BY fires on every tool call so it dominates (~29k of ~30k projected), which structurally pushes rare kinds (CONTRADICTS / RELATES_TO) below the 1% floor — "all 12 above floor" may need a per-kind floor or a presence-only bar rather than a global 1% share. Resolve when the projection can run live.
 
 ## 4. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 4.1 Update or create documentation covering the implementation
