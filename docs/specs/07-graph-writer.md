@@ -106,6 +106,33 @@ Mapping lives in `cortex-workers/src/graph/mapper.rs`; one `fn map(&EnrichedEven
 - **DEFINES edge:** `(:Symbol)-[:DEFINES]->(:Artifact)`, MERGE-idempotent on the Symbol natural key plus the Artifact natural key — replay does not duplicate edges (verified by `artifact_replay_is_idempotent_under_natural_key` in `crates/cortex-graph/tests/mapper.rs`).
 - **Out of scope (deferred):** `IMPORTS`, `CALLS`, `EXTENDS`, `IMPLEMENTS`. Those need richer parser-level analysis the chunker doesn't expose today; they ship in a follow-up task once the chunker emits import/call edges per chunk.
 
+#### Semantic-edge projection (phase15b §3)
+
+The mapper above emits the **structural / identity** edges (`HAS_TURN`, `HAS_TOOL_CALL`, `TOUCHED`, `IN_REPO`, `REMEMBERS`, `DEFINES`, …). Phase15b adds a parallel **semantic-edge projection** pass that closes the "graph lane returns nothing useful" gap by emitting twelve relationship kinds the mapper never produced:
+
+| Edge            | From → To                     | Source                                  |
+|-----------------|-------------------------------|-----------------------------------------|
+| `CALLS`         | `ToolCall → <entity>`         | classifier relations (case-insensitive) |
+| `IMPORTS`       | `ToolCall|Artifact → <entity>`| classifier relations                    |
+| `DEFINES`       | `ToolCall|Artifact → <entity>`| classifier relations                    |
+| `RETURNS`       | `ToolCall → <entity>`         | classifier relations                    |
+| `SUPERSEDES`    | `Decision → Decision`         | `DecisionPayload.supersedes` (payload)  |
+| `CONTRADICTS`   | `Evidence → Evidence`         | `TopicCardPayload.contradictions` (Open only) |
+| `EMITTED_BY`    | `<event> → Tool|Model`        | payload producer field                  |
+| `ABOUT`         | `Turn|Decision → Topic`       | `classifier.topics`                     |
+| `ANSWERED_BY`   | `Turn → ToolCall`             | `Turn.tool_call_event_ids` (payload)    |
+| `CITES`         | `Turn|Analysis → Decision`    | classifier relations + `DEC-\d{3,}` body regex |
+| `MENTIONS_FILE` | `Turn → Artifact`             | `classifier.entities` (artifact)        |
+| `RELATES_TO`    | `Turn → Turn`                 | classifier relations (cosine pass dormant — `EnrichedEvent` lacks the embedding vector) |
+
+**Pipeline.** `cortex-workers/src/graph/projection.rs::project_envelope(env, ctx)` iterates a fixed `&[(name, fn)]` dispatch table (one row per extractor in `graph/extractors/`) and folds every emitted edge into a single edge-only `GraphPatch`. Each extractor is a pure function over `(env, ctx)`; every edge is stamped with the provenance triple (`source_event_id`, `analyzer_version`, `created_at_ms`) via `stamp_provenance` so the stale-edge sweeper can retire a superseded run.
+
+**Worker wiring.** `graph/worker.rs` runs the projection as batch step **3b** — after the mapper's structural patch (step 3) and the static-analyzer pass (step 3a), before `write_patches`. One `ExtractCtx::new(PROJECTION_ANALYZER_VERSION)` per batch pins a single `now_ms`. The projection patch carries **edges only**: endpoint nodes are created either by the same batch's mapper patch or by a prior event's, and the writer's `MATCH (a),(b) MERGE (a)-[r]->(b)` render silently drops any edge whose endpoints are absent (tracked under `edges_dropped{edge_type}`). The two patch streams compose through the existing coalescer.
+
+**Idempotency.** Re-projecting the same envelope is byte-identical (pinned by `project_envelope_is_idempotent_byte_identical_on_second_call`) and the `(from, to, kind)` unique constraint makes replay a no-op downstream.
+
+**Coverage doctor.** `cortex-ops doctor-graph-coverage [--floor <share>] [--json]` queries `MATCH ()-[r]->() WHERE type(r) IN [<12 kinds>] RETURN type(r), count(r)`, renders a per-kind count + share table, and exits `1` if any kind has zero edges or falls below `--floor` (default `0.01` = 1%), `2` if Nexus is unreachable. `cortex-ops graph backfill --since <RFC3339>` re-projects archived envelopes (count-only dry-run today; payload-driven kinds produce useful counts without a classifier replay).
+
 Resulting Cypher pattern:
 
 ```cypher

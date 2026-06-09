@@ -913,6 +913,22 @@ impl Worker {
             }
         }
 
+        // 3b. Phase15b §3.1 — semantic-edge projection pass. Runs the
+        // 12 registered extractors (CALLS / IMPORTS / ... / RELATES_TO)
+        // over every ready event and appends the resulting edge-only
+        // patch to the batch. The coalescer merges it with the
+        // structural patch from step 3 under the `(from, to, kind)`
+        // unique constraint, so re-projecting the same envelope is a
+        // no-op. One `ExtractCtx` per batch pins a single `now_ms`.
+        let extract_ctx =
+            super::extractors::ExtractCtx::new(super::projection::PROJECTION_ANALYZER_VERSION);
+        for event in &ready.events {
+            let semantic_patch = super::projection::project_envelope(event, &extract_ctx);
+            if !semantic_patch.edges.is_empty() {
+                patches.push(semantic_patch);
+            }
+        }
+
         let event_count = ready.events.len();
         let orphan_count = ready.orphan_turn_ids.len();
         match self.writer.write_patches(patches).await {

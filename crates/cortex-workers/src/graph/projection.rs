@@ -35,6 +35,13 @@ use super::extractors::{
 use super::patch::GraphPatch;
 use crate::embedder::EnrichedEvent;
 
+/// Stable analyzer-version label the live worker stamps on every
+/// projection edge (via [`ExtractCtx`]). Mirrors
+/// [`super::analyzer_dispatch::GRAPH_STATIC_ANALYZER_VERSION`] so the
+/// stale-edge sweeper can retire a superseded projection run by
+/// `analyzer_version`. Bump when an extractor's emit shape changes.
+pub const PROJECTION_ANALYZER_VERSION: &str = "phase15b.1";
+
 /// Function-pointer type for an extractor (mirrors the contract
 /// pinned in [`super::extractors`]).
 type ExtractorFn = fn(&EnrichedEvent, &ExtractCtx) -> Vec<Edge>;

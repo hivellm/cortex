@@ -214,6 +214,34 @@ pub(super) fn graph_replay(
 /// have ≥`floor` of total edges (default 0.01 = 1%). Exit codes:
 /// `0` all kinds present + above floor, `1` any kind missing OR
 /// below floor, `2` Nexus unreachable.
+/// Phase15b §4.2 — pure threshold policy. Given per-kind edge
+/// counts and the minimum acceptable share (`floor`, e.g. 0.01 =
+/// 1%), returns `(missing, below_floor)`: kinds with zero edges and
+/// kinds whose share of the total is under `floor`. Extracted from
+/// [`doctor_graph_coverage`] so the policy is unit-testable without
+/// a live Nexus.
+fn classify_coverage(
+    counts: &std::collections::BTreeMap<String, u64>,
+    floor: f64,
+) -> (Vec<String>, Vec<String>) {
+    let total: u64 = counts.values().sum();
+    let mut missing: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+    for (kind, &c) in counts {
+        if c == 0 {
+            missing.push(kind.clone());
+            continue;
+        }
+        if total > 0 {
+            let share = c as f64 / total as f64;
+            if share < floor {
+                warnings.push(format!("{kind} share={share:.4} < floor {floor}"));
+            }
+        }
+    }
+    (missing, warnings)
+}
+
 pub(super) fn doctor_graph_coverage(nexus: Option<String>, floor: f64, json: bool) -> ExitCode {
     use cortex_workers::graph::config::GraphConfig;
     use cortex_workers::graph::nexus_client::{GraphClient, LiveNexusClient};
@@ -281,21 +309,7 @@ pub(super) fn doctor_graph_coverage(nexus: Option<String>, floor: f64, json: boo
         }
     }
     let total: u64 = counts.values().sum();
-
-    let mut warnings: Vec<String> = Vec::new();
-    let mut missing: Vec<String> = Vec::new();
-    for (kind, &c) in &counts {
-        if c == 0 {
-            missing.push(kind.clone());
-            continue;
-        }
-        if total > 0 {
-            let share = c as f64 / total as f64;
-            if share < floor {
-                warnings.push(format!("{kind} share={share:.4} < floor {floor}"));
-            }
-        }
-    }
+    let (missing, warnings) = classify_coverage(&counts, floor);
 
     if json {
         let payload = serde_json::json!({
@@ -487,4 +501,56 @@ pub(super) fn graph_backfill(
     // wiring (suppress dead-code warning via a no-op cast).
     let _: Option<Envelope> = None;
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_coverage;
+    use std::collections::BTreeMap;
+
+    fn counts(pairs: &[(&str, u64)]) -> BTreeMap<String, u64> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    #[test]
+    fn zero_count_kinds_report_missing() {
+        let c = counts(&[("CALLS", 10), ("IMPORTS", 0), ("DEFINES", 0)]);
+        let (missing, below) = classify_coverage(&c, 0.01);
+        assert_eq!(missing, vec!["DEFINES".to_string(), "IMPORTS".to_string()]);
+        assert!(below.is_empty(), "present kinds above floor: {below:?}");
+    }
+
+    #[test]
+    fn below_floor_kinds_warn_but_are_not_missing() {
+        // total = 1000; RARE share = 1/1000 = 0.001 < 0.01 floor.
+        let c = counts(&[("CALLS", 999), ("RARE", 1)]);
+        let (missing, below) = classify_coverage(&c, 0.01);
+        assert!(missing.is_empty(), "no zero-count kinds: {missing:?}");
+        assert_eq!(below.len(), 1);
+        assert!(below[0].starts_with("RARE share=0.0010 < floor 0.01"));
+    }
+
+    #[test]
+    fn all_kinds_above_floor_yield_clean_report() {
+        let c = counts(&[("CALLS", 500), ("IMPORTS", 500)]);
+        let (missing, below) = classify_coverage(&c, 0.01);
+        assert!(missing.is_empty());
+        assert!(below.is_empty());
+    }
+
+    #[test]
+    fn empty_graph_reports_all_missing_no_division_by_zero() {
+        let c = counts(&[("CALLS", 0), ("IMPORTS", 0)]);
+        let (missing, below) = classify_coverage(&c, 0.01);
+        assert_eq!(missing.len(), 2);
+        assert!(below.is_empty(), "no share computed when total == 0");
+    }
+
+    #[test]
+    fn exactly_at_floor_is_not_below() {
+        // share == floor (0.01) must NOT warn — policy is strict `<`.
+        let c = counts(&[("CALLS", 99), ("EXACT", 1)]);
+        let (_missing, below) = classify_coverage(&c, 0.01);
+        assert!(below.is_empty(), "share == floor is acceptable: {below:?}");
+    }
 }
