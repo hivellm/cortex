@@ -346,11 +346,18 @@ fn build_hook_entry(shim: &HookShim, layout: &Layout, bin_available: bool) -> Va
         let sh_path = layout.hooks_dir.join(shim.sh_filename);
         format!("bash {}", sh_path.display())
     };
-    json!({
-        "type": "command",
-        "command": command,
-        "owner": "cortex",
-    })
+    // Phase 15g — emit the array/matcher form that Claude Code (≥2026-06-06)
+    // requires. Pre/PostToolUse carry `matcher: "*"` because they filter by
+    // tool name; all other events use a bare group (no matcher key).
+    // The `owner: "cortex"` sentinel on the group lets uninstall identify
+    // and strip exactly the cortex-owned entries without touching user hooks.
+    let inner = json!({ "type": "command", "command": command });
+    let group = if matches!(shim.hook_name, "PreToolUse" | "PostToolUse") {
+        json!({ "matcher": "*", "hooks": [inner], "owner": "cortex" })
+    } else {
+        json!({ "hooks": [inner], "owner": "cortex" })
+    };
+    Value::Array(vec![group])
 }
 
 /// Probe `$PATH` for an executable named `cortex-hook` (or
@@ -387,6 +394,18 @@ fn cortex_hook_on_path() -> bool {
 }
 
 fn is_cortex_entry(entry: &Value, _shim: &HookShim) -> bool {
+    // New array form (phase 15g+): the `owner` sentinel lives on the group
+    // object inside the array.
+    if let Some(arr) = entry.as_array() {
+        return arr.iter().any(|group| {
+            group
+                .get("owner")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "cortex")
+                .unwrap_or(false)
+        });
+    }
+    // Legacy object form (pre-phase 15g): `owner` is on the top-level entry.
     entry
         .get("owner")
         .and_then(|v| v.as_str())
@@ -529,9 +548,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&body).unwrap();
         let hooks = parsed["hooks"].as_object().unwrap();
 
+        // Phase 15g: each entry is an array; the command lives at [0]["hooks"][0]["command"].
         // Synchronous hooks: command exactly `cortex-hook <Event>`.
         for hook in ["UserPromptSubmit", "PreToolUse"] {
-            let cmd = hooks[hook]["command"].as_str().unwrap();
+            let cmd = hooks[hook][0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(
                 cmd,
                 format!("cortex-hook {hook}"),
@@ -546,13 +566,98 @@ mod tests {
             "SubagentStop",
             "Notification",
         ] {
-            let cmd = hooks[hook]["command"].as_str().unwrap();
+            let cmd = hooks[hook][0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(
                 cmd,
                 format!("cortex-hook {hook} --fire-forget"),
                 "fire-forget hook {hook} should append the flag"
             );
         }
+    }
+
+    #[test]
+    fn install_writes_array_matcher_form() {
+        // §3.2 — asserts the exact array/matcher shape emitted for each event.
+        let _guard = PATH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let (tmp, layout) = fixture_layout();
+        let prior_path = fake_cortex_hook_on_path(tmp.path());
+        let result = install(&layout);
+        restore_path(prior_path);
+        result.expect("install");
+        let body = fs::read_to_string(&layout.settings_path).unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        let hooks = parsed["hooks"].as_object().unwrap();
+        for shim in HOOK_SHIMS {
+            assert!(
+                hooks[shim.hook_name].is_array(),
+                "hook {} must be written as an array (phase 15g format)",
+                shim.hook_name
+            );
+            let group = &hooks[shim.hook_name][0];
+            assert_eq!(
+                group["owner"].as_str().unwrap(),
+                "cortex",
+                "group for {} must carry owner sentinel",
+                shim.hook_name
+            );
+            // Tool events carry matcher: "*"; bare groups do not.
+            if matches!(shim.hook_name, "PreToolUse" | "PostToolUse") {
+                assert_eq!(
+                    group["matcher"].as_str().unwrap(),
+                    "*",
+                    "tool event {} must carry matcher: \"*\"",
+                    shim.hook_name
+                );
+            } else {
+                assert!(
+                    group.get("matcher").is_none(),
+                    "non-tool event {} must NOT carry a matcher field",
+                    shim.hook_name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_object_entry_is_migrated_to_array_form_on_install() {
+        // §1.2 — a plain `install` over an old settings.json (legacy object form)
+        // must rewrite the cortex entries to the array/matcher form.
+        let (_tmp, layout) = fixture_layout();
+        fs::create_dir_all(&layout.claude_dir).unwrap();
+        let legacy = json!({
+            "hooks": {
+                "PreToolUse": {
+                    "type": "command",
+                    "command": "cortex-hook PreToolUse",
+                    "owner": "cortex"
+                },
+                "PostToolUse": {
+                    "type": "command",
+                    "command": "cortex-hook PostToolUse --fire-forget",
+                    "owner": "cortex"
+                },
+                "UserKeep": { "type": "command", "command": "/usr/bin/true" }
+            }
+        });
+        fs::write(
+            &layout.settings_path,
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+        install(&layout).expect("install over legacy config");
+        let body = fs::read_to_string(&layout.settings_path).unwrap();
+        let parsed: Value = serde_json::from_str(&body).unwrap();
+        let hooks = parsed["hooks"].as_object().unwrap();
+        assert!(
+            hooks["PreToolUse"].is_array(),
+            "legacy PreToolUse object must be migrated to array form"
+        );
+        assert!(
+            hooks["PostToolUse"].is_array(),
+            "legacy PostToolUse object must be migrated to array form"
+        );
+        // Non-cortex hook must survive untouched.
+        assert!(hooks.contains_key("UserKeep"), "user hook must survive migration");
     }
 
     #[test]

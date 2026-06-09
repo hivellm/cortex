@@ -215,12 +215,37 @@ with `--pipe NAME` / `CORTEX_ADAPTER_PIPE` or `--sock PATH` /
 JSON line per round-trip: a `HookFrame` request and either a
 `HookResponse` reply (synchronous) or no reply at all (`--fire-forget`).
 
-### Transport (phase 11x)
+### Transport (phase 11x / phase 15g)
 
 The default Claude Code hook command is the native binary
 **`cortex-hook`** (release-mode Rust, ~50 ms cold start on Windows).
 `install.rs` writes the following entries into
-`~/.claude/settings.json`:
+`~/.claude/settings.json`.
+
+#### Hook format (phase 15g)
+
+Claude Code ≥2026-06-06 only honours the **array / matcher form**.
+The legacy object form (`"PreToolUse": { "type": "command", ... }`)
+silently stops firing after that version. `install.rs` now emits:
+
+```json
+"PreToolUse": [
+  { "matcher": "*", "hooks": [{ "type": "command", "command": "cortex-hook PreToolUse" }], "owner": "cortex" }
+],
+"SessionStart": [
+  { "hooks": [{ "type": "command", "command": "cortex-hook SessionStart --fire-forget" }], "owner": "cortex" }
+]
+```
+
+`PreToolUse` and `PostToolUse` carry `matcher: "*"` (tool-name filter
+field); all other events use a bare group (no matcher key). The
+`owner: "cortex"` sentinel on the group is used by uninstall to
+identify and strip only the Cortex-owned entries without touching any
+user-configured hooks under the same event. A plain `install` over an
+old settings.json (legacy object form) rewrites the Cortex entries
+in-place to the array form — acting as an automatic migration.
+
+#### Command table
 
 | Hook              | Settings command                                  | Mode           |
 |-------------------|---------------------------------------------------|----------------|
