@@ -4,17 +4,12 @@
 
 **Total**: 17 tasks | **Completed**: 0 | **In Progress**: 0 | **Pending**: 17
 
-## phase15b
-
-| Status | Task | Progress | Description |
-|--------|------|----------|-------------|
-| ⬚ | phase15b_graph-mapper-edge-expansion | 18/28 | graph mapper edge expansion |
-
 ## phase15c
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase15c_archived-tasks-inventory-cleanup | 0/16 | archived tasks inventory cleanup |
+| ⬚ | phase15c_graph-projection-live-coverage-backfill | 0/8 | graph projection live coverage backfill |
 
 ## phase15d
 
@@ -98,11 +93,11 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase24_consolidator-trigger-producer | 3/14 | consolidator trigger producer |
+| ⬚ | phase24_consolidator-trigger-producer | 3/17 | consolidator trigger producer |
 
 ## phase25
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase25_nexus-graph-write-performance | 13/19 | nexus graph write performance |
+| ⬚ | phase25_nexus-graph-write-performance | 13/22 | nexus graph write performance |
 
