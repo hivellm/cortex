@@ -244,6 +244,34 @@ Backpressure: if Nexus returns `TransientError` sustained for >30 s, the worker 
 | Nexus auth failure                        | Fail fast at startup                                                    |
 | Schema statement fails                    | Fail fast at startup                                                    |
 
+### Offset persistence & recovery (phase15h)
+
+The consumer cursor lives in the SQLite `consumer_offsets` table
+(`MetadataStore`). The container **must** bind-mount that DB
+(`CORTEX_GRAPH_METADATA_DB=/var/lib/cortex-graph/metadata.sqlite` →
+`./.cortex-state/graph`) — otherwise the store is ephemeral and every
+`docker compose up` recreate re-seeds the tracker at **0**, re-consuming the
+whole `cortex.events.enriched` stream and re-MERGEing the entire graph in one
+burst. On a Nexus version with the sustained-write stall (nexus#12) that burst
+pins the server at 100% CPU until restarted.
+
+Cold-boot policy stays **start-from-0** when no offset row exists (the
+2026-05-03 fix — defaulting to "latest" once dropped 12 of 20 sibling repos
+mid-reindex). To recover the graph lane *without* replaying history (e.g. the
+offset was lost, or the worker is being brought online against a graph that is
+already populated), seed the cursor at the stream head:
+
+```
+docker stop cortex-graph-worker
+cortex-ops graph seek-head --metadata-db ./.cortex-state/graph/metadata.sqlite
+docker compose up -d --no-deps cortex-graph-worker
+```
+
+`seek-head` reads the Synap stream head (`stream.stats.max_offset`) and writes
+it as the committed offset, so the worker resumes from `head + 1` (new events
+forward). Historical envelopes are loaded separately, at a controlled rate,
+via `cortex-ops graph backfill --since <RFC3339> --apply --limit <N>`.
+
 ### Observability
 
 ```

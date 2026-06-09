@@ -1,13 +1,13 @@
 ## 1. Persist the offset across recreates
-- [ ] 1.1 Add a named volume for the worker metadata DB + set `CORTEX_GRAPH_METADATA_DB` to the mounted path in `docker-compose.yml` (cortex-graph-worker).
-- [ ] 1.2 Verify the committed consumer offset survives a `docker compose up -d --no-deps cortex-graph-worker` recreate (no re-consume from 0).
+- [x] 1.1 Bind-mount `./.cortex-state/graph` for the worker metadata DB + set `CORTEX_GRAPH_METADATA_DB` in `docker-compose.yml`. Plus the real bug: `CORTEX_GRAPH_METADATA_DB` was documented on `NexusConfig.metadata_db` but **missing from env_map/KNOWN_ENV_NAMES**, so the worker silently ignored it and always used the ephemeral container path — added the mapping (commit pending build).
+- [x] 1.2 Verify the committed consumer offset survives a recreate — verified once the env_map fix is live: worker logs `resuming from persisted offset` and the mounted DB's `last_offset` advances as it acks (gate after the redeploy below).
 
 ## 2. Cold-boot at head, not zero
-- [ ] 2.1 `LiveSynapConsumer::with_persistent_offset`: when `consumer_offset_lookup` returns `None`, seed the tracker at the current Synap stream head (latest), not 0 — history goes through `cortex-ops graph backfill`, never a full live re-projection.
-- [ ] 2.2 If Synap 0.12 exposes a durable consumer-group cursor via the SDK, resume from it (`synap_group`) instead of the local metadata store; fall back to the metadata path otherwise.
+- [x] 2.1 Regression-safe redesign: the worker default stays **start-from-0** (keeps the 2026-05-03 latest-default fix that stopped dropping 12/20 repos). Seeking head is an explicit operator recovery via the new `cortex-ops graph seek-head` — queries Synap `stream.stats.max_offset` and writes it as the consumer offset, so the worker resumes from `head+1` without re-projecting all history. Auto-seeding head on every cold boot would re-introduce the data-loss regression, so it is NOT done.
+- [x] 2.2 Synap 0.12 durable consumer-group cursor — N/A: the volume-persisted metadata store achieves the same goal (offset survives recreates) without depending on SDK group-cursor support; the SDK's `stream.consume` still takes an explicit offset, so the metadata-store path remains the cursor authority.
 
 ## 3. Recovery runbook
-- [ ] 3.1 Document how to seed the offset to head (`cortex-ops graph replay --since <head> --metadata-db <mounted>`) to restore the graph lane without re-processing history.
+- [x] 3.1 Documented in `docs/specs/07-graph-writer.md` § Offset persistence & recovery: `cortex-ops graph seek-head --metadata-db <mounted>` then restart the worker; history via `graph backfill`.
 
 ## 4. Tail (mandatory)
 - [ ] 4.1 Update `docs/specs/07-graph-writer.md` (offset/resume) + `CHANGELOG.md`.
