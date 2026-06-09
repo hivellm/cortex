@@ -13,7 +13,7 @@
 //! after a successful publish so an at-least-once retry is the worst
 //! case.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -571,6 +571,11 @@ pub struct Worker {
     pub pricing: PricingTable,
     /// In-memory de-dup of already-classified event ids (at-least-once delivery guard).
     processed: Mutex<BTreeSet<String>>,
+    /// phase24 §1.2 — last-seen wall-clock ms per `session_id`, used by
+    /// the idle-window session-end detector. Shared across the tokio
+    /// pool via `Arc<Worker>`; the critical section is sync (no await
+    /// held under the lock).
+    session_last_seen: Mutex<BTreeMap<String, i64>>,
     /// Phase8b — total Synap messages the worker has processed end
     /// to end. Bumped after each `run_once` returns a non-zero count.
     pub jobs_processed_total: AtomicU64,
@@ -612,6 +617,7 @@ impl Worker {
             metadata: None,
             pricing: PricingTable::HAIKU_4_5,
             processed: Mutex::new(BTreeSet::new()),
+            session_last_seen: Mutex::new(BTreeMap::new()),
             jobs_processed_total: AtomicU64::new(0),
             last_job_ts_ms: AtomicU64::new(0),
             last_consume_ts_ms: AtomicU64::new(0),
@@ -874,6 +880,40 @@ impl Worker {
                         event_id = %enriched.event_id,
                         "consolidator decision_landed trigger publish failed"
                     );
+                }
+            }
+
+            // phase24 §1.2 — idle-window session-end detection. Stamp
+            // this event's session, then fan out a `session_end` trigger
+            // for any OTHER session quiet past `SESSION_IDLE_MS`. The lock
+            // is released before any await (publish happens outside it).
+            let ended = {
+                let mut seen = self
+                    .session_last_seen
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                crate::consolidator::trigger_producer::evaluate_idle_sessions(
+                    &mut seen,
+                    enriched.session_id.as_deref(),
+                    enriched.occurred_at_ms,
+                    crate::consolidator::trigger_producer::SESSION_IDLE_MS,
+                )
+            };
+            for session_id in ended {
+                if let Some(trigger) =
+                    crate::consolidator::trigger_producer::session_end_trigger(&session_id)
+                {
+                    if let Err(err) = self
+                        .publisher
+                        .publish(crate::consolidator::daemon::TRIGGER_STREAM, &trigger)
+                        .await
+                    {
+                        tracing::warn!(
+                            error = %err,
+                            session_id = %session_id,
+                            "consolidator session_end trigger publish failed"
+                        );
+                    }
                 }
             }
         }

@@ -1,6 +1,6 @@
 ## 1. Trigger producer
 - [x] 1.1 Define the trigger envelope builder (`consolidator/trigger_producer.rs`); reuse the daemon's `TRIGGER_STREAM` + the classifier worker's existing `SynapPublisher` instead of a new trait
-- [ ] 1.2 Implement session-end detection (idle window or explicit session-end envelope) and publish a session-grain trigger
+- [x] 1.2 Implement session-end detection (idle window or explicit session-end envelope) and publish a session-grain trigger — idle-window detector: the Claude `Stop` hook lands as a plain `Kind::Turn` (no session-end envelope), so `trigger_producer::evaluate_idle_sessions` tracks last-seen ms per session and emits a `session_end` trigger for any session quiet past `SESSION_IDLE_MS` (30 min). Wired into the classifier worker (shared `Mutex<BTreeMap>`, lock released before publish) behind the existing `consolidator_trigger_enabled` opt-in flag. 5 unit tests (build, blank-reject, fire-once+prune, active-never-flagged, exact-boundary).
 - [ ] 1.3 Implement topic-threshold detection via the existing topic_cards::trigger evaluator and publish a topic-grain trigger
 - [x] 1.4 Implement decision-landed detection on Kind::Decision and publish a decision-trace trigger
 

@@ -22,10 +22,72 @@
 //! `producer_checkpoints` row keyed on `decision:<decision_id>` (spec 27
 //! §2.4), so a decision already consolidated is skipped on the next fire.
 
+use std::collections::BTreeMap;
+
 use cortex_core::events::{DecisionPayload, Kind};
 use serde_json::{json, Value};
 
 use crate::embedder::EnrichedEvent;
+
+/// phase24 §1.2 — a session is treated as ended after this much quiet
+/// (30 minutes). Conservative: a real Claude Code session rarely pauses
+/// this long mid-work, so the window avoids firing a `session_end`
+/// (and its Opus-promoting session-grain consolidation) on a coffee
+/// break while still closing sessions promptly once the user stops.
+pub const SESSION_IDLE_MS: i64 = 30 * 60 * 1000;
+
+/// Build a `session_end` trigger envelope (spec 27 §3) for `session_id`,
+/// or `None` when the id is blank.
+///
+/// Wire shape:
+/// ```json
+/// { "kind": "session_end", "session_id": "01HXSESS..." }
+/// ```
+#[must_use]
+pub fn session_end_trigger(session_id: &str) -> Option<Value> {
+    let id = session_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+    Some(json!({ "kind": "session_end", "session_id": id }))
+}
+
+/// phase24 §1.2 — idle-window session-end detection.
+///
+/// The Claude Code `Stop` hook lands as an ordinary `Kind::Turn` (no
+/// distinct session-end envelope), so a session boundary can't be read
+/// off a single event. Instead the producer tracks the last-seen time
+/// per session and treats a session as ended once it has been quiet for
+/// `idle_ms`.
+///
+/// Call this once per processed event: it stamps `now_ms` for the
+/// event's own session (`active_session`, kept alive), then returns
+/// every OTHER session whose last activity predates `now_ms - idle_ms`,
+/// **pruning** them from `last_seen` so each fires its `session_end`
+/// trigger exactly once. A re-opened session simply re-enters the map.
+/// (A fully quiet stream leaves the final idle session unflagged until
+/// the next event arrives — acceptable: no traffic means no
+/// consolidation urgency.)
+#[must_use]
+pub fn evaluate_idle_sessions(
+    last_seen: &mut BTreeMap<String, i64>,
+    active_session: Option<&str>,
+    now_ms: i64,
+    idle_ms: i64,
+) -> Vec<String> {
+    if let Some(s) = active_session.map(str::trim).filter(|s| !s.is_empty()) {
+        last_seen.insert(s.to_string(), now_ms);
+    }
+    let ended: Vec<String> = last_seen
+        .iter()
+        .filter(|(_, &ts)| now_ms - ts > idle_ms)
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in &ended {
+        last_seen.remove(k);
+    }
+    ended
+}
 
 /// Build a `decision_landed` trigger envelope for a `Kind::Decision`
 /// event, or `None` when the event is not a decision or carries no
@@ -135,5 +197,59 @@ mod tests {
     fn malformed_decision_payload_yields_nothing() {
         let ev = event(Kind::Decision, json!({ "not": "a decision" }));
         assert!(decision_landed_trigger(&ev).is_none());
+    }
+
+    #[test]
+    fn session_end_trigger_builds_envelope() {
+        let t = session_end_trigger("01HXSESS00000000000000000A").expect("non-blank id");
+        assert_eq!(t["kind"], "session_end");
+        assert_eq!(t["session_id"], "01HXSESS00000000000000000A");
+    }
+
+    #[test]
+    fn session_end_trigger_rejects_blank() {
+        assert!(session_end_trigger("   ").is_none());
+        assert!(session_end_trigger("").is_none());
+    }
+
+    #[test]
+    fn idle_session_fires_once_and_is_pruned() {
+        let idle_ms = 60_000;
+        let mut seen = BTreeMap::new();
+        // t=0: session A active.
+        assert!(evaluate_idle_sessions(&mut seen, Some("A"), 0, idle_ms).is_empty());
+        // t=30s: B active, A still within window → nothing ends.
+        assert!(evaluate_idle_sessions(&mut seen, Some("B"), 30_000, idle_ms).is_empty());
+        // t=70s: C active; A last seen at 0 → 70s idle > 60s → A ends.
+        let ended = evaluate_idle_sessions(&mut seen, Some("C"), 70_000, idle_ms);
+        assert_eq!(ended, vec!["A".to_string()]);
+        // A pruned → never fires again even far in the future.
+        let again = evaluate_idle_sessions(&mut seen, Some("C"), 200_000, idle_ms);
+        assert!(
+            !again.contains(&"A".to_string()),
+            "A must not re-fire: {again:?}"
+        );
+    }
+
+    #[test]
+    fn active_session_is_never_flagged_as_idle() {
+        let mut seen = BTreeMap::new();
+        // A keeps being the active session every tick — it is refreshed to
+        // `now_ms` each call, so it is never older than the window.
+        for t in [0, 100_000, 200_000, 300_000] {
+            assert!(evaluate_idle_sessions(&mut seen, Some("A"), t, 60_000).is_empty());
+        }
+    }
+
+    #[test]
+    fn boundary_exactly_at_idle_ms_is_not_yet_ended() {
+        let mut seen = BTreeMap::new();
+        let _ = evaluate_idle_sessions(&mut seen, Some("A"), 0, 60_000);
+        // Exactly idle_ms later: 60_000 - 0 == 60_000, not > 60_000 → alive.
+        let ended = evaluate_idle_sessions(&mut seen, Some("B"), 60_000, 60_000);
+        assert!(
+            ended.is_empty(),
+            "exactly-at-threshold is not yet ended: {ended:?}"
+        );
     }
 }
