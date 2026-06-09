@@ -764,7 +764,7 @@ function TimelineStats({
         </div>
         {preThinkingP95.some((v) => v != null) ? (
           <div className="stat__spark">
-            <Sparkline data={preThinkingP95} color="var(--ok)" />
+            <Sparkline data={preThinkingP95} color="var(--ok)" bridgeGaps />
           </div>
         ) : null}
       </div>

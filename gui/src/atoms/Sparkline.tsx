@@ -5,6 +5,14 @@ type SparklineProps = {
   color?: string;
   filled?: boolean;
   height?: number;
+  /** When `true`, connect the line across `null` buckets instead of
+   * lifting the pen. Right for a gauge (e.g. P95 latency) where a
+   * sample-less minute means "no new reading", not "value dropped":
+   * bridging the gap draws the continuous trend between real
+   * measurements — matching the gap-free feel of the zero-filled
+   * count series — without faking a floor. X-positions still use the
+   * original bucket index so the time axis stays honest. */
+  bridgeGaps?: boolean;
 };
 
 export function Sparkline({
@@ -12,6 +20,7 @@ export function Sparkline({
   color = "var(--accent)",
   filled = true,
   height = 28,
+  bridgeGaps = false,
 }: SparklineProps) {
   if (!data || data.length === 0) return null;
   const w = 120;
@@ -30,7 +39,9 @@ export function Sparkline({
   let current: [number, number][] = [];
   data.forEach((v, i) => {
     if (v == null) {
-      if (current.length > 0) {
+      // Bridging: skip the null but keep the running segment open so
+      // the next real point connects straight across the gap.
+      if (!bridgeGaps && current.length > 0) {
         segments.push(current);
         current = [];
       }
