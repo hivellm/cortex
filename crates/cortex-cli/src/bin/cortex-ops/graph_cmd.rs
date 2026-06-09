@@ -372,11 +372,15 @@ pub(super) fn doctor_graph_coverage(nexus: Option<String>, floor: f64, json: boo
 pub(super) fn graph_backfill(
     since: Option<String>,
     archive_root: Option<String>,
+    apply: bool,
+    limit: usize,
+    nexus: Option<String>,
     json: bool,
 ) -> ExitCode {
     use cortex_core::events::Envelope;
     use cortex_workers::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
     use cortex_workers::embedder::EnrichedEvent;
+    use cortex_workers::graph::patch::GraphPatch;
     use cortex_workers::graph::projection::{project_envelope, registered_edge_kinds};
     use std::path::PathBuf;
 
@@ -425,7 +429,18 @@ pub(super) fn graph_backfill(
     let mut envelopes_walked: u64 = 0;
     let mut edges_total: u64 = 0;
 
+    // phase15c §1.1 — when `--apply` is set, collect every projection
+    // patch so they can be written to the live graph after the walk.
+    // Dry-run leaves this empty (count-only).
+    let mut apply_patches: Vec<GraphPatch> = Vec::new();
+
     for env in &envelopes {
+        // phase15c §1.1 — `--limit N` (N>0) caps how many envelopes are
+        // projected so the sustained edge-write load under `--apply`
+        // stays bounded (nexus#12).
+        if limit > 0 && envelopes_walked >= limit as u64 {
+            break;
+        }
         envelopes_walked += 1;
         // Build a classifier-less EnrichedEvent. Payload-driven
         // extractors still produce edges; classifier-driven ones
@@ -468,37 +483,123 @@ pub(super) fn graph_backfill(
             *per_kind.entry(edge.edge_type.clone()).or_insert(0) += 1;
             edges_total += 1;
         }
+        if apply && !patch.edges.is_empty() {
+            apply_patches.push(patch);
+        }
     }
 
+    // phase15c §1.1 — live writeback. Build the real `NexusGraphWriter`
+    // and flush the collected patches in worker-sized chunks (256) so a
+    // bounded window never opens one giant transaction. Only the
+    // payload-driven kinds land (the walk uses a StaticFallback
+    // classifier); endpoint nodes must already exist in the live graph
+    // or the writer's MATCH-MERGE drops the edge (tracked downstream).
+    let mut applied_edges_persisted: u64 = 0;
+    let mut applied_nexus_url = String::new();
+    if apply {
+        use cortex_workers::graph::cypher::load_from_dir;
+        use cortex_workers::graph::writer::GraphWriter;
+        use cortex_workers::graph::{
+            GraphClient, GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter,
+        };
+        use std::sync::Arc;
+
+        let nexus_url = nexus
+            .or_else(|| {
+                cortex_config::Config::load()
+                    .ok()
+                    .and_then(|c| c.nexus.nexus_url)
+            })
+            .unwrap_or_else(|| "http://127.0.0.1:17002".to_string());
+        applied_nexus_url = nexus_url.clone();
+        let cfg = GraphConfig {
+            nexus_url: nexus_url.clone(),
+            ..GraphConfig::default()
+        };
+        let client: Arc<dyn GraphClient> = match LiveNexusClient::new(cfg.clone()) {
+            Ok(c) => Arc::new(c),
+            Err(e) => {
+                eprintln!("ERROR: connect to Nexus at {nexus_url}: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        // The live `run_write_tx` path inline-renders Cypher (phase25)
+        // and ignores the templates registry, so an empty registry is
+        // fine here — load whatever is on disk without requiring the
+        // worker's full template set.
+        let cypher_dir = cortex_config::Config::load()
+            .ok()
+            .and_then(|c| c.nexus.cypher_dir)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("crates/cortex-graph/cypher"));
+        let templates = Arc::new(load_from_dir(&cypher_dir).unwrap_or_default());
+        let writer = NexusGraphWriter::new(cfg, client, templates, Arc::new(Metrics::new()));
+
+        let runtime = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("ERROR: build tokio runtime: {e}");
+                return ExitCode::from(2);
+            }
+        };
+        let write_result = runtime.block_on(async {
+            let mut persisted: u64 = 0;
+            for chunk in apply_patches.chunks(256) {
+                let report = writer.write_patches(chunk.to_vec()).await?;
+                persisted += u64::from(report.edges_upserted);
+            }
+            Ok::<u64, cortex_workers::graph::nexus_client::GraphClientError>(persisted)
+        });
+        match write_result {
+            Ok(p) => applied_edges_persisted = p,
+            Err(e) => {
+                eprintln!("ERROR: write patches to Nexus at {nexus_url}: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    let mode = if apply { "applied" } else { "dry-run" };
     if json {
-        let payload = serde_json::json!({
-            "mode": "dry-run",
+        let mut payload = serde_json::json!({
+            "mode": mode,
             "archive_root": archive_root.display().to_string(),
             "since": since,
+            "limit": limit,
             "envelopes_walked": envelopes_walked,
             "edges_total": edges_total,
             "by_kind": per_kind,
         });
+        if apply {
+            payload["nexus_url"] = serde_json::json!(applied_nexus_url);
+            payload["edges_persisted"] = serde_json::json!(applied_edges_persisted);
+        }
         println!(
             "{}",
             serde_json::to_string_pretty(&payload).unwrap_or_default()
         );
     } else {
-        println!("cortex-ops graph backfill (dry-run)");
+        println!("cortex-ops graph backfill ({mode})");
         println!("  archive_root      = {}", archive_root.display());
         println!(
             "  since             = {}",
             since.as_deref().unwrap_or("<unset>")
         );
+        if limit > 0 {
+            println!("  limit             = {limit}");
+        }
         println!("  envelopes_walked  = {envelopes_walked}");
         println!("  edges_total       = {edges_total}");
+        if apply {
+            println!("  nexus_url         = {applied_nexus_url}");
+            println!("  edges_persisted   = {applied_edges_persisted}");
+        }
         println!("  per_kind:");
         for (k, v) in &per_kind {
             println!("    {k:<14} = {v}");
         }
     }
-    // Unused for now — Envelope import retained for downstream
-    // wiring (suppress dead-code warning via a no-op cast).
+    // Envelope import retained for the type annotation above.
     let _: Option<Envelope> = None;
     ExitCode::SUCCESS
 }

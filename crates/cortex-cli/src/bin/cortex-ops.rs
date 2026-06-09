@@ -17,8 +17,12 @@
 // default search for `mod <name>;` in a bin file is `src/bin/<name>.rs`
 // (sibling to the bin), so we point each module at the correct path
 // explicitly. Keeps the bin's submodule layout self-contained.
+#[path = "cortex-ops/backfill_cross_project.rs"]
+mod backfill_cross_project;
 #[path = "cortex-ops/bootstrap.rs"]
 mod bootstrap;
+#[path = "cortex-ops/branch_cmd.rs"]
+mod branch_cmd;
 #[path = "cortex-ops/canary.rs"]
 mod canary;
 #[path = "cortex-ops/cas.rs"]
@@ -53,6 +57,8 @@ mod metadata;
 mod pii;
 #[path = "cortex-ops/plan.rs"]
 mod plan;
+#[path = "cortex-ops/query_cmd.rs"]
+mod query_cmd;
 #[path = "cortex-ops/retention.rs"]
 mod retention;
 #[path = "cortex-ops/retention_archive_purge.rs"]
@@ -63,12 +69,6 @@ mod rollup;
 mod schedule_cmd;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
-#[path = "cortex-ops/backfill_cross_project.rs"]
-mod backfill_cross_project;
-#[path = "cortex-ops/branch_cmd.rs"]
-mod branch_cmd;
-#[path = "cortex-ops/query_cmd.rs"]
-mod query_cmd;
 #[path = "cortex-ops/temporal_digest.rs"]
 mod temporal_digest;
 #[path = "cortex-ops/timeline.rs"]
@@ -1353,6 +1353,24 @@ enum GraphCommand {
         /// `~/.cortex/archive`.
         #[arg(long)]
         archive_root: Option<String>,
+        /// phase15c §1.1 — write the projected edges to the live
+        /// graph via the real `GraphWriter` instead of the
+        /// count-only dry-run. Only the payload-driven kinds
+        /// (SUPERSEDES / CONTRADICTS / EMITTED_BY / ANSWERED_BY /
+        /// CITES body-regex) land without a classifier replay.
+        #[arg(long)]
+        apply: bool,
+        /// phase15c §1.1 — cap the number of envelopes projected
+        /// (newest-walked order). Bounds the sustained edge-write
+        /// load so `--apply` stays under the nexus#12 stall
+        /// threshold. `0` (default) means no cap.
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
+        /// Override the Nexus URL for `--apply`. Defaults to
+        /// `cortex_config::NexusConfig.nexus_url` then
+        /// `http://127.0.0.1:17002`.
+        #[arg(long)]
+        nexus: Option<String>,
         /// Emit JSON instead of plain-text summary.
         #[arg(long)]
         json: bool,
@@ -1849,8 +1867,11 @@ fn run() -> ExitCode {
             GraphCommand::Backfill {
                 since,
                 archive_root,
+                apply,
+                limit,
+                nexus,
                 json,
-            } => graph_cmd::graph_backfill(since, archive_root, json),
+            } => graph_cmd::graph_backfill(since, archive_root, apply, limit, nexus, json),
         },
         Command::SweepEmpty {
             meili,

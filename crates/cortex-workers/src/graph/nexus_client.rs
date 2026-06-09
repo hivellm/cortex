@@ -399,12 +399,20 @@ impl GraphClient for LiveNexusClient {
             std::collections::BTreeMap::new();
         for n in &patch.nodes {
             let sig: Vec<&str> = n.props.keys().map(String::as_str).collect();
-            node_groups.entry((n.label.as_str(), sig)).or_default().push(n);
+            node_groups
+                .entry((n.label.as_str(), sig))
+                .or_default()
+                .push(n);
         }
         for ((label, prop_keys), group) in &node_groups {
             let cypher = render_node_unwind(label, prop_keys, group);
             let result = self.execute_with_retry(&cypher, None).await?;
-            assert_write_landed(&result, "node-batch", label, &format!("{} rows", group.len()))?;
+            assert_write_landed(
+                &result,
+                "node-batch",
+                label,
+                &format!("{} rows", group.len()),
+            )?;
         }
 
         let mut edges_sorted: Vec<&EdgeOp> = patch.edges.iter().collect();
@@ -438,7 +446,17 @@ impl GraphClient for LiveNexusClient {
             let pair = format!("{}->{}", edge.from_key, edge.to_key);
             match assert_write_landed(&result, "edge", &edge.edge_type, &pair) {
                 Ok(()) => edges_upserted = edges_upserted.saturating_add(1),
-                Err(GraphClientError::Nexus(detail)) if detail.contains("count=0") => {
+                // Endpoint-missing edge: Nexus 2.3.2 returns either a
+                // `count=0` cell or zero rows ("no rows") when the
+                // `MATCH (a),(b)` finds no endpoints, so the MERGE never
+                // ran. Both mean "drop, don't abort" — tally it and move
+                // on (a cross-batch race resolves on the next replay).
+                // The phase15b projection legitimately emits edges whose
+                // endpoint node has not landed yet; aborting the batch on
+                // those would wedge the worker (backpressure loop).
+                Err(GraphClientError::Nexus(detail))
+                    if detail.contains("count=0") || detail.contains("no rows") =>
+                {
                     *edges_dropped.entry(edge.edge_type.clone()).or_insert(0) += 1;
                 }
                 Err(other) => return Err(other),
@@ -491,9 +509,22 @@ impl GraphClient for LiveNexusClient {
 fn render_edge_merge(edge: &EdgeOp) -> String {
     let from_kf = LiveNexusClient::key_field_for(&edge.from_label);
     let to_kf = LiveNexusClient::key_field_for(&edge.to_label);
-    let mut cy = format!(
+    // phase15c — Nexus 2.3.2 cannot SET properties on a relationship
+    // variable: it raises `Unknown variable 'r' in SET clause` for
+    // `SET r.x`, `SET r += {..}`, AND the `ON CREATE SET / ON MATCH SET`
+    // form (the prior phase11p workaround, which was never exercised
+    // because no edge carried props until the phase15b projection). The
+    // only accepted way to attach props is INLINE in the MERGE pattern:
+    // `MERGE (a)-[r:T { k: v }]->(b)`. That makes props part of the merge
+    // key, so the volatile `created_at_ms` is excluded — re-projecting
+    // the same source then yields identical stable props (source_event_id
+    // / analyzer_version + extractor props) and MERGE is idempotent. The
+    // stale-edge sweeper filters on analyzer_version / source_event_id,
+    // both retained; it does not read created_at_ms.
+    let inline = render_edge_props_inline(&edge.props);
+    format!(
         "MATCH (a:{fl} {{ {fkf}: {fk} }}), (b:{tl} {{ {tkf}: {tk} }}) \
-         MERGE (a)-[r:{rt}]->(b)",
+         MERGE (a)-[r:{rt}{inline}]->(b) RETURN count(r) AS written",
         fl = edge.from_label,
         fkf = from_kf,
         fk = cypher_string_literal(&edge.from_key),
@@ -501,27 +532,30 @@ fn render_edge_merge(edge: &EdgeOp) -> String {
         tkf = to_kf,
         tk = cypher_string_literal(&edge.to_key),
         rt = edge.edge_type,
-    );
-    if !edge.props.is_empty() {
-        // Phase11p hotfix — Nexus 2.1 raises
-        // `Unknown variable 'r' in SET clause` when SET follows
-        // MERGE without scoping through ON CREATE / ON MATCH.
-        // Mirror the workaround in `cypher::render_edge_merge`.
-        let mut props_clause = String::new();
-        let mut first = true;
-        for (k, v) in &edge.props {
-            if !first {
-                props_clause.push_str(", ");
-            }
-            first = false;
-            props_clause.push_str(&format!("r.{k} = {}", value_to_cypher_literal(v)));
-        }
-        cy.push_str(&format!(
-            " ON CREATE SET {props_clause} ON MATCH SET {props_clause}"
-        ));
+        inline = inline,
+    )
+}
+
+/// phase15c — render an edge's props as an inline Cypher map suffix
+/// (`{ k: v, ... }`) for the MERGE relationship pattern, or the empty
+/// string when there is nothing to stamp. The volatile `created_at_ms`
+/// is skipped so the inlined map (which Nexus 2.3.2 folds into the merge
+/// key) stays stable across re-projection, keeping the write idempotent.
+/// Props are emitted in `BTreeMap` key order for a deterministic
+/// statement.
+fn render_edge_props_inline(
+    props: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> String {
+    let pairs: Vec<String> = props
+        .iter()
+        .filter(|(k, _)| k.as_str() != "created_at_ms")
+        .map(|(k, v)| format!("{k}: {}", value_to_cypher_literal(v)))
+        .collect();
+    if pairs.is_empty() {
+        String::new()
+    } else {
+        format!(" {{ {} }}", pairs.join(", "))
     }
-    cy.push_str(" RETURN count(r) AS written");
-    cy
 }
 
 /// phase25 §4.2 — render one UNWIND batch that MERGEs many same-shape
@@ -913,5 +947,61 @@ mod tests {
     fn assert_write_landed_rejects_zero_unsigned_count() {
         let r = qresult(vec![json!([0u64])]);
         assert!(assert_write_landed(&r, "edge", "HAS_TURN", "s1->t1").is_err());
+    }
+
+    fn edge_with(props: Vec<(&str, serde_json::Value)>) -> super::EdgeOp {
+        super::EdgeOp {
+            edge_type: "CALLS".into(),
+            from_label: "ToolCall".into(),
+            from_key: "tc-1".into(),
+            to_label: "Artifact".into(),
+            to_key: "repo|path|hash".into(),
+            props: props.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+        }
+    }
+
+    // phase15c — a propless edge renders a bare MERGE with no inline map,
+    // and crucially NO `SET` clause (Nexus 2.3.2 rejects `r` in SET).
+    #[test]
+    fn render_edge_merge_propless_has_no_set_clause() {
+        let cy = super::render_edge_merge(&edge_with(vec![]));
+        assert!(cy.contains("MERGE (a)-[r:CALLS]->(b)"), "cy={cy}");
+        assert!(!cy.contains("SET"), "must not emit a SET clause: {cy}");
+        assert!(cy.ends_with("RETURN count(r) AS written"), "cy={cy}");
+    }
+
+    // phase15c — props are inlined into the MERGE pattern (the only form
+    // Nexus 2.3.2 accepts), the volatile created_at_ms is excluded so the
+    // merge key stays stable, and stable provenance is retained.
+    #[test]
+    fn render_edge_merge_inlines_stable_props_and_drops_created_at_ms() {
+        let cy = super::render_edge_merge(&edge_with(vec![
+            ("source_event_id", json!("evt-9")),
+            ("analyzer_version", json!("phase15b.1")),
+            ("created_at_ms", json!(1_700_000_000_000i64)),
+        ]));
+        assert!(!cy.contains("SET"), "no SET clause: {cy}");
+        assert!(
+            !cy.contains("created_at_ms"),
+            "created_at_ms excluded: {cy}"
+        );
+        assert!(cy.contains("source_event_id: \"evt-9\""), "cy={cy}");
+        assert!(cy.contains("analyzer_version: \"phase15b.1\""), "cy={cy}");
+        assert!(
+            cy.contains("MERGE (a)-[r:CALLS { ") && cy.contains(" }]->(b)"),
+            "props inline in MERGE pattern: {cy}"
+        );
+    }
+
+    // phase15c — rendering the same edge twice is byte-identical
+    // (BTreeMap key order), so the inlined-prop MERGE is idempotent.
+    #[test]
+    fn render_edge_merge_is_deterministic() {
+        let e = edge_with(vec![
+            ("source_event_id", json!("evt-9")),
+            ("analyzer_version", json!("phase15b.1")),
+            ("producer_kind", json!("tool")),
+        ]);
+        assert_eq!(super::render_edge_merge(&e), super::render_edge_merge(&e));
     }
 }
