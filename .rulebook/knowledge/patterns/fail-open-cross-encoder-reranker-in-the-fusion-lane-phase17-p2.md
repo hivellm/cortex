@@ -1,0 +1,20 @@
+# Fail-open cross-encoder reranker in the fusion lane (phase17 P2)
+
+**Category**: architecture
+**Tags**: phase17, reranker, retrieval, fail-open, tei, bge-reranker-v2-m3
+
+## Description
+
+Cross-encoder rerank step wired AFTER BM25+dense+graph fusion and cross-project propagation, BEFORE anchor-dedupe/top-K cut, operating on the top-100 fused candidates. Load-bearing config (RerankerConfig in cortex-config): enabled=true, top_k_input=100, timeout_ms=500, endpoint=None (must be set to a TEI host for the lane to activate — orchestrator skips silently when no reranker is injected). Env knobs: CORTEX_RERANKER_{ENABLED,ENDPOINT,TIMEOUT_MS,TOP_K}. Fail-open contract: any RerankerError (HTTP/decode/timeout) preserves the pre-rerank fusion order and emits a cortex_audit event `reranker.fallback` with the reason — retrieval never degrades to an error because the reranker is down. TEI wire shape: POST {endpoint}/rerank with {query, texts, return_text:false} → [{index, score}]. Metric delta (MRR@10 ≥ +5%, p95 ≤ +250ms) pending live eval — phase17 §2.7 blocked on golden CSV event IDs.
+
+## Example
+
+Orchestrator::with_reranker(Arc::new(BgeRerankerV2M3::new(endpoint, cfg.timeout_ms)), cfg) — see crates/cortex-api/src/search/orchestrator.rs (rerank step) and crates/cortex-workers/src/rerank/bge_v2m3.rs
+
+## When to Use
+
+Any retrieval lane where a second-stage scorer can fail independently of the primary pipeline: inject behind a trait, bound the candidate set, time-box the call, and always keep the pre-stage order as the fallback result.
+
+## When NOT to Use
+
+When the reranker IS the only ranking signal (no fusion order to fall back to), fail-open silently returns garbage — fail closed instead.

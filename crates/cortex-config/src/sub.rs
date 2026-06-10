@@ -382,8 +382,18 @@ pub struct NexusConfig {
     /// Env: `CORTEX_GRAPH_PROJECTION_ENABLED`.
     #[serde(default = "default_true")]
     pub projection_enabled: bool,
+    /// phase25 §3 — periodic schema re-ensure interval (seconds).
+    /// nexus#11: Nexus drops property indexes on restart; the worker
+    /// re-runs the idempotent `CREATE ... IF NOT EXISTS` bootstrap on
+    /// this timer. `0` disables the loop.
+    /// Env: `CORTEX_GRAPH_SCHEMA_ENSURE_SECS`.
+    #[serde(default = "default_graph_schema_ensure_secs")]
+    pub schema_ensure_secs: u64,
 }
 
+fn default_graph_schema_ensure_secs() -> u64 {
+    120
+}
 fn default_graph_transport() -> String {
     "auto".to_string()
 }
@@ -430,6 +440,7 @@ impl Default for NexusConfig {
             cypher_enabled: false,
             sweeper_interval_secs: None,
             projection_enabled: true,
+            schema_ensure_secs: default_graph_schema_ensure_secs(),
         }
     }
 }

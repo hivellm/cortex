@@ -1,0 +1,11 @@
+{
+  "id": 26,
+  "slug": "phantom-link-verifier-action-policy-flag-first-rollout-filter-after-measured-confidence",
+  "title": "Phantom-link verifier action policy: flag-first rollout, filter after measured confidence",
+  "status": "proposed",
+  "date": "2026-06-10",
+  "relatedTasks": [
+    "phase17_cdc-code-doc-correlation"
+  ],
+  "supersededBy": null
+}

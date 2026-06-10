@@ -1,0 +1,11 @@
+{
+  "id": 25,
+  "slug": "reranker-model-bge-reranker-v2-m3-via-tei-rerank-fail-open-with-500ms-budget",
+  "title": "Reranker model: BGE-reranker-v2-m3 via TEI /rerank, fail-open with 500ms budget",
+  "status": "proposed",
+  "date": "2026-06-10",
+  "relatedTasks": [
+    "phase17_cdc-code-doc-correlation"
+  ],
+  "supersededBy": null
+}

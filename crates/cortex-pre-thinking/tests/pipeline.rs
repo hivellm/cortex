@@ -73,6 +73,8 @@ fn populated_response(query_id: &str) -> QueryResponse {
                 body_truncated: false,
                 score: 0.9,
                 why: Some("vector match".into()),
+                verified: None,
+                verdict: None,
             }],
             decisions: vec![DecisionRef {
                 rank: 1,
@@ -265,6 +267,8 @@ async fn overflow_response_clips_under_budget_keeping_laws() {
             body_truncated: false,
             score: 0.5,
             why: Some("why".into()),
+            verified: None,
+            verdict: None,
         })
         .collect();
     let canned = Arc::new(CannedQuery::new(fat));
@@ -320,6 +324,8 @@ async fn truncation_step_metric_records_each_applied_step() {
             body_truncated: false,
             score: 0.5,
             why: Some("why".into()),
+            verified: None,
+            verdict: None,
         })
         .collect();
     let canned = Arc::new(CannedQuery::new(fat));

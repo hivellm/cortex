@@ -1058,7 +1058,11 @@ pub fn count_sections(
     if decisions > 0 {
         map.insert("decisions".to_string(), decisions);
     }
-    let similar_turns = response.results.similar_turns.len().min(opts.similar_turns_cap) as u32;
+    let similar_turns = response
+        .results
+        .similar_turns
+        .len()
+        .min(opts.similar_turns_cap) as u32;
     if similar_turns > 0 {
         map.insert("similar_turns".to_string(), similar_turns);
     }
@@ -1098,7 +1102,11 @@ pub fn count_sections(
         .grounding
         .timeline_window
         .as_ref()
-        .map(|w| w.recent_events.len().min(section_caps::TIMELINE_WINDOW_EVENTS) as u32)
+        .map(|w| {
+            w.recent_events
+                .len()
+                .min(section_caps::TIMELINE_WINDOW_EVENTS) as u32
+        })
         .unwrap_or(0);
     if timeline_window > 0 {
         map.insert("timeline_window".to_string(), timeline_window);
@@ -1242,7 +1250,10 @@ pub fn render_timeline_window(w: &Option<TimelineWindow>) -> String {
     if window.recent_events.is_empty() {
         return String::new();
     }
-    let n = window.recent_events.len().min(section_caps::TIMELINE_WINDOW_EVENTS);
+    let n = window
+        .recent_events
+        .len()
+        .min(section_caps::TIMELINE_WINDOW_EVENTS);
     let project = &window.project;
     let branch = if window.branch.is_empty() {
         "main".to_string()
@@ -1398,6 +1409,8 @@ mod tests {
                     body_truncated: false,
                     score: 0.9,
                     why: Some("vector match to ef_search tuning".into()),
+                    verified: None,
+                    verdict: None,
                 }],
                 decisions: vec![DecisionRef {
                     rank: 1,
@@ -2445,7 +2458,10 @@ mod tests {
             out.len()
         );
         // Must not render more than TIMELINE_WINDOW_EVENTS entries.
-        let event_lines = out.lines().filter(|l| l.starts_with(|c: char| c.is_ascii_digit())).count();
+        let event_lines = out
+            .lines()
+            .filter(|l| l.starts_with(|c: char| c.is_ascii_digit()))
+            .count();
         assert!(
             event_lines <= section_caps::TIMELINE_WINDOW_EVENTS,
             "rendered {event_lines} events, cap is {}",
@@ -2494,10 +2510,16 @@ mod tests {
         let out = render_supersession_overlay(&overlay);
         assert!(!out.is_empty());
         assert!(out.contains("## Supersession overlay"), "missing header");
-        assert!(out.contains("Active decisions:"), "missing active decisions header");
+        assert!(
+            out.contains("Active decisions:"),
+            "missing active decisions header"
+        );
         assert!(out.contains("DEC-0042"), "missing DEC-0042");
         assert!(out.contains("DEC-0043"), "missing DEC-0043");
-        assert!(out.contains("Recently superseded:"), "missing recently superseded header");
+        assert!(
+            out.contains("Recently superseded:"),
+            "missing recently superseded header"
+        );
         assert!(out.contains("supersedes"), "missing supersedes keyword");
         assert!(out.contains("DEC-0001"), "missing predecessor");
 
@@ -2514,26 +2536,37 @@ mod tests {
     fn render_branch_context_lists_siblings_and_merged() {
         let ctx = Some(BranchContext {
             current_branch: "Cortex:feature-auth".into(),
-            active_sibling_branches: vec![
-                BranchRefRow {
-                    branch_id: "Cortex:feature-search".into(),
-                    status: "active".into(),
-                },
-            ],
-            recently_merged: vec![
-                BranchRefRow {
-                    branch_id: "Cortex:phase18-bootstrap".into(),
-                    status: "merged".into(),
-                },
-            ],
+            active_sibling_branches: vec![BranchRefRow {
+                branch_id: "Cortex:feature-search".into(),
+                status: "active".into(),
+            }],
+            recently_merged: vec![BranchRefRow {
+                branch_id: "Cortex:phase18-bootstrap".into(),
+                status: "merged".into(),
+            }],
         });
         let out = render_branch_context(&ctx);
         assert!(!out.is_empty());
-        assert!(out.contains("## Branch context — Cortex:feature-auth"), "missing header");
-        assert!(out.contains("Active siblings:"), "missing active siblings header");
-        assert!(out.contains("Cortex:feature-search [active]"), "missing sibling row");
-        assert!(out.contains("Recently merged:"), "missing recently merged header");
-        assert!(out.contains("Cortex:phase18-bootstrap [merged]"), "missing merged row");
+        assert!(
+            out.contains("## Branch context — Cortex:feature-auth"),
+            "missing header"
+        );
+        assert!(
+            out.contains("Active siblings:"),
+            "missing active siblings header"
+        );
+        assert!(
+            out.contains("Cortex:feature-search [active]"),
+            "missing sibling row"
+        );
+        assert!(
+            out.contains("Recently merged:"),
+            "missing recently merged header"
+        );
+        assert!(
+            out.contains("Cortex:phase18-bootstrap [merged]"),
+            "missing merged row"
+        );
 
         // None and all-empty → blank.
         assert!(render_branch_context(&None).is_empty());
@@ -2581,20 +2614,36 @@ mod tests {
         });
 
         let bundle = format_bundle("pre_change_context", &resp, &opts);
-        assert!(bundle.contains("Timeline window"), "Timeline window header missing");
-        assert!(bundle.contains("Supersession overlay"), "Supersession overlay header missing");
-        assert!(bundle.contains("Branch context"), "Branch context header missing");
+        assert!(
+            bundle.contains("Timeline window"),
+            "Timeline window header missing"
+        );
+        assert!(
+            bundle.contains("Supersession overlay"),
+            "Supersession overlay header missing"
+        );
+        assert!(
+            bundle.contains("Branch context"),
+            "Branch context header missing"
+        );
 
         // Temporal sections must appear before Active operator work
         // (and before the consolidation block).
         let tw_pos = bundle.find("Timeline window").expect("Timeline window");
-        let so_pos = bundle.find("Supersession overlay").expect("Supersession overlay");
+        let so_pos = bundle
+            .find("Supersession overlay")
+            .expect("Supersession overlay");
         let bc_pos = bundle.find("Branch context").expect("Branch context");
-        let cons_pos = bundle.find("Consolidated context").expect("Consolidated context");
+        let cons_pos = bundle
+            .find("Consolidated context")
+            .expect("Consolidated context");
         // Order: timeline → supersession → branch → … → consolidations.
         assert!(tw_pos < so_pos, "timeline must precede supersession");
         assert!(so_pos < bc_pos, "supersession must precede branch context");
-        assert!(bc_pos < cons_pos, "branch context must precede consolidated context");
+        assert!(
+            bc_pos < cons_pos,
+            "branch context must precede consolidated context"
+        );
     }
 
     #[test]

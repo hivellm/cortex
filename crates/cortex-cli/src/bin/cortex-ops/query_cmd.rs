@@ -286,8 +286,13 @@ fn connect_nexus(
 }
 
 fn resolve_api_url(opt: Option<String>) -> String {
-    opt.or_else(|| std::env::var("CORTEX_API_URL").ok())
-        .unwrap_or_else(|| "http://127.0.0.1:17081".to_string())
+    opt.or_else(|| {
+        cortex_config::Config::load()
+            .unwrap_or_default()
+            .dashboard
+            .api_url
+    })
+    .unwrap_or_else(|| "http://127.0.0.1:17081".to_string())
 }
 
 fn build_runtime() -> Result<tokio::runtime::Runtime, ExitCode> {

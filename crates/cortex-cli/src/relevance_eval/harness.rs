@@ -418,6 +418,8 @@ mod tests {
             body_truncated: false,
             score: 1.0 / rank as f64,
             why: None,
+            verified: None,
+            verdict: None,
         }
     }
 

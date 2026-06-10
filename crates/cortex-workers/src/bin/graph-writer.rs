@@ -76,10 +76,10 @@ async fn main() -> Result<()> {
     // statement is a fast catalog check when the index is present. Set
     // `CORTEX_GRAPH_SCHEMA_ENSURE_SECS=0` to disable (e.g. once Nexus
     // persists indexes across restart).
-    let ensure_secs = std::env::var("CORTEX_GRAPH_SCHEMA_ENSURE_SECS")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(120);
+    let ensure_secs = cortex_config::Config::load()
+        .unwrap_or_default()
+        .nexus
+        .schema_ensure_secs;
     if ensure_secs > 0 {
         let schema_client = client.clone();
         tokio::spawn(async move {

@@ -219,11 +219,11 @@ async fn relevance_gold_set_meets_mrr_threshold() {
             budget_ms: PER_REQUEST_BUDGET_MS,
             budget_bytes: None,
             as_of: None,
-                branch: None,
-                projects: None,
-                include_history: None,
-                include_future: None,
-                include_branches: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
         };
         let url = format!("{}/v1/query", base.trim_end_matches('/'));
         let resp = client

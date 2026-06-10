@@ -69,6 +69,8 @@ fn populated_response_with_topic(card: Option<TopicCardRef>) -> QueryResponse {
                 body_truncated: false,
                 score: 0.9,
                 why: Some("vector match".into()),
+                verified: None,
+                verdict: None,
             }],
             decisions: vec![DecisionRef {
                 rank: 1,

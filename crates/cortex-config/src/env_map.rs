@@ -146,6 +146,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "/nexus/projection_enabled",
     ),
     (
+        "CORTEX_GRAPH_SCHEMA_ENSURE_SECS",
+        "/nexus/schema_ensure_secs",
+    ),
+    (
         "CORTEX_GRAPH_SWEEPER_INTERVAL_SECS",
         "/nexus/sweeper_interval_secs",
     ),

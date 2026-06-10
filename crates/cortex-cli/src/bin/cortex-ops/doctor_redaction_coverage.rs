@@ -33,7 +33,12 @@ struct Candidate {
 
 pub fn run(synap_url: Option<String>, stream: Option<String>, json: bool) -> ExitCode {
     let synap_url = synap_url
-        .or_else(|| std::env::var("CORTEX_SYNAP_URL").ok())
+        .or_else(|| {
+            cortex_config::Config::load()
+                .unwrap_or_default()
+                .ingestion
+                .synap_url
+        })
         .or_else(|| std::env::var("SYNAP_URL").ok())
         .unwrap_or_else(|| "http://127.0.0.1:17003".to_string());
     let stream_name = stream.unwrap_or_else(|| STREAM_RAW.to_string());
@@ -62,9 +67,7 @@ pub fn run(synap_url: Option<String>, stream: Option<String>, json: bool) -> Exi
     }) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!(
-                "ERROR: sample Synap stream {stream_name} at {synap_url}: {e}"
-            );
+            eprintln!("ERROR: sample Synap stream {stream_name} at {synap_url}: {e}");
             return ExitCode::from(1);
         }
     };
@@ -90,10 +93,7 @@ pub fn run(synap_url: Option<String>, stream: Option<String>, json: bool) -> Exi
         if candidates.is_empty() {
             println!("OK: 0 unredacted candidates");
         } else {
-            println!(
-                "WARN: {} unredacted-candidate(s) found",
-                candidates.len()
-            );
+            println!("WARN: {} unredacted-candidate(s) found", candidates.len());
             for c in &candidates {
                 println!(
                     "  unredacted-candidate  class={}  envelope_offset={}  field={}  byte_offset={}  len={}  preview={}",

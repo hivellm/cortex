@@ -69,8 +69,13 @@ pub(super) fn temporal_digest(api_url: Option<String>, json: bool) -> ExitCode {
 // ---------------------------------------------------------------------------
 
 fn resolve_api_url(opt: Option<String>) -> String {
-    opt.or_else(|| std::env::var("CORTEX_API_URL").ok())
-        .unwrap_or_else(|| "http://127.0.0.1:17000".to_string())
+    opt.or_else(|| {
+        cortex_config::Config::load()
+            .unwrap_or_default()
+            .dashboard
+            .api_url
+    })
+    .unwrap_or_else(|| "http://127.0.0.1:17000".to_string())
 }
 
 fn fetch_metrics(url: &str) -> Result<String, String> {

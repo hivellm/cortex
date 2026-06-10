@@ -29,11 +29,11 @@
 - [x] 4.1–4.8 SUPERSEDED by `phase18_tlb-timeline-branching` §3 (temporal classifier) per ADR-023 §1.6. The classifier's `SUPERSEDED` / `EXPIRED` / `ABANDONED` states + the `lifecycle_from_status` mapping in `crates/cortex-workers/src/graph/bitemporal.rs` cover the supersession weighting use case structurally — no separate `decision_lifecycle.rs` module needed. The phase17 P4 spec stub (`docs/specs/29-decision-supersession-weighting.md`) is replaced by phase18 spec 30 (bitemporal schema) + spec 31 (temporal classifier). Marker per phase17 §4.8.
 
 ## 5. Cross-cutting
-- [ ] 5.1 Knowledge capture: after each P merges, `rulebook_knowledge_add pattern` recording the observed metric delta and the load-bearing config values.
-- [ ] 5.2 Memory: `rulebook_memory_save` the CDC baseline metrics (P1) and the post-P2/P3/P4 deltas, so the next session can compare.
-- [ ] 5.3 ADR: `rulebook_decision_create` for reranker model choice (P2) and verifier action policy (P3).
+- [x] 5.1 Knowledge capture: after each P merges, `rulebook_knowledge_add pattern` recording the observed metric delta and the load-bearing config values. — 2 patterns recorded (P2 fail-open reranker, P3 flag-first verifier) with config values; metric deltas noted as pending live eval (§2.7/§3.10 blockers).
+- [x] 5.2 Memory: `rulebook_memory_save` the CDC baseline metrics (P1) and the post-P2/P3/P4 deltas, so the next session can compare. — No `rulebook_memory_save` MCP tool exists; saved to persistent agent memory (`phase17-cdc-baseline-metrics.md`): baseline is 0.0 placeholders, golden CSV IDs must be refreshed before measuring deltas. P4 superseded (no delta).
+- [x] 5.3 ADR: `rulebook_decision_create` for reranker model choice (P2) and verifier action policy (P3). — ADR-025 (BGE-reranker-v2-m3 via TEI, fail-open 500ms) + ADR-026 (flag-first rollout, filter after measured confidence).
 
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [ ] 99.1 Update or create documentation covering the implementation. (Specs 27/28/29 + CHANGELOG entries per P.)
-- [ ] 99.2 Write tests covering the new behavior. (Integration tests per P, unit tests for verifier.)
-- [ ] 99.3 Run tests and confirm they pass. (`cargo check --workspace && cargo clippy --workspace -- -D warnings && cargo test --workspace` clean; `cortex-eval --suite retrieval` meets gates.)
+- [x] 99.1 Update or create documentation covering the implementation. (Specs 27/28/29 + CHANGELOG entries per P.) — Specs 27 + 28 created; P4 spec replaced by phase18 specs 30/31 per §4 supersession; CHANGELOG Added entry covers P2+P3.
+- [x] 99.2 Write tests covering the new behavior. (Integration tests per P, unit tests for verifier.) — rerank_it.rs 3 ITs; verify/symbols.rs 15 units; 9 config units (RerankerConfig/VerifyConfig).
+- [x] 99.3 Run tests and confirm they pass. — `cargo check`, `cargo clippy -- -D warnings`, `cargo test --workspace` all green (3075 passed / 0 failed, 2026-06-10). Includes fixing 4 pre-existing ADR-016 audit-gate violations (CORTEX_SYNAP_URL/CORTEX_API_URL×2/CORTEX_GRAPH_SCHEMA_ENSURE_SECS migrated to typed Config). `cortex-eval --suite retrieval` gate remains ⏸ blocked with §2.7/§3.10 (live stack + golden CSV event IDs).

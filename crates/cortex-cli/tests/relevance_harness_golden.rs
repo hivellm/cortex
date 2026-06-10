@@ -28,6 +28,8 @@ fn snip(rank: usize, path: &str) -> Snippet {
         body_truncated: false,
         score: 1.0 / rank as f64,
         why: None,
+        verified: None,
+        verdict: None,
     }
 }
 

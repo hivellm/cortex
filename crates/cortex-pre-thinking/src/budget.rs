@@ -163,6 +163,8 @@ mod tests {
                 body_truncated: false,
                 score: 0.5,
                 why: Some("why".into()),
+                verified: None,
+                verdict: None,
             })
             .collect();
         let decisions: Vec<DecisionRef> = (0..5)
