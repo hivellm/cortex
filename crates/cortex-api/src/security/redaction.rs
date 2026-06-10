@@ -88,6 +88,8 @@ mod tests {
                     body_truncated: false,
                     score: 0.0,
                     why: None,
+                    verified: None,
+                    verdict: None,
                 }],
                 ..Default::default()
             },

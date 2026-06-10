@@ -160,6 +160,14 @@ fn deltas_for(env: &cortex_core::events::Envelope) -> Value {
             out.insert(key.to_string(), v.clone());
         }
     }
+    // Payload blobs (Turn, ToolCall) carry no `model` field — the model
+    // is stored at the Envelope level. Promote it into the delta blob so
+    // the timeline reflects the actual model name instead of being absent.
+    if !out.contains_key("model") {
+        if let Some(m) = &env.model {
+            out.insert("model".to_string(), Value::String(m.clone()));
+        }
+    }
     Value::Object(out)
 }
 
@@ -349,6 +357,38 @@ mod tests {
             let env = mk_env(kind, "2026-05-26T07:00:00Z", json!({}));
             assert_eq!(build_row(&env).kind, expected);
         }
+    }
+
+    #[test]
+    fn deltas_for_promotes_envelope_model_when_payload_has_none() {
+        let mut env = mk_env(
+            Kind::Turn,
+            "2026-05-26T07:00:00Z",
+            json!({"user_message": "hello"}),
+        );
+        env.model = Some("claude-sonnet-4-6".to_string());
+        let row = build_row(&env);
+        assert_eq!(
+            row.deltas["model"],
+            "claude-sonnet-4-6",
+            "envelope.model must be promoted to deltas when payload lacks it"
+        );
+    }
+
+    #[test]
+    fn deltas_for_payload_model_takes_precedence_over_envelope_model() {
+        let mut env = mk_env(
+            Kind::AgentCall,
+            "2026-05-26T07:00:00Z",
+            json!({"model": "claude-haiku-4-5", "tool_name": "bash"}),
+        );
+        env.model = Some("claude-sonnet-4-6".to_string());
+        let row = build_row(&env);
+        assert_eq!(
+            row.deltas["model"],
+            "claude-haiku-4-5",
+            "payload model must win over envelope.model"
+        );
     }
 
     #[test]

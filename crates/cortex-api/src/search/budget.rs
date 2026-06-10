@@ -185,6 +185,8 @@ mod tests {
             body_truncated: false,
             score: 1.0,
             why: None,
+            verified: None,
+            verdict: None,
         }
     }
 

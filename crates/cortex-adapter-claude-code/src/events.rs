@@ -228,7 +228,8 @@ pub fn build_event(
         session_id,
         stream: Stream::Live,
         tool: TOOL_CLAUDE_CODE.to_string(),
-        model: std::env::var("CLAUDE_MODEL").ok(),
+        model: read_string_field(&redacted, "model")
+            .or_else(|| std::env::var("CLAUDE_MODEL").ok()),
         kind: canonical_kind,
         context,
         payload: payload_value,
