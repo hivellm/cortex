@@ -1,0 +1,11 @@
+id,session_id,expected_entities,expected_facts
+c-001,PLACEHOLDER_SESS_001,EnvelopeProducer;ProducerCtx;OpenCodeProducer,OpenCodeProducer implements EnvelopeProducer;MPSC channel drains per produce() call
+c-002,PLACEHOLDER_SESS_002,ADR-016;cortex_config;Config,ADR-016 drove migration from std::env::var to typed Config;KNOWN_ENV_NAMES enforces allowlist
+c-003,PLACEHOLDER_SESS_003,pre-thinking;bundle;circuit breaker,pre-thinking injects context before each prompt;circuit breaker trips on 5 consecutive failures
+c-004,PLACEHOLDER_SESS_004,git-safety;LAW-CORTEX;destructive ops,git reset --hard requires explicit user authorization;stash is forbidden without authorization
+c-005,PLACEHOLDER_SESS_005,graph projection;EMITTED_BY;anchor node,anchor nodes prevent EMITTED_BY edges from dropping;projection is idempotent
+c-006,PLACEHOLDER_SESS_006,OpenCode;cortex-opencode-plugin;TOOL_OPENCODE,OpenCode adapter uses HTTP POST /hook;plugin subscribes to session.created and session.idle
+c-007,PLACEHOLDER_SESS_007,bootstrap CLI;checkpoint;RepoProgress,bootstrap resumes per-repo from last checkpoint;ETA is derived from rolling 60s rate window
+c-008,PLACEHOLDER_SESS_008,classifier worker;Haiku;enriched event,classifier enriches events with topics severity and PII risk;Haiku CLI drives classification
+c-009,PLACEHOLDER_SESS_009,RRF;Reciprocal Rank Fusion;fusion lane,RRF combines BM25 dense and graph results;fusion lane is in spec-11
+c-010,PLACEHOLDER_SESS_010,Nexus;graph writer;MERGE,graph writer uses MERGE for idempotent upserts;Tool nodes are anchored per EMITTED_BY edge

@@ -1261,3 +1261,150 @@ mod tests_cross_project_config {
         assert_eq!(cfg.max_hops, 1);
     }
 }
+
+// ── VerifyConfig ──────────────────────────────────────────────────────────────
+
+fn default_verify_symbols_enabled() -> bool {
+    true
+}
+
+fn default_verify_action() -> String {
+    "flag".to_string()
+}
+
+/// Configuration for the phantom-link symbol verifier (phase17 §3.6).
+///
+/// The verifier checks whether a cited `(path, symbol)` pair actually exists
+/// in the repository. Default action is `"flag"` (attach `verified: false`
+/// metadata); `"filter"` drops unverified snippets entirely. Operators can
+/// flip to `"filter"` once confidence in the parser is high.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VerifyConfig {
+    /// Master switch. `false` disables all symbol-verification checks.
+    #[serde(default = "default_verify_symbols_enabled")]
+    pub symbols_enabled: bool,
+
+    /// What to do when a cited symbol cannot be verified:
+    /// `"flag"` — attach `verified = false` metadata (default, safe for 2-week rollout),
+    /// `"filter"` — remove the snippet from results entirely.
+    #[serde(default = "default_verify_action")]
+    pub action: String,
+}
+
+impl Default for VerifyConfig {
+    fn default() -> Self {
+        Self {
+            symbols_enabled: default_verify_symbols_enabled(),
+            action: default_verify_action(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_verify_config {
+    use super::*;
+
+    #[test]
+    fn defaults_match_spec_28() {
+        let cfg = VerifyConfig::default();
+        assert!(cfg.symbols_enabled);
+        assert_eq!(cfg.action, "flag");
+    }
+
+    #[test]
+    fn toml_round_trips_defaults() {
+        let cfg = VerifyConfig::default();
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: VerifyConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn partial_toml_keeps_serde_defaults_for_missing_fields() {
+        let raw = r#"action = "filter""#;
+        let cfg: VerifyConfig = toml::from_str(raw).expect("parse");
+        assert!(cfg.symbols_enabled);
+        assert_eq!(cfg.action, "filter");
+    }
+}
+
+// ── RerankerConfig ────────────────────────────────────────────────────────────
+
+fn default_reranker_enabled() -> bool {
+    true
+}
+
+fn default_reranker_top_k_input() -> usize {
+    100
+}
+
+fn default_reranker_timeout_ms() -> u64 {
+    500
+}
+
+/// Configuration for the cross-encoder reranker (BGE-reranker-v2-m3 via TEI).
+///
+/// When `endpoint` is `None` the reranker step is silently skipped even if
+/// `enabled = true`, so operators can ship the feature flag before standing up
+/// the TEI service.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RerankerConfig {
+    /// Master switch. `false` bypasses the rerank step entirely.
+    #[serde(default = "default_reranker_enabled")]
+    pub enabled: bool,
+
+    /// TEI reranker endpoint, e.g. `http://localhost:8080`. `None` = disabled.
+    #[serde(default)]
+    pub endpoint: Option<String>,
+
+    /// How many fused candidates to send to the reranker. Default: 100.
+    #[serde(default = "default_reranker_top_k_input")]
+    pub top_k_input: usize,
+
+    /// HTTP timeout for a single rerank call in milliseconds. Default: 500.
+    #[serde(default = "default_reranker_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl Default for RerankerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_reranker_enabled(),
+            endpoint: None,
+            top_k_input: default_reranker_top_k_input(),
+            timeout_ms: default_reranker_timeout_ms(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_reranker_config {
+    use super::*;
+
+    #[test]
+    fn defaults_match_spec_27() {
+        let cfg = RerankerConfig::default();
+        assert!(cfg.enabled);
+        assert!(cfg.endpoint.is_none());
+        assert_eq!(cfg.top_k_input, 100);
+        assert_eq!(cfg.timeout_ms, 500);
+    }
+
+    #[test]
+    fn toml_round_trips_defaults() {
+        let cfg = RerankerConfig::default();
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: RerankerConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn partial_toml_keeps_serde_defaults_for_missing_fields() {
+        let raw = r#"endpoint = "http://localhost:8080""#;
+        let cfg: RerankerConfig = toml::from_str(raw).expect("parse");
+        assert!(cfg.enabled);
+        assert_eq!(cfg.endpoint.as_deref(), Some("http://localhost:8080"));
+        assert_eq!(cfg.top_k_input, 100);
+        assert_eq!(cfg.timeout_ms, 500);
+    }
+}

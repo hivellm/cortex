@@ -7,7 +7,7 @@ use crate::sub::{
     AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
     ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig, DoctorConfig,
     EmbedderConfig, IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
-    RetentionConfig, RulebookConfig, TemporalConfig,
+    RerankerConfig, RetentionConfig, RulebookConfig, TemporalConfig, VerifyConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -87,6 +87,15 @@ pub struct Config {
     /// OFF per ADR-020.
     #[serde(default)]
     pub cross_project: CrossProjectConfig,
+    /// Phase17 §2.4 — cross-encoder reranker config (BGE-reranker-v2-m3
+    /// via TEI). Enabled by default; active only when `endpoint` is set.
+    #[serde(default)]
+    pub reranker: RerankerConfig,
+    /// Phase17 §3.6 — phantom-link symbol verifier config. Default action
+    /// is `"flag"` (attach metadata without dropping snippets) for the
+    /// first 2 weeks, then operators switch to `"filter"`.
+    #[serde(default)]
+    pub verify: VerifyConfig,
 }
 
 fn default_schema_version() -> String {
@@ -116,6 +125,8 @@ impl Default for Config {
             mcp: McpConfig::default(),
             temporal: TemporalConfig::default(),
             cross_project: CrossProjectConfig::default(),
+            reranker: RerankerConfig::default(),
+            verify: VerifyConfig::default(),
         }
     }
 }

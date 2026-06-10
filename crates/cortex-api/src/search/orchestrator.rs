@@ -15,7 +15,9 @@ use crate::fusion::{rrf_fuse, FusionConfig};
 use crate::lanes::{
     is_collection_missing_marker, GraphLane, GraphRequest, KeywordLane, LaneHit, VectorLane,
 };
-use cortex_config::{CrossProjectConfig, TemporalConfig};
+use cortex_config::{CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig};
+use cortex_workers::rerank::{Candidate as RerankCandidate, Reranker};
+use cortex_workers::verify::{verify_symbol, SymbolVerdict};
 use cortex_workers::temporal::classifier::{
     classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
     TemporalConfig as ClassifierConfig,
@@ -70,6 +72,21 @@ pub struct Orchestrator {
     /// into this registry. `None` (the default) is a no-op so all
     /// existing `Orchestrator::new` call sites compile unchanged.
     pub temporal_metrics: Option<Arc<crate::TemporalMetrics>>,
+    /// Phase17 §2.3 — optional cross-encoder reranker. When `Some` and
+    /// `reranker_cfg.enabled`, the top-`top_k_input` fused candidates are
+    /// sent to the TEI service before the dedupe/truncate step.
+    /// `None` (the default) bypasses reranking entirely so existing
+    /// constructors compile unchanged.
+    pub reranker: Option<Arc<dyn Reranker>>,
+    /// Phase17 §2.4 — reranker knob snapshot (cloned from config at boot).
+    pub reranker_cfg: RerankerConfig,
+    /// Phase17 §3.5 — phantom-link verifier config.
+    pub verify_cfg: VerifyConfig,
+    /// Phase17 §3.5 — absolute workspace root for resolving repo-relative
+    /// snippet paths. `None` disables filesystem verification even when
+    /// `verify_cfg.symbols_enabled = true` (safe default for tests that
+    /// don't have a real workspace on disk).
+    pub workspace_root: Option<std::path::PathBuf>,
 }
 
 impl Orchestrator {
@@ -90,6 +107,10 @@ impl Orchestrator {
             cross_project: Arc::new(RwLock::new(CrossProjectConfig::default())),
             rewriter: Arc::new(PassthroughRewriter),
             temporal_metrics: None,
+            reranker: None,
+            reranker_cfg: RerankerConfig::default(),
+            verify_cfg: VerifyConfig::default(),
+            workspace_root: None,
         }
     }
 
@@ -190,6 +211,28 @@ impl Orchestrator {
     /// record calls become no-ops (existing tests are unaffected).
     pub fn with_temporal_metrics(mut self, m: Arc<crate::TemporalMetrics>) -> Self {
         self.temporal_metrics = Some(m);
+        self
+    }
+
+    /// Phase17 §2.3 — attach a cross-encoder reranker. The live binary
+    /// wires in [`cortex_workers::rerank::bge_v2m3::BgeRerankerV2M3`]
+    /// when `CORTEX_RERANKER_ENDPOINT` is set. Omitting this builder
+    /// leaves `reranker = None` and all existing constructors compile
+    /// unchanged (no reranking = pass-through).
+    pub fn with_reranker(mut self, reranker: Arc<dyn Reranker>, cfg: RerankerConfig) -> Self {
+        self.reranker = Some(reranker);
+        self.reranker_cfg = cfg;
+        self
+    }
+
+    /// Phase17 §3.5 — configure the phantom-link verifier. The live binary
+    /// passes the workspace root and `VerifyConfig` from `Config::verify` at
+    /// boot. Omitting this builder leaves `symbols_enabled = true` (default)
+    /// but `workspace_root = None`, which disables filesystem verification so
+    /// tests that don't mount a real workspace are unaffected.
+    pub fn with_verify(mut self, cfg: VerifyConfig, root: std::path::PathBuf) -> Self {
+        self.verify_cfg = cfg;
+        self.workspace_root = Some(root);
         self
     }
 
@@ -458,6 +501,51 @@ impl Orchestrator {
             .await;
         }
 
+        // Phase17 §2.3 — cross-encoder reranker step (fail-open, §2.5).
+        // Sends the top `top_k_input` fused candidates to the TEI
+        // service and overwrites each hit's `score` with the returned
+        // cross-encoder logit, then re-sorts descending. On timeout or
+        // any HTTP error the pre-rerank order is kept intact and an
+        // audit event is emitted with `reranker.fallback = true`.
+        if let Some(reranker) = &self.reranker {
+            if self.reranker_cfg.enabled {
+                let top_k = self.reranker_cfg.top_k_input;
+                let candidates: Vec<RerankCandidate> = fused
+                    .iter()
+                    .take(top_k)
+                    .map(|h| RerankCandidate {
+                        doc_id: h.doc_id.clone(),
+                        text: h.text.clone(),
+                    })
+                    .collect();
+
+                match reranker.score(&rewritten.vector_query, &candidates).await {
+                    Ok(scores) => {
+                        for (hit, score) in fused.iter_mut().zip(scores) {
+                            hit.score = score as f64;
+                        }
+                        // Re-sort descending by the new scores from the
+                        // cross-encoder (fusion order is no longer valid).
+                        fused.sort_by(|a, b| {
+                            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
+                    Err(err) => {
+                        tracing::warn!(
+                            error = %err,
+                            "reranker call failed; falling back to pre-rerank fusion order"
+                        );
+                        tracing::info!(
+                            target: "cortex_audit",
+                            event = "reranker.fallback",
+                            reason = %err,
+                            query_id = %response.query_id,
+                        );
+                    }
+                }
+            }
+        }
+
         // Post-fusion dedupe + degenerate-hit filter. `rrf_fuse` only
         // dedupes by `doc_id`, so the same artifact lands twice when
         // the keyword lane (`meili|...`) and vector lane (`vec|...`)
@@ -500,6 +588,21 @@ impl Orchestrator {
                 .enumerate()
                 .map(|(idx, hit)| snippet_from_hit(idx + 1, hit))
                 .collect();
+
+            // Phase17 §3.5 — phantom-link verification pass.
+            // Run only when `symbols_enabled` and a workspace root is
+            // available; otherwise snippets flow through with
+            // `verified = None` (not-run, not flagged).
+            if self.verify_cfg.symbols_enabled {
+                if let Some(root) = &self.workspace_root {
+                    apply_phantom_link_verification(
+                        &mut response.results.snippets,
+                        root,
+                        &self.verify_cfg.action,
+                        &response.query_id,
+                    );
+                }
+            }
         }
 
         // ---- Overlays ----
@@ -1146,6 +1249,66 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
             .get("why")
             .and_then(|v| v.as_str())
             .map(String::from),
+        // Phase17 §3.5 — phantom-link verification is applied as a
+        // post-assembly pass in `Orchestrator::run` (see
+        // `apply_phantom_link_verification`). These fields start as
+        // `None` and are filled in by that pass.
+        verified: None,
+        verdict: None,
+    }
+}
+
+/// Phase17 §3.5 + §3.9 — phantom-link verification post-assembly pass.
+///
+/// For each snippet that has both a `path` and a `symbol`, runs
+/// [`verify_symbol`] against `workspace_root/path`. Attaches `verified`
+/// and `verdict` metadata. When `action = "filter"`, removes snippets
+/// whose symbol was `NotFound`. Emits a `phantom_link_dropped` audit event
+/// with the per-turn drop count (§3.9).
+fn apply_phantom_link_verification(
+    snippets: &mut Vec<crate::types::Snippet>,
+    workspace_root: &std::path::Path,
+    action: &str,
+    query_id: &str,
+) {
+    let mut dropped = 0u32;
+
+    for snippet in snippets.iter_mut() {
+        let (Some(path_str), Some(symbol)) = (snippet.path.as_deref(), snippet.symbol.as_deref())
+        else {
+            continue;
+        };
+        let abs_path = workspace_root.join(path_str);
+        let v = verify_symbol(&abs_path, symbol);
+        snippet.verified = Some(v == SymbolVerdict::Verified);
+        snippet.verdict = Some(v);
+    }
+
+    if action == "filter" {
+        snippets.retain(|s| {
+            let keep = s.verified.unwrap_or(true);
+            if !keep {
+                dropped += 1;
+            }
+            keep
+        });
+    } else {
+        // "flag" mode: count how many are unverified for the audit event.
+        for s in snippets.iter() {
+            if s.verified == Some(false) {
+                dropped += 1;
+            }
+        }
+    }
+
+    if dropped > 0 {
+        tracing::info!(
+            target: "cortex_audit",
+            event = "phantom_link_dropped",
+            dropped = dropped,
+            action = action,
+            query_id = query_id,
+        );
     }
 }
 

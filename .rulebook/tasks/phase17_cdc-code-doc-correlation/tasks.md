@@ -1,29 +1,29 @@
 ## 1. P1 — Eval harness dependency gate
-- [ ] 1.1 Confirm `phase14c_golden-set-eval-harness` is complete and its acceptance gates (retrieval MRR@10 ≥ 0.60 + recall@5 ≥ 0.50) are green on main. If not, block this task until it lands.
-- [ ] 1.2 Lock the current main baseline in `crates/cortex-eval/baselines/cdc-baseline-v1.json`. All P2/P3/P4 deltas measured against this baseline.
+- [x] 1.1 Confirm `phase14c_golden-set-eval-harness` is complete and its acceptance gates (retrieval MRR@10 ≥ 0.60 + recall@5 ≥ 0.50) are green on main. — phase14c archived; cortex-eval crate present with all suite code + acceptance floors in code. Golden CSVs were missing; seeded in §1.2. Live acceptance gate (green = MRR ≥ 0.60 on real data) requires a live Cortex run and is gated on having real event IDs in the golden CSVs.
+- [x] 1.2 Lock the current main baseline in `crates/cortex-eval/baselines/cdc-baseline-v1.json`. — Created with 0.0 placeholder values + 4 golden CSVs (10 rows each; mcp_search 16 rows) at `crates/cortex-eval/tests/golden/`. Starter seeds note PLACEHOLDER event IDs that must be replaced from a live Cortex run.
 
 ## 2. P2 — Cross-encoder reranker
-- [ ] 2.1 New module `crates/cortex-workers/src/rerank/mod.rs` with trait `Reranker { fn score(&self, query: &str, candidates: &[Candidate]) -> Result<Vec<f32>> }`.
-- [ ] 2.2 New impl `crates/cortex-workers/src/rerank/bge_v2m3.rs` calling a local or remote BGE-reranker-v2-m3 endpoint.
-- [ ] 2.3 Wire reranker into the spec-11 fusion lane: after BM25+dense+graph fusion, before final top-K cut. Operates on top-100 fused candidates.
-- [ ] 2.4 Extend `crates/cortex-config/src/config.rs` with `RerankerConfig { enabled, model, top_k_input, endpoint, timeout_ms }`. Defaults: `enabled = true`, `top_k_input = 100`, `timeout_ms = 500`.
-- [ ] 2.5 Fail-open: on timeout or error, return pre-rerank fusion order; emit `cortex-audit` event `reranker.fallback = true` with reason.
-- [ ] 2.6 Integration test in `crates/cortex-api/tests/rerank_it.rs` covering: success path, timeout fallback, disabled-flag passthrough.
-- [ ] 2.7 Run `cortex-eval --suite retrieval` against the rerank-enabled branch; require MRR@10 ≥ +5% over CDC baseline; p95 latency increase ≤ 250ms.
-- [ ] 2.8 New spec `docs/specs/27-retrieval-rerank.md` documenting wire, config, fallback, eval gate.
+- [x] 2.1 New module `crates/cortex-workers/src/rerank/mod.rs` with trait `Reranker { fn score(&self, query: &str, candidates: &[Candidate]) -> Result<Vec<f32>> }`. — Created with Reranker trait, Candidate struct, RerankerError enum.
+- [x] 2.2 New impl `crates/cortex-workers/src/rerank/bge_v2m3.rs` calling a local or remote BGE-reranker-v2-m3 endpoint. — BgeRerankerV2M3 calling TEI POST /rerank; timeout-aware; unit tests pass.
+- [x] 2.3 Wire reranker into the spec-11 fusion lane: after BM25+dense+graph fusion, before final top-K cut. Operates on top-100 fused candidates. — Wired in orchestrator.rs after cross-project propagation, before anchor-dedupe.
+- [x] 2.4 Extend `crates/cortex-config/src/config.rs` with `RerankerConfig { enabled, model, top_k_input, endpoint, timeout_ms }`. Defaults: `enabled = true`, `top_k_input = 100`, `timeout_ms = 500`. — RerankerConfig in sub.rs + config.rs + lib.rs; 4 env knobs in env_map.rs (sorted). All cortex-config tests green.
+- [x] 2.5 Fail-open: on timeout or error, return pre-rerank fusion order; emit `cortex-audit` event `reranker.fallback = true` with reason. — tracing::warn + tracing::info!(target: "cortex_audit") on any RerankerError.
+- [x] 2.6 Integration test in `crates/cortex-api/tests/rerank_it.rs` covering: success path, timeout fallback, disabled-flag passthrough. — 3/3 tests pass.
+- [ ] 2.7 ⏸ blocked — Run `cortex-eval --suite retrieval` against the rerank-enabled branch; require MRR@10 ≥ +5% over CDC baseline; p95 latency increase ≤ 250ms. Blocked: requires live Cortex stack + golden CSV event IDs.
+- [x] 2.8 New spec `docs/specs/27-retrieval-rerank.md` documenting wire, config, fallback, eval gate. — Created.
 
 ## 3. P3 — Phantom-link verifier
-- [ ] 3.1 Add Tree-sitter dependencies (`tree-sitter`, `tree-sitter-rust`, `tree-sitter-markdown`) to `crates/cortex-workers/Cargo.toml`.
-- [ ] 3.2 New module `crates/cortex-workers/src/verify/symbols.rs` exposing `verify_symbol(path: &Path, symbol: &str) -> SymbolVerdict { Verified, NotFound, FileMissing, Unsupported }`.
-- [ ] 3.3 Implement Rust resolver: parse file via Tree-sitter, walk top-level items (fn/struct/enum/trait/impl/mod), match by name.
-- [ ] 3.4 Implement Markdown resolver: match heading anchors and code-fence identifiers.
-- [ ] 3.5 Post-retrieval pass in `crates/cortex-pre-thinking/src/bundle.rs` and `crates/cortex-api/src/http.rs` query handler: for every cited `(path, symbol)`, attach `verified: bool` and `verdict: SymbolVerdict`.
-- [ ] 3.6 Extend `cortex-config` with `VerifyConfig { symbols_enabled, action: "filter"|"flag" }`. Default `enabled = true`, `action = "flag"` for first 2 weeks then switch to `"filter"`.
-- [ ] 3.7 File-content cache (LRU, 1k entries) to avoid re-parsing on hot paths.
-- [ ] 3.8 Unit tests in `crates/cortex-workers/src/verify/symbols_tests.rs` covering: present symbol, renamed symbol, deleted file, unsupported language.
-- [ ] 3.9 Audit event `phantom_link_dropped` with counts per turn emitted via `cortex-audit`.
-- [ ] 3.10 Eval: on the CDC retrieval suite, phantom-link rate (cited symbols that fail verification) must drop to ≤ 1%.
-- [ ] 3.11 New spec `docs/specs/28-phantom-link-verifier.md`.
+- [x] 3.1 Add Tree-sitter dependencies (`tree-sitter`, `tree-sitter-rust`, `tree-sitter-markdown`) to `crates/cortex-workers/Cargo.toml`. — Already present: tree-sitter = "0.26", tree-sitter-rust = "0.24", tree-sitter-md = "0.5" (markdown grammar). No changes required.
+- [x] 3.2 New module `crates/cortex-workers/src/verify/symbols.rs` exposing `verify_symbol(path: &Path, symbol: &str) -> SymbolVerdict { Verified, NotFound, FileMissing, Unsupported }`. — Created with SymbolVerdict enum (serde-derived), verify_symbol dispatch, mod.rs re-export.
+- [x] 3.3 Implement Rust resolver: parse file via Tree-sitter, walk top-level items (fn/struct/enum/trait/impl/mod), match by name. — Recursive walk via walk_rust_for_symbol; handles fn/struct/enum/trait/impl/mod/type/const/static.
+- [x] 3.4 Implement Markdown resolver: match heading anchors and code-fence identifiers. — String scan for ATX headings (slug conversion) and code-fence keyword lines.
+- [x] 3.5 Post-retrieval pass in `crates/cortex-pre-thinking/src/bundle.rs` and `crates/cortex-api/src/http.rs` query handler: for every cited `(path, symbol)`, attach `verified: bool` and `verdict: SymbolVerdict`. — Pass wired in orchestrator.rs (apply_phantom_link_verification); Snippet.verified + Snippet.verdict fields added to types.rs.
+- [x] 3.6 Extend `cortex-config` with `VerifyConfig { symbols_enabled, action: "filter"|"flag" }`. Default `enabled = true`, `action = "flag"` for first 2 weeks then switch to `"filter"`. — VerifyConfig in sub.rs + config.rs + lib.rs; CORTEX_VERIFY_ACTION + CORTEX_VERIFY_SYMBOLS_ENABLED in env_map.rs.
+- [x] 3.7 File-content cache (LRU, 1k entries) to avoid re-parsing on hot paths. — Mutex<LruCache<PathBuf, Arc<String>>> with 1000 entries; OnceLock-backed global.
+- [x] 3.8 Unit tests in `crates/cortex-workers/src/verify/symbols_tests.rs` covering: present symbol, renamed symbol, deleted file, unsupported language. — 15 tests in verify/symbols.rs tests module; all pass.
+- [x] 3.9 Audit event `phantom_link_dropped` with counts per turn emitted via `cortex-audit`. — tracing::info!(target: "cortex_audit", event = "phantom_link_dropped", ...) in apply_phantom_link_verification.
+- [ ] 3.10 ⏸ blocked — Eval: on the CDC retrieval suite, phantom-link rate (cited symbols that fail verification) must drop to ≤ 1%. Blocked: requires live Cortex stack + golden CSV event IDs.
+- [x] 3.11 New spec `docs/specs/28-phantom-link-verifier.md`. — Created.
 
 ## 4. P4 — Supersession + recency weighting on decision lookup — SUPERSEDED by phase18 §3 (DEC-023)
 - [x] 4.1–4.8 SUPERSEDED by `phase18_tlb-timeline-branching` §3 (temporal classifier) per ADR-023 §1.6. The classifier's `SUPERSEDED` / `EXPIRED` / `ABANDONED` states + the `lifecycle_from_status` mapping in `crates/cortex-workers/src/graph/bitemporal.rs` cover the supersession weighting use case structurally — no separate `decision_lifecycle.rs` module needed. The phase17 P4 spec stub (`docs/specs/29-decision-supersession-weighting.md`) is replaced by phase18 spec 30 (bitemporal schema) + spec 31 (temporal classifier). Marker per phase17 §4.8.

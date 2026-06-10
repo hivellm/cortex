@@ -257,6 +257,15 @@ pub struct Snippet {
     /// Why-this-result blurb.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
+    /// Phase17 §3.5 — `true` when the cited (path, symbol) was found
+    /// in the repo by the phantom-link verifier. `None` when the verifier
+    /// was disabled, the snippet has no symbol, or the language is unsupported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified: Option<bool>,
+    /// Phase17 §3.5 — detailed verifier verdict (only set when `verified`
+    /// is `Some`). `None` when the verifier was not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<cortex_workers::verify::SymbolVerdict>,
 }
 
 /// One decision overlay entry.

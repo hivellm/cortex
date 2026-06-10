@@ -174,6 +174,12 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "CORTEX_RELEVANCE_CONFIG",
         "/dashboard/relevance_config_path",
     ),
+    // Phase17 §2.4 — cross-encoder reranker knobs (sorted alphabetically
+    // between CORTEX_RELEVANCE_CONFIG and CORTEX_RETENTION_BATCH_SIZE).
+    ("CORTEX_RERANKER_ENABLED", "/reranker/enabled"),
+    ("CORTEX_RERANKER_ENDPOINT", "/reranker/endpoint"),
+    ("CORTEX_RERANKER_TIMEOUT_MS", "/reranker/timeout_ms"),
+    ("CORTEX_RERANKER_TOP_K", "/reranker/top_k_input"),
     ("CORTEX_RETENTION_BATCH_SIZE", "/retention/batch_size"),
     (
         "CORTEX_RETENTION_FP32_TO_PQ_DAYS",
@@ -220,6 +226,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ),
     ("CORTEX_VECTORIZER_URL", "/embedder/vectorizer_url"),
     ("CORTEX_VECTORIZER_USER", "/embedder/vectorizer_user"),
+    // Phase17 §3.6 — phantom-link verifier knobs (sorted alphabetically
+    // after CORTEX_VECTORIZER_* since VERIFY > VECTOR lexicographically).
+    ("CORTEX_VERIFY_ACTION", "/verify/action"),
+    ("CORTEX_VERIFY_SYMBOLS_ENABLED", "/verify/symbols_enabled"),
 ];
 
 /// Reverse lookup: given an env name, return the JSON pointer

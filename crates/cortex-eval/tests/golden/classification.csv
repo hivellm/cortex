@@ -1,0 +1,11 @@
+id,envelope_json,expected_kind
+cl-001,"{""tool"":""claude-code"",""kind"":""turn"",""payload"":{""prompt"":""how does authentication work"",""response"":""It uses JWT tokens""}}",turn
+cl-002,"{""tool"":""claude-code"",""kind"":""tool_call"",""payload"":{""tool_name"":""Bash"",""input"":{""command"":""cargo check""},""outcome"":""success""}}",tool_call
+cl-003,"{""tool"":""claude-code"",""kind"":""agent_call"",""payload"":{""agent_type"":""researcher"",""prompt"":""find all usages of EnvelopeProducer""}}",agent_call
+cl-004,"{""tool"":""claude-code"",""kind"":""memory"",""payload"":{""operation"":""write"",""key"":""preferred_test_framework"",""value"":""vitest""}}",memory
+cl-005,"{""tool"":""claude-code"",""kind"":""decision"",""payload"":{""decision_id"":""DEC-042"",""title"":""Use axum for HTTP server"",""rationale"":""async-native and well-supported""}}",decision
+cl-006,"{""tool"":""claude-code"",""kind"":""law_violation"",""payload"":{""law_id"":""LAW-007"",""severity"":""critical"",""message"":""attempted force push to main""}}",law_violation
+cl-007,"{""tool"":""claude-code"",""kind"":""artifact"",""payload"":{""artifact_type"":""file"",""path"":""crates/cortex-core/src/events.rs""}}",artifact
+cl-008,"{""tool"":""claude-code"",""kind"":""knowledge"",""payload"":{""title"":""use cargo check before cargo test"",""category"":""rust-workflow""}}",knowledge
+cl-009,"{""tool"":""claude-code"",""kind"":""learning"",""payload"":{""title"":""axum Router.merge panics on duplicate routes"",""insight"":""Always use Router.nest for sub-routers""}}",learning
+cl-010,"{""tool"":""claude-code"",""kind"":""consolidation"",""payload"":{""grain"":""session"",""summary_markdown"":""Implemented OpenCode adapter"",""takeaways"":[""MPSC pattern for decoupled ingestion""]}}",consolidation

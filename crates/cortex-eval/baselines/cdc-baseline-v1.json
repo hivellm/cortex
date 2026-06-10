@@ -1,0 +1,32 @@
+{
+  "_note": "CDC-001 baseline — phase17 §1.2. Values are 0.0 (no live run yet). Regenerate with: cargo run -p cortex-eval -- --suite retrieval --baseline-out baselines/cdc-baseline-v1.json against a live Cortex stack after populating tests/golden/retrieval.csv with real event IDs.",
+  "retrieval": {
+    "suite": "retrieval",
+    "finished_at": "1970-01-01T00:00:00Z",
+    "rows_total": 0,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.0, "floor": 0.60, "passed": false},
+      {"name": "recall_at_5", "value": 0.0, "floor": 0.50, "passed": false}
+    ]
+  },
+  "consolidation": {
+    "suite": "consolidation",
+    "finished_at": "1970-01-01T00:00:00Z",
+    "rows_total": 0,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "entity_recall", "value": 0.0, "floor": 0.85, "passed": false},
+      {"name": "fact_recall", "value": 0.0, "floor": 0.70, "passed": false}
+    ]
+  },
+  "classification": {
+    "suite": "classification",
+    "finished_at": "1970-01-01T00:00:00Z",
+    "rows_total": 0,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "macro_f1", "value": 0.0, "floor": 0.90, "passed": false}
+    ]
+  }
+}

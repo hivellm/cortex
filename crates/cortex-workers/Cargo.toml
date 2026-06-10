@@ -89,6 +89,7 @@ tower = { workspace = true }
 tower-http = { workspace = true }
 regex = { workspace = true }
 once_cell = { workspace = true }
+lru = { workspace = true }
 rusqlite = { workspace = true }
 cron = { workspace = true }
 sha2 = { workspace = true }
