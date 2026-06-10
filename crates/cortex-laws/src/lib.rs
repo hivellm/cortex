@@ -336,7 +336,11 @@ rationale: "Fires on every action."
         let reg = LawRegistry::load(tmp.path()).unwrap();
         assert_eq!(reg.len(), 1);
 
-        let ctx = EvalContext { tool: "Bash", action: "", args: "git commit --no-verify" };
+        let ctx = EvalContext {
+            tool: "Bash",
+            action: "",
+            args: "git commit --no-verify",
+        };
         let v = reg.evaluate(&ctx);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, RuleVerdict::Deny);
@@ -351,7 +355,11 @@ rationale: "Fires on every action."
         law_file(&tmp, "law-007.yml", LAW_007_YAML);
         let reg = LawRegistry::load(tmp.path()).unwrap();
 
-        let ctx = EvalContext { tool: "Bash", action: "", args: "git commit -m 'fix: bug'" };
+        let ctx = EvalContext {
+            tool: "Bash",
+            action: "",
+            args: "git commit -m 'fix: bug'",
+        };
         let v = reg.evaluate(&ctx);
         assert!(v.is_empty(), "normal commit must not trigger LAW-007");
     }
@@ -363,7 +371,11 @@ rationale: "Fires on every action."
         law_file(&tmp, "law-007.yml", LAW_007_YAML);
         let reg = LawRegistry::load(tmp.path()).unwrap();
 
-        let ctx = EvalContext { tool: "Edit", action: "", args: "--no-verify" };
+        let ctx = EvalContext {
+            tool: "Edit",
+            action: "",
+            args: "--no-verify",
+        };
         let v = reg.evaluate(&ctx);
         assert!(v.is_empty(), "Edit tool must not trigger Bash-scoped law");
     }
@@ -392,14 +404,22 @@ rationale: "Fires on every action."
         assert_eq!(reg.len(), 3);
 
         // Edit tool triggers LAW-009 (warn) only.
-        let ctx = EvalContext { tool: "Edit", action: "", args: "src/lib.rs" };
+        let ctx = EvalContext {
+            tool: "Edit",
+            action: "",
+            args: "src/lib.rs",
+        };
         let v = reg.evaluate(&ctx);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].law_id, "LAW-009");
         assert_eq!(v[0].verdict, RuleVerdict::Warn);
 
         // Read tool triggers LAW-010 (allow) only.
-        let ctx = EvalContext { tool: "Read", action: "", args: "src/lib.rs" };
+        let ctx = EvalContext {
+            tool: "Read",
+            action: "",
+            args: "src/lib.rs",
+        };
         let v = reg.evaluate(&ctx);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, RuleVerdict::Allow);
@@ -413,7 +433,11 @@ rationale: "Fires on every action."
         let reg = LawRegistry::load(tmp.path()).unwrap();
 
         for tool in &["Bash", "Edit", "Write", "Read", "Grep"] {
-            let ctx = EvalContext { tool, action: "", args: "" };
+            let ctx = EvalContext {
+                tool,
+                action: "",
+                args: "",
+            };
             let v = reg.evaluate(&ctx);
             assert_eq!(v.len(), 1, "{tool} must trigger wildcard law");
         }
@@ -447,7 +471,11 @@ rationale: "Bad regex."
     #[test]
     fn empty_registry_evaluates_to_nothing() {
         let reg = LawRegistry::empty();
-        let ctx = EvalContext { tool: "Bash", action: "", args: "--no-verify" };
+        let ctx = EvalContext {
+            tool: "Bash",
+            action: "",
+            args: "--no-verify",
+        };
         assert!(reg.evaluate(&ctx).is_empty());
     }
 
@@ -459,7 +487,11 @@ rationale: "Bad regex."
         let tmp = TempDir::new().unwrap();
         law_file(&tmp, "deny.yml", LAW_007_YAML);
         let reg = LawRegistry::load(tmp.path()).unwrap();
-        let ctx = EvalContext { tool: "Bash", action: "", args: "git push --no-verify" };
+        let ctx = EvalContext {
+            tool: "Bash",
+            action: "",
+            args: "git push --no-verify",
+        };
         let v = reg.evaluate(&ctx);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, RuleVerdict::Deny);
@@ -472,7 +504,11 @@ rationale: "Bad regex."
         let tmp = TempDir::new().unwrap();
         law_file(&tmp, "warn.yml", LAW_009_WARN_YAML);
         let reg = LawRegistry::load(tmp.path()).unwrap();
-        let ctx = EvalContext { tool: "Edit", action: "", args: "src/main.rs" };
+        let ctx = EvalContext {
+            tool: "Edit",
+            action: "",
+            args: "src/main.rs",
+        };
         let v = reg.evaluate(&ctx);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, RuleVerdict::Warn);
@@ -485,7 +521,11 @@ rationale: "Bad regex."
         let tmp = TempDir::new().unwrap();
         law_file(&tmp, "allow.yml", LAW_ALLOW_YAML);
         let reg = LawRegistry::load(tmp.path()).unwrap();
-        let ctx = EvalContext { tool: "Read", action: "", args: "src/main.rs" };
+        let ctx = EvalContext {
+            tool: "Read",
+            action: "",
+            args: "src/main.rs",
+        };
         let v = reg.evaluate(&ctx);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, RuleVerdict::Allow);

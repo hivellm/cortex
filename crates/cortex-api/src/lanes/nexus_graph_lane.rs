@@ -218,10 +218,7 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
             .map(|(proj, _)| proj)
             .unwrap_or(edge_to.as_str())
             .to_string();
-        extras.insert(
-            "source_project".to_string(),
-            Value::String(source_project),
-        );
+        extras.insert("source_project".to_string(), Value::String(source_project));
     }
 
     // ADR-011 — typed overlay alongside extras. Graph lane owns

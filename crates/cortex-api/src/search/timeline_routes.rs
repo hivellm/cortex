@@ -285,7 +285,12 @@ pub async fn handle_branch_create(
     let child_id = compose_id(&project, &body.name);
     let parent_id = compose_id(&project, &body.from);
     let now_rfc3339 = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let fork_lit = match body.valid_time.as_deref().map(normalize_rfc3339).transpose() {
+    let fork_lit = match body
+        .valid_time
+        .as_deref()
+        .map(normalize_rfc3339)
+        .transpose()
+    {
         Ok(v) => v
             .flatten()
             .map(|s| format!("'{}'", sanitize_literal(&s)))
@@ -402,7 +407,10 @@ pub async fn handle_branch_merge(
         return err(
             StatusCode::BAD_REQUEST,
             "bad_input",
-            format!("strategy must be accept|partial|discard, got {:?}", body.strategy),
+            format!(
+                "strategy must be accept|partial|discard, got {:?}",
+                body.strategy
+            ),
         );
     }
     let Some(nexus) = state.nexus.clone() else {
@@ -419,10 +427,11 @@ pub async fn handle_branch_merge(
         id = sanitize_literal(&child_id),
     );
     let parent_id = match nexus.execute_cypher(&lookup_cypher, None).await {
-        Ok(out) => out
-            .rows
-            .first()
-            .and_then(|r| r.get("parent_branch_id").and_then(|v| v.as_str()).map(String::from)),
+        Ok(out) => out.rows.first().and_then(|r| {
+            r.get("parent_branch_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        }),
         Err(e) => return err(StatusCode::BAD_GATEWAY, "nexus_error", format!("{e}")),
     };
     let Some(parent_id) = parent_id else {
@@ -572,10 +581,7 @@ pub async fn handle_entity_history(
         Err(e) => return err(StatusCode::BAD_REQUEST, "bad_input", format!("as_of: {e}")),
     };
     let limit = clamp_limit(q.limit);
-    let mut clauses = vec![format!(
-        "t.entity_id = '{}'",
-        sanitize_literal(&entity_id)
-    )];
+    let mut clauses = vec![format!("t.entity_id = '{}'", sanitize_literal(&entity_id))];
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));
     }
@@ -660,7 +666,13 @@ fn normalize_rfc3339(raw: &str) -> Result<Option<String>, String> {
         s.to_string()
     };
     DateTime::parse_from_rfc3339(&normalized)
-        .map(|dt| Some(dt.with_timezone(&Utc).format("%Y-%m-%dT%H:%M:%SZ").to_string()))
+        .map(|dt| {
+            Some(
+                dt.with_timezone(&Utc)
+                    .format("%Y-%m-%dT%H:%M:%SZ")
+                    .to_string(),
+            )
+        })
         .map_err(|e| format!("parse {normalized:?}: {e}"))
 }
 

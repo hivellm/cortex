@@ -2632,11 +2632,7 @@ impl Tool for ConsolidationLineageTool {
             .filter(|s| !s.is_empty())
             .map(|r| format!("?repo={}", urlencode(r)))
             .unwrap_or_default();
-        proxy_get(
-            ctx,
-            &format!("/v1/consolidations/{id}/lineage{repo_qs}"),
-        )
-        .await
+        proxy_get(ctx, &format!("/v1/consolidations/{id}/lineage{repo_qs}")).await
     }
 }
 
@@ -3496,9 +3492,7 @@ fn require_branch(args: &Value, key: &'static str) -> Result<String, ToolError> 
         )));
     }
     if !bytes.iter().all(|b| {
-        b.is_ascii_lowercase()
-            || b.is_ascii_digit()
-            || matches!(*b, b'.' | b'_' | b'/' | b'-')
+        b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(*b, b'.' | b'_' | b'/' | b'-')
     }) {
         return Err(ToolError::invalid_input(format!(
             "`{key}` chars must be [a-z0-9._/-]"
@@ -3608,12 +3602,14 @@ mod tests {
                 "{name}: inputSchema.type must be \"object\""
             );
             assert!(
-                schema.get("properties").map(Value::is_object).unwrap_or(false),
+                schema
+                    .get("properties")
+                    .map(Value::is_object)
+                    .unwrap_or(false),
                 "{name}: inputSchema must carry a properties object"
             );
-            jsonschema::validator_for(schema).unwrap_or_else(|e| {
-                panic!("{name}: inputSchema is not a valid JSON Schema: {e}")
-            });
+            jsonschema::validator_for(schema)
+                .unwrap_or_else(|e| panic!("{name}: inputSchema is not a valid JSON Schema: {e}"));
         }
     }
 

@@ -823,8 +823,7 @@ async fn main() -> Result<()> {
         // `pre_thinking_health_secs` (default 60 s), calls
         // GET /v1/health/pre-thinking and records the result in
         // `canary_runs`. On 2 consecutive failures emits a scrape-able WARN.
-        let pre_thinking_api_url =
-            format!("http://{}", cli.bind);
+        let pre_thinking_api_url = format!("http://{}", cli.bind);
         tokio::spawn(cortex_api::canary::run_pre_thinking_health_canary_loop(
             cfg.canary.pre_thinking_health_secs.max(5),
             pre_thinking_api_url,

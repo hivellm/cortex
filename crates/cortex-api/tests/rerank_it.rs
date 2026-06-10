@@ -108,7 +108,11 @@ impl ReversingReranker {
 
 #[async_trait]
 impl Reranker for ReversingReranker {
-    async fn score(&self, _query: &str, candidates: &[Candidate]) -> Result<Vec<f32>, RerankerError> {
+    async fn score(
+        &self,
+        _query: &str,
+        candidates: &[Candidate],
+    ) -> Result<Vec<f32>, RerankerError> {
         self.called.store(true, Ordering::SeqCst);
         // Return scores in reverse order so the second candidate wins.
         let n = candidates.len();
@@ -134,7 +138,11 @@ impl TimeoutReranker {
 
 #[async_trait]
 impl Reranker for TimeoutReranker {
-    async fn score(&self, _query: &str, _candidates: &[Candidate]) -> Result<Vec<f32>, RerankerError> {
+    async fn score(
+        &self,
+        _query: &str,
+        _candidates: &[Candidate],
+    ) -> Result<Vec<f32>, RerankerError> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         Err(RerankerError::Timeout { ms: 500 })
     }
@@ -145,7 +153,11 @@ struct PanicReranker;
 
 #[async_trait]
 impl Reranker for PanicReranker {
-    async fn score(&self, _query: &str, _candidates: &[Candidate]) -> Result<Vec<f32>, RerankerError> {
+    async fn score(
+        &self,
+        _query: &str,
+        _candidates: &[Candidate],
+    ) -> Result<Vec<f32>, RerankerError> {
         panic!("PanicReranker: reranker must not be called when disabled");
     }
 }

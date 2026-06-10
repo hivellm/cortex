@@ -138,7 +138,6 @@ pub use lanes::{
     MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
 pub use loader_metrics::LoaderMetrics;
-pub use temporal_metrics::TemporalMetrics;
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};
 pub use mcp_topic_card::{
     invoke_synthesize, invoke_topic_diff, invoke_topic_drill, invoke_topic_get,
@@ -167,6 +166,7 @@ pub use tasks_loader::{
     SortOrder, SpecFile, TaskChecklistItem, TaskChecklistSection, TaskDetail, TaskListResponse,
     TaskLoader, TaskRow, TaskSummary,
 };
+pub use temporal_metrics::TemporalMetrics;
 pub use types::{
     empty_response, BudgetReport, ConsolidationRef, DebugInfo, DecisionRef, GraphNeighbor,
     IncludeField, Intent, LaneTimings, LawRef, Notice, PastSession, Props, QueryRequest,

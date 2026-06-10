@@ -1177,8 +1177,7 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
 }
 
 fn emit_law(event: &EnrichedEvent, patch: &mut GraphPatch) {
-    let payload: Option<LawPayload> =
-        serde_json::from_value(event.redacted_payload.clone()).ok();
+    let payload: Option<LawPayload> = serde_json::from_value(event.redacted_payload.clone()).ok();
 
     let law_key = payload
         .as_ref()

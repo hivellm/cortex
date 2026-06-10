@@ -266,11 +266,7 @@ pub(crate) fn extract_decisions(doc: &Value) -> Vec<DecisionRef> {
 fn references(doc: &Value) -> impl Iterator<Item = &serde_json::Map<String, Value>> {
     doc.get("references")
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_object())
-                .collect::<Vec<_>>()
-        })
+        .map(|arr| arr.iter().filter_map(|v| v.as_object()).collect::<Vec<_>>())
         .unwrap_or_default()
         .into_iter()
 }
@@ -279,7 +275,9 @@ fn references(doc: &Value) -> impl Iterator<Item = &serde_json::Map<String, Valu
 /// I L O U). The full Crockford check is overkill for an
 /// extraction heuristic; we accept any 26 chars from `[0-9A-Z]`.
 fn is_ulid(s: &str) -> bool {
-    s.len() == 26 && s.bytes().all(|b| b.is_ascii_digit() || b.is_ascii_uppercase())
+    s.len() == 26
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_uppercase())
 }
 
 /// Scan `text` for ULIDs that follow the literal token `session`
@@ -400,7 +398,10 @@ fn looks_like_path(s: &str) -> bool {
     ];
     FILE_EXTS.iter().any(|ext| {
         s.ends_with(ext)
-            || s.split(':').next().map(|p| p.ends_with(ext)).unwrap_or(false)
+            || s.split(':')
+                .next()
+                .map(|p| p.ends_with(ext))
+                .unwrap_or(false)
     })
 }
 

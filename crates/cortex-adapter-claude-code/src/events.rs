@@ -228,8 +228,7 @@ pub fn build_event(
         session_id,
         stream: Stream::Live,
         tool: TOOL_CLAUDE_CODE.to_string(),
-        model: read_string_field(&redacted, "model")
-            .or_else(|| std::env::var("CLAUDE_MODEL").ok()),
+        model: read_string_field(&redacted, "model").or_else(|| std::env::var("CLAUDE_MODEL").ok()),
         kind: canonical_kind,
         context,
         payload: payload_value,
@@ -973,11 +972,13 @@ mod tests {
         )
         .expect("SubagentStop must publish");
         assert_eq!(env.kind, Kind::AgentCall);
-        let payload: cortex_core::events::AgentCall =
-            serde_json::from_value(env.payload).unwrap();
+        let payload: cortex_core::events::AgentCall = serde_json::from_value(env.payload).unwrap();
         assert_eq!(payload.agent_type, "code-reviewer");
         assert_eq!(payload.description, "agent call");
-        assert!(!payload.description.is_empty(), "description must be non-empty for schema minLength:1");
+        assert!(
+            !payload.description.is_empty(),
+            "description must be non-empty for schema minLength:1"
+        );
     }
 
     #[test]
@@ -985,13 +986,15 @@ mod tests {
         let mgr = SessionManager::new();
         let env = build_event(
             HookKind::SubagentStop,
-            &frame("SubagentStop", json!({ "subagent_type": "researcher", "description": "" })),
+            &frame(
+                "SubagentStop",
+                json!({ "subagent_type": "researcher", "description": "" }),
+            ),
             &mgr,
             42,
         )
         .expect("SubagentStop must publish");
-        let payload: cortex_core::events::AgentCall =
-            serde_json::from_value(env.payload).unwrap();
+        let payload: cortex_core::events::AgentCall = serde_json::from_value(env.payload).unwrap();
         assert_eq!(payload.description, "agent call");
     }
 
@@ -1008,8 +1011,7 @@ mod tests {
             42,
         )
         .expect("SubagentStop must publish");
-        let payload: cortex_core::events::AgentCall =
-            serde_json::from_value(env.payload).unwrap();
+        let payload: cortex_core::events::AgentCall = serde_json::from_value(env.payload).unwrap();
         assert_eq!(payload.description, "Implement feature X");
     }
 }

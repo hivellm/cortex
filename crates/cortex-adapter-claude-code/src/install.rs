@@ -657,7 +657,10 @@ mod tests {
             "legacy PostToolUse object must be migrated to array form"
         );
         // Non-cortex hook must survive untouched.
-        assert!(hooks.contains_key("UserKeep"), "user hook must survive migration");
+        assert!(
+            hooks.contains_key("UserKeep"),
+            "user hook must survive migration"
+        );
     }
 
     #[test]

@@ -204,11 +204,7 @@ pub async fn handle_consolidations_by_entity(
     // the explicit `repo` hint is required; without it the
     // handler now returns `400 bad_input` instead of bubbling
     // a 502 `Index not found` from the upstream fallback.
-    let explicit_repo = req
-        .repo
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty());
+    let explicit_repo = req.repo.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let repo_for_index: Option<&str> = if req.entity.kind == "repo" {
         Some(req.entity.value.trim()).filter(|s| !s.is_empty())
     } else {

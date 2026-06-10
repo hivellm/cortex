@@ -115,11 +115,11 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
         budget_ms: 1000,
         budget_bytes: None,
         as_of: None,
-            branch: None,
-            projects: None,
-            include_history: None,
-            include_future: None,
-            include_branches: None,
+        branch: None,
+        projects: None,
+        include_history: None,
+        include_future: None,
+        include_branches: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert_eq!(resp.results.graph_neighbors.len(), 1);
@@ -200,11 +200,11 @@ async fn fail_open_when_nexus_unreachable_through_orchestrator() {
         budget_ms: 1000,
         budget_bytes: None,
         as_of: None,
-            branch: None,
-            projects: None,
-            include_history: None,
-            include_future: None,
-            include_branches: None,
+        branch: None,
+        projects: None,
+        include_history: None,
+        include_future: None,
+        include_branches: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.graph_neighbors.is_empty());

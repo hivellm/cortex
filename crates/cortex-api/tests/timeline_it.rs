@@ -25,9 +25,8 @@ use std::sync::Arc;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use cortex_api::{
-    build_router, AclStore, AuditStore, InMemoryCache, MemoryAuditPublisher,
-    MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryService,
-    RateConfig, RateLimiter,
+    build_router, AclStore, AuditStore, InMemoryCache, MemoryAuditPublisher, MemoryGraphLane,
+    MemoryKeywordLane, MemoryVectorLane, Orchestrator, QueryService, RateConfig, RateLimiter,
 };
 use serde_json::Value;
 use tower::ServiceExt;
@@ -89,15 +88,13 @@ async fn timeline_with_filters_still_routes_to_handler() {
     // Verifies that the full query-string surface (branch, kind, from,
     // to, as_of, limit) is accepted and reaches the handler without a
     // 400/404.  With a live Nexus this would exercise every filter.
-    let (status, json) = get(
-        "/v1/timeline/cortex\
+    let (status, json) = get("/v1/timeline/cortex\
          ?branch=feature-x\
          &kind=adr\
          &from=2026-01-01\
          &to=2026-06-01\
          &as_of=2026-03-01\
-         &limit=10",
-    )
+         &limit=10")
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "body={json}");
     assert_eq!(

@@ -513,10 +513,7 @@ pub async fn run_pre_thinking_health_canary_loop(
         }
     };
 
-    let url = format!(
-        "{}/v1/health/pre-thinking",
-        api_url.trim_end_matches('/')
-    );
+    let url = format!("{}/v1/health/pre-thinking", api_url.trim_end_matches('/'));
 
     let mut ticker = tokio::time::interval(interval);
     ticker.tick().await; // skip immediate first tick
@@ -541,8 +538,7 @@ pub async fn run_pre_thinking_health_canary_loop(
             Err(e) => ("error".to_string(), None, Some(e.to_string())),
         };
 
-        if let Err(e) =
-            store.insert_canary_run(&now, &status, latency_ms, error_message.as_deref())
+        if let Err(e) = store.insert_canary_run(&now, &status, latency_ms, error_message.as_deref())
         {
             tracing::warn!(error = %e, "pre-thinking canary: failed to insert run row");
         }

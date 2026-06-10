@@ -369,8 +369,7 @@ mod tests {
         env.model = Some("claude-sonnet-4-6".to_string());
         let row = build_row(&env);
         assert_eq!(
-            row.deltas["model"],
-            "claude-sonnet-4-6",
+            row.deltas["model"], "claude-sonnet-4-6",
             "envelope.model must be promoted to deltas when payload lacks it"
         );
     }
@@ -385,8 +384,7 @@ mod tests {
         env.model = Some("claude-sonnet-4-6".to_string());
         let row = build_row(&env);
         assert_eq!(
-            row.deltas["model"],
-            "claude-haiku-4-5",
+            row.deltas["model"], "claude-haiku-4-5",
             "payload model must win over envelope.model"
         );
     }

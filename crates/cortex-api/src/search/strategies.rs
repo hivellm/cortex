@@ -523,11 +523,11 @@ mod tests {
             budget_ms: 500,
             budget_bytes: None,
             as_of: None,
-                branch: None,
-                projects: None,
-                include_history: None,
-                include_future: None,
-                include_branches: None,
+            branch: None,
+            projects: None,
+            include_history: None,
+            include_future: None,
+            include_branches: None,
         }
     }
 

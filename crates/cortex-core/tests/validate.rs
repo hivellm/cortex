@@ -64,6 +64,21 @@ fn bad_content_hash_fails() {
     assert!(!errors.is_empty());
 }
 
+#[test]
+fn opencode_tool_value_passes_schema() {
+    let mut v = fresh_envelope();
+    v["tool"] = json!("opencode");
+    validate_event(&v).expect("tool:opencode must be a valid enum value");
+}
+
+#[test]
+fn unknown_tool_value_fails_schema() {
+    let mut v = fresh_envelope();
+    v["tool"] = json!("unknown-tool-xyz");
+    let errors = validate_event(&v).unwrap_err();
+    assert!(!errors.is_empty());
+}
+
 fn law_violation_envelope() -> Value {
     json!({
         "event_id": "01HXYZABCDEF0123456789ABD5",

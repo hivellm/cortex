@@ -106,7 +106,8 @@ const RUST_TOP_LEVEL_KINDS: &[&str] = &[
 
 fn rust_language() -> tree_sitter::Language {
     static LANG: OnceLock<tree_sitter::Language> = OnceLock::new();
-    LANG.get_or_init(|| tree_sitter_rust::LANGUAGE.into()).clone()
+    LANG.get_or_init(|| tree_sitter_rust::LANGUAGE.into())
+        .clone()
 }
 
 fn verify_rust(path: &Path, symbol: &str) -> SymbolVerdict {
@@ -224,7 +225,9 @@ fn verify_markdown(path: &Path, symbol: &str) -> SymbolVerdict {
         // Match code-fence identifier lines: look for `fn <symbol>` or
         // `struct <symbol>` etc. inside fenced blocks (simple pattern).
         let stripped = line.trim();
-        for kw in &["fn ", "struct ", "enum ", "trait ", "impl ", "mod ", "type "] {
+        for kw in &[
+            "fn ", "struct ", "enum ", "trait ", "impl ", "mod ", "type ",
+        ] {
             if let Some(rest) = stripped.strip_prefix(kw) {
                 let ident = rest
                     .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -273,7 +276,10 @@ mod tests {
     #[test]
     fn rust_fn_present() {
         let f = rust_file("pub fn my_function() {}\n");
-        assert_eq!(verify_symbol(f.path(), "my_function"), SymbolVerdict::Verified);
+        assert_eq!(
+            verify_symbol(f.path(), "my_function"),
+            SymbolVerdict::Verified
+        );
     }
 
     #[test]
@@ -285,7 +291,10 @@ mod tests {
     #[test]
     fn rust_enum_present() {
         let f = rust_file("enum Direction { North, South }\n");
-        assert_eq!(verify_symbol(f.path(), "Direction"), SymbolVerdict::Verified);
+        assert_eq!(
+            verify_symbol(f.path(), "Direction"),
+            SymbolVerdict::Verified
+        );
     }
 
     #[test]

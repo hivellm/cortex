@@ -15,19 +15,19 @@ use crate::fusion::{rrf_fuse, FusionConfig};
 use crate::lanes::{
     is_collection_missing_marker, GraphLane, GraphRequest, KeywordLane, LaneHit, VectorLane,
 };
-use cortex_config::{CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig};
-use cortex_workers::rerank::{Candidate as RerankCandidate, Reranker};
-use cortex_workers::verify::{verify_symbol, SymbolVerdict};
-use cortex_workers::temporal::classifier::{
-    classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
-    TemporalConfig as ClassifierConfig,
-};
 use crate::query_rewrite::{PassthroughRewriter, QueryRewriter, RewrittenQuery};
 use crate::strategies::{build_plan, Overlay, Plan};
 use crate::types::{
     empty_response, BudgetReport, DebugNote, DecisionRef, GraphNeighbor, IncludeField, Intent,
     LawRef, QueryRequest, QueryResponse, SimilarTurn, Snippet, ViolationRef,
 };
+use cortex_config::{CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig};
+use cortex_workers::rerank::{Candidate as RerankCandidate, Reranker};
+use cortex_workers::temporal::classifier::{
+    classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
+    TemporalConfig as ClassifierConfig,
+};
+use cortex_workers::verify::{verify_symbol, SymbolVerdict};
 
 /// Orchestrator handles — fan-out clients passed in via `Arc` so the
 /// daemon owns lifetimes.
@@ -492,13 +492,8 @@ impl Orchestrator {
         // fuse the survivors in with `source_project` provenance.
         if self.current_cross_project().enabled {
             let as_of_override = parse_as_of_to_unix(req.as_of.as_deref());
-            self.propagate_cross_project(
-                &mut fused,
-                req,
-                as_of_override,
-                &response.query_id,
-            )
-            .await;
+            self.propagate_cross_project(&mut fused, req, as_of_override, &response.query_id)
+                .await;
         }
 
         // Phase17 §2.3 — cross-encoder reranker step (fail-open, §2.5).
@@ -527,7 +522,9 @@ impl Orchestrator {
                         // Re-sort descending by the new scores from the
                         // cross-encoder (fusion order is no longer valid).
                         fused.sort_by(|a, b| {
-                            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+                            b.score
+                                .partial_cmp(&a.score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
                         });
                     }
                     Err(err) => {
@@ -668,12 +665,7 @@ impl Orchestrator {
         if projects.is_empty() {
             return;
         }
-        let active = req
-            .scope
-            .repo
-            .as_deref()
-            .unwrap_or("cortex")
-            .to_lowercase();
+        let active = req.scope.repo.as_deref().unwrap_or("cortex").to_lowercase();
         let gr = GraphRequest {
             template: "cross_project_ref".into(),
             params: serde_json::json!({ "query": format!("{active}:main") }),
@@ -695,8 +687,7 @@ impl Orchestrator {
             }
         };
         let discovered = edges.len();
-        let projects_lower: Vec<String> =
-            projects.iter().map(|p| p.to_ascii_lowercase()).collect();
+        let projects_lower: Vec<String> = projects.iter().map(|p| p.to_ascii_lowercase()).collect();
 
         let now = as_of_unix.unwrap_or_else(|| {
             std::time::SystemTime::now()
@@ -1767,7 +1758,14 @@ mod tests {
             ),
         ];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
+        apply_temporal_classifier(
+            &mut hits,
+            &cfg,
+            "test-query-id",
+            None,
+            IncludeFlags::default(),
+            None,
+        );
         assert_eq!(hits.len(), 1, "superseded hit must drop by default");
         assert_eq!(hits[0].doc_id, "alive");
     }
@@ -1780,7 +1778,14 @@ mod tests {
             hit_with_extras("b", 0.5, &[]),
         ];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
+        apply_temporal_classifier(
+            &mut hits,
+            &cfg,
+            "test-query-id",
+            None,
+            IncludeFlags::default(),
+            None,
+        );
         assert_eq!(hits.len(), 2);
         // Sort is descending by score; `a` (1.0) must lead `b` (0.5).
         assert_eq!(hits[0].doc_id, "a");
@@ -1800,7 +1805,14 @@ mod tests {
             &[("valid_to_unix", serde_json::json!(now + 3600))],
         )];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
+        apply_temporal_classifier(
+            &mut hits,
+            &cfg,
+            "test-query-id",
+            None,
+            IncludeFlags::default(),
+            None,
+        );
         assert_eq!(hits.len(), 1);
         let expected = 1.0 * f64::from(cfg.temporal_boost);
         assert!(
@@ -1824,7 +1836,14 @@ mod tests {
             include_history_default: true,
             ..TemporalConfig::default()
         };
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
+        apply_temporal_classifier(
+            &mut hits,
+            &cfg,
+            "test-query-id",
+            None,
+            IncludeFlags::default(),
+            None,
+        );
         assert_eq!(hits.len(), 1, "demoted hits are kept");
         let expected = 2.0 * f64::from(cfg.demote_factor);
         assert!((hits[0].score - expected).abs() < 1e-6);
@@ -1844,7 +1863,14 @@ mod tests {
             ),
         ];
         let cfg = TemporalConfig::default();
-        apply_temporal_classifier(&mut hits, &cfg, "test-query-id", None, IncludeFlags::default(), None);
+        apply_temporal_classifier(
+            &mut hits,
+            &cfg,
+            "test-query-id",
+            None,
+            IncludeFlags::default(),
+            None,
+        );
         assert_eq!(hits[0].doc_id, "high_temporal");
     }
 }

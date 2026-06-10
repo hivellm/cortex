@@ -76,21 +76,10 @@ async fn branch_create_rejects_invalid_name() {
         Some(json!({ "name": "Bad_Name", "from": "main" })),
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "expected 400; body={json}"
-    );
-    assert_eq!(
-        json["reason"].as_str(),
-        Some("bad_input"),
-        "body={json}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400; body={json}");
+    assert_eq!(json["reason"].as_str(), Some("bad_input"), "body={json}");
     assert!(
-        json["detail"]
-            .as_str()
-            .unwrap_or("")
-            .starts_with("name:"),
+        json["detail"].as_str().unwrap_or("").starts_with("name:"),
         "detail should start with 'name:'; body={json}"
     );
 }
@@ -127,16 +116,8 @@ async fn branch_merge_rejects_bad_strategy() {
         Some(json!({ "strategy": "squash" })),
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "expected 400; body={json}"
-    );
-    assert_eq!(
-        json["reason"].as_str(),
-        Some("bad_input"),
-        "body={json}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400; body={json}");
+    assert_eq!(json["reason"].as_str(), Some("bad_input"), "body={json}");
 }
 
 #[tokio::test]
@@ -171,16 +152,8 @@ async fn branch_abandon_rejects_empty_reason() {
         Some(json!({ "reason": "  " })),
     )
     .await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "expected 400; body={json}"
-    );
-    assert_eq!(
-        json["reason"].as_str(),
-        Some("bad_input"),
-        "body={json}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400; body={json}");
+    assert_eq!(json["reason"].as_str(), Some("bad_input"), "body={json}");
 }
 
 #[tokio::test]
@@ -210,16 +183,8 @@ async fn branch_abandon_valid_but_nexus_unconfigured() {
 #[tokio::test]
 async fn branch_show_rejects_invalid_name() {
     let (status, json) = send("GET", "/v1/branch/cortex/Bad_Name", None).await;
-    assert_eq!(
-        status,
-        StatusCode::BAD_REQUEST,
-        "expected 400; body={json}"
-    );
-    assert_eq!(
-        json["reason"].as_str(),
-        Some("bad_input"),
-        "body={json}"
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST, "expected 400; body={json}");
+    assert_eq!(json["reason"].as_str(), Some("bad_input"), "body={json}");
 }
 
 #[tokio::test]

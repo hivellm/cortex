@@ -244,21 +244,19 @@ fn extract_payload_text(event: &EnrichedEvent) -> (String, Option<String>) {
                 Err(_) => (fallback_text(&event.redacted_payload), None),
             }
         }
-        Kind::Law => {
-            match serde_json::from_value::<LawPayload>(event.redacted_payload.clone()) {
-                Ok(lp) => {
-                    let mut out = lp.body.clone();
-                    if let Some(title) = lp.title.as_deref() {
-                        if !out.is_empty() {
-                            out.push('\n');
-                        }
-                        out.push_str(title);
+        Kind::Law => match serde_json::from_value::<LawPayload>(event.redacted_payload.clone()) {
+            Ok(lp) => {
+                let mut out = lp.body.clone();
+                if let Some(title) = lp.title.as_deref() {
+                    if !out.is_empty() {
+                        out.push('\n');
                     }
-                    (out, Some(lp.law_id))
+                    out.push_str(title);
                 }
-                Err(_) => (fallback_text(&event.redacted_payload), None),
+                (out, Some(lp.law_id))
             }
-        }
+            Err(_) => (fallback_text(&event.redacted_payload), None),
+        },
         Kind::LawViolation => {
             match serde_json::from_value::<LawViolationPayload>(event.redacted_payload.clone()) {
                 Ok(lv) => {
@@ -387,16 +385,14 @@ fn derive_title(event: &EnrichedEvent, raw: &str) -> String {
         Kind::Analysis => serde_json::from_value::<AnalysisPayload>(event.redacted_payload.clone())
             .map(|a| a.question)
             .unwrap_or_else(|_| event.event_id.clone()),
-        Kind::Law => {
-            serde_json::from_value::<LawPayload>(event.redacted_payload.clone())
-                .map(|lp| {
-                    lp.title
-                        .as_deref()
-                        .map(|t| format!("{}: {t}", lp.law_id))
-                        .unwrap_or_else(|| lp.law_id.clone())
-                })
-                .unwrap_or_else(|_| event.event_id.clone())
-        }
+        Kind::Law => serde_json::from_value::<LawPayload>(event.redacted_payload.clone())
+            .map(|lp| {
+                lp.title
+                    .as_deref()
+                    .map(|t| format!("{}: {t}", lp.law_id))
+                    .unwrap_or_else(|| lp.law_id.clone())
+            })
+            .unwrap_or_else(|_| event.event_id.clone()),
         Kind::LawViolation => {
             serde_json::from_value::<LawViolationPayload>(event.redacted_payload.clone())
                 .map(|lv| format!("{}: {}", lv.law_id, lv.message))
@@ -681,7 +677,11 @@ fn apply_top_level_projection(event: &EnrichedEvent, doc: &mut Document) {
                 if let Some(id) = event.redacted_payload.get("law_id").and_then(Value::as_str) {
                     doc.law_id = Some(id.to_string());
                 }
-                if let Some(sev) = event.redacted_payload.get("severity").and_then(Value::as_str) {
+                if let Some(sev) = event
+                    .redacted_payload
+                    .get("severity")
+                    .and_then(Value::as_str)
+                {
                     doc.law_severity = Some(sev.to_string());
                 }
             }

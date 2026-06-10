@@ -44,9 +44,6 @@ pub trait Reranker: Send + Sync + 'static {
     /// Returns a `Vec<f32>` of the same length as `candidates`, in the
     /// same order. On timeout or service error the caller falls back to
     /// the pre-rerank fusion order (fail-open — §2.5).
-    async fn score(
-        &self,
-        query: &str,
-        candidates: &[Candidate],
-    ) -> Result<Vec<f32>, RerankerError>;
+    async fn score(&self, query: &str, candidates: &[Candidate])
+        -> Result<Vec<f32>, RerankerError>;
 }

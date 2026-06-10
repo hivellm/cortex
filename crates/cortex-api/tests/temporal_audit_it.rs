@@ -96,11 +96,11 @@ fn req() -> QueryRequest {
         budget_ms: 500,
         budget_bytes: None,
         as_of: None,
-            branch: None,
-            projects: None,
-            include_history: None,
-            include_future: None,
-            include_branches: None,
+        branch: None,
+        projects: None,
+        include_history: None,
+        include_future: None,
+        include_branches: None,
     }
 }
 
@@ -165,11 +165,7 @@ fn classifier_emits_per_hit_summary_and_branch_resolution_envelopes() {
 
     let hits = vec![
         hit("valid", 1.0, &[]),
-        hit(
-            "superseded",
-            1.5,
-            &[("superseded_at_unix", json!(past))],
-        ),
+        hit("superseded", 1.5, &[("superseded_at_unix", json!(past))]),
         hit("boost", 0.9, &[("valid_to_unix", json!(soon))]),
     ];
 
@@ -195,10 +191,7 @@ fn classifier_emits_per_hit_summary_and_branch_resolution_envelopes() {
 
     let events = events_handle.lock().unwrap().clone();
 
-    let kinds: Vec<String> = events
-        .iter()
-        .filter_map(|e| e.kind.clone())
-        .collect();
+    let kinds: Vec<String> = events.iter().filter_map(|e| e.kind.clone()).collect();
 
     let per_hit = kinds
         .iter()
@@ -226,11 +219,7 @@ fn classifier_emits_per_hit_summary_and_branch_resolution_envelopes() {
         .iter()
         .find(|e| e.kind.as_deref() == Some("temporal_classification"))
         .expect("no temporal_classification recorded");
-    let names: Vec<&str> = any_hit_env
-        .fields
-        .iter()
-        .map(|(k, _)| k.as_str())
-        .collect();
+    let names: Vec<&str> = any_hit_env.fields.iter().map(|(k, _)| k.as_str()).collect();
     assert!(names.contains(&"state"));
     assert!(names.contains(&"action"));
     assert!(names.contains(&"doc_id"));

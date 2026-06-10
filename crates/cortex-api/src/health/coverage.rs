@@ -235,9 +235,9 @@ pub async fn fetch_nexus_repo_names(
         timeout,
         client.execute_cypher(cypher, Some(std::collections::HashMap::new())),
     )
-        .await
-        .map_err(|_| format!("nexus query timeout after {:?}", timeout))?
-        .map_err(|e| format!("nexus execute_cypher: {e}"))?;
+    .await
+    .map_err(|_| format!("nexus query timeout after {:?}", timeout))?
+    .map_err(|e| format!("nexus execute_cypher: {e}"))?;
     let mut out = BTreeSet::new();
     for row in &res.rows {
         let Some(cells) = row.as_array() else {

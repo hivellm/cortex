@@ -1159,10 +1159,9 @@ impl MetadataStore {
     /// RFC-3339 UTC strings produced by `chrono::Utc::now().to_rfc3339()`.
     /// The caller computes `cutoff = (Utc::now() - Duration::hours(24)).to_rfc3339()`.
     pub fn cleanup_canary_runs(&self, cutoff: &str) -> Result<usize, MetadataError> {
-        let deleted = self.conn.execute(
-            "DELETE FROM canary_runs WHERE ts < ?1",
-            params![cutoff],
-        )?;
+        let deleted = self
+            .conn
+            .execute("DELETE FROM canary_runs WHERE ts < ?1", params![cutoff])?;
         Ok(deleted)
     }
 

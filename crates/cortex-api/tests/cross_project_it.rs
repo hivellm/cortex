@@ -141,7 +141,11 @@ async fn run_doc_ids(orch: &Orchestrator, request: &QueryRequest) -> Vec<String>
 async fn cross_project_disabled_yields_no_propagation() {
     // Open-ended valid window so the only reason it could be absent is
     // the disabled gate.
-    let edge = cross_edge_hit("nexus", "2020-01-01T00:00:00Z", Some("2099-01-01T00:00:00Z"));
+    let edge = cross_edge_hit(
+        "nexus",
+        "2020-01-01T00:00:00Z",
+        Some("2099-01-01T00:00:00Z"),
+    );
     let orch = orch_with_edge(edge, /* enabled */ false);
     let doc_ids = run_doc_ids(&orch, &req(Some(vec!["nexus".into()]), None)).await;
     assert!(
@@ -152,7 +156,11 @@ async fn cross_project_disabled_yields_no_propagation() {
 
 #[tokio::test]
 async fn cross_project_enabled_propagates_with_provenance() {
-    let edge = cross_edge_hit("nexus", "2020-01-01T00:00:00Z", Some("2099-01-01T00:00:00Z"));
+    let edge = cross_edge_hit(
+        "nexus",
+        "2020-01-01T00:00:00Z",
+        Some("2099-01-01T00:00:00Z"),
+    );
     let orch = orch_with_edge(edge, /* enabled */ true);
     let doc_ids = run_doc_ids(&orch, &req(Some(vec!["nexus".into()]), None)).await;
     assert!(
@@ -165,7 +173,11 @@ async fn cross_project_enabled_propagates_with_provenance() {
 async fn cross_project_stale_constraint_dropped() {
     // `valid_to` well in the past ⇒ the classifier marks it EXPIRED
     // and the propagation path drops it.
-    let edge = cross_edge_hit("nexus", "2019-01-01T00:00:00Z", Some("2020-01-01T00:00:00Z"));
+    let edge = cross_edge_hit(
+        "nexus",
+        "2019-01-01T00:00:00Z",
+        Some("2020-01-01T00:00:00Z"),
+    );
     let orch = orch_with_edge(edge, /* enabled */ true);
     let doc_ids = run_doc_ids(&orch, &req(Some(vec!["nexus".into()]), None)).await;
     assert!(
@@ -178,7 +190,11 @@ async fn cross_project_stale_constraint_dropped() {
 async fn cross_project_unrequested_sibling_filtered() {
     // Edge points into `nexus`, but the request only asks for
     // `vectorizer` ⇒ the nexus reference is filtered before classify.
-    let edge = cross_edge_hit("nexus", "2020-01-01T00:00:00Z", Some("2099-01-01T00:00:00Z"));
+    let edge = cross_edge_hit(
+        "nexus",
+        "2020-01-01T00:00:00Z",
+        Some("2099-01-01T00:00:00Z"),
+    );
     let orch = orch_with_edge(edge, /* enabled */ true);
     let doc_ids = run_doc_ids(&orch, &req(Some(vec!["vectorizer".into()]), None)).await;
     assert!(

@@ -596,7 +596,8 @@ impl Worker {
             Err(err) => {
                 // Fatal embedder error (not a per-event issue).
                 tracing::warn!(error = %err, event_id = %event.event_id, "embed_batch failed");
-                self.metrics.incr_vectorizer_error(VectorizerErrorKind::Other);
+                self.metrics
+                    .incr_vectorizer_error(VectorizerErrorKind::Other);
                 self.publish_invalid(&event.event_id, "embedder_error", &err.to_string())
                     .await;
                 self.ack(STREAM_ENRICHED, offset).await;
@@ -642,7 +643,10 @@ impl Worker {
                 // Detect rate-limit / transport signatures from the detail string
                 // since the typed error was flattened into EmbedError::Vectorizer.
                 let lower = detail.to_ascii_lowercase();
-                let kind = if lower.contains("rate") || lower.contains("429") || lower.contains("transport") {
+                let kind = if lower.contains("rate")
+                    || lower.contains("429")
+                    || lower.contains("transport")
+                {
                     VectorizerErrorKind::Transport
                 } else if lower.contains("auth") || lower.contains("401") || lower.contains("403") {
                     VectorizerErrorKind::Auth
@@ -798,7 +802,8 @@ impl crate::synap_worker::SynapWorker for Worker {
     }
 
     fn on_run_once_err(&self, _err: &anyhow::Error, _consecutive: u32) {
-        self.metrics.incr_vectorizer_error(VectorizerErrorKind::Other);
+        self.metrics
+            .incr_vectorizer_error(VectorizerErrorKind::Other);
     }
 
     fn on_backpressure_pause(&self) {

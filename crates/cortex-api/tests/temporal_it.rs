@@ -78,11 +78,7 @@ fn now_unix() -> i64 {
     .unwrap()
 }
 
-fn stamped_hit(
-    doc_id: &str,
-    score: f64,
-    extras: &[(&str, serde_json::Value)],
-) -> LaneHit {
+fn stamped_hit(doc_id: &str, score: f64, extras: &[(&str, serde_json::Value)]) -> LaneHit {
     let mut props = Props::new();
     for (k, v) in extras {
         props.insert((*k).to_string(), v.clone());
@@ -120,11 +116,11 @@ fn req() -> QueryRequest {
         budget_ms: 500,
         budget_bytes: None,
         as_of: None,
-            branch: None,
-            projects: None,
-            include_history: None,
-            include_future: None,
-            include_branches: None,
+        branch: None,
+        projects: None,
+        include_history: None,
+        include_future: None,
+        include_branches: None,
     }
 }
 
@@ -138,17 +134,9 @@ async fn orchestrator_drops_superseded_and_boosts_temporal() {
         // VALID — no bitemporal columns, base 1.0.
         stamped_hit("valid", 1.0, &[]),
         // SUPERSEDED — must drop.
-        stamped_hit(
-            "superseded",
-            1.5,
-            &[("superseded_at_unix", json!(past))],
-        ),
+        stamped_hit("superseded", 1.5, &[("superseded_at_unix", json!(past))]),
         // TEMPORAL — `valid_to` inside the 30-day window, base 0.9.
-        stamped_hit(
-            "temporal_boost",
-            0.9,
-            &[("valid_to_unix", json!(soon))],
-        ),
+        stamped_hit("temporal_boost", 0.9, &[("valid_to_unix", json!(soon))]),
     ];
 
     let orch = Orchestrator::new(
@@ -218,11 +206,7 @@ async fn orchestrator_drops_expired_under_default_flags() {
 async fn orchestrator_drops_abandoned_hits_under_default_flags() {
     let hits = vec![
         stamped_hit("active", 1.0, &[]),
-        stamped_hit(
-            "abandoned",
-            1.5,
-            &[("lifecycle", json!("abandoned"))],
-        ),
+        stamped_hit("abandoned", 1.5, &[("lifecycle", json!("abandoned"))]),
     ];
 
     let orch = Orchestrator::new(
@@ -252,11 +236,7 @@ async fn orchestrator_disabling_classifier_passes_every_hit_through() {
     let past = now - 86_400;
     let hits = vec![
         stamped_hit("alive", 1.0, &[]),
-        stamped_hit(
-            "superseded",
-            1.5,
-            &[("superseded_at_unix", json!(past))],
-        ),
+        stamped_hit("superseded", 1.5, &[("superseded_at_unix", json!(past))]),
     ];
 
     let cfg = cortex_config::TemporalConfig {

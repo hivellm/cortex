@@ -69,7 +69,10 @@ fn abandoned_branch_chain_still_walks_back_to_root() {
 fn main_only_chain_yields_singleton_clause() {
     let chain = branch_ancestry_chain("cortex", DEFAULT_BRANCH, &BTreeMap::new());
     assert_eq!(chain, vec![compose_id("cortex", DEFAULT_BRANCH)]);
-    assert_eq!(meili_branch_clause(&chain), "branch_id IN [\"cortex:main\"]");
+    assert_eq!(
+        meili_branch_clause(&chain),
+        "branch_id IN [\"cortex:main\"]"
+    );
 }
 
 #[test]

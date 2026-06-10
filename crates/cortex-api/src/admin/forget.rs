@@ -547,10 +547,7 @@ mod tests {
         );
         // Injection attempt: quotes + backslashes are escaped so the
         // value cannot break out of the literal.
-        assert_eq!(
-            escape_cypher_string("a\"b\\c"),
-            "\"a\\\"b\\\\c\""
-        );
+        assert_eq!(escape_cypher_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
         // Control chars are neutralised; non-ASCII collapses to `?`.
         assert_eq!(escape_cypher_string("x\ny"), "\"x\\ny\"");
         assert_eq!(escape_cypher_string("café"), "\"caf?\"");

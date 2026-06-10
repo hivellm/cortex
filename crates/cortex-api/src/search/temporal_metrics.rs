@@ -99,7 +99,8 @@ impl TemporalMetrics {
     /// 1 and adds `discovered` / `propagated` to the corresponding
     /// cumulative counters.
     pub fn record_cross_project(&self, discovered: u64, propagated: u64) {
-        self.cross_project_runs_total.fetch_add(1, Ordering::Relaxed);
+        self.cross_project_runs_total
+            .fetch_add(1, Ordering::Relaxed);
         self.cross_project_discovered_total
             .fetch_add(discovered, Ordering::Relaxed);
         self.cross_project_propagated_total
@@ -168,10 +169,7 @@ impl TemporalMetrics {
 
         out.push_str("# TYPE cortex_branch_queries_total counter\n");
         for (kind, n) in self.branch_snapshot() {
-            let _ = writeln!(
-                out,
-                "cortex_branch_queries_total{{kind=\"{kind}\"}} {n}"
-            );
+            let _ = writeln!(out, "cortex_branch_queries_total{{kind=\"{kind}\"}} {n}");
         }
 
         // --- cross-project counters ---
