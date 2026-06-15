@@ -25,22 +25,22 @@ The end state: an AI workflow that is **analytical rather than purely generative
 ## Architecture at a glance
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  AI Tools / IDEs                                                 │
-│  Claude Code · Cursor · Gemini · Codex · Copilot · Windsurf      │
-└──────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│  AI Tools / IDEs                                                      │
+│  Claude Code · OpenCode · Cursor · Gemini · Codex · Copilot · Windsurf │
+└───────────────────────────────────────────────────────────────────────┘
                        ▲                       ▲
                        │ capture (hooks)       │ retrieve (MCP / HTTP)
                        ▼                       │
-┌──────────────────────────────────────────────────────────────────┐
-│                          C O R T E X                             │
-│  Ingestion → Processing → Retrieval + Governance + Dashboard     │
-└──────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                          C O R T E X                                  │
+│  Ingestion → Processing → Retrieval + Governance + Dashboard          │
+└───────────────────────────────────────────────────────────────────────┘
                               ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  HiveLLM Data Services                                           │
-│  Vectorizer · Nexus · Synap · Meilisearch · Haiku (CLI)          │
-└──────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│  HiveLLM Data Services                                                │
+│  Vectorizer · Nexus · Synap · Meilisearch · Haiku (CLI)               │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
 Full architecture doc: [`docs/architecture.md`](docs/architecture.md).
@@ -49,7 +49,7 @@ Full architecture doc: [`docs/architecture.md`](docs/architecture.md).
 
 | Layer            | What it does                                                                                     | Spec                                                               |
 |------------------|--------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| **Capture**      | Hooks in Claude Code / Cursor / Codex / Gemini publish events (prompts, tool calls, decisions).   | [10](docs/specs/10-claude-code-adapter.md), [17](docs/specs/17-additional-adapters.md) |
+| **Capture**      | Hooks in Claude Code / OpenCode / Cursor / Codex / Gemini publish events (prompts, tool calls, decisions). | [10](docs/specs/10-claude-code-adapter.md), [17](docs/specs/17-additional-adapters.md), [20](docs/specs/20-opencode-adapter.md) |
 | **Classify**     | Claude Haiku (via CLI or SDK) enriches events with topics, severity, PII risk.                    | [05](docs/specs/05-classifier.md)                                  |
 | **Embed**        | Symbol-level code chunks (Tree-sitter) + doc sections go to Vectorizer (BM25 + dense).           | [06](docs/specs/06-embedder.md)                                    |
 | **Link**         | Nexus stores the graph of sessions, turns, tool calls, artifacts, decisions, laws, violations.    | [07](docs/specs/07-graph-writer.md)                                |

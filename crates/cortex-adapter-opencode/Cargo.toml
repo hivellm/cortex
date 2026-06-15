@@ -1,0 +1,24 @@
+[package]
+name = "cortex-adapter-opencode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Cortex OpenCode adapter via EnvelopeProducer trait"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+cortex-workers = { path = "../cortex-workers" }
+cortex-adapter-claude-code = { path = "../cortex-adapter-claude-code" }
+cortex-config = { path = "../cortex-config" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true }
+tracing = { workspace = true }

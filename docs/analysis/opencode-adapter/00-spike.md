@@ -112,15 +112,15 @@ API is unavailable.
 
 ## §1.7 plugin runtime + version pinning
 
-- **OpenCode CLI**: pinned at the smoke-test version (operator-led;
-  the §10 e2e records the SHA in the test artifact).
-- **Bun runtime**: Bun is OpenCode's bundled runtime; no separate
-  install is required.
-- **`@opencode-ai/plugin`**: pinned in
-  `packages/cortex-opencode-plugin/package.json` as a `peerDependency`
-  matching the OpenCode CLI's bundled version. Local development
-  uses the OpenCode repo's published types; the build does not
-  embed the plugin runtime.
+- **OpenCode CLI**: `1.15.5` (installed 2026-06-09; `opencode --version`).
+- **Bun runtime**: `1.1.22` (system-installed; `bun --version`). OpenCode
+  also bundles its own Bun for plugin execution; the plugin package uses
+  the system Bun for `bun test`.
+- **`@opencode-ai/plugin`**: `1.15.5` — npm version tracks the CLI 1:1;
+  pin the same semver as the installed CLI. Pinned in
+  `packages/cortex-opencode-plugin/package.json` as a `peerDependency`.
+  Local development uses the published types; the build does not embed
+  the plugin runtime.
 
 ## Operator confirmation checklist
 

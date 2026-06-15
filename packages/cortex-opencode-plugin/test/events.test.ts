@@ -1,6 +1,6 @@
 // Phase11w §4.8 — event-mapper + scope + client unit tests.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildFrame, mapEvent } from "../src/events.js";
 import { hookUrl, loadConfig } from "../src/config.js";
 import { extractBundle, extractDecision, postHook } from "../src/client.js";
@@ -171,5 +171,3 @@ describe("resolveScope", () => {
     expect(calls).toBe(1);
   });
 });
-
-import { beforeEach } from "vitest";
