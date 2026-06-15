@@ -22,6 +22,11 @@
 - [x] 4.1 wiped nexus-data + cortex-graph-backfill replay (in progress — full multi-project history): clear the corrupt Nexus graph + re-run the graph backfill from Synap/Meili
 - [ ] 4.2 Verify the rebuilt graph is deduped + index-backed and the worker keeps up (latency_ms small, no backpressure)
 
+## 4b. Classifier-replay + coverage acceptance (phase15c §2-§3 carry-over)
+- [ ] ⏸ 4b.1 Re-enrich a bounded window of archived envelopes through the live classifier so CALLS / IMPORTS / DEFINES / RETURNS / ABOUT / MENTIONS_FILE / RELATES_TO carry real relations/entities/topics; project via `graph backfill --apply`. — Blocked on nexus#12/#13 (same gate as §4.2).
+- [ ] ⏸ 4b.2 Gate the window size so sustained edge-writes stay under the Nexus stall threshold; verify classifier-driven kinds appear in doctor output. — Same nexus#12/#13 block.
+- [ ] ⏸ 4b.3 `cortex-ops doctor-graph-coverage` reports all 12 kinds present and above the §4.2 floor; capture JSON output as acceptance artifact (phase15c §3.1 close-out). — Blocked on §4b.1/§4b.2 (nexus#12/#13).
+
 ## 5. Re-enable + verify
 - [x] 5.1 worker live: Nexus idle (1%) under write load, no meltdown; forget drains fast (208 del/40s)
 - [x] 5.2 dashboard: coverage worst=None (nexus warn, no error)
