@@ -35,16 +35,26 @@ async fn main() -> Result<()> {
 
     // `CORTEX_CLASSIFIER_MODE=disabled` (or `off` / `none`) is the
     // operator escape hatch for "don't run classification right
-    // now" — exit 0 before consuming the input streams or opening
-    // a Synap connection. Process supervisors that loop on
-    // non-zero exit (systemd, docker restart=always, …) treat this
-    // as healthy so they don't churn the binary. Re-enable by
-    // flipping the env to `cli` (LLM-backed) or `static`
-    // (deterministic offline fallback) and restarting the worker.
+    // now" — skip consuming the input streams and opening a Synap
+    // connection, but DO NOT exit. Idle until a stop signal instead.
+    //
+    // Exiting here (even with code 0) churns the container under the
+    // common supervisor restart policies: docker `restart: always`
+    // and `restart: unless-stopped` both restart on ANY exit code —
+    // only `on-failure` respects a clean exit. An earlier version of
+    // this guard returned `Ok(())` on the wrong assumption that exit 0
+    // is supervisor-friendly, which produced a ~per-minute restart
+    // loop (RestartCount climbing forever) for a worker that was meant
+    // to sit quietly. Parking the process keeps the container `Up` and
+    // quiet. `docker stop` (SIGTERM) still terminates it normally.
+    // Re-enable by flipping the env to `cli` (LLM-backed) or `static`
+    // (deterministic offline fallback) and recreating the worker.
     if matches!(config.mode, ClassifierMode::Disabled) {
         tracing::info!(
-            "CORTEX_CLASSIFIER_MODE=disabled — classifier worker exiting cleanly without consuming events"
+            "CORTEX_CLASSIFIER_MODE=disabled — classifier worker idling (no event consumption); send SIGINT/SIGTERM to stop"
         );
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("ctrl-c received; classifier worker (disabled mode) exiting");
         return Ok(());
     }
 
