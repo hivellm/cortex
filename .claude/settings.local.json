@@ -81,7 +81,21 @@
       "PowerShell(Get-Process bash,sh,wsl -ErrorAction SilentlyContinue)",
       "PowerShell(Get-CimInstance Win32_Process -Filter \"Name='bash.exe'\")",
       "mcp__plugin_playwright_playwright__browser_click",
-      "mcp__plugin_playwright_playwright__browser_type"
+      "mcp__plugin_playwright_playwright__browser_type",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/health\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/health/freshness\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/health/divergence\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/health/versions\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17001/api/namespaces\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17002/health\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17002/\" -Method GET 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/dashboard/overview\" -Method GET)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/dashboard/decisions\" -Method GET)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:17000/v1/health/pre-thinking\" -Method GET 2>&1)",
+      "PowerShell(git -C \"e:/HiveLLM/Cortex\" log --oneline -3)",
+      "PowerShell(head -20)",
+      "PowerShell(Get-ChildItem -Path \"E:\\\\HiveLLM\\\\Cortex\\\\packages\\\\cortex-opencode-plugin\" -Directory | Where-Object { $_.Name -eq \"test\" })",
+      "PowerShell(Get-ChildItem -Path \"E:\\\\HiveLLM\\\\Cortex\\\\packages\\\\cortex-claude-plugin\" -File | Where-Object { $_.Name -match 'package\\\\.json|tsconfig\\\\.json' } | Select-Object Name)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
