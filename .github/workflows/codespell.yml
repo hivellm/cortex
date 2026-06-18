@@ -25,15 +25,23 @@ jobs:
         run: |
           codespell \
             --skip="*.lock,*.json,*.map,*.yaml,*.yml,*.csv,*.bib,*.txt,target,node_modules,.git,dist,venv,build,benchmarks,coverage" \
-            --ignore-words-list="crate,ser,deser,upToDate,optIn,shouldBe,Bloc,unparseable,Unparseable,statics,re-uses,re-using,pre-emptive,pre-emptively,pre-empts,targetting,behaviou,heterogenous,implementor,invokable,deriver,allEdges,doesnt,modul,vai,repete,nome,purgable,analise,juxt,JUXT,infarction,relevante,reencode"
+            --ignore-words-list="crate,ser,deser,upToDate,optIn,shouldBe,Bloc,unparseable,Unparseable,statics,re-uses,re-using,pre-emptive,pre-emptively,pre-empts,targetting,behaviou,heterogenous,implementor,implementors,invokable,deriver,allEdges,doesnt,modul,vai,repete,nome,purgable,analise,juxt,JUXT,infarction,relevante,reencode,bitap,pres,schem,caf"
           # MONOREPO NOTE: Add multilingual stopwords to ignore-words-list if needed
           # Example: --ignore-words-list="crate,ser,deser,meu,oder,ist,alle" (Portuguese,German,etc)
           # ADR-016 §3.6 / phase13e — codespell tolerates the existing
           # vocabulary: `unparseable` (British), `statics` (Rust term),
           # `re-uses`/`re-using`/`pre-emptive` (hyphenated forms used
           # across the codebase), `targetting` / `behaviou` (British),
-          # `heterogenous` / `implementor` (Rust trait term), `invokable`
-          # (MCP tool term), `deriver` (orchestrator overlay helper),
-          # `allEdges` (camelCase variable in the GUI Graph view), and
-          # `*.txt` log fixtures (e.g. `scripts/graph/cypher_load.errors.txt`).
+          # `heterogenous` / `implementor`/`implementors` (Rust trait
+          # term), `invokable` (MCP tool term), `deriver` (orchestrator
+          # overlay helper), `allEdges` (camelCase variable in the GUI
+          # Graph view), and `*.txt` log fixtures (e.g.
+          # `scripts/graph/cypher_load.errors.txt`).
+          # phase26 — false positives that are not typos: `bitap`
+          # (Bitap/shift-or fuzzy-search algorithm, Fuse.js), `pres`
+          # (deliberate `present`-count abbreviation in
+          # phase20_acceptance.sh), `schem` (a `schemas` path truncated
+          # with `…` in an analysis appendix table), `caf` (the test
+          # `escape_cypher_string("café") == "caf?"` — the `é` is
+          # escaped to `?`, leaving the `caf` token).
 
