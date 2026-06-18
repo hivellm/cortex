@@ -44,4 +44,12 @@ intent_mismatch_top: Array<IntentMismatchView>,
  * `sonnet_hit`, `sonnet_cache_hit`, `sonnet_timeout`,
  * `sonnet_error`, `deterministic_fallback`.
  */
-rewriter_path_total: { [key in string]?: bigint }, };
+rewriter_path_total: { [key in string]?: bigint }, 
+/**
+ * phase26c §2.3 — bundle-cache hit count since adapter boot.
+ */
+cache_hit_total: bigint, 
+/**
+ * phase26c §2.3 — bundle-cache miss count since adapter boot.
+ */
+cache_miss_total: bigint, };
