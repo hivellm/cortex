@@ -77,6 +77,42 @@ cargo sweep --installed      # drop artifacts from toolchains you uninstalled
 cargo sweep --maxsize 20GiB  # shrink target/ until under 20 GiB
 ```
 
+## Automating it on Windows (Task Scheduler)
+
+A machine-local launcher + a daily scheduled task runs the sweep
+unattended. The launcher is *not* committed (it is per-machine glue);
+the sweep logic stays in `scripts/sweep-target.sh`.
+
+1. Launcher `C:\Users\<you>\.cortex\sweep-target.cmd`:
+
+   ```bat
+   @echo off
+   setlocal
+   set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+   "C:\Program Files\Git\bin\bash.exe" -lc "/e/HiveLLM/Cortex/scripts/sweep-target.sh 14" >> "%USERPROFILE%\.cortex\sweep-target.log" 2>&1
+   endlocal
+   ```
+
+2. Register a daily task (runs as the logged-on user, no stored
+   password). From Git Bash, `MSYS_NO_PATHCONV=1` stops the shell from
+   mangling the `/Flags`:
+
+   ```bash
+   MSYS_NO_PATHCONV=1 schtasks /Create \
+     /TN "Cortex target sweep" \
+     /TR "C:\\Users\\<you>\\.cortex\\sweep-target.cmd" \
+     /SC DAILY /ST 03:00 /F
+   ```
+
+   Daily + `--time 14` is intentional: each run is cheap and only
+   removes artifacts untouched for 14 days, so missed days (machine off)
+   never matter and active work is never deleted. Inspect runs in
+   `%USERPROFILE%\.cortex\sweep-target.log`; trigger on demand with
+   `schtasks /Run /TN "Cortex target sweep"`.
+
+On macOS/Linux use a cron entry instead:
+`0 3 * * * cd /path/to/cortex && scripts/sweep-target.sh 14`.
+
 ## CI / Docker notes
 
 - CI runners and the Docker build start from a clean cache, so **disable

@@ -118,6 +118,26 @@ the notice and start returning real results. The slug is the value
 `cortex-storage`'s `slug_for_repo` produces — lowercase ASCII; the
 same form `daemon.indexed_repos` reports.
 
+### Build hygiene (keep `target/` small)
+
+Cargo never garbage-collects build artifacts, so `target/` grows without
+bound (it once passed **500 GB** here). The repo already limits this:
+`[profile.dev].debug = "line-tables-only"` and `[profile.release].strip`
+keep debuginfo and symbols in check. For the rest, sweep periodically —
+this removes only artifacts you are not actively building, so the next
+build stays incremental:
+
+```sh
+cargo install cargo-sweep      # once
+scripts/sweep-target.sh        # remove artifacts unused for 14 days
+scripts/sweep-target.sh --dry-run
+cargo clean                    # full reclaim (forces a fresh rebuild)
+```
+
+Automate it (daily Task Scheduler job on Windows, cron elsewhere) and set
+`CARGO_INCREMENTAL=0` in CI. Full guide:
+[`docs/rust-target-hygiene.md`](docs/rust-target-hygiene.md).
+
 ## Roadmap
 
 Five phases, mapped to the spec list:
