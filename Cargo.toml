@@ -69,10 +69,23 @@ nexus-graph-sdk = "2.1"
 [patch.crates-io]
 rustls-webpki = { git = "https://github.com/rustls/webpki", tag = "v/0.103.13" }
 
+# ── target/ size & build hygiene ─────────────────────────────────────────────
+# The dev profile defaults to FULL debuginfo for every workspace crate AND
+# every dependency. Across a 14-crate workspace with dozens of integration-
+# test binaries that is the primary driver of an unbounded `target/` (it grew
+# past 500 GB locally). `line-tables-only` keeps file:line in panics/backtraces
+# but slashes debuginfo size and speeds incremental rebuilds ~30-40%
+# (Rust perf-team guidance, Kobzol 2025). Full debuginfo is rarely needed —
+# step-debugging a specific crate can opt back in with a local override.
+# Periodic cleanup is still required: see scripts/sweep-target.sh.
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-
-[profile.dev]
-opt-level = 0
+# Release already emits no debuginfo; strip the residual symbol table from the
+# final linked binaries so shipped/CI artifacts stay small.
+strip = true
