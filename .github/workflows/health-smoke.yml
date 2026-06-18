@@ -20,11 +20,10 @@ on:
   # Pre-phase14j — the health smoke requires the full local-stack
   # boot inside the runner (cortex-api + adapter + ingestion +
   # workers). Today this fails intermittently in CI on transient
-  # binding errors; until the boot becomes deterministic the smoke
-  # runs on manual trigger + nightly schedule.
+  # binding errors; it runs on PRs and on a manual trigger. The
+  # nightly schedule was removed because the non-deterministic boot
+  # made it fail most nights and flood the maintainer's inbox.
   workflow_dispatch:
-  schedule:
-    - cron: "30 6 * * *"
   pull_request:
     branches: [main, master, develop]
     paths-ignore:

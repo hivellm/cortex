@@ -22,8 +22,6 @@ on:
       - ".github/workflows/dashboard-grep-gate.yml"
       - "packages/cortex-claude-plugin/**"
       - "scripts/**"
-  schedule:
-    - cron: "0 2 * * *"
   workflow_dispatch:
 
 permissions:

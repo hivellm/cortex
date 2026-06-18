@@ -7,15 +7,15 @@ name: eval
 # fixtures are a placeholder pending operator-led seeding.
 #
 # Until the fixtures grow to cover the floor, the eval gate runs
-# on a manual trigger + the nightly schedule so it does not block
-# every push to main. The CI is preserved structurally (artefact
-# upload + baseline comparison still works when run); only the
-# automatic push trigger is removed.
+# on a manual trigger only. The nightly schedule was removed because
+# it only ever failed (placeholder fixtures can't meet the floor) and
+# flooded the maintainer's inbox with failure mail. The CI is
+# preserved structurally (artefact upload + baseline comparison still
+# works when run by hand); re-add a `schedule:` block once the golden
+# fixtures are seeded to satisfy the acceptance floors.
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 7 * * *"
 
 jobs:
   eval:

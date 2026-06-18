@@ -28,10 +28,10 @@ on:
       - "crates/cortex-classifier/**"
       - "crates/cortex-workers/**"
       - ".github/workflows/retention-canary.yml"
-  schedule:
-    # Nightly canary at 04:00 UTC so a regression that doesn't
-    # touch the listed paths still surfaces within 24 h.
-    - cron: "0 4 * * *"
+  # The nightly `schedule:` (04:00 UTC) was removed — it required a
+  # live stack it didn't have in CI, so it failed every night and
+  # flooded the maintainer's inbox. Regressions still surface on push
+  # and on PRs that touch the listed paths.
 
 permissions:
   contents: read

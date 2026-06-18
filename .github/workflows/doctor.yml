@@ -14,11 +14,11 @@ on:
   # not reliably available inside GitHub Actions runners (the
   # Synap image has been pulled / re-tagged multiple times across
   # the project lifetime). Until the stack reproduces 100% in CI,
-  # the doctor runs on a manual trigger + the nightly schedule so
-  # it does not block every push.
+  # the doctor runs on a manual trigger only — the nightly schedule
+  # was removed because it only ever failed (no live stack) and
+  # flooded the maintainer's inbox with failure mail. Re-add a
+  # `schedule:` block once the stack boots deterministically in CI.
   workflow_dispatch:
-  schedule:
-    - cron: "0 6 * * *"
 
 permissions:
   contents: read
