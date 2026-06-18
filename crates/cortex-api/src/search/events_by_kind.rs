@@ -275,6 +275,23 @@ pub async fn handle_events_by_kind(
         }
     };
     if !status.is_success() {
+        // A missing Meili index is a recoverable empty state, not a
+        // gateway failure (issue #4): asking for `kind=tool_call` /
+        // `kind=turn` on a daemon whose kind-routed index
+        // (`cortex_tool_calls` / `cortex_turns`) — or per-repo
+        // `cortex-<slug>-<family>` — was never created must answer
+        // `200` with empty hits, not `502`. The resolved `index` is
+        // echoed back so the caller still sees which uid was queried.
+        if super::is_meili_index_missing(status.as_u16(), &parsed) {
+            return Json(EventsByKindResponse {
+                kind: req.kind,
+                index,
+                hits: Vec::new(),
+                processing_time_ms: 0,
+                estimated_total_hits: 0,
+            })
+            .into_response();
+        }
         let detail = parsed
             .get("message")
             .and_then(Value::as_str)

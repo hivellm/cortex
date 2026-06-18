@@ -43,6 +43,44 @@ const VECTOR_K_MAX: u32 = 200;
 const KEYWORD_LIMIT_DEFAULT: u32 = 10;
 const KEYWORD_LIMIT_MAX: u32 = 100;
 
+/// Per-string-field byte cap applied to raw keyword hits when the
+/// caller did NOT pass `attributes_to_retrieve` (issue #4 secondary
+/// finding). A single oversized document field — the report saw a
+/// 91 KB line — otherwise blows the MCP per-result transport cap and
+/// makes `cortex_keyword_search` unusable without manually restricting
+/// fields. Callers who need a field in full opt out by passing
+/// `attributes_to_retrieve`, which bypasses capping entirely.
+const KEYWORD_HIT_FIELD_CAP_BYTES: usize = 2_048;
+
+/// Recursively truncate every string leaf in `value` longer than `cap`
+/// bytes, replacing the dropped tail with a `…[+N bytes]` marker.
+/// UTF-8 safe — never splits a multi-byte codepoint.
+fn cap_string_leaves(value: &mut Value, cap: usize) {
+    match value {
+        Value::String(s) if s.len() > cap => {
+            let mut idx = cap;
+            while idx > 0 && !s.is_char_boundary(idx) {
+                idx -= 1;
+            }
+            let dropped = s.len() - idx;
+            let mut truncated = s[..idx].to_string();
+            truncated.push_str(&format!("…[+{dropped} bytes]"));
+            *s = truncated;
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                cap_string_leaves(v, cap);
+            }
+        }
+        Value::Object(map) => {
+            for (_, v) in map.iter_mut() {
+                cap_string_leaves(v, cap);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Request body for `POST /v1/search/keyword`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct KeywordSearchRequest {
@@ -272,11 +310,21 @@ pub async fn handle_keyword_search(
             );
         }
     };
-    let hits: Vec<Value> = parsed
+    let mut hits: Vec<Value> = parsed
         .get("hits")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    // When the caller did not restrict fields, cap oversized string
+    // leaves so one 91 KB document field can't blow the MCP
+    // per-result transport budget (issue #4). Explicit
+    // `attributes_to_retrieve` opts out — the caller is steering
+    // field selection themselves.
+    if req.attributes_to_retrieve.is_none() {
+        for hit in hits.iter_mut() {
+            cap_string_leaves(hit, KEYWORD_HIT_FIELD_CAP_BYTES);
+        }
+    }
     let processing_time_ms = parsed
         .get("processingTimeMs")
         .and_then(|v| v.as_u64())
@@ -729,6 +777,42 @@ mod tests {
             1
         );
         assert_eq!(req.attributes_to_retrieve.unwrap(), vec!["id", "title"]);
+    }
+
+    #[test]
+    fn cap_string_leaves_truncates_oversized_fields_and_marks_them() {
+        let big = "x".repeat(5_000);
+        let mut hit = json!({
+            "id": "abc",
+            "body": big,
+            "nested": { "deep": "y".repeat(3_000) },
+            "tags": ["short", "z".repeat(4_000)],
+            "count": 42,
+        });
+        cap_string_leaves(&mut hit, 2_048);
+        // Small fields and non-strings are untouched.
+        assert_eq!(hit["id"], "abc");
+        assert_eq!(hit["count"], 42);
+        // Oversized leaves are truncated + marked, recursively.
+        let body = hit["body"].as_str().unwrap();
+        assert!(body.len() < 5_000 && body.contains("…[+"));
+        assert!(body.starts_with("xxx"));
+        let deep = hit["nested"]["deep"].as_str().unwrap();
+        assert!(deep.len() < 3_000 && deep.contains("…[+"));
+        let arr = hit["tags"].as_array().unwrap();
+        assert_eq!(arr[0], "short");
+        assert!(arr[1].as_str().unwrap().contains("…[+"));
+    }
+
+    #[test]
+    fn cap_string_leaves_respects_utf8_boundaries() {
+        // A field of multi-byte codepoints right at the cap must not
+        // split a codepoint.
+        let mut hit = json!({ "body": "é".repeat(2_000) });
+        cap_string_leaves(&mut hit, 2_048);
+        // Still valid UTF-8 (as_str succeeds) and was truncated.
+        let body = hit["body"].as_str().unwrap();
+        assert!(body.contains("…[+"));
     }
 
     #[test]

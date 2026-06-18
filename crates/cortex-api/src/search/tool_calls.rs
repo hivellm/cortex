@@ -266,6 +266,20 @@ pub async fn handle_tool_calls(
         }
     };
     if !status.is_success() {
+        // A missing Meili index is a recoverable empty state, not a
+        // gateway failure (issue #4): a daemon that hasn't created the
+        // kind-routed `cortex_tool_calls` index — or any per-repo
+        // `cortex-<slug>-code` that was never populated — must answer
+        // with `200 []`, not `502`, so tool-call telemetry consumers
+        // degrade gracefully instead of hard-failing.
+        if super::is_meili_index_missing(status.as_u16(), &parsed) {
+            return Json(ToolCallsResponse {
+                hits: Vec::new(),
+                processing_time_ms: 0,
+                estimated_total_hits: 0,
+            })
+            .into_response();
+        }
         let detail = parsed
             .get("message")
             .and_then(Value::as_str)
