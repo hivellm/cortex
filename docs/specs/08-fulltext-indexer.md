@@ -123,12 +123,27 @@ The family suffix is picked deterministically from `(kind, classifier.topics, co
 ### Identity
 
 ```
-doc_id = event_id                              // live events
-doc_id = "bootstrap:" + repo + ":" + path + ":" + content_hash   // bootstrap artifacts
+doc_id = event_id                              // live events (ULID — Meili-safe)
+doc_id = "bootstrap-" + sha256_hex(repo 0x1f path 0x1f content_hash)   // content-addressable
 ```
 
-- `doc_id` is stable across re-runs.
+- `doc_id` is stable across re-runs (same `(repo, path, content_hash)` → same hash).
 - Meilisearch upsert is `doc_id`-keyed, so retries and bootstrap replays are no-ops.
+- **Content-addressable kinds** (`Decision`, `LawViolation`, `Knowledge`,
+  `Learning`) use the `bootstrap-` hashed key on the LIVE path too (not just
+  backfill) so re-emitting the same file upserts instead of duplicating
+  (Phase22 P1).
+- **Meili-safe key (phase0).** A Meilisearch primary key accepts only
+  `[a-zA-Z0-9-_]` (≤ 511 bytes). The earlier readable form
+  `bootstrap:<repo>:<path>:<hash>` contained `:` `/` `.` and was **rejected
+  at indexing** (`documentAdditionOrUpdate failed … Document identifier … is
+  invalid`), silently dropping every content-addressable doc and leaving only
+  the random-ULID copies — the source of the `cortex_decisions`
+  `title==id` orphans + 51-docs-for-27-decisions duplication. Hashing the
+  tuple into `bootstrap-<sha256hex>` keeps the key valid, stable, and
+  collision-resistant. Repair tooling: `cortex-ops decisions-reindex`
+  (re-emit + prune legacy non-`bootstrap-` docs) and `cortex-ops
+  doctor-decisions` (flags `title==id`).
 
 ## Design
 

@@ -8,8 +8,8 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase0_decision-fulltext-title-body-mismapped | 0/7 | decision fulltext title body mismapped |
-| ⬚ | phase0_nexus-merge-drops-edge-props | 0/7 | nexus merge drops edge props |
+| 🚫 | phase0_nexus-merge-drops-edge-props | 4/10 | nexus merge drops edge props |
+| ⬚ | phase0_reindex-content-addressable-after-meili-key-fix | 0/8 | reindex content addressable after meili key fix |
 
 ## phase16b
 

@@ -1,6 +1,9 @@
 use super::helpers::home_dir;
 use std::process::ExitCode;
 
+/// Global decisions index name (mirrors `cortex_storage::names::INDEX_DECISIONS`).
+const INDEX_DECISIONS: &str = "cortex_decisions";
+
 pub(super) fn doctor(
     vectorizer: Option<String>,
     nexus: Option<String>,
@@ -1161,6 +1164,172 @@ fn string_array(value: Option<&serde_json::Value>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// `cortex-ops doctor-decisions` — scan `cortex_decisions` for malformed
+/// orphan docs whose `title == id` (the signature of the `01KQNYF4J*`
+/// early buggy emit batch).
+///
+/// Exit codes:
+/// - `0` — no malformed docs found.
+/// - `2` — at least one doc has `title == id`, or the index is unreachable.
+///
+/// Use `cortex-ops decisions-reindex` to fix the malformed docs.
+pub(super) fn doctor_decisions(
+    meili_url: Option<String>,
+    master_key: Option<String>,
+    json: bool,
+) -> ExitCode {
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let url = meili_url
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.meili.meili_url.clone())
+        .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
+    let key = master_key
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.meili.meili_api_key.clone());
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("doctor-decisions: tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let result = rt.block_on(scan_decisions_index(&url, key.as_deref()));
+
+    match result {
+        Ok(malformed) => {
+            let any_malformed = !malformed.is_empty();
+            if json {
+                let payload = serde_json::json!({
+                    "meili_url": url,
+                    "index": INDEX_DECISIONS,
+                    "malformed_count": malformed.len(),
+                    "malformed": malformed,
+                    "status": if any_malformed { "fail" } else { "ok" },
+                    "fix": "cortex-ops decisions-reindex --dry-run",
+                });
+                match serde_json::to_string_pretty(&payload) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => eprintln!("doctor-decisions: serialize: {e}"),
+                }
+            } else {
+                println!("cortex-ops doctor-decisions");
+                println!("index: {INDEX_DECISIONS} @ {url}");
+                println!();
+                if malformed.is_empty() {
+                    println!("ok     no malformed docs (title == id)");
+                } else {
+                    for id in &malformed {
+                        println!("fail   malformed doc title == id: {id}");
+                    }
+                    println!();
+                    println!(
+                        "FAIL   {} malformed doc(s) found — run \
+                         `cortex-ops decisions-reindex` to repair",
+                        malformed.len()
+                    );
+                }
+            }
+            if any_malformed {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => {
+            if json {
+                let payload = serde_json::json!({
+                    "meili_url": url,
+                    "index": INDEX_DECISIONS,
+                    "status": "error",
+                    "error": e.to_string(),
+                });
+                match serde_json::to_string_pretty(&payload) {
+                    Ok(s) => println!("{s}"),
+                    Err(se) => eprintln!("doctor-decisions: serialize error report: {se}"),
+                }
+            } else {
+                eprintln!("doctor-decisions: {e}");
+            }
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Fetch up to 1 000 docs from `cortex_decisions` and return the ids of any
+/// whose `title == id`.  A 404 (index missing) is treated as zero docs rather
+/// than an error — the index may not exist yet on a fresh stack.
+async fn scan_decisions_index(
+    meili_url: &str,
+    api_key: Option<&str>,
+) -> anyhow::Result<Vec<String>> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if let Some(key) = api_key {
+        let bearer = format!("Bearer {key}");
+        let val = HeaderValue::from_str(&bearer)
+            .map_err(|e| anyhow::anyhow!("invalid api key: {e}"))?;
+        headers.insert(AUTHORIZATION, val);
+    }
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| anyhow::anyhow!("reqwest: {e}"))?;
+
+    let endpoint = format!(
+        "{}/indexes/{}/search",
+        meili_url.trim_end_matches('/'),
+        INDEX_DECISIONS,
+    );
+    let body = serde_json::json!({
+        "q": "",
+        "limit": 1000,
+        "attributesToRetrieve": ["id", "title"],
+    });
+    let resp = client.post(&endpoint).json(&body).send().await?;
+    let status = resp.status();
+    // 404 means the index doesn't exist yet — not an error.
+    if status.as_u16() == 404 {
+        return Ok(Vec::new());
+    }
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "HTTP {}: {}",
+            status.as_u16(),
+            text.chars().take(200).collect::<String>()
+        ));
+    }
+    let payload: serde_json::Value = resp.json().await?;
+    let hits = payload
+        .get("hits")
+        .and_then(|v| v.as_array())
+        .map(|a| a.as_slice())
+        .unwrap_or(&[]);
+
+    let malformed: Vec<String> = hits
+        .iter()
+        .filter_map(|hit| {
+            let id = hit.get("id")?.as_str()?;
+            let title = hit.get("title")?.as_str()?;
+            if title == id {
+                Some(id.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    Ok(malformed)
 }
 
 #[cfg(test)]

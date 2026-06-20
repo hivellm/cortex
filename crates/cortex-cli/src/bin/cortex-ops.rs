@@ -21,6 +21,8 @@
 mod backfill_cross_project;
 #[path = "cortex-ops/bootstrap.rs"]
 mod bootstrap;
+#[path = "cortex-ops/decisions_reindex.rs"]
+mod decisions_reindex;
 #[path = "cortex-ops/branch_cmd.rs"]
 mod branch_cmd;
 #[path = "cortex-ops/canary.rs"]
@@ -1214,6 +1216,56 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// phase0_decision-fulltext-title-body-mismapped — scan
+    /// `cortex_decisions` for malformed orphan docs whose
+    /// `title == id` (the `01KQNYF4J*` early-buggy-emit signature).
+    /// Exit `0` when no malformed docs are found; `2` when any
+    /// are present or the index is unreachable. Pairs with
+    /// `decisions-reindex` which fixes the issue.
+    DoctorDecisions {
+        /// Meilisearch base URL. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL` then
+        /// `http://127.0.0.1:7700`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
+        #[arg(long)]
+        master_key: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// phase0_decision-fulltext-title-body-mismapped — re-emit all
+    /// `.rulebook/decisions/*.md` into `cortex_decisions` using the
+    /// stable content-addressable doc_id
+    /// (`bootstrap:<repo>:<path>:<hash>`), then prune any doc whose
+    /// `title == id` (the malformed-orphan signature). Idempotent —
+    /// Meilisearch upserts on the stable primary key so re-running is
+    /// safe. Reads `CORTEX_FULLTEXT_MEILI_URL` /
+    /// `CORTEX_FULLTEXT_MEILI_API_KEY`. Use `--dry-run` to report
+    /// what would change without writing.
+    DecisionsReindex {
+        /// Directory containing the `*.md` decision files. Defaults
+        /// to `.rulebook/decisions` relative to cwd.
+        #[arg(long)]
+        decisions_dir: Option<String>,
+        /// Meilisearch base URL. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL` then
+        /// `http://127.0.0.1:7700`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Report what would change without writing to Meilisearch.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -1964,6 +2016,18 @@ fn run() -> ExitCode {
             stream,
             json,
         } => doctor_redaction_coverage::run(synap_url, stream, json),
+        Command::DoctorDecisions {
+            meili_url,
+            master_key,
+            json,
+        } => doctor::doctor_decisions(meili_url, master_key, json),
+        Command::DecisionsReindex {
+            decisions_dir,
+            meili_url,
+            meili_key,
+            dry_run,
+            json,
+        } => decisions_reindex::decisions_reindex(decisions_dir, meili_url, meili_key, dry_run, json),
     }
 }
 

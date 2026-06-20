@@ -200,7 +200,28 @@ fn bootstrap_doc_id_uses_repo_path_hash() {
         BuildOutcome::Ready(d) => *d,
         BuildOutcome::Skipped => panic!("artifact must build"),
     };
-    assert_eq!(doc.id, "bootstrap:Vectorizer:src/lib.rs:h-evt-bootstrap");
+    // Content-addressable id is now a Meili-safe hash of the
+    // (repo, path, content_hash) tuple — the readable
+    // `bootstrap:<repo>:<path>:<hash>` form contained ':' '/' '.' which
+    // Meili rejects as a primary key (only [a-zA-Z0-9-_] allowed).
+    assert!(
+        doc.id.starts_with("bootstrap-"),
+        "content-addressable id must use the bootstrap- prefix, got {}",
+        doc.id
+    );
+    assert_eq!(
+        doc.id.len(),
+        "bootstrap-".len() + 64,
+        "id must be bootstrap- + 64 sha256 hex chars, got {}",
+        doc.id
+    );
+    assert!(
+        doc.id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "id must be a valid Meili primary key (only [a-zA-Z0-9-_]), got {}",
+        doc.id
+    );
 }
 
 #[test]

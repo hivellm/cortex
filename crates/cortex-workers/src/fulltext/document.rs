@@ -197,13 +197,38 @@ pub fn live_doc_id(event_id: &str) -> String {
     event_id.to_string()
 }
 
-/// Build the doc-id for a bootstrap artifact — `bootstrap:<repo>:<path>:<hash>`.
+/// Build the doc-id for a bootstrap artifact — `bootstrap-<sha256hex>`
+/// over the stable `(repo, path, content_hash)` tuple.
 ///
 /// Stable across re-runs as long as `(repo, path, content_hash)` doesn't
-/// change. Spec 08 §Identity calls this out explicitly so re-bootstrapping
-/// the same repo is idempotent on the Meilisearch side.
+/// change. Spec 08 §Identity calls this out so re-bootstrapping the same
+/// repo is idempotent on the Meilisearch side.
+///
+/// The id MUST be a valid Meilisearch primary key — Meili accepts only
+/// `[a-zA-Z0-9-_]` (≤ 511 bytes). The previous readable form
+/// `bootstrap:<repo>:<path>:<hash>` contained `:` `/` `.` and was
+/// **rejected at indexing**, silently dropping every bootstrap/content-
+/// addressable doc (Decision/LawViolation/Knowledge/Learning). Hashing
+/// the tuple yields a collision-resistant, Meili-safe key while keeping
+/// determinism (same tuple → same id → idempotent upsert).
 pub fn bootstrap_doc_id(repo: &str, path: &str, content_hash: &str) -> String {
-    format!("bootstrap:{repo}:{path}:{content_hash}")
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    // Unit-separator (0x1f) delimiters keep the tuple unambiguous so two
+    // distinct (repo, path, hash) triples cannot hash to the same key by
+    // concatenation aliasing.
+    hasher.update(repo.as_bytes());
+    hasher.update([0x1f]);
+    hasher.update(path.as_bytes());
+    hasher.update([0x1f]);
+    hasher.update(content_hash.as_bytes());
+    let digest = hasher.finalize();
+    let mut id = String::with_capacity(74);
+    id.push_str("bootstrap-");
+    for byte in digest {
+        id.push_str(&format!("{byte:02x}"));
+    }
+    id
 }
 
 #[cfg(test)]

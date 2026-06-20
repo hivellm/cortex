@@ -981,7 +981,7 @@ mod top_level_projection_tests {
             "live re-emit of the same decision must share a doc id"
         );
         assert!(
-            a.id.starts_with("bootstrap:"),
+            a.id.starts_with("bootstrap-"),
             "content-addressable kinds use the stable id space, got {}",
             a.id
         );
@@ -1156,5 +1156,50 @@ mod top_level_projection_tests {
         assert_eq!(parsed.decision_id.as_deref(), Some("ADR-RT"));
         assert_eq!(parsed.decision_title.as_deref(), Some("Round trip"));
         assert_eq!(parsed.decision_status.as_deref(), Some("accepted"));
+    }
+
+    /// phase0_decision-fulltext-title-body-mismapped — builder contract:
+    /// a well-formed decision doc MUST have `title != id` (title is the
+    /// human-readable ADR title, NOT the Meili primary key or a ULID)
+    /// AND `body` must be plain text, not a JSON-object string (i.e.
+    /// the body must not start with `{`). Pins the boundary that the
+    /// `01KQNYF4J*` malformed batch violated: those docs had
+    /// `title == id` (the ULID) and `body` was a raw JSON object string.
+    #[test]
+    fn decision_doc_title_differs_from_id_and_body_is_not_json_object() {
+        let doc = ready(build_doc(
+            &evt_with_source(
+                "01SOMEULIDHERE",
+                Kind::Decision,
+                "sha256:abc",
+                "cortex",
+                ".rulebook/decisions/0042-adopt-meili.md",
+                json!({
+                    "decision_id": "ADR-0042",
+                    "title": "Adopt Meilisearch",
+                    "status": "accepted",
+                    "body": "We adopt Meilisearch for the full-text lane.",
+                    "tags": []
+                }),
+            ),
+            false,
+            1024 * 1024,
+        ));
+        // The stable doc_id uses the bootstrap:<repo>:<path>:<hash> form —
+        // NEVER the ULID. The title must be the human ADR title, not the id.
+        assert_ne!(
+            doc.title, doc.id,
+            "decision title must be the ADR title, not the doc primary key"
+        );
+        // `title` must be the human-readable ADR label.
+        assert_eq!(doc.title, "Adopt Meilisearch");
+        // `body` must be prose text — NOT a serialised JSON object string.
+        // The malformed batch had `body = r#"{"decision_id":"...","title":"..."}"#`
+        // because the full payload was accidentally stringified.
+        assert!(
+            !doc.body.trim_start().starts_with('{'),
+            "body must be prose text, not a JSON-object string; got: {:?}",
+            doc.body.chars().take(80).collect::<String>()
+        );
     }
 }
