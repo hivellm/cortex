@@ -21,7 +21,9 @@ Rebuilt + recreated cortex-api at HEAD. Findings:
 ## Run 1c — MCP tool surface (§8) via mcp__cortex__*
 - PASS: cortex_pre_thinking (bundle, 181ms, fail_open=false), cortex_active_work (lists all tasks incl. phase0/27/28), cortex_keyword_search (raw Meili, correct decision docs), cortex_decision_search, cortex_query (free_search/decision_lookup/similar_problems), cortex_status.
 - EMPTY (note, re-probe with seeded data; not confirmed bugs): cortex_timeline (cortex:main — no TimelineEvent rows), cortex_topic_search (repo:cortex — no topic cards matched), cortex_similar_sessions (cortex — none ≥0.6 floor).
-- PENDING: cortex_graph_query neighbors (need a valid node_id), cortex_capture_memory→query round-trip, cortex_feedback_record→signals, cortex_audit{query_id}, cortex_history/supersession, cortex_session_timeline model-name (needs adapter redeploy + fresh session).
+- PASS: cortex_graph_query neighbors (node 01KQVHJ5... → Turn neighbor + HAS_TOOL_CALL edge, live traversal); cortex_capture_memory WRITE (event_id returned, doc lands in cortex-cortex-misc within ~35s).
+- FOUND (follow-up phase0_captured-memory-not-retrievable-via-query): captured memory is indexed in `cortex-<repo>-misc` but `cortex_query` free_search does NOT return it (rare marker zeta-7731 absent from results) — the fusion lane doesn't fan out to the memory/misc family, so capture_memory is write-only from the query path. High value: breaks the documented capture_memory contract.
+- PENDING: cortex_feedback_record→signals, cortex_audit{query_id}, cortex_history/supersession, cortex_session_timeline model-name (needs adapter redeploy + fresh session), §5.2 phase27a edge confidence (needs graph-worker rebuild).
 - PENDING NEXT RUN: §8.2 model-name in timeline (needs adapter redeploy + a fresh session — old archived events have model=None); §5.2 phase27a edge confidence (needs graph-worker rebuild); §5.1/§8.11 re-probe with correct request shape.
 
 ## 0. Pre-flight: deploy HEAD + stack health
