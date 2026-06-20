@@ -4,6 +4,12 @@
 
 **Total**: 20 tasks | **Completed**: 0 | **In Progress**: 1 | **Pending**: 19
 
+## phase0
+
+| Status | Task | Progress | Description |
+|--------|------|----------|-------------|
+| ⬚ | phase0_missing-index-empty-200-all-handlers | 0/5 | missing index empty 200 all handlers |
+
 ## phase16b
 
 | Status | Task | Progress | Description |
@@ -117,10 +123,4 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase28_manual-e2e-feature-verification | 0/58 | manual e2e feature verification |
-
-## phase29
-
-| Status | Task | Progress | Description |
-|--------|------|----------|-------------|
-| ⬚ | phase29_missing-index-empty-200-all-handlers | 0/5 | missing index empty 200 all handlers |
 

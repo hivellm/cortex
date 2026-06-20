@@ -1,4 +1,4 @@
-# Proposal: phase29_missing-index-empty-200-all-handlers
+# Proposal: phase0_missing-index-empty-200-all-handlers
 
 Source: phase28 manual E2E verification (run 1, 2026-06-20) — finding F1.
 
@@ -23,23 +23,21 @@ remaining Meili-backed handler's `!status.is_success()` branch, returning
 that handler's empty response shape (200) instead of `BAD_GATEWAY`:
 
 - `consolidations_recent`, `consolidations_search`, `consolidations_by_entity`,
-  `consolidations_diff`, `consolidation_costs`, `consolidation_get`,
-  `consolidation_lineage`
+  `consolidations_diff`, `consolidation_costs`, `consolidation_lineage`
 - `decision_search`, `topic_search`, `law_violations`
 - audit any other handler in `crates/cortex-api/src/search/` with the same
   `BAD_GATEWAY`-on-non-success pattern (search_proxy keyword already
   returns a structured 404, leave as-is or align).
 
-Each handler returns its own typed empty response (empty hits + zeroed
-counts). `consolidation_get` (single-doc) returns 404 not-found rather
-than empty, since a missing item is semantically not-found.
+`consolidation_get` (single-doc) returns 404 not-found rather than empty,
+since a missing item is semantically not-found.
 
 ## Impact
 
 - Affected specs: spec 11 (query surface error contract), spec 27
   (consolidation read endpoints).
 - Affected code: ~10 handlers under `crates/cortex-api/src/search/`.
-- Breaking change: NO (502 → 200 empty is a strictly friendlier
+- Breaking change: NO (502 -> 200 empty is a strictly friendlier
   contract; consumers tolerate empty).
 - User benefit: consolidation/decision/topic/violation reads stop
   hard-failing on a fresh or partially-indexed daemon.

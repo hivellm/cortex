@@ -12,6 +12,6 @@
 - [ ] 1.11 Audit search/ for any other BAD_GATEWAY-on-non-success handler; align
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 2.1 Update spec 11 error contract + CHANGELOG (missing index → 200 empty across the read surface)
-- [ ] 2.2 Per-handler unit test: missing-index body → empty 200 (reuse the is_meili_index_missing pattern)
+- [ ] 2.1 Update spec 11 error contract + CHANGELOG (missing index -> 200 empty across the read surface)
+- [ ] 2.2 Per-handler unit test: missing-index body -> empty 200 (reuse the is_meili_index_missing pattern)
 - [ ] 2.3 Run `cargo check` + `clippy -D warnings` + `cargo test --workspace`; live-verify the consolidations/recent probe returns 200 empty
