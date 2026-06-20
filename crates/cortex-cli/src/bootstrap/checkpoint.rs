@@ -177,9 +177,11 @@ mod tests {
     fn record_emit_stamps_time_and_rolls_rate_window() {
         use chrono::{Duration, Utc};
         let t0 = Utc::now();
-        let mut p = RepoProgress::default();
+        let mut p = RepoProgress {
+            events_emitted: 100,
+            ..Default::default()
+        };
         // First emit: stamps last_emit_at + seeds the rate sample.
-        p.events_emitted = 100;
         p.record_emit(t0);
         assert_eq!(p.last_emit_at.as_deref(), Some(t0.to_rfc3339()).as_deref());
         assert_eq!(

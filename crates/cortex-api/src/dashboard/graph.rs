@@ -46,6 +46,14 @@ pub struct GraphEdge {
     pub to: String,
     /// Edge label (e.g. `INVOKED`, `WROTE`, `OBSERVED_IN`).
     pub label: String,
+    /// Phase27a §3.2 — edge-confidence tier (`extracted` / `inferred`
+    /// / `ambiguous`) read off the Nexus edge property. Lets the SPA
+    /// style low-confidence edges distinctly (e.g. dash + amber for
+    /// `ambiguous`) so a reviewer can spot inferred links at a glance.
+    /// `None` when the edge predates phase27a or the synthetic
+    /// lane-fallback path produced it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<String>,
 }
 
 /// Query params for `/v1/dashboard/graph`.
@@ -309,29 +317,36 @@ async fn query_nexus_graph(
         // Session-anchored mode: restrict the edge's "from" side to
         // descendants of the requested Session. Cheaper than a full
         // 3-hop path because each rel-spec already names the depth.
+        // Phase27a §3.2 — every variant also projects `r.confidence`
+        // (cell 4) so the edge payload can carry the tier. Edges
+        // without the property surface it as null → `None`.
         let cy = match session_id {
             Some(_) if *from_label == "Session" => format!(
                 "MATCH (a:Session {{ session_id: $sid }})-[r:{rel}]->(b:{to_label}) \
                  RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
-                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl, \
+                        r.confidence AS conf \
                  LIMIT {per_rel_limit}"
             ),
             Some(_) if *from_label == "Turn" => format!(
                 "MATCH (s:Session {{ session_id: $sid }})-[:HAS_TURN]->(a:Turn)-[r:{rel}]->(b:{to_label}) \
                  RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
-                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl, \
+                        r.confidence AS conf \
                  LIMIT {per_rel_limit}"
             ),
             Some(_) if *from_label == "ToolCall" => format!(
                 "MATCH (s:Session {{ session_id: $sid }})-[:HAS_TURN]->(:Turn)-[:HAS_TOOL_CALL]->(a:ToolCall)-[r:{rel}]->(b:{to_label}) \
                  RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
-                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl, \
+                        r.confidence AS conf \
                  LIMIT {per_rel_limit}"
             ),
             Some(_) if *from_label == "LawViolation" => format!(
                 "MATCH (s:Session {{ session_id: $sid }})-[:HAS_TURN]->(t:Turn)<-[:OBSERVED_IN]-(a:LawViolation)-[r:{rel}]->(b:{to_label}) \
                  RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
-                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl, \
+                        r.confidence AS conf \
                  LIMIT {per_rel_limit}"
             ),
             // Decision/SUPERSEDES and Artifact/IN_REPO are not
@@ -340,7 +355,8 @@ async fn query_nexus_graph(
             None => format!(
                 "MATCH (a:{from_label})-[r:{rel}]->(b:{to_label}) \
                  RETURN a.{from_id_p} AS f_id, a.{from_lbl_p} AS f_lbl, \
-                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl \
+                        b.{to_id_p} AS t_id, b.{to_lbl_p} AS t_lbl, \
+                        r.confidence AS conf \
                  LIMIT {per_rel_limit}"
             ),
         };
@@ -422,12 +438,16 @@ async fn query_nexus_graph(
                     kind: (*to_kind).to_string(),
                 });
 
+            // Phase27a §3.2 — cell 4 carries the edge confidence tier
+            // (null for pre-phase27a edges → None).
+            let confidence = cell_str(cells.get(4)).filter(|s| !s.is_empty());
             let key = format!("{from_id}|{rel}|{to_id}");
             if seen_edges.insert(key) {
                 edges.push(GraphEdge {
                     from: from_id,
                     to: to_id,
                     label: (*rel).to_string(),
+                    confidence,
                 });
             }
             if nodes_by_id.len() >= limit {
@@ -612,6 +632,7 @@ impl GraphBuilder {
             from,
             to,
             label: rel,
+            confidence: None,
         });
     }
 
@@ -727,6 +748,7 @@ fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPa
                     from: session_id.to_string(),
                     to: id.clone(),
                     label: "CONTAINS".to_string(),
+                    confidence: None,
                 });
                 turns_seen.insert(id, (220, y));
             }
@@ -750,6 +772,7 @@ fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPa
                     from: parent,
                     to: id,
                     label: "INVOKED".to_string(),
+                    confidence: None,
                 });
             }
             "decision" => {
@@ -780,6 +803,7 @@ fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPa
                     from: parent,
                     to: id,
                     label: "REFERENCES".to_string(),
+                    confidence: None,
                 });
             }
             "analysis" => {
@@ -807,6 +831,7 @@ fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPa
                     from: parent,
                     to: id,
                     label: "PRODUCED".to_string(),
+                    confidence: None,
                 });
             }
             "law_violation" => {
@@ -834,6 +859,7 @@ fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPa
                     from: id.clone(),
                     to: parent,
                     label: "OBSERVED_IN".to_string(),
+                    confidence: None,
                 });
             }
             _ => {}
@@ -841,4 +867,51 @@ fn synthesize_graph_from_lane(lane: &MemoryKeywordLane, limit: usize) -> GraphPa
     }
 
     GraphPayload { nodes, edges }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_payload_carries_confidence_when_present_and_omits_when_none() {
+        // Phase27a §3.2 — an ambiguous edge surfaces its tier so the
+        // SPA can style it; a confidence-less edge keeps the lean
+        // shape (field skipped) for back-compat with existing clients.
+        let ambiguous = GraphEdge {
+            from: "a".into(),
+            to: "b".into(),
+            label: "RELATED_TO".into(),
+            confidence: Some("ambiguous".into()),
+        };
+        let plain = GraphEdge {
+            from: "a".into(),
+            to: "b".into(),
+            label: "HAS_TURN".into(),
+            confidence: None,
+        };
+        let amb_json = serde_json::to_value(&ambiguous).unwrap();
+        assert_eq!(
+            amb_json.get("confidence").and_then(|v| v.as_str()),
+            Some("ambiguous"),
+            "ambiguous edge must expose its tier to the graph view"
+        );
+        let plain_json = serde_json::to_value(&plain).unwrap();
+        assert!(
+            plain_json.get("confidence").is_none(),
+            "confidence-less edge must omit the field, not emit null"
+        );
+    }
+
+    #[test]
+    fn cell_str_reads_confidence_cell_and_treats_null_as_absent() {
+        // The edge-pull loop reads the tier from cell 4 via cell_str;
+        // a null cell (pre-phase27a edge) yields None.
+        let row = serde_json::json!(["f", "from", "t", "to", "inferred"]);
+        let cells = row.as_array().unwrap();
+        assert_eq!(cell_str(cells.get(4)).as_deref(), Some("inferred"));
+        let null_row = serde_json::json!(["f", "from", "t", "to", null]);
+        let null_cells = null_row.as_array().unwrap();
+        assert!(cell_str(null_cells.get(4)).is_none());
+    }
 }

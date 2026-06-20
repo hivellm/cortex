@@ -60,11 +60,18 @@ impl NexusGraphLane {
 /// downstream during overlay derivation.
 fn cypher_for(template: &str) -> Option<&'static str> {
     match template {
+        // Phase27a §3.1 — every strategy template also returns the
+        // edge's confidence tier + score (cells 5/6) so `project_row`
+        // can down-weight `Inferred`/`Ambiguous` edges in the fused
+        // native-score term. Edges written before phase27a carry
+        // neither property → Cypher returns null → weight 1.0 (no
+        // down-weighting, back-compatible).
         "edge_artifact_touched_neighbours" => Some(
             "MATCH (a:Artifact)<-[r:TOUCHED]-(s) \
              WHERE a.path CONTAINS $q OR a.natural_key CONTAINS $q \
              RETURN s.id AS edge_from, a.path AS edge_to, type(r) AS edge_type, 1 AS hops, \
-                    coalesce(a.path, a.natural_key) AS label \
+                    coalesce(a.path, a.natural_key) AS label, \
+                    r.confidence AS confidence, r.confidence_score AS confidence_score \
              LIMIT 50",
         ),
         "decision_supersedes_chain" => Some(
@@ -72,7 +79,8 @@ fn cypher_for(template: &str) -> Option<&'static str> {
              WHERE d.id CONTAINS $q OR d.title CONTAINS $q \
                 OR prev.id CONTAINS $q OR prev.title CONTAINS $q \
              RETURN d.id AS edge_from, prev.id AS edge_to, type(r) AS edge_type, 1 AS hops, \
-                    coalesce(d.title, d.id) AS label \
+                    coalesce(d.title, d.id) AS label, \
+                    r.confidence AS confidence, r.confidence_score AS confidence_score \
              LIMIT 50",
         ),
         "turn_analysis_decision_chain" => Some(
@@ -80,7 +88,8 @@ fn cypher_for(template: &str) -> Option<&'static str> {
              WHERE t.id CONTAINS $q OR an.id CONTAINS $q OR an.title CONTAINS $q \
              OPTIONAL MATCH (an)-[r2:PRODUCED_DECISION]->(d:Decision) \
              RETURN t.id AS edge_from, an.id AS edge_to, type(r1) AS edge_type, 1 AS hops, \
-                    coalesce(an.title, an.id) AS label \
+                    coalesce(an.title, an.id) AS label, \
+                    r1.confidence AS confidence, r1.confidence_score AS confidence_score \
              LIMIT 50",
         ),
         "law_violations_last_30d" => Some(
@@ -92,7 +101,8 @@ fn cypher_for(template: &str) -> Option<&'static str> {
             "MATCH (v:LawViolation)-[r:VIOLATES]->(l:Law) \
              WHERE v.law_id CONTAINS $q OR l.title CONTAINS $q OR v.body CONTAINS $q \
              RETURN v.id AS edge_from, l.id AS edge_to, type(r) AS edge_type, 1 AS hops, \
-                    coalesce(l.title, l.id) AS label \
+                    coalesce(l.title, l.id) AS label, \
+                    r.confidence AS confidence, r.confidence_score AS confidence_score \
              LIMIT 50",
         ),
         // Phase18 §5.2 — cross-project reference edges. Invoked
@@ -103,10 +113,16 @@ fn cypher_for(template: &str) -> Option<&'static str> {
         // so the propagation helper can classify them via the same
         // temporal wedge used for regular hits.
         "cross_project_ref" => Some(
+            // Confidence rides cells 5/6 like every other template;
+            // this edge's own extras (version_constraint, valid_from,
+            // valid_to) shift to cells 7/8/9 so `project_row` reads
+            // confidence at the same offset for every template.
             "MATCH (a:Branch)-[r:CROSS_PROJECT_REF]->(b:Branch) \
              WHERE a.id CONTAINS $q \
              RETURN a.id AS edge_from, b.id AS edge_to, type(r) AS edge_type, 1 AS hops, \
-                    coalesce(b.id, a.id) AS label, r.version_constraint AS version_constraint, \
+                    coalesce(b.id, a.id) AS label, \
+                    r.confidence AS confidence, r.confidence_score AS confidence_score, \
+                    r.version_constraint AS version_constraint, \
                     r.valid_from AS valid_from, r.valid_to AS valid_to \
              LIMIT 50",
         ),
@@ -159,6 +175,28 @@ impl GraphLane for NexusGraphLane {
     }
 }
 
+/// Phase27a §3.1 — map an edge-confidence tier (+ optional explicit
+/// score) to a retrieval weight in `(0.0, 1.0]`. Mirrors
+/// `cortex_workers::graph::EdgeConfidence::default_score`
+/// (`extracted → 1.0`, `inferred → 0.7`, `ambiguous → 0.4`). An
+/// explicit `confidence_score` property wins when present + finite +
+/// positive; otherwise the tier string decides; an edge carrying
+/// neither (everything written before phase27a) yields `1.0` so the
+/// down-weighting is fully back-compatible.
+fn confidence_weight(tier: Option<&str>, score: Option<f64>) -> f64 {
+    if let Some(s) = score {
+        if s.is_finite() && s > 0.0 {
+            return s.clamp(0.0, 1.0);
+        }
+    }
+    match tier.map(|t| t.trim().to_ascii_lowercase()).as_deref() {
+        Some("extracted") => 1.0,
+        Some("inferred") => 0.7,
+        Some("ambiguous") => 0.4,
+        _ => 1.0,
+    }
+}
+
 fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
     let cells = row.as_array()?;
     let edge_from = cells.first().and_then(Value::as_str)?.to_string();
@@ -174,6 +212,14 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
         .and_then(Value::as_str)
         .map(String::from)
         .unwrap_or_else(|| edge_to.clone());
+
+    // Phase27a §3.1 — cells 5/6 carry the edge's confidence tier +
+    // score for every template (see `cypher_for`). A row that
+    // predates the RETURN change, or an edge without the property,
+    // surfaces these as absent → `confidence_weight` returns 1.0.
+    let confidence = cells.get(5).and_then(Value::as_str).map(String::from);
+    let confidence_score = cells.get(6).and_then(Value::as_f64);
+    let weight = confidence_weight(confidence.as_deref(), confidence_score);
 
     if edge_from.is_empty() || edge_to.is_empty() {
         return None;
@@ -193,6 +239,19 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
     extras.insert("hops".to_string(), Value::Number(hops.into()));
     extras.insert("template".to_string(), Value::String(template.to_string()));
 
+    // Phase27a §3.1 — round-trip the confidence tier + the realised
+    // retrieval weight for debug / dashboard surfacing (§3.2). Only
+    // stamped when the edge actually carries a tier so pre-phase27a
+    // edges keep the leaner extras shape.
+    if let Some(tier) = &confidence {
+        extras.insert("confidence".to_string(), Value::String(tier.clone()));
+    }
+    if let Some(s) = confidence_score {
+        if let Some(n) = serde_json::Number::from_f64(s) {
+            extras.insert("confidence_score".to_string(), Value::Number(n));
+        }
+    }
+
     // Phase18 §5.2 — cross_project_ref edges carry three extra cells
     // (cells 5/6/7: version_constraint, valid_from, valid_to). Read
     // them only for this template so a 5-cell row from any other
@@ -200,16 +259,18 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
     // target branch id by splitting on ':' and taking the prefix
     // (e.g. "nexus:main" → "nexus").
     if template == "cross_project_ref" {
-        if let Some(vc) = cells.get(5).and_then(Value::as_str) {
+        // Phase27a §3.1 — these shifted from cells 5/6/7 to 7/8/9 when
+        // confidence took cells 5/6 across every template.
+        if let Some(vc) = cells.get(7).and_then(Value::as_str) {
             extras.insert(
                 "version_constraint".to_string(),
                 Value::String(vc.to_string()),
             );
         }
-        if let Some(vf) = cells.get(6).and_then(Value::as_str) {
+        if let Some(vf) = cells.get(8).and_then(Value::as_str) {
             extras.insert("valid_from".to_string(), Value::String(vf.to_string()));
         }
-        if let Some(vt) = cells.get(7).and_then(Value::as_str) {
+        if let Some(vt) = cells.get(9).and_then(Value::as_str) {
             extras.insert("valid_to".to_string(), Value::String(vt.to_string()));
         }
         // Derive source_project from edge_to ("project:branch" → "project").
@@ -240,12 +301,16 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
         path: None,
         symbol: Some(edge_type),
         content_hash: None,
-        // Score by hop distance: 1.0 / hops. The orchestrator's RRF
-        // doesn't depend on this for ranking (positional order +
-        // RRF rank is enough), but a real-ish score keeps the
-        // downstream snippet column from showing 0.0 across the
-        // board.
-        score: 1.0 / (hops as f64).max(1.0),
+        // Score by hop distance (`1.0 / hops`) down-weighted by edge
+        // confidence (Phase27a §3.1): an `Inferred` (×0.7) or
+        // `Ambiguous` (×0.4) edge contributes proportionally less to
+        // the fused native-score term than a direct `Extracted` edge
+        // at the same hop distance. The fusion blend reads this via
+        // `LaneHit::normalized_score`, so the down-weighting shifts
+        // fused order whenever two graph edges differ only in
+        // confidence. Edges without a confidence property keep weight
+        // 1.0 (back-compatible with everything written pre-phase27a).
+        score: (1.0 / (hops as f64).max(1.0)) * weight,
         ts: 0,
         severity: None,
         extras,
@@ -314,6 +379,106 @@ mod tests {
         assert_eq!(
             hit.extras.get("source").and_then(|v| v.as_str()),
             Some("graph")
+        );
+    }
+
+    // ---------------- Phase27a §3.1 — confidence weighting ----------------
+
+    #[test]
+    fn confidence_weight_maps_tiers_to_default_scores() {
+        // Mirrors EdgeConfidence::default_score in cortex-workers.
+        assert_eq!(confidence_weight(Some("extracted"), None), 1.0);
+        assert_eq!(confidence_weight(Some("inferred"), None), 0.7);
+        assert_eq!(confidence_weight(Some("ambiguous"), None), 0.4);
+        // Case / whitespace tolerant.
+        assert_eq!(confidence_weight(Some("  Inferred "), None), 0.7);
+        // Unknown tier or absent property → no down-weighting.
+        assert_eq!(confidence_weight(Some("bogus"), None), 1.0);
+        assert_eq!(confidence_weight(None, None), 1.0);
+    }
+
+    #[test]
+    fn confidence_weight_prefers_explicit_score_when_present() {
+        // An explicit, finite, positive confidence_score wins over
+        // the tier mapping and is clamped onto (0,1].
+        assert_eq!(confidence_weight(Some("extracted"), Some(0.55)), 0.55);
+        assert_eq!(confidence_weight(Some("inferred"), Some(1.5)), 1.0);
+        // Non-positive / non-finite scores fall back to the tier.
+        assert_eq!(confidence_weight(Some("inferred"), Some(0.0)), 0.7);
+        assert_eq!(confidence_weight(Some("ambiguous"), Some(f64::NAN)), 0.4);
+    }
+
+    #[test]
+    fn project_row_downweights_inferred_edge_score() {
+        // Two single-hop edges that differ only in confidence: the
+        // Extracted edge keeps the full 1.0 hop score, the Inferred
+        // one is multiplied by 0.7 so it contributes less to the
+        // fused native-score term.
+        let extracted = serde_json::json!([
+            "S1", "src/lib.rs", "TOUCHED", 1_i64, "src/lib.rs", "extracted", 1.0
+        ]);
+        let inferred = serde_json::json!([
+            "S2", "about", "RELATES_TO", 1_i64, "about", "inferred", 0.7
+        ]);
+        let he = project_row(&extracted, "edge_artifact_touched_neighbours").unwrap();
+        let hi = project_row(&inferred, "edge_artifact_touched_neighbours").unwrap();
+        assert!((he.score - 1.0).abs() < 1e-9, "extracted keeps full score");
+        assert!((hi.score - 0.7).abs() < 1e-9, "inferred down-weighted ×0.7");
+        assert!(hi.score < he.score);
+        // Tier is round-tripped into extras for §3.2 surfacing.
+        assert_eq!(
+            hi.extras.get("confidence").and_then(|v| v.as_str()),
+            Some("inferred")
+        );
+    }
+
+    #[test]
+    fn project_row_without_confidence_keeps_full_hop_score() {
+        // A 5-cell row (pre-phase27a edge, or an edge missing the
+        // property) must keep weight 1.0 — no down-weighting.
+        let row = serde_json::json!(["A", "B", "SUPERSEDES", 1_i64, "label"]);
+        let hit = project_row(&row, "decision_supersedes_chain").unwrap();
+        assert!((hit.score - 1.0).abs() < 1e-9);
+        assert!(
+            !hit.extras.contains_key("confidence"),
+            "no confidence extra stamped for an edge without the property"
+        );
+    }
+
+    #[test]
+    fn cross_project_ref_reads_extras_after_confidence_cells() {
+        // cross_project_ref now returns confidence at cells 5/6 and
+        // its own extras at 7/8/9. Confirm both the down-weight and
+        // the shifted extra reads.
+        let row = serde_json::json!([
+            "cortex:main",
+            "nexus:main",
+            "CROSS_PROJECT_REF",
+            1_i64,
+            "nexus:main",
+            "ambiguous",
+            0.4,
+            "^2.1",
+            "2026-01-01",
+            "2026-12-31"
+        ]);
+        let hit = project_row(&row, "cross_project_ref").unwrap();
+        assert!((hit.score - 0.4).abs() < 1e-9, "ambiguous ×0.4");
+        assert_eq!(
+            hit.extras.get("version_constraint").and_then(|v| v.as_str()),
+            Some("^2.1")
+        );
+        assert_eq!(
+            hit.extras.get("valid_from").and_then(|v| v.as_str()),
+            Some("2026-01-01")
+        );
+        assert_eq!(
+            hit.extras.get("valid_to").and_then(|v| v.as_str()),
+            Some("2026-12-31")
+        );
+        assert_eq!(
+            hit.extras.get("source_project").and_then(|v| v.as_str()),
+            Some("nexus")
         );
     }
 

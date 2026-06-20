@@ -144,6 +144,44 @@ MATCH (s:Symbol {name: "PreThinkingTool"})-[:DEFINES]->(a:Artifact)
 RETURN a.repo, a.path, s.language
 ```
 
+#### Edge-confidence tiers (phase27a)
+
+Every edge carries an optional **confidence tier** so the read path can
+distinguish a deterministic structural link from a classifier-inferred
+one. The tier is stamped as two additive edge properties (back-compat:
+edges written before phase27a carry neither):
+
+| Property           | Type   | Values                                  |
+|--------------------|--------|-----------------------------------------|
+| `confidence`       | string | `extracted` \| `inferred` \| `ambiguous`|
+| `confidence_score` | float  | default per tier — `1.0` / `0.7` / `0.4`|
+
+Stamping (`cortex-workers/src/graph`, `EdgeOp::with_confidence`):
+
+- **`extracted` (1.0)** — deterministic edges. The structural mapper's
+  literal-`edge_type` edges (`HAS_TURN`, `HAS_TOOL_CALL`, `TOUCHED`,
+  `DEFINES`, `IN_REPO`, `REMEMBERS`, …) and the AST analyzer's resolved
+  edges (`LocalFile`/`IntraCrate`/`External` resolution tiers).
+- **`inferred` (0.7)** — classifier / LLM-derived edges. The mapper's
+  `rel_label` classifier edge, the analyzer's `Unresolved` tier, and the
+  semantic projection's relation edges (`RELATES_TO`, `ABOUT`,
+  `ANSWERED_BY`, `CITES`, `CALLS`, …).
+- **`ambiguous` (0.4)** — reserved for edges flagged as low-confidence
+  by a future disambiguation pass; consumed today by the read path but
+  not yet stamped by any extractor.
+
+**Read-path consumption.**
+- *Graph lane (`lanes/nexus_graph_lane.rs`, §3.1):* every strategy
+  Cypher returns `r.confidence` / `r.confidence_score` (cells 5/6) and
+  the hit score is multiplied by `confidence_weight` (explicit score
+  wins; else the tier default; else `1.0`). The fusion blend reads this
+  via `LaneHit::normalized_score`, so two edges that differ only in
+  confidence fuse in tier order.
+- *Dashboard graph (`dashboard/graph.rs`, §3.2):* each edge-pull Cypher
+  returns `r.confidence` and the `GraphEdge` payload carries it
+  (omitted when absent) so the SPA can style `ambiguous` edges
+  distinctly.
+
 ## Design
 
 ### Stable identity
@@ -336,21 +374,24 @@ overlay derivation.
 
 ### Hit projection (Nexus row → `LaneHit`)
 
-Each row returns 5 cells: `[edge_from, edge_to, edge_type, hops, label]`.
-Projected into `LaneHit`:
+Each row returns 7 cells: `[edge_from, edge_to, edge_type, hops, label,
+confidence, confidence_score]` (phase27a §3.1 added cells 5/6 — see
+**Edge-confidence tiers** below). Projected into `LaneHit`:
 
-| LaneHit field         | Source cell / value                                                |
-|-----------------------|--------------------------------------------------------------------|
-| `doc_id`              | `graph|{template}|{edge_from}|{edge_to}` (per-template namespace)  |
-| `text`                | `label` (cell 4) — node title or id                                |
-| `symbol`              | `edge_type` (cell 2)                                               |
-| `score`               | `1.0 / max(hops, 1)` — closer hops score higher                    |
-| `extras["source"]`    | `"graph"` (constant, source-attribution invariant)                 |
-| `extras["edge_from"]` | `edge_from` (cell 0)                                               |
-| `extras["edge_to"]`   | `edge_to` (cell 1)                                                 |
-| `extras["edge_type"]` | `edge_type` (cell 2)                                               |
-| `extras["hops"]`      | `hops` (cell 3)                                                    |
-| `extras["template"]`  | the template name — useful for debug dashboards                    |
+| LaneHit field             | Source cell / value                                                |
+|---------------------------|--------------------------------------------------------------------|
+| `doc_id`                  | `graph|{template}|{edge_from}|{edge_to}` (per-template namespace)  |
+| `text`                    | `label` (cell 4) — node title or id                                |
+| `symbol`                  | `edge_type` (cell 2)                                               |
+| `score`                   | `(1.0 / max(hops, 1)) * confidence_weight` — closer hops + higher-confidence edges score higher (phase27a §3.1) |
+| `extras["source"]`        | `"graph"` (constant, source-attribution invariant)                 |
+| `extras["edge_from"]`     | `edge_from` (cell 0)                                               |
+| `extras["edge_to"]`       | `edge_to` (cell 1)                                                 |
+| `extras["edge_type"]`     | `edge_type` (cell 2)                                               |
+| `extras["hops"]`          | `hops` (cell 3)                                                    |
+| `extras["template"]`      | the template name — useful for debug dashboards                    |
+| `extras["confidence"]`    | `confidence` (cell 5) — tier string, stamped only when present     |
+| `extras["confidence_score"]` | `confidence_score` (cell 6) — numeric, stamped only when present |
 
 The orchestrator's `derive_graph_neighbors` reads the four `edge_*`
 extras to materialise `GraphNeighbor { from, to, relation, hops }`
