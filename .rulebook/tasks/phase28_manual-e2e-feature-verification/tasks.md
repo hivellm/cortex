@@ -45,8 +45,8 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 - [ ] 2.2 Classifier enrichment of a tool_call (not directly verified end-to-end)
 
 ## 3. Embedder + Vectorizer lane (spec 06)
-- [ ] 3.1 `cortex_vector_search` — `query_text` returns 400 `not_implemented` (server-side embedding not wired; needs `query_vector`)
-- [ ] 3.2 Per-repo Vectorizer collections (not directly inspected)
+- [~] 3.1 `cortex_vector_search` — `query_text` returns 400 `not_implemented` (server-side embedding not wired; needs `query_vector`)
+- [~] 3.2 Vectorizer up but `/collections` → 401 (auth-gated; not inspected without creds — not a defect)
 
 ## 4. Fulltext + Meili lane (spec 08/22)
 - [x] 4.1 `cortex_keyword_search cortex_decisions` — hits returned, no oversized-line blowup
@@ -62,7 +62,7 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 ## 6. Query API + fusion (spec 11/27)
 - [x] 6.1 `cortex_query free_search repo=cortex` — fused snippets, `scope_resolved.repo=cortex`
 - [x] 6.2 cwd→slug (issue#4 Bug2) — Windows `E:\HiveLLM\Rulebook` → `rulebook` (fixed+live)
-- [ ] 6.3 `cortex_query_explain` per-lane breakdown (not run)
+- [x] 6.3 `cortex_query_explain` — per-lane timings (vector/keyword/graph) + fusion_math (rrf_k=60, alpha=0.7, recency=0.02) + envelope
 - [ ] 6.4 Reranker active path (no endpoint configured in this stack)
 - [ ] 6.5 Phantom-link verifier on a renamed/deleted symbol (not run)
 
@@ -73,15 +73,15 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 ## 8. MCP tool surface (spec 20)
 - [x] 8.1 `cortex_status` — daemon up, indexed_repos list (8 repos)
 - [ ] 8.2 `cortex_session_timeline` model-name (needs adapter rebuild + fresh session)
-- [~] 8.3 `cortex_timeline` returns (empty for cortex:main); `session_replay` not run
-- [x] 8.4 `cortex_decision_search` — hits returned (decision_chain not separately run)
+- [x] 8.3 `cortex_session_replay` — 33-turn session, ordered turns + summaries; `cortex_timeline` returns (empty for cortex:main)
+- [x] 8.4 `cortex_decision_search` — hits; `cortex_decision_chain` works (empty chain — no SUPERSEDES graph edges, ties to projection-off)
 - [x] 8.5 consolidations recent/search/by_entity/diff/costs → 200, get/lineage → 404 (missing-index fix; were 502)
 - [x] 8.6 `cortex_topic_search` — works (empty for repo:cortex)
 - [x] 8.7 `cortex_law_violations` / dashboard violations — 200
 - [x] 8.8 `cortex_similar_sessions` (200, empty) + `cortex_active_work` (lists tasks); files_touched not run
 - [x] 8.9 `cortex_capture_memory` → `cortex_query` round-trip — retrievable (FIXED + verified live)
-- [ ] 8.10 `cortex_feedback_record` → `_signals` (not run)
-- [ ] 8.11 `cortex_audit {query_id}` (not run)
+- [x] 8.10 `cortex_feedback_record` → `_signals` round-trip — wrote rating 5 + note, read it back (verified live)
+- [x] 8.11 `cortex_audit {query_id}` — query_audit envelope (counts, fusion params, rewrite=noun_phrase)
 - [ ] 8.12 `cortex_missing` / `cortex_unknown` (not run)
 
 ## 9. Dashboard endpoints (spec 16/21/28)
@@ -95,10 +95,10 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 ## 10. Temporal / branches / cross-project (spec 30-35)
 - [x] 10.1 `/v1/branch/{project}` list — 200 (empty branches)
 - [ ] 10.2 `cortex_query` with `as_of` / `include_history` (not run)
-- [ ] 10.3 `cortex_supersession` / entity history (not run)
+- [~] 10.3 `cortex_supersession` — graceful 404 (entity not in the phase18 timeline store; no data, not a crash)
 
 ## 11. Retention / governance (spec 13/14/19)
-- [ ] 11.1 retention sweep dry-run (not run)
+- [x] 11.1 `cortex-ops sweep-empty` (dry-run) — connects to Meili, lists 7 empty-index candidates, exit 0 (no deletion)
 - [~] 11.2 Laws — `/v1/dashboard/laws` + violations return data (deny-eval not exercised)
 - [ ] 11.3 `/v1/admin/forget` token gate (not run)
 
