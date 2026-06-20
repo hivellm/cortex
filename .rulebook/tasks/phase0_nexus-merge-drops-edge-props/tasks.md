@@ -1,6 +1,14 @@
 ## 1. Reproduce + characterise
-- [ ] 1.1 Add a live/integration probe asserting Nexus persists relationship props written by the worker (write edge via `LiveNexusClient`, read `r.confidence` back) — currently fails on 2.3.2
-- [ ] 1.2 Confirm which write forms persist rel props on the pinned Nexus (MERGE inline = drops; CREATE inline = persists; UNWIND+MERGE = TBD) and record the matrix in the spec
+- [x] 1.1 Reproduced live (2026-06-20, Nexus 2.3.2, `/cypher` host:17002): `MATCH ()-[r]->() WHERE r.confidence IS NOT NULL RETURN count(r)` = 0 across the whole graph; also 0 for `TOUCHED.operation` and the provenance triple — confirming NO edge prop persists in prod.
+- [x] 1.2 Write-form matrix established empirically (fresh node pairs + fresh edge types, read-back in a separate statement):
+  - `MATCH (a),(b) MERGE (a)-[r:T { k:v }]->(b)` → edge persists, **prop dropped** (`r.k` = null). ← current writer
+  - `SET r.x = ...` / `SET r += {}` / `ON CREATE SET` → **rejected** (`Unknown variable 'r' in SET clause`), even after a plain `MATCH` of an existing edge.
+  - `MATCH (a),(b) CREATE (a)-[r:T { k:v }]->(b)` (standalone) → **prop persists** (`r.k` reads back).
+  - `... OPTIONAL MATCH old DELETE old CREATE (a)-[r:T {k:v}]->(b)` (combined) → **prop dropped** (Nexus only persists rel props when CREATE is the sole write clause).
+  - **Idempotent recipe that works:** two statements — (A) `MATCH (a)-[old:T]->(b) DELETE old`, then (B) `MATCH (a),(b) CREATE (a)-[r:T { k:v }]->(b)`. Replay-safe (always ends with exactly one current-props edge), but **doubles writes per props-bearing edge**.
+
+## 1b. Fix-path decision (ARCHITECTURAL — owner: user, who maintains Nexus)
+- [ ] 1b.1 Decide: (A) Cortex writer workaround (two-statement delete+create for props-bearing edges — 2× write volume on already-strained Nexus, nexus#12/phase25) vs (B) upstream Nexus fix (MERGE must persist inline rel props, or support `SET` on a rel var) + gate phase27a/provenance persistence on the fixed release (mirrors nexus#12 pattern). Blocked pending this decision.
 
 ## 2. Fix the writer (or gate on Nexus)
 - [ ] 2.1 Implement an idempotent edge-prop persistence path in `render_edge_merge`/`nexus_client.rs` that survives replay (no `SET r.*`), or gate phase27a + provenance persistence on a fixed Nexus release with a tracked issue link
