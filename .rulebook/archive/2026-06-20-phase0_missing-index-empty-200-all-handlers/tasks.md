@@ -12,6 +12,6 @@
 - [x] 1.11 Audited search/; tool_calls + events_by_kind (issue#4) + topic_search + the 6 above now all guard missing-index; search_proxy keyword returns structured 404 by design
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [x] 2.1 CHANGELOG note (missing index -> 200 empty / 404 single-doc across the consolidation/decision/law read surface)
-- [x] 2.2 Coverage: missing-index detection unit-tested in search.rs (is_meili_index_missing 3 tests); live before/after probes confirm each handler
-- [x] 2.3 `cargo check` + `clippy -D warnings` clean; 239 search unit tests pass; live-verified recent/search/diff/costs → 200 empty, {id}/lineage → 404 (were all 502)
+- [x] 2.1 Update or create documentation covering the implementation. DONE: CHANGELOG note (missing index -> 200 empty / 404 single-doc across the consolidation/decision/law read surface).
+- [x] 2.2 Write tests covering the new behavior. DONE: missing-index detection unit-tested in search.rs (is_meili_index_missing 3 tests); live before/after probes confirm each handler.
+- [x] 2.3 Run tests and confirm they pass. DONE: `cargo check` + `clippy -D warnings` clean; 239 search unit tests pass; live-verified recent/search/diff/costs → 200 empty, {id}/lineage → 404 (were all 502).

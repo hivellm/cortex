@@ -75,6 +75,12 @@ canonical envelope to `/v1/ingest`. The tool MUST accept
 (`info` / `notable`). It MUST return `{event_id, content_hash,
 indexed_at}` synchronously.
 
+Captured envelopes land in the per-repo `cortex-{slug}-misc` family.
+For the round-trip below to hold, `free_search` MUST fan out to the
+`misc` family (alongside `code` / `docs`) on both lanes — see
+spec 11 §Intent → retrieval-strategy and
+`phase0_captured-memory-not-retrievable-via-query`.
+
 #### Scenario: in-session capture is queryable next turn
 - Given the agent calls `cortex_capture_memory { kind: "memory", body: "Phase9k uses per-name semaphore for concurrency", repo: "cortex" }`
 - When the response returns `event_id` and the embedder lane has drained

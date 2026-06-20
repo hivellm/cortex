@@ -237,7 +237,7 @@ stores defined in `crates/cortex-storage/src/names.rs`:
 | `decision_lookup`  | `cortex.decision.fp32` (global)                            | `cortex_decisions` (global) | `decision_supersedes_chain`        |
 | `similar_problems` | `cortex.turn.fp32` + `cortex.turn.pq` (global)             | `cortex_turns` (global)     | `turn_analysis_decision_chain`     |
 | `law_check`        | —                                                          | `cortex_laws` (global)      | `law_violations_last_30d`          |
-| `free_search`      | `cortex-{slug}-code` (per-repo)                            | `cortex-{slug}-code`        | —                                  |
+| `free_search`      | `cortex-{slug}-{code,docs,misc}` (per-repo)               | `cortex-{slug}-{code,docs,misc}` | —                             |
 | `explain`          | `cortex-{slug}-code` + `cortex-{slug}-docs` (per-repo)     | `cortex-{slug}-{code,docs}` | —                                  |
 
 For the global indexes that carry `repo` as a filterable attribute
@@ -246,6 +246,15 @@ For the global indexes that carry `repo` as a filterable attribute
 query does not bleed across other repos sharing the same global
 index. `cortex_laws` does NOT carry `repo` — laws are cross-repo by
 design and `law_check` strips `scope.repo` before fan-out.
+
+`free_search` fans out across the `code`, `docs`, AND `misc` per-repo
+families on both the vector and keyword lanes. `misc` is the family
+`cortex_capture_memory` writes to (`memory` / `knowledge` / `learning`
+→ `cortex-{slug}-misc`); without it, captured memories are indexed but
+never retrievable via the fused query path
+(`phase0_captured-memory-not-retrievable-via-query`). A per-repo
+collection/index that does not exist simply returns zero hits, so the
+extra lanes are safe.
 
 ### Execution plan
 
