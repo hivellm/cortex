@@ -34,7 +34,7 @@ use super::extractors::{
     about, answered_by, calls, cites, contradicts, defines, emitted_by, imports, mentions_file,
     relates_to, returns, supersedes, Edge, ExtractCtx,
 };
-use super::patch::{GraphPatch, NodeOp};
+use super::patch::{EdgeConfidence, GraphPatch, NodeOp};
 use crate::embedder::EnrichedEvent;
 use std::collections::BTreeSet;
 
@@ -93,7 +93,16 @@ pub fn project_envelope(env: &EnrichedEvent, ctx: &ExtractCtx) -> GraphPatch {
     let mut patch = GraphPatch::empty();
     for (_name, extractor) in EXTRACTORS {
         let edges = extractor(env, ctx);
-        patch.edges.extend(edges);
+        // phase27a — projection edges come from the classifier's
+        // (LLM/heuristic) extracted relations, so they are `Inferred` by
+        // default. The two structural edges that are read deterministically
+        // from the envelope itself (who emitted it; a file path named in
+        // the payload) are `Extracted`. Deterministic → byte-identical
+        // re-projection holds (the §3.2 idempotency invariant).
+        patch.edges.extend(edges.into_iter().map(|e| {
+            let tier = confidence_for_projected_edge(&e.edge_type);
+            e.with_confidence(tier, None)
+        }));
     }
     // §1.3 — emit an endpoint anchor for every distinct (label, key)
     // an edge references, in first-seen order so re-projection stays
@@ -115,6 +124,17 @@ pub fn project_envelope(env: &EnrichedEvent, ctx: &ExtractCtx) -> GraphPatch {
         }
     }
     patch
+}
+
+/// Confidence tier for a projected (classifier-derived) edge (phase27a).
+/// `EMITTED_BY` and `MENTIONS_FILE` are read deterministically from the
+/// envelope, so they are `Extracted`; every other projected relation is
+/// an LLM/heuristic inference (`Inferred`).
+fn confidence_for_projected_edge(edge_type: &str) -> EdgeConfidence {
+    match edge_type {
+        "EMITTED_BY" | "MENTIONS_FILE" => EdgeConfidence::Extracted,
+        _ => EdgeConfidence::Inferred,
+    }
 }
 
 /// Iterator over the registered edge-kind names — useful for
@@ -148,6 +168,55 @@ mod tests {
             from: from.into(),
             relation: relation.into(),
             to: to.into(),
+        }
+    }
+
+    #[test]
+    fn projected_edge_confidence_extracted_for_structural_inferred_otherwise() {
+        // Deterministic-from-envelope relations are Extracted.
+        assert_eq!(
+            confidence_for_projected_edge("EMITTED_BY"),
+            EdgeConfidence::Extracted
+        );
+        assert_eq!(
+            confidence_for_projected_edge("MENTIONS_FILE"),
+            EdgeConfidence::Extracted
+        );
+        // Classifier/LLM-derived relations are Inferred.
+        for inferred in ["RELATES_TO", "ABOUT", "ANSWERED_BY", "CITES", "CALLS"] {
+            assert_eq!(
+                confidence_for_projected_edge(inferred),
+                EdgeConfidence::Inferred,
+                "{inferred} should be Inferred in the projection path"
+            );
+        }
+    }
+
+    #[test]
+    fn project_envelope_stamps_confidence_on_every_edge() {
+        let mut env = fixture_envelope("01HXTURN02", Kind::Turn);
+        env.classifier.topics = vec!["retention".into()];
+        env.classifier.entities = vec![entity("artifact", "cortex|src/x.rs|h")];
+        env.redacted_payload = serde_json::json!({
+            "user_message": "see DEC-0042",
+            "assistant_message": "implementing DEC-0042 now",
+            "tool_call_event_ids": ["01HXTC_A"]
+        });
+        let patch = project_envelope(&env, &ctx());
+        assert!(!patch.edges.is_empty(), "expected at least one edge");
+        for e in &patch.edges {
+            assert!(
+                e.props.contains_key("confidence"),
+                "edge {} missing confidence prop",
+                e.edge_type
+            );
+            let expected = confidence_for_projected_edge(&e.edge_type).as_str();
+            assert_eq!(
+                e.props.get("confidence").and_then(|v| v.as_str()),
+                Some(expected),
+                "edge {} confidence mismatch",
+                e.edge_type
+            );
         }
     }
 

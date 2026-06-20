@@ -38,7 +38,7 @@ use serde_json::{json, Value};
 
 use super::{artifact_logical_key, CodeEdge, EdgeType, NodeRef};
 use crate::graph::identity::artifact_natural_key;
-use crate::graph::patch::{EdgeOp, GraphPatch, NodeOp};
+use crate::graph::patch::{EdgeConfidence, EdgeOp, GraphPatch, NodeOp};
 use crate::graph::resolver::{ResolutionTier, ResolvedTarget, SymbolResolver};
 
 /// Sentinel content-hash component used by the pre-phase11l wire
@@ -363,6 +363,22 @@ fn make_edge(
         to_key: to_key.to_string(),
         props,
     }
+    // phase27a — the static analyzer's resolution tier is itself a
+    // confidence signal: a target resolved against a known file/crate is
+    // AST-proven (`Extracted`); an unresolved best-effort target is a
+    // heuristic (`Inferred`).
+    .with_confidence(tier_to_confidence(tier), None)
+}
+
+/// Map the analyzer's symbol-resolution tier to an edge confidence tier
+/// (phase27a).
+fn tier_to_confidence(tier: ResolutionTier) -> EdgeConfidence {
+    match tier {
+        ResolutionTier::LocalFile | ResolutionTier::IntraCrate | ResolutionTier::External => {
+            EdgeConfidence::Extracted
+        }
+        ResolutionTier::Unresolved => EdgeConfidence::Inferred,
+    }
 }
 
 fn tier_label(tier: ResolutionTier) -> &'static str {
@@ -683,6 +699,43 @@ mod tests {
             assert_eq!(
                 e.props.get("analyzer_version").and_then(|v| v.as_str()),
                 Some("phase11k.1")
+            );
+        }
+    }
+
+    #[test]
+    fn tier_to_confidence_maps_resolved_to_extracted_unresolved_to_inferred() {
+        assert_eq!(
+            tier_to_confidence(ResolutionTier::LocalFile),
+            EdgeConfidence::Extracted
+        );
+        assert_eq!(
+            tier_to_confidence(ResolutionTier::IntraCrate),
+            EdgeConfidence::Extracted
+        );
+        assert_eq!(
+            tier_to_confidence(ResolutionTier::External),
+            EdgeConfidence::Extracted
+        );
+        assert_eq!(
+            tier_to_confidence(ResolutionTier::Unresolved),
+            EdgeConfidence::Inferred
+        );
+    }
+
+    #[test]
+    fn every_analyzer_edge_carries_a_confidence_prop() {
+        let edges = RustAnalyzer::new().extract(
+            "use tokio::spawn;\nfn outer() { helper(); }\n",
+            "cortex",
+            "src/lib.rs",
+        );
+        let p = run(&edges);
+        for e in &p.edges {
+            assert!(
+                e.props.contains_key("confidence"),
+                "edge {} missing confidence prop",
+                e.edge_type
             );
         }
     }

@@ -34,6 +34,53 @@ pub enum ConflictPolicy {
     Error,
 }
 
+/// Confidence tier for a projected edge (phase27a).
+///
+/// Distinguishes deterministic, AST-proven edges from analyzer/LLM-
+/// inferred ones so the query graph lane can weight by trust and the
+/// dashboard can flag uncertain edges. Stored on the edge as the
+/// `confidence` prop (this enum, snake_case) plus a `confidence_score`
+/// prop (float in `[0.0, 1.0]`), alongside the provenance triple. An
+/// edge without these props is treated as unknown confidence — additive
+/// and back-compatible with pre-phase27a edges.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeConfidence {
+    /// Deterministically proven by an AST / tree-sitter parse
+    /// (`defines`, `imports`, `calls`, `returns`, `inherits`). Default
+    /// score 1.0.
+    Extracted,
+    /// Derived by a heuristic analyzer or an LLM (`relates_to`, `about`,
+    /// `answered_by`, `cites`, `mentions_file`). Sub-1.0 score.
+    Inferred,
+    /// Low-confidence match, kept but flagged for review.
+    Ambiguous,
+}
+
+impl EdgeConfidence {
+    /// Canonical lowercase string stamped into the `confidence` edge prop.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EdgeConfidence::Extracted => "extracted",
+            EdgeConfidence::Inferred => "inferred",
+            EdgeConfidence::Ambiguous => "ambiguous",
+        }
+    }
+
+    /// Default numeric score used when a caller stamps a tier without an
+    /// explicit score. `Extracted` is always certain (1.0); the inferred
+    /// tiers carry representative mid-band values callers may override.
+    #[must_use]
+    pub fn default_score(self) -> f32 {
+        match self {
+            EdgeConfidence::Extracted => 1.0,
+            EdgeConfidence::Inferred => 0.7,
+            EdgeConfidence::Ambiguous => 0.4,
+        }
+    }
+}
+
 /// Upsert entry for a single node.
 ///
 /// `natural_key` is the primary identity Cortex stamps on every node
@@ -105,6 +152,33 @@ pub struct EdgeOp {
     pub to_key: String,
     /// Property bag set on the relationship.
     pub props: BTreeMap<String, serde_json::Value>,
+}
+
+impl EdgeOp {
+    /// Phase27a — stamp a [`EdgeConfidence`] tier (and optional explicit
+    /// score) onto the edge as the `confidence` / `confidence_score`
+    /// props, alongside the provenance triple. When `score` is `None`
+    /// the tier's [`EdgeConfidence::default_score`] is used. Additive and
+    /// idempotent: consumers that don't know about confidence ignore the
+    /// extra props, and edges written before this change read back as
+    /// unknown confidence.
+    #[must_use]
+    pub fn with_confidence(mut self, tier: EdgeConfidence, score: Option<f32>) -> Self {
+        let score = score.unwrap_or_else(|| tier.default_score());
+        // Round in f64 space to 3 decimals so the persisted score is a
+        // clean value (e.g. 0.55, not 0.550000011920929 from the f32→f64
+        // widening) when it lands on the Nexus edge / dashboard.
+        let score = ((score as f64) * 1000.0).round() / 1000.0;
+        self.props.insert(
+            "confidence".to_string(),
+            serde_json::Value::String(tier.as_str().to_string()),
+        );
+        if let Some(n) = serde_json::Number::from_f64(score) {
+            self.props
+                .insert("confidence_score".to_string(), serde_json::Value::Number(n));
+        }
+        self
+    }
 }
 
 /// A batch of node / edge upserts that will be turned into one Cypher
@@ -225,6 +299,58 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ConflictPolicy::Error).unwrap(),
             "\"error\""
+        );
+    }
+
+    // ---------- Phase27a — edge confidence ----------
+
+    #[test]
+    fn edge_confidence_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&EdgeConfidence::Extracted).unwrap(),
+            "\"extracted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeConfidence::Inferred).unwrap(),
+            "\"inferred\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeConfidence::Ambiguous).unwrap(),
+            "\"ambiguous\""
+        );
+    }
+
+    #[test]
+    fn edge_confidence_default_score_per_tier() {
+        assert_eq!(EdgeConfidence::Extracted.default_score(), 1.0);
+        assert!(EdgeConfidence::Inferred.default_score() < 1.0);
+        assert!(EdgeConfidence::Ambiguous.default_score() < EdgeConfidence::Inferred.default_score());
+        assert_eq!(EdgeConfidence::Extracted.as_str(), "extracted");
+    }
+
+    #[test]
+    fn with_confidence_stamps_props_using_default_score() {
+        let e = edge("CALLS").with_confidence(EdgeConfidence::Extracted, None);
+        assert_eq!(
+            e.props.get("confidence"),
+            Some(&serde_json::Value::String("extracted".into()))
+        );
+        assert_eq!(
+            e.props.get("confidence_score").and_then(|v| v.as_f64()),
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn with_confidence_honors_explicit_score() {
+        let e = edge("RELATES_TO").with_confidence(EdgeConfidence::Inferred, Some(0.55));
+        assert_eq!(
+            e.props.get("confidence"),
+            Some(&serde_json::Value::String("inferred".into()))
+        );
+        assert_eq!(
+            e.props.get("confidence_score").and_then(|v| v.as_f64()),
+            Some(0.55)
         );
     }
 

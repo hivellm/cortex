@@ -44,7 +44,7 @@ pub use metrics::Metrics;
 pub use nexus_client::{
     GraphClient, GraphClientError, LiveNexusClient, MemoryCall, MemoryNexusClient, WriteStats,
 };
-pub use patch::{EdgeOp, GraphPatch, GraphWriteReport, NodeOp};
+pub use patch::{EdgeConfidence, EdgeOp, GraphPatch, GraphWriteReport, NodeOp};
 pub use schema::SCHEMA_STATEMENTS;
 pub use stale_sweeper::{StaleEdgeSweeper, SweepReport, DEFAULT_SWEEP_INTERVAL_SECS};
 pub use worker::{
