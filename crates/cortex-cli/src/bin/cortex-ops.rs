@@ -1238,6 +1238,26 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Scan ANY content-addressable index for legacy (non-`bootstrap-`-
+    /// keyed) docs + the malformed `title == id` subset. Exit `0` when
+    /// every doc is `bootstrap-`-keyed; `2` when any legacy doc is found
+    /// or the index is unreachable. Repair with `meili-rekey` (in-place)
+    /// or `decisions-reindex` (file-backed kinds).
+    DoctorContentAddressable {
+        /// Target index (e.g. `cortex-cortex-knowledge`).
+        #[arg(long)]
+        index: String,
+        /// Meilisearch base URL. Defaults to `$CORTEX_FULLTEXT_MEILI_URL`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
+        #[arg(long)]
+        master_key: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
     /// phase0_decision-fulltext-title-body-mismapped — re-emit all
     /// `.rulebook/decisions/*.md` into `cortex_decisions` using the
     /// stable content-addressable doc_id
@@ -2052,6 +2072,12 @@ fn run() -> ExitCode {
             master_key,
             json,
         } => doctor::doctor_decisions(meili_url, master_key, json),
+        Command::DoctorContentAddressable {
+            index,
+            meili_url,
+            master_key,
+            json,
+        } => doctor::doctor_content_addressable(index, meili_url, master_key, json),
         Command::DecisionsReindex {
             decisions_dir,
             meili_url,

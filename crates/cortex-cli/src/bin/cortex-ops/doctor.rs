@@ -1332,6 +1332,191 @@ async fn scan_decisions_index(
     Ok(malformed)
 }
 
+/// `cortex-ops doctor-content-addressable --index <idx>` — scan any
+/// content-addressable index for docs NOT keyed by the Meili-safe
+/// `bootstrap-` scheme (legacy random-ULID residue) and the malformed
+/// `title == id` subset.
+///
+/// Exit codes: `0` clean, `2` at least one legacy doc (or unreachable).
+/// Repair: `cortex-ops decisions-reindex` (file-backed kinds) or
+/// `cortex-ops meili-rekey` (in-place migration for the rest).
+pub(super) fn doctor_content_addressable(
+    index: String,
+    meili_url: Option<String>,
+    master_key: Option<String>,
+    json: bool,
+) -> ExitCode {
+    if index.trim().is_empty() {
+        eprintln!("doctor-content-addressable: --index is required");
+        return ExitCode::from(2);
+    }
+    let cfg = cortex_config::Config::load().unwrap_or_default();
+    let url = meili_url
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.meili.meili_url.clone())
+        .unwrap_or_else(|| "http://127.0.0.1:7700".to_string());
+    let key = master_key
+        .filter(|s| !s.is_empty())
+        .or_else(|| cfg.meili.meili_api_key.clone());
+
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("doctor-content-addressable: tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    match rt.block_on(scan_content_addressable(&url, key.as_deref(), &index)) {
+        Ok((total, fixable, title_id, no_triple)) => {
+            let fail = fixable > 0;
+            if json {
+                let payload = serde_json::json!({
+                    "meili_url": url,
+                    "index": index,
+                    "total": total,
+                    "fixable_legacy_count": fixable,
+                    "title_eq_id_count": title_id,
+                    "no_triple_count": no_triple,
+                    "status": if fail { "fail" } else { "ok" },
+                    "fix": "cortex-ops decisions-reindex (file-backed) or cortex-ops meili-rekey (in-place)",
+                });
+                match serde_json::to_string_pretty(&payload) {
+                    Ok(s) => println!("{s}"),
+                    Err(e) => eprintln!("doctor-content-addressable: serialize: {e}"),
+                }
+            } else {
+                println!("cortex-ops doctor-content-addressable");
+                println!("index: {index} @ {url}");
+                println!();
+                println!("total docs:              {total}");
+                println!("fixable legacy:          {fixable} (non-bootstrap- WITH repo+path+content_hash)");
+                println!("  of which title==id:    {title_id}");
+                println!("no-triple (live-keyed):  {no_triple} (no path — legitimately ULID-keyed)");
+                println!();
+                if fail {
+                    println!(
+                        "FAIL   {fixable} fixable legacy doc(s) — run `cortex-ops meili-rekey \
+                         --index {index}` (or decisions-reindex for file-backed kinds)"
+                    );
+                } else {
+                    println!("ok     no fixable legacy residue (all content-addressable docs are bootstrap--keyed)");
+                }
+            }
+            if fail {
+                ExitCode::from(2)
+            } else {
+                ExitCode::SUCCESS
+            }
+        }
+        Err(e) => {
+            if json {
+                let payload = serde_json::json!({
+                    "meili_url": url, "index": index, "status": "error", "error": e.to_string(),
+                });
+                let _ = serde_json::to_string_pretty(&payload).map(|s| println!("{s}"));
+            } else {
+                eprintln!("doctor-content-addressable: {e}");
+            }
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Scan `index` and return `(total, fixable_legacy, title_eq_id, no_triple)`.
+///
+/// - `fixable_legacy` = id is NOT `bootstrap-`-keyed AND the doc carries
+///   the full `(repo, path, content_hash)` identity triple — genuine
+///   residue that `meili-rekey`/`decisions-reindex` can repair (drives
+///   the non-zero exit).
+/// - `no_triple` = id is NOT `bootstrap-`-keyed but the doc lacks `path`
+///   (e.g. live `cortex_capture_memory` entries) — these are legitimately
+///   ULID-keyed forever (the builder only uses the `bootstrap-` key when
+///   a path is present), so they are reported but do NOT fail the check.
+///
+/// A 404 (missing index) is treated as zero docs rather than an error.
+async fn scan_content_addressable(
+    meili_url: &str,
+    api_key: Option<&str>,
+    index: &str,
+) -> anyhow::Result<(usize, usize, usize, usize)> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    if let Some(key) = api_key {
+        let bearer = format!("Bearer {key}");
+        let val = HeaderValue::from_str(&bearer)
+            .map_err(|e| anyhow::anyhow!("invalid api key: {e}"))?;
+        headers.insert(AUTHORIZATION, val);
+    }
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| anyhow::anyhow!("reqwest: {e}"))?;
+
+    let endpoint = format!("{}/indexes/{}/search", meili_url.trim_end_matches('/'), index);
+    let mut total = 0usize;
+    let mut fixable = 0usize;
+    let mut title_id = 0usize;
+    let mut no_triple = 0usize;
+    let page = 1000usize;
+    let mut offset = 0usize;
+    loop {
+        let body = serde_json::json!({
+            "q": "", "limit": page, "offset": offset,
+            "attributesToRetrieve": ["id", "title", "repo", "path", "content_hash"],
+        });
+        let resp = client.post(&endpoint).json(&body).send().await?;
+        let status = resp.status();
+        if status.as_u16() == 404 {
+            return Ok((0, 0, 0, 0));
+        }
+        if !status.is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "HTTP {}: {}",
+                status.as_u16(),
+                text.chars().take(200).collect::<String>()
+            ));
+        }
+        let payload: serde_json::Value = resp.json().await?;
+        let hits = payload
+            .get("hits")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let got = hits.len();
+        for hit in &hits {
+            total += 1;
+            let id = hit.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+            if id.starts_with("bootstrap-") {
+                continue;
+            }
+            let has_triple = hit.get("repo").and_then(|v| v.as_str()).is_some()
+                && hit.get("path").and_then(|v| v.as_str()).is_some()
+                && hit.get("content_hash").and_then(|v| v.as_str()).is_some();
+            if has_triple {
+                fixable += 1;
+                if hit.get("title").and_then(|v| v.as_str()) == Some(id) {
+                    title_id += 1;
+                }
+            } else {
+                no_triple += 1;
+            }
+        }
+        if got < page {
+            break;
+        }
+        offset += page;
+    }
+    Ok((total, fixable, title_id, no_triple))
+}
+
 #[cfg(test)]
 mod meili_drift_tests {
     use super::*;

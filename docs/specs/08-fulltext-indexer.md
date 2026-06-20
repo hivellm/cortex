@@ -141,9 +141,23 @@ doc_id = "bootstrap-" + sha256_hex(repo 0x1f path 0x1f content_hash)   // conten
   the random-ULID copies — the source of the `cortex_decisions`
   `title==id` orphans + 51-docs-for-27-decisions duplication. Hashing the
   tuple into `bootstrap-<sha256hex>` keeps the key valid, stable, and
-  collision-resistant. Repair tooling: `cortex-ops decisions-reindex`
-  (re-emit + prune legacy non-`bootstrap-` docs) and `cortex-ops
-  doctor-decisions` (flags `title==id`).
+  collision-resistant. Repair tooling:
+  - `cortex-ops decisions-reindex [--index <idx>]` — for **file-backed**
+    kinds (decisions): re-emit every source file through the builder
+    (stable `bootstrap-` key) + prune legacy non-`bootstrap-` docs.
+    `--index` targets the global or a per-repo decisions index.
+  - `cortex-ops meili-rekey --index <idx>` — for **non-file-backed**
+    kinds (knowledge/learnings, added live via `rulebook_*`): re-key each
+    doc IN PLACE (recompute the `bootstrap-` id from the doc's own
+    `repo`/`path`/`content_hash`, upsert, delete the old id). No
+    source-driven prune, so live-captured entries are preserved; true
+    duplicates collapse.
+  - `cortex-ops doctor-content-addressable --index <idx>` — flags
+    *fixable* legacy residue (non-`bootstrap-` docs that carry the full
+    identity triple). Docs without a `path` (e.g. `cortex_capture_memory`
+    knowledge) are legitimately ULID-keyed (the `bootstrap-` key needs a
+    path) and are reported separately, NOT failed.
+  - `cortex-ops doctor-decisions` — decisions-specific `title==id` check.
 
 ## Design
 
