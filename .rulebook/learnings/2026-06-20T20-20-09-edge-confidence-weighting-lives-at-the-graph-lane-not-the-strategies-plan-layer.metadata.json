@@ -1,0 +1,14 @@
+{
+  "id": "2026-06-20T20-20-09-edge-confidence-weighting-lives-at-the-graph-lane-not-the-strategies-plan-layer",
+  "title": "Edge confidence weighting lives at the graph lane, not the strategies/plan layer",
+  "content": "phase27a §3.1 specced the graph-lane confidence weighting in `search/strategies.rs`, but that file only builds the Plan (lane requests) BEFORE any Cypher runs — edge confidence is a Nexus edge property only known AFTER the query returns. The correct, testable location is the lane projection: `lanes/nexus_graph_lane.rs::project_row`. Each strategy Cypher now RETURNs `r.confidence`/`r.confidence_score` (cells 5/6) and the hop score is multiplied by a `confidence_weight` (explicit score wins; else tier default extracted=1.0/inferred=0.7/ambiguous=0.4; else 1.0 back-compat). The weighting only affects ranking because fusion's score-aware blend reads `LaneHit::normalized_score` (alpha=0.7 → native term contributes 30%); a purely positional RRF would have made the down-weight a no-op. Lesson: when a task names a file for \"weighting/scoring\", verify where the signal is actually available in the data flow before implementing — plan-build time vs post-query time. When adding a returned column to positional Cypher rows shared by multiple templates (cross_project_ref had extras at cells 5/6/7), put the new common column at a fixed low offset and shift template-specific cells out (→7/8/9) so every template reads the common column at the same index.",
+  "source": "manual",
+  "tags": [
+    "analysis:graphify-comparison",
+    "graph",
+    "rrf-fusion",
+    "cortex-api",
+    "phase27a"
+  ],
+  "createdAt": "2026-06-20T20:20:09.938Z"
+}
