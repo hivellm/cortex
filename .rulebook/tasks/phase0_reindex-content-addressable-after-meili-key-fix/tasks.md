@@ -1,13 +1,14 @@
 ## 1. Audit
-- [ ] 1.1 For each content-addressable index (`cortex_laws`/governance, per-repo `misc` for knowledge+learning, bootstrap `code`/`docs`), count docs whose id is NOT `bootstrap-`-keyed (stale legacy) vs canonical, mirroring the decisions audit
-- [ ] 1.2 Confirm the source of truth for each kind (`.rulebook/knowledge`, `.rulebook/learnings`, `.claude/rules`/laws, repo files for artifacts) and the re-emit path
+- [x] 1.1 DONE (live audit 2026-06-20, local `cortex` repo indexes): `cortex_decisions` global = 27 all `bootstrap-` (clean, fixed by prior task); `cortex-cortex-decisions` per-repo = 33 all legacy, 8 `title==id`; `cortex-cortex-knowledge` = 309 all legacy, 0 `title==id`; `cortex-cortex-learnings` = 500 all legacy, 0 `title==id`; `cortex-cortex-governance` = empty; `cortex_laws` = 240 all legacy AND all `title==id` (body = stringified JSON object — fully malformed).
+- [x] 1.2 DONE: source-of-truth completeness differs sharply by kind. **Decisions** are fully file-backed (`.rulebook/decisions` = 27 files = 27 decisions) → safe to re-emit+prune. **Knowledge** (`.rulebook/knowledge` = 1 file vs 309 docs) and **Learnings** (`.rulebook/learnings` = 44 files vs 500 docs) are NOT fully file-backed — most entries were added live via `rulebook_knowledge_add`/`rulebook_learn_capture` and exist only in the index/rulebook store, so re-emit-from-file + prune would DESTROY them. **Laws** (`.claude/rules` = 15 files vs 240 docs) similarly over-counted + fully malformed. Emitter fns exist for every kind (`emit_{decision,law,spec_laws,extracted_laws,knowledge,learning,analysis,memory}_imported`).
 
-## 2. Reindex + prune
-- [ ] 2.1 Generalise `decisions-reindex` (or add per-kind reindex subcommands) to re-emit each kind through the builder with the stable `bootstrap-` key and prune legacy non-`bootstrap-` docs (guarded, `--dry-run`)
-- [ ] 2.2 Run the reindex live for each kind and verify the index collapses to the canonical set with zero non-`bootstrap-` docs
-- [ ] 2.3 Extend `doctor-decisions` (or a generalised doctor) to flag non-`bootstrap-` content-addressable docs across all affected indexes
+## 2. Reindex / migrate (approach is per-kind, driven by §1.2)
+- [x] 2.1 DONE (decisions, both index families): added `--index` flag to `cortex-ops decisions-reindex`; ran it against the per-repo `cortex-cortex-decisions` → collapsed 33→**27**, all `bootstrap-`-keyed, 0 `title==id`, 0 missing `decision_title` (global `cortex_decisions` already clean from the prior task). Decisions are now fully repaired in every index the `decision_lookup` strategy reads.
+- [ ] 2.2 Knowledge + Learnings: implement an in-place RE-KEY migration (read each legacy doc, recompute its `bootstrap-<sha256hex(repo|path|content_hash)>` id from the doc's own fields, upsert under the new id, delete the old id) — NO source-driven prune, so non-file-backed entries are preserved. Verify counts are conserved (309→309, 500→500) with every doc `bootstrap-`-keyed.
+- [ ] 2.3 Laws: laws are fully malformed (`title==id`, body = stringified JSON). Determine the authoritative source (`.claude/rules` + spec-extracted via `emit_spec_laws_imported`/`emit_extracted_laws_imported`) and whether the live count (240) is real or duplicated; repair via re-emit (if file-complete) or re-key migration (if not), then verify no `title==id` remains.
+- [ ] 2.4 Extend `doctor-decisions` into a generalised `doctor-content-addressable` that flags non-`bootstrap-` docs across all affected indexes.
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 3.1 Update or create documentation covering the implementation (spec 08 per-kind reindex contract; CHANGELOG)
-- [ ] 3.2 Write tests covering the new behavior (per-kind reindex unit tests)
+- [ ] 3.1 Update or create documentation covering the implementation (spec 08 per-kind reindex/migration contract; CHANGELOG)
+- [ ] 3.2 Write tests covering the new behavior (re-key migration unit tests; per-kind reindex)
 - [ ] 3.3 Run tests and confirm they pass (`cargo check` + `clippy -D warnings` + `cargo test --workspace`)

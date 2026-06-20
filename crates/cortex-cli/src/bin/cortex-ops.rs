@@ -1259,6 +1259,12 @@ enum Command {
         /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
         #[arg(long)]
         meili_key: Option<String>,
+        /// Target decisions index. Defaults to the global
+        /// `cortex_decisions`; pass `cortex-<repo>-decisions` to also
+        /// repair the per-repo index the `decision_lookup` strategy
+        /// fans out to.
+        #[arg(long)]
+        index: Option<String>,
         /// Report what would change without writing to Meilisearch.
         #[arg(long)]
         dry_run: bool,
@@ -2025,9 +2031,17 @@ fn run() -> ExitCode {
             decisions_dir,
             meili_url,
             meili_key,
+            index,
             dry_run,
             json,
-        } => decisions_reindex::decisions_reindex(decisions_dir, meili_url, meili_key, dry_run, json),
+        } => decisions_reindex::decisions_reindex(
+            decisions_dir,
+            meili_url,
+            meili_key,
+            index,
+            dry_run,
+            json,
+        ),
     }
 }
 

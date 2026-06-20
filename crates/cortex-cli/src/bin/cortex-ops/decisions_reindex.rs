@@ -71,6 +71,8 @@ const BOOTSTRAP_SESSION: &str = "01DECISIONS-REINDEX-CLI0000000";
 struct ReindexReport {
     decisions_dir: PathBuf,
     meili_url: String,
+    /// Target Meili index (global `cortex_decisions` or a per-repo one).
+    index: String,
     dry_run: bool,
     /// Decision files successfully read and built.
     files_built: usize,
@@ -97,9 +99,13 @@ pub(super) fn decisions_reindex(
     decisions_dir: Option<String>,
     meili_url: Option<String>,
     meili_key: Option<String>,
+    index: Option<String>,
     dry_run: bool,
     json: bool,
 ) -> ExitCode {
+    let target_index = index
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| INDEX_DECISIONS.to_string());
     let cfg = FulltextConfig::from_env();
     let resolved_url = meili_url
         .filter(|s| !s.is_empty())
@@ -133,6 +139,7 @@ pub(super) fn decisions_reindex(
         &dir_path,
         &resolved_url,
         resolved_key.as_deref(),
+        &target_index,
         dry_run,
     ));
 
@@ -154,11 +161,13 @@ async fn run_reindex(
     decisions_dir: &Path,
     meili_url: &str,
     meili_key: Option<&str>,
+    index: &str,
     dry_run: bool,
 ) -> ReindexReport {
     let mut report = ReindexReport {
         decisions_dir: decisions_dir.to_path_buf(),
         meili_url: meili_url.to_string(),
+        index: index.to_string(),
         dry_run,
         files_built: 0,
         docs_upserted: 0,
@@ -205,7 +214,7 @@ async fn run_reindex(
     // prune set; re-emitting every current file first guarantees each
     // pruned decision has a canonical replacement (ADR-022 never-delete is
     // honoured — the decision survives under its stable key).
-    let scan = match scan_legacy_docs(meili_url, meili_key).await {
+    let scan = match scan_legacy_docs(meili_url, meili_key, index).await {
         Ok(s) => {
             report.orphans_found = s.title_id_count;
             report.legacy_found = s.legacy_ids.len();
@@ -231,7 +240,7 @@ async fn run_reindex(
 
     // Step 4 — upsert documents (stable bootstrap keys).
     if !docs.is_empty() {
-        if let Err(e) = upsert_documents(meili_url, meili_key, &docs).await {
+        if let Err(e) = upsert_documents(meili_url, meili_key, index, &docs).await {
             report.error = Some(format!("upsert failed: {e}"));
             return report;
         }
@@ -239,7 +248,7 @@ async fn run_reindex(
 
     // Step 5 — delete the legacy docs captured before the upsert.
     if !prune_ids.is_empty() {
-        if let Err(e) = delete_documents(meili_url, meili_key, &prune_ids).await {
+        if let Err(e) = delete_documents(meili_url, meili_key, index, &prune_ids).await {
             report.error = Some(format!("legacy prune failed: {e}"));
             return report;
         }
@@ -393,12 +402,13 @@ struct LegacyScan {
 async fn scan_legacy_docs(
     meili_url: &str,
     meili_key: Option<&str>,
+    index: &str,
 ) -> anyhow::Result<LegacyScan> {
     let client = build_http_client(meili_key)?;
     let url = format!(
         "{}/indexes/{}/search",
         meili_url.trim_end_matches('/'),
-        INDEX_DECISIONS,
+        index,
     );
     // Fetch up to 1000 docs — the index is small.
     let body = serde_json::json!({
@@ -446,13 +456,14 @@ async fn scan_legacy_docs(
 async fn upsert_documents(
     meili_url: &str,
     meili_key: Option<&str>,
+    index: &str,
     docs: &[serde_json::Value],
 ) -> anyhow::Result<()> {
     let client = build_http_client(meili_key)?;
     let url = format!(
         "{}/indexes/{}/documents?primaryKey=id",
         meili_url.trim_end_matches('/'),
-        INDEX_DECISIONS,
+        index,
     );
     let resp = client.post(&url).json(docs).send().await?;
     if !resp.status().is_success() {
@@ -470,13 +481,14 @@ async fn upsert_documents(
 async fn delete_documents(
     meili_url: &str,
     meili_key: Option<&str>,
+    index: &str,
     ids: &[String],
 ) -> anyhow::Result<()> {
     let client = build_http_client(meili_key)?;
     let url = format!(
         "{}/indexes/{}/documents/delete-batch",
         meili_url.trim_end_matches('/'),
-        INDEX_DECISIONS,
+        index,
     );
     let resp = client.post(&url).json(ids).send().await?;
     if !resp.status().is_success() {
@@ -512,6 +524,7 @@ fn print_text(r: &ReindexReport) {
     println!("cortex-ops decisions-reindex");
     println!("decisions_dir: {}", r.decisions_dir.display());
     println!("meili_url:     {}", r.meili_url);
+    println!("index:         {}", r.index);
     println!("dry_run:       {}", r.dry_run);
     println!();
     println!("files_built:   {}", r.files_built);
@@ -531,6 +544,7 @@ fn print_json(r: &ReindexReport) {
     let payload = serde_json::json!({
         "decisions_dir": r.decisions_dir.display().to_string(),
         "meili_url": r.meili_url,
+        "index": r.index,
         "dry_run": r.dry_run,
         "files_built": r.files_built,
         "docs_upserted": r.docs_upserted,
