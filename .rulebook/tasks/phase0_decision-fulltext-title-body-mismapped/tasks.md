@@ -1,11 +1,10 @@
-## 1. Diagnose + fix the decision doc builder
-- [ ] 1.1 Locate the decision Meili document builder in `crates/cortex-workers/src/fulltext/builders.rs` (+ routing); confirm where `title`/`body` are set
-- [ ] 1.2 Map `title` to the real decision title (heading / `title` field), not the document id
-- [ ] 1.3 Map `body` to the decision markdown/text, not the JSON-serialized payload (fix the double-encoding)
+## 1. Confirm builder + find the malformed-batch source
+- [ ] 1.1 Verify the current decision doc builder in `crates/cortex-workers/src/fulltext/builders.rs` (+ routing) sets `title`/`decision_title`/`body` from the decision heading, not the id (the `01KQNYMYKH` doc proves it can)
+- [ ] 1.2 Identify how the `01KQNYF4J*` batch got `title==id` + missing `decision_title` (older builder revision, or an ingest path that bypassed title extraction); fix that path if it still exists
 
-## 2. Reindex + verify
-- [ ] 2.1 Re-emit / reindex `cortex_decisions` so existing docs are corrected (document the step)
-- [ ] 2.2 Live: `POST /v1/decisions/search {"query":"vectorizer","limit":2}` returns hits whose `title` is the real title and `body` is clean text
+## 2. Reindex + verify the mix is gone
+- [ ] 2.1 Re-emit / reindex `cortex_decisions` through the current builder so the stale malformed batch is corrected (document the command)
+- [ ] 2.2 Live: `cortex_keyword_search cortex_decisions q="" attributes=[id,title,decision_title]` shows every doc with a real title + decision_title (none where `title == id`)
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 3.1 Update spec 08 (decision doc schema) + CHANGELOG

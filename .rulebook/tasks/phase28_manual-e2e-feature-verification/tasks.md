@@ -15,8 +15,13 @@ Rebuilt + recreated cortex-api at HEAD. Findings:
 - FOUND+FIXED: §6.2 issue#4 Bug2 — Windows cwd `E:\HiveLLM\Rulebook` resolved to `e-hivellm-rulebook` (std::path::Path on the Linux daemon ignores backslash). Fixed (split on both separators), redeployed, re-verified → `rulebook`. Commit 5f64291.
 - PASS (run 1b): all 17 dashboard/retention/health GETs → 200 (analyses, classifications, conversations, consolidations, decisions, handoffs, memory, producers, tasks, tasks/summary, tools/stats, timeline/recent, active-work, retention/state+sweeps, health/versions+config); §6 query intents decision_lookup + similar_problems → 200; §10.1 branch list → 200.
 - FOUND (follow-up phase0_missing-index-empty-200-all-handlers): §8.5 consolidations/recent + consolidations/search + ~8 other Meili-backed handlers still 502 on missing index (issue#4 Bug1 fix reached only 2 of ~12 handlers).
-- FOUND (follow-up phase0_decision-fulltext-title-body-mismapped): `/v1/decisions/search` (Meili `cortex_decisions`) maps `title`=ULID id and `body`=JSON-stringified payload; dashboard path has correct titles → fulltext doc builder mis-maps the fields.
+- FOUND (follow-up phase0_decision-fulltext-title-body-mismapped): a SUBSET of `cortex_decisions` docs (the `01KQNYF4J*` ingest batch) have `title==id` + no `decision_title`, while newer docs (`01KQNYMYKH`) are correct. Refined via two MCP probe paths: the index is a mix of malformed + correct docs (stale batch from an earlier ingest), NOT the search handler (returns raw hits) and NOT all docs → reindex.
 - NOTE (not a bug): `/v1/search/vector` with `query_text` returns 400 `not_implemented` (server-side embedding not wired; caller must pass `query_vector`). classifier synap-consume WARN at 14:01 was transient (recovered, RestartCount=0).
+
+## Run 1c — MCP tool surface (§8) via mcp__cortex__*
+- PASS: cortex_pre_thinking (bundle, 181ms, fail_open=false), cortex_active_work (lists all tasks incl. phase0/27/28), cortex_keyword_search (raw Meili, correct decision docs), cortex_decision_search, cortex_query (free_search/decision_lookup/similar_problems), cortex_status.
+- EMPTY (note, re-probe with seeded data; not confirmed bugs): cortex_timeline (cortex:main — no TimelineEvent rows), cortex_topic_search (repo:cortex — no topic cards matched), cortex_similar_sessions (cortex — none ≥0.6 floor).
+- PENDING: cortex_graph_query neighbors (need a valid node_id), cortex_capture_memory→query round-trip, cortex_feedback_record→signals, cortex_audit{query_id}, cortex_history/supersession, cortex_session_timeline model-name (needs adapter redeploy + fresh session).
 - PENDING NEXT RUN: §8.2 model-name in timeline (needs adapter redeploy + a fresh session — old archived events have model=None); §5.2 phase27a edge confidence (needs graph-worker rebuild); §5.1/§8.11 re-probe with correct request shape.
 
 ## 0. Pre-flight: deploy HEAD + stack health
