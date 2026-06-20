@@ -106,6 +106,40 @@ fn tool_call_with_touched_files_emits_touched_edges() {
         .any(|v| v.as_ref().and_then(|x| x.as_str()) == Some("read")));
 }
 
+// ---------- phase27a §2.3 — structural mapper edge confidence ----------
+
+#[test]
+fn structural_mapper_edges_carry_extracted_confidence() {
+    // A ToolCall yields structural edges (HAS_TOOL_CALL, TOUCHED, IN_REPO)
+    // — all deterministic facts → `Extracted`. The static-fallback
+    // classifier emits no relations, so there are no Inferred edges here.
+    let payload = json!({
+        "tool_name": "Edit",
+        "input": {},
+        "outcome": "success",
+        "duration_ms": 12,
+        "touched": [ { "kind": "write", "path": "src/lib.rs" } ]
+    });
+    let evt = event(
+        "tc-conf",
+        Kind::ToolCall,
+        payload,
+        Some("hivellm/cortex"),
+        None,
+        None,
+    );
+    let patch = map_event_to_patch(&evt);
+    assert!(!patch.edges.is_empty(), "expected structural edges");
+    for e in &patch.edges {
+        assert_eq!(
+            e.props.get("confidence").and_then(|v| v.as_str()),
+            Some("extracted"),
+            "structural edge {} must carry Extracted confidence",
+            e.edge_type
+        );
+    }
+}
+
 #[test]
 fn tool_call_props_carry_tool_name_and_outcome() {
     let payload = json!({

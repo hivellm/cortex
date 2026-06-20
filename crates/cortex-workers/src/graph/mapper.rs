@@ -38,7 +38,7 @@ use serde_json::{json, Value};
 use crate::embedder::{ChunkSource, Chunker, CodeChunker};
 
 use super::identity::{artifact_natural_key, symbol_natural_key};
-use super::patch::{ConflictPolicy, EdgeOp, GraphPatch, NodeOp};
+use super::patch::{ConflictPolicy, EdgeConfidence, EdgeOp, GraphPatch, NodeOp};
 use crate::embedder::EnrichedEvent;
 
 /// Cap a human-readable label so a single node never explodes the
@@ -166,6 +166,24 @@ pub fn map_event_to_patch(event: &EnrichedEvent) -> GraphPatch {
     // keep-as-VALID per ADRs 018–023.
     super::bitemporal::stamp_bitemporal_props_on_patch(event, &mut patch);
 
+    // phase27a §2.3 — stamp confidence on the structural mapper edges.
+    // The classifier-relation edge (emit_classifier_entities) already
+    // carried `Inferred`; every remaining edge here is a deterministic
+    // structural fact (HAS_TURN / HAS_TOOL_CALL / TOUCHED / DEFINES /
+    // IN_REPO / REMEMBERS / OWNS / OF / …) → `Extracted`. Idempotent:
+    // edges that already have a confidence prop are left untouched.
+    patch.edges = patch
+        .edges
+        .into_iter()
+        .map(|e| {
+            if e.props.contains_key("confidence") {
+                e
+            } else {
+                e.with_confidence(EdgeConfidence::Extracted, None)
+            }
+        })
+        .collect();
+
     patch
 }
 
@@ -254,14 +272,18 @@ fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
             "event_id".to_string(),
             Value::String(event.event_id.clone()),
         );
-        patch.edges.push(EdgeOp {
-            edge_type: rel_label,
-            from_label: event_label.to_string(),
-            from_key: event_anchor.clone(),
-            to_label: target_label.to_string(),
-            to_key: target_key,
-            props,
-        });
+        // phase27a — classifier-derived semantic relation → Inferred.
+        patch.edges.push(
+            EdgeOp {
+                edge_type: rel_label,
+                from_label: event_label.to_string(),
+                from_key: event_anchor.clone(),
+                to_label: target_label.to_string(),
+                to_key: target_key,
+                props,
+            }
+            .with_confidence(EdgeConfidence::Inferred, None),
+        );
     }
 }
 
