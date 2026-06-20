@@ -70,6 +70,15 @@ pub struct EventsByKindResponse {
 /// Map a `kind` discriminator string to the canonical Meili index
 /// uid. Returns `None` for unknown kinds so the handler can fail
 /// fast with a `bad_input` error.
+///
+/// Contract (phase0_laws-index-routing-and-malformed-docs):
+/// - "law"/"Law"             → `INDEX_LAWS` (global definitions index —
+///   `cortex_laws` carries law definitions dual-written by the fulltext
+///   worker; the caller may also scope to per-repo governance via `repo`).
+/// - "violation"/"Violation" → `None` — violations are per-repo only
+///   (`cortex-{slug}-governance`); no global fallback exists. The handler
+///   uses the sentinel `None` to return an empty 200 when no repo is
+///   provided, instead of querying the definitions `cortex_laws` index.
 pub fn kind_to_index(kind: &str) -> Option<&'static str> {
     use cortex_storage::names::*;
     match kind {
@@ -79,12 +88,24 @@ pub fn kind_to_index(kind: &str) -> Option<&'static str> {
         "decision" | "Decision" => Some(INDEX_DECISIONS),
         "analysis" | "Analysis" => Some(INDEX_ANALYSES),
         "memory" | "Memory" => Some(INDEX_MEMORIES),
-        "law" | "Law" | "violation" | "Violation" => Some(INDEX_LAWS),
+        // Law DEFINITIONS live in the global `cortex_laws` index.
+        "law" | "Law" => Some(INDEX_LAWS),
+        // Law VIOLATIONS are per-repo only; None signals "repo required".
+        // The handler returns an empty 200 when no repo is provided.
+        "violation" | "Violation" => None,
         "knowledge" | "KnowledgeNote" | "Knowledge" => Some(INDEX_KNOWLEDGE),
         "learning" | "LearningNote" | "Learning" => Some(INDEX_LEARNINGS),
         "topic_card" | "TopicCard" => Some(INDEX_TOPIC_CARDS),
         _ => None,
     }
+}
+
+/// True when `kind` is a per-repo-only kind whose `kind_to_index`
+/// intentionally returns `None` — these are valid kinds that simply
+/// have no global fallback index.  The handler must return an empty
+/// 200 when no repo is provided, not a `bad_input` 400.
+pub fn is_per_repo_only_kind(kind: &str) -> bool {
+    matches!(kind, "violation" | "Violation")
 }
 
 fn meili_base_url() -> String {
@@ -170,38 +191,11 @@ fn parse_rfc3339_to_ms(s: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
-/// Handler — `POST /v1/search/events`. Maps `kind` to the matching
-/// Meili index and forwards the request with the assembled filter.
-pub async fn handle_events_by_kind(
-    State(_state): State<ApiState>,
-    Json(req): Json<EventsByKindRequest>,
-) -> Response {
+/// Execute a search against a known Meili `index` and return the
+/// assembled `EventsByKindResponse`. Called from
+/// [`handle_events_by_kind`] after the index has been resolved.
+async fn handle_meili_search(req: EventsByKindRequest, index: String) -> Response {
     use axum::response::IntoResponse;
-
-    let global_index = match kind_to_index(req.kind.trim()) {
-        Some(i) => i,
-        None => {
-            return json_err(
-                StatusCode::BAD_REQUEST,
-                "bad_input",
-                format!("unknown kind `{}`", req.kind),
-            );
-        }
-    };
-    // Route per-repo when caller scopes by repo — live Meili only
-    // populates the per-repo `cortex-<slug>-<family>` indexes for
-    // most kinds (globals exist only for `cortex_decisions` +
-    // `cortex_laws`). Resolve the per-repo family from the kind so
-    // the read-side hits the same index the writer wrote to.
-    let kind_lower = req.kind.trim().to_ascii_lowercase();
-    let family = super::kind_to_family(&kind_lower);
-    let index: String = match (
-        req.repo.as_deref().map(str::trim).filter(|s| !s.is_empty()),
-        family,
-    ) {
-        (Some(r), Some(fam)) => format!("cortex-{}-{}", r.to_ascii_lowercase(), fam),
-        _ => global_index.to_string(),
-    };
 
     // If the caller passed a since/until that fails to parse, the
     // filter assembler returns None silently — surface a 400 here so
@@ -324,12 +318,72 @@ pub async fn handle_events_by_kind(
     .into_response()
 }
 
+/// Handler — `POST /v1/search/events`. Maps `kind` to the matching
+/// Meili index and forwards the request with the assembled filter.
+pub async fn handle_events_by_kind(
+    State(_state): State<ApiState>,
+    Json(req): Json<EventsByKindRequest>,
+) -> Response {
+    use axum::response::IntoResponse;
+
+    let kind_trimmed = req.kind.trim();
+    let kind_lower = kind_trimmed.to_ascii_lowercase();
+    let family = super::kind_to_family(&kind_lower);
+    let repo_scope = req.repo.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    // Per-repo-only kinds (currently "violation"/"Violation") have no
+    // global fallback index: violations live exclusively in the per-repo
+    // `cortex-{slug}-governance` index. When the caller provides a repo,
+    // route there directly. When no repo is provided, return an empty 200
+    // rather than querying the law-definitions `cortex_laws` index.
+    if is_per_repo_only_kind(kind_trimmed) {
+        let index: String = match (repo_scope, family) {
+            (Some(r), Some(fam)) => format!("cortex-{}-{}", r.to_ascii_lowercase(), fam),
+            _ => {
+                // No repo — per-repo-only kind cannot resolve; return empty.
+                return Json(EventsByKindResponse {
+                    kind: req.kind,
+                    index: String::new(),
+                    hits: Vec::new(),
+                    processing_time_ms: 0,
+                    estimated_total_hits: 0,
+                })
+                .into_response();
+            }
+        };
+        return handle_meili_search(req, index).await;
+    }
+
+    let global_index = match kind_to_index(kind_trimmed) {
+        Some(i) => i,
+        None => {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                "bad_input",
+                format!("unknown kind `{}`", req.kind),
+            );
+        }
+    };
+    // Route per-repo when caller scopes by repo — live Meili only
+    // populates the per-repo `cortex-<slug>-<family>` indexes for
+    // most kinds (globals exist only for `cortex_decisions` +
+    // `cortex_laws`). Resolve the per-repo family from the kind so
+    // the read-side hits the same index the writer wrote to.
+    let index: String = match (repo_scope, family) {
+        (Some(r), Some(fam)) => format!("cortex-{}-{}", r.to_ascii_lowercase(), fam),
+        _ => global_index.to_string(),
+    };
+
+    handle_meili_search(req, index).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn kind_to_index_covers_every_canonical_kind() {
+    fn kind_to_index_covers_every_global_kind() {
+        // Kinds that have a global fallback index.
         for kind in [
             "turn",
             "tool_call",
@@ -344,7 +398,7 @@ mod tests {
         ] {
             assert!(
                 kind_to_index(kind).is_some(),
-                "lowercase kind `{kind}` must map to an index"
+                "lowercase kind `{kind}` must map to a global index"
             );
         }
         for pascal in [
@@ -355,16 +409,27 @@ mod tests {
             "Analysis",
             "Memory",
             "Law",
-            "Violation",
             "KnowledgeNote",
             "LearningNote",
             "TopicCard",
         ] {
             assert!(
                 kind_to_index(pascal).is_some(),
-                "PascalCase kind `{pascal}` must map to an index"
+                "PascalCase kind `{pascal}` must map to a global index"
             );
         }
+    }
+
+    #[test]
+    fn kind_to_index_violation_is_per_repo_only() {
+        // phase0_laws-index-routing — "violation"/"Violation" has no
+        // global fallback index; kind_to_index returns None and
+        // is_per_repo_only_kind returns true. The handler returns an
+        // empty 200 when no repo is provided.
+        assert!(kind_to_index("violation").is_none());
+        assert!(kind_to_index("Violation").is_none());
+        assert!(is_per_repo_only_kind("violation"));
+        assert!(is_per_repo_only_kind("Violation"));
     }
 
     #[test]

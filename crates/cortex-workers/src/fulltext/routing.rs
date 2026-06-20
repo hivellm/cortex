@@ -255,21 +255,24 @@ pub fn index_for(prefix: &str, kind: Kind, repo_id: Option<&str>) -> String {
 
 /// Phase11k §2.1 — resolve the GLOBAL Meili index a governance event
 /// fans out to in addition to the per-repo `cortex-{slug}-{family}`
-/// write. Returns `Some("cortex_decisions")` for `Kind::Decision` and
-/// `Some("cortex_laws")` for `Kind::LawViolation`; every other kind
-/// stays per-repo only (returning `None`).
+/// write.
 ///
-/// The dual-write is what makes `decision_lookup` /
-/// `law_check` answerable with no `scope.repo` set — the per-repo
-/// indexes alone require the caller to enumerate every repo, which
-/// the strategy layer in `cortex-api/src/strategies.rs` cannot do.
-/// Writing the same envelope to both lets the per-repo lane stay the
-/// authoritative source for repo-scoped reads while the global lane
-/// answers cross-repo questions ("have we ever decided X?").
+/// Contract (phase0_laws-index-routing-and-malformed-docs):
+/// - `Kind::Decision`     → `Some("cortex_decisions")` — cross-repo
+///   decision lookup must be answerable without enumerating repos.
+/// - `Kind::Law`          → `Some("cortex_laws")` — law DEFINITIONS
+///   dual-write to the global `cortex_laws` index so `law_check`
+///   resolves cross-repo without a repo parameter.
+/// - `Kind::LawViolation` → `None` — violations stay per-repo only
+///   (in `cortex-{slug}-governance`). Violations require a repo
+///   context; writing them to the global `cortex_laws` index mixes
+///   definitions and violations in one index, which broke the
+///   `events_by_kind` "violation" handler (returned definition docs).
+/// - Everything else      → `None` (per-repo only).
 pub fn index_for_event_global(kind: Kind) -> Option<&'static str> {
     match kind {
         Kind::Decision => Some(cortex_storage::names::INDEX_DECISIONS),
-        Kind::LawViolation => Some(cortex_storage::names::INDEX_LAWS),
+        Kind::Law => Some(cortex_storage::names::INDEX_LAWS),
         _ => None,
     }
 }
@@ -636,10 +639,23 @@ mod tests {
     }
 
     #[test]
-    fn index_for_event_global_returns_laws_for_law_violation_kind() {
+    fn index_for_event_global_returns_laws_for_law_kind() {
+        // phase0_laws-index-routing — law DEFINITIONS dual-write to
+        // `cortex_laws` so `law_check` is answerable cross-repo.
         assert_eq!(
-            index_for_event_global(Kind::LawViolation),
+            index_for_event_global(Kind::Law),
             Some("cortex_laws")
+        );
+    }
+
+    #[test]
+    fn index_for_event_global_returns_none_for_law_violation() {
+        // phase0_laws-index-routing — violations stay per-repo only
+        // in `cortex-{slug}-governance`; they must NOT go to the
+        // global `cortex_laws` definitions index.
+        assert!(
+            index_for_event_global(Kind::LawViolation).is_none(),
+            "LawViolation must NOT dual-write to cortex_laws",
         );
     }
 
@@ -660,6 +676,7 @@ mod tests {
             Kind::Learning,
             Kind::Consolidation,
             Kind::TopicCard,
+            Kind::LawViolation,
         ] {
             assert!(
                 index_for_event_global(kind).is_none(),

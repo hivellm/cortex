@@ -238,17 +238,17 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
         }),
     );
 
-    // LawViolation → cortex-vectorizer-governance.
+    // Law (definition) → cortex-vectorizer-governance (per-repo) +
+    // cortex_laws (global dual-write per phase0_laws-index-routing).
     let law = event(
-        "lv-1",
-        Kind::LawViolation,
+        "law-def-1",
+        Kind::Law,
         json!({
-            "violation_id": "VIO-1",
-            "law_id": "LAW-1",
+            "law_id": "LAW-001",
+            "title": "No shortcuts",
             "severity": "critical",
-            "tier": 1,
-            "message": "broke a rule",
-            "evidence": null
+            "detector": "hook:pre_commit",
+            "body": "Never use stubs or TODOs.",
         }),
     );
 
@@ -301,9 +301,10 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
     ];
 
     let report = indexer.index_batch(&events).await.expect("index_batch");
-    // Phase11k §2.2 — governance kinds dual-write to global indexes:
-    // 6 non-governance + 1 Decision (per-repo + global) + 1 LawViolation
-    // (per-repo + global) = 10 upserts.
+    // phase0_laws-index-routing — dual-write contract after routing fix:
+    // 6 non-governance + 1 Decision (per-repo + global cortex_decisions) +
+    // 1 Law definition (per-repo governance + global cortex_laws) = 10
+    // upserts. LawViolation (violations) no longer dual-write to cortex_laws.
     assert_eq!(report.documents_upserted, 10);
 
     // Every destination from the spec-08 matrix should be populated.
@@ -311,12 +312,12 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
         ("cortex-vectorizer-code", 2),  // tool_call + .rs artifact
         ("cortex-vectorizer-turns", 2), // turn + agent_call
         ("cortex-vectorizer-decisions", 1),
-        ("cortex-vectorizer-governance", 1),
+        ("cortex-vectorizer-governance", 1), // Law definition per-repo
         ("cortex-vectorizer-docs", 1), // .md artifact
         ("cortex-vectorizer-misc", 1), // unknown-ext artifact
-        // Phase11k §2.2 — global dual-write targets.
+        // Global dual-write targets.
         ("cortex_decisions", 1),
-        ("cortex_laws", 1),
+        ("cortex_laws", 1), // Law definitions only (not violations)
     ];
     for (idx, expected) in want {
         assert_eq!(

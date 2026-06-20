@@ -23,6 +23,8 @@ mod backfill_cross_project;
 mod bootstrap;
 #[path = "cortex-ops/decisions_reindex.rs"]
 mod decisions_reindex;
+#[path = "cortex-ops/laws_reindex.rs"]
+mod laws_reindex;
 #[path = "cortex-ops/meili_rekey.rs"]
 mod meili_rekey;
 #[path = "cortex-ops/branch_cmd.rs"]
@@ -1294,6 +1296,39 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// phase0_laws-index-routing-and-malformed-docs — re-emit all
+    /// `.claude/rules/*.md` law definitions into the global
+    /// `cortex_laws` index using stable content-addressable doc ids
+    /// (`bootstrap-<hash>`), then prune any doc whose `title == id`
+    /// or that is not keyed by the `bootstrap-` scheme. Idempotent —
+    /// Meilisearch upserts on the stable primary key so re-running is
+    /// safe. Reads `CORTEX_FULLTEXT_MEILI_URL` /
+    /// `CORTEX_FULLTEXT_MEILI_API_KEY`. Use `--dry-run` to report
+    /// what would change without writing.
+    LawsReindex {
+        /// Directory containing the `*.md` rule files. Defaults to
+        /// `.claude/rules` relative to cwd.
+        #[arg(long)]
+        rules_dir: Option<String>,
+        /// Meilisearch base URL. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_URL` then
+        /// `http://127.0.0.1:7700`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Target laws index. Defaults to the global `cortex_laws`.
+        #[arg(long)]
+        index: Option<String>,
+        /// Report what would change without writing to Meilisearch.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Re-key legacy random-ULID content-addressable docs to the stable
     /// Meili-safe `bootstrap-<hash>` primary key IN PLACE (no source
     /// re-emit, so non-file-backed entries like live-captured knowledge /
@@ -2093,6 +2128,14 @@ fn run() -> ExitCode {
             dry_run,
             json,
         ),
+        Command::LawsReindex {
+            rules_dir,
+            meili_url,
+            meili_key,
+            index,
+            dry_run,
+            json,
+        } => laws_reindex::laws_reindex(rules_dir, meili_url, meili_key, index, dry_run, json),
         Command::MeiliRekey {
             index,
             meili_url,

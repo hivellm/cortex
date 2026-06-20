@@ -134,7 +134,11 @@ async fn decisions_from_two_repos_both_land_in_global_cortex_decisions() {
 }
 
 #[tokio::test]
-async fn law_violations_from_two_repos_both_land_in_global_cortex_laws() {
+async fn law_violations_stay_per_repo_governance_not_global_cortex_laws() {
+    // phase0_laws-index-routing-and-malformed-docs (decided contract):
+    // `cortex_laws` (global) is the law-DEFINITION index `law_check`
+    // reads; LawViolations are per-repo only (`cortex-<slug>-governance`)
+    // and MUST NOT dual-write to the global `cortex_laws`.
     let (client, indexer) = make_indexer();
     let events = vec![
         evt(
@@ -165,7 +169,8 @@ async fn law_violations_from_two_repos_both_land_in_global_cortex_laws() {
         ),
     ];
     let report = indexer.index_batch(&events).await.expect("index_batch");
-    assert_eq!(report.documents_upserted, 4);
+    // Per-repo governance only — no global dual-write, so 2 docs total.
+    assert_eq!(report.documents_upserted, 2);
     assert_eq!(
         report.by_index.get("cortex-cortex-governance").copied(),
         Some(1),
@@ -174,25 +179,59 @@ async fn law_violations_from_two_repos_both_land_in_global_cortex_laws() {
         report.by_index.get("cortex-vectorizer-governance").copied(),
         Some(1),
     );
-    assert_eq!(report.by_index.get("cortex_laws").copied(), Some(2));
-
-    let calls = client.calls_snapshot();
-    let mut global_law_ids: Vec<String> = Vec::new();
-    for c in calls {
-        if let MemoryCall::UpsertDocuments { name, docs } = c {
-            if name == "cortex_laws" {
-                for d in docs {
-                    global_law_ids.push(d.law_id.clone().unwrap_or_default());
-                }
-            }
-        }
-    }
-    global_law_ids.sort();
     assert_eq!(
-        global_law_ids,
-        vec!["LAW-007".to_string(), "LAW-CORTEX-001".to_string()],
-        "global cortex_laws must hold violations from BOTH repos",
+        report.by_index.get("cortex_laws").copied(),
+        None,
+        "violations must NOT land in the global definitions index",
     );
+
+    let wrote_cortex_laws = client.calls_snapshot().into_iter().any(|c| {
+        matches!(c, MemoryCall::UpsertDocuments { name, .. } if name == "cortex_laws")
+    });
+    assert!(
+        !wrote_cortex_laws,
+        "no LawViolation may be written to global cortex_laws",
+    );
+}
+
+#[tokio::test]
+async fn law_definitions_land_in_global_cortex_laws() {
+    // The flip side of the contract: law DEFINITIONS (`Kind::Law`) dual-
+    // write to the global `cortex_laws` (the index `law_check` reads) in
+    // addition to the per-repo `governance` index.
+    let (client, indexer) = make_indexer();
+    let events = vec![evt(
+        "law-A-1",
+        Kind::Law,
+        "Cortex",
+        json!({
+            "law_id": "LAW-CORTEX-001",
+            "title": "Strict task-sequence execution",
+            "severity": "info",
+            "detector": null,
+            "body": "Execute every checklist top-to-bottom in the exact order listed.",
+            "section_index": 0,
+            "source_path": ".claude/rules/follow-task-sequence.md"
+        }),
+    )];
+    let report = indexer.index_batch(&events).await.expect("index_batch");
+    assert_eq!(report.by_index.get("cortex_laws").copied(), Some(1));
+    assert_eq!(
+        report.by_index.get("cortex-cortex-governance").copied(),
+        Some(1),
+    );
+
+    let global_law_ids: Vec<String> = client
+        .calls_snapshot()
+        .into_iter()
+        .filter_map(|c| match c {
+            MemoryCall::UpsertDocuments { name, docs } if name == "cortex_laws" => Some(docs),
+            _ => None,
+        })
+        .flatten()
+        .map(|d| d.law_id.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(global_law_ids, vec!["LAW-CORTEX-001".to_string()]);
 }
 
 #[tokio::test]

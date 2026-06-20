@@ -46,6 +46,11 @@ pub(crate) fn kind_to_family(kind: &str) -> Option<&'static str> {
         "consolidation" => "consolidations",
         "decision" => "decisions",
         "analysis" => "analyses",
+        // phase0_laws-index-routing: law DEFINITIONS live in `governance`
+        // per-repo (family_for(Kind::Law) == "governance"). Violations
+        // also land in `governance`. Both are per-repo; the global
+        // `cortex_laws` dual-write is for definitions only and is handled
+        // by `index_for_event_global`, not the per-repo family routing.
         "law_violation" | "violation" | "law" => "governance",
         "memory" | "artifact" => "misc",
         "knowledge" => "knowledge",
