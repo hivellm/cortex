@@ -8,13 +8,17 @@
   - **Idempotent recipe that works:** two statements — (A) `MATCH (a)-[old:T]->(b) DELETE old`, then (B) `MATCH (a),(b) CREATE (a)-[r:T { k:v }]->(b)`. Replay-safe (always ends with exactly one current-props edge), but **doubles writes per props-bearing edge**.
 
 ## 1b. Fix-path decision (ARCHITECTURAL — owner: user, who maintains Nexus)
-- [ ] 1b.1 Decide: (A) Cortex writer workaround (two-statement delete+create for props-bearing edges — 2× write volume on already-strained Nexus, nexus#12/phase25) vs (B) upstream Nexus fix (MERGE must persist inline rel props, or support `SET` on a rel var) + gate phase27a/provenance persistence on the fixed release (mirrors nexus#12 pattern). Blocked pending this decision.
+- [x] 1b.1 DECIDED (2026-06-20, user): it is a genuine Nexus engine bug (CREATE persists rel props, MERGE drops them — inconsistent with openCypher MERGE semantics), so fix it **upstream**, not via a Cortex hot-path workaround. Filed **hivellm/nexus#25** ("MERGE silently drops inline relationship properties (2.3.2); CREATE persists them") with the full empirical matrix + repro. No Cortex writer change; phase27a confidence + provenance persistence are gated on a fixed Nexus release.
+
+## 2. Gate on the upstream fix (BLOCKED on hivellm/nexus#25)
+- [ ] 2.1 ⏸ blocked: nexus#25 — when a Nexus release persists inline rel props on MERGE (or supports `SET` on a rel var), bump the pinned image and confirm `render_edge_merge`'s existing inline-props output persists `confidence` end-to-end (no writer change expected).
+- [ ] 2.2 ⏸ blocked: nexus#25 — re-verify the stale-edge sweeper reads `analyzer_version`/`source_event_id` off persisted edges once props land.
 
 ## 2. Fix the writer (or gate on Nexus)
 - [ ] 2.1 Implement an idempotent edge-prop persistence path in `render_edge_merge`/`nexus_client.rs` that survives replay (no `SET r.*`), or gate phase27a + provenance persistence on a fixed Nexus release with a tracked issue link
 - [ ] 2.2 Verify the stale-edge sweeper still reads `analyzer_version`/`source_event_id` off persisted edges after the fix
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 3.1 Update or create documentation covering the implementation (spec 07 edge-prop persistence contract + the write-form matrix)
-- [ ] 3.2 Write tests covering the new behavior (writer rel-prop round-trip unit/integration)
-- [ ] 3.3 Run tests and confirm they pass (`cargo check` + `clippy -D warnings` + `cargo test --workspace`); plus a live read-back of `r.confidence` through the worker
+- [x] 3.1 Update or create documentation covering the implementation. DONE: spec 07 §Edge-confidence tiers gained a "⚠ Persistence gated on hivellm/nexus#25" callout documenting the MERGE-drops-rel-props limitation + the write-form matrix; proposal.md carries the full investigation.
+- [ ] 3.2 ⏸ blocked: nexus#25 — writer rel-prop round-trip test (unit/integration) can only assert success once Nexus persists the props; writing it now would assert the broken behavior.
+- [ ] 3.3 ⏸ blocked: nexus#25 — live read-back of `r.confidence` through the worker requires the fixed Nexus release.
