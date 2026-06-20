@@ -13,7 +13,10 @@ via the `mcp__cortex__*` surface.
 Rebuilt + recreated cortex-api at HEAD. Findings:
 - PASS: §0.2 (12 healthy), §4.2/§4.3 issue#4 Bug1 (tool-calls/events no-repo → 200 empty, was 502), §4.4 (repo=api → real hits), §6.1 (scoped query fused), §8.1 status, §8.4 decisions/search, §9.1 overview, §9.2 sessions, §9.3 graph, §9.4 coverage+trust, §11 laws, §8.7 violations, §12.6 lru audit (exit 0).
 - FOUND+FIXED: §6.2 issue#4 Bug2 — Windows cwd `E:\HiveLLM\Rulebook` resolved to `e-hivellm-rulebook` (std::path::Path on the Linux daemon ignores backslash). Fixed (split on both separators), redeployed, re-verified → `rulebook`. Commit 5f64291.
-- FOUND (follow-up task phase29): §8.5 consolidations/recent + ~9 other Meili-backed handlers still 502 on missing index (issue#4 Bug1 fix reached only 2 of ~12 handlers).
+- PASS (run 1b): all 17 dashboard/retention/health GETs → 200 (analyses, classifications, conversations, consolidations, decisions, handoffs, memory, producers, tasks, tasks/summary, tools/stats, timeline/recent, active-work, retention/state+sweeps, health/versions+config); §6 query intents decision_lookup + similar_problems → 200; §10.1 branch list → 200.
+- FOUND (follow-up phase0_missing-index-empty-200-all-handlers): §8.5 consolidations/recent + consolidations/search + ~8 other Meili-backed handlers still 502 on missing index (issue#4 Bug1 fix reached only 2 of ~12 handlers).
+- FOUND (follow-up phase0_decision-fulltext-title-body-mismapped): `/v1/decisions/search` (Meili `cortex_decisions`) maps `title`=ULID id and `body`=JSON-stringified payload; dashboard path has correct titles → fulltext doc builder mis-maps the fields.
+- NOTE (not a bug): `/v1/search/vector` with `query_text` returns 400 `not_implemented` (server-side embedding not wired; caller must pass `query_vector`). classifier synap-consume WARN at 14:01 was transient (recovered, RestartCount=0).
 - PENDING NEXT RUN: §8.2 model-name in timeline (needs adapter redeploy + a fresh session — old archived events have model=None); §5.2 phase27a edge confidence (needs graph-worker rebuild); §5.1/§8.11 re-probe with correct request shape.
 
 ## 0. Pre-flight: deploy HEAD + stack health
