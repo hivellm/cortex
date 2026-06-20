@@ -460,18 +460,33 @@ fn explain(req: &QueryRequest) -> Plan {
 }
 
 fn free_search(req: &QueryRequest) -> Plan {
-    let vectors = vec![VectorRequest {
-        collection: repo_scoped(req, "code"),
-        query: req.query.clone(),
-        k: req.k,
-        scope: req.scope.clone(),
-    }];
-    let keywords = vec![KeywordRequest {
-        index: repo_scoped(req, "code"),
-        query: req.query.clone(),
-        limit: req.limit,
-        scope: req.scope.clone(),
-    }];
+    // Free search must reach ANY captured artifact, so it fans out across
+    // the repo's content families, not just `code`. `misc` is the family
+    // that `cortex_capture_memory` writes to (memory / knowledge /
+    // learning → `cortex-<slug>-misc`); without it, captured memories are
+    // indexed but never retrievable via the fused query path (phase0
+    // captured-memory-not-retrievable). `docs` covers prose. A per-repo
+    // index/collection that does not exist simply returns zero hits
+    // (see `repo_scoped`), so the extra lanes are safe.
+    let families = ["code", "docs", "misc"];
+    let vectors = families
+        .iter()
+        .map(|f| VectorRequest {
+            collection: repo_scoped(req, f),
+            query: req.query.clone(),
+            k: req.k,
+            scope: req.scope.clone(),
+        })
+        .collect();
+    let keywords = families
+        .iter()
+        .map(|f| KeywordRequest {
+            index: repo_scoped(req, f),
+            query: req.query.clone(),
+            limit: req.limit,
+            scope: req.scope.clone(),
+        })
+        .collect();
     Plan {
         vectors,
         keywords,
@@ -655,6 +670,28 @@ mod tests {
         let plan = build_plan(&req(Intent::FreeSearch));
         assert!(plan.overlays.is_empty());
         assert!(plan.graphs.is_empty());
+    }
+
+    #[test]
+    fn free_search_fans_out_to_misc_family_for_captured_memories() {
+        // phase0 captured-memory-not-retrievable regression: free_search
+        // must include the `misc` family (memory/knowledge/learning) that
+        // cortex_capture_memory writes to, plus code + docs.
+        let mut r = req(Intent::FreeSearch);
+        r.scope.repo = Some("cortex".into());
+        let plan = build_plan(&r);
+        let kw: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
+        let vc: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
+        for fam in ["-code", "-docs", "-misc"] {
+            assert!(
+                kw.iter().any(|i| i.ends_with(fam)),
+                "free_search keyword lane must include {fam}: {kw:?}"
+            );
+            assert!(
+                vc.iter().any(|c| c.ends_with(fam)),
+                "free_search vector lane must include {fam}: {vc:?}"
+            );
+        }
     }
 
     #[test]

@@ -1,11 +1,11 @@
 ## 1. Diagnose lane coverage
-- [ ] 1.1 Confirm which Meili index families `free_search` (and each intent) fans out to in `crates/cortex-api/src/search/strategies.rs`; verify the `misc` family (memory/knowledge/learning) is absent
-- [ ] 1.2 Confirm where captured memories are indexed (per-repo `cortex-<repo>-misc`; no global `cortex_memories`)
+- [x] 1.1 Confirm which Meili index families `free_search` fans out to — was ONLY `repo_scoped(req,"code")` for both vector + keyword; `misc` absent (strategies.rs free_search)
+- [x] 1.2 Confirm captured memories index to per-repo `cortex-<repo>-misc` (no global `cortex_memories`); verified the zeta-7731 doc in `cortex-cortex-misc`
 
 ## 2. Fix the fan-out
-- [ ] 2.1 Add the memory/knowledge/learning (`misc`) family to the keyword lane fan-out for the relevant intents
-- [ ] 2.2 Ensure the dense lane covers the memory collection if memories are embedded
-- [ ] 2.3 Live round-trip: capture a marker via cortex_capture_memory, then cortex_query free_search returns it
+- [x] 2.1 free_search now fans out across `["code","docs","misc"]` for the keyword lane (misc = memory/knowledge/learning)
+- [x] 2.2 Same family list applied to the dense (vector) lane; missing per-repo collections return zero hits gracefully (repo_scoped contract)
+- [x] 2.3 Live round-trip verified: captured zeta-7731 marker, redeployed cortex-api, `cortex_query free_search` now returns the marker (snippets:5, FOUND:true)
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 3.1 Update spec 11 (lane fan-out) + spec 20 (capture_memory contract) + CHANGELOG
