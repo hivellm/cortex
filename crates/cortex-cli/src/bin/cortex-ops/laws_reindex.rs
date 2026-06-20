@@ -213,8 +213,11 @@ async fn run_reindex(
     }
 
     // Step 3 — scan live index for stale legacy docs (before the upsert
-    // so fresh bootstrap docs are never in the prune set).
-    let scan = match scan_legacy_docs(meili_url, meili_key, index).await {
+    // so fresh bootstrap docs are never in the prune set). The prune is
+    // scoped to this run's source dir so it cannot delete laws from other
+    // sources (docs/specs, AGENTS) that this run does not re-emit.
+    let anchor = source_anchor_for(rules_dir);
+    let scan = match scan_legacy_docs(meili_url, meili_key, index, &anchor).await {
         Ok(s) => {
             report.orphans_found = s.title_id_count;
             report.legacy_found = s.legacy_ids.len();
@@ -397,6 +400,7 @@ async fn scan_legacy_docs(
     meili_url: &str,
     meili_key: Option<&str>,
     index: &str,
+    source_anchor: &str,
 ) -> anyhow::Result<LegacyScan> {
     let client = build_http_client(meili_key)?;
     let url = format!(
@@ -407,7 +411,7 @@ async fn scan_legacy_docs(
     let body = serde_json::json!({
         "q": "",
         "limit": 1000,
-        "attributesToRetrieve": ["id", "title"],
+        "attributesToRetrieve": ["id", "title", "source_path", "path"],
     });
     let resp = client.post(&url).json(&body).send().await?;
     if !resp.status().is_success() {
@@ -434,6 +438,21 @@ async fn scan_legacy_docs(
         if id.starts_with("bootstrap-") {
             continue;
         }
+        // SAFETY GUARD: only prune legacy docs that originate from the
+        // SAME source this run re-emits (`source_anchor`, e.g.
+        // `.claude/rules`). `cortex_laws` also holds laws from `docs/specs`
+        // and AGENTS — pruning those while re-emitting only `.claude/rules`
+        // would delete laws with no replacement. A doc without a readable
+        // source is left untouched (never pruned).
+        let source = hit
+            .get("source_path")
+            .and_then(|v| v.as_str())
+            .or_else(|| hit.get("path").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .replace('\\', "/");
+        if !source.contains(source_anchor) {
+            continue;
+        }
         if hit.get("title").and_then(|v| v.as_str()) == Some(id) {
             title_id_count += 1;
         }
@@ -444,6 +463,21 @@ async fn scan_legacy_docs(
         legacy_ids,
         title_id_count,
     })
+}
+
+/// Repo-relative source anchor for the prune guard, derived from the
+/// rules dir (e.g. `E:\…\.claude\rules` → `.claude/rules`). Falls back to
+/// the final path component so a custom dir still scopes the prune.
+fn source_anchor_for(rules_dir: &Path) -> String {
+    let norm = rules_dir.to_string_lossy().replace('\\', "/");
+    if let Some(idx) = norm.find(".claude/") {
+        return norm[idx..].to_string();
+    }
+    rules_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("rules")
+        .to_string()
 }
 
 /// POST documents to Meili `addOrReplaceDocuments` (upsert by primary key).
