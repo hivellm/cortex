@@ -128,10 +128,18 @@ pub fn resolve_scope(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        let basename = std::path::Path::new(cwd)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .filter(|s| !s.is_empty())
+        // Take the last path component, splitting on BOTH `/` and `\`.
+        // `std::path::Path::file_name` is platform-dependent: the daemon
+        // runs on Linux (docker) but the caller's cwd is frequently a
+        // Windows path (`E:\HiveLLM\Rulebook`), and Linux's `Path` does
+        // not treat `\` as a separator — so it would slug the whole
+        // string to `e-hivellm-rulebook` instead of `rulebook` (issue #4
+        // Bug 2). Splitting on both separators is correct regardless of
+        // which OS the daemon runs on. `find(non-empty)` skips a trailing
+        // separator (`foo/` -> `foo`).
+        let basename = cwd
+            .rsplit(['/', '\\'])
+            .find(|s| !s.is_empty())
             .unwrap_or(cwd);
         let slug = cortex_storage::names::slug_for_repo(basename);
         if !slug.is_empty() {
@@ -643,6 +651,29 @@ mod tests {
         .expect("cwd lane must succeed");
         assert_eq!(res, ScopeResolution::Cwd);
         // basename → slug_for_repo lower-cases.
+        assert_eq!(r.scope.repo.as_deref(), Some("cortex"));
+    }
+
+    #[test]
+    fn resolve_scope_derives_repo_from_windows_cwd_on_linux_daemon() {
+        // issue #4 Bug 2 regression: the daemon runs on Linux but the
+        // caller's cwd is a Windows path. `\` must be treated as a
+        // separator so we get `rulebook`, not `e-hivellm-rulebook`.
+        let mut r = req("x");
+        let res = resolve_scope(
+            &mut r,
+            &headers_with(HEADER_CORTEX_CWD, "E:\\HiveLLM\\Rulebook"),
+        )
+        .expect("cwd lane must succeed");
+        assert_eq!(res, ScopeResolution::Cwd);
+        assert_eq!(r.scope.repo.as_deref(), Some("rulebook"));
+    }
+
+    #[test]
+    fn resolve_scope_cwd_basename_handles_trailing_separator() {
+        let mut r = req("x");
+        resolve_scope(&mut r, &headers_with(HEADER_CORTEX_CWD, "/home/user/Cortex/"))
+            .expect("cwd lane must succeed");
         assert_eq!(r.scope.repo.as_deref(), Some("cortex"));
     }
 
