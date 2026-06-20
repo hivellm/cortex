@@ -23,6 +23,8 @@ mod backfill_cross_project;
 mod bootstrap;
 #[path = "cortex-ops/decisions_reindex.rs"]
 mod decisions_reindex;
+#[path = "cortex-ops/meili_rekey.rs"]
+mod meili_rekey;
 #[path = "cortex-ops/branch_cmd.rs"]
 mod branch_cmd;
 #[path = "cortex-ops/canary.rs"]
@@ -1272,6 +1274,29 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Re-key legacy random-ULID content-addressable docs to the stable
+    /// Meili-safe `bootstrap-<hash>` primary key IN PLACE (no source
+    /// re-emit, so non-file-backed entries like live-captured knowledge /
+    /// learnings are preserved). Use for `cortex-<repo>-{knowledge,
+    /// learnings}` and other content-addressable indexes.
+    MeiliRekey {
+        /// Target index (e.g. `cortex-cortex-knowledge`).
+        #[arg(long)]
+        index: String,
+        /// Meilisearch base URL. Defaults to `$CORTEX_FULLTEXT_MEILI_URL`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Report what would change without writing to Meilisearch.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -2042,6 +2067,13 @@ fn run() -> ExitCode {
             dry_run,
             json,
         ),
+        Command::MeiliRekey {
+            index,
+            meili_url,
+            meili_key,
+            dry_run,
+            json,
+        } => meili_rekey::meili_rekey(index, meili_url, meili_key, dry_run, json),
     }
 }
 
