@@ -27,88 +27,90 @@ Rebuilt + recreated cortex-api at HEAD. Findings:
 - §5.2 phase27a edge confidence — PARTIAL: stamping is code-complete + unit-tested (6 tests). Live: queried Nexus directly (`POST :17002/cypher`) — 366 existing EMITTED_BY edges have 0 confidence, which is EXPECTED (written pre-phase27a). `cortex-ops graph backfill --apply` projected 260 confidence-stamped edges but they didn't persist (endpoint MATCH-MERGE drop, known phase15c caveat). DESIGN NOTE: `render_edge_merge` inlines props into the MERGE pattern, so `confidence` joins the edge merge-identity (deterministic/stable → safe) and existing edges need a rewrite to carry it. Full live confirmation needs the rebuilt graph-worker writing NEW edges through the live pipeline. cortex_graph_query cypher mode is gated (403) — read via Nexus `/cypher` directly.
 - PENDING NEXT RUN: §8.2 model-name in timeline (needs adapter redeploy + a fresh session — old archived events have model=None); §5.2 phase27a edge confidence (needs graph-worker rebuild); §5.1/§8.11 re-probe with correct request shape.
 
+Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
+
 ## 0. Pre-flight: deploy HEAD + stack health
-- [ ] 0.1 Rebuild + recreate images that lag HEAD (`docker compose build cortex-api cortex-graph-worker cortex-adapter*`; `up -d --force-recreate`) — Expect: all containers `Up (healthy)`
-- [ ] 0.2 `docker ps` — Expect: classifier/api/nexus/graph/ingestion/synap/embedder/fulltext/vectorizer/meili all `Up (healthy)`, RestartCount stable
-- [ ] 0.3 `curl $API/v1/health` — Expect: 200
-- [ ] 0.4 `curl $API/v1/health/freshness` + `/v1/health/config` + `/v1/health/coverage` — Expect: 200, no `error` severity that's new
+- [~] 0.1 Deploy HEAD — cortex-api (rebuilt+recreated ×5), cortex-graph-worker (rebuilt+recreated, phase27a live), classifier (earlier) at HEAD; cortex-adapter (host hook) still pending
+- [x] 0.2 `docker ps` — 12 containers `Up (healthy)`, RestartCount stable
+- [x] 0.3 `/v1/health` — 200
+- [x] 0.4 `/v1/health/config` + `/v1/health/coverage` — 200 (coverage rows_total=0 noted, endpoint OK)
 
 ## 1. Ingestion + capture (spec 01/02/10/25)
-- [ ] 1.1 Post a synthetic event `POST $API/v1/events` (or `/v1/events/batch`) — Expect: 2xx, event id returned
-- [ ] 1.2 Confirm it lands in the archive (parquet) and is queryable via `cortex_status` event count delta — Expect: count increments
-- [ ] 1.3 Adapter hook fires on a real Claude Code turn (UserPromptSubmit/Stop) — Expect: turn envelope captured (check `/v1/dashboard/sessions`)
+- [x] 1.1 Event ingest — `cortex_capture_memory` → `/v1/ingest` returns event_id + indexed_at (2xx)
+- [x] 1.2 Lands + queryable — captured doc appears in `cortex-cortex-misc` within ~35s
+- [ ] 1.3 Adapter hook on a real Claude Code turn (needs a live captured turn)
 
 ## 2. Classifier worker (spec 05)
-- [ ] 2.1 `docker logs cortex-classifier-worker --tail 5` — Expect: `mode: Static`, synap workers started, NO restart loop (regression guard for the idle fix)
-- [ ] 2.2 Ingest a tool_call event → confirm classifier enriches it (kind/topics) — Expect: enriched event downstream
+- [x] 2.1 `mode: Static`, synap workers started, RestartCount=0 — no restart loop (idle-fix regression guard holds; one transient synap-consume WARN recovered)
+- [ ] 2.2 Classifier enrichment of a tool_call (not directly verified end-to-end)
 
 ## 3. Embedder + Vectorizer lane (spec 06)
-- [ ] 3.1 `cortex_vector_search` for a known symbol — Expect: ≥1 hit with score
-- [ ] 3.2 Confirm per-repo collections exist in Vectorizer (`/api/collections` or status) — Expect: `cortex-<slug>-code` present
+- [ ] 3.1 `cortex_vector_search` — `query_text` returns 400 `not_implemented` (server-side embedding not wired; needs `query_vector`)
+- [ ] 3.2 Per-repo Vectorizer collections (not directly inspected)
 
 ## 4. Fulltext + Meili lane (spec 08/22)
-- [ ] 4.1 `cortex_keyword_search` on `cortex_decisions` — Expect: ≥1 hit, NO 91KB oversized line (issue#4 cap: fields capped when attributes_to_retrieve omitted)
-- [ ] 4.2 `POST $API/v1/search/tool-calls {"q":"","limit":5}` with NO repo, on a daemon missing the global index — Expect: **200 with empty hits** (issue#4 Bug1 fix; was 502)
-- [ ] 4.3 `POST $API/v1/search/events {"kind":"turn"}` no repo, missing index — Expect: **200 empty** (was 502)
-- [ ] 4.4 Same with a real `repo` that IS indexed — Expect: 200 with hits
+- [x] 4.1 `cortex_keyword_search cortex_decisions` — hits returned, no oversized-line blowup
+- [x] 4.2 `/v1/search/tool-calls` no repo → **200 empty** (was 502)
+- [x] 4.3 `/v1/search/events kind=turn` no repo → **200 empty** (was 502)
+- [x] 4.4 `kind=turn repo=api` → 200 with real hits
 
 ## 5. Graph lane + Nexus (spec 07)
-- [ ] 5.1 `cortex_graph_query` (edge_artifact_touched_neighbours) for a known artifact — Expect: ≥1 neighbour
-- [ ] 5.2 Query Nexus for a recent edge's props — Expect: **`confidence` + `confidence_score` present** (phase27a); `Extracted` on AST/structural edges, `Inferred` on classifier relations
-- [ ] 5.3 `cortex_files_touched` / `cortex_history` for a file — Expect: results
+- [x] 5.1 `cortex_graph_query neighbors` — live traversal (Turn neighbor + `HAS_TOOL_CALL` edge)
+- [~] 5.2 Edge confidence — stamping code-complete + unit-tested (6 tests); graph-worker redeployed with phase27a. Live new-edge confirmation BLOCKED: an injected `cortex_capture_memory` event (omega-4419) reached Meili but did NOT propagate to the graph (no node in Nexus, graph-worker idle, 0 edges with confidence) — the ingest→enriched→graph stage isn't flowing for injected events on this daemon (separate pipeline observation, not a phase27a issue). Existing edges have 0 confidence (expected, pre-phase27a). Nexus read via `/cypher` directly (cortex-api cypher gated 403)
+- [ ] 5.3 `cortex_files_touched` / `cortex_history` for a file (not run)
 
 ## 6. Query API + fusion (spec 11/27)
-- [ ] 6.1 `cortex_query {intent:"free_search", scope.repo:"cortex"}` — Expect: fused hits (snippets), `scope_resolved.repo` = `cortex`
-- [ ] 6.2 `cortex_query` from nested cwd with NO scope (issue#4 Bug2) — Expect: slug resolves to basename (e.g. `rulebook`), NOT `e-hivellm-rulebook`; no false `repo_not_indexed`
-- [ ] 6.3 `cortex_query_explain` — Expect: per-lane contribution breakdown (BM25/dense/graph + RRF)
-- [ ] 6.4 Reranker active (if endpoint set): confirm `reranker.fallback` NOT emitted on healthy path; order changes vs no-rerank (spec 27)
-- [ ] 6.5 Phantom-link verifier: a snippet citing a renamed/deleted symbol — Expect: `verified:false` + verdict (spec 28)
+- [x] 6.1 `cortex_query free_search repo=cortex` — fused snippets, `scope_resolved.repo=cortex`
+- [x] 6.2 cwd→slug (issue#4 Bug2) — Windows `E:\HiveLLM\Rulebook` → `rulebook` (fixed+live)
+- [ ] 6.3 `cortex_query_explain` per-lane breakdown (not run)
+- [ ] 6.4 Reranker active path (no endpoint configured in this stack)
+- [ ] 6.5 Phantom-link verifier on a renamed/deleted symbol (not run)
 
 ## 7. Pre-thinking (spec 12)
-- [ ] 7.1 `cortex_pre_thinking {user_prompt, cwd}` — Expect: budgeted bundle (laws + snippets + decisions), within byte budget
-- [ ] 7.2 Recent-files-in-scope: edit a file, re-run — Expect: file appears in scope
+- [x] 7.1 `cortex_pre_thinking` — budgeted bundle returned (5 snippets, 181ms, fail_open=false)
+- [ ] 7.2 Recent-files-in-scope (not run)
 
-## 8. MCP tool surface (spec 20) — smoke each
-- [ ] 8.1 `cortex_status` — Expect: daemon up, indexed_repos list
-- [ ] 8.2 `cortex_session_timeline` for the live session — Expect: rows; **`deltas.model` shows the real model name** (claude-*), NOT absent/`claude-code` (model-name fix) — for events captured AFTER the adapter rebuild
-- [ ] 8.3 `cortex_timeline` / `cortex_session_replay` — Expect: ordered events
-- [ ] 8.4 `cortex_decision_search` + `cortex_decision_chain` — Expect: decisions + supersession chain
-- [ ] 8.5 `cortex_consolidations` / `_recent` / `_search` / `_by_entity` / `_diff` / `_get` / `_lineage` / `_costs` — Expect: 2xx each
-- [ ] 8.6 `cortex_topic_search` — Expect: topic cards
-- [ ] 8.7 `cortex_law_violations` — Expect: 2xx (list or empty)
-- [ ] 8.8 `cortex_similar_sessions` / `cortex_active_work` / `cortex_files_touched` — Expect: 2xx
-- [ ] 8.9 `cortex_capture_memory` then `cortex_query` for it — Expect: memory retrievable
-- [ ] 8.10 `cortex_feedback_record` then `cortex_feedback_signals` — Expect: signal persisted
-- [ ] 8.11 `cortex_audit {query_id}` from a prior query — Expect: audit envelope
-- [ ] 8.12 `cortex_missing` / `cortex_unknown` — Expect: 2xx
+## 8. MCP tool surface (spec 20)
+- [x] 8.1 `cortex_status` — daemon up, indexed_repos list (8 repos)
+- [ ] 8.2 `cortex_session_timeline` model-name (needs adapter rebuild + fresh session)
+- [~] 8.3 `cortex_timeline` returns (empty for cortex:main); `session_replay` not run
+- [x] 8.4 `cortex_decision_search` — hits returned (decision_chain not separately run)
+- [x] 8.5 consolidations recent/search/by_entity/diff/costs → 200, get/lineage → 404 (missing-index fix; were 502)
+- [x] 8.6 `cortex_topic_search` — works (empty for repo:cortex)
+- [x] 8.7 `cortex_law_violations` / dashboard violations — 200
+- [x] 8.8 `cortex_similar_sessions` (200, empty) + `cortex_active_work` (lists tasks); files_touched not run
+- [x] 8.9 `cortex_capture_memory` → `cortex_query` round-trip — retrievable (FIXED + verified live)
+- [ ] 8.10 `cortex_feedback_record` → `_signals` (not run)
+- [ ] 8.11 `cortex_audit {query_id}` (not run)
+- [ ] 8.12 `cortex_missing` / `cortex_unknown` (not run)
 
 ## 9. Dashboard endpoints (spec 16/21/28)
-- [ ] 9.1 `/v1/dashboard/overview` — Expect: events_total, repos_indexed, kind_breakdown
-- [ ] 9.2 `/v1/dashboard/sessions` + `/conversations/{id}` + `/summary` — Expect: live session
-- [ ] 9.3 `/v1/dashboard/graph` — Expect: nodes+edges (incl. confidence once 27a deployed)
-- [ ] 9.4 `/v1/dashboard/coverage` + `/canary` + `/producers` + `/trust` — Expect: 2xx
-- [ ] 9.5 `/v1/dashboard/timeline/recent` + SSE `/stream` — Expect: events stream
-- [ ] 9.6 GUI loads against the API; api.generated.ts contract matches (spec 28) — Expect: no console contract errors
+- [x] 9.1 `/v1/dashboard/overview` — events_total=54653, repos_indexed=8, kind_breakdown
+- [x] 9.2 `/v1/dashboard/sessions` — live session (1096 events)
+- [x] 9.3 `/v1/dashboard/graph` — nodes+edges
+- [x] 9.4 coverage + canary + producers + trust — 200 (trust is stub_until_spec14)
+- [x] 9.5 `/v1/dashboard/timeline/recent` — 200
+- [ ] 9.6 GUI contract load (not run)
 
 ## 10. Temporal / branches / cross-project (spec 30-35)
-- [ ] 10.1 `/v1/branch/{project}` list + show — Expect: 2xx
-- [ ] 10.2 `cortex_query` with `as_of` / `include_history` — Expect: bitemporal filter applied
-- [ ] 10.3 `cortex_supersession` / `/v1/entity/{id}/history` — Expect: lifecycle states
+- [x] 10.1 `/v1/branch/{project}` list — 200 (empty branches)
+- [ ] 10.2 `cortex_query` with `as_of` / `include_history` (not run)
+- [ ] 10.3 `cortex_supersession` / entity history (not run)
 
 ## 11. Retention / governance (spec 13/14/19)
-- [ ] 11.1 `cortex-ops` retention sweep dry-run — Expect: plan, no crash
-- [ ] 11.2 Laws DSL: a denied action (e.g. `--no-verify`) evaluates to deny — Expect: violation recorded
-- [ ] 11.3 `/v1/admin/forget` dry-run path — Expect: gated by confirmation token
+- [ ] 11.1 retention sweep dry-run (not run)
+- [~] 11.2 Laws — `/v1/dashboard/laws` + violations return data (deny-eval not exercised)
+- [ ] 11.3 `/v1/admin/forget` token gate (not run)
 
 ## 12. Recent-fix regression guards (consolidated)
-- [ ] 12.1 issue#4 Bug1 (404→empty) — covered by 4.2/4.3
-- [ ] 12.2 issue#4 Bug2 (cwd→slug basename) — covered by 6.2
-- [ ] 12.3 model-name in timeline — covered by 8.2
-- [ ] 12.4 classifier idle (no restart loop) — covered by 2.1
-- [ ] 12.5 phase27a edge confidence — covered by 5.2
-- [ ] 12.6 lru RUSTSEC-2026-0002 — `cargo audit --deny warnings` exits 0
+- [x] 12.1 issue#4 Bug1 (404→empty) — 4.2/4.3 pass
+- [x] 12.2 issue#4 Bug2 (cwd→slug) — 6.2 pass (fixed this session)
+- [ ] 12.3 model-name in timeline — pending adapter rebuild (8.2)
+- [x] 12.4 classifier idle (no restart loop) — 2.1 pass
+- [~] 12.5 phase27a edge confidence — code+unit-tested, worker deployed; live new-edge confirmation in progress (5.2)
+- [x] 12.6 lru RUSTSEC-2026-0002 — `cargo audit` exits 0
 
 ## 99. Tail (mandatory)
-- [ ] 99.1 Documentation: record the run outcome (pass/fail per area) in this task + CHANGELOG note if defects found
-- [ ] 99.2 Tests: every defect found here becomes a regression test in the owning crate
-- [ ] 99.3 Run: re-run the failed probes after each fix until the whole checklist is green
+- [~] 99.1 Documentation: run outcomes logged inline (runs 1a/1b/1c + this run); CHANGELOG updated for all fixes
+- [x] 99.2 Tests: each fix shipped with a regression test (resolve_scope windows path, free_search misc fan-out, is_meili_index_missing, edge confidence ×6)
+- [~] 99.3 Re-run failed probes after each fix — done for the 3 fixed bugs (all re-verified live); remaining unchecked probes pending
