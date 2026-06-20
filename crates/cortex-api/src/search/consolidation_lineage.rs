@@ -584,6 +584,15 @@ pub async fn handle_consolidation_lineage(
             }
         };
         if !status.is_success() {
+            // A missing index means the consolidation isn't there —
+            // single-doc semantics → 404 not-found, not 502 (issue #4).
+            if super::is_meili_index_missing(status.as_u16(), &parsed) {
+                return json_err(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    format!("no consolidation matches id `{id}`"),
+                );
+            }
             let detail = parsed
                 .get("message")
                 .and_then(Value::as_str)

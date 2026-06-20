@@ -362,6 +362,17 @@ pub async fn handle_consolidation_costs(
         }
     };
     if !status.is_success() {
+        // Missing Meili index → empty 200, not 502 (issue #4 Bug1).
+        if super::is_meili_index_missing(status.as_u16(), &parsed) {
+            return Json(ConsolidationCostsResponse {
+                group_by: axes,
+                buckets: Vec::new(),
+                total: 0,
+                truncated: false,
+                match_strategy: "doc_only",
+            })
+            .into_response();
+        }
         let detail = parsed
             .get("message")
             .and_then(Value::as_str)

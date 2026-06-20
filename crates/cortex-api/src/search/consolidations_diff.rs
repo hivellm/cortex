@@ -180,6 +180,16 @@ pub async fn handle_consolidations_diff(
         }
     };
     if !status.is_success() {
+        // Missing Meili index → empty 200, not 502 (issue #4 Bug1).
+        if super::is_meili_index_missing(status.as_u16(), &parsed) {
+            return Json(ConsolidationsDiffResponse {
+                since_ts: q.since_ts,
+                hits: Vec::new(),
+                processing_time_ms: 0,
+                estimated_total_hits: 0,
+            })
+            .into_response();
+        }
         let detail = parsed
             .get("message")
             .and_then(Value::as_str)

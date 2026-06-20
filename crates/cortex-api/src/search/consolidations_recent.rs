@@ -233,6 +233,16 @@ pub async fn handle_consolidations_recent(
         }
     };
     if !status.is_success() {
+        // A missing Meili index is a recoverable empty state, not a
+        // gateway failure (issue #4 Bug1, extended to all read handlers).
+        if super::is_meili_index_missing(status.as_u16(), &parsed) {
+            return Json(ConsolidationsRecentResponse {
+                hits: Vec::new(),
+                processing_time_ms: 0,
+                estimated_total_hits: 0,
+            })
+            .into_response();
+        }
         let detail = parsed
             .get("message")
             .and_then(Value::as_str)
