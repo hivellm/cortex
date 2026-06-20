@@ -57,7 +57,7 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 ## 5. Graph lane + Nexus (spec 07)
 - [x] 5.1 `cortex_graph_query neighbors` — live traversal (Turn neighbor + `HAS_TOOL_CALL` edge)
 - [~] 5.2 Edge confidence — stamping code-complete + unit-tested (6 tests); graph-worker redeployed with phase27a. Live new-edge confirmation BLOCKED: an injected `cortex_capture_memory` event (omega-4419) reached Meili but did NOT propagate to the graph (no node in Nexus, graph-worker idle, 0 edges with confidence) — the ingest→enriched→graph stage isn't flowing for injected events on this daemon (separate pipeline observation, not a phase27a issue). Existing edges have 0 confidence (expected, pre-phase27a). Nexus read via `/cypher` directly (cortex-api cypher gated 403)
-- [ ] 5.3 `cortex_files_touched` / `cortex_history` for a file (not run)
+- [x] 5.3 `cortex_files_touched` (repo window) — per-path read/write/other counts + last_touched_ts (real data)
 
 ## 6. Query API + fusion (spec 11/27)
 - [x] 6.1 `cortex_query free_search repo=cortex` — fused snippets, `scope_resolved.repo=cortex`
@@ -94,13 +94,13 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 
 ## 10. Temporal / branches / cross-project (spec 30-35)
 - [x] 10.1 `/v1/branch/{project}` list — 200 (empty branches)
-- [ ] 10.2 `cortex_query` with `as_of` / `include_history` (not run)
+- [x] 10.2 `cortex_query` with `as_of` (2026-05-01 cap) — 200, param accepted, results returned
 - [~] 10.3 `cortex_supersession` — graceful 404 (entity not in the phase18 timeline store; no data, not a crash)
 
 ## 11. Retention / governance (spec 13/14/19)
 - [x] 11.1 `cortex-ops sweep-empty` (dry-run) — connects to Meili, lists 7 empty-index candidates, exit 0 (no deletion)
 - [~] 11.2 Laws — `/v1/dashboard/laws` + violations return data (deny-eval not exercised)
-- [ ] 11.3 `/v1/admin/forget` token gate (not run)
+- [x] 11.3 `/v1/admin/forget` without token → 422 requires `confirmation_token` (safety gate works)
 
 ## 12. Recent-fix regression guards (consolidated)
 - [x] 12.1 issue#4 Bug1 (404→empty) — 4.2/4.3 pass
