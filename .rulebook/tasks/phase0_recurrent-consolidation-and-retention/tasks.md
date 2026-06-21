@@ -2,10 +2,19 @@
 - [x] 1.1 DONE (2026-06-21): surveyed the sweeps. `sweep-empty` dry-run → 7 empty orphan indexes (`cortex-cortex-governance` + 6 `*-consolidations`). Age scan: >1000 turns/code docs beyond 90d (Meili count capped at 1000) — a large un-digested/un-pruned backlog. KEY FINDING: `turn-digest`/`tool-call-digest` are LLM summarisers (cost API → blocked on the missing key); `sweep-empty`/`meili-prune`/`rollup`/`retention-sweep` are API-free.
 - [x] 1.2 DONE: cadence gap confirmed — cron schedules NONE of the sweeps (`next_runs` empty); trigger producer flag empty; container `ANTHROPIC_API_KEY` is a 29-char placeholder.
 
-## 2. Recurrent cleanup (retention — local, no API)
-- [ ] 2.1 Define retention windows (turn/tool_call digest > N days; cold-tier prune > M days; sweep-empty orphan indexes) in config
-- [ ] 2.2 Schedule the sweeps in cron (nightly) via `cortex-ops schedule`; confirm `next_runs` populated
-- [~] 2.3 First apply pass — STARTED with the zero-loss step: `sweep-empty --apply` dropped 7 empty orphan indexes (re-scan → 0 candidates). REMAINING (alter/lose data → need window confirmation): `meili-prune` blanks turn/tool_call bodies >90d (keeps doc+summary), `rollup` merges old parquets, `retention-sweep` re-encodes vectors; `*-digest --purge-originals` deletes raw after digesting (also needs the API key).
+## 2. Recurrent cleanup (retention) — CADENCE ALREADY EXISTS (diagnosis corrected)
+> CORRECTION (2026-06-21): the cadence is NOT missing. `cortex-ops schedule list`
+> shows 13 cron jobs registered + `enabled`, driven by the `retention_daemon`
+> in cortex-api (seeds defaults + runs the tick loop). Most `last_status=success`
+> with `next_run_at` set: rollup (04:00), meili_prune (05:30), sweep (03:00),
+> consolidation_prune (03:00), turn_digest/tool_call_digest (weekly), pii_enforce,
+> metadata_reap, cas_vacuum, sessions_backfill (hourly), consolidator_nightly
+> (02:00). `rollup --dry-run` → files_in=0 (archive already compacted). The earlier
+> "next_runs empty" was the dashboard endpoint returning empty, NOT missing jobs.
+- [x] 2.1 Windows already defined by the daemon's default cron rows (digest >30d weekly, meili_prune >90d, rollup hourly>90d→daily>365d→monthly, tier sweep, etc.).
+- [x] 2.2 Already scheduled + enabled (13 jobs, daemon executing). No action needed.
+- [x] 2.3 Zero-loss cleanup applied: `sweep-empty --apply` dropped 7 empty orphan indexes (re-scan → 0). Rollup confirmed in-sync (0 pending).
+- [ ] 2.4 Fix `retention.archive_purge` stuck on `last_status=lock_held` (the one sweep not running) — clear the stale lock / find why it never acquires.
 
 ## 3. Corrupt-graph pruning (deletion — requires explicit operator OK)
 - [ ] 3.1 Identify + count the garbage (null-id nodes, edge-less orphans, legacy duplicates); preview without deleting
