@@ -24,10 +24,11 @@
 
 use std::collections::BTreeMap;
 
-use cortex_core::events::{DecisionPayload, Kind};
+use cortex_core::events::{DecisionPayload, Kind, TopicCardPayload};
 use serde_json::{json, Value};
 
 use crate::embedder::EnrichedEvent;
+use crate::topic_cards::trigger::{Trigger as TopicTrigger, TriggerDecision};
 
 /// phase24 §1.2 — a session is treated as ended after this much quiet
 /// (30 minutes). Conservative: a real Claude Code session rarely pauses
@@ -111,6 +112,46 @@ pub fn decision_landed_trigger(event: &EnrichedEvent) -> Option<Value> {
         "decision_id": payload.decision_id,
         "force_deep": false,
     }))
+}
+
+/// phase24 §1.3 — topic-grain trigger via the topic-card threshold
+/// evaluator.
+///
+/// Reuses [`crate::topic_cards::trigger::Trigger::evaluate`] (the same
+/// event-count / high-impact-proximity / staleness heuristics the topic
+/// synthesiser uses): when it returns [`TriggerDecision::Rewrite`], the
+/// topic for `repo` has crossed the rewrite threshold, so we publish a
+/// `nightly_topic` trigger and the daemon's topic grain re-consolidates
+/// that repo's clusters. A `Hold` decision (or a blank `repo`) publishes
+/// nothing. `card == None` is the first-emit path — the evaluator always
+/// rewrites, so a repo with no card yet gets its first topic
+/// consolidation.
+///
+/// The topic grain is repo-scoped (it clusters within a repo), so the
+/// trigger reuses the `nightly_topic` wire shape regardless of whether a
+/// nightly cron or this threshold fired it — both ask the topic grain to
+/// re-cluster the same repo.
+///
+/// Wire shape (spec 27 §3, parsed by `cortex-consolidator::parse_trigger`):
+/// ```json
+/// { "kind": "nightly_topic", "repo": "cortex" }
+/// ```
+#[must_use]
+pub fn topic_threshold_trigger(
+    repo: &str,
+    card: Option<&TopicCardPayload>,
+    new_event_kind: Kind,
+    embedding_distance_fn: &dyn Fn() -> f32,
+    synthesis_age_d: u32,
+) -> Option<Value> {
+    let repo = repo.trim();
+    if repo.is_empty() {
+        return None;
+    }
+    match TopicTrigger::evaluate(card, new_event_kind, embedding_distance_fn, synthesis_age_d) {
+        TriggerDecision::Rewrite => Some(json!({ "kind": "nightly_topic", "repo": repo })),
+        TriggerDecision::Hold { .. } => None,
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +292,58 @@ mod tests {
             ended.is_empty(),
             "exactly-at-threshold is not yet ended: {ended:?}"
         );
+    }
+
+    // ---- phase24 §1.3 — topic-threshold trigger ----
+
+    fn topic_card(events_since: u32) -> TopicCardPayload {
+        TopicCardPayload {
+            topic_card_id: cortex_core::events::derive_topic_card_id("auth", "cortex"),
+            topic_slug: "auth".into(),
+            repos: vec!["cortex".into()],
+            revision: 1,
+            synthesis_markdown: "x".repeat(250),
+            evidence: vec![],
+            contradictions: vec![],
+            open_questions: vec![],
+            related_topic_ids: vec![],
+            confidence: 0.9,
+            last_rev_at: "2026-01-01T00:00:00Z".into(),
+            events_since_last_rev: events_since,
+            synthesis_model: "claude-haiku-4-5".into(),
+            synthesis_cost_cents: 5,
+        }
+    }
+
+    #[test]
+    fn topic_threshold_first_emit_fires_nightly_topic() {
+        // No card yet → evaluator always rewrites → publish for the repo.
+        let t = topic_threshold_trigger("cortex", None, Kind::Turn, &|| 1.0, 0)
+            .expect("first-emit fires");
+        assert_eq!(t["kind"], "nightly_topic");
+        assert_eq!(t["repo"], "cortex");
+    }
+
+    #[test]
+    fn topic_threshold_event_count_fires() {
+        use crate::topic_cards::trigger::TRIGGER_EVENTS_THRESHOLD;
+        let card = topic_card(TRIGGER_EVENTS_THRESHOLD);
+        let t = topic_threshold_trigger("cortex", Some(&card), Kind::Turn, &|| 1.0, 0)
+            .expect("at threshold fires");
+        assert_eq!(t["kind"], "nightly_topic");
+        assert_eq!(t["repo"], "cortex");
+    }
+
+    #[test]
+    fn topic_threshold_hold_publishes_nothing() {
+        // Fresh, low-impact, below event threshold → Hold → no trigger.
+        let card = topic_card(0);
+        assert!(topic_threshold_trigger("cortex", Some(&card), Kind::Turn, &|| 1.0, 0).is_none());
+    }
+
+    #[test]
+    fn topic_threshold_blank_repo_publishes_nothing() {
+        // Even a rewrite decision must not fire without a repo to scope.
+        assert!(topic_threshold_trigger("  ", None, Kind::Turn, &|| 1.0, 0).is_none());
     }
 }
