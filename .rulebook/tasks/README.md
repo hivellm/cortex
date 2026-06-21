@@ -8,19 +8,14 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
+| ⬚ | phase0_live-eval-gates-rerank-phantomlink | 0/8 | live eval gates rerank phantomlink |
 | 🚫 | phase0_nexus-merge-drops-edge-props | 4/10 | nexus merge drops edge props |
 
 ## phase16b
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| ⬚ | phase16b_opencode-smoke-validation | 0/8 | opencode smoke validation |
-
-## phase17
-
-| Status | Task | Progress | Description |
-|--------|------|----------|-------------|
-| ⬚ | phase17_cdc-code-doc-correlation | 26/28 | cdc code doc correlation |
+| 🚫 | phase16b_opencode-smoke-validation | 0/8 | opencode smoke validation |
 
 ## phase18
 
