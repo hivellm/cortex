@@ -22,7 +22,7 @@
       - **1280 Artifacts without `natural_key`** (and no `id`) — unkeyed, unreachable by content-addressable lookup, can't dedupe/match; 126 also orphan, 1154 still carry edges.
       - **6119 orphan Artifacts** (no edges at all) — relationally dead; 5993 keyed + 126 unkeyed.
       - No `natural_key` duplicates (dedup is sound). SAFETY CAVEAT for §3.2: the Nexus planner returns a FULL label scan (all 8278 Artifacts) whenever the WHERE leads with `n.id IS NULL OR n.id=''` on the unindexed `:Artifact(id)` pair — silently widening any DELETE. Deletion queries MUST use single-anchor predicates that verified correct (`n.natural_key IS NULL`, `NOT (n)-[]-()`), never `n.id IS NULL OR …`.
-- [ ] 3.2 Prune after explicit operator authorization; re-verify count + integrity
+- [x] 3.2 DONE (2026-06-21): operator authorized scope A+B. `DETACH DELETE` with single-anchor predicates (dry-run count before each): 4 label-less nodes (`size(labels(n))=0`) + 1280 unkeyed Artifacts (`n.natural_key IS NULL`) = 1284 nodes removed. Integrity re-verified: total nodes 13037→11753 (−1284 exact), edges 14749→13465, label-less now 0, all 6998 remaining Artifacts keyed (`natural_key IS NOT NULL`). Orphans (level C) intentionally KEPT — live ingestion idle since 2026-06-20, orphans may be nodes awaiting edge-building.
 
 ## 4. Recurrent consolidation (costs Opus — requires key + cost authorization)
 - [ ] 4.1 Enable the trigger producer (`CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED=1`) in compose + recreate the classifier
