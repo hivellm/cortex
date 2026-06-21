@@ -157,7 +157,21 @@ doc_id = "bootstrap-" + sha256_hex(repo 0x1f path 0x1f content_hash)   // conten
     identity triple). Docs without a `path` (e.g. `cortex_capture_memory`
     knowledge) are legitimately ULID-keyed (the `bootstrap-` key needs a
     path) and are reported separately, NOT failed.
+  - `cortex-ops laws-repair` — repairs malformed `cortex_laws` docs IN
+    PLACE when the legacy `body` is the stringified original law payload:
+    unwraps it, rebuilds via the builder, and re-keys to `bootstrap-`.
+    Works across all law sources (`.claude/rules`/`docs/specs`/AGENTS)
+    with no source re-walk.
+  - `cortex-ops laws-reindex [--index <idx>]` — forward write-path
+    re-emit of `.claude/rules` law definitions (source-scoped prune
+    guard so it never deletes laws from sources it does not re-emit).
   - `cortex-ops doctor-decisions` — decisions-specific `title==id` check.
+
+  **Governance routing.** `cortex_laws` (global) holds law DEFINITIONS
+  (`Kind::Law` dual-writes there + per-repo `governance`); law VIOLATIONS
+  (`Kind::LawViolation`) are per-repo `cortex-<slug>-governance` only —
+  `index_for_event_global` returns `None` for them and `events_by_kind`
+  resolves "violation" to the per-repo governance index.
 
 ## Design
 

@@ -27,6 +27,8 @@ mod decisions_reindex;
 mod laws_reindex;
 #[path = "cortex-ops/meili_rekey.rs"]
 mod meili_rekey;
+#[path = "cortex-ops/laws_repair.rs"]
+mod laws_repair;
 #[path = "cortex-ops/branch_cmd.rs"]
 mod branch_cmd;
 #[path = "cortex-ops/canary.rs"]
@@ -1329,6 +1331,30 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Repair malformed `cortex_laws` docs IN PLACE from their own
+    /// embedded payload (the malformed `body` is the stringified original
+    /// law payload). Recovers law_id/title/body, rebuilds via the
+    /// production builder, and re-keys to the stable `bootstrap-` id —
+    /// works across ALL law sources (`.claude/rules` + `docs/specs` +
+    /// AGENTS) with no source re-walk and no data-loss risk.
+    LawsRepair {
+        /// Meilisearch base URL. Defaults to `$CORTEX_FULLTEXT_MEILI_URL`.
+        #[arg(long)]
+        meili_url: Option<String>,
+        /// Meilisearch master / admin API key. Defaults to
+        /// `$CORTEX_FULLTEXT_MEILI_API_KEY`.
+        #[arg(long)]
+        meili_key: Option<String>,
+        /// Target laws index. Defaults to the global `cortex_laws`.
+        #[arg(long)]
+        index: Option<String>,
+        /// Report what would change without writing to Meilisearch.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     /// Re-key legacy random-ULID content-addressable docs to the stable
     /// Meili-safe `bootstrap-<hash>` primary key IN PLACE (no source
     /// re-emit, so non-file-backed entries like live-captured knowledge /
@@ -2136,6 +2162,13 @@ fn run() -> ExitCode {
             dry_run,
             json,
         } => laws_reindex::laws_reindex(rules_dir, meili_url, meili_key, index, dry_run, json),
+        Command::LawsRepair {
+            meili_url,
+            meili_key,
+            index,
+            dry_run,
+            json,
+        } => laws_repair::laws_repair(meili_url, meili_key, index, dry_run, json),
         Command::MeiliRekey {
             index,
             meili_url,
