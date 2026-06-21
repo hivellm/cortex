@@ -1,0 +1,13 @@
+{
+  "id": 27,
+  "slug": "graph-community-detection-in-process-rust-leiden-over-a-nexus-snapshot-gated-on-the-semantic-projection",
+  "title": "Graph community detection: in-process Rust Leiden over a Nexus snapshot, gated on the semantic projection",
+  "status": "proposed",
+  "date": "2026-06-21",
+  "relatedTasks": [
+    "phase27b_graph-community-detection",
+    "phase27c_graphrag-community-summaries",
+    "phase25_nexus-graph-write-performance"
+  ],
+  "supersededBy": null
+}

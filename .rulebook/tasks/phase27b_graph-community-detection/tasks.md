@@ -1,9 +1,13 @@
+## 0. Spike finding (2026-06-21) — read before §2
+The live Nexus graph has NO architecture edges (CALLS/IMPORTS/DEFINES) — only structural kinds (IN_REPO 8078, HAS_TOOL_CALL 2982, TOUCHED 1677, HAS_TURN 1611, EMITTED_BY 366, ABOUT 28, REMEMBERS 5). The semantic edges come from `graph/projection.rs`, gated OFF in prod (`CORTEX_GRAPH_PROJECTION_ENABLED=false`, nexus#12 → phase25). So the partition INPUT does not exist live until the projection is enabled. The algorithm + guards are offline-unit-testable now; live value (and §2.4 writeback / §2.5 cron / §3 surface verification) is GATED on the projection. See ADR-027.
+
 ## 1. Spike + decision
-- [ ] 1.1 Spike: Rust Leiden/Louvain crate over a graph snapshot vs. server-side Nexus procedure; pick one
-- [ ] 1.2 `rulebook_decision_create` ADR recording the algorithm/placement choice
+- [x] 1.1 DONE: spiked the inputs (architecture edges absent live — projection-gated) + the placement options. No mature Rust Leiden crate; Nexus has no community-detection procedure → in-process Rust over a Nexus snapshot.
+- [x] 1.2 DONE: ADR-027 (`graph-community-detection-in-process-rust-leiden-over-a-nexus-snapshot-gated-on-the-semantic-projection`) records the algorithm/placement choice + the projection gating (phase25 is the de-facto unblocker for the 27b/27c track).
 
 ## 2. Community detection worker
-- [ ] 2.1 New `crates/cortex-workers/src/graph/community.rs`: snapshot the architecture subgraph (calls/imports/defines/inherits; down-weight session-plumbing edges) and run Leiden
+> STATUS (2026-06-21): a first cut of `community.rs` (Louvain + the two guards) was attempted but the implementation was incorrect — 2 unit tests failed and 3 hung (non-terminating Louvain/​split loop), which would wedge the `cargo test` gate. It was removed (uncommitted) to keep the suite green. §2 needs a CORRECT from-scratch implementation in a focused session (the algorithm must converge deterministically — pin a pass cap + a strictly-decreasing modularity guard + a recursion-depth cap on the oversized-split). Also note ADR-027: this whole worker has NO live value until the semantic projection is enabled (nexus#12 → phase25), so phase25 is the de-facto unblocker.
+- [ ] 2.1 New `crates/cortex-workers/src/graph/community.rs`: snapshot the architecture subgraph (calls/imports/defines/inherits; down-weight session-plumbing edges) and run Leiden — MUST be deterministic + provably terminating (pass cap + modularity-monotonicity + recursion-depth cap)
 - [ ] 2.2 Port oversized-community recursive split (community > ~25% of nodes → re-partition)
 - [ ] 2.3 Port hub-percentile exclusion + neighbor-majority re-attachment
 - [ ] 2.4 Write `community_id` + hierarchy `level` back onto nodes via the `NodeOp` surface (idempotent, deterministic seed)
