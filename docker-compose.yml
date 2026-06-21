@@ -494,7 +494,13 @@ services:
       # Read-only mount of the host's `~/.claude/projects` JSONL
       # corpus. Override CORTEX_CLAUDE_PROJECTS_HOST in `.env` when
       # the host stores the archive elsewhere.
-      - ${CORTEX_CLAUDE_PROJECTS_HOST:-${USERPROFILE:-${HOME}}/.claude/projects}:/data/claude-projects:ro
+      # NOTE: the tail watcher's root is `/data/claude-projects` and
+      # `walk()` appends `/projects` (root must be the `.claude`-style
+      # dir CONTAINING `projects/`). So the host projects dir must land
+      # at `<root>/projects` = `/data/claude-projects/projects`, NOT at
+      # `/data/claude-projects` directly — otherwise `walk()` finds 0
+      # files (files_watched=0) and ingestion silently stalls.
+      - ${CORTEX_CLAUDE_PROJECTS_HOST:-${USERPROFILE:-${HOME}}/.claude/projects}:/data/claude-projects/projects:ro
       # Same bind-mount as cortex-ingestion + cortex-api so the
       # archive sink lands in the canonical `~/.cortex/archive`
       # dir; cortex-api's archive_loader re-reads it at boot.
