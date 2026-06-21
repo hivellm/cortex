@@ -629,6 +629,29 @@ mod tests {
     }
 
     #[test]
+    fn source_anchor_for_extracts_claude_rules_from_abs_paths() {
+        // The prune-safety guard scopes deletion to docs whose source is
+        // under this anchor — it MUST resolve to `.claude/rules` from both
+        // POSIX and Windows absolute rules dirs so the prune never reaches
+        // docs/specs or AGENTS laws.
+        assert_eq!(
+            source_anchor_for(Path::new("/home/u/project/.claude/rules")),
+            ".claude/rules"
+        );
+        assert_eq!(
+            source_anchor_for(Path::new(r"E:\HiveLLM\Cortex\.claude\rules")),
+            ".claude/rules"
+        );
+    }
+
+    #[test]
+    fn source_anchor_for_falls_back_to_final_component() {
+        // A non-.claude dir still scopes the prune to its own tail, so a
+        // custom --rules-dir can never delete unrelated laws.
+        assert_eq!(source_anchor_for(Path::new("/tmp/customrules")), "customrules");
+    }
+
+    #[test]
     fn build_law_docs_produces_stable_bootstrap_id() {
         // Same file content must yield the same doc ids across calls
         // (content-addressable contract — mirrors decisions_reindex).
