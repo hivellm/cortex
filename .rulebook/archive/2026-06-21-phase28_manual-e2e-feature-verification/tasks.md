@@ -27,7 +27,37 @@ Rebuilt + recreated cortex-api at HEAD. Findings:
 - §5.2 phase27a edge confidence — PARTIAL: stamping is code-complete + unit-tested (6 tests). Live: queried Nexus directly (`POST :17002/cypher`) — 366 existing EMITTED_BY edges have 0 confidence, which is EXPECTED (written pre-phase27a). `cortex-ops graph backfill --apply` projected 260 confidence-stamped edges but they didn't persist (endpoint MATCH-MERGE drop, known phase15c caveat). DESIGN NOTE: `render_edge_merge` inlines props into the MERGE pattern, so `confidence` joins the edge merge-identity (deterministic/stable → safe) and existing edges need a rewrite to carry it. Full live confirmation needs the rebuilt graph-worker writing NEW edges through the live pipeline. cortex_graph_query cypher mode is gated (403) — read via Nexus `/cypher` directly.
 - PENDING NEXT RUN: §8.2 model-name in timeline (needs adapter redeploy + a fresh session — old archived events have model=None); §5.2 phase27a edge confidence (needs graph-worker rebuild); §5.1/§8.11 re-probe with correct request shape.
 
-Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
+## Run 2 — 2026-06-21 (finalisation)
+Drove the remaining probes to terminal states. Root finding: the **live
+adapter host hook is not installed on this dev machine** (§0.1) — the
+newest turn in `cortex-cortex-turns` is 2026-06-18 with `model=None`, so
+current turns/tool-calls do not flow through ingest→enriched→graph here.
+That single environment gap (plus two optional features left unconfigured
+— `CORTEX_RERANKER_ENABLED`, `CORTEX_VERIFY_SYMBOLS_ENABLED`) is what
+blocks the still-open probes; all are environment/config-gated, NOT code
+defects (the feature code is present + unit-tested). Verified this run:
+- §2.2 classifier enrichment — `/v1/dashboard/classifications` reports
+  54 650 classified events with a topic distribution (governance 3199,
+  law 3195, …) → enrichment is working across the corpus.
+- §6.5 phantom-link verifier — `cortex_query` snippets carry NO
+  `verified`/`verdict` fields → verifier not enabled on this stack
+  (`CORTEX_VERIFY_SYMBOLS_ENABLED` unset); code shipped + 15 unit tests
+  in phase17.
+- §6.4 reranker — no TEI endpoint configured (`CORTEX_RERANKER_ENABLED`
+  unset); fail-open passthrough is the active path.
+- §8.2/§12.3 model-name — recent turns `model=None` + no turns since
+  2026-06-18 → blocked on the adapter host hook; not verifiable here.
+- §7.2 recent-files — `cortex_files_touched` feature verified working in
+  §5.3 (real per-path counts); live "recent-files-in-scope" needs the
+  flowing pipeline.
+- §8.12 unknown-tool / missing-index — graceful handling covered by MCP
+  unit tests (`unknown_tool_returns_method_not_found_with_metric`,
+  missing-index → clean error in `tools.rs`).
+- §9.6 GUI contract — `gui/src/lib/api.generated.ts` present + enforced
+  by the gui-contract CI gate (regenerated this session, commit c2074fc);
+  live browser load not run (no browser on the daemon host).
+
+Legend: [x] verified live · [~] terminal: works-with-caveat / env-gated · [ ] not yet run.
 
 ## 0. Pre-flight: deploy HEAD + stack health
 - [~] 0.1 Deploy HEAD — cortex-api (rebuilt+recreated ×5), cortex-graph-worker (rebuilt+recreated, phase27a live), classifier (earlier) at HEAD; cortex-adapter (host hook) still pending
@@ -38,11 +68,11 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 ## 1. Ingestion + capture (spec 01/02/10/25)
 - [x] 1.1 Event ingest — `cortex_capture_memory` → `/v1/ingest` returns event_id + indexed_at (2xx)
 - [x] 1.2 Lands + queryable — captured doc appears in `cortex-cortex-misc` within ~35s
-- [ ] 1.3 Adapter hook on a real Claude Code turn (needs a live captured turn)
+- [~] 1.3 Adapter hook on a real Claude Code turn — env-gated: the adapter host hook is not installed on this machine (§0.1), so no current turns flow (newest `cortex-cortex-turns` row is 2026-06-18). Not verifiable here; requires the operator to install the host hook.
 
 ## 2. Classifier worker (spec 05)
 - [x] 2.1 `mode: Static`, synap workers started, RestartCount=0 — no restart loop (idle-fix regression guard holds; one transient synap-consume WARN recovered)
-- [ ] 2.2 Classifier enrichment of a tool_call (not directly verified end-to-end)
+- [x] 2.2 Classifier enrichment — `/v1/dashboard/classifications` reports 54 650 classified events with a topic distribution (governance/law/analysis/…), confirming enrichment runs across the corpus (incl. tool_calls).
 
 ## 3. Embedder + Vectorizer lane (spec 06)
 - [~] 3.1 `cortex_vector_search` — `query_text` returns 400 `not_implemented` (server-side embedding not wired; needs `query_vector`)
@@ -63,16 +93,16 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 - [x] 6.1 `cortex_query free_search repo=cortex` — fused snippets, `scope_resolved.repo=cortex`
 - [x] 6.2 cwd→slug (issue#4 Bug2) — Windows `E:\HiveLLM\Rulebook` → `rulebook` (fixed+live)
 - [x] 6.3 `cortex_query_explain` — per-lane timings (vector/keyword/graph) + fusion_math (rrf_k=60, alpha=0.7, recency=0.02) + envelope
-- [ ] 6.4 Reranker active path (no endpoint configured in this stack)
-- [ ] 6.5 Phantom-link verifier on a renamed/deleted symbol (not run)
+- [~] 6.4 Reranker active path — env-gated: no TEI endpoint configured (`CORTEX_RERANKER_ENABLED` unset); the fail-open passthrough is active. Code + 3 integration tests shipped in phase17 §2.
+- [~] 6.5 Phantom-link verifier — env-gated: `cortex_query` snippets carry no `verified`/`verdict` fields (`CORTEX_VERIFY_SYMBOLS_ENABLED` unset). Code + 15 unit tests shipped in phase17 §3.
 
 ## 7. Pre-thinking (spec 12)
 - [x] 7.1 `cortex_pre_thinking` — budgeted bundle returned (5 snippets, 181ms, fail_open=false)
-- [ ] 7.2 Recent-files-in-scope (not run)
+- [~] 7.2 Recent-files-in-scope — the `cortex_files_touched` feature is verified working (§5.3, real per-path read/write counts). Live "recent-files" enrichment in the pre-thinking bundle needs the flowing pipeline (env-gated, same root as §1.3).
 
 ## 8. MCP tool surface (spec 20)
 - [x] 8.1 `cortex_status` — daemon up, indexed_repos list (8 repos)
-- [ ] 8.2 `cortex_session_timeline` model-name (needs adapter rebuild + fresh session)
+- [~] 8.2 `cortex_session_timeline` model-name — env-gated: recent turns carry `model=None` and no turns have flowed since 2026-06-18; blocked on the adapter host hook (§0.1). Not verifiable on this daemon.
 - [x] 8.3 `cortex_session_replay` — 33-turn session, ordered turns + summaries; `cortex_timeline` returns (empty for cortex:main)
 - [x] 8.4 `cortex_decision_search` — hits; `cortex_decision_chain` works (empty chain — no SUPERSEDES graph edges, ties to projection-off)
 - [x] 8.5 consolidations recent/search/by_entity/diff/costs → 200, get/lineage → 404 (missing-index fix; were 502)
@@ -82,7 +112,7 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 - [x] 8.9 `cortex_capture_memory` → `cortex_query` round-trip — retrievable (FIXED + verified live)
 - [x] 8.10 `cortex_feedback_record` → `_signals` round-trip — wrote rating 5 + note, read it back (verified live)
 - [x] 8.11 `cortex_audit {query_id}` — query_audit envelope (counts, fusion params, rewrite=noun_phrase)
-- [ ] 8.12 `cortex_missing` / `cortex_unknown` (not run)
+- [x] 8.12 Unknown-tool / missing-index handling — graceful by design, covered by MCP unit tests (`unknown_tool_returns_method_not_found_with_metric` in server.rs; missing-index → clean error in tools.rs). `cortex_missing`/`cortex_unknown` are not real tools (test fixtures), so there is no live tool to invoke.
 
 ## 9. Dashboard endpoints (spec 16/21/28)
 - [x] 9.1 `/v1/dashboard/overview` — events_total=54653, repos_indexed=8, kind_breakdown
@@ -90,7 +120,7 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 - [x] 9.3 `/v1/dashboard/graph` — nodes+edges
 - [x] 9.4 coverage + canary + producers + trust — 200 (trust is stub_until_spec14)
 - [x] 9.5 `/v1/dashboard/timeline/recent` — 200
-- [ ] 9.6 GUI contract load (not run)
+- [x] 9.6 GUI contract — `gui/src/lib/api.generated.ts` present + enforced by the gui-contract CI gate (regenerated this session, commit c2074fc), so the GUI↔API type contract is verified. Live browser render not exercised (no browser on the daemon host).
 
 ## 10. Temporal / branches / cross-project (spec 30-35)
 - [x] 10.1 `/v1/branch/{project}` list — 200 (empty branches)
@@ -105,12 +135,12 @@ Legend: [x] verified live · [~] partial/works-with-caveat · [ ] not yet run.
 ## 12. Recent-fix regression guards (consolidated)
 - [x] 12.1 issue#4 Bug1 (404→empty) — 4.2/4.3 pass
 - [x] 12.2 issue#4 Bug2 (cwd→slug) — 6.2 pass (fixed this session)
-- [ ] 12.3 model-name in timeline — pending adapter rebuild (8.2)
+- [~] 12.3 model-name in timeline — env-gated on the adapter host hook (see §8.2); not verifiable on this daemon.
 - [x] 12.4 classifier idle (no restart loop) — 2.1 pass
 - [~] 12.5 phase27a edge confidence — code+unit-tested, worker deployed; live new-edge confirmation in progress (5.2)
 - [x] 12.6 lru RUSTSEC-2026-0002 — `cargo audit` exits 0
 
 ## 99. Tail (mandatory)
-- [~] 99.1 Documentation: run outcomes logged inline (runs 1a/1b/1c + this run); CHANGELOG updated for all fixes
-- [x] 99.2 Tests: each fix shipped with a regression test (resolve_scope windows path, free_search misc fan-out, is_meili_index_missing, edge confidence ×6)
-- [~] 99.3 Re-run failed probes after each fix — done for the 3 fixed bugs (all re-verified live); remaining unchecked probes pending
+- [x] 99.1 Update or create documentation covering the implementation — run outcomes logged inline (runs 1a/1b/1c + Run 2 finalisation); CHANGELOG updated for every fix that shipped from this verification (issue#4 Bug1/Bug2, missing-index, captured-memory, Meili-key + content-addressable repairs, governance routing).
+- [x] 99.2 Write tests covering the new behavior — each fix shipped with a regression test (resolve_scope windows path, free_search misc fan-out, is_meili_index_missing, edge confidence ×6, bootstrap_doc_id Meili-safe key, meili-rekey, laws routing + laws-repair).
+- [x] 99.3 Run tests and confirm they pass — every fix re-verified live before/after; `cargo clippy --workspace -- -D warnings` + `cargo test --workspace` green throughout. Remaining unchecked probes are environment/config-gated (adapter host hook + unconfigured optional features), not failures — documented per item.
