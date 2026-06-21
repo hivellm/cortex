@@ -17,7 +17,11 @@
 - [x] 2.4 DONE (2026-06-21): root-caused — NOT a lock. The cron row runs `retention-archive-purge --before 365d`, but the binary only parsed RFC-3339, so `365d` failed (`premature end of input`) → exit 2 → the run loop's `Some(2) => "lock_held"` mislabel. Fix: `parse_cutoff` in `retention_archive_purge.rs` now accepts both RFC-3339 and relative shorthand (`Nd`/`Nw`/`Nh`), resolving `now - dur`. Verified: `--before 365d --dry-run` → exit 0, cutoff = now−365d (was exit 2). +5 unit tests. (Note: exit 2 == `lock_held` is a real contract for `rollup`/`retention_sweep` running-row advisory-lock conflicts; the conflation with generic exit-2 errors is pre-existing and out of scope here.)
 
 ## 3. Corrupt-graph pruning (deletion — requires explicit operator OK)
-- [ ] 3.1 Identify + count the garbage (null-id nodes, edge-less orphans, legacy duplicates); preview without deleting
+- [x] 3.1 DONE (2026-06-21): cataloged live (read-only). Graph = 13037 nodes / 14749 edges. `n.id IS NULL` is NOT a corruption signal — Artifact/Turn/ToolCall/Repo key on `natural_key`+`_nexus_id`, not `id`. Real garbage populations:
+      - **4 label-less nodes** (`_nexus_id` only, no label/props, degree 1) — dangling edge endpoints; highest-confidence corruption.
+      - **1280 Artifacts without `natural_key`** (and no `id`) — unkeyed, unreachable by content-addressable lookup, can't dedupe/match; 126 also orphan, 1154 still carry edges.
+      - **6119 orphan Artifacts** (no edges at all) — relationally dead; 5993 keyed + 126 unkeyed.
+      - No `natural_key` duplicates (dedup is sound). SAFETY CAVEAT for §3.2: the Nexus planner returns a FULL label scan (all 8278 Artifacts) whenever the WHERE leads with `n.id IS NULL OR n.id=''` on the unindexed `:Artifact(id)` pair — silently widening any DELETE. Deletion queries MUST use single-anchor predicates that verified correct (`n.natural_key IS NULL`, `NOT (n)-[]-()`), never `n.id IS NULL OR …`.
 - [ ] 3.2 Prune after explicit operator authorization; re-verify count + integrity
 
 ## 4. Recurrent consolidation (costs Opus — requires key + cost authorization)
