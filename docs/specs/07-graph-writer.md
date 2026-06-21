@@ -170,16 +170,16 @@ Stamping (`cortex-workers/src/graph`, `EdgeOp::with_confidence`):
   by a future disambiguation pass; consumed today by the read path but
   not yet stamped by any extractor.
 
-> **⚠ Persistence gated on hivellm/nexus#25.** Nexus 2.3.2 silently
-> drops inline relationship properties on `MERGE` (the writer's
-> `render_edge_merge` form); `CREATE` persists them but is not
-> idempotent, and `SET r.*` is rejected. Verified live 2026-06-20: zero
-> edges in the graph carry `confidence` (or the provenance triple).
-> So the writer stamps `confidence` correctly and the read paths consume
-> it correctly, but **no value persists end-to-end until Nexus#25 ships**
-> a MERGE that keeps inline rel props (or `SET` on a rel variable). The
-> read paths are null-safe (weight `1.0`, field omitted), so this is
-> inert, not broken. Tracked in `phase0_nexus-merge-drops-edge-props`.
+> **✓ Persistence works as of Nexus 2.3.4 (hivellm/nexus#25).** Nexus
+> 2.3.2 silently dropped inline relationship properties on `MERGE` (the
+> writer's `render_edge_merge` form), so `confidence` / the provenance
+> triple read back null. **nexus#25, fixed in 2.3.4, persists inline rel
+> props on MERGE** (and supports `SET` on a rel variable) — verified live
+> 2026-06-21: `MERGE (a)-[r {confidence:"ambiguous"}]->(b)` reads back
+> `ambiguous` (was null). No writer change was needed; `render_edge_merge`'s
+> existing inline-props output now round-trips end-to-end on 2.3.4. Edges
+> written before 2.3.4 still carry no props until rewritten. Closed in
+> `phase0_nexus-merge-drops-edge-props`.
 
 **Read-path consumption.**
 - *Graph lane (`lanes/nexus_graph_lane.rs`, §3.1):* every strategy

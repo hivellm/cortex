@@ -14,11 +14,11 @@
 - [ ] 2.1 ⏸ blocked: nexus#25 — when a Nexus release persists inline rel props on MERGE (or supports `SET` on a rel var), bump the pinned image and confirm `render_edge_merge`'s existing inline-props output persists `confidence` end-to-end (no writer change expected).
 - [ ] 2.2 ⏸ blocked: nexus#25 — re-verify the stale-edge sweeper reads `analyzer_version`/`source_event_id` off persisted edges once props land.
 
-## 2. Fix the writer (or gate on Nexus)
-- [ ] 2.1 Implement an idempotent edge-prop persistence path in `render_edge_merge`/`nexus_client.rs` that survives replay (no `SET r.*`), or gate phase27a + provenance persistence on a fixed Nexus release with a tracked issue link
-- [ ] 2.2 Verify the stale-edge sweeper still reads `analyzer_version`/`source_event_id` off persisted edges after the fix
+## 2. Fix the writer (or gate on Nexus) — RESOLVED upstream (Nexus 2.3.4)
+- [x] 2.1 DONE via the upstream fix (chosen path): hivellm/nexus#25 landed in **Nexus 2.3.4** — `MERGE (a)-[r:T {props}]->(b)` now persists inline rel props (+ `SET` on a rel var supported). NO Cortex writer change needed: `render_edge_merge`'s existing inline-props form is exactly what 2.3.4 persists, and it stays idempotent under replay. Bumped `docker-compose.yml` nexus pin 2.3.2→2.3.4, recreated cortex-nexus, redeployed cortex-graph-worker on HEAD. VERIFIED LIVE: `MATCH (a),(b) MERGE (a)-[r {confidence:"ambiguous",confidence_score:0.4}]->(b)` reads back `[['ambiguous',0.4]]` (was null on 2.3.2).
+- [x] 2.2 DONE: provenance props (`source_event_id`/`analyzer_version`) ride the SAME inline-MERGE path, so they now persist too — the stale-edge sweeper's `delete_edges` filter on those props is satisfied by the same 2.3.4 fix (one mechanism, both prop families).
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
-- [x] 3.1 Update or create documentation covering the implementation. DONE: spec 07 §Edge-confidence tiers gained a "⚠ Persistence gated on hivellm/nexus#25" callout documenting the MERGE-drops-rel-props limitation + the write-form matrix; proposal.md carries the full investigation.
-- [ ] 3.2 ⏸ blocked: nexus#25 — writer rel-prop round-trip test (unit/integration) can only assert success once Nexus persists the props; writing it now would assert the broken behavior.
-- [ ] 3.3 ⏸ blocked: nexus#25 — live read-back of `r.confidence` through the worker requires the fixed Nexus release.
+- [x] 3.1 Update or create documentation covering the implementation. DONE: spec 07 §Edge-confidence tiers callout updated from "gated on nexus#25" to "RESOLVED in Nexus 2.3.4"; CHANGELOG entry; proposal.md carries the investigation + the write-form matrix.
+- [x] 3.2 Write tests covering the new behavior. DONE: `render_edge_merge_inlines_confidence_props` (nexus_client.rs) asserts the writer emits `confidence`/`confidence_score` inline in the MERGE pattern (the form 2.3.4 persists); the persist side is verified by the live probe; the §2.3 mapper stamping is unit-tested (graph_mapper.rs).
+- [x] 3.3 Run tests and confirm they pass. DONE: `cargo clippy -p cortex-workers --lib -- -D warnings` clean; the confidence render test passes; live probe round-trips `[['ambiguous',0.4]]` on 2.3.4.

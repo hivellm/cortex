@@ -993,6 +993,32 @@ mod tests {
         );
     }
 
+    // phase27a + nexus#25 — an edge carrying confidence (via
+    // `EdgeOp::with_confidence`) renders those props INLINE in the MERGE
+    // pattern. Nexus < 2.3.4 dropped inline rel props on MERGE (the edge
+    // landed with `confidence` null); nexus#25 (fixed in 2.3.4) persists
+    // them, so this emitted shape now round-trips end-to-end. The persist
+    // side is verified live; this guards the emit side.
+    #[test]
+    fn render_edge_merge_inlines_confidence_props() {
+        let edge =
+            edge_with(vec![]).with_confidence(crate::graph::patch::EdgeConfidence::Inferred, None);
+        let cy = super::render_edge_merge(&edge);
+        assert!(
+            cy.contains("confidence: \"inferred\""),
+            "confidence tier inlined: {cy}"
+        );
+        assert!(
+            cy.contains("confidence_score: 0.7"),
+            "confidence_score (Inferred default 0.7) inlined: {cy}"
+        );
+        assert!(
+            cy.contains("MERGE (a)-[r:CALLS { ") && cy.contains(" }]->(b)"),
+            "props inline in the MERGE pattern (the form nexus#25 persists): {cy}"
+        );
+        assert!(!cy.contains("SET"), "no SET clause: {cy}");
+    }
+
     // phase15c — rendering the same edge twice is byte-identical
     // (BTreeMap key order), so the inlined-prop MERGE is idempotent.
     #[test]
