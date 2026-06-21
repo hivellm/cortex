@@ -14,7 +14,7 @@
 - [x] 2.1 Windows already defined by the daemon's default cron rows (digest >30d weekly, meili_prune >90d, rollup hourly>90d→daily>365d→monthly, tier sweep, etc.).
 - [x] 2.2 Already scheduled + enabled (13 jobs, daemon executing). No action needed.
 - [x] 2.3 Zero-loss cleanup applied: `sweep-empty --apply` dropped 7 empty orphan indexes (re-scan → 0). Rollup confirmed in-sync (0 pending).
-- [ ] 2.4 Fix `retention.archive_purge` stuck on `last_status=lock_held` (the one sweep not running) — clear the stale lock / find why it never acquires.
+- [x] 2.4 DONE (2026-06-21): root-caused — NOT a lock. The cron row runs `retention-archive-purge --before 365d`, but the binary only parsed RFC-3339, so `365d` failed (`premature end of input`) → exit 2 → the run loop's `Some(2) => "lock_held"` mislabel. Fix: `parse_cutoff` in `retention_archive_purge.rs` now accepts both RFC-3339 and relative shorthand (`Nd`/`Nw`/`Nh`), resolving `now - dur`. Verified: `--before 365d --dry-run` → exit 0, cutoff = now−365d (was exit 2). +5 unit tests. (Note: exit 2 == `lock_held` is a real contract for `rollup`/`retention_sweep` running-row advisory-lock conflicts; the conflation with generic exit-2 errors is pre-existing and out of scope here.)
 
 ## 3. Corrupt-graph pruning (deletion — requires explicit operator OK)
 - [ ] 3.1 Identify + count the garbage (null-id nodes, edge-less orphans, legacy duplicates); preview without deleting

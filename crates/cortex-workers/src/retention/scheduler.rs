@@ -411,11 +411,15 @@ fn default_jobs() -> Vec<DefaultJob> {
         // via the existing cron-edit surface; the §3 seed_defaults
         // reconciler preserves operator-tuned schedules.
         //
-        // The shipped command embeds the 365-day cutoff in
-        // `--before` at run time. The cron-side handler resolves
-        // `now - 365d` immediately before invoking the binary; the
-        // command literal stays static so the reconciler's
-        // drift-detection works without false positives every day.
+        // The shipped command embeds the 365-day cutoff as the
+        // relative shorthand `--before 365d`. The `retention-archive-
+        // purge` binary resolves `now - 365d` itself at run time
+        // (parse_cutoff: RFC-3339 OR Nd/Nw/Nh duration); the command
+        // literal stays static so the reconciler's drift-detection
+        // works without false positives every day. NOTE: prior to the
+        // duration-shorthand support the binary only accepted RFC-3339
+        // and failed this literal with exit 2, which the run loop
+        // mislabelled as `lock_held` (phase0 §2.4 fix).
         DefaultJob {
             name: "retention.archive_purge",
             schedule: "15 3 * * *",

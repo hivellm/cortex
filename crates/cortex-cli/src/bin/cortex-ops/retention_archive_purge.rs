@@ -24,8 +24,8 @@ pub(super) fn run(
     repo: Option<String>,
     home: Option<String>,
 ) -> ExitCode {
-    let cutoff = match DateTime::parse_from_rfc3339(&before) {
-        Ok(dt) => dt.with_timezone(&Utc),
+    let cutoff = match parse_cutoff(&before, Utc::now()) {
+        Ok(dt) => dt,
         Err(e) => {
             eprintln!("retention-archive-purge: --before parse: {e}");
             return ExitCode::from(2);
@@ -138,6 +138,45 @@ fn resolve_home(cli_home: Option<String>) -> Option<PathBuf> {
     home_dir().map(|h| h.join(".cortex"))
 }
 
+/// Resolve the `--before` cutoff. Accepts either an absolute RFC-3339
+/// timestamp (`2025-06-21T00:00:00Z`) or a relative duration shorthand
+/// (`365d`, `90d`, `4w`, `12h`), in which case the cutoff is `now - dur`.
+///
+/// The relative form is what the `retention_daemon` cron row passes
+/// (`--before 365d`); resolving it here lets the registered command run
+/// unchanged instead of failing the RFC-3339 parse (which the scheduler
+/// mislabels as `lock_held` via exit code 2).
+fn parse_cutoff(before: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(before) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    if let Some(dur) = parse_relative_duration(before) {
+        return Ok(now - dur);
+    }
+    Err(format!(
+        "{before:?} is neither RFC-3339 nor a relative duration (Nd/Nw/Nh)"
+    ))
+}
+
+/// Parse a relative duration shorthand: `<N><unit>` where `unit` is
+/// `d` (days), `w` (weeks), or `h` (hours). Returns `None` for any
+/// other shape so [`parse_cutoff`] can fall through to an error.
+fn parse_relative_duration(s: &str) -> Option<chrono::Duration> {
+    let s = s.trim();
+    let split = s.len().checked_sub(1)?;
+    let (num, unit) = s.split_at(split);
+    let n: i64 = num.parse().ok()?;
+    if n < 0 {
+        return None;
+    }
+    match unit {
+        "d" | "D" => Some(chrono::Duration::days(n)),
+        "w" | "W" => Some(chrono::Duration::weeks(n)),
+        "h" | "H" => Some(chrono::Duration::hours(n)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,4 +194,46 @@ mod tests {
     // and race each other when run in parallel (CORTEX_HOME is shared
     // process state). The CLI-flag path stays here because it doesn't
     // touch env.
+
+    #[test]
+    fn parse_cutoff_accepts_rfc3339() {
+        let now = DateTime::parse_from_rfc3339("2026-06-21T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let got = parse_cutoff("2025-01-02T03:04:05Z", now).unwrap();
+        assert_eq!(got.to_rfc3339(), "2025-01-02T03:04:05+00:00");
+    }
+
+    #[test]
+    fn parse_cutoff_resolves_relative_days() {
+        // The exact cron shape that was failing: `--before 365d`.
+        let now = DateTime::parse_from_rfc3339("2026-06-21T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let got = parse_cutoff("365d", now).unwrap();
+        assert_eq!(got, now - chrono::Duration::days(365));
+    }
+
+    #[test]
+    fn parse_relative_duration_units() {
+        assert_eq!(parse_relative_duration("90d"), Some(chrono::Duration::days(90)));
+        assert_eq!(parse_relative_duration("4w"), Some(chrono::Duration::weeks(4)));
+        assert_eq!(parse_relative_duration("12h"), Some(chrono::Duration::hours(12)));
+        assert_eq!(parse_relative_duration("0d"), Some(chrono::Duration::days(0)));
+    }
+
+    #[test]
+    fn parse_relative_duration_rejects_garbage() {
+        assert_eq!(parse_relative_duration(""), None);
+        assert_eq!(parse_relative_duration("d"), None);
+        assert_eq!(parse_relative_duration("365"), None);
+        assert_eq!(parse_relative_duration("-5d"), None);
+        assert_eq!(parse_relative_duration("30y"), None);
+    }
+
+    #[test]
+    fn parse_cutoff_rejects_unparseable() {
+        let now = Utc::now();
+        assert!(parse_cutoff("not-a-date", now).is_err());
+    }
 }

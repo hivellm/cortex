@@ -95,7 +95,10 @@
       "PowerShell(git -C \"e:/HiveLLM/Cortex\" log --oneline -3)",
       "PowerShell(head -20)",
       "PowerShell(Get-ChildItem -Path \"E:\\\\HiveLLM\\\\Cortex\\\\packages\\\\cortex-opencode-plugin\" -Directory | Where-Object { $_.Name -eq \"test\" })",
-      "PowerShell(Get-ChildItem -Path \"E:\\\\HiveLLM\\\\Cortex\\\\packages\\\\cortex-claude-plugin\" -File | Where-Object { $_.Name -match 'package\\\\.json|tsconfig\\\\.json' } | Select-Object Name)"
+      "PowerShell(Get-ChildItem -Path \"E:\\\\HiveLLM\\\\Cortex\\\\packages\\\\cortex-claude-plugin\" -File | Where-Object { $_.Name -match 'package\\\\.json|tsconfig\\\\.json' } | Select-Object Name)",
+      "mcp__cortex__cortex_timeline",
+      "mcp__cortex__cortex_supersession",
+      "mcp__cortex__cortex_feedback_record"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
