@@ -9,8 +9,8 @@
 - [ ] 2.2 Confirm the daemon dispatches (dispatched>0) end-to-end against the live Synap stream (requires enabling the flag — opt-in Opus spend)
 
 ## 3. Backfill
-- [ ] 3.1 Run `cortex-consolidator estimate` to preview spend before any live run
-- [ ] 3.2 Backfill consolidations from existing history (run-session / run-topic / nightly) so the empty indexes populate
+- [x] 3.1 DONE: `cortex-consolidator estimate --repo cortex` → 6083 envelopes; session+topic grains ~$0 (Haiku, realistically a few $ on 3.4M input tok), decision_trace **$12.18** (Opus 4.7; assumes 100 ADRs, actual 27 → ~$3). Worst-case ~$12, concentrated in the Opus decision-trace grain.
+- [~] 3.2 Pipeline VALIDATED via `nightly --dry-run true --all`: 216 candidate sessions enumerated, batch plan built, monthly cap $1000, no API call — the backfill path is correctly wired end-to-end. REAL run BLOCKED on two operator decisions: (a) a valid `ANTHROPIC_API_KEY` (the container's is 29 chars; a real key is ~108 `sk-ant-…` — likely a placeholder, so a live run would 401) and (b) spend authorization (~$12 worst-case per §3.1). No money spent.
 
 ## 4. Verify retrieval surfaces
 - [ ] 4.1 `cortex_similar_sessions` returns hits for a known prior session
