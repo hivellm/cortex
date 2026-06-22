@@ -242,8 +242,12 @@ fn fetch_watcher(url: Option<&str>) -> (bool, usize, i64) {
     let base = url
         .map(str::to_string)
         .or_else(|| {
-            std::env::var("CORTEX_ARCHIVE_WATCHER_URLS")
+            // ADR-016 — read `CORTEX_ARCHIVE_WATCHER_URLS` through the
+            // typed Config layer (comma-separated; take the first entry),
+            // never `std::env::var` directly.
+            cortex_config::Config::load()
                 .ok()
+                .and_then(|c| c.ingestion.archive_watcher_urls)
                 .and_then(|v| v.split(',').next().map(|s| s.trim().to_string()))
                 .filter(|s| !s.is_empty())
         })

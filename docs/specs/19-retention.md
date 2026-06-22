@@ -1260,3 +1260,98 @@ clusters of size ≥ 2 (every survivor sits in its own
 - `drifted_merge_is_rejected_and_originals_remain`
 - `render_index_caps_each_line_at_150_chars`
 - `render_memory_body_round_trips_through_parser`
+
+## phase0 — `--before` relative-duration shorthand (Implemented)
+
+The `retention_daemon` seeds `retention.archive_purge` with the static
+command `cortex-ops retention-archive-purge --before 365d`. The handler
+historically parsed `--before` as RFC-3339 only, so the `365d` literal
+failed (`premature end of input`) → exit code `2`. The scheduler run
+loop maps `Some(2) => "lock_held"`, so the sweep reported
+`last_status=lock_held` every night and never ran — a phantom lock it
+never took.
+
+`parse_cutoff(before, now)` now accepts **either**:
+
+- an absolute RFC-3339 timestamp (`2025-06-21T00:00:00Z`), or
+- a relative duration shorthand `<N><unit>` where `unit ∈ {d, w, h}`
+  (days / weeks / hours), resolved to `now - dur`.
+
+The cron command literal stays static (`--before 365d`) so the
+`seed_defaults` drift-detection does not see a new value every day; the
+binary resolves the cutoff at run time. The `exit-2 == lock_held`
+mapping is intentionally retained — it is a real contract for the
+`rollup` / `retention_sweep` running-row advisory-lock conflict, the
+only sweeps that take that lock. Disambiguating generic exit-2 errors
+from genuine lock conflicts across all sweeps is out of scope.
+
+### Test surface (relative-duration)
+
+- `parse_cutoff_accepts_rfc3339`
+- `parse_cutoff_resolves_relative_days`
+- `parse_relative_duration_units`
+- `parse_relative_duration_rejects_garbage`
+- `parse_cutoff_rejects_unparseable`
+
+## phase0 — Coverage watchdog (Implemented)
+
+The `/v1/health/coverage` endpoint reports the archive-watcher and
+pruner signals as data, but its `overall_severity` only reflects the
+backend inventory diff (collections present / missing). A blind
+watcher, a stalled ingest flush, or a sweep / consolidation that
+silently stopped never raised it. The `cortex-ops watchdog` command
+closes that gap.
+
+### Wire shape
+
+```
+cortex-ops watchdog
+  [--watcher-url <url>]                 # default: first CORTEX_ARCHIVE_WATCHER_URLS, else http://localhost:17030
+  [--ingest-staleness-secs <n>]        # default 3600  (1 h)
+  [--sweep-staleness-secs <n>]         # default 90000 (~25 h)
+  [--consolidation-staleness-secs <n>] # default 172800 (48 h)
+  [--home <path>]                      # metadata.sqlite + pruner-status.json base
+  [--json]
+```
+
+### Signals
+
+| Signal | Source | Alarm |
+|--------|--------|-------|
+| `files_watched` | watcher `GET /healthz` | `archive_watcher_blind` (Critical) when watcher healthy but `== 0` |
+| watcher reachability | watcher `GET /healthz` | `archive_watcher_unreachable` (Warn) on probe failure |
+| `last_flush_ts` | watcher `GET /healthz` | `ingest_stale` (Warn) when age > ingest budget |
+| last finished sweep | `retention_sweeps.finished_at` (max) | `sweep_missing` / `sweep_stale` (Warn) |
+| last consolidation | pruner-status `last_run_ts` | `consolidation_missing` / `consolidation_stale` (Warn) |
+
+The alarm logic is the pure function `evaluate(&WatchdogSignals,
+&WatchdogThresholds) -> WatchdogReport`; the I/O wrapper is best-effort
+(an unreachable watcher or unreadable status file degrades to an alarm,
+never a panic). Report severity = max(alarm severities).
+
+### Exit codes
+
+`0` ok / `1` warn / `2` critical — mirrors
+`cortex_api::health::coverage::CoverageSeverity::exit_code`. Under the
+scheduler run loop the `exit-2` bucket is the `lock_held` label and
+`exit-1` is `failed`; the precise severity stays in the `--json`
+payload captured as the cron `last_stdout`.
+
+### Cadence
+
+Seeded as the `health.watchdog` cron job (`*/15 * * * *`,
+`cortex-ops watchdog --json`, enabled) in the retention scheduler
+default jobs. Cheap (one HTTP probe + two local reads), no Opus spend,
+no deletion.
+
+### Test surface (watchdog)
+
+- `all_fresh_is_ok`
+- `files_watched_zero_is_critical`
+- `unreachable_watcher_is_warn_not_blind`
+- `stale_ingest_flush_warns`
+- `missing_sweep_and_consolidation_warn`
+- `stale_sweep_warns`
+- `critical_outranks_warn_in_severity`
+- `parse_rfc3339_ms_round_trips`
+- `seed_defaults_inserts_ten_jobs_idempotently` (extended: 14 jobs, asserts the `health.watchdog` row)
