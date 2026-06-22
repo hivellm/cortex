@@ -21,6 +21,37 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+/// Stable, schema-valid ULID the canary failure-alert envelopes share
+/// as their `session_id` so every canary `law_violation` groups under
+/// one synthetic session. All chars are in the Crockford alphabet
+/// `[0-9A-HJ-KM-NP-TV-Z]` and the length is exactly 26.
+const CANARY_SESSION_ID: &str = "01CANARY000000000000000000";
+
+/// Map `std::env::consts::OS` to the envelope schema's `context.platform`
+/// enum (`win32` / `darwin` / `linux`, Node-style). The Rust names
+/// (`windows` / `macos`) are not valid schema values; anything else
+/// falls back to `linux` (the production container target).
+fn platform_tag() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "win32",
+        "macos" => "darwin",
+        _ => "linux",
+    }
+}
+
+/// Hex-encode a SHA-256 digest as the lowercase 64-char string the
+/// `content_hash` schema (`^sha256:[0-9a-f]{64}$`) requires.
+fn sha256_hex(bytes: &[u8]) -> String {
+    let out = Sha256::new().chain_update(bytes).finalize();
+    let mut s = String::with_capacity(out.len() * 2);
+    for b in out {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
 
 /// Canary execution result, suitable for both CLI exit-code mapping
 /// and JSONL history recording.
@@ -426,35 +457,51 @@ pub async fn run_canary_loop(cfg: CanaryConfig) {
     }
 }
 
+/// Build a SCHEMA-VALID `law_violation` envelope describing a canary
+/// failure. The previous inline shape hand-rolled invalid ULIDs
+/// (`01CANARYFAIL…`), an out-of-enum `tool` (`cortex-api`), an invalid
+/// `content_hash`, and a payload carrying a `hook` property the schema
+/// forbids — so cortex-ingestion rejected every alert
+/// (`reason_class=invalid_json`), the failure never reached the
+/// Violations dashboard it targets, and the ingestion log filled with
+/// rejection WARNs every tick. This valid form lands the alert and
+/// keeps the log quiet.
+fn build_failure_alert_envelope(
+    hook: &str,
+    outcome: &CanaryOutcome,
+    now: &str,
+) -> serde_json::Value {
+    let message = format!("canary tick failed for hook '{hook}': {}", outcome.describe());
+    let content_hash = format!("sha256:{}", sha256_hex(message.as_bytes()));
+    serde_json::json!({
+        "event_id": ulid::Ulid::new().to_string(),
+        "schema_version": "1",
+        "occurred_at": now,
+        "session_id": CANARY_SESSION_ID,
+        "stream": "live",
+        "tool": "cortex-cli",
+        "kind": "law_violation",
+        "context": { "platform": platform_tag() },
+        "payload": {
+            "violation_id": ulid::Ulid::new().to_string(),
+            "law_id": "CANARY-1",
+            "severity": "critical",
+            "message": message,
+            // `hook` is not an allowed top-level payload property;
+            // `evidence` accepts free-form keys, so carry it there.
+            "evidence": { "hook": hook, "outcome": outcome.describe() },
+        },
+        "redactions": [],
+        "content_hash": content_hash,
+    })
+}
+
 /// POST a `law_violation` envelope describing the canary failure to
 /// cortex-ingestion. Same alert path phase8e uses, so the failure
 /// shows up in the existing Violations dashboard automatically.
 async fn emit_failure_alert(cfg: &CanaryConfig, hook: &str, outcome: &CanaryOutcome) {
     let now = chrono::Utc::now().to_rfc3339();
-    let event_id_raw = format!(
-        "01CANARYFAIL{}{}",
-        hook.chars().take(4).collect::<String>(),
-        now.replace([':', '-', '.', 'T', 'Z'], "")
-    );
-    let event_id: String = event_id_raw.chars().take(26).collect();
-    let envelope = serde_json::json!({
-        "event_id": event_id,
-        "schema_version": "1",
-        "occurred_at": now,
-        "session_id": "01CANARYFAIL00000000000000",
-        "stream": "live",
-        "tool": "cortex-api",
-        "kind": "law_violation",
-        "context": { "platform": std::env::consts::OS },
-        "payload": {
-            "law_id": format!("canary-{hook}"),
-            "severity": "critical",
-            "hook": hook,
-            "message": outcome.describe(),
-        },
-        "redactions": [],
-        "content_hash": format!("sha256:canary:{hook}"),
-    });
+    let envelope = build_failure_alert_envelope(hook, outcome, &now);
     let body = serde_json::json!({ "events": [envelope] });
     let url = format!(
         "{}/v1/events/batch",
@@ -567,6 +614,36 @@ pub async fn run_pre_thinking_health_canary_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failure_alert_envelope_is_schema_valid() {
+        // Regression: the old hand-rolled shape was rejected by
+        // cortex-ingestion (invalid ULIDs, out-of-enum tool, bad
+        // content_hash, forbidden `hook` payload prop) and spammed the
+        // ingestion log every tick. The valid form must pass the
+        // canonical validator.
+        let outcome = CanaryOutcome::Transport {
+            stage: "post".to_string(),
+            reason: "connection refused".to_string(),
+        };
+        let env = build_failure_alert_envelope("PostToolUse", &outcome, "2026-06-21T00:00:00Z");
+        cortex_core::validate::validate_event(&env)
+            .unwrap_or_else(|e| panic!("canary failure-alert envelope must validate: {e:?}"));
+        // The hook rides in `evidence` (free-form), not as a forbidden
+        // top-level payload property.
+        let payload = env.get("payload").unwrap();
+        assert!(payload.get("hook").is_none());
+        assert_eq!(
+            payload
+                .get("evidence")
+                .and_then(|e| e.get("hook"))
+                .and_then(|v| v.as_str()),
+            Some("PostToolUse")
+        );
+        // content_hash matches the schema's sha256 shape.
+        let ch = env.get("content_hash").and_then(|v| v.as_str()).unwrap();
+        assert!(ch.starts_with("sha256:") && ch.len() == "sha256:".len() + 64);
+    }
 
     #[test]
     fn build_canary_frame_post_tool_use_carries_marker_in_tool_name() {
