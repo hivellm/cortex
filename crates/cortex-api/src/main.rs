@@ -767,6 +767,36 @@ async fn main() -> Result<()> {
             }
         }
     }
+    // phase0 — wire the phantom-link verifier (phase17 §3, same dead-code
+    // gap the reranker had: with_verify existed but was never called at
+    // boot). Only when symbols_enabled AND a workspace root is configured
+    // (the verifier resolves `<root>/<snippet.path>`; without a source
+    // tree there is nothing to check). Action defaults to the safe "flag"
+    // mode (annotate, never drop).
+    if cfg.verify.symbols_enabled {
+        match cfg
+            .verify
+            .root
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(root) => {
+                orchestrator =
+                    orchestrator.with_verify(cfg.verify.clone(), std::path::PathBuf::from(root));
+                tracing::info!(
+                    root = %root,
+                    action = %cfg.verify.action,
+                    "phantom-link verifier wired"
+                );
+            }
+            None => {
+                tracing::info!(
+                    "verifier symbols_enabled but CORTEX_VERIFY_ROOT unset; verifier left unwired"
+                );
+            }
+        }
+    }
     spawn_relevance_reload_task(orchestrator.clone(), relevance_path.clone());
     // Phase11e §6 — coverage snapshot handle, shared between the
     // boot-time audit (which writes the result here) and `/v1/status`

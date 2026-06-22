@@ -233,6 +233,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     // Phase17 §3.6 — phantom-link verifier knobs (sorted alphabetically
     // after CORTEX_VECTORIZER_* since VERIFY > VECTOR lexicographically).
     ("CORTEX_VERIFY_ACTION", "/verify/action"),
+    ("CORTEX_VERIFY_ROOT", "/verify/root"),
     ("CORTEX_VERIFY_SYMBOLS_ENABLED", "/verify/symbols_enabled"),
 ];
 

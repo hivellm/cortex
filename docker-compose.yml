@@ -385,6 +385,12 @@ services:
       CORTEX_RERANKER_ENDPOINT: http://cortex-reranker:80
       CORTEX_RERANKER_TOP_K: "30"
       CORTEX_RERANKER_TIMEOUT_MS: "15000"
+      # phase0 — phantom-link verifier (phase17 §3). Resolves cited
+      # symbols against the workspace source mounted at /workspaces/Cortex.
+      # "flag" mode annotates snippet.verified, never drops (safe).
+      CORTEX_VERIFY_SYMBOLS_ENABLED: "true"
+      CORTEX_VERIFY_ROOT: /workspaces/Cortex
+      CORTEX_VERIFY_ACTION: flag
       CORTEX_SYNAP_URL: http://synap:15500
       # Nexus transport: HTTP is stable; RPC (nexus://nexus:15475)
       # tested but nexus-graph-sdk 2.1 RPC connection does not

@@ -1300,6 +1300,13 @@ pub struct VerifyConfig {
     /// `"filter"` — remove the snippet from results entirely.
     #[serde(default = "default_verify_action")]
     pub action: String,
+
+    /// Workspace root the verifier resolves snippet paths against
+    /// (`<root>/<snippet.path>`). `None` (default) → cortex-api leaves
+    /// the verifier unwired even when `symbols_enabled`, because there is
+    /// no source tree to check against. Env: `CORTEX_VERIFY_ROOT`.
+    #[serde(default)]
+    pub root: Option<String>,
 }
 
 impl Default for VerifyConfig {
@@ -1307,6 +1314,7 @@ impl Default for VerifyConfig {
         Self {
             symbols_enabled: default_verify_symbols_enabled(),
             action: default_verify_action(),
+            root: None,
         }
     }
 }
