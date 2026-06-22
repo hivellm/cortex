@@ -176,6 +176,13 @@ services:
       CORTEX_CLASSIFIER_BIND: 0.0.0.0:17021
       CORTEX_CLASSIFIER_SYNAP_URL: http://synap:15500
       CORTEX_CLASSIFIER_MODE: ${CORTEX_CLASSIFIER_MODE:-static}
+      # Emit consolidation triggers (session_end / decision / topic grains)
+      # into Synap's `cortex.consolidator.triggers` stream. The host
+      # consolidator daemon (scripts/consolidator-daemon.cmd, run outside
+      # docker so it can use the local claude CLI) consumes them. Cheap +
+      # API-free — the trigger is a small heuristic event; the LLM call
+      # happens in the daemon via `claude -p`.
+      CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED: "true"
     restart: unless-stopped
 
   # cortex-embedder-worker ─ chunks + Vectorizer upserts.
