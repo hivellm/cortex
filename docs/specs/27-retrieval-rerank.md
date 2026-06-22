@@ -40,12 +40,36 @@ preserved and an audit event is emitted.
 
 **Out:**
 
-- Latency eval gate (§2.7 `cortex-eval --suite retrieval`): requires a
-  live Cortex stack + real golden CSV event IDs. Gated on phase17 §1.2
-  refresh.
 - TEI service deployment / Dockerfile: operator-managed, not shipped in
   this phase.
 - Reranker caching / local ONNX inference: future work.
+- p95-latency gate (≤ 250ms): requires a load test run; not yet measured.
+
+## Eval results (phase0, 2026-06-22)
+
+Gate §2.7 PASSED. Re-keyed golden eval (`cortex-eval --suite retrieval`,
+`tests/golden/retrieval.csv`, 10 rows, `expected_paths` column), run
+against the live stack after fixing the dead-code wiring (see below) and
+standing up the TEI service.
+
+| Metric | Fusion-only | With reranker | Floor | Status |
+|--------|-------------|---------------|-------|--------|
+| MRR@10 | 0.4733 | **0.6417** (+36%) | 0.60 | ✅ PASS |
+| recall@5 | 1.0 | 0.80 | 0.50 | ✅ PASS |
+
+**Root cause of the un-ranked reranker (phase17 dead code):** phase17
+shipped `BgeRerankerV2M3` and the `with_reranker` builder but `main.rs`
+never called `with_reranker` — `orchestrator.reranker` stayed `None`.
+Fixed in phase0: `main.rs` now builds the reranker from
+`cfg.reranker.endpoint` when set and attaches it at boot.
+
+**TEI setup:** GPU image `ghcr.io/huggingface/text-embeddings-inference:89-1.8`,
+model `BAAI/bge-reranker-v2-m3`, `--auto-truncate` (required — without
+it every `/rerank` call 413'd and silently fell back to fusion order).
+Host RTX 4090. Defined as `cortex-reranker` service in `docker-compose.yml`.
+
+Baseline recorded: `crates/cortex-eval/baselines/cdc-baseline-v1.json`
+(`retrieval_reranked` key).
 
 ## Config defaults
 

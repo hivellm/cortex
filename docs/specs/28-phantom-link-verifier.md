@@ -44,11 +44,35 @@ in `"filter"` mode, removes unverified snippets entirely.
 
 **Out:**
 
-- Eval gate (§3.10): requires live Cortex stack + golden CSV. Blocked on
-  phase17 §1.2 refresh (real event IDs).
 - Go/Python/TypeScript resolvers: Unsupported for now; extend by adding a
   resolver branch in `verify_symbol` and a new tree-sitter grammar call.
 - Per-symbol caching (bypass LRU for same path+symbol combo): future work.
+- Phantom-rate metric in `cortex-eval` (≤ 1% gate): the retrieval suite
+  measures MRR/recall, not phantom rate; a dedicated harness addition is
+  needed to count `verified=false` snippets per query.
+
+## Live status (phase0, 2026-06-22)
+
+The dead-code wiring gap (§3.10 originally blocked) was closed in phase0.
+`main.rs` now calls `with_verify(cfg.verify, root)` at boot — the same
+root cause as the reranker (`with_verify` existed but was never called).
+
+**Current config on cortex-api:**
+
+| Knob | Value |
+|------|-------|
+| `CORTEX_VERIFY_SYMBOLS_ENABLED` | `true` |
+| `CORTEX_VERIFY_ROOT` | `/workspaces/Cortex` (source bind-mounted) |
+| `CORTEX_VERIFY_ACTION` | `flag` |
+
+**Verified live:** log line `phantom-link verifier wired` on boot;
+snippets carrying a `symbol` field receive `verified`/`verdict` metadata
+(e.g. `verified=false verdict=not_found`); symbol-less snippets pass
+through with `verified=null` (not checked). See commit 2ca7970.
+
+Phantom-link **rate** gate (≤ 1%) still requires a dedicated metric pass
+in `cortex-eval`. The flag-mode data is flowing; measuring the rate needs
+a harness that counts `verified=false` snippets across the golden set.
 
 ## Config defaults
 
