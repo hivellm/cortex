@@ -357,6 +357,18 @@ services:
       # to point at a different parent dir on non-default layouts.
       CORTEX_RULEBOOK_ROOTS: /workspaces/Cortex/.rulebook,/workspaces/Nexus/.rulebook,/workspaces/Synap/.rulebook,/workspaces/Vectorizer/.rulebook,/workspaces/Rulebook/.rulebook,/workspaces/Tml/.rulebook,/workspaces/HiveGPU/.rulebook,/workspaces/TmlDocs/.rulebook
       CORTEX_INGESTION_URL: http://cortex-ingestion:17010
+      # phase0 — disable the synthetic IPC canary in this deployment.
+      # cortex-config defaults `canary.enabled=true` (phase15f), but the
+      # IPC canary probes a legacy unix-socket / named-pipe adapter
+      # (`<HOME>/.cortex/adapter-claude.sock`) that this HTTP-based stack
+      # does NOT run — the live path is `cortex-hook` → cortex-ingestion
+      # over HTTP. Left enabled, every tick fails at `pipe-connect`
+      # ("unix-socket open: No such file or directory") and posts a
+      # false-positive law_violation alert; before the envelope was made
+      # schema-valid it also spammed the ingestion log with
+      # `invalid_json` rejections. Real coverage monitoring for this
+      # deployment is the `health.watchdog` cron job (phase0 §5).
+      CORTEX_CANARY_ENABLED: "false"
       CORTEX_SYNAP_URL: http://synap:15500
       # Nexus transport: HTTP is stable; RPC (nexus://nexus:15475)
       # tested but nexus-graph-sdk 2.1 RPC connection does not
