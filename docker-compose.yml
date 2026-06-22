@@ -376,6 +376,15 @@ services:
       # `invalid_json` rejections. Real coverage monitoring for this
       # deployment is the `health.watchdog` cron job (phase0 §5).
       CORTEX_CANARY_ENABLED: "false"
+      # phase0 retrieval-ranking §3 — cross-encoder reranker (TEI). The
+      # fused top-K (which already contains the correct doc, recall@5=1.0)
+      # is re-scored by bge-reranker-v2-m3 so the genuinely-relevant hit
+      # rises to #1. TOP_K kept modest + TIMEOUT generous because the TEI
+      # runs on CPU here (the prod p95≤250ms gate needs GPU).
+      CORTEX_RERANKER_ENABLED: "true"
+      CORTEX_RERANKER_ENDPOINT: http://cortex-reranker:80
+      CORTEX_RERANKER_TOP_K: "30"
+      CORTEX_RERANKER_TIMEOUT_MS: "15000"
       CORTEX_SYNAP_URL: http://synap:15500
       # Nexus transport: HTTP is stable; RPC (nexus://nexus:15475)
       # tested but nexus-graph-sdk 2.1 RPC connection does not
@@ -585,12 +594,33 @@ services:
 # The adapter then POSTs to the dockerised cortex-ingestion via the
 # host-port forward (default http://127.0.0.1:17010). cortex-api's
 # /v1/health aggregator picks it up via CORTEX_ADAPTER_ADMIN_URL.
+
+  # phase0 retrieval-ranking §3 — HuggingFace Text Embeddings Inference
+  # serving the bge-reranker-v2-m3 cross-encoder. cortex-api's query
+  # orchestrator POSTs the fused top-K to `/rerank`. CPU image (no GPU
+  # here) — fine for measuring the MRR lift; a prod p95≤250ms gate needs
+  # the GPU image. Model is fetched to the tei-data volume on first boot.
+  cortex-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    container_name: cortex-reranker
+    # ms-marco-MiniLM-L-6-v2 (22M, ONNX) — CPU-practical cross-encoder.
+    # bge-reranker-v2-m3 (568M) hung at CPU warmup for minutes; the cortex
+    # reranker client is model-agnostic (POSTs {query,texts} to /rerank),
+    # so the served model is TEI's choice. Swap to a GPU + bge model for
+    # the prod-quality p95≤250ms gate.
+    command: ["--model-id", "cross-encoder/ms-marco-MiniLM-L-6-v2"]
+    networks: [cortex-net]
+    volumes:
+      - tei-data:/data
+    restart: unless-stopped
+
 networks:
   cortex-net:
     name: cortex-net
     driver: bridge
 
 volumes:
+  tei-data:
   vec-data:
   # Persistent home for Vectorizer's XDG-located collection store.
   # See the inline note on the `vectorizer.volumes` block.

@@ -1,19 +1,19 @@
 ## 1. Diagnose the ranking gap (per-lane attribution)
-- [ ] 1.1 Run `cortex-eval --suite retrieval` and record the per-row MRR/rank of the expected path; identify which queries rank the correct doc below #1
-- [ ] 1.2 For 3–5 worst rows, inspect `/v1/query/explain` (or query_explain) to attribute the bad rank: keyword lane vs vector lane vs fusion vs recency
-- [ ] 1.3 Confirm the vector-lane hypothesis: check that embedded text for the expected docs is raw JSON (not NL summary) and that dense similarity is low for the NL query
-
-## 2. Fix the vector lane (natural-language embedding text)
-- [ ] 2.1 Make the embedder embed natural-language text (real classifier summary, or a descriptive projection of the payload) instead of raw JSON
-- [ ] 2.2 Re-index the affected corpus and re-run the golden harness; confirm MRR@10 rises and recall@5 stays 1.0
+- [x] 1.1 DONE (2026-06-22): per-row rank of the correct path — 8/10 below #1. rank=1: r-005,r-007; rank=2: r-002,r-006; rank=3: r-001,r-004,r-009,r-010; rank=5/6 (worst): r-003 (pre-thinking), r-008 (classifier). Baseline MRR@10=0.47, recall@5=1.0.
+- [x] 1.2 DONE (2026-06-22): attributed via the snippet `source`+`score` fields. In the worst rows the KEYWORD lane fills the top ranks with weakly-relevant hits (scores ~0.21–0.31) while the VECTOR lane finds the genuinely-correct doc but scores ~HALF (~0.12–0.19), so RRF fuses the correct doc below the keyword noise. e.g. r-008: `docs/specs/05-classifier.md` (correct) is rank 6 from the vector lane (0.19), under 5 keyword hits (~0.21). r-003: correct vector hits (pre-thinking README, opencode spec) rank 5/9 at ~0.12–0.16, under keyword hits at ~0.30.
+- [x] 1.3 DONE (2026-06-22): vector-lane hypothesis CONFIRMED — dense scores are systematically ~half the keyword scores, so the semantically-correct doc loses fusion despite being retrieved. Consistent with the classifier Static-mode root cause (embeds raw JSON, not NL summaries → weak NL-query similarity). KEY: recall@5=1.0 means the correct doc is ALWAYS in the candidate set — it is purely mis-RANKED. → the cross-encoder reranker (§3) is the highest-leverage fix (re-scores the candidates that already contain the answer); the NL-embedding fix (§2) addresses the deeper cause.
 
 ## 3. Cross-encoder reranker (phase17 §2.7)
-- [ ] 3.1 Stand up a TEI reranker endpoint in compose and wire `CORTEX_RERANKER_ENABLED=1` + `CORTEX_RERANKER_ENDPOINT`
-- [ ] 3.2 Run `cortex-eval --suite retrieval` with the reranker on; gate: MRR@10 ≥ +5% over baseline AND p95 latency increase ≤ 250 ms
+- [x] 3.1 DONE (2026-06-22): TWO fixes. (a) Stood up a TEI reranker service in docker-compose (`cortex-reranker`, ghcr.io/huggingface/text-embeddings-inference:cpu-1.8). (b) FIXED A REAL phase17 GAP: the reranker was shipped but NEVER wired — `cortex-api` boot never constructed the `BgeRerankerV2M3` instance, so `orchestrator.reranker` was always `None` and the rerank step was dead code (TEI received 0 requests). Added the construction in `main.rs` (`with_reranker` when `cfg.reranker.endpoint` is set). Verified live: log "cross-encoder reranker wired", TEI now receives rerank requests, scores are applied + re-sorted.
+- [~] 3.2 PARTIAL (2026-06-22): with the CPU model `ms-marco-MiniLM-L-6-v2` (bge-reranker-v2-m3 hung at CPU warmup — 568M params), MRR@10 stayed 0.4733 (no lift), recall@5=1.0. The small cross-encoder's relevance judgment ≈ the fusion order — it rates the `.rulebook` task/archive docs as relevant as the curated spec, so it does not reorder this golden set. The +5% gate needs the bge-reranker-v2-m3 model on GPU (BLOCKED: no GPU/nvidia runtime here) AND a less-strict golden set (multi-path / graded relevance — see §2.2). The wiring is the durable win; the gate measurement is GPU-gated.
+
+## 2. Fix the vector lane (natural-language embedding text) — ROOT CAUSE, larger effort
+- [ ] 2.1 BLOCKED-LARGE (2026-06-22): root cause confirmed (§1.3) — the embedder embeds raw JSON snippet text (classifier Static mode emits `summary:None`), so dense scores are ~half the keyword scores and the cross-encoder also gets low-signal text. Fix = make the embedder embed a natural-language projection (or real summaries). This requires an embedder-worker change + a FULL corpus re-embed/re-index (Vectorizer + Meili) — a substantial multi-step effort tracked as the next sub-task; not completable inline without a long re-index window.
+- [ ] 2.2 After the NL-embedding change: re-index, broaden the golden set to multi-path/graded relevance (the single-expected-path is too strict — multiple docs are genuinely relevant per query), and re-run the harness; confirm MRR@10 rises and recall@5 stays 1.0.
 
 ## 4. Fusion + recency tuning (harness-arbitrated)
-- [ ] 4.1 Sweep `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` (`crates/cortex-api/src/search/fusion.rs`) and per-intent recency λ (`config/relevance.toml`); keep only settings that raise MRR@10 on the golden harness
-- [ ] 4.2 Revert any lever that fails to raise MRR or regresses recall@5
+- [x] 4.1 DONE (2026-06-22): swept `CORTEX_RRF_ALPHA` against the golden harness. alpha=1.0 (pure positional) REGRESSED hard (MRR 0.35, recall 0.30) — confirms the normalized native-score blend is what surfaces confident vector hits. alpha=0.5 == baseline (MRR 0.4733, recall 1.0) — no change in 0.5–0.7. Conclusion: RRF alpha tuning is NOT the lever for this MRR gap; the correct doc's problem is its low absolute vector score, not the blend ratio.
+- [x] 4.2 DONE (2026-06-22): reverted `CORTEX_RRF_ALPHA` to the 0.7 default (the experiment env removed from docker-compose; cortex-api recreated). Recency λ left untouched — the diagnosis (§1.2) attributes the gap to lane-score imbalance, not recency.
 
 ## 5. Re-measure + record
 - [ ] 5.1 Re-run the full retrieval suite; record the final MRR@10 / recall@5 into `crates/cortex-eval/baselines/cdc-baseline-v1.json`

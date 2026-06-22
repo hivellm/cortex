@@ -730,10 +730,43 @@ async fn main() -> Result<()> {
         "fusion config resolved (relevance.toml + CORTEX_RRF_ALPHA / CORTEX_RRF_K)"
     );
     let rewriter = resolve_query_rewriter_from_env();
-    let orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
+    let mut orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
         .with_fusion(fusion)
         .with_rewriter(rewriter)
         .with_temporal_metrics(temporal_metrics.clone());
+    // phase0 retrieval-ranking §3 — construct + attach the cross-encoder
+    // reranker when an endpoint is configured. phase17 shipped the rerank
+    // step + the `with_reranker` builder but never built the instance in
+    // boot, so `orchestrator.reranker` stayed `None` and the step was
+    // always skipped (the fused top-K — which already contains the correct
+    // doc, recall@5=1.0 — was never re-scored).
+    if cfg.reranker.enabled {
+        match cfg
+            .reranker
+            .endpoint
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(endpoint) => {
+                let rr = cortex_workers::rerank::bge_v2m3::BgeRerankerV2M3::new(
+                    endpoint,
+                    cfg.reranker.timeout_ms,
+                );
+                orchestrator =
+                    orchestrator.with_reranker(std::sync::Arc::new(rr), cfg.reranker.clone());
+                tracing::info!(
+                    endpoint = %endpoint,
+                    top_k_input = cfg.reranker.top_k_input,
+                    timeout_ms = cfg.reranker.timeout_ms,
+                    "cross-encoder reranker wired"
+                );
+            }
+            None => {
+                tracing::info!("reranker enabled but no endpoint configured; rerank step skipped");
+            }
+        }
+    }
     spawn_relevance_reload_task(orchestrator.clone(), relevance_path.clone());
     // Phase11e §6 — coverage snapshot handle, shared between the
     // boot-time audit (which writes the result here) and `/v1/status`
