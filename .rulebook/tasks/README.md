@@ -9,7 +9,7 @@
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
 | ⬚ | phase0_live-eval-gates-rerank-phantomlink | 0/10 | live eval gates rerank phantomlink |
-| ⬚ | phase0_retrieval-ranking-quality | 0/14 | retrieval ranking quality |
+| ⬚ | phase0_nl-embedding-text-projection | 0/7 | nl embedding text projection |
 
 ## phase21
 
