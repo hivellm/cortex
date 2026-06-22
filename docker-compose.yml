@@ -601,17 +601,28 @@ services:
   # here) — fine for measuring the MRR lift; a prod p95≤250ms gate needs
   # the GPU image. Model is fetched to the tei-data volume on first boot.
   cortex-reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    # GPU TEI on the host RTX 4090 (Ada Lovelace, compute 8.9 → the `89`
+    # image tag). Serves the quality cross-encoder bge-reranker-v2-m3.
+    # The cortex reranker client is model/hardware-agnostic (POSTs
+    # {query,texts} to /rerank); GPU support is purely this service def —
+    # no cortex code change. (CPU fallback: image `cpu-1.8` +
+    # `cross-encoder/ms-marco-MiniLM-L-6-v2`, but bge-v2-m3 hangs on CPU.)
+    image: ghcr.io/huggingface/text-embeddings-inference:89-1.8
     container_name: cortex-reranker
-    # ms-marco-MiniLM-L-6-v2 (22M, ONNX) — CPU-practical cross-encoder.
-    # bge-reranker-v2-m3 (568M) hung at CPU warmup for minutes; the cortex
-    # reranker client is model-agnostic (POSTs {query,texts} to /rerank),
-    # so the served model is TEI's choice. Swap to a GPU + bge model for
-    # the prod-quality p95≤250ms gate.
-    command: ["--model-id", "cross-encoder/ms-marco-MiniLM-L-6-v2"]
+    # --auto-truncate: snippet candidate texts can exceed the model's max
+    # sequence length; without it TEI rejects the whole /rerank call with
+    # HTTP 413 → the orchestrator falls back to fusion order (no rerank).
+    command: ["--model-id", "BAAI/bge-reranker-v2-m3", "--auto-truncate"]
     networks: [cortex-net]
     volumes:
       - tei-data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
 
 networks:

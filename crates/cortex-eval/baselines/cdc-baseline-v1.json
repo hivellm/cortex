@@ -1,5 +1,5 @@
 {
-  "_note": "CDC-001 baseline. phase0 2026-06-22 — retrieval lane re-keyed to snippet `path` (the live /v1/query returns results.snippets[] keyed by path+content_hash, not event_id) and captured against the live stack from tests/golden/retrieval.csv. KEY FINDING: recall@5=1.0 (every curated answer IS retrievable) but mrr_at_10=0.47 (the right answer is usually rank ~2-3, not #1) — the relevance gap is RANKING, not missing data; this is the headroom the reranker (phase17) must lift. consolidation/mcp_search baselines pending corpus + harness re-key. Regenerate: cortex-eval --suite retrieval --golden tests/golden/retrieval.csv --api-url http://localhost:17000.",
+  "_note": "CDC-001 baseline. phase0 2026-06-22 — retrieval lane re-keyed to snippet `path` (the live /v1/query returns results.snippets[] keyed by path+content_hash, not event_id), captured against the live stack. KEY FINDING: fusion-only recall@5=1.0 but mrr_at_10=0.47 — the right answer is retrievable but ranked ~2-3, not #1 (the gap is RANKING, not missing data). WITH the cross-encoder reranker (bge-reranker-v2-m3 on GPU, after fixing the dead phase17 wiring + TEI --auto-truncate), mrr_at_10 rose to 0.6417 (+36%, clears the 0.60 floor and the phase17 §2.7 +5% gate); recall@5 dipped to 0.80 (aggressive reranker pushed 2 weakly-curated rows down, still above the 0.50 floor). See `retrieval_reranked`. consolidation/mcp_search baselines pending corpus + harness re-key. Regenerate: cortex-eval --suite retrieval --golden tests/golden/retrieval.csv --api-url http://localhost:17000.",
   "retrieval": {
     "suite": "retrieval",
     "finished_at": "2026-06-22T03:28:48Z",
@@ -8,6 +8,17 @@
     "metrics": [
       {"name": "mrr_at_10", "value": 0.4733, "floor": 0.60, "passed": false},
       {"name": "recall_at_5", "value": 1.0, "floor": 0.50, "passed": true}
+    ]
+  },
+  "retrieval_reranked": {
+    "suite": "retrieval",
+    "note": "bge-reranker-v2-m3 (GPU) + TEI --auto-truncate; cortex-api reranker wired at boot.",
+    "finished_at": "2026-06-22T04:34:00Z",
+    "rows_total": 10,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.6417, "floor": 0.60, "passed": true},
+      {"name": "recall_at_5", "value": 0.80, "floor": 0.50, "passed": true}
     ]
   },
   "consolidation": {
