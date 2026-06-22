@@ -2,11 +2,16 @@
 //! `cortex-api /v1/query`. Golden CSV shape:
 //!
 //! ```csv
-//! id,query,repo,expected_event_ids
-//! r-001,"how does tier sweep work","cortex","01HXEVT001;01HXEVT002"
+//! id,query,repo,expected_paths
+//! r-001,"how does tier sweep work","cortex","crates/.../sweep.rs;docs/specs/19-retention.md"
 //! ```
 //!
-//! `expected_event_ids` is a `;`-delimited list (CSV-safe).
+//! `expected_paths` is a `;`-delimited list (CSV-safe). phase0 2026-06-22
+//! — the live `/v1/query` returns `results.snippets[]` keyed by `path`
+//! (+ `content_hash`), NOT `event_id`; the golden set + driver were
+//! re-keyed to `path`. The metrics (`mrr_at_k`, `recall_at_k`) are
+//! identity-agnostic string matchers, so only the column name + the
+//! driver's hit extraction changed.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -25,17 +30,17 @@ pub struct RetrievalRow {
     /// Optional repo scope. Empty means cross-repo.
     #[serde(default)]
     pub repo: String,
-    /// `;`-delimited list of event ids the row expects to surface
-    /// in the top-10 results. Parsed via
-    /// [`RetrievalRow::expected_ids`].
-    pub expected_event_ids: String,
+    /// `;`-delimited list of repo-relative snippet paths the row
+    /// expects to surface in the top-10 results. Parsed via
+    /// [`RetrievalRow::expected_paths`].
+    pub expected_paths: String,
 }
 
 impl RetrievalRow {
-    /// Parse the `;`-delimited expected-id column into a vec,
+    /// Parse the `;`-delimited expected-path column into a vec,
     /// trimming whitespace and dropping empty entries.
-    pub fn expected_ids(&self) -> Vec<String> {
-        self.expected_event_ids
+    pub fn expected_paths(&self) -> Vec<String> {
+        self.expected_paths
             .split(';')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -104,7 +109,7 @@ pub fn build_report(rows: &[RetrievalRow], observed: &[Vec<String>]) -> SuiteRep
     let mut sum_recall = 0.0;
     let mut per_row = std::collections::BTreeMap::new();
     for (row, obs) in rows.iter().zip(observed.iter()) {
-        let expected = row.expected_ids();
+        let expected = row.expected_paths();
         let row_mrr = mrr_at_k(obs, &expected, MRR_K);
         let row_recall = recall_at_k(obs, &expected, RECALL_K);
         sum_mrr += row_mrr;
@@ -150,14 +155,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn expected_ids_splits_and_trims() {
+    fn expected_paths_splits_and_trims() {
         let row = RetrievalRow {
             id: "r1".into(),
             query: "q".into(),
             repo: "".into(),
-            expected_event_ids: "a; b ; ; c".into(),
+            expected_paths:"a; b ; ; c".into(),
         };
-        assert_eq!(row.expected_ids(), vec!["a", "b", "c"]);
+        assert_eq!(row.expected_paths(), vec!["a", "b", "c"]);
     }
 
     #[test]
@@ -166,7 +171,7 @@ mod tests {
             id: "r1".into(),
             query: "q".into(),
             repo: "".into(),
-            expected_event_ids: "a".into(),
+            expected_paths:"a".into(),
         }];
         let observed = vec![vec!["a".to_string(), "b".to_string()]];
         let r = build_report(&rows, &observed);
@@ -183,7 +188,7 @@ mod tests {
             id: "r1".into(),
             query: "q".into(),
             repo: "".into(),
-            expected_event_ids: "a".into(),
+            expected_paths:"a".into(),
         }];
         let observed = vec![vec!["x".to_string(), "y".to_string()]];
         let r = build_report(&rows, &observed);
@@ -199,14 +204,17 @@ mod tests {
         let path = dir.path().join("retrieval.csv");
         std::fs::write(
             &path,
-            "id,query,repo,expected_event_ids\n\
-             r1,how does tier sweep work,cortex,01EVT01;01EVT02\n\
-             r2,what is ADR-013,cortex,01EVT03\n",
+            "id,query,repo,expected_paths\n\
+             r1,how does tier sweep work,cortex,crates/a/sweep.rs;docs/specs/19.md\n\
+             r2,what is ADR-013,cortex,docs/specs/02.md\n",
         )
         .unwrap();
         let rows = load_csv(&path).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, "r1");
-        assert_eq!(rows[0].expected_ids(), vec!["01EVT01", "01EVT02"]);
+        assert_eq!(
+            rows[0].expected_paths(),
+            vec!["crates/a/sweep.rs", "docs/specs/19.md"]
+        );
     }
 }

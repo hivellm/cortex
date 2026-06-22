@@ -1,11 +1,11 @@
-id,query,repo,expected_event_ids
-r-001,how does the EnvelopeProducer trait work,cortex,PLACEHOLDER_EVT_001
-r-002,what is ADR-016 and why was config migrated,cortex,PLACEHOLDER_EVT_002
-r-003,how does pre-thinking injection inject context into the prompt,cortex,PLACEHOLDER_EVT_003
-r-004,what laws govern destructive git operations,cortex,PLACEHOLDER_EVT_004
-r-005,how does the graph projection handle EMITTED_BY edges,cortex,PLACEHOLDER_EVT_005
-r-006,what is the OpenCode adapter and how does it differ from the Claude Code adapter,cortex,PLACEHOLDER_EVT_006
-r-007,how does the bootstrap CLI resume from a checkpoint,cortex,PLACEHOLDER_EVT_007
-r-008,what is the classifier worker and how does it enrich events,cortex,PLACEHOLDER_EVT_008
-r-009,how does Reciprocal Rank Fusion combine BM25 and dense results,cortex,PLACEHOLDER_EVT_009
-r-010,what Nexus graph schema does the graph writer use for tool call edges,cortex,PLACEHOLDER_EVT_010
+id,query,repo,expected_paths
+r-001,how does the EnvelopeProducer trait work,cortex,crates/cortex-workers/src/producer/trait.rs
+r-002,what is ADR-016 and why was config migrated,cortex,.rulebook/archive/2026-05-25-phase13e_cortex-config-crate-adr-016/proposal.md
+r-003,how does pre-thinking injection inject context into the prompt,cortex,.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
+r-004,what laws govern destructive git operations,cortex,docs/specs/13-laws-dsl.md
+r-005,how does the graph projection handle EMITTED_BY edges,cortex,crates/cortex-workers/src/graph/extractors/mod.rs
+r-006,what is the OpenCode adapter and how does it differ from the Claude Code adapter,cortex,docs/specs/20-opencode-adapter.md
+r-007,how does the bootstrap CLI resume from a checkpoint,cortex,crates/cortex-cli/src/bootstrap/cli.rs
+r-008,what is the classifier worker and how does it enrich events,cortex,docs/specs/05-classifier.md
+r-009,how does Reciprocal Rank Fusion combine BM25 and dense results,cortex,.rulebook/archive/2026-04-29-phase6c_relevance_score_aware_rrf/tasks.md
+r-010,what Nexus graph schema does the graph writer use for tool call edges,cortex,docs/specs/07-graph-writer.md

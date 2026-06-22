@@ -189,9 +189,14 @@ async fn run_retrieval(
     let rows = retrieval::load_csv(golden)?;
     let mut observed: Vec<Vec<String>> = Vec::with_capacity(rows.len());
     for row in &rows {
+        // phase0 2026-06-22 — match the live /v1/query contract: `intent`
+        // is required, `repo` lives under `scope`, and the response is
+        // `results.snippets[]` keyed by `path` (content-addressed), not
+        // `hits[].event_id`.
         let body = serde_json::json!({
             "query": row.query,
-            "repo": row.repo,
+            "intent": "free_search",
+            "scope": { "repo": row.repo },
             "limit": 10,
         });
         let url = format!("{}/v1/query", api_url.trim_end_matches('/'));
@@ -209,15 +214,16 @@ async fn run_retrieval(
             continue;
         }
         let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
-        let hits = json
-            .get("hits")
+        let snippets = json
+            .get("results")
+            .and_then(|r| r.get("snippets"))
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        let ids: Vec<String> = hits
+        let ids: Vec<String> = snippets
             .iter()
             .filter_map(|h| {
-                h.get("event_id")
+                h.get("path")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string())
             })
