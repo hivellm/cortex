@@ -3,7 +3,7 @@
 > gate DONE; the other lanes/arms remain (see per-item notes).
 
 ## 1. Curate golden set + baseline
-- [x] 1.1 PARTIAL→retrieval DONE (2026-06-22): the retrieval golden was re-keyed from the obsolete `expected_event_ids` to `expected_paths` (the live `/v1/query` returns `results.snippets[].path`, not event_id) and populated with real paths harvested from the live stack (commit adf6153). `classification.csv` was already complete. `consolidation.csv` (needs `session_id`→`consolidation_id` re-key; the dashboard exposes no session_id) and `mcp_search.csv` (per-tool re-key) still carry PLACEHOLDERs — remaining lane work.
+- [x] 1.1 retrieval + consolidation DONE; mcp_search remains (2026-06-22): (a) RETRIEVAL golden re-keyed `expected_event_ids`→`expected_paths` (live `/v1/query` returns `results.snippets[].path`) + real paths harvested (commit adf6153). (b) `classification.csv` already complete. (c) CONSOLIDATION golden re-keyed `session_id`→`consolidation_id` (dashboard keys by route id; exposes no session_id), harness now GETs `/v1/dashboard/consolidations/{id}`, golden re-curated from 10 REAL consolidations with entities/facts verified present (entity_recall 1.0 / fact_recall 1.0). (d) `mcp_search.csv` (per-tool: events_by_kind / tool_calls / session_timeline) still carries PLACEHOLDERs — the one remaining lane.
 - [x] 1.2 DONE (2026-06-22): real CDC retrieval baseline recorded in `cdc-baseline-v1.json` — fusion MRR@10 0.4733 / recall@5 1.0; reranked MRR 0.6417 / recall 0.80.
 
 ## 2. Measure the gates (consolidated golden-corpus eval gates)

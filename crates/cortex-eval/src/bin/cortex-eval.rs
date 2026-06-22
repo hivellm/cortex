@@ -244,9 +244,9 @@ async fn run_consolidation(
     let mut observed: Vec<String> = Vec::with_capacity(rows.len());
     for row in &rows {
         let url = format!(
-            "{}/v1/dashboard/consolidations?session_id={}",
+            "{}/v1/dashboard/consolidations/{}",
             api_url.trim_end_matches('/'),
-            row.session_id
+            row.consolidation_id
         );
         let body_text = match http.get(&url).send().await {
             Ok(r) => r.text().await.unwrap_or_default(),

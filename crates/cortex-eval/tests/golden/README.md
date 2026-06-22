@@ -7,7 +7,7 @@ This directory holds the curated CSV fixtures that drive the eval harness.
 | File | Suite | Shape |
 |------|-------|-------|
 | `retrieval.csv` | retrieval | `id, query, repo, expected_paths` |
-| `consolidation.csv` | consolidation | `id, session_id, expected_entities, expected_facts` |
+| `consolidation.csv` | consolidation | `id, consolidation_id, expected_entities, expected_facts` |
 | `classification.csv` | classification | `id, envelope_json, expected_kind` |
 | `mcp_search.csv` | mcp_search | `id, tool, query, repo, expected_ids` |
 

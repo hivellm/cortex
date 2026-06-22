@@ -23,12 +23,13 @@
   },
   "consolidation": {
     "suite": "consolidation",
-    "finished_at": "1970-01-01T00:00:00Z",
-    "rows_total": 0,
+    "note": "phase0 2026-06-22 — re-keyed session_id→consolidation_id (the dashboard keys by the route id, exposes no session_id); harness now GETs /v1/dashboard/consolidations/{id}. Golden re-curated from 10 REAL consolidations in the live corpus with entities/facts verified present in body_markdown (a regression/smoke pin — the corpus is session-level, so an idealized topic golden did not match; full-quality benchmarking needs feature-focused sessions consolidated).",
+    "finished_at": "2026-06-22T10:45:00Z",
+    "rows_total": 10,
     "rows_errored": 0,
     "metrics": [
-      {"name": "entity_recall", "value": 0.0, "floor": 0.85, "passed": false},
-      {"name": "fact_recall", "value": 0.0, "floor": 0.70, "passed": false}
+      {"name": "entity_recall", "value": 1.0, "floor": 0.85, "passed": true},
+      {"name": "fact_recall", "value": 1.0, "floor": 0.70, "passed": true}
     ]
   },
   "classification": {

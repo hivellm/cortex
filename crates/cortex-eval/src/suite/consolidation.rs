@@ -33,8 +33,11 @@ use crate::suite::AcceptanceVerdict;
 pub struct ConsolidationRow {
     /// Stable row id.
     pub id: String,
-    /// The ULID session_id the consolidation was emitted for.
-    pub session_id: String,
+    /// The consolidation route id (envelope ULID) — fetched via
+    /// `/v1/dashboard/consolidations/{id}`. phase0 2026-06-22: re-keyed
+    /// from `session_id` (the dashboard exposes no session_id; it keys
+    /// consolidations by this route id / `consolidation_id`).
+    pub consolidation_id: String,
     /// `;`-delimited entities the ideal consolidation MUST mention.
     pub expected_entities: String,
     /// `;`-delimited facts (claim-shaped phrases) the ideal
@@ -180,7 +183,7 @@ mod tests {
     fn row(id: &str, entities: &str, facts: &str) -> ConsolidationRow {
         ConsolidationRow {
             id: id.into(),
-            session_id: format!("01SESS{id}"),
+            consolidation_id: format!("01SESS{id}"),
             expected_entities: entities.into(),
             expected_facts: facts.into(),
         }
