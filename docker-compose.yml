@@ -538,6 +538,20 @@ services:
       target: cortex-consolidator
     image: cortex/consolidator:dev
     container_name: cortex-consolidator
+    # The consolidator summarises through the LOCAL, logged-in `claude`
+    # CLI (`claude -p`) — there is no Anthropic API path. The CLI binary
+    # and its OAuth login live on the host, not in this container, so
+    # the consolidator must run OUTSIDE docker, like cortex-adapter-claude
+    # below. This service definition is kept for the image build only and
+    # is excluded from the default `docker compose up` via the `manual`
+    # profile. Run consolidation on the host:
+    #
+    #   CORTEX_ARCHIVE_ROOT=~/.cortex/archive \
+    #   CORTEX_METADATA_DB=~/.cortex/metadata.sqlite \
+    #   CORTEX_INGESTION_URL=http://127.0.0.1:17010 \
+    #   CLAUDE_CODE_BIN=$(which claude) \
+    #   cortex-consolidator nightly --dry-run false --all
+    profiles: ["manual"]
     depends_on:
       synap: { condition: service_healthy }
       cortex-ingestion: { condition: service_started }
@@ -547,8 +561,6 @@ services:
       CORTEX_INGESTION_URL: http://cortex-ingestion:17010
       CORTEX_ARCHIVE_ROOT: /var/lib/cortex/archive
       CORTEX_METADATA_DB: /var/lib/cortex/metadata.sqlite
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_API_URL: ${ANTHROPIC_API_URL:-}
     volumes:
       - ${CORTEX_HOME_HOST:-${USERPROFILE:-${HOME}}/.cortex}:/var/lib/cortex
     restart: unless-stopped

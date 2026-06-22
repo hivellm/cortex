@@ -41,9 +41,7 @@ use cortex_workers::consolidator::orchestrator::{Orchestrator, ProducerSelection
 use cortex_workers::consolidator::source::{
     LiveDecisionTraceSource, LiveSessionSource, LiveTopicSource, SourceError,
 };
-use cortex_workers::consolidator::summariser::{
-    cost_cents, AnthropicSummariser, Summariser, SummariserKind,
-};
+use cortex_workers::consolidator::summariser::{cost_cents, Summariser, SummariserKind};
 use cortex_workers::consolidator::summariser_cli::ClaudeCliSummariser;
 use cortex_workers::producer::ProducerMetadataHandle;
 use serde::Serialize;
@@ -63,13 +61,6 @@ struct Cli {
     /// Verbose tracing output.
     #[arg(long)]
     verbose: bool,
-    /// Anthropic API key (overrides `ANTHROPIC_API_KEY`). Required for
-    /// non-dry-run / non-estimate subcommands.
-    #[arg(long, env = "ANTHROPIC_API_KEY")]
-    api_key: Option<String>,
-    /// Anthropic API base URL (`https://api.anthropic.com` by default).
-    #[arg(long, env = "ANTHROPIC_API_URL")]
-    api_url: Option<String>,
     /// Monthly budget cap in USD cents (default 100 000 = $1 000).
     #[arg(long, default_value_t = 100_000)]
     monthly_cents_cap: u32,
@@ -81,11 +72,11 @@ struct Cli {
     /// to enumerate sessions closed in the last 24h.
     #[arg(long, env = "CORTEX_METADATA_DB")]
     metadata_db: Option<PathBuf>,
-    /// Path to the `claude` binary (used when `--api-key` is empty;
-    /// falls back to PATH lookup of `claude`). The CLI summariser
-    /// pipes the rendered prompt through `claude -p - --bare` so
-    /// operators without an Anthropic API key can still consolidate
-    /// using their logged-in Claude Code session.
+    /// Path to the `claude` binary (falls back to PATH lookup of
+    /// `claude`). The consolidator always summarises through this
+    /// local, logged-in Claude Code CLI — `claude -p` pipes the
+    /// rendered prompt — so consolidation runs against the operator's
+    /// Claude Code session with no Anthropic API key.
     #[arg(long, env = "CLAUDE_CODE_BIN")]
     claude_bin: Option<PathBuf>,
     /// cortex-ingestion base URL the produced consolidation envelopes
@@ -305,52 +296,27 @@ fn print_plan_header(trigger: &Trigger) {
     }
 }
 
-fn require_api_key(cli: &Cli) -> Result<String> {
-    cli.api_key
-        .clone()
-        .filter(|k| !k.trim().is_empty())
-        .context("ANTHROPIC_API_KEY (or --api-key) required for live runs")
-}
-
-fn has_api_key(cli: &Cli) -> bool {
-    cli.api_key
-        .as_deref()
-        .map(|k| !k.trim().is_empty())
-        .unwrap_or(false)
-}
-
 fn build_summarisers(
     cli: &Cli,
 ) -> Result<(
     std::sync::Arc<dyn Summariser>,
     std::sync::Arc<dyn Summariser>,
 )> {
-    if has_api_key(cli) {
-        let api_key = require_api_key(cli)?;
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .context("build reqwest client")?;
-        let mut haiku =
-            AnthropicSummariser::new(client.clone(), api_key.clone(), SummariserKind::Haiku45);
-        let mut opus = AnthropicSummariser::new(client, api_key, SummariserKind::Opus47);
-        if let Some(url) = cli.api_url.as_deref().filter(|s| !s.trim().is_empty()) {
-            haiku = haiku.with_api_url(url);
-            opus = opus.with_api_url(url);
-        }
-        Ok((std::sync::Arc::new(haiku), std::sync::Arc::new(opus)))
-    } else {
-        let bin = cli
-            .claude_bin
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("claude"));
-        let haiku = ClaudeCliSummariser::new(bin.clone(), SummariserKind::Haiku45);
-        let opus = ClaudeCliSummariser::new(bin, SummariserKind::Opus47);
-        eprintln!(
-            "[cortex-consolidator] no ANTHROPIC_API_KEY; routing through claude CLI subprocess"
-        );
-        Ok((std::sync::Arc::new(haiku), std::sync::Arc::new(opus)))
-    }
+    // CLI-only: the consolidator always summarises through the local,
+    // logged-in `claude` CLI (`claude -p`), never the Anthropic HTTP
+    // API. There is no API-key path — run this binary on a host with a
+    // logged-in Claude Code session (billing rides that subscription,
+    // $0 from the consolidator's API accounting). `--claude-bin` /
+    // `CLAUDE_CODE_BIN` overrides the binary; otherwise `claude` is
+    // resolved from PATH.
+    let bin = cli
+        .claude_bin
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("claude"));
+    let haiku = ClaudeCliSummariser::new(bin.clone(), SummariserKind::Haiku45);
+    let opus = ClaudeCliSummariser::new(bin, SummariserKind::Opus47);
+    eprintln!("[cortex-consolidator] summarising via local claude CLI subprocess");
+    Ok((std::sync::Arc::new(haiku), std::sync::Arc::new(opus)))
 }
 
 fn resolve_ingest_url(cli: &Cli) -> Option<String> {
