@@ -9,7 +9,7 @@ This directory holds the curated CSV fixtures that drive the eval harness.
 | `retrieval.csv` | retrieval | `id, query, repo, expected_paths` |
 | `consolidation.csv` | consolidation | `id, consolidation_id, expected_entities, expected_facts` |
 | `classification.csv` | classification | `id, envelope_json, expected_kind` |
-| `mcp_search.csv` | mcp_search | `id, tool, query, repo, expected_ids` |
+| `mcp_search.csv` | mcp_search | `id, tool, query, repo, expected_ids` (4 real rows for the cleanly-working wired tools; see task findings for the 502/400/empty tools) |
 
 > phase0 2026-06-22 — `retrieval.csv` was re-keyed `expected_event_ids` →
 > `expected_paths`: the live `/v1/query` returns `results.snippets[]`

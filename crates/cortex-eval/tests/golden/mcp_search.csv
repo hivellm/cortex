@@ -1,17 +1,5 @@
 id,tool,query,repo,expected_ids
-m-001,cortex_events_by_kind,tool_call,cortex,PLACEHOLDER_EVT_M001
-m-002,cortex_session_timeline,PLACEHOLDER_SESS_001,cortex,PLACEHOLDER_EVT_M002
-m-003,cortex_tool_calls,Bash,cortex,PLACEHOLDER_EVT_M003
-m-004,cortex_files_touched,crates/cortex-core/src/events.rs,cortex,PLACEHOLDER_EVT_M004
-m-005,cortex_topic_search,envelope producer trait,cortex,PLACEHOLDER_EVT_M005
-m-006,cortex_consolidation_get,PLACEHOLDER_CONS_001,,PLACEHOLDER_CONS_001
-m-007,cortex_consolidations_recent,,cortex,PLACEHOLDER_EVT_M007
-m-008,cortex_consolidations_by_entity,EnvelopeProducer,cortex,PLACEHOLDER_CONS_002
-m-009,cortex_consolidations_search,OpenCode adapter HTTP server,cortex,PLACEHOLDER_CONS_003
-m-010,cortex_consolidation_lineage,PLACEHOLDER_CONS_001,,PLACEHOLDER_CONS_001
-m-011,cortex_consolidations_diff,PLACEHOLDER_CONS_001;PLACEHOLDER_CONS_002,,PLACEHOLDER_CONS_001
-m-012,cortex_law_violations,LAW-007,cortex,PLACEHOLDER_EVT_M012
-m-013,cortex_feedback_signals,,,PLACEHOLDER_FB_001
-m-014,cortex_decision_search,ADR-016 config migration,cortex,PLACEHOLDER_DEC_001
-m-015,cortex_consolidation_costs,,cortex,PLACEHOLDER_CONS_001
-m-016,cortex_query_explain,how does pre-thinking work,cortex,PLACEHOLDER_EVT_M016
+m-001,cortex_events_by_kind,tool_call,cortex,01KVPT3WQZRAMYRR2HFEPW5NRK
+m-007,cortex_consolidations_recent,,cortex,01KVPQHXK372ZBYYKW3C0R00J2
+m-009,cortex_consolidations_search,OpenCode adapter,cortex,01KVPMMP6ZDBK5BGJE1X1HT576
+m-014,cortex_decision_search,accepted,cortex,01KVKG87CHEASF63G8J0NJNNWR
