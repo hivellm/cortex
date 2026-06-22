@@ -25,13 +25,13 @@
 - [x] 3.2 DONE (2026-06-21): operator authorized scope A+B. `DETACH DELETE` with single-anchor predicates (dry-run count before each): 4 label-less nodes (`size(labels(n))=0`) + 1280 unkeyed Artifacts (`n.natural_key IS NULL`) = 1284 nodes removed. Integrity re-verified: total nodes 13037→11753 (−1284 exact), edges 14749→13465, label-less now 0, all 6998 remaining Artifacts keyed (`natural_key IS NOT NULL`). Orphans (level C) intentionally KEPT — live ingestion idle since 2026-06-20, orphans may be nodes awaiting edge-building.
 
 ## 4. Recurrent consolidation (costs Opus — requires key + cost authorization)
-- [ ] 4.1 Enable the trigger producer (`CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED=1`) in compose + recreate the classifier
-- [ ] 4.2 Schedule the `nightly` consolidation in cron; document the valid `ANTHROPIC_API_KEY` requirement
-- [ ] 4.3 Once ingest flows (phase0_live-ingestion-staleness) + a valid key + cost OK: run the initial backfill (estimate first) and verify `similar_sessions`/`topic_search`/`consolidations_recent` populate
+- [ ] 4.1 BLOCKED (2026-06-21): `ANTHROPIC_API_KEY` is empty in all containers (verified `key_len=0` on cortex-api + cortex-classifier-worker) and operator authorization for Opus spend is pending. Arming `CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED=1` without a valid key would emit triggers the consolidator cannot process (API calls fail). Operator chose to gate §4 on a valid key. Tracked in a follow-up rulebook task (created before archive).
+- [ ] 4.2 BLOCKED (2026-06-21): scheduling already exists — `retention.consolidator_nightly` cron is registered + enabled (02:00 UTC, last_status=success as a no-op). The remaining work (document the valid `ANTHROPIC_API_KEY` requirement + verify real consolidation) is gated on the key. Same follow-up task as §4.1.
+- [ ] 4.3 BLOCKED (2026-06-21): the backfill spends Opus and needs a valid key + cost OK + live ingest flowing (phase0_live-ingestion-staleness §2). Same follow-up task as §4.1.
 
 ## 5. Anti-recurrence watchdog
-- [ ] 5.1 Coverage alarm when `files_watched==0` (non-empty mount) / ingestion has no POSTs in N min / no sweep or consolidation in N
-- [ ] 5.2 Watchdog test
+- [x] 5.1 DONE (2026-06-21): new `cortex-ops watchdog` command (`watchdog.rs`) — pure `evaluate()` over `WatchdogSignals` raises alarms: `archive_watcher_blind` (Critical, watcher healthy but `files_watched==0`), `archive_watcher_unreachable` (Warn), `ingest_stale` (Warn, no emitter flush in N s, default 3600), `sweep_missing`/`sweep_stale` (Warn, `retention_sweeps` recency, default 90000 s), `consolidation_missing`/`consolidation_stale` (Warn, pruner-status `last_run_ts`, default 172800 s). Severity = max(alarms); exit 0/1/2 mirrors `CoverageSeverity`. Seeded as cron `health.watchdog` (`*/15 * * * *`, `cortex-ops watchdog --json`, enabled) so silent failures surface as non-success `last_status`. Live smoke vs the real watcher: files_watched=202 ok, ingest fresh, correctly raised `consolidation_missing` (Warn, exit 1) — consolidation genuinely isn't running (empty key, §4).
+- [x] 5.2 DONE (2026-06-21): 8 unit tests on `evaluate()` (all-fresh ok; blind critical; unreachable warn precedence; stale ingest; missing sweep+consolidation; stale sweep; critical outranks warn; rfc3339 parse) + scheduler `seed_defaults` test extended (13→14 jobs, asserts the watchdog row schedule+command). All green.
 
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 6.1 Update or create documentation covering the implementation (consolidation+retention cadence architecture; CHANGELOG)

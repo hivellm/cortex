@@ -426,6 +426,18 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-ops retention-archive-purge --before 365d",
             enabled: true,
         },
+        // phase0 §5 — coverage watchdog. Runs every 15 min so a blind
+        // archive watcher, a stalled ingest flush, or a sweep /
+        // consolidation that stopped running surfaces as a non-zero
+        // cron `last_status` (1 warn / 2 critical) instead of failing
+        // silently. Cheap (one HTTP probe + two local reads), no Opus
+        // spend, no deletion.
+        DefaultJob {
+            name: "health.watchdog",
+            schedule: "*/15 * * * *",
+            command: "cortex-ops watchdog --json",
+            enabled: true,
+        },
     ]
 }
 
@@ -1006,11 +1018,19 @@ mod tests {
         // `retention.tool_call_digest`.
         // phase12b — 11 → 12 with the addition of `retention.archive_purge`.
         // 2026-05-20 — 12 → 13 with `retention.sessions_backfill`.
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 13);
+        // phase0 §5 — 13 → 14 with `health.watchdog`.
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 14);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 13);
+        assert_eq!(jobs.len(), 14);
+        let watchdog = jobs
+            .iter()
+            .find(|j| j.name == "health.watchdog")
+            .expect("health.watchdog must seed");
+        assert!(watchdog.enabled, "watchdog defaults enabled");
+        assert_eq!(watchdog.schedule, "*/15 * * * *");
+        assert_eq!(watchdog.command, "cortex-ops watchdog --json");
         let backfill = jobs
             .iter()
             .find(|j| j.name == "retention.sessions_backfill")

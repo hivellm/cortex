@@ -81,6 +81,8 @@ mod schedule_cmd;
 mod sessions_backfill;
 #[path = "cortex-ops/temporal_digest.rs"]
 mod temporal_digest;
+#[path = "cortex-ops/watchdog.rs"]
+mod watchdog;
 #[path = "cortex-ops/timeline.rs"]
 mod timeline;
 #[path = "cortex-ops/timeline_backfill.rs"]
@@ -191,6 +193,38 @@ enum Command {
         /// `$CORTEX_HOME` then `<HOME|USERPROFILE>/.cortex`.
         #[arg(long)]
         home: Option<String>,
+    },
+
+    /// phase0 §5 — coverage / health watchdog. Probes the archive
+    /// watcher, the `retention_sweeps` table, and the pruner-status
+    /// file, then raises alarms (exit `1` warn / `2` critical) when
+    /// ingestion / sweeps / consolidation go silent. The
+    /// `health.watchdog` seed job runs this on a cadence so silent
+    /// failures surface without an operator looking.
+    Watchdog {
+        /// Archive watcher base URL. Defaults to the first entry of
+        /// `CORTEX_ARCHIVE_WATCHER_URLS` then `http://localhost:17030`.
+        #[arg(long)]
+        watcher_url: Option<String>,
+        /// Seconds without an emitter flush before `ingest_stale`
+        /// warns. Default 3600 (1 h).
+        #[arg(long)]
+        ingest_staleness_secs: Option<i64>,
+        /// Seconds since the last retention sweep before `sweep_stale`
+        /// warns. Default 90000 (~25 h).
+        #[arg(long)]
+        sweep_staleness_secs: Option<i64>,
+        /// Seconds since the last consolidation before
+        /// `consolidation_stale` warns. Default 172800 (48 h).
+        #[arg(long)]
+        consolidation_staleness_secs: Option<i64>,
+        /// Override the home directory used to locate
+        /// `metadata.sqlite` and `pruner-status.json`.
+        #[arg(long)]
+        home: Option<String>,
+        /// Emit the report as JSON instead of human lines.
+        #[arg(long)]
+        json: bool,
     },
 
     /// Phase9f — Meilisearch archival pruner. Blanks turn /
@@ -1791,6 +1825,21 @@ fn run() -> ExitCode {
             repo,
             home,
         } => retention_archive_purge::run(before, dry_run, repo, home),
+        Command::Watchdog {
+            watcher_url,
+            ingest_staleness_secs,
+            sweep_staleness_secs,
+            consolidation_staleness_secs,
+            home,
+            json,
+        } => watchdog::watchdog(
+            watcher_url,
+            ingest_staleness_secs,
+            sweep_staleness_secs,
+            consolidation_staleness_secs,
+            home,
+            json,
+        ),
         Command::MeiliAudit { json } => meili_audit::meili_audit(json),
         Command::MeiliReindex { archive_root, json } => {
             meili_audit::meili_reindex(archive_root, json)
