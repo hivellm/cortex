@@ -152,6 +152,45 @@ The full collection name is `{prefix}-{repo_slug}-{family}` (default prefix `cor
    - 512-token window, 128-token stride.
    - Used when language is unknown or Tree-sitter grammar is missing.
 
+### Embedding text projection (phase0)
+
+Before a chunk is embedded, `chunker_fallback.rs::event_text()` converts the
+`EnrichedEvent` payload into a natural-language string using the following
+priority order:
+
+1. **Classifier summary** — if `event.classifier.summary` is `Some(s)` and
+   non-empty, `s` is used verbatim. Applies only when the classifier runs in
+   LLM mode; in `Static` mode the summary is `None`.
+2. **Per-kind NL projection** — deterministic rendering of the payload's most
+   meaningful fields, matched on `event.kind`:
+
+   | Kind | Projection |
+   |------|-----------|
+   | `turn` | `user_message` + `assistant_message`, joined with `\n` |
+   | `tool_call` | `"{tool_name}({input_json})"` + `output.text` |
+   | `agent_call` | `description` + `prompt` |
+   | `memory` | `name` + `body` + `description` |
+   | `decision` | `title` + `status` + `body` |
+   | `analysis` | `question` |
+   | `law` | `title` + `body` |
+   | `law_violation` | `message` |
+   | `artifact` | `context_path` + `body` |
+   | `knowledge` | `title` + `body` |
+   | `learning` | `title` + `body` |
+   | `consolidation` | `summary_markdown` + `takeaways[]` joined with `\n` |
+   | `topic_card` | `synthesis_markdown` |
+
+3. **Legacy field scan** — falls back to the first non-empty string found in
+   `content`, `text`, or `body` fields of the raw JSON payload.
+4. **JSON fallback** — `serde_json::to_string_pretty(payload)` as a last resort.
+
+**Re-index note:** the dedup key is derived from the chunk's content hash
+(`ULID(SHA256(event_id:ordinal:chunk_content_hash))`). Changing the projected
+text changes the content hash and therefore the dedup key — new NL-projected
+vectors are written as new entries alongside any pre-existing JSON-projected
+vectors. A clean re-index (purging stale vectors first) is required for a pure
+NL corpus.
+
 ### Summary substitution
 
 For any chunk whose **raw byte size > 4 KB**, the embedder substitutes the classifier `summary` as the embedded text, *and* emits the raw chunk as a separate record with `source=raw_oversize` that stays in Vectorizer metadata but is **not re-embedded** (it's only fetchable as context). This keeps embedding inputs small while preserving the full content for retrieval.

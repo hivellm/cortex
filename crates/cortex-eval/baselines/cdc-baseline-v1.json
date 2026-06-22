@@ -21,6 +21,28 @@
       {"name": "recall_at_5", "value": 0.80, "floor": 0.50, "passed": true}
     ]
   },
+  "retrieval_nl_projected": {
+    "suite": "retrieval",
+    "note": "phase0 2026-06-22 — NL text projection in chunker_fallback.rs::event_text() (priority: classifier summary > per-kind NL > legacy fields > JSON). Fusion-only (reranker disabled). Corpus has both old JSON-projected and new NL-projected vectors (dedup_key changes on text change, so new vectors were added alongside, not replacing). MRR did not rise vs JSON baseline (0.4567 vs 0.4733) — dilution from dual-vector corpus; recall@5 returned to 1.0. A clean re-index (purge JSON vectors first) would isolate the NL effect.",
+    "finished_at": "2026-06-22T23:01:00Z",
+    "rows_total": 10,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.4567, "floor": 0.60, "passed": false},
+      {"name": "recall_at_5", "value": 1.0, "floor": 0.50, "passed": true}
+    ]
+  },
+  "retrieval_reranked_nl_projected": {
+    "suite": "retrieval",
+    "note": "phase0 2026-06-22 — NL projection + bge-reranker-v2-m3 (GPU). Combined result essentially unchanged vs pre-NL reranked baseline (0.6367 vs 0.6417). Reranker dominates; NL projection benefit expected to surface more clearly once old JSON vectors are purged. Both metrics above floor.",
+    "finished_at": "2026-06-22T22:59:22Z",
+    "rows_total": 10,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.6367, "floor": 0.60, "passed": true},
+      {"name": "recall_at_5", "value": 0.80, "floor": 0.50, "passed": true}
+    ]
+  },
   "consolidation": {
     "suite": "consolidation",
     "note": "phase0 2026-06-22 — re-keyed session_id→consolidation_id (the dashboard keys by the route id, exposes no session_id); harness now GETs /v1/dashboard/consolidations/{id}. Golden re-curated from 10 REAL consolidations in the live corpus with entities/facts verified present in body_markdown (a regression/smoke pin — the corpus is session-level, so an idealized topic golden did not match; full-quality benchmarking needs feature-focused sessions consolidated).",
