@@ -1,3 +1,6 @@
+## 0. SUPERSEDED (2026-06-21)
+- [x] 0.1 Superseded by the CLI-only resolution: the consolidator now summarises through the LOCAL logged-in `claude` CLI (no Anthropic API key), so the original premise (need a valid `ANTHROPIC_API_KEY` + Opus cost authorization) no longer applies. Done in `phase0_recurrent-consolidation-and-retention` §4 (commits 0701630 / 58398b0) + host daemon + autostart (`docs/consolidator-host-daemon.md`). The items below are retained for history only; none are actionable.
+
 ## 1. Gate (blocking precondition)
 - [ ] 1.1 Confirm a valid `ANTHROPIC_API_KEY` is present in cortex-api + cortex-classifier-worker + cortex-consolidator (`key_len` plausible, not empty/placeholder)
 - [ ] 1.2 Confirm operator authorization for the recurring Opus spend
