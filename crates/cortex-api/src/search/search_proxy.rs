@@ -20,7 +20,7 @@
 //! `CORTEX_GRAPH_NEXUS_URL`), so the daemon does not need extra
 //! configuration plumbing for this surface.
 
-use axum::{extract::State, http::StatusCode, response::Response, Json};
+use axum::{extract::State, http::{HeaderMap, StatusCode}, response::Response, Json};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -216,6 +216,44 @@ fn json_err(status: StatusCode, reason: &str, detail: impl Into<String>) -> Resp
         .into_response()
 }
 
+/// Phase21 §5.7 — merge a caller-supplied Meili filter with the ACL
+/// clause. Both are wrapped in parens so the AND precedence is
+/// unambiguous when the filter grammar has OR at the top level.
+fn merged_meili_filter(caller: Option<&str>, acl: &str) -> String {
+    match caller {
+        Some(c) if !c.trim().is_empty() => format!("({c}) AND ({acl})"),
+        _ => acl.to_string(),
+    }
+}
+
+/// Phase21 §5.7 — Bell-LaPadula ACL check for a raw Vectorizer hit.
+///
+/// Reads `class_level` / `class_compartments` from `hit["payload"]`
+/// (canonical ≥3.0.0), falling back to `hit["payload"]["payload"]`
+/// for legacy embedder builds — mirrors the vectorizer-lane reading
+/// pattern in `lanes/vectorizer_lane.rs`.
+fn vector_hit_passes_acl(hit: &Value, clearance_level: u8, compartment_grants: &[String]) -> bool {
+    let payload = hit.get("payload").unwrap_or(hit);
+    let nested = payload.get("payload");
+    let fact_level: Option<u8> = payload
+        .get("class_level")
+        .or_else(|| nested.and_then(|n| n.get("class_level")))
+        .and_then(Value::as_u64)
+        .map(|n| n as u8);
+    let fact_compartments: Vec<String> = payload
+        .get("class_compartments")
+        .or_else(|| nested.and_then(|n| n.get("class_compartments")))
+        .and_then(Value::as_array)
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .unwrap_or_default();
+    cortex_workers::acl::filter::vectorizer_acl_matches(
+        clearance_level,
+        compartment_grants,
+        fact_level,
+        &fact_compartments,
+    )
+}
+
 #[allow(clippy::manual_clamp)]
 fn clamp_limit(req: &KeywordSearchRequest) -> u32 {
     req.limit
@@ -227,7 +265,8 @@ fn clamp_limit(req: &KeywordSearchRequest) -> u32 {
 /// Handler — `POST /v1/search/keyword`. Forwards the request to the
 /// backing Meili index and returns the raw hits.
 pub async fn handle_keyword_search(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
+    headers: HeaderMap,
     Json(req): Json<KeywordSearchRequest>,
 ) -> Response {
     use axum::response::IntoResponse;
@@ -247,7 +286,17 @@ pub async fn handle_keyword_search(
         "q": req.q,
         "limit": limit,
     });
-    if let Some(filter) = &req.filter {
+    // Phase21 §5.7 — inject the ACL filter; non-admin principals get
+    // their caller-supplied filter merged with the lattice clause so
+    // classified rows cannot escape via the raw Meili proxy.
+    let principal = state.service.resolve_principal(&headers);
+    if !principal.is_acl_admin() {
+        let acl = cortex_workers::acl::filter::meili_acl_filter(
+            principal.clearance_level,
+            &principal.compartment_grants,
+        );
+        body["filter"] = Value::String(merged_meili_filter(req.filter.as_deref(), &acl));
+    } else if let Some(filter) = &req.filter {
         body["filter"] = Value::String(filter.clone());
     }
     if let Some(sort) = &req.sort {
@@ -387,7 +436,8 @@ fn clamp_k(req: &VectorSearchRequest) -> u32 {
 /// Handler — `POST /v1/search/vector`. Forwards the raw vector to
 /// the named collection's HNSW search endpoint.
 pub async fn handle_vector_search(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
+    headers: HeaderMap,
     Json(req): Json<VectorSearchRequest>,
 ) -> Response {
     use axum::response::IntoResponse;
@@ -492,12 +542,27 @@ pub async fn handle_vector_search(
             );
         }
     };
-    let hits: Vec<Value> = parsed
+    // Phase21 §5.7 — client-side ACL post-filter (Vectorizer has no
+    // server-side filter parameter). Apply the exact Bell-LaPadula
+    // predicate before returning hits to the caller.
+    let principal = state.service.resolve_principal(&headers);
+    let raw_hits: Vec<Value> = parsed
         .get("results")
         .or_else(|| parsed.get("hits"))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+    let hits: Vec<Value> = raw_hits
+        .into_iter()
+        .filter(|h| {
+            principal.is_acl_admin()
+                || vector_hit_passes_acl(
+                    h,
+                    principal.clearance_level,
+                    &principal.compartment_grants,
+                )
+        })
+        .collect();
     (
         StatusCode::OK,
         Json(VectorSearchResponse {
@@ -560,9 +625,34 @@ fn cypher_enabled() -> bool {
 /// Handler — `POST /v1/search/graph`.
 pub async fn handle_graph_query(
     State(state): State<ApiState>,
+    headers: HeaderMap,
     Json(req): Json<GraphQueryRequest>,
 ) -> Response {
     use axum::response::IntoResponse;
+
+    // Phase21 §5.7 — resolve once; both Neighbors and Cypher arms need it.
+    let principal = state.service.resolve_principal(&headers);
+    let acl_admin = principal.is_acl_admin();
+
+    // Early security gates for Cypher mode — checked before the nexus
+    // lookup so unauthorized callers get a clean 403 even when Nexus is
+    // absent, and so the existence of a Nexus backend is not revealed.
+    if let GraphQueryRequest::Cypher { .. } = &req {
+        if !cypher_enabled() {
+            return json_err(
+                StatusCode::FORBIDDEN,
+                "cypher_disabled",
+                "set `CORTEX_GRAPH_CYPHER_ENABLED=1` to enable cypher mode",
+            );
+        }
+        if !acl_admin {
+            return json_err(
+                StatusCode::FORBIDDEN,
+                "acl_required",
+                "raw Cypher requires acl_admin clearance; use mode=neighbors for ACL-filtered graph traversal",
+            );
+        }
+    }
 
     let nexus = match state.nexus.clone() {
         Some(n) => n,
@@ -618,6 +708,21 @@ pub async fn handle_graph_query(
             // is `:A|B|C` (single leading colon, pipe-separated).
             // Backtick-quoted identifiers are rejected. Sanitize
             // each kind to ASCII identifier chars before splicing.
+
+            // Phase21 §5.7 — build the ACL WHERE fragment for alias `n`.
+            // Inserted between the MATCH pattern and RETURN so classified
+            // nodes are filtered at the Nexus level before rows are sent.
+            let acl_where = if !acl_admin {
+                let w = cortex_workers::acl::filter::nexus_acl_where_for_alias(
+                    principal.clearance_level,
+                    &principal.compartment_grants,
+                    "n",
+                );
+                format!("WHERE {w} ")
+            } else {
+                String::new()
+            };
+
             let cypher = match &edge_kinds {
                 Some(kinds) if !kinds.is_empty() => {
                     let alt = kinds
@@ -637,17 +742,17 @@ pub async fn handle_graph_query(
                         .join("|");
                     if alt.is_empty() {
                         format!(
-                            "MATCH (s {{ id: '{id_safe}' }})-[r*1..{depth}]-(n) RETURN s, r, n LIMIT 200"
+                            "MATCH (s {{ id: '{id_safe}' }})-[r*1..{depth}]-(n) {acl_where}RETURN s, r, n LIMIT 200"
                         )
                     } else {
                         format!(
                             "MATCH (s {{ id: '{id_safe}' }})-[r:{alt}*1..{depth}]-(n) \
-                             RETURN s, r, n LIMIT 200"
+                             {acl_where}RETURN s, r, n LIMIT 200"
                         )
                     }
                 }
                 _ => format!(
-                    "MATCH (s {{ id: '{id_safe}' }})-[r*1..{depth}]-(n) RETURN s, r, n LIMIT 200"
+                    "MATCH (s {{ id: '{id_safe}' }})-[r*1..{depth}]-(n) {acl_where}RETURN s, r, n LIMIT 200"
                 ),
             };
             let started = std::time::Instant::now();
@@ -671,13 +776,7 @@ pub async fn handle_graph_query(
             statement,
             parameters,
         } => {
-            if !cypher_enabled() {
-                return json_err(
-                    StatusCode::FORBIDDEN,
-                    "cypher_disabled",
-                    "set `CORTEX_GRAPH_CYPHER_ENABLED=1` to enable cypher mode",
-                );
-            }
+            // cypher_enabled + acl_admin already checked before the nexus lookup above.
             let stmt = statement.trim();
             if stmt.is_empty() {
                 return json_err(
@@ -906,4 +1005,72 @@ mod tests {
     // The bool resolution is centrally tested in
     // crates/cortex-config/src/load.rs::tests; per-helper duplicates
     // race each other on shared CORTEX_GRAPH_CYPHER_ENABLED state.
+
+    // ── Phase21 §5.7 helpers ─────────────────────────────────────────
+
+    #[test]
+    fn merged_meili_filter_wraps_both_in_parens() {
+        let out = merged_meili_filter(Some("repo = 'cortex'"), "(class_level IS EMPTY OR class_level <= 1)");
+        assert_eq!(
+            out,
+            "(repo = 'cortex') AND ((class_level IS EMPTY OR class_level <= 1))"
+        );
+    }
+
+    #[test]
+    fn merged_meili_filter_acl_only_when_no_caller() {
+        let acl = "(class_level IS EMPTY OR class_level <= 2)";
+        assert_eq!(merged_meili_filter(None, acl), acl);
+        assert_eq!(merged_meili_filter(Some(""), acl), acl);
+        assert_eq!(merged_meili_filter(Some("   "), acl), acl);
+    }
+
+    #[test]
+    fn vector_hit_passes_acl_level_gate() {
+        let hit = json!({
+            "id": "evt-001",
+            "payload": { "class_level": 3, "class_compartments": [] }
+        });
+        assert!(!vector_hit_passes_acl(&hit, 1, &[]), "clearance 1 must not see level 3");
+        assert!(vector_hit_passes_acl(&hit, 3, &[]), "clearance 3 may see level 3");
+    }
+
+    #[test]
+    fn vector_hit_passes_acl_compartment_gate() {
+        let hit = json!({
+            "id": "evt-002",
+            "payload": {
+                "class_level": 1,
+                "class_compartments": ["financial"]
+            }
+        });
+        assert!(!vector_hit_passes_acl(&hit, 2, &[]), "no grant must be denied");
+        assert!(
+            vector_hit_passes_acl(&hit, 2, &["financial".to_string()]),
+            "grant held must pass"
+        );
+    }
+
+    #[test]
+    fn vector_hit_passes_acl_unclassified_passes() {
+        let hit = json!({ "id": "evt-003", "payload": {} });
+        assert!(vector_hit_passes_acl(&hit, 0, &[]));
+    }
+
+    #[test]
+    fn vector_hit_passes_acl_legacy_nested_payload() {
+        // Legacy embedder builds nest class fields under payload.payload.
+        let hit = json!({
+            "id": "evt-004",
+            "payload": {
+                "payload": {
+                    "class_level": 2,
+                    "class_compartments": ["hr"]
+                }
+            }
+        });
+        assert!(!vector_hit_passes_acl(&hit, 1, &["hr".to_string()]), "level gate must fire");
+        assert!(!vector_hit_passes_acl(&hit, 2, &[]), "missing compartment grant");
+        assert!(vector_hit_passes_acl(&hit, 2, &["hr".to_string()]), "both pass");
+    }
 }

@@ -41,7 +41,7 @@
 - [x] 5.4 Nexus lane wiring (`nexus_graph_lane.rs`): add the ACL `WHERE` to each whitelisted template (inline-literal per the Nexus 2.2.0 param-binding workaround, nexus#3). IT.
 - [x] 5.5 Post-fusion ACL drop-wedge in `crates/cortex-api/src/search/orchestrator.rs` (mirror `apply_temporal_classifier`): after the temporal wedge, drop any hit whose `class_*` (read from `LaneHit::extras`) fails `can_read(principal, ..)`; extend `LANE_EXTRAS_KEYS` with `class_level`/`class_compartments`. Pinned IT (drop/keep across the lattice).
 - [x] 5.6 Pre-thinking bundle filter (`crates/cortex-pre-thinking/src/bundle.rs`): apply `can_read` before any section (laws/decisions/snippets/similar) enters the bundle, so sensitive facts never reach the assembled prompt. IT.
-- [ ] 5.7 Raw search proxies (`crates/cortex-api/src/search_proxy.rs` `/v1/search/{keyword,vector,graph}`): apply the principal filter (these bypass the orchestrator). IT — a raw proxy MUST NOT leak a classified row.
+- [x] 5.7 Raw search proxies (`crates/cortex-api/src/search_proxy.rs` `/v1/search/{keyword,vector,graph}`): apply the principal filter (these bypass the orchestrator). IT — a raw proxy MUST NOT leak a classified row.
 - [ ] 5.8 Spec `docs/specs/42-access-enforcement.md` (the lattice predicate, the four enforcement points, the defense-in-depth rationale, pinned tests).
 
 ## 6. P5 — Public surfaces (CLI / HTTP / MCP)

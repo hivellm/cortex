@@ -308,6 +308,8 @@ mod scoring_math {
             why: None,
             verified: None,
             verdict: None,
+            class_level: None,
+            class_compartments: vec![],
         }
     }
 
