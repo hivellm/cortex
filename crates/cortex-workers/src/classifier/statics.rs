@@ -6,7 +6,8 @@
 
 use super::errors::ClassifierError;
 use super::types::{
-    Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
+    Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, SensitivityOutput,
+    Severity,
 };
 use async_trait::async_trait;
 use cortex_core::events::Kind;
@@ -14,6 +15,73 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use std::time::Instant;
+
+/// Phase21 §3.3 — sensitivity keyword rules.
+///
+/// Each entry maps a regex over the flat JSON payload to `(min_level, compartment)`.
+/// Multiple rules can fire; level = max of all fired levels, compartments = union.
+/// Ordered most-to-least-restrictive so the table is self-documenting.
+static SENSITIVITY_RULES: Lazy<Vec<(Regex, u8, &'static str)>> = Lazy::new(|| {
+    vec![
+        // restricted (3) — security vulnerability / exploit material.
+        (
+            Regex::new(
+                r"(?i)\b(pentest|exploit|CVE-\d{4}|zero.?day|vuln(erabilit|erable)|poc.exploit|payload\.exec)\b",
+            )
+            .unwrap(),
+            3,
+            "security",
+        ),
+        // confidential (2) — financial signals.
+        (
+            Regex::new(
+                r"(?i)\b(revenue|salary|payroll|invoice|billing|credit.?card|bank.?account|quarterly.?earnings)\b",
+            )
+            .unwrap(),
+            2,
+            "financial",
+        ),
+        // confidential (2) — HR signals.
+        (
+            Regex::new(
+                r"(?i)\b(performance.?review|termination.?notice|disciplinary|medical.?leave|hr.?record|employee.?file)\b",
+            )
+            .unwrap(),
+            2,
+            "hr",
+        ),
+        // confidential (2) — legal-privilege signals.
+        (
+            Regex::new(
+                r"(?i)\b(attorney.?client|privileged.?communic|litigation|settlement.?agreement|nda|non.?disclosure)\b",
+            )
+            .unwrap(),
+            2,
+            "legal",
+        ),
+        // confidential (2) — customer PII signals.
+        (
+            Regex::new(
+                r"(?i)\b(ssn|social.?security.?number|passport.?number|date.?of.?birth|home.?address|customer.?pii)\b",
+            )
+            .unwrap(),
+            2,
+            "customer_pii",
+        ),
+        // internal (1) — generic PII escalation (redacted tokens, email addresses, auth paths).
+        (
+            Regex::new(r"(?i)\[REDACTED:|@[a-z0-9.-]+\.[a-z]{2,}|/Users/[^/]+/|C:\\Users\\").unwrap(),
+            1,
+            "customer_pii",
+        ),
+        // internal (1) — API/secret material that the redactor didn't catch.
+        (
+            Regex::new(r"(?i)\b(api.?key|secret.?key|bearer.?token|private.?key|access.?token)\b").unwrap(),
+            1,
+            "security",
+        ),
+    ]
+});
 
 /// Keyword → topic hits (used across tool-call inputs and messages).
 static KEYWORD_TOPICS: Lazy<Vec<(Regex, &'static [&'static str])>> = Lazy::new(|| {
@@ -82,6 +150,9 @@ impl Classifier for StaticClassifier {
                 pii_risk = PiiRisk::High;
             }
 
+            let flat = payload_to_string(&input.redacted_payload);
+            let sensitivity = detect_sensitivity(&flat);
+
             out.push(ClassifierOutput {
                 event_id: input.event_id.clone(),
                 kind_refinement,
@@ -104,6 +175,7 @@ impl Classifier for StaticClassifier {
                 )),
                 entities: Vec::new(),
                 relations: Vec::new(),
+                sensitivity,
                 source: ClassifierSource::StaticFallback,
                 prompt_version: "static-v1".into(),
                 model: "static-v1".into(),
@@ -312,9 +384,273 @@ fn payload_to_string(payload: &Value) -> String {
     serde_json::to_string(payload).unwrap_or_default()
 }
 
+/// Detect sensitivity from payload content signals (phase21 §3.3).
+///
+/// Scans the flat payload for keyword patterns in [`SENSITIVITY_RULES`].
+/// Returns the escalated `SensitivityOutput` (`level = max` + compartment union).
+/// Always escalate-only: the returned level/compartments may be merged
+/// with a declared floor via [`super::types::merge_sensitivity`].
+pub fn detect_sensitivity(flat: &str) -> SensitivityOutput {
+    let mut level: u8 = 0;
+    let mut compartments: Vec<&'static str> = Vec::new();
+
+    for (re, rule_level, compartment) in SENSITIVITY_RULES.iter() {
+        if re.is_match(flat) {
+            if *rule_level > level {
+                level = *rule_level;
+            }
+            if !compartments.contains(compartment) {
+                compartments.push(compartment);
+            }
+        }
+    }
+
+    SensitivityOutput {
+        level,
+        compartments: compartments.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::classifier::types::merge_sensitivity;
+
+    // ---- detect_sensitivity unit tests (phase21 §3.3) ---- //
+
+    #[test]
+    fn detect_sensitivity_public_for_clean_payload() {
+        let out = detect_sensitivity("ordinary text with no sensitive keywords");
+        assert_eq!(out.level, 0, "clean payload must be public");
+        assert!(
+            out.compartments.is_empty(),
+            "clean payload has no compartments"
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_security_keywords_yield_restricted() {
+        let out = detect_sensitivity("zero-day exploit found in CVE-2024-9999 poc.exploit");
+        assert_eq!(out.level, 3, "security exploit keywords → restricted");
+        assert!(
+            out.compartments.contains(&"security".to_string()),
+            "compartments must include security; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_financial_keywords_yield_confidential() {
+        let out = detect_sensitivity("quarterly earnings and revenue figures for billing cycle");
+        assert_eq!(out.level, 2, "financial keywords → confidential");
+        assert!(
+            out.compartments.contains(&"financial".to_string()),
+            "compartments must include financial; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_hr_keywords_yield_confidential() {
+        let out = detect_sensitivity("performance review and disciplinary action in hr record");
+        assert_eq!(out.level, 2, "HR keywords → confidential");
+        assert!(
+            out.compartments.contains(&"hr".to_string()),
+            "compartments must include hr; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_legal_keywords_yield_confidential() {
+        let out = detect_sensitivity("attorney-client privileged communication under NDA");
+        assert_eq!(out.level, 2, "legal keywords → confidential");
+        assert!(
+            out.compartments.contains(&"legal".to_string()),
+            "compartments must include legal; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_customer_pii_keywords_yield_confidential() {
+        let out = detect_sensitivity("SSN 123-45-6789 and passport number found in customer PII");
+        assert_eq!(out.level, 2, "customer PII keywords → confidential");
+        assert!(
+            out.compartments.contains(&"customer_pii".to_string()),
+            "compartments must include customer_pii; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_redacted_token_yields_internal() {
+        let out = detect_sensitivity("[REDACTED:api_key] user@example.com accessed /Users/alice/");
+        assert_eq!(out.level, 1, "redacted token / email → internal");
+        assert!(
+            out.compartments.contains(&"customer_pii".to_string()),
+            "compartments must include customer_pii; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_api_key_material_yields_internal() {
+        let out = detect_sensitivity("api_key=sk-abc123 bearer token passed in header");
+        assert_eq!(out.level, 1, "api key / bearer token → internal");
+        assert!(
+            out.compartments.contains(&"security".to_string()),
+            "compartments must include security; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_multiple_rules_max_level_union_compartments() {
+        // Both financial (2) and security exploit (3) fire — level must be 3,
+        // compartments must be the union {"security", "financial"}.
+        let out =
+            detect_sensitivity("CVE-2024-1234 zero-day in our quarterly earnings payroll system");
+        assert_eq!(out.level, 3, "max of financial+security → restricted");
+        assert!(
+            out.compartments.contains(&"security".to_string()),
+            "security compartment must be present; got {:?}",
+            out.compartments
+        );
+        assert!(
+            out.compartments.contains(&"financial".to_string()),
+            "financial compartment must be present; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn detect_sensitivity_no_duplicate_compartments() {
+        // Only the security compartment fires — must appear exactly once.
+        let out = detect_sensitivity("CVE-2024-1234 zero-day pentest payload.exec exploit");
+        assert_eq!(
+            out.compartments.iter().filter(|c| *c == "security").count(),
+            1,
+            "security compartment must appear exactly once; got {:?}",
+            out.compartments
+        );
+    }
+
+    // ---- merge_sensitivity unit tests (phase21 §3.4 precursor) ---- //
+
+    #[test]
+    fn merge_sensitivity_escalate_only_takes_max_level() {
+        let a = SensitivityOutput {
+            level: 1,
+            compartments: vec!["security".into()],
+        };
+        let b = SensitivityOutput {
+            level: 3,
+            compartments: vec!["financial".into()],
+        };
+        let merged = merge_sensitivity(a, b);
+        assert_eq!(merged.level, 3, "merge must take the max level");
+    }
+
+    #[test]
+    fn merge_sensitivity_compartments_are_unioned() {
+        let a = SensitivityOutput {
+            level: 2,
+            compartments: vec!["hr".into(), "legal".into()],
+        };
+        let b = SensitivityOutput {
+            level: 1,
+            compartments: vec!["legal".into(), "financial".into()],
+        };
+        let merged = merge_sensitivity(a, b);
+        assert_eq!(merged.level, 2, "level = max(2, 1) = 2");
+        let mut comps = merged.compartments.clone();
+        comps.sort();
+        assert_eq!(
+            comps,
+            vec!["financial", "hr", "legal"],
+            "compartments = union, no duplicates"
+        );
+    }
+
+    #[test]
+    fn merge_sensitivity_public_with_public_stays_public() {
+        let a = SensitivityOutput::default();
+        let b = SensitivityOutput::default();
+        let merged = merge_sensitivity(a, b);
+        assert_eq!(merged.level, 0);
+        assert!(merged.compartments.is_empty());
+    }
+
+    #[test]
+    fn merge_sensitivity_commutative_level() {
+        let a = SensitivityOutput {
+            level: 3,
+            compartments: vec![],
+        };
+        let b = SensitivityOutput {
+            level: 1,
+            compartments: vec![],
+        };
+        assert_eq!(merge_sensitivity(a.clone(), b.clone()).level, 3);
+        assert_eq!(
+            merge_sensitivity(b, a).level,
+            3,
+            "merge must be commutative for level"
+        );
+    }
+
+    // ---- redaction ordering tests (phase21 §3.5) ---- //
+
+    #[test]
+    fn redacted_token_in_payload_still_elevates_to_internal_customer_pii() {
+        // After the redactor runs, the raw secret is gone but [REDACTED:...] remains.
+        // The sensitivity detector must still see the token and escalate to internal.
+        let redacted_flat = r#"{"body": "[REDACTED:generic_env_secret] user data here"}"#;
+        let out = detect_sensitivity(redacted_flat);
+        assert!(
+            out.level >= 1,
+            "redacted token must elevate level to at least internal; got {}",
+            out.level
+        );
+        assert!(
+            out.compartments.contains(&"customer_pii".to_string()),
+            "redacted token must set customer_pii compartment; got {:?}",
+            out.compartments
+        );
+    }
+
+    #[test]
+    fn raw_pii_removed_by_redaction_does_not_trigger_customer_pii_alone() {
+        // Verify the converse: a payload with the raw SSN phrase (no [REDACTED:])
+        // hits the customer_pii rule via the ssn keyword.
+        let raw_pii = "SSN 123-45-6789 is present";
+        let out = detect_sensitivity(raw_pii);
+        assert_eq!(out.level, 2, "raw SSN → confidential");
+        assert!(
+            out.compartments.contains(&"customer_pii".to_string()),
+            "raw SSN → customer_pii compartment"
+        );
+    }
+
+    #[test]
+    fn redaction_and_classification_do_not_downgrade_each_other() {
+        // Both a security exploit keyword AND a redacted token fire.
+        // Neither mechanism should lower the final level — result must be max.
+        let payload = "CVE-2024-9999 zero-day exploit [REDACTED:bearer_token] in request";
+        let out = detect_sensitivity(payload);
+        assert_eq!(out.level, 3, "security exploit must dominate → restricted");
+        assert!(
+            out.compartments.contains(&"security".to_string()),
+            "security compartment present"
+        );
+        assert!(
+            out.compartments.contains(&"customer_pii".to_string()),
+            "customer_pii also present from REDACTED token"
+        );
+    }
+
+    // ---- static_classifier summary test (phase26c §1.2) ---- //
 
     /// phase26c §1.2 — the static path now emits a deterministic
     /// `{kind} in {location}: {snippet}` summary so oversize events

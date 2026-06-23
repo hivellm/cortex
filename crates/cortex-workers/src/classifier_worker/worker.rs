@@ -19,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::classifier::{
-    Classifier, ClassifierOutput, ClassifierSource, ClassifierStack, EnrichmentInput, PiiRisk,
-    PricingTable, Severity,
+    merge_sensitivity, Classifier, ClassifierOutput, ClassifierSource, ClassifierStack,
+    EnrichmentInput, PiiRisk, PricingTable, SensitivityOutput, Severity,
 };
 use crate::embedder::EnrichedEvent;
 use anyhow::Result;
@@ -391,6 +391,16 @@ struct NormalisedEvent {
     /// worker can project `Document.ts` instead of leaving it 0.
     #[serde(default)]
     occurred_at_ms: i64,
+    /// Phase21 §3.4 — declared classification floor from config path rules
+    /// (bootstrap path) or from the canonical `Envelope.class_level` (live path).
+    /// Merged with `classifier.sensitivity` in `into_enriched` via
+    /// `merge_sensitivity`; the result is the `EnrichedEvent.class_level`.
+    #[serde(default)]
+    class_level: Option<u8>,
+    /// Phase21 §3.4 — declared compartment floor; unioned with detected
+    /// compartments in `into_enriched`.
+    #[serde(default)]
+    class_compartments: Option<Vec<String>>,
 }
 
 impl NormalisedEvent {
@@ -437,6 +447,8 @@ impl NormalisedEvent {
             session_id,
             tool,
             occurred_at_ms,
+            class_level: env.class_level,
+            class_compartments: env.class_compartments,
         })
     }
 
@@ -499,6 +511,23 @@ impl NormalisedEvent {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.timestamp_millis())
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+        // Phase21 §3.4 — declared classification floor from the bootstrap emitter
+        // (stamped by config path rules in the walker). u8 is not a serde native
+        // number tag, so deserialize as u64 then narrow.
+        let class_level = payload
+            .get("class_level")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.min(255) as u8);
+        let class_compartments = payload
+            .get("class_compartments")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|v| !v.is_empty());
         Ok(Self {
             event_id,
             kind,
@@ -510,6 +539,8 @@ impl NormalisedEvent {
             session_id,
             tool,
             occurred_at_ms,
+            class_level,
+            class_compartments,
         })
     }
 
@@ -528,6 +559,30 @@ impl NormalisedEvent {
     }
 
     fn into_enriched(self, classifier: ClassifierOutput) -> EnrichedEvent {
+        // Phase21 §3.4 — merge declared floor (from config path rules or live
+        // envelope) with content-detected sensitivity (classifier.sensitivity).
+        // Escalate-only: level = max(declared, detected), compartments = union.
+        let declared = SensitivityOutput {
+            level: self.class_level.unwrap_or(0),
+            compartments: self.class_compartments.clone().unwrap_or_default(),
+        };
+        let detected = classifier.sensitivity.clone();
+        let merged = merge_sensitivity(declared, detected);
+        // Keep None when result is public/empty — preserves backward-compat
+        // (callers treat None as "unclassified / public" per ADR-032).
+        let (class_level, class_compartments) =
+            if merged.level > 0 || !merged.compartments.is_empty() {
+                (
+                    Some(merged.level),
+                    if merged.compartments.is_empty() {
+                        None
+                    } else {
+                        Some(merged.compartments)
+                    },
+                )
+            } else {
+                (None, None)
+            };
         EnrichedEvent {
             event_id: self.event_id,
             kind: self.kind,
@@ -539,6 +594,8 @@ impl NormalisedEvent {
             parent_event_id: self.parent_event_id,
             session_id: self.session_id,
             occurred_at_ms: self.occurred_at_ms,
+            class_level,
+            class_compartments,
         }
     }
 }
@@ -1010,6 +1067,7 @@ fn static_fallback_output(n: &NormalisedEvent, prompt_version: &str) -> Classifi
         summary: None,
         entities: Vec::new(),
         relations: Vec::new(),
+        sensitivity: Default::default(),
         source: ClassifierSource::StaticFallback,
         prompt_version: prompt_version.to_string(),
         model: "static-v1".into(),
@@ -1094,6 +1152,182 @@ mod tests {
         let norm = NormalisedEvent::from_canonical_envelope(&env_json).expect("normalise");
         assert_eq!(norm.tool.as_deref(), Some("claude-code"));
         assert_eq!(norm.kind, Kind::Turn);
+    }
+
+    // -----------------------------------------------------------------
+    // phase21 §3.4 — merge semantics (declared floor + detected sensitivity)
+    // -----------------------------------------------------------------
+
+    fn make_classifier_with_sensitivity(
+        event_id: &str,
+        level: u8,
+        compartments: Vec<&'static str>,
+    ) -> ClassifierOutput {
+        ClassifierOutput {
+            event_id: event_id.into(),
+            kind_refinement: None,
+            topics: vec![],
+            severity: Severity::Info,
+            pii_risk: PiiRisk::Low,
+            redaction_suggestions: vec![],
+            summary: None,
+            entities: vec![],
+            relations: vec![],
+            sensitivity: SensitivityOutput {
+                level,
+                compartments: compartments.iter().map(|s| s.to_string()).collect(),
+            },
+            source: ClassifierSource::StaticFallback,
+            prompt_version: "v1".into(),
+            model: "static-v1".into(),
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+        }
+    }
+
+    fn bootstrap_norm_with_class(
+        class_level: Option<u8>,
+        class_compartments: Option<Vec<&'static str>>,
+    ) -> NormalisedEvent {
+        NormalisedEvent {
+            event_id: "evt-merge-test".into(),
+            kind: Kind::Turn,
+            content_hash: "sha256:test".into(),
+            redacted_payload: json!({}),
+            context_repo: Some("cortex".into()),
+            context_path: None,
+            parent_event_id: None,
+            session_id: None,
+            tool: None,
+            occurred_at_ms: 0,
+            class_level,
+            class_compartments: class_compartments
+                .map(|v| v.iter().map(|s| s.to_string()).collect()),
+        }
+    }
+
+    #[test]
+    fn into_enriched_both_public_leaves_class_fields_none() {
+        let norm = bootstrap_norm_with_class(None, None);
+        let clf = make_classifier_with_sensitivity("evt-merge-test", 0, vec![]);
+        let enriched = norm.into_enriched(clf);
+        assert!(
+            enriched.class_level.is_none(),
+            "public+public → class_level None"
+        );
+        assert!(
+            enriched.class_compartments.is_none(),
+            "public+public → class_compartments None"
+        );
+    }
+
+    #[test]
+    fn into_enriched_declared_only_propagates_to_enriched() {
+        let norm = bootstrap_norm_with_class(Some(2), Some(vec!["financial"]));
+        let clf = make_classifier_with_sensitivity("evt-merge-test", 0, vec![]);
+        let enriched = norm.into_enriched(clf);
+        assert_eq!(enriched.class_level, Some(2), "declared level propagates");
+        assert_eq!(
+            enriched.class_compartments.as_deref(),
+            Some(vec!["financial".to_string()].as_slice()),
+            "declared compartments propagate"
+        );
+    }
+
+    #[test]
+    fn into_enriched_detected_only_propagates_to_enriched() {
+        let norm = bootstrap_norm_with_class(None, None);
+        let clf = make_classifier_with_sensitivity("evt-merge-test", 3, vec!["security"]);
+        let enriched = norm.into_enriched(clf);
+        assert_eq!(enriched.class_level, Some(3), "detected level propagates");
+        assert_eq!(
+            enriched.class_compartments.as_deref(),
+            Some(vec!["security".to_string()].as_slice()),
+            "detected compartments propagate"
+        );
+    }
+
+    #[test]
+    fn into_enriched_detected_escalates_over_declared() {
+        // declared=confidential(2), detected=restricted(3) → result=restricted(3)
+        let norm = bootstrap_norm_with_class(Some(2), Some(vec!["financial"]));
+        let clf = make_classifier_with_sensitivity("evt-merge-test", 3, vec!["security"]);
+        let enriched = norm.into_enriched(clf);
+        assert_eq!(enriched.class_level, Some(3), "max(2,3)=3");
+        let mut comps = enriched.class_compartments.expect("compartments set");
+        comps.sort();
+        assert_eq!(
+            comps,
+            vec!["financial", "security"],
+            "union of compartments"
+        );
+    }
+
+    #[test]
+    fn into_enriched_declared_wins_when_higher_than_detected() {
+        // declared=restricted(3), detected=internal(1) → result=restricted(3)
+        let norm = bootstrap_norm_with_class(Some(3), Some(vec!["security"]));
+        let clf = make_classifier_with_sensitivity("evt-merge-test", 1, vec!["customer_pii"]);
+        let enriched = norm.into_enriched(clf);
+        assert_eq!(enriched.class_level, Some(3), "max(3,1)=3");
+        let mut comps = enriched.class_compartments.expect("compartments set");
+        comps.sort();
+        assert_eq!(
+            comps,
+            vec!["customer_pii", "security"],
+            "union of compartments"
+        );
+    }
+
+    #[test]
+    fn into_enriched_compartments_deduplicated_in_union() {
+        let norm = bootstrap_norm_with_class(Some(1), Some(vec!["security", "financial"]));
+        let clf = make_classifier_with_sensitivity("evt-merge-test", 1, vec!["security", "hr"]);
+        let enriched = norm.into_enriched(clf);
+        assert_eq!(enriched.class_level, Some(1));
+        let mut comps = enriched.class_compartments.expect("compartments set");
+        comps.sort();
+        assert_eq!(
+            comps.iter().filter(|c| *c == "security").count(),
+            1,
+            "security must appear exactly once after union"
+        );
+        assert!(comps.contains(&"financial".to_string()));
+        assert!(comps.contains(&"hr".to_string()));
+    }
+
+    #[test]
+    fn bootstrap_event_with_class_fields_is_parsed_correctly() {
+        let payload = json!({
+            "event_id": "01TEST0000000000000000000D",
+            "kind": "artifact.code",
+            "content_hash": "sha256:abc",
+            "redacted_payload": {},
+            "source": {"repo": "Cortex"},
+            "class_level": 2,
+            "class_compartments": ["financial", "hr"]
+        });
+        let norm = NormalisedEvent::from_bootstrap_event(&payload).expect("normalise");
+        assert_eq!(norm.class_level, Some(2));
+        assert_eq!(
+            norm.class_compartments,
+            Some(vec!["financial".to_string(), "hr".to_string()])
+        );
+    }
+
+    #[test]
+    fn bootstrap_event_without_class_fields_yields_none() {
+        let payload = json!({
+            "event_id": "01TEST0000000000000000000E",
+            "kind": "turn",
+            "content_hash": "sha256:def",
+            "redacted_payload": {},
+            "source": {"repo": "Cortex"}
+        });
+        let norm = NormalisedEvent::from_bootstrap_event(&payload).expect("normalise");
+        assert!(norm.class_level.is_none());
+        assert!(norm.class_compartments.is_none());
     }
 
     // -----------------------------------------------------------------

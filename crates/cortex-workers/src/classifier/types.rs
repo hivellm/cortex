@@ -118,6 +118,39 @@ pub struct ExtractedRelation {
     pub to: String,
 }
 
+/// Sensitivity classification output — level ordinal + need-to-know compartments.
+///
+/// Produced by content-signal detection in [`super::statics`] and by the
+/// LLM prompt (phase21 §3.3). The escalate-only merge ([`merge_sensitivity`])
+/// enforces the ADR-032 contract: `level = max(declared, detected)` and
+/// `compartments = union`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensitivityOutput {
+    /// Sensitivity level ordinal (0 = public … 3 = restricted).
+    pub level: u8,
+    /// Compartments asserted by this detection.
+    #[serde(default)]
+    pub compartments: Vec<String>,
+}
+
+/// Escalate-only merge: `level = max(a, b)`, `compartments = union`.
+///
+/// Neither side may downgrade the other's level or remove compartments.
+/// This is the ADR-032 primitive used by every enforcement point.
+pub fn merge_sensitivity(a: SensitivityOutput, b: SensitivityOutput) -> SensitivityOutput {
+    let level = a.level.max(b.level);
+    let mut compartments = a.compartments;
+    for c in b.compartments {
+        if !compartments.contains(&c) {
+            compartments.push(c);
+        }
+    }
+    SensitivityOutput {
+        level,
+        compartments,
+    }
+}
+
 /// Which backend produced a [`ClassifierOutput`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -200,6 +233,10 @@ pub struct ClassifierOutput {
     /// hoping for a keyword hit.
     #[serde(default)]
     pub relations: Vec<ExtractedRelation>,
+    /// Phase21 §3.3 — sensitivity classification from content signals.
+    /// Defaults to `public` with no compartments when the classifier cannot determine sensitivity.
+    #[serde(default)]
+    pub sensitivity: SensitivityOutput,
     /// Which backend produced this record.
     pub source: ClassifierSource,
     /// Prompt template version (`v1`, …).
@@ -392,6 +429,7 @@ mod tests {
                     summary: None,
                     entities: Vec::new(),
                     relations: Vec::new(),
+                    sensitivity: Default::default(),
                     source: ClassifierSource::StaticFallback,
                     prompt_version: "v1".into(),
                     model: "static-echo".into(),

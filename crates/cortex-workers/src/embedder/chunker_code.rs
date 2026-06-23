@@ -18,7 +18,7 @@ use anyhow::Result;
 use tree_sitter::{Language, Node, Parser};
 
 use super::chunker::{Chunk, ChunkMetadata, ChunkSource, Chunker};
-use super::chunker_fallback::{event_text, sha256_hex, FallbackChunker};
+use super::chunker_fallback::{sha256_hex, FallbackChunker};
 use super::embedder::EnrichedEvent;
 use super::identity::dedup_key;
 use super::routing::collection_for;
@@ -227,7 +227,17 @@ impl Chunker for CodeChunker {
         let Some(lang) = detect_language_from_path(path) else {
             return Ok(Vec::new());
         };
-        let text = event_text(event);
+        // Use raw source text from the payload — tree-sitter needs actual code,
+        // not the NL projection that event_text() now returns for Artifact events
+        // (which prepends the file path and would break the parse).
+        let p = &event.redacted_payload;
+        let text: String = p
+            .get("body")
+            .or_else(|| p.get("content"))
+            .or_else(|| p.get("text"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         if text.is_empty() {
             return Ok(Vec::new());
         }
@@ -323,8 +333,11 @@ impl Chunker for CodeChunker {
                 valid_from_unix: None,
                 valid_to_unix: None,
                 superseded_at_unix: None,
+                class_level: None,
+                class_compartments: None,
             };
             metadata.stamp_bitemporal(event);
+            metadata.stamp_classification(event);
             out.push(Chunk {
                 dedup_key: key,
                 parent_event_id: event.event_id.clone(),

@@ -10,6 +10,7 @@
 
 use super::errors::ClassifierError;
 use super::prompt::{PromptTemplate, PROMPT_V1};
+use super::statics::detect_sensitivity;
 use super::types::{
     Classifier, ClassifierOutput, ClassifierSource, EnrichmentInput, PiiRisk, Severity,
 };
@@ -273,26 +274,31 @@ impl Classifier for HaikuCliClassifier {
         Ok(events
             .iter()
             .zip(records)
-            .map(|(input, rec)| ClassifierOutput {
-                event_id: input.event_id.clone(),
-                kind_refinement: rec.kind_refinement,
-                topics: normalise_topics(rec.topics),
-                severity: rec.severity,
-                pii_risk: rec.pii_risk,
-                redaction_suggestions: rec.redaction_suggestions,
-                summary: rec.summary,
-                // Pass through Sonnet's typed entities + relations
-                // so the graph mapper can hoist them into Nexus
-                // nodes/edges. Empty when the model emitted nothing
-                // (or when the fallback static path runs).
-                entities: rec.entities,
-                relations: rec.relations,
-                source: ClassifierSource::HaikuCli,
-                prompt_version: self.prompt.version.into(),
-                model: self.cfg.model.clone(),
-                latency_ms,
-                tokens_in,
-                tokens_out,
+            .map(|(input, rec)| {
+                let flat = serde_json::to_string(&input.redacted_payload).unwrap_or_default();
+                let sensitivity = detect_sensitivity(&flat);
+                ClassifierOutput {
+                    event_id: input.event_id.clone(),
+                    kind_refinement: rec.kind_refinement,
+                    topics: normalise_topics(rec.topics),
+                    severity: rec.severity,
+                    pii_risk: rec.pii_risk,
+                    redaction_suggestions: rec.redaction_suggestions,
+                    summary: rec.summary,
+                    // Pass through Sonnet's typed entities + relations
+                    // so the graph mapper can hoist them into Nexus
+                    // nodes/edges. Empty when the model emitted nothing
+                    // (or when the fallback static path runs).
+                    entities: rec.entities,
+                    relations: rec.relations,
+                    sensitivity,
+                    source: ClassifierSource::HaikuCli,
+                    prompt_version: self.prompt.version.into(),
+                    model: self.cfg.model.clone(),
+                    latency_ms,
+                    tokens_in,
+                    tokens_out,
+                }
             })
             .collect())
     }

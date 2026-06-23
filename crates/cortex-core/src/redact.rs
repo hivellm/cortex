@@ -6,6 +6,24 @@
 //!
 //! Patterns are versioned and exposed as [`PATTERN_CATALOG_V1`] so adapters
 //! (spec 10 / 17) can mirror the exact same set on the client side.
+//!
+//! ## Ordering invariant (phase21 §3.5 — ADR-034)
+//!
+//! Redaction runs in the **adapter layer** before the event is published to
+//! Synap, which means it executes *before* any classification stamping in the
+//! classifier worker. The two mechanisms compose sequentially:
+//!
+//! 1. **Redaction** removes the raw secret from the payload (irreversible).
+//! 2. **Classification** gates visibility of the already-redacted fact per
+//!    principal.
+//!
+//! The `[REDACTED:<class>]` tokens that redaction leaves in the payload are
+//! *intentionally detectable* by the classifier's sensitivity rules (see
+//! `cortex_workers::classifier::statics::SENSITIVITY_RULES` — the
+//! `\[REDACTED:` pattern maps to `internal / customer_pii`). This means a
+//! fact that originally contained raw PII is still classified at ≥ `internal`
+//! after redaction, preventing silent downgrade. Neither step substitutes for
+//! the other.
 
 use once_cell::sync::Lazy;
 use regex::Regex;

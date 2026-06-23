@@ -26,6 +26,7 @@ pub use prompt::{
 pub use statics::StaticClassifier;
 pub use stats::{ClassifierSpend, PricingTable};
 pub use types::{
-    Classifier, ClassifierMode, ClassifierOutput, ClassifierSource, EnrichmentInput,
-    ExtractedEntity, ExtractedRelation, PiiRisk, RedactionSuggestion, Severity,
+    merge_sensitivity, Classifier, ClassifierMode, ClassifierOutput, ClassifierSource,
+    EnrichmentInput, ExtractedEntity, ExtractedRelation, PiiRisk, RedactionSuggestion,
+    SensitivityOutput, Severity,
 };
