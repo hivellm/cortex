@@ -297,6 +297,7 @@ mod tests {
             include_history: None,
             include_future: None,
             include_branches: None,
+            principal: None,
         };
         let resp = empty_response(&req);
         let env = build_envelope("dash", "pre_change_context", &resp);

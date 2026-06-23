@@ -678,6 +678,7 @@ dependencies = [
  "cortex-workers",
  "cron",
  "flate2",
+ "globset",
  "ignore",
  "reqwest 0.12.28",
  "rusqlite",

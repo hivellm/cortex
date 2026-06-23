@@ -224,6 +224,8 @@ async fn relevance_gold_set_meets_mrr_threshold() {
             include_history: None,
             include_future: None,
             include_branches: None,
+
+            principal: None,
         };
         let url = format!("{}/v1/query", base.trim_end_matches('/'));
         let resp = client

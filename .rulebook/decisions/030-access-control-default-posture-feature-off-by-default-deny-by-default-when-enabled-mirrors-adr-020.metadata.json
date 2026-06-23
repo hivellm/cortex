@@ -1,0 +1,11 @@
+{
+  "id": 30,
+  "slug": "access-control-default-posture-feature-off-by-default-deny-by-default-when-enabled-mirrors-adr-020",
+  "title": "Access control default posture: feature OFF by default; deny-by-default when enabled; mirrors ADR-020",
+  "status": "proposed",
+  "date": "2026-06-23",
+  "relatedTasks": [
+    "phase21_data-classification-access-control"
+  ],
+  "supersededBy": null
+}

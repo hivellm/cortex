@@ -34,6 +34,8 @@ fn make_chunk(id: &str) -> Chunk {
             valid_from_unix: None,
             valid_to_unix: None,
             superseded_at_unix: None,
+            class_level: None,
+            class_compartments: None,
         },
     }
 }

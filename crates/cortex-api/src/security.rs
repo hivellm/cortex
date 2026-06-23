@@ -11,5 +11,8 @@ pub mod acl;
 pub mod audit;
 pub mod audit_store;
 pub mod auth;
+pub mod principal;
+pub mod principal_resolver;
+pub mod principal_store;
 pub mod rate_limit;
 pub mod redaction;

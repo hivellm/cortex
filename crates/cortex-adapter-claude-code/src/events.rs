@@ -235,6 +235,8 @@ pub fn build_event(
         redactions: report.tokens,
         content_hash,
         parent_event_id,
+        class_level: None,
+        class_compartments: None,
     })
 }
 

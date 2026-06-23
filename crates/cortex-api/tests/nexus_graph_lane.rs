@@ -19,6 +19,7 @@ fn graph_request(template: &str, query: &str) -> GraphRequest {
         params: serde_json::json!({ "query": query }),
         max_hops: 2,
         scope: Scope::default(),
+        acl: None,
     }
 }
 
@@ -120,6 +121,8 @@ async fn graph_overlay_populates_when_lane_returns_hits() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert_eq!(resp.results.graph_neighbors.len(), 1);
@@ -205,11 +208,186 @@ async fn fail_open_when_nexus_unreachable_through_orchestrator() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.graph_neighbors.is_empty());
     assert!(
         resp.debug.errors.contains_key("graph"),
         "graph lane error must surface in debug.errors",
+    );
+}
+
+// ── Phase21 §5.4 — Nexus ACL WHERE injection ─────────────────────────────────
+//
+// All three tests use wiremock to intercept the POST /cypher HTTP call
+// (the Nexus SDK uses HTTP transport when base_url starts with "http://")
+// and assert on the `query` field of the JSON body.
+
+/// A successful Nexus /cypher response (empty rows — enough to satisfy
+/// `project_row` without requiring node data in the mock).
+fn nexus_ok_body() -> serde_json::Value {
+    serde_json::json!({
+        "columns": ["edge_from", "edge_to", "edge_type", "hops", "label"],
+        "rows": [],
+        "execution_time_ms": 1
+    })
+}
+
+/// Phase21 §5.4 — When an ACL context is present the lane must inject
+/// `AND (<alias>.class_level IS NULL OR <alias>.class_level <= N)
+///  AND (<alias>.class_compartments IS NULL OR ... IN [...])` into the
+/// Cypher before the RETURN keyword.
+#[tokio::test]
+async fn acl_context_injects_where_clause_into_cypher_body() {
+    use cortex_api::{AclContext, NexusGraphLane};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(nexus_ok_body()),
+        )
+        .mount(&server)
+        .await;
+
+    let cfg = nexus_sdk::ClientConfig {
+        base_url: server.uri(),
+        api_key: None,
+        ..Default::default()
+    };
+    let client = nexus_sdk::NexusClient::with_config(cfg).expect("nexus client built");
+    let lane = NexusGraphLane::new(Arc::new(client));
+
+    let req = GraphRequest {
+        template: "decision_supersedes_chain".into(),
+        params: serde_json::json!({ "query": "RRF" }),
+        max_hops: 2,
+        scope: Scope::default(),
+        acl: Some(AclContext {
+            clearance_level: 2,
+            compartment_grants: vec!["financial".to_string(), "hr".to_string()],
+        }),
+    };
+    let _ = lane.query(&req).await;
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1, "exactly one POST /cypher");
+    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    let cypher = body["query"].as_str().expect("query field present");
+
+    assert!(
+        cypher.contains("d.class_level IS NULL OR d.class_level <= 2"),
+        "level clause with alias 'd' must be present; got: {cypher}"
+    );
+    assert!(
+        cypher.contains("d.class_compartments IS NULL"),
+        "compartment clause must be present; got: {cypher}"
+    );
+    assert!(
+        cypher.contains("\"financial\"") && cypher.contains("\"hr\""),
+        "compartment list must be inlined as literals; got: {cypher}"
+    );
+    assert!(
+        cypher.contains(" AND ") && cypher.contains(" RETURN "),
+        "injection must sit before RETURN; got: {cypher}"
+    );
+}
+
+/// Phase21 §5.4 — Wildcard grants produce only the level clause (no
+/// compartment clause) so super-admin access is as cheap as possible.
+#[tokio::test]
+async fn acl_wildcard_grant_emits_level_only_fragment() {
+    use cortex_api::{AclContext, NexusGraphLane};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(nexus_ok_body()),
+        )
+        .mount(&server)
+        .await;
+
+    let cfg = nexus_sdk::ClientConfig {
+        base_url: server.uri(),
+        api_key: None,
+        ..Default::default()
+    };
+    let client = nexus_sdk::NexusClient::with_config(cfg).expect("nexus client built");
+    let lane = NexusGraphLane::new(Arc::new(client));
+
+    let req = GraphRequest {
+        template: "law_violations_last_30d".into(),
+        params: serde_json::json!({ "query": "no-read-up" }),
+        max_hops: 1,
+        scope: Scope::default(),
+        acl: Some(AclContext {
+            clearance_level: 3,
+            compartment_grants: vec!["*".to_string()],
+        }),
+    };
+    let _ = lane.query(&req).await;
+
+    let received = server.received_requests().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    let cypher = body["query"].as_str().unwrap();
+
+    assert!(
+        cypher.contains("v.class_level IS NULL OR v.class_level <= 3"),
+        "level clause with alias 'v' must be present; got: {cypher}"
+    );
+    assert!(
+        !cypher.contains("class_compartments"),
+        "wildcard grant must omit the compartment clause; got: {cypher}"
+    );
+}
+
+/// Phase21 §5.4 — When ACL is `None` the Cypher sent to Nexus must be
+/// the unmodified template (no extra WHERE predicates).
+#[tokio::test]
+async fn no_acl_context_sends_unmodified_cypher() {
+    use cortex_api::NexusGraphLane;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(nexus_ok_body()),
+        )
+        .mount(&server)
+        .await;
+
+    let cfg = nexus_sdk::ClientConfig {
+        base_url: server.uri(),
+        api_key: None,
+        ..Default::default()
+    };
+    let client = nexus_sdk::NexusClient::with_config(cfg).expect("nexus client built");
+    let lane = NexusGraphLane::new(Arc::new(client));
+
+    let req = GraphRequest {
+        template: "edge_artifact_touched_neighbours".into(),
+        params: serde_json::json!({ "query": "main.rs" }),
+        max_hops: 2,
+        scope: Scope::default(),
+        acl: None,
+    };
+    let _ = lane.query(&req).await;
+
+    let received = server.received_requests().await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    let cypher = body["query"].as_str().unwrap();
+
+    assert!(
+        !cypher.contains("class_level") && !cypher.contains("class_compartments"),
+        "no ACL context must produce no ACL predicates; got: {cypher}"
     );
 }

@@ -98,7 +98,10 @@
       "PowerShell(Get-ChildItem -Path \"E:\\\\HiveLLM\\\\Cortex\\\\packages\\\\cortex-claude-plugin\" -File | Where-Object { $_.Name -match 'package\\\\.json|tsconfig\\\\.json' } | Select-Object Name)",
       "mcp__cortex__cortex_timeline",
       "mcp__cortex__cortex_supersession",
-      "mcp__cortex__cortex_feedback_record"
+      "mcp__cortex__cortex_feedback_record",
+      "PowerShell(schtasks /query /tn \"CortexConsolidatorDaemon\" /fo LIST 2>&1)",
+      "PowerShell(Start-Process -FilePath \"cmd.exe\" -ArgumentList \"/c `\"E:\\\\HiveLLM\\\\Cortex\\\\scripts\\\\consolidator-daemon.cmd`\"\" -WindowStyle Hidden -PassThru)",
+      "PowerShell(Get-Process -Name \"cortex-consolidator\" -ErrorAction SilentlyContinue)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

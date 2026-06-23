@@ -71,6 +71,8 @@ fn populated_response_with_topic(card: Option<TopicCardRef>) -> QueryResponse {
                 why: Some("vector match".into()),
                 verified: None,
                 verdict: None,
+                class_level: None,
+                class_compartments: vec![],
             }],
             decisions: vec![DecisionRef {
                 rank: 1,

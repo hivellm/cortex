@@ -322,6 +322,8 @@ mod tests {
             content_hash: "sha256:00".to_string()
                 + "00000000000000000000000000000000000000000000000000000000000000",
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -347,6 +349,8 @@ mod tests {
             content_hash: "sha256:00".to_string()
                 + "00000000000000000000000000000000000000000000000000000000000000",
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

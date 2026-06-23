@@ -151,6 +151,16 @@ pub struct Document {
     /// AND <= as_of_unix` selects SUPERSEDED rows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_at_unix: Option<i64>,
+    // Phase21 §2.3 — classification projection. Filterable/sortable axes
+    // for the per-lane ACL wedge (phase21 §5).
+    /// Bell-LaPadula sensitivity level (0=public … 3=restricted). Filterable
+    /// + sortable; absent means the operator default applies at read time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_level: Option<u8>,
+    /// Need-to-know compartment labels. Filterable for subset checks.
+    /// Absent when the document carries no compartment restriction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub class_compartments: Option<Vec<String>>,
     /// Per-kind extensions keyed by kind family — schema is
     /// `ext.<family>.<field>`. Missing extensions are absent (no
     /// null-padding per spec 08).

@@ -75,6 +75,8 @@ fn populated_response(query_id: &str) -> QueryResponse {
                 why: Some("vector match".into()),
                 verified: None,
                 verdict: None,
+                class_level: None,
+                class_compartments: vec![],
             }],
             decisions: vec![DecisionRef {
                 rank: 1,
@@ -134,6 +136,7 @@ fn input_for<'a>(prompt: &'a str, cwd: &'a std::path::Path) -> PreThinkingInput<
         cwd,
         recent_files: &[],
         budget: PreThinkingBudget::default_for_spec_12(),
+        principal: None,
     }
 }
 
@@ -269,6 +272,8 @@ async fn overflow_response_clips_under_budget_keeping_laws() {
             why: Some("why".into()),
             verified: None,
             verdict: None,
+            class_level: None,
+            class_compartments: vec![],
         })
         .collect();
     let canned = Arc::new(CannedQuery::new(fat));
@@ -301,6 +306,7 @@ async fn recent_files_within_5_min_make_it_into_scope() {
         cwd: &repo,
         recent_files: &recent,
         budget: PreThinkingBudget::default_for_spec_12(),
+        principal: None,
     };
     let _ = run(&input, canned.clone(), metrics).await;
     let captured = canned.captured().await;
@@ -326,6 +332,8 @@ async fn truncation_step_metric_records_each_applied_step() {
             why: Some("why".into()),
             verified: None,
             verdict: None,
+            class_level: None,
+            class_compartments: vec![],
         })
         .collect();
     let canned = Arc::new(CannedQuery::new(fat));

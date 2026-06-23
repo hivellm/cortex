@@ -238,6 +238,7 @@ async fn idempotent_replay_reports_zero_new() {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -250,6 +251,8 @@ async fn idempotent_replay_reports_zero_new() {
         parent_event_id: None,
         session_id: None,
         occurred_at_ms: 0,
+        class_level: None,
+        class_compartments: None,
     };
 
     // Contract: even with the server's UUID-reassignment bug (ADR 0001),

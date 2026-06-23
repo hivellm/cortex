@@ -144,6 +144,7 @@ impl SnippetFetcher for HttpFetcher {
             include_history: None,
             include_future: None,
             include_branches: None,
+            principal: None,
         };
         let url = format!("{}/v1/query", self.base.trim_end_matches('/'));
         let resp = self

@@ -157,7 +157,22 @@ impl KeywordLane for MeiliKeywordLane {
             "limit": req.limit,
             "showRankingScore": true,
         });
-        if let Some(filter) = build_meili_filter(&req.scope, &req.index) {
+        // Build the composite filter: scope clauses AND (when AC is active)
+        // the Bell-LaPadula ACL clause from the resolved principal.
+        let scope_filter = build_meili_filter(&req.scope, &req.index);
+        let acl_filter = req.acl.as_ref().map(|acl| {
+            cortex_workers::acl::filter::meili_acl_filter(
+                acl.clearance_level,
+                &acl.compartment_grants,
+            )
+        });
+        let combined_filter = match (scope_filter, acl_filter) {
+            (Some(s), Some(a)) => Some(format!("{s} AND {a}")),
+            (Some(s), None) => Some(s),
+            (None, Some(a)) => Some(a),
+            (None, None) => None,
+        };
+        if let Some(filter) = combined_filter {
             if let Some(map) = body.as_object_mut() {
                 map.insert("filter".to_string(), serde_json::Value::String(filter));
             }
@@ -684,6 +699,7 @@ mod tests {
             query: query.into(),
             limit: 10,
             scope: Scope::default(),
+            acl: None,
         }
     }
 

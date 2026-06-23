@@ -1,0 +1,11 @@
+{
+  "id": 28,
+  "slug": "classification-model-bell-lapadula-lattice-with-linear-sensitivity-levels-and-orthogonal-need-to-know-compartments",
+  "title": "Classification model: Bell-LaPadula lattice with linear sensitivity levels and orthogonal need-to-know compartments",
+  "status": "proposed",
+  "date": "2026-06-23",
+  "relatedTasks": [
+    "phase21_data-classification-access-control"
+  ],
+  "supersededBy": null
+}

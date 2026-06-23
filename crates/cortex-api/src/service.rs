@@ -3,7 +3,7 @@
 //! tool binding call into this single entry point so behaviour stays
 //! identical between transports.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::http::HeaderMap;
 
@@ -13,9 +13,13 @@ use crate::audit_store::AuditStore;
 use crate::cache::{cache_key, Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
+use crate::principal::Principal;
+use crate::principal_resolver::resolve_request_principal;
+use crate::principal_store::PrincipalStore;
 use crate::query_rewrite::RewrittenQuery;
 use crate::rate_limit::{RateConfig, RateDecision, RateLimiter};
 use crate::redaction::redact_response;
+use crate::storage::api_keys::ApiKeyStore;
 use crate::types::{Notice, QueryRequest, QueryResponse, Scope};
 
 /// Phase4j header — explicit repo override for direct
@@ -308,6 +312,15 @@ pub struct QueryService {
     /// backend was unconfigured.
     pub coverage_snapshot:
         Option<Arc<tokio::sync::RwLock<Option<crate::coverage::CoverageResponse>>>>,
+    /// Phase21 §4.4 — RBAC role-binding store used to resolve an
+    /// API key's role → `Principal`. `None` when access control is
+    /// not configured (local dev); in that case all callers receive
+    /// the default principal (see [`PrincipalStore::pass_through`]).
+    pub principal_store: Option<Arc<RwLock<PrincipalStore>>>,
+    /// Phase21 §4.4 — API-key store, forwarded to the principal
+    /// resolver so `verify_with_role` can map a Bearer token → role.
+    /// Shares the same `Arc` as the auth middleware's store.
+    pub api_key_store: Option<Arc<ApiKeyStore>>,
 }
 
 impl QueryService {
@@ -324,7 +337,25 @@ impl QueryService {
             audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
             coverage_snapshot: None,
+            principal_store: None,
+            api_key_store: None,
         }
+    }
+
+    /// Phase21 §4.4 — attach the principal-store (role bindings). When set,
+    /// every request is resolved to a `Principal` via the key → role → store
+    /// chain. When `None` (default), all callers receive the pass-through
+    /// super-admin principal so backward compat is preserved.
+    pub fn with_principal_store(mut self, ps: Arc<RwLock<PrincipalStore>>) -> Self {
+        self.principal_store = Some(ps);
+        self
+    }
+
+    /// Phase21 §4.4 — attach the API-key store so the resolver can call
+    /// `verify_with_role` to map a Bearer token to a role.
+    pub fn with_api_key_store(mut self, aks: Arc<ApiKeyStore>) -> Self {
+        self.api_key_store = Some(aks);
+        self
     }
 
     /// Attach an indexed-repos snapshot. Returns `self` so callers can
@@ -399,7 +430,9 @@ impl QueryService {
     /// [`QueryService::handle_with_headers`] so the audit envelope
     /// records the resolution lane.
     pub async fn handle(&self, caller: &str, req: QueryRequest) -> ServiceOutcome {
-        self.handle_resolved(caller, req, ScopeResolution::Explicit, None)
+        // No headers available — use pass-through principal (backward compat).
+        let principal = self.resolve_principal(&HeaderMap::new());
+        self.handle_resolved(caller, req, ScopeResolution::Explicit, None, principal)
             .await
     }
 
@@ -422,8 +455,25 @@ impl QueryService {
             .and_then(|v| v.to_str().ok())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        self.handle_resolved(caller, req, resolution, intent_trigger)
+        // Phase21 §4.4 — resolve the caller's principal from the API key
+        // and the role-binding store. Falls back to pass-through when AC
+        // is not configured (principal_store is None).
+        let principal = self.resolve_principal(headers);
+        self.handle_resolved(caller, req, resolution, intent_trigger, principal)
             .await
+    }
+
+    /// Phase21 §4.4 — resolve the caller's `Principal` from the
+    /// request headers. Returns a pass-through super-admin when the
+    /// service was not wired with a `principal_store` (backward compat).
+    pub fn resolve_principal(&self, headers: &HeaderMap) -> Principal {
+        match (&self.principal_store, &self.api_key_store) {
+            (Some(ps_lock), aks) => {
+                let ps = ps_lock.read().expect("principal_store RwLock poisoned");
+                resolve_request_principal(headers, aks.as_deref(), &ps)
+            }
+            (None, _) => Principal::super_admin("system"),
+        }
     }
 
     async fn handle_resolved(
@@ -432,6 +482,7 @@ impl QueryService {
         req: QueryRequest,
         resolution: ScopeResolution,
         intent_trigger: Option<String>,
+        principal: Principal,
     ) -> ServiceOutcome {
         if req.query.trim().is_empty() {
             return ServiceOutcome::EmptyQuery;
@@ -486,7 +537,15 @@ impl QueryService {
             return ServiceOutcome::Ok(Box::new(hit));
         }
 
-        let (mut response, rewritten) = self.orchestrator.run(&req).await;
+        // Phase21 §5.2 — run with the resolved principal's ACL context
+        // so each lane injects the Bell-LaPadula filter server-side.
+        tracing::debug!(
+            principal_id = %principal.id,
+            clearance_level = principal.clearance_level,
+            compartments = ?principal.compartment_grants,
+            "query executing under resolved principal"
+        );
+        let (mut response, rewritten) = self.orchestrator.run_with_principal(&req, &principal).await;
         redact_response(&mut response);
         // Stamp ACL + scope echo before caching so the audit layer
         // sees the canonical view. The echoed `repo` carries the
@@ -605,6 +664,7 @@ mod tests {
             include_history: None,
             include_future: None,
             include_branches: None,
+            principal: None,
         }
     }
 
@@ -796,6 +856,8 @@ mod tests {
             audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
             coverage_snapshot: None,
+            principal_store: None,
+            api_key_store: None,
         };
         let _ = svc.handle("dash", req("x")).await;
         let snap = audit.snapshot();
@@ -821,6 +883,8 @@ mod tests {
             audit_store: store.clone(),
             indexed_repos: None,
             coverage_snapshot: None,
+            principal_store: None,
+            api_key_store: None,
         };
         let mut r = req("hello-world");
         r.scope.repo = Some("Vectorizer".into());
@@ -971,6 +1035,7 @@ mod tests {
             include_history: None,
             include_future: None,
             include_branches: None,
+            principal: None,
         };
         match svc.handle("dash", r).await {
             ServiceOutcome::Ok(resp) => {
@@ -1031,6 +1096,8 @@ mod tests {
             audit_store: Arc::new(AuditStore::new()),
             indexed_repos: None,
             coverage_snapshot: None,
+            principal_store: None,
+            api_key_store: None,
         };
         // Use distinct queries so the cache doesn't short-circuit
         // (cache hits reuse the rate-limit token on the spec-11 path

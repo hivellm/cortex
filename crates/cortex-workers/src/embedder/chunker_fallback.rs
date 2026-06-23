@@ -197,8 +197,11 @@ fn build_chunk(
         valid_from_unix: None,
         valid_to_unix: None,
         superseded_at_unix: None,
+        class_level: None,
+        class_compartments: None,
     };
     metadata.stamp_bitemporal(event);
+    metadata.stamp_classification(event);
     Chunk {
         dedup_key: key,
         parent_event_id: event.event_id.clone(),
@@ -350,8 +353,8 @@ pub fn sha256_hex(input: &str) -> String {
 mod tests {
     use serde_json::json;
 
-    use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
     use super::super::embedder::EnrichedEvent;
+    use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
     use cortex_core::events::Kind;
 
     use super::*;
@@ -367,6 +370,7 @@ mod tests {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -388,6 +392,8 @@ mod tests {
             parent_event_id: None,
             session_id: None,
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -435,7 +441,10 @@ mod tests {
             }),
         );
         let text = event_text(&e);
-        assert!(text.contains("We fixed the wiring."), "missing summary_markdown");
+        assert!(
+            text.contains("We fixed the wiring."),
+            "missing summary_markdown"
+        );
         assert!(text.contains("TEI service"), "missing takeaways");
     }
 
@@ -460,7 +469,10 @@ mod tests {
             json!({"synthesis_markdown": "# Topic\nThis is the synthesis."}),
         );
         let text = event_text(&e);
-        assert!(text.contains("This is the synthesis."), "missing synthesis_markdown");
+        assert!(
+            text.contains("This is the synthesis."),
+            "missing synthesis_markdown"
+        );
     }
 
     #[test]
@@ -470,7 +482,10 @@ mod tests {
             json!({"title": "Anti-pattern: raw-JSON embedding", "body": "Always project NL text."}),
         );
         let text = event_text(&e);
-        assert!(text.contains("Anti-pattern: raw-JSON embedding"), "missing title");
+        assert!(
+            text.contains("Anti-pattern: raw-JSON embedding"),
+            "missing title"
+        );
         assert!(text.contains("Always project NL text."), "missing body");
     }
 

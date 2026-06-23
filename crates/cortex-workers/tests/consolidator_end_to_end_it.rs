@@ -105,6 +105,8 @@ fn envelope(idx: u8, kind: Kind, ts: &str, payload: serde_json::Value) -> Envelo
         content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             .into(),
         parent_event_id: None,
+        class_level: None,
+        class_compartments: None,
     }
 }
 

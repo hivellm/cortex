@@ -64,6 +64,11 @@ pub enum WalkEntry {
         size_bytes: u64,
         /// Classification driving the event kind.
         class: FileClass,
+        /// Phase21 §3.2 — sensitivity level floor from `[cortex.classification]` path rules.
+        /// `None` when no rule matches (the stamper imputes the default level).
+        class_level: Option<u8>,
+        /// Phase21 §3.2 — compartments floor from `[cortex.classification]` path rules.
+        class_compartments: Option<Vec<String>>,
     },
     /// File was rejected; carries the reason used as a metric label.
     Dropped {
@@ -188,11 +193,18 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
         }
 
         let class = classify_path(&rel_path, cfg);
+        let (class_level, class_compartments) =
+            match cfg.classification.apply_to_path(&rel_path) {
+                Some((lv, comps)) => (Some(lv), Some(comps)),
+                None => (None, None),
+            };
         out.push(WalkEntry::Accepted {
             path: path.to_path_buf(),
             rel_path,
             size_bytes,
             class,
+            class_level,
+            class_compartments,
         });
     }
 
@@ -288,11 +300,18 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
             continue;
         }
         let class = classify_path(&rel_path, cfg);
+        let (class_level, class_compartments) =
+            match cfg.classification.apply_to_path(&rel_path) {
+                Some((lv, comps)) => (Some(lv), Some(comps)),
+                None => (None, None),
+            };
         out.push(WalkEntry::Accepted {
             path: path.to_path_buf(),
             rel_path,
             size_bytes,
             class,
+            class_level,
+            class_compartments,
         });
     }
 
@@ -656,5 +675,39 @@ mod tests {
             FileClass::Decision,
             "explicit cortex.toml promotion overrides built-in defaults"
         );
+    }
+
+    // Phase21 §3.2 — classification rule integration tests.
+
+    #[test]
+    fn walk_entry_accepted_carries_nil_class_fields_when_no_rules() {
+        use crate::bootstrap::config::ClassificationConfig;
+        let cfg = CortexSection::default(); // no classification rules
+        // Simulate what walk_repo does for a matched path.
+        let (cl, cc) = match cfg.classification.apply_to_path("docs/financial/report.md") {
+            Some((lv, comps)) => (Some(lv), Some(comps)),
+            None => (None, None),
+        };
+        assert!(cl.is_none());
+        assert!(cc.is_none());
+    }
+
+    #[test]
+    fn walk_entry_accepted_carries_class_floor_from_matching_rule() {
+        use crate::bootstrap::config::{ClassificationConfig, ClassificationRule};
+        let mut cfg = CortexSection::default();
+        cfg.classification = ClassificationConfig {
+            rules: vec![ClassificationRule {
+                pattern: "docs/financial/**".into(),
+                level: "confidential".into(),
+                compartments: vec!["financial".into()],
+            }],
+        };
+        let (cl, cc) = match cfg.classification.apply_to_path("docs/financial/q1.md") {
+            Some((lv, comps)) => (Some(lv), Some(comps)),
+            None => (None, None),
+        };
+        assert_eq!(cl, Some(2), "confidential = 2");
+        assert_eq!(cc.as_deref(), Some(["financial".to_string()].as_slice()));
     }
 }

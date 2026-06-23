@@ -124,6 +124,7 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         })
         .collect();
     let keywords = vec![
@@ -143,6 +144,7 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
         query: req.query.clone(),
         limit: req.limit,
         scope: req.scope.clone(),
+        acl: None,
     })
     .collect();
     let graphs = vec![GraphRequest {
@@ -150,6 +152,7 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
         params: json!({ "query": req.query }),
         max_hops: 2,
         scope: req.scope.clone(),
+        acl: None,
     }];
     Plan {
         vectors,
@@ -193,12 +196,14 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
         VectorRequest {
             collection: repo_scoped(req, "decisions"),
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
         // Phase11r §5.2 — topic cards drill into evidence (§4.2),
         // making them a natural cross-lookup surface for
@@ -210,6 +215,7 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
     ];
     let keywords = vec![
@@ -218,12 +224,14 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
         KeywordRequest {
             index: repo_scoped(req, "decisions"),
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
         // Phase11r §5.2 — paired with the vector lane above.
         KeywordRequest {
@@ -231,6 +239,7 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
     ];
     let graphs = vec![GraphRequest {
@@ -238,6 +247,7 @@ fn decision_lookup(req: &QueryRequest) -> Plan {
         params: json!({ "query": req.query }),
         max_hops: 2,
         scope: req.scope.clone(),
+        acl: None,
     }];
     Plan {
         vectors,
@@ -264,12 +274,14 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
         VectorRequest {
             collection: COLLECTION_TURN_PQ.to_string(),
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
         // phase11e §5.3 — per-repo `cortex-{slug}-turns` is the
         // canonical write target of the embedder. Fan out so a
@@ -280,6 +292,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
         // Phase11j §4.1 — consolidations beat raw turns at recalling
         // similar past problems because they distill the lesson
@@ -291,6 +304,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
         // Phase11r §5.2 — topic cards beat raw consolidations on
         // similar-problems recall because they fold many
@@ -301,6 +315,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         },
     ];
     let keywords = vec![
@@ -309,12 +324,14 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
         KeywordRequest {
             index: repo_scoped(req, "turns"),
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
         // Phase11j §4.1 — global consolidations index supplies the
         // literal-phrase recall path (a tool name, an error string)
@@ -324,6 +341,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
         // Phase11r §5.2 — paired with the topic-card vector lane
         // above; covers the literal-phrase recall path.
@@ -332,6 +350,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         },
     ];
     let graphs = vec![GraphRequest {
@@ -339,6 +358,7 @@ fn similar_problems(req: &QueryRequest) -> Plan {
         params: json!({ "query": req.query }),
         max_hops: 2,
         scope: req.scope.clone(),
+        acl: None,
     }];
     Plan {
         vectors,
@@ -380,12 +400,14 @@ fn law_check(req: &QueryRequest) -> Plan {
         query: req.query.clone(),
         limit: req.limit,
         scope: law_scope,
+        acl: None,
     }];
     let graphs = vec![GraphRequest {
         template: "law_violations_last_30d".into(),
         params: json!({ "query": req.query }),
         max_hops: 1,
         scope: req.scope.clone(),
+        acl: None,
     }];
     Plan {
         vectors: Vec::new(),
@@ -426,6 +448,7 @@ fn explain(req: &QueryRequest) -> Plan {
             // 50 vectors burns the trim ladder for no gain.
             k: req.k.min(8),
             scope: req.scope.clone(),
+            acl: None,
         })
         .collect();
     let keywords = vec![repo_scoped(req, "code"), repo_scoped(req, "docs")]
@@ -435,6 +458,7 @@ fn explain(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit.min(8),
             scope: req.scope.clone(),
+            acl: None,
         })
         .collect();
     Plan {
@@ -476,6 +500,7 @@ fn free_search(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             k: req.k,
             scope: req.scope.clone(),
+            acl: None,
         })
         .collect();
     let keywords = families
@@ -485,6 +510,7 @@ fn free_search(req: &QueryRequest) -> Plan {
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
+            acl: None,
         })
         .collect();
     Plan {
@@ -543,6 +569,7 @@ mod tests {
             include_history: None,
             include_future: None,
             include_branches: None,
+            principal: None,
         }
     }
 

@@ -21,6 +21,7 @@ fn vec_request(query: &str) -> VectorRequest {
         query: query.into(),
         k: 5,
         scope: Scope::default(),
+        acl: None,
     }
 }
 
@@ -208,6 +209,8 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let req_beta = QueryRequest {
         intent: Intent::FreeSearch,
@@ -224,6 +227,8 @@ async fn distinct_queries_through_orchestrator_produce_distinct_vector_hits() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let (resp_alpha, _) = orch.run(&req_alpha).await;
     let (resp_beta, _) = orch.run(&req_beta).await;
@@ -282,6 +287,8 @@ async fn fail_open_when_vectorizer_unreachable_through_orchestrator() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(resp.results.snippets.is_empty());
@@ -316,7 +323,116 @@ async fn keyword_request_compiles_without_changes() {
         query: "test".into(),
         limit: 5,
         scope: Scope::default(),
+        acl: None,
     };
+}
+
+// ── Phase21 §5.3 — Vectorizer ACL post-filter tests ────────────────────────
+
+/// When `req.acl` is set and the Vectorizer server returns a hit whose
+/// `payload.class_level` exceeds the principal's clearance, the lane
+/// MUST drop the hit client-side.
+#[tokio::test]
+async fn acl_filter_drops_hit_above_principal_clearance() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/collections/cortex-cortex-code/search/text"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [
+                {
+                    "id": "hit-public",
+                    "score": 0.9_f32,
+                    "payload": { "body": "public doc", "class_level": 0_i64 },
+                },
+                {
+                    "id": "hit-restricted",
+                    "score": 0.85_f32,
+                    "payload": { "body": "restricted doc", "class_level": 3_i64 },
+                },
+            ],
+            "query_time_ms": 0.0_f64,
+        })))
+        .mount(&server)
+        .await;
+
+    let lane = VectorizerLane::new(server.uri(), None).unwrap();
+    let mut req = vec_request("acl test");
+    req.acl = Some(cortex_api::AclContext {
+        clearance_level: 1, // can only read public + internal
+        compartment_grants: vec![],
+    });
+    let hits = lane.search(&req).await.unwrap();
+    assert_eq!(hits.len(), 1, "restricted hit must be dropped by ACL filter");
+    assert_eq!(hits[0].text, "public doc");
+}
+
+/// When `req.acl` is `None`, all hits pass through (backward compat).
+#[tokio::test]
+async fn no_acl_context_passes_all_hits_through() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/collections/cortex-cortex-code/search/text"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [
+                {
+                    "id": "hit-restricted",
+                    "score": 0.9_f32,
+                    "payload": { "body": "restricted doc", "class_level": 3_i64 },
+                },
+            ],
+            "query_time_ms": 0.0_f64,
+        })))
+        .mount(&server)
+        .await;
+
+    let lane = VectorizerLane::new(server.uri(), None).unwrap();
+    let req = vec_request("no-acl"); // acl: None
+    let hits = lane.search(&req).await.unwrap();
+    assert_eq!(hits.len(), 1, "without ACL context, restricted hit passes through");
+}
+
+/// Compartment check: a hit with `class_compartments = ["hr"]` is dropped
+/// when the principal only holds `["financial"]`.
+#[tokio::test]
+async fn acl_filter_drops_hit_missing_required_compartment() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/collections/cortex-cortex-code/search/text"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "results": [
+                {
+                    "id": "hit-hr",
+                    "score": 0.9_f32,
+                    "payload": {
+                        "body": "hr doc",
+                        "class_level": 1_i64,
+                        "class_compartments": ["hr"],
+                    },
+                },
+                {
+                    "id": "hit-financial",
+                    "score": 0.8_f32,
+                    "payload": {
+                        "body": "financial doc",
+                        "class_level": 1_i64,
+                        "class_compartments": ["financial"],
+                    },
+                },
+            ],
+            "query_time_ms": 0.0_f64,
+        })))
+        .mount(&server)
+        .await;
+
+    let lane = VectorizerLane::new(server.uri(), None).unwrap();
+    let mut req = vec_request("compartments");
+    req.acl = Some(cortex_api::AclContext {
+        clearance_level: 2,
+        compartment_grants: vec!["financial".to_string()],
+    });
+    let hits = lane.search(&req).await.unwrap();
+    assert_eq!(hits.len(), 1, "hr hit must be dropped; financial hit must pass");
+    assert_eq!(hits[0].text, "financial doc");
 }
 
 // ────────────────────────────────────────────────────────────────────

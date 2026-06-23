@@ -1,5 +1,5 @@
 {
-  "version": "v7",
+  "version": "v8",
   "searchableAttributes": [
     "title",
     "body",
@@ -52,7 +52,9 @@
     "lifecycle",
     "valid_from_unix",
     "valid_to_unix",
-    "superseded_at_unix"
+    "superseded_at_unix",
+    "class_level",
+    "class_compartments"
   ],
   "sortableAttributes": [
     "ts",
@@ -68,7 +70,8 @@
     "ext.topic_card.confidence",
     "ext.topic_card.synthesis_age_d",
     "ext.topic_card.contradictions_count",
-    "ext.topic_card.synthesis_model"
+    "ext.topic_card.synthesis_model",
+    "class_level"
   ],
   "displayedAttributes": ["*"],
   "rankingRules": [

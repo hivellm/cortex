@@ -170,6 +170,7 @@ impl<L: VectorLane + 'static> ConsolidationSearchSource for VectorLaneConsolidat
             query: query.to_string(),
             k: k as usize,
             scope: Scope::default(),
+            acl: None,
         };
         let hits = self
             .lane

@@ -510,6 +510,7 @@ impl VectorLane for VectorizerLane {
             .into_iter()
             .map(|h| project(h, req))
             .filter(|h| scope_matches(&req.scope, h))
+            .filter(|h| acl_matches(req, h))
             .collect();
         Ok(projected)
     }
@@ -590,6 +591,45 @@ fn scope_matches(scope: &crate::types::Scope, hit: &crate::lanes::LaneHit) -> bo
         }
     }
     true
+}
+
+/// Phase21 §5.3 — Bell-LaPadula ACL post-filter for the Vectorizer lane.
+///
+/// Reads `class_level` and `class_compartments` from `hit.extras`
+/// (projected by the embedder worker into the payload, then forwarded
+/// via [`crate::lanes::LANE_EXTRAS_KEYS`]) and applies the exact
+/// `vectorizer_acl_matches` predicate from
+/// `cortex_workers::acl::filter`.
+///
+/// When `req.acl` is `None` (passthrough), returns `true` for every
+/// hit — backward compatible.
+fn acl_matches(req: &VectorRequest, hit: &crate::lanes::LaneHit) -> bool {
+    let acl = match &req.acl {
+        Some(a) => a,
+        None => return true,
+    };
+    let fact_level = hit
+        .extras
+        .get("class_level")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as u8);
+    let fact_compartments: Vec<String> = hit
+        .extras
+        .get("class_compartments")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
+    cortex_workers::acl::filter::vectorizer_acl_matches(
+        acl.clearance_level,
+        &acl.compartment_grants,
+        fact_level,
+        &fact_compartments,
+    )
 }
 
 /// phase10h — RFC-3339 timestamp → epoch ms. The orchestrator's
@@ -755,6 +795,7 @@ mod tests {
             query: query.into(),
             k: 5,
             scope: Scope::default(),
+            acl: None,
         }
     }
 

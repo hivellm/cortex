@@ -324,7 +324,9 @@ mod tests {
     fn edge_confidence_default_score_per_tier() {
         assert_eq!(EdgeConfidence::Extracted.default_score(), 1.0);
         assert!(EdgeConfidence::Inferred.default_score() < 1.0);
-        assert!(EdgeConfidence::Ambiguous.default_score() < EdgeConfidence::Inferred.default_score());
+        assert!(
+            EdgeConfidence::Ambiguous.default_score() < EdgeConfidence::Inferred.default_score()
+        );
         assert_eq!(EdgeConfidence::Extracted.as_str(), "extracted");
     }
 

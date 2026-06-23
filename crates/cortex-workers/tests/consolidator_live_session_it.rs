@@ -63,6 +63,8 @@ fn turn_user(event_id: &str, session_id: &str, ts: &str, idx: u8) -> Envelope {
         redactions: vec![],
         content_hash: format!("sha256:{:0>64}", idx),
         parent_event_id: None,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -88,6 +90,8 @@ fn turn_paired(event_id: &str, session_id: &str, ts: &str, idx: u8) -> Envelope 
         redactions: vec![],
         content_hash: format!("sha256:{:0>64}", idx + 100),
         parent_event_id: None,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -115,6 +119,8 @@ fn tool_call(event_id: &str, session_id: &str, ts: &str, idx: u8) -> Envelope {
         redactions: vec![],
         content_hash: format!("sha256:{:0>64}", idx + 200),
         parent_event_id: None,
+        class_level: None,
+        class_compartments: None,
     }
 }
 

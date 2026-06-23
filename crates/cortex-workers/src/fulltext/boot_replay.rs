@@ -301,6 +301,7 @@ fn envelope_to_enriched(env: Envelope) -> EnrichedEvent {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "fulltext-replay-v1".into(),
             model: "fulltext-replay-v1".into(),
@@ -317,6 +318,8 @@ fn envelope_to_enriched(env: Envelope) -> EnrichedEvent {
         occurred_at_ms: chrono::DateTime::parse_from_rfc3339(&env.occurred_at)
             .map(|dt| dt.timestamp_millis())
             .unwrap_or(0),
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -382,6 +385,8 @@ mod tests {
                 event_id.chars().take(8).collect::<String>()
             ),
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

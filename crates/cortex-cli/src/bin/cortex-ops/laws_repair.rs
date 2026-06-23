@@ -218,6 +218,7 @@ fn rebuild_law_doc(
         summary: None,
         entities: Vec::new(),
         relations: Vec::new(),
+        sensitivity: Default::default(),
         source: ClassifierSource::StaticFallback,
         prompt_version: "v1".into(),
         model: "static-v1".into(),
@@ -236,6 +237,8 @@ fn rebuild_law_doc(
         parent_event_id: None,
         session_id: None,
         occurred_at_ms: 0,
+        class_level: None,
+        class_compartments: None,
     };
     match build_doc(&enriched, true, 1024 * 1024) {
         BuildOutcome::Ready(doc) => serde_json::to_value(&*doc).ok(),

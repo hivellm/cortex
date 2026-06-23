@@ -22,6 +22,7 @@ fn classifier(event_id: &str) -> ClassifierOutput {
         summary: None,
         entities: Vec::new(),
         relations: Vec::new(),
+        sensitivity: Default::default(),
         source: ClassifierSource::StaticFallback,
         prompt_version: "v1".into(),
         model: "static-v1".into(),
@@ -43,6 +44,8 @@ fn event(event_id: &str, kind: Kind, payload: serde_json::Value) -> EnrichedEven
         parent_event_id: None,
         session_id: None,
         occurred_at_ms: 0,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -313,8 +316,8 @@ async fn routing_matrix_distributes_mixed_batch_across_families() {
         ("cortex-vectorizer-turns", 2), // turn + agent_call
         ("cortex-vectorizer-decisions", 1),
         ("cortex-vectorizer-governance", 1), // Law definition per-repo
-        ("cortex-vectorizer-docs", 1), // .md artifact
-        ("cortex-vectorizer-misc", 1), // unknown-ext artifact
+        ("cortex-vectorizer-docs", 1),       // .md artifact
+        ("cortex-vectorizer-misc", 1),       // unknown-ext artifact
         // Global dual-write targets.
         ("cortex_decisions", 1),
         ("cortex_laws", 1), // Law definitions only (not violations)

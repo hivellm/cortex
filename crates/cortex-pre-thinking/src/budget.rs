@@ -165,6 +165,8 @@ mod tests {
                 why: Some("why".into()),
                 verified: None,
                 verdict: None,
+                class_level: None,
+                class_compartments: vec![],
             })
             .collect();
         let decisions: Vec<DecisionRef> = (0..5)

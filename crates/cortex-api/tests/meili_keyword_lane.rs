@@ -21,6 +21,7 @@ fn keyword_request(query: &str) -> KeywordRequest {
         query: query.into(),
         limit: 5,
         scope: Scope::default(),
+        acl: None,
     }
 }
 
@@ -159,6 +160,8 @@ async fn distinct_queries_through_orchestrator_return_distinct_snippets() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let req_beta = QueryRequest {
         intent: Intent::FreeSearch,
@@ -175,6 +178,8 @@ async fn distinct_queries_through_orchestrator_return_distinct_snippets() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
 
     let (resp_alpha, _) = orch.run(&req_alpha).await;
@@ -238,6 +243,8 @@ async fn fail_open_when_meili_unreachable_through_orchestrator() {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     };
     let (resp, _rewritten) = orch.run(&req).await;
     assert!(
@@ -248,4 +255,96 @@ async fn fail_open_when_meili_unreachable_through_orchestrator() {
         resp.debug.errors.contains_key("keyword"),
         "keyword lane error must surface in debug.errors"
     );
+}
+
+// ── Phase21 §5.2 — ACL filter injection tests ──────────────────────────────
+
+/// The lane must include the Bell-LaPadula ACL clause in the Meili filter when
+/// `req.acl` is set. We verify by registering a mock that only matches when the
+/// request body carries the expected filter string.
+#[tokio::test]
+async fn acl_context_injects_level_and_compartment_filter_into_meili_body() {
+    let server = MockServer::start().await;
+    // The mock matches only when the request body contains the expected
+    // ACL filter clause (class_level <= 2 + compartment allowlist).
+    Mock::given(method("POST"))
+        .and(path("/indexes/cortex-cortex-code/search"))
+        .and(body_partial_json(json!({
+            "filter": "(class_level IS EMPTY OR class_level <= 2) AND (class_compartments IS EMPTY OR class_compartments IN ['financial', 'hr'])"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "hits": [{
+                "id": "acl-hit-1",
+                "event_id": "acl-hit-1",
+                "kind": "turn",
+                "repo": "Cortex",
+                "summary": "classified internal doc",
+                "_rankingScore": 0.85,
+            }]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let lane = MeiliKeywordLane::new(server.uri(), None).unwrap();
+    let mut req = keyword_request("classify");
+    req.acl = Some(cortex_api::AclContext {
+        clearance_level: 2,
+        compartment_grants: vec!["financial".to_string(), "hr".to_string()],
+    });
+    let hits = lane.search(&req).await.unwrap();
+    assert_eq!(hits.len(), 1, "mock only matches when ACL filter is injected");
+    assert_eq!(hits[0].text, "classified internal doc");
+}
+
+/// A wildcard grant (`"*"`) must emit only the level clause — no compartment
+/// list — so super-admin callers do not generate an unnecessarily verbose filter.
+#[tokio::test]
+async fn acl_wildcard_grant_emits_level_only_filter() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/indexes/cortex-cortex-code/search"))
+        .and(body_partial_json(json!({
+            "filter": "(class_level IS EMPTY OR class_level <= 3)"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "hits": [] })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let lane = MeiliKeywordLane::new(server.uri(), None).unwrap();
+    let mut req = keyword_request("wildcard");
+    req.acl = Some(cortex_api::AclContext {
+        clearance_level: 3,
+        compartment_grants: vec!["*".to_string()],
+    });
+    let hits = lane.search(&req).await.unwrap();
+    assert!(hits.is_empty());
+}
+
+/// When `req.acl` is `None` (backward-compat), the lane must NOT inject any
+/// ACL clause — the filter should only contain scope clauses (or be absent).
+#[tokio::test]
+async fn no_acl_context_produces_no_acl_filter() {
+    let server = MockServer::start().await;
+    // The mock matches any POST body WITHOUT the class_level filter.
+    // We verify via wiremock's negation: mount a mock that DOES match the
+    // ACL filter and assert it was NEVER called (0 invocations).
+    Mock::given(method("POST"))
+        .and(path("/indexes/cortex-cortex-code/search"))
+        .and(body_partial_json(json!({ "filter": "(class_level IS EMPTY OR class_level <= 3)" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "hits": [] })))
+        .expect(0) // must NOT be called
+        .mount(&server)
+        .await;
+    // Fallback mock — matches any POST to the index.
+    Mock::given(method("POST"))
+        .and(path("/indexes/cortex-cortex-code/search"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "hits": [] })))
+        .mount(&server)
+        .await;
+
+    let lane = MeiliKeywordLane::new(server.uri(), None).unwrap();
+    let req = keyword_request("no-acl"); // acl: None by default
+    let _ = lane.search(&req).await.unwrap();
 }

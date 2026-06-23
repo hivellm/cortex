@@ -1,0 +1,4 @@
+# Vectorizer upsert "collection_not_found" errors are expected on first upsert per collection
+**Source**: manual
+**Date**: 2026-06-22
+The embedder creates Vectorizer collections on demand during upsert. The Vectorizer logs ERROR "collection_not_found" on the FIRST upsert attempt for a new collection, then the embedder creates it and retries successfully. These errors are NORMAL and indicate the embedder IS processing events (not an outage). If the Vectorizer shows no errors AND no upsert activity, the embedder isn't processing. The embedder itself logs at debug level only — no INFO per event processed. Use the Vectorizer error pattern as the primary signal for "embedder is working".

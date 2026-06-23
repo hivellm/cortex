@@ -53,6 +53,7 @@ async-trait = "0.1"
 reqwest = { version = "0.12", features = ["json"] }
 toml = "1.1"
 ignore = "0.4"
+globset = "0.4"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 notify = "8.2"

@@ -101,6 +101,8 @@ fn req() -> QueryRequest {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     }
 }
 

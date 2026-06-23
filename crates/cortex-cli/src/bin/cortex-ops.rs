@@ -77,6 +77,8 @@ mod retention_archive_purge;
 mod rollup;
 #[path = "cortex-ops/schedule_cmd.rs"]
 mod schedule_cmd;
+#[path = "cortex-ops/migrate_classification.rs"]
+mod migrate_classification;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
 #[path = "cortex-ops/temporal_digest.rs"]
@@ -420,6 +422,30 @@ enum Command {
     /// its earliest `occurred_at` as `started_at`. Idempotent;
     /// scheduled hourly so new sessions appear within an hour of
     /// their first envelope landing.
+    /// Phase21 §2.7 — backfill classification columns on events that
+    /// predate the classification stamper. Dry-run by default; pass
+    /// `--no-dry-run` to record imputed counts (graph writes are
+    /// wired in phase21 §3.2). Exits `2` when anomalies are found.
+    MigrateClassification {
+        /// Parquet archive root. Defaults to `$CORTEX_ARCHIVE_ROOT`
+        /// / `<CORTEX_HOME>/archive` / `<home>/.cortex/archive`.
+        #[arg(long)]
+        archive_root: Option<String>,
+        /// Restrict scan to a single project slug (lower-cased repo).
+        /// Omit to scan all projects.
+        #[arg(long)]
+        project: Option<String>,
+        /// Sensitivity level to impute on rows lacking `class_level`
+        /// (0=public, 1=internal, 2=confidential, 3=restricted).
+        #[arg(long, default_value_t = 0)]
+        default_level: u8,
+        /// Count missing rows and report anomalies without writing.
+        #[arg(long, default_value_t = true)]
+        dry_run: bool,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     SessionsBackfill {
         /// SQLite metadata DB path. Defaults to
         /// `$CORTEX_METADATA_DB` / `<CORTEX_HOME>/metadata.sqlite` /
@@ -1918,6 +1944,19 @@ fn run() -> ExitCode {
             json,
         } => rollup::rollup(time_travel, dry_run, granularity, archive_root, json),
         Command::Schedule { command } => schedule_cmd::schedule(command),
+        Command::MigrateClassification {
+            archive_root,
+            project,
+            default_level,
+            dry_run,
+            json,
+        } => migrate_classification::migrate_classification(
+            archive_root,
+            project,
+            default_level,
+            dry_run,
+            json,
+        ),
         Command::SessionsBackfill {
             metadata_db,
             archive_root,

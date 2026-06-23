@@ -1,0 +1,11 @@
+{
+  "id": 29,
+  "slug": "principal-and-identity-source-api-key-bound-rbac-roles-for-v1-external-idp-deferred",
+  "title": "Principal and identity source: API-key-bound RBAC roles for v1; external IdP deferred",
+  "status": "proposed",
+  "date": "2026-06-23",
+  "relatedTasks": [
+    "phase21_data-classification-access-control"
+  ],
+  "supersededBy": null
+}

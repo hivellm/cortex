@@ -109,6 +109,8 @@ fn req(projects: Option<Vec<String>>, as_of: Option<String>) -> QueryRequest {
         include_history: None,
         include_future: None,
         include_branches: None,
+
+        principal: None,
     }
 }
 

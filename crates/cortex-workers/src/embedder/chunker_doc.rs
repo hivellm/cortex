@@ -141,8 +141,11 @@ fn chunk_markdown(event: &EnrichedEvent, text: &str, collection: &str) -> Vec<Ch
             valid_from_unix: None,
             valid_to_unix: None,
             superseded_at_unix: None,
+            class_level: None,
+            class_compartments: None,
         };
         metadata.stamp_bitemporal(event);
+        metadata.stamp_classification(event);
         out.push(Chunk {
             dedup_key: key,
             parent_event_id: event.event_id.clone(),
@@ -186,8 +189,11 @@ fn chunk_markdown(event: &EnrichedEvent, text: &str, collection: &str) -> Vec<Ch
             valid_from_unix: None,
             valid_to_unix: None,
             superseded_at_unix: None,
+            class_level: None,
+            class_compartments: None,
         };
         metadata.stamp_bitemporal(event);
+        metadata.stamp_classification(event);
         out.push(Chunk {
             dedup_key: key,
             parent_event_id: event.event_id.clone(),

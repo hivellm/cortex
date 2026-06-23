@@ -20,6 +20,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod acl;
 pub mod admin_health;
 pub mod classifier;
 pub mod classifier_worker;

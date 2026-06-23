@@ -114,6 +114,9 @@ pub use security::acl;
 pub use security::audit;
 pub use security::audit_store;
 pub use security::auth;
+pub use security::principal;
+pub use security::principal_resolver;
+pub use security::principal_store;
 pub use security::rate_limit;
 pub use security::redaction;
 
@@ -121,6 +124,9 @@ pub use security::redaction;
 // pre-reorg lib.rs so call sites like `cortex_api::LaneHit`
 // continue to resolve). -----------------------------------------------------
 pub use acl::{AclDecision, AclStore};
+pub use principal::{can_read, Principal, PrincipalRef};
+pub use principal_resolver::resolve_request_principal;
+pub use principal_store::{PrincipalStore, RoleBinding};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
 };
@@ -134,8 +140,8 @@ pub use http::{
     CALLER_HEADER,
 };
 pub use lanes::{
-    GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit, MemoryGraphLane,
-    MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
+    AclContext, GraphLane, GraphRequest, KeywordLane, KeywordRequest, LaneError, LaneHit,
+    MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, VectorLane, VectorRequest,
 };
 pub use loader_metrics::LoaderMetrics;
 pub use mcp::{invoke as mcp_invoke, tool_descriptor, McpError, TOOL_NAME};

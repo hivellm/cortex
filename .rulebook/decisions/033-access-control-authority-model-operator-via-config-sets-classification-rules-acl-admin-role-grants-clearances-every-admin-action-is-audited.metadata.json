@@ -1,0 +1,11 @@
+{
+  "id": 33,
+  "slug": "access-control-authority-model-operator-via-config-sets-classification-rules-acl-admin-role-grants-clearances-every-admin-action-is-audited",
+  "title": "Access control authority model: operator-via-config sets classification rules; acl_admin role grants clearances; every admin action is audited",
+  "status": "proposed",
+  "date": "2026-06-23",
+  "relatedTasks": [
+    "phase21_data-classification-access-control"
+  ],
+  "supersededBy": null
+}

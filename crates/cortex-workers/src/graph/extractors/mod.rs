@@ -259,6 +259,7 @@ pub(crate) mod tests {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -280,6 +281,8 @@ pub(crate) mod tests {
             parent_event_id: None,
             session_id: Some("01HXSESS00000000000000000A".into()),
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

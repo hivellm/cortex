@@ -1,0 +1,11 @@
+{
+  "id": 31,
+  "slug": "access-enforcement-strategy-defense-in-depth-with-backend-filter-primary-application-layer-only-no-backend-native-rls",
+  "title": "Access enforcement strategy: defense-in-depth with backend-filter-primary; application-layer only, no backend-native RLS",
+  "status": "proposed",
+  "date": "2026-06-23",
+  "relatedTasks": [
+    "phase21_data-classification-access-control"
+  ],
+  "supersededBy": null
+}

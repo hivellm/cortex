@@ -34,6 +34,7 @@ impl Classifier for FakeHaiku {
                 summary: None,
                 entities: Vec::new(),
                 relations: Vec::new(),
+                sensitivity: Default::default(),
                 source: ClassifierSource::HaikuCli,
                 prompt_version: "v1".into(),
                 model: "claude-haiku-4-5".into(),

@@ -361,6 +361,7 @@ fn bootstrap_event_to_enriched(
         summary: None,
         entities: Vec::new(),
         relations: Vec::new(),
+        sensitivity: Default::default(),
         source: ClassifierSource::StaticFallback,
         prompt_version: "v1".into(),
         model: "static-v1".into(),
@@ -380,6 +381,8 @@ fn bootstrap_event_to_enriched(
         parent_event_id: None,
         session_id: Some(event.session_id.clone()),
         occurred_at_ms: event.ts,
+        class_level: None,
+        class_compartments: None,
     }
 }
 

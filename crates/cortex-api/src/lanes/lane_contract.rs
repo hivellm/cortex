@@ -32,6 +32,7 @@ fn keyword_req(index: &str) -> crate::lanes::KeywordRequest {
         query: "fixture".to_string(),
         limit: 5,
         scope: Scope::default(),
+        acl: None,
     }
 }
 
@@ -41,6 +42,7 @@ fn vector_req(collection: &str) -> crate::lanes::VectorRequest {
         query: "fixture".to_string(),
         k: 5,
         scope: Scope::default(),
+        acl: None,
     }
 }
 

@@ -33,6 +33,7 @@ fn make_enriched(event_id: &str) -> EnrichedEvent {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -45,6 +46,8 @@ fn make_enriched(event_id: &str) -> EnrichedEvent {
         parent_event_id: None,
         session_id: None,
         occurred_at_ms: 0,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -173,6 +176,8 @@ async fn embedder_worker_skips_identity_writeback_when_metadata_absent() {
                 valid_from_unix: None,
                 valid_to_unix: None,
                 superseded_at_unix: None,
+                class_level: None,
+                class_compartments: None,
             },
         },
         STREAM_ENRICHED,

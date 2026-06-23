@@ -130,10 +130,58 @@ fn cypher_for(template: &str) -> Option<&'static str> {
     }
 }
 
+/// Phase21 §5.4 — map a template name to the primary node alias used
+/// in its WHERE clause. The ACL injection appends predicates on this
+/// alias so the Bell-LaPadula level + compartment check applies to the
+/// "content" node (the one whose classification the principal must hold
+/// clearance for). Returns `None` for `cross_project_ref` (structural
+/// meta-edge; class filtering is not applicable there).
+fn primary_node_alias(template: &str) -> Option<&'static str> {
+    match template {
+        "edge_artifact_touched_neighbours" => Some("a"),
+        "decision_supersedes_chain" => Some("d"),
+        "turn_analysis_decision_chain" => Some("an"),
+        "law_violations_last_30d" => Some("v"),
+        _ => None,
+    }
+}
+
+/// Phase21 §5.4 — build the ACL-augmented Cypher for a template when
+/// an ACL context is present. Inserts the Bell-LaPadula WHERE fragment
+/// (inline literals, per the Nexus 2.2.0 param-binding workaround
+/// nexus#3) immediately before the `RETURN` keyword by replacing the
+/// first occurrence of ` RETURN `. Returns the base template unchanged
+/// (as `String`) when ACL is `None` or the template has no registered
+/// primary alias (structural templates like `cross_project_ref`).
+fn cypher_with_acl(
+    base: &'static str,
+    template: &str,
+    acl: Option<&crate::lanes::AclContext>,
+) -> String {
+    let acl = match acl {
+        Some(a) => a,
+        None => return base.to_string(),
+    };
+    let alias = match primary_node_alias(template) {
+        Some(a) => a,
+        None => return base.to_string(),
+    };
+    let fragment =
+        cortex_workers::acl::filter::nexus_acl_where_for_alias(
+            acl.clearance_level,
+            &acl.compartment_grants,
+            alias,
+        );
+    // Insert before ` RETURN ` to extend the existing WHERE clause.
+    // Every template has exactly one RETURN; if the pattern is absent
+    // the base Cypher is returned unchanged (safe degradation).
+    base.replacen(" RETURN ", &format!(" AND {fragment} RETURN "), 1)
+}
+
 #[async_trait]
 impl GraphLane for NexusGraphLane {
     async fn query(&self, req: &GraphRequest) -> Result<Vec<LaneHit>, LaneError> {
-        let cy = cypher_for(&req.template).ok_or_else(|| {
+        let base = cypher_for(&req.template).ok_or_else(|| {
             LaneError::Rejected(format!(
                 "unknown graph template: {} (whitelist: edge_artifact_touched_neighbours, \
                  decision_supersedes_chain, turn_analysis_decision_chain, law_violations_last_30d, \
@@ -141,6 +189,8 @@ impl GraphLane for NexusGraphLane {
                 req.template
             ))
         })?;
+        let cy_owned = cypher_with_acl(base, &req.template, req.acl.as_ref());
+        let cy = cy_owned.as_str();
 
         // Bind `$q` from the strategies-supplied params. Every
         // current template uses the same `query` param name; if a
@@ -497,6 +547,7 @@ mod tests {
             params: serde_json::json!({ "query": "RRF" }),
             max_hops: 2,
             scope: Scope::default(),
+            acl: None,
         };
     }
 
@@ -512,5 +563,83 @@ mod tests {
             cypher_for("cross_project_ref").is_some(),
             "cross_project_ref must resolve to a Cypher string",
         );
+    }
+
+    // ── Phase21 §5.4 — cypher_with_acl / primary_node_alias ─────────
+
+    #[test]
+    fn primary_node_alias_maps_each_template() {
+        assert_eq!(primary_node_alias("edge_artifact_touched_neighbours"), Some("a"));
+        assert_eq!(primary_node_alias("decision_supersedes_chain"), Some("d"));
+        assert_eq!(primary_node_alias("turn_analysis_decision_chain"), Some("an"));
+        assert_eq!(primary_node_alias("law_violations_last_30d"), Some("v"));
+        // Structural template — no content-node ACL filter.
+        assert_eq!(primary_node_alias("cross_project_ref"), None);
+        // Unknown — no alias.
+        assert_eq!(primary_node_alias("unknown_template"), None);
+    }
+
+    #[test]
+    fn cypher_with_acl_injects_before_return_keyword() {
+        use crate::lanes::AclContext;
+        let acl = AclContext {
+            clearance_level: 1,
+            compartment_grants: vec!["hr".to_string()],
+        };
+        let base = cypher_for("decision_supersedes_chain").unwrap();
+        let cy = cypher_with_acl(base, "decision_supersedes_chain", Some(&acl));
+        // Level clause uses alias 'd'.
+        assert!(
+            cy.contains("d.class_level IS NULL OR d.class_level <= 1"),
+            "level clause missing: {cy}"
+        );
+        // Compartment clause uses alias 'd'.
+        assert!(
+            cy.contains("d.class_compartments"),
+            "compartment clause missing: {cy}"
+        );
+        // Injection is before RETURN, not after.
+        let inject_pos = cy.find("d.class_level").unwrap();
+        let return_pos = cy.find("RETURN").unwrap();
+        assert!(inject_pos < return_pos, "injection must precede RETURN");
+    }
+
+    #[test]
+    fn cypher_with_acl_wildcard_emits_level_clause_only() {
+        use crate::lanes::AclContext;
+        let acl = AclContext {
+            clearance_level: 3,
+            compartment_grants: vec!["*".to_string()],
+        };
+        let base = cypher_for("law_violations_last_30d").unwrap();
+        let cy = cypher_with_acl(base, "law_violations_last_30d", Some(&acl));
+        assert!(
+            cy.contains("v.class_level IS NULL OR v.class_level <= 3"),
+            "level clause missing: {cy}"
+        );
+        assert!(
+            !cy.contains("class_compartments"),
+            "wildcard must omit compartment clause: {cy}"
+        );
+    }
+
+    #[test]
+    fn cypher_with_no_acl_returns_base_unchanged() {
+        let base = cypher_for("edge_artifact_touched_neighbours").unwrap();
+        let cy = cypher_with_acl(base, "edge_artifact_touched_neighbours", None);
+        assert_eq!(cy, base, "no ACL must return base cypher verbatim");
+    }
+
+    #[test]
+    fn cypher_with_acl_cross_project_ref_unchanged() {
+        use crate::lanes::AclContext;
+        let acl = AclContext {
+            clearance_level: 2,
+            compartment_grants: vec!["financial".to_string()],
+        };
+        let base = cypher_for("cross_project_ref").unwrap();
+        let cy = cypher_with_acl(base, "cross_project_ref", Some(&acl));
+        // cross_project_ref has no primary alias → base returned unchanged.
+        assert_eq!(cy, base, "structural template must not be ACL-filtered");
     }
 }

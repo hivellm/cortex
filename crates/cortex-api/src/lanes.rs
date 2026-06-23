@@ -73,6 +73,12 @@ pub const LANE_EXTRAS_KEYS: &[&str] = &[
     "valid_from_unix",
     "valid_to_unix",
     "superseded_at_unix",
+    // Phase21 §5.3 — Bell-LaPadula classification axes. Stamped by
+    // Meili / Vectorizer projections when the upstream document carries
+    // them; the post-fusion wedge (§5.5) reads them to enforce the
+    // lattice predicate after fusion.
+    "class_level",
+    "class_compartments",
 ];
 
 /// Phase11e §3 — sentinel `doc_id` prefix for synthetic
@@ -486,6 +492,21 @@ pub struct VectorRequest {
     pub k: usize,
     /// Repo + topic filter forwarded as Vectorizer metadata predicates.
     pub scope: Scope,
+    /// Phase21 §5.3 — optional ACL context; when set, the lane applies
+    /// the Bell-LaPadula predicate as a client-side post-filter (the
+    /// Vectorizer has no server-side filter parameter). `None` = passthrough.
+    pub acl: Option<AclContext>,
+}
+
+/// Phase21 §5.2 — per-request ACL context stamped onto lane requests
+/// when access control is active. `None` = passthrough (all hits allowed).
+#[derive(Debug, Clone)]
+pub struct AclContext {
+    /// Maximum clearance level of the authenticated principal.
+    pub clearance_level: u8,
+    /// Compartment grants. Contains `"*"` for acl_admin / passthrough callers
+    /// so the filter renderers can emit an efficient no-compartment-clause.
+    pub compartment_grants: Vec<String>,
 }
 
 /// Keyword-lane request — wraps the Meili index + filter shape.
@@ -499,6 +520,9 @@ pub struct KeywordRequest {
     pub limit: usize,
     /// Scope mapped to filterable attributes.
     pub scope: Scope,
+    /// Phase21 §5.2 — optional ACL context; when set, the lane injects the
+    /// Bell-LaPadula filter into the backend query. `None` = passthrough.
+    pub acl: Option<AclContext>,
 }
 
 /// Graph-lane request — parametrised Cypher (read-only).
@@ -512,6 +536,10 @@ pub struct GraphRequest {
     pub max_hops: u8,
     /// Scope echoed for ACL checks.
     pub scope: Scope,
+    /// Phase21 §5.4 — optional ACL context; when set, the lane injects
+    /// the Bell-LaPadula WHERE clause into the Cypher template.
+    /// `None` = passthrough (no ACL filtering).
+    pub acl: Option<AclContext>,
 }
 
 /// Vector-lane abstraction.
@@ -750,6 +778,8 @@ mod adr_011_tests {
             redactions: Vec::new(),
             content_hash: "sha256:0".to_string(),
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

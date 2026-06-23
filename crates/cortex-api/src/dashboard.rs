@@ -445,6 +445,7 @@ pub(crate) fn dashboard_memory_query(q: &str, limit: usize) -> QueryRequest {
         include_history: None,
         include_future: None,
         include_branches: None,
+        principal: None,
     }
 }
 

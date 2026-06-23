@@ -171,6 +171,7 @@ mod tests {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -192,6 +193,8 @@ mod tests {
             parent_event_id: None,
             session_id: None,
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

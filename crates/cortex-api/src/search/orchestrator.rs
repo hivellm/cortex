@@ -240,7 +240,47 @@ impl Orchestrator {
     /// with the [`RewrittenQuery`] the rewriter produced (so the
     /// caller can stamp the audit envelope). The caller decides
     /// whether to short-circuit on a cache hit before invoking this.
+    ///
+    /// ACL-unaware wrapper — all lane requests use scope-only filters.
+    /// Use [`Self::run_with_principal`] when Bell-LaPadula filtering is
+    /// required.
     pub async fn run(&self, req: &QueryRequest) -> (QueryResponse, RewrittenQuery) {
+        self.run_with_acl(req, None).await
+    }
+
+    /// Phase21 §5.2 — ACL-aware entry point. Resolves the principal's
+    /// clearance + compartments, stamps [`crate::lanes::AclContext`] onto
+    /// every keyword-lane request, and delegates to [`Self::run_with_acl`].
+    ///
+    /// Super-admin / acl_admin principals bypass the backend filter (they
+    /// are unrestricted at the application layer; only their level gate
+    /// applies).  For all other principals the Bell-LaPadula filter is
+    /// injected before each lane search so the Meili server enforces it
+    /// server-side (performance primary; the post-fusion wedge §5.5 is
+    /// the authoritative gate).
+    pub async fn run_with_principal(
+        &self,
+        req: &QueryRequest,
+        principal: &crate::security::principal::Principal,
+    ) -> (QueryResponse, RewrittenQuery) {
+        if principal.is_acl_admin() {
+            return self.run(req).await;
+        }
+        let acl = crate::lanes::AclContext {
+            clearance_level: principal.clearance_level,
+            compartment_grants: principal.compartment_grants.clone(),
+        };
+        self.run_with_acl(req, Some(acl)).await
+    }
+
+    /// Private inner runner. `acl_override` is stamped onto every keyword
+    /// lane request so the Meili backend can apply the Bell-LaPadula filter
+    /// server-side. `None` = passthrough (scope-only filters, backward compat).
+    async fn run_with_acl(
+        &self,
+        req: &QueryRequest,
+        acl_override: Option<crate::lanes::AclContext>,
+    ) -> (QueryResponse, RewrittenQuery) {
         let started = Instant::now();
 
         // Phase6f §4.1 — rewrite the prompt once, then patch each
@@ -265,6 +305,22 @@ impl Orchestrator {
         }
         for k in plan.keywords.iter_mut() {
             k.query = rewritten.keyword_query.clone();
+        }
+        // Phase21 §5.2 / §5.3 / §5.4 — stamp ACL context onto keyword,
+        // vector, and graph lane requests. Keyword requests get server-side
+        // filtering via `meili_acl_filter`; vector requests get client-side
+        // filtering via `vectorizer_acl_matches`; graph requests get inline
+        // Cypher WHERE injection via `nexus_acl_where_for_alias`.
+        if let Some(acl) = &acl_override {
+            for k in plan.keywords.iter_mut() {
+                k.acl = Some(acl.clone());
+            }
+            for v in plan.vectors.iter_mut() {
+                v.acl = Some(acl.clone());
+            }
+            for g in plan.graphs.iter_mut() {
+                g.acl = Some(acl.clone());
+            }
         }
         // The graph lane today binds the original prompt as the
         // `query` Cypher param (most templates ignore it; the few
@@ -496,6 +552,16 @@ impl Orchestrator {
                 .await;
         }
 
+        // Phase21 §5.5 — post-fusion ACL wedge. Drop any hit whose
+        // `class_level`/`class_compartments` extras fail the
+        // Bell-LaPadula predicate for the calling principal. This gate
+        // runs AFTER cross-project propagation so propagated hits are
+        // also filtered, and BEFORE the reranker so we don't score
+        // hits that will be discarded.
+        if let Some(acl) = &acl_override {
+            apply_acl_wedge(&mut fused, acl, &response.query_id);
+        }
+
         // Phase17 §2.3 — cross-encoder reranker step (fail-open, §2.5).
         // Sends the top `top_k_input` fused candidates to the TEI
         // service and overwrites each hit's `score` with the returned
@@ -671,6 +737,7 @@ impl Orchestrator {
             params: serde_json::json!({ "query": format!("{active}:main") }),
             max_hops: u8::try_from(cfg.max_hops).unwrap_or(1).max(1),
             scope: req.scope.clone(),
+            acl: None,
         };
         let edges = match self.graph.query(&gr).await {
             Ok(e) => e,
@@ -980,6 +1047,89 @@ fn apply_temporal_classifier(
     *fused = kept;
 }
 
+/// Phase21 §5.5 — post-fusion ACL drop-wedge.
+///
+/// Iterates over all fused hits and drops those whose `class_level` /
+/// `class_compartments` extras fail the `can_read` Bell-LaPadula
+/// predicate for the calling principal's `acl`. Hits that carry no
+/// classification metadata are treated as `class_level = 0` (public),
+/// so they always pass. This function is the authoritative enforcement
+/// gate; the per-lane filters (§5.2 – §5.4) are load-bearing
+/// pre-filters that reduce result set size before fusion.
+///
+/// Emits per-hit + per-request audit events on `cortex_audit` so
+/// operators can diagnose "why did Cortex hide this fact" without
+/// needing the explain path.
+fn apply_acl_wedge(
+    fused: &mut Vec<LaneHit>,
+    acl: &crate::lanes::AclContext,
+    query_id: &str,
+) {
+    let mut kept: Vec<LaneHit> = Vec::with_capacity(fused.len());
+    let mut evaluated: u32 = 0;
+    let mut granted: u32 = 0;
+    let mut denied: u32 = 0;
+
+    for hit in std::mem::take(fused) {
+        evaluated += 1;
+
+        let fact_level = hit
+            .extras
+            .get("class_level")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u8);
+        let fact_compartments: Vec<String> = hit
+            .extras
+            .get("class_compartments")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let permit = cortex_workers::acl::filter::vectorizer_acl_matches(
+            acl.clearance_level,
+            &acl.compartment_grants,
+            fact_level,
+            &fact_compartments,
+        );
+
+        let verdict = if permit { "grant" } else { "deny" };
+        tracing::event!(
+            target: "cortex_audit",
+            tracing::Level::INFO,
+            kind = "access_decision",
+            query_id = %query_id,
+            doc_id = %hit.doc_id,
+            fact_level = ?fact_level,
+            clearance_level = acl.clearance_level,
+            verdict = verdict,
+        );
+
+        if permit {
+            granted += 1;
+            kept.push(hit);
+        } else {
+            denied += 1;
+        }
+    }
+
+    tracing::event!(
+        target: "cortex_audit",
+        tracing::Level::INFO,
+        kind = "access_decision_summary",
+        query_id = %query_id,
+        evaluated = evaluated,
+        granted = granted,
+        denied = denied,
+    );
+
+    *fused = kept;
+}
+
 /// Phase18 §3.9 — emit a `branch_resolution` envelope on the
 /// `cortex_audit` channel. Today's orchestrator does not yet
 /// receive a caller-supplied branch (phase18 §4 P3 extends the
@@ -1246,6 +1396,25 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
         // `None` and are filled in by that pass.
         verified: None,
         verdict: None,
+        // Phase21 §5.6 — project classification metadata from extras so
+        // the pre-thinking bundle filter can enforce `can_read` on the
+        // assembled prompt context without re-accessing the lane level.
+        class_level: hit
+            .extras
+            .get("class_level")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u8),
+        class_compartments: hit
+            .extras
+            .get("class_compartments")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
     }
 }
 

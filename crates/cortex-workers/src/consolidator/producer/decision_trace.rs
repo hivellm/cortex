@@ -258,6 +258,8 @@ mod tests {
             content_hash: "sha256:".to_string()
                 + "0000000000000000000000000000000000000000000000000000000000000000",
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

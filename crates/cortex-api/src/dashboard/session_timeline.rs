@@ -287,6 +287,8 @@ mod tests {
             payload,
             redactions: Vec::new(),
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

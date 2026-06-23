@@ -38,6 +38,10 @@ fn build_service() -> (Arc<QueryService>, Arc<MemoryKeywordLane>) {
         audit_store: Arc::new(AuditStore::new()),
         indexed_repos: None,
         coverage_snapshot: None,
+
+        principal_store: None,
+
+        api_key_store: None,
     };
     (Arc::new(svc), k)
 }

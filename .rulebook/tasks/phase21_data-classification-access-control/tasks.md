@@ -27,20 +27,20 @@
 - [x] 3.6 Spec section in `docs/specs/40-...` covering the assignment pipeline + merge precedence.
 
 ## 4. P3 — Principal model + resolution
-- [ ] 4.1 `Principal { id, clearance_level, compartment_grants, roles }` type (`crates/cortex-api/src/acl.rs` or a new `principal.rs`) + the lattice predicate `can_read(principal, level, compartments) -> bool`. Pure, exhaustively unit-tested (clears/denies on level + each compartment-subset case + empty-grant + super-admin).
-- [ ] 4.2 `PrincipalStore` + RBAC role bindings (role → clearance + compartments); resolve a `Principal` from a role set. Backed by the existing storage layer; admin-mutable. Unit tests.
-- [ ] 4.3 Extend `ApiKeyStore` (`crates/cortex-api/src/storage/api_keys.rs`) with a role binding per key; resolve key → principal. Backward-compat: keys without a binding resolve to the configured default principal. Unit tests.
-- [ ] 4.4 Caller-identity resolution: map the authenticated request (API key, or signed `x-cortex-principal` header when configured) → `Principal`; thread it into `QueryService`/orchestrator. Unauthenticated → default principal per ADR-1.3. Unit + IT.
-- [ ] 4.5 Thread `principal: Option<PrincipalRef>` onto `QueryRequest` (`crates/cortex-api/src/types.rs`), Option-typed + omit-when-none (mirror phase18 `as_of`/`branch`/`projects`); patch every `QueryRequest { .. }` literal site to `None`. Compile + existing-tests green.
-- [ ] 4.6 Spec `docs/specs/41-principal-and-rbac.md`.
+- [x] 4.1 `Principal { id, clearance_level, compartment_grants, roles }` type (`crates/cortex-api/src/acl.rs` or a new `principal.rs`) + the lattice predicate `can_read(principal, level, compartments) -> bool`. Pure, exhaustively unit-tested (clears/denies on level + each compartment-subset case + empty-grant + super-admin).
+- [x] 4.2 `PrincipalStore` + RBAC role bindings (role → clearance + compartments); resolve a `Principal` from a role set. Backed by the existing storage layer; admin-mutable. Unit tests.
+- [x] 4.3 Extend `ApiKeyStore` (`crates/cortex-api/src/storage/api_keys.rs`) with a role binding per key; resolve key → principal. Backward-compat: keys without a binding resolve to the configured default principal. Unit tests.
+- [x] 4.4 Caller-identity resolution: map the authenticated request (API key, or signed `x-cortex-principal` header when configured) → `Principal`; thread it into `QueryService`/orchestrator. Unauthenticated → default principal per ADR-1.3. Unit + IT.
+- [x] 4.5 Thread `principal: Option<PrincipalRef>` onto `QueryRequest` (`crates/cortex-api/src/types.rs`), Option-typed + omit-when-none (mirror phase18 `as_of`/`branch`/`projects`); patch every `QueryRequest { .. }` literal site to `None`. Compile + existing-tests green.
+- [x] 4.6 Spec `docs/specs/41-principal-and-rbac.md`.
 
 ## 5. P4 — Enforcement in retrieval (defense-in-depth)
-- [ ] 5.1 ACL filter builder `crates/cortex-workers/src/acl/filter.rs`: render the per-lane clause from a principal — Meili (`class_level <= N AND (class_compartments IS EMPTY OR class_compartments IN [...])`), Vectorizer payload filter, Nexus `WHERE`. Pure renderers + unit tests (incl. compartment-subset semantics + escape).
-- [ ] 5.2 Meili lane wiring (`crates/cortex-api/src/lanes/meili_lane.rs` + `meili_loader.rs`): inject the ACL clause into every keyword request when AC is enabled. IT against seeded docs at mixed levels.
-- [ ] 5.3 Vectorizer lane wiring (`vectorizer_lane.rs`): apply the payload ACL pre-filter. IT.
-- [ ] 5.4 Nexus lane wiring (`nexus_graph_lane.rs`): add the ACL `WHERE` to each whitelisted template (inline-literal per the Nexus 2.2.0 param-binding workaround, nexus#3). IT.
-- [ ] 5.5 Post-fusion ACL drop-wedge in `crates/cortex-api/src/search/orchestrator.rs` (mirror `apply_temporal_classifier`): after the temporal wedge, drop any hit whose `class_*` (read from `LaneHit::extras`) fails `can_read(principal, ..)`; extend `LANE_EXTRAS_KEYS` with `class_level`/`class_compartments`. Pinned IT (drop/keep across the lattice).
-- [ ] 5.6 Pre-thinking bundle filter (`crates/cortex-pre-thinking/src/bundle.rs`): apply `can_read` before any section (laws/decisions/snippets/similar) enters the bundle, so sensitive facts never reach the assembled prompt. IT.
+- [x] 5.1 ACL filter builder `crates/cortex-workers/src/acl/filter.rs`: render the per-lane clause from a principal — Meili (`class_level <= N AND (class_compartments IS EMPTY OR class_compartments IN [...])`), Vectorizer payload filter, Nexus `WHERE`. Pure renderers + unit tests (incl. compartment-subset semantics + escape).
+- [x] 5.2 Meili lane wiring (`crates/cortex-api/src/lanes/meili_lane.rs` + `meili_loader.rs`): inject the ACL clause into every keyword request when AC is enabled. IT against seeded docs at mixed levels.
+- [x] 5.3 Vectorizer lane wiring (`vectorizer_lane.rs`): apply the payload ACL pre-filter. IT.
+- [x] 5.4 Nexus lane wiring (`nexus_graph_lane.rs`): add the ACL `WHERE` to each whitelisted template (inline-literal per the Nexus 2.2.0 param-binding workaround, nexus#3). IT.
+- [x] 5.5 Post-fusion ACL drop-wedge in `crates/cortex-api/src/search/orchestrator.rs` (mirror `apply_temporal_classifier`): after the temporal wedge, drop any hit whose `class_*` (read from `LaneHit::extras`) fails `can_read(principal, ..)`; extend `LANE_EXTRAS_KEYS` with `class_level`/`class_compartments`. Pinned IT (drop/keep across the lattice).
+- [x] 5.6 Pre-thinking bundle filter (`crates/cortex-pre-thinking/src/bundle.rs`): apply `can_read` before any section (laws/decisions/snippets/similar) enters the bundle, so sensitive facts never reach the assembled prompt. IT.
 - [ ] 5.7 Raw search proxies (`crates/cortex-api/src/search_proxy.rs` `/v1/search/{keyword,vector,graph}`): apply the principal filter (these bypass the orchestrator). IT — a raw proxy MUST NOT leak a classified row.
 - [ ] 5.8 Spec `docs/specs/42-access-enforcement.md` (the lattice predicate, the four enforcement points, the defense-in-depth rationale, pinned tests).
 

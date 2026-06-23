@@ -89,6 +89,16 @@ pub struct EnrichedEvent {
     /// then falls back to a synthetic per-event session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// phase21 — sensitivity level ordinal (public=0, internal=1, confidential=2,
+    /// restricted=3). Stamped by the classification worker after the classifier runs;
+    /// None until then. All four enforcement points read this field from the event
+    /// metadata when projecting backend filter clauses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_level: Option<u8>,
+    /// phase21 — orthogonal need-to-know compartment labels (e.g. `["financial","hr"]`).
+    /// None is equivalent to an empty set — omitted on the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_compartments: Option<Vec<String>>,
 }
 
 /// Per-event failure surfaced in an [`EmbedReport`].
@@ -526,6 +536,7 @@ mod tests {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -547,6 +558,8 @@ mod tests {
             parent_event_id: None,
             session_id: None,
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 

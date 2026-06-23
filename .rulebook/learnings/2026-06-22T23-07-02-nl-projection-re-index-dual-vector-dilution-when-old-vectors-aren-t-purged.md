@@ -1,0 +1,4 @@
+# NL projection re-index: dual-vector dilution when old vectors aren't purged
+**Source**: manual
+**Date**: 2026-06-22
+Changing event_text() projection changes the dedup_key (content hash changes), so new NL vectors are ADDED alongside existing JSON vectors — they don't replace them. The result: both JSON and NL vectors exist in the Vectorizer corpus simultaneously. MRR stays flat (0.4567 vs 0.4733 baseline) because the reranker dominates AND because the dual-vector corpus dilutes the ranking signal. A clean re-index would require: (1) purge the old collection or delete vectors by old dedup_key pattern, THEN (2) re-bootstrap. Without the purge, the "improvement" only surfaces in reranker mode where text quality matters more than vector similarity ranking.

@@ -128,12 +128,15 @@ pub fn build_doc(event: &EnrichedEvent, bootstrap: bool, max_body_bytes: usize) 
         valid_from_unix: None,
         valid_to_unix: None,
         superseded_at_unix: None,
+        class_level: None,
+        class_compartments: None,
         ext: BTreeMap::new(),
     };
 
     apply_extensions(event, &mut doc);
     apply_top_level_projection(event, &mut doc);
     apply_bitemporal_projection(event, &mut doc);
+    apply_classification_projection(event, &mut doc);
     BuildOutcome::Ready(Box::new(doc))
 }
 
@@ -756,6 +759,15 @@ fn apply_bitemporal_projection(event: &EnrichedEvent, doc: &mut Document) {
     // stamps them on the target row of each supersession event.
 }
 
+fn apply_classification_projection(event: &EnrichedEvent, doc: &mut Document) {
+    if doc.class_level.is_none() {
+        doc.class_level = event.class_level;
+    }
+    if doc.class_compartments.is_none() {
+        doc.class_compartments = event.class_compartments.clone();
+    }
+}
+
 /// Days between `last_rev_at` (RFC 3339) and now (UTC). Returns `0`
 /// when the timestamp is unparseable or in the future — the
 /// pre-thinking renderer reads this value to drive the staleness
@@ -831,6 +843,7 @@ mod top_level_projection_tests {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -852,6 +865,8 @@ mod top_level_projection_tests {
             parent_event_id: None,
             session_id: None,
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -934,6 +949,8 @@ mod top_level_projection_tests {
             parent_event_id: None,
             session_id: None,
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -1200,6 +1217,95 @@ mod top_level_projection_tests {
             !doc.body.trim_start().starts_with('{'),
             "body must be prose text, not a JSON-object string; got: {:?}",
             doc.body.chars().take(80).collect::<String>()
+        );
+    }
+}
+
+#[cfg(test)]
+mod classification_projection_tests {
+    use super::*;
+    use crate::classifier::{ClassifierOutput, ClassifierSource, PiiRisk, Severity};
+    use cortex_core::events::Kind;
+    use serde_json::json;
+
+    fn classifier() -> ClassifierOutput {
+        ClassifierOutput {
+            event_id: "evt".into(),
+            kind_refinement: None,
+            topics: vec![],
+            severity: Severity::Info,
+            pii_risk: PiiRisk::Low,
+            redaction_suggestions: vec![],
+            summary: None,
+            entities: Vec::new(),
+            relations: Vec::new(),
+            sensitivity: Default::default(),
+            source: ClassifierSource::StaticFallback,
+            prompt_version: "v1".into(),
+            model: "static-v1".into(),
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+        }
+    }
+
+    fn evt(class_level: Option<u8>, class_compartments: Option<Vec<String>>) -> EnrichedEvent {
+        EnrichedEvent {
+            event_id: "evt-cls".into(),
+            kind: Kind::Turn,
+            content_hash: "h-cls".into(),
+            redacted_payload: json!({ "user_message": "hello", "assistant_message": "hi" }),
+            classifier: classifier(),
+            context_repo: Some("Cortex".into()),
+            context_path: None,
+            parent_event_id: None,
+            session_id: None,
+            occurred_at_ms: 0,
+            class_level,
+            class_compartments,
+        }
+    }
+
+    fn build(event: &EnrichedEvent) -> Document {
+        match build_doc(event, false, 1024 * 1024) {
+            BuildOutcome::Ready(d) => *d,
+            BuildOutcome::Skipped => panic!("expected Ready"),
+        }
+    }
+
+    #[test]
+    fn class_level_and_compartments_propagate_from_event() {
+        let doc = build(&evt(Some(2), Some(vec!["hr".into(), "legal".into()])));
+        assert_eq!(doc.class_level, Some(2));
+        assert_eq!(
+            doc.class_compartments,
+            Some(vec!["hr".to_string(), "legal".to_string()])
+        );
+    }
+
+    #[test]
+    fn absent_class_fields_remain_none() {
+        let doc = build(&evt(None, None));
+        assert_eq!(doc.class_level, None);
+        assert_eq!(doc.class_compartments, None);
+    }
+
+    #[test]
+    fn class_level_zero_public_is_preserved() {
+        let doc = build(&evt(Some(0), Some(vec![])));
+        assert_eq!(doc.class_level, Some(0));
+    }
+
+    #[test]
+    fn class_level_restricted_three() {
+        let doc = build(&evt(
+            Some(3),
+            Some(vec!["financial".into(), "customer_pii".into()]),
+        ));
+        assert_eq!(doc.class_level, Some(3));
+        assert_eq!(
+            doc.class_compartments.as_deref(),
+            Some(["financial".to_string(), "customer_pii".to_string()].as_slice())
         );
     }
 }

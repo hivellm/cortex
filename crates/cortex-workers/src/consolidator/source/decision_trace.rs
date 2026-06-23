@@ -134,6 +134,8 @@ mod tests {
             content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 .to_string(),
             parent_event_id: parent_event_id.map(str::to_string),
+            class_level: None,
+            class_compartments: None,
         }
     }
 

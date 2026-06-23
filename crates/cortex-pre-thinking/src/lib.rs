@@ -14,6 +14,7 @@
 
 pub mod breaker;
 pub mod budget;
+pub mod bundle;
 pub mod formatter;
 pub mod health_source;
 pub mod implicit_feedback;
@@ -24,6 +25,7 @@ pub mod rewriter;
 pub mod scope;
 
 pub use budget::{clip_to_budget, ClippedBundle, TrimStep};
+pub use bundle::filter_snippets_by_acl;
 pub use formatter::{clip_utf8, format_bundle, section_caps, FormatOptions, SnippetTrim};
 pub use intent_select::{select as select_intent, select_with, Rule, DEFAULT_RULES};
 pub use metrics::Metrics;

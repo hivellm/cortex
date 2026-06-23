@@ -51,6 +51,12 @@ pub struct BootstrapEvent {
     /// Redaction stats produced by [`redact`].
     #[serde(default)]
     pub redactions: u32,
+    /// Phase21 §3.2 — sensitivity level floor from `[cortex.classification]` rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_level: Option<u8>,
+    /// Phase21 §3.2 — compartments floor from `[cortex.classification]` rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_compartments: Option<Vec<String>>,
 }
 
 /// Phase11e §5 — match a `BootstrapEvent.kind` (e.g.
@@ -114,6 +120,24 @@ fn finalise(
         redacted_payload: payload,
         content_hash: hash,
         redactions: u32::try_from(report.tokens.len()).unwrap_or(u32::MAX),
+        class_level: None,
+        class_compartments: None,
+    }
+}
+
+/// Copy `class_level` / `class_compartments` from `entry` onto `event`
+/// (phase21 §3.2). The stamper in `graph/classification.rs` later
+/// applies the config floor; this call carries the walker-resolved
+/// floor so it survives before the workers run.
+fn stamp_classification_floor(event: &mut BootstrapEvent, entry: &WalkEntry) {
+    if let WalkEntry::Accepted {
+        class_level,
+        class_compartments,
+        ..
+    } = entry
+    {
+        event.class_level = *class_level;
+        event.class_compartments = class_compartments.clone();
     }
 }
 
@@ -140,13 +164,9 @@ pub fn emit_artifact_code(
         "text": body,
         "language": language,
     });
-    Some(finalise(
-        "artifact.code",
-        session_id,
-        source,
-        payload,
-        stream,
-    ))
+    let mut evt = finalise("artifact.code", session_id, source, payload, stream);
+    stamp_classification_floor(&mut evt, entry);
+    Some(evt)
 }
 
 /// Build the `artifact.doc` event for one accepted documentation file.
@@ -171,13 +191,9 @@ pub fn emit_artifact_doc(
         "text": body,
         "title": derive_doc_title(body, rel_path),
     });
-    Some(finalise(
-        "artifact.doc",
-        session_id,
-        source,
-        payload,
-        stream,
-    ))
+    let mut evt = finalise("artifact.doc", session_id, source, payload, stream);
+    stamp_classification_floor(&mut evt, entry);
+    Some(evt)
 }
 
 /// Build the `turn.historical` event for one git commit.
@@ -1084,7 +1100,7 @@ pub fn emit_for_file_multi_with_extract(
     if body.trim().is_empty() {
         return Vec::new();
     }
-    match class {
+    let mut events: Vec<BootstrapEvent> = match class {
         FileClass::Code => emit_artifact_code(
             repo_id,
             session_id,
@@ -1135,7 +1151,15 @@ pub fn emit_for_file_multi_with_extract(
             repo_id, session_id, git_ref, rel_path, body, stream,
         )],
         FileClass::Other => Vec::new(),
+    };
+    // Phase21 §3.2 — stamp the classification floor on every event
+    // produced from this entry (artifact, decision, law, etc.).
+    // `emit_artifact_code`/`doc` already stamp; the `or_insert`
+    // semantics mean double-stamping is a safe no-op.
+    for evt in &mut events {
+        stamp_classification_floor(evt, entry);
     }
+    events
 }
 
 fn language_for(rel_path: &str) -> Option<String> {
@@ -1180,6 +1204,8 @@ mod tests {
             rel_path: rel.to_string(),
             size_bytes: size,
             class,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -1506,6 +1532,8 @@ mod tests {
             rel_path: "docs/analysis/cortex/01-overview.md".to_string(),
             size_bytes: 4242,
             class: FileClass::Analysis,
+            class_level: None,
+            class_compartments: None,
         };
         let evt = emit_for_file(
             "Cortex",
@@ -1639,6 +1667,8 @@ mod tests {
             rel_path: ".rulebook/specs/GIT.md".to_string(),
             size_bytes: 200,
             class: FileClass::Law,
+            class_level: None,
+            class_compartments: None,
         };
         let body =
             "# Git\n\n## Allowed\n\nstatus / diff / log.\n\n## Forbidden\n\nrebase / reset.\n";
@@ -1664,6 +1694,8 @@ mod tests {
             rel_path: ".claude/rules/diagnostic-first.md".to_string(),
             size_bytes: 100,
             class: FileClass::Law,
+            class_level: None,
+            class_compartments: None,
         };
         let body = "# Check before test\n\n## Allowed\n\nfine.\n";
         let events = emit_for_file_multi(
@@ -1680,6 +1712,49 @@ mod tests {
             ".claude/rules/*.md keeps the single-law-per-file shape"
         );
         assert_eq!(events[0].kind, "law.imported");
+    }
+
+    // Phase21 §3.2 — classification floor carried onto events.
+
+    #[test]
+    fn class_floor_propagates_to_artifact_code_event() {
+        let e = WalkEntry::Accepted {
+            path: PathBuf::from("docs/financial/code.rs"),
+            rel_path: "docs/financial/code.rs".to_string(),
+            size_bytes: 100,
+            class: FileClass::Code,
+            class_level: Some(2),
+            class_compartments: Some(vec!["financial".into()]),
+        };
+        let evt = emit_artifact_code(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            &e,
+            "fn main() {}",
+            Some("rust"),
+            BOOTSTRAP_STREAM,
+        )
+        .expect("emit");
+        assert_eq!(evt.class_level, Some(2));
+        assert_eq!(evt.class_compartments.as_deref(), Some(["financial".to_string()].as_slice()));
+    }
+
+    #[test]
+    fn class_floor_absent_when_no_rule_matches() {
+        let e = entry("src/lib.rs", FileClass::Code, 100);
+        let evt = emit_artifact_code(
+            "Cortex",
+            "01TESTSESSION0000000000000",
+            None,
+            &e,
+            "fn foo() {}",
+            None,
+            BOOTSTRAP_STREAM,
+        )
+        .expect("emit");
+        assert!(evt.class_level.is_none());
+        assert!(evt.class_compartments.is_none());
     }
 
     #[test]

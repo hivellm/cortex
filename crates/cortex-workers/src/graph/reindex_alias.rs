@@ -27,6 +27,18 @@ pub const VECTORIZER_BITEMPORAL_ALIAS: &str = "cortex-vector-bitemporal-v1";
 /// alias` subcommand (§2.9).
 pub const ALL_BITEMPORAL_ALIASES: &[&str] = &[MEILI_BITEMPORAL_ALIAS, VECTORIZER_BITEMPORAL_ALIAS];
 
+/// Phase21 §2.6 — current Meili reindex alias for the classification
+/// cut-over. Rows backfilled by `cortex-ops migrate-classification`
+/// land here; the ACL wedge reads from this alias when enabled.
+pub const MEILI_CLASSIFICATION_ALIAS: &str = "cortex-meili-classification-v1";
+
+/// Phase21 §2.6 — current Vectorizer reindex alias.
+pub const VECTORIZER_CLASSIFICATION_ALIAS: &str = "cortex-vector-classification-v1";
+
+/// Phase21 §2.6 — every classification alias the migration may flip.
+pub const ALL_CLASSIFICATION_ALIASES: &[&str] =
+    &[MEILI_CLASSIFICATION_ALIAS, VECTORIZER_CLASSIFICATION_ALIAS];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +68,32 @@ mod tests {
         assert!(ALL_BITEMPORAL_ALIASES.contains(&MEILI_BITEMPORAL_ALIAS));
         assert!(ALL_BITEMPORAL_ALIASES.contains(&VECTORIZER_BITEMPORAL_ALIAS));
         assert_eq!(ALL_BITEMPORAL_ALIASES.len(), 2);
+    }
+
+    #[test]
+    fn classification_aliases_share_v1_suffix_for_rollback_pairing() {
+        for alias in ALL_CLASSIFICATION_ALIASES {
+            assert!(
+                alias.ends_with("-v1"),
+                "alias `{alias}` must carry the `-v1` suffix so a future v2 cutover stays pairwise revertible"
+            );
+        }
+    }
+
+    #[test]
+    fn classification_aliases_use_cortex_prefix() {
+        for alias in ALL_CLASSIFICATION_ALIASES {
+            assert!(
+                alias.starts_with("cortex-"),
+                "alias `{alias}` must carry the `cortex-` prefix"
+            );
+        }
+    }
+
+    #[test]
+    fn classification_alias_set_covers_meili_and_vectorizer() {
+        assert!(ALL_CLASSIFICATION_ALIASES.contains(&MEILI_CLASSIFICATION_ALIAS));
+        assert!(ALL_CLASSIFICATION_ALIASES.contains(&VECTORIZER_CLASSIFICATION_ALIAS));
+        assert_eq!(ALL_CLASSIFICATION_ALIASES.len(), 2);
     }
 }

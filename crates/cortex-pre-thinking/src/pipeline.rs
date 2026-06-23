@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use cortex_api::{Intent, Notice, QueryRequest, QueryResponse};
+use cortex_api::{Intent, Notice, Principal, QueryRequest, QueryResponse};
 
 use crate::breaker::{Breaker, BreakerState, FailReason};
 use crate::budget::{clip_to_budget, ClippedBundle, TrimStep};
@@ -55,6 +55,9 @@ pub struct PreThinkingInput<'a> {
     pub recent_files: &'a [RecentFile],
     /// Budget knobs.
     pub budget: PreThinkingBudget,
+    /// Phase21 §5.6 — optional principal for bundle-level ACL filtering.
+    /// When `None` all snippets pass through (backward compat).
+    pub principal: Option<Principal>,
 }
 
 /// Callable surface so the pipeline doesn't depend on a particular
@@ -214,6 +217,7 @@ pub async fn run_with_breaker<Q: QueryFn>(
         include_history: None,
         include_future: None,
         include_branches: None,
+        principal: None,
     };
 
     let total_budget = Duration::from_millis(input.budget.time_ms.max(1) as u64);
@@ -225,7 +229,7 @@ pub async fn run_with_breaker<Q: QueryFn>(
             (None, Some(FailReason::Timeout))
         }
     };
-    let response = match resp_opt {
+    let mut response = match resp_opt {
         Some(r) => {
             // Successful upstream response — half-open probes
             // close the breaker; closed-state successes are no-ops.
@@ -256,6 +260,12 @@ pub async fn run_with_breaker<Q: QueryFn>(
             };
         }
     };
+    // Phase21 §5.6 — bundle-level ACL filter: drop snippets the principal
+    // may not read before the formatter assembles the system-prompt bundle.
+    if let Some(ref p) = input.principal {
+        crate::bundle::filter_snippets_by_acl(&mut response.results.snippets, Some(p));
+    }
+
     let notice = response.notice.clone();
 
     let clipped: ClippedBundle = clip_to_budget(
@@ -349,6 +359,7 @@ mod tests {
                 bundle_bytes: 4 * 1024,
                 time_ms: 50,
             },
+            principal: None,
         }
     }
 

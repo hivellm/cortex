@@ -334,6 +334,7 @@ mod tests {
             summary: None,
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -359,6 +360,8 @@ mod tests {
             parent_event_id: None,
             session_id: None,
             occurred_at_ms: 0,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -642,10 +645,7 @@ mod tests {
     fn index_for_event_global_returns_laws_for_law_kind() {
         // phase0_laws-index-routing — law DEFINITIONS dual-write to
         // `cortex_laws` so `law_check` is answerable cross-repo.
-        assert_eq!(
-            index_for_event_global(Kind::Law),
-            Some("cortex_laws")
-        );
+        assert_eq!(index_for_event_global(Kind::Law), Some("cortex_laws"));
     }
 
     #[test]

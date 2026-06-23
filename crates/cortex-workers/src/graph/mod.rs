@@ -11,6 +11,8 @@ pub mod analyzer_dispatch;
 pub mod bitemporal;
 pub mod branch;
 pub mod citations;
+pub mod classification;
+pub mod classification_migration;
 pub mod coalescer;
 pub mod config;
 pub mod cross_project;

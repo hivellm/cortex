@@ -1,0 +1,4 @@
+# Bootstrap re-index: must rebuild+restart workers BEFORE running bootstrap
+**Source**: manual
+**Date**: 2026-06-22
+If you rebuild and restart the embedder worker AFTER running bootstrap, the bootstrap events are consumed by the OLD embedder. The pipeline is: bootstrap → Synap (cortex.events.bootstrap) → classifier → Synap (cortex.events.enriched) → embedder → Vectorizer. The classifier and embedder subscribe from their last checkpoint. When the new embedder starts with no checkpoint (fresh container), it re-processes from offset 0 in cortex.events.enriched — so it DOES pick up previously classified events. But you still need to run bootstrap AGAIN after the rebuild to get the new events in if the classifier's checkpoint is at the end of the stream. Correct order: build → restart all workers → run bootstrap --force.

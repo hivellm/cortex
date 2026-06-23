@@ -90,6 +90,8 @@ fn canonical_envelope(event_id: &str, kind: Kind) -> Envelope {
         redactions: vec![],
         content_hash: "sha256:cafef00d".to_string(),
         parent_event_id: None,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -215,6 +217,7 @@ impl Classifier for FixedTokenBackend {
                 summary: None,
                 entities: Vec::new(),
                 relations: Vec::new(),
+                sensitivity: Default::default(),
                 source: ClassifierSource::HaikuCli,
                 prompt_version: "test-v1".into(),
                 model: "claude-haiku-4-5".into(),

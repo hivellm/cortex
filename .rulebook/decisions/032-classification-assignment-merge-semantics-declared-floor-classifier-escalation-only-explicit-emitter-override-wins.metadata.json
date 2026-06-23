@@ -1,0 +1,11 @@
+{
+  "id": 32,
+  "slug": "classification-assignment-merge-semantics-declared-floor-classifier-escalation-only-explicit-emitter-override-wins",
+  "title": "Classification assignment merge semantics: declared floor + classifier escalation-only; explicit emitter override wins",
+  "status": "proposed",
+  "date": "2026-06-23",
+  "relatedTasks": [
+    "phase21_data-classification-access-control"
+  ],
+  "supersededBy": null
+}

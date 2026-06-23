@@ -191,6 +191,13 @@ pub struct QueryRequest {
     /// Off by default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_branches: Option<bool>,
+    /// Phase21 §4.5 — resolved principal id (a `PrincipalRef` string).
+    /// Option-typed + omit-when-none (mirrors phase18 `as_of`/`branch`/
+    /// `projects`). Set server-side by the principal resolver; clients
+    /// may also provide it as a hint. Skipped in serialisation when absent
+    /// so existing API consumers round-trip unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
 }
 
 fn default_limit() -> usize {
@@ -266,6 +273,15 @@ pub struct Snippet {
     /// is `Some`). `None` when the verifier was not run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<cortex_workers::verify::SymbolVerdict>,
+    /// Phase21 §5.6 — Bell-LaPadula sensitivity level of this fact.
+    /// `None` = unclassified (public). Used by the pre-thinking bundle
+    /// filter to enforce `can_read` before the fact enters the prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_level: Option<u8>,
+    /// Phase21 §5.6 — need-to-know compartments. Empty = no compartment
+    /// constraint; every string must appear in the principal's grants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub class_compartments: Vec<String>,
 }
 
 /// One decision overlay entry.

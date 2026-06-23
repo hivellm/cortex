@@ -547,6 +547,7 @@ impl Tool for PreThinkingTool {
             cwd: &cwd,
             recent_files: &parsed.recent_files,
             budget,
+            principal: None,
         };
 
         let out: PreThinkingOutput =

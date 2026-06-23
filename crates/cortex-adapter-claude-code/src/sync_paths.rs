@@ -303,6 +303,7 @@ impl SyncClient {
                 bundle_bytes: budget_bytes,
                 time_ms: budget_ms,
             },
+            principal: None,
         };
 
         let output = pre_thinking_run(&input, query_fn, self.prethink_metrics.clone()).await;

@@ -44,6 +44,15 @@ pub struct Envelope {
     /// Parent event id for nested/derived events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_event_id: Option<String>,
+    /// phase21 — sensitivity level ordinal: public=0, internal=1, confidential=2, restricted=3.
+    /// Absent (None) until the classification stamper runs; treated as public=0 by all
+    /// enforcement points when the AC feature is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_level: Option<u8>,
+    /// phase21 — orthogonal need-to-know compartments (e.g. `["financial","hr"]`).
+    /// Empty vec and None are equivalent; serde omits on None to keep the wire format small.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_compartments: Option<Vec<String>>,
 }
 
 /// Router destination for an event.
@@ -1016,5 +1025,98 @@ mod topic_card_tests {
         assert_eq!(TOPIC_CARD_SYNTHESIS_MAX_BYTES, 4_000);
         assert_eq!(TOPIC_CARD_OPEN_QUESTIONS_MAX, 8);
         assert_eq!(TOPIC_CARD_RELATED_MAX, 32);
+    }
+}
+
+#[cfg(test)]
+mod classification_fields_tests {
+    use super::*;
+
+    fn minimal_envelope() -> Envelope {
+        Envelope {
+            event_id: "01EVT".into(),
+            schema_version: "1".into(),
+            occurred_at: "2026-06-23T00:00:00Z".into(),
+            ingested_at: None,
+            session_id: "01SESS".into(),
+            stream: Stream::Live,
+            tool: "test".into(),
+            model: None,
+            kind: Kind::Turn,
+            context: Context {
+                repo: None,
+                branch: None,
+                commit: None,
+                cwd: None,
+                user: None,
+                platform: "linux".into(),
+                ide: None,
+                extras: Default::default(),
+            },
+            payload: serde_json::json!({}),
+            redactions: vec![],
+            content_hash: "sha256:abc".into(),
+            parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
+        }
+    }
+
+    #[test]
+    fn class_fields_default_to_none_and_are_omitted_when_serialised() {
+        let env = minimal_envelope();
+        let json = serde_json::to_string(&env).expect("serialize");
+        assert!(
+            !json.contains("class_level"),
+            "class_level absent when None"
+        );
+        assert!(
+            !json.contains("class_compartments"),
+            "class_compartments absent when None"
+        );
+    }
+
+    #[test]
+    fn class_fields_round_trip_when_set() {
+        let mut env = minimal_envelope();
+        env.class_level = Some(2);
+        env.class_compartments = Some(vec!["financial".into(), "hr".into()]);
+        let json = serde_json::to_string(&env).expect("serialize");
+        let decoded: Envelope = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(decoded.class_level, Some(2));
+        assert_eq!(
+            decoded.class_compartments,
+            Some(vec!["financial".into(), "hr".into()])
+        );
+    }
+
+    #[test]
+    fn class_fields_default_to_none_when_absent_from_json() {
+        // An envelope serialised before phase21 has no class fields.
+        // Deserialisation must succeed with None defaults.
+        let legacy_json = r#"{
+            "event_id":"01EVT","schema_version":"1",
+            "occurred_at":"2026-06-23T00:00:00Z","session_id":"01SESS",
+            "stream":"live","tool":"test","kind":"turn",
+            "context":{"platform":"linux"},
+            "payload":{},"content_hash":"sha256:abc"
+        }"#;
+        let decoded: Envelope = serde_json::from_str(legacy_json).expect("deserialize");
+        assert_eq!(decoded.class_level, None);
+        assert_eq!(decoded.class_compartments, None);
+    }
+
+    #[test]
+    fn class_level_ordinal_values() {
+        // Validate the canonical ordinal contract: public=0, internal=1,
+        // confidential=2, restricted=3. Stored as u8 so arithmetic comparisons
+        // work without enum overhead.
+        let public: u8 = 0;
+        let internal: u8 = 1;
+        let confidential: u8 = 2;
+        let restricted: u8 = 3;
+        assert!(public < internal);
+        assert!(internal < confidential);
+        assert!(confidential < restricted);
     }
 }

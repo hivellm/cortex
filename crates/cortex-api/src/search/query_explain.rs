@@ -242,6 +242,7 @@ pub async fn handle_query_explain(
         include_history: None,
         include_future: None,
         include_branches: None,
+        principal: None,
     };
     let recency_lambda = resolve_recency_lambda(&query_req);
 
@@ -396,6 +397,7 @@ mod tests {
             include_history: None,
             include_future: None,
             include_branches: None,
+            principal: None,
         }
     }
 

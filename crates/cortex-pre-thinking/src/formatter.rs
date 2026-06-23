@@ -1411,6 +1411,8 @@ mod tests {
                     why: Some("vector match to ef_search tuning".into()),
                     verified: None,
                     verdict: None,
+                    class_level: None,
+                    class_compartments: vec![],
                 }],
                 decisions: vec![DecisionRef {
                     rank: 1,

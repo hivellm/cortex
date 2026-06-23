@@ -378,6 +378,8 @@ mod tests {
             content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 .into(),
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         }
     }
 
@@ -496,6 +498,8 @@ mod tests {
             content_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
                 .into(),
             parent_event_id: None,
+            class_level: None,
+            class_compartments: None,
         };
         let input = super::super::producer::decision_trace::DecisionTraceInput {
             decision,

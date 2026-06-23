@@ -143,6 +143,7 @@ pub fn enriched_event(
             summary: summary.map(|s| s.to_string()),
             entities: Vec::new(),
             relations: Vec::new(),
+            sensitivity: Default::default(),
             source: ClassifierSource::StaticFallback,
             prompt_version: "v1".into(),
             model: "static-v1".into(),
@@ -155,6 +156,8 @@ pub fn enriched_event(
         parent_event_id: None,
         session_id: None,
         occurred_at_ms: 0,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -187,6 +190,8 @@ pub fn make_chunk(id: &str, collection: &str, text: &str) -> Chunk {
             valid_from_unix: None,
             valid_to_unix: None,
             superseded_at_unix: None,
+            class_level: None,
+            class_compartments: None,
         },
     }
 }

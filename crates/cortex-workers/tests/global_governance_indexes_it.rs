@@ -28,6 +28,7 @@ fn classifier(event_id: &str) -> ClassifierOutput {
         summary: None,
         entities: Vec::new(),
         relations: Vec::new(),
+        sensitivity: Default::default(),
         source: ClassifierSource::StaticFallback,
         prompt_version: "v1".into(),
         model: "static-v1".into(),
@@ -49,6 +50,8 @@ fn evt(event_id: &str, kind: Kind, repo: &str, payload: serde_json::Value) -> En
         parent_event_id: None,
         session_id: None,
         occurred_at_ms: 0,
+        class_level: None,
+        class_compartments: None,
     }
 }
 
@@ -185,9 +188,10 @@ async fn law_violations_stay_per_repo_governance_not_global_cortex_laws() {
         "violations must NOT land in the global definitions index",
     );
 
-    let wrote_cortex_laws = client.calls_snapshot().into_iter().any(|c| {
-        matches!(c, MemoryCall::UpsertDocuments { name, .. } if name == "cortex_laws")
-    });
+    let wrote_cortex_laws = client
+        .calls_snapshot()
+        .into_iter()
+        .any(|c| matches!(c, MemoryCall::UpsertDocuments { name, .. } if name == "cortex_laws"));
     assert!(
         !wrote_cortex_laws,
         "no LawViolation may be written to global cortex_laws",
