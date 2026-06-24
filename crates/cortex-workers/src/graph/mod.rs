@@ -19,6 +19,7 @@ pub mod cross_project;
 pub mod cypher;
 pub mod extractors;
 pub mod identity;
+pub mod indexer;
 pub mod mapper;
 pub mod markdown;
 pub mod metrics;

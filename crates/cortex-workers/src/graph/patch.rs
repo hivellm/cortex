@@ -514,9 +514,15 @@ mod tests {
         assert!(json.contains("\"direction\":\"bidirectional\""), "{json}");
         assert!(json.contains("\"weight\":0.8"), "{json}");
         assert!(json.contains("\"description\":"), "{json}");
-        assert!(json.contains("\"provenance\":\"consolidator-v1\""), "{json}");
+        assert!(
+            json.contains("\"provenance\":\"consolidator-v1\""),
+            "{json}"
+        );
         assert!(json.contains("\"valid_from\":1700000000000"), "{json}");
-        assert!(!json.contains("\"valid_to\""), "valid_to None must be omitted: {json}");
+        assert!(
+            !json.contains("\"valid_to\""),
+            "valid_to None must be omitted: {json}"
+        );
 
         let parsed: EdgeOp = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.direction, EdgeDirection::Bidirectional);

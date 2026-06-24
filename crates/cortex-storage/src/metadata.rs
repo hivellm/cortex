@@ -76,6 +76,9 @@ impl MetadataStore {
         // Phase15f — canary_runs table: one row per pre-thinking health
         // canary tick. Rows older than 24h are cleaned up each tick.
         apply_phase15f_schema(conn)?;
+        // Phase23b — graph indexed-commit fingerprint: one row per repo_id,
+        // tracks the last HEAD SHA seen by the incremental graph indexer.
+        apply_phase23b_schema(conn)?;
         // Phase9a — idempotent column-add for `retention_sweeps.status`.
         // Existing pre-phase9a databases lack the column; the
         // `CREATE TABLE IF NOT EXISTS` above is a no-op for them, so
@@ -1187,6 +1190,128 @@ impl MetadataStore {
         }
         Ok(out)
     }
+
+    /// Phase23b — return the last commit hash that the incremental graph
+    /// indexer successfully processed for `repo_id`, or `None` on first run.
+    pub fn get_indexed_commit_hash(&self, repo_id: &str) -> Result<Option<String>, MetadataError> {
+        self.conn
+            .query_row(
+                "SELECT last_commit_hash FROM graph_indexed_commits WHERE repo_id = ?1",
+                params![repo_id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(MetadataError::from)
+    }
+
+    /// Phase23b — upsert `last_commit_hash` for `repo_id` in
+    /// `graph_indexed_commits`. `indexed_at` should be an RFC-3339 UTC
+    /// timestamp produced by `chrono::Utc::now().to_rfc3339()`.
+    pub fn set_indexed_commit_hash(
+        &self,
+        repo_id: &str,
+        commit_hash: &str,
+        indexed_at: &str,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT INTO graph_indexed_commits (repo_id, last_commit_hash, indexed_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT (repo_id) DO UPDATE SET
+                 last_commit_hash = excluded.last_commit_hash,
+                 indexed_at       = excluded.indexed_at",
+            params![repo_id, commit_hash, indexed_at],
+        )?;
+        Ok(())
+    }
+
+    /// Phase23b — insert or ignore a `(repo_id, file_path) → (node_id, node_label)`
+    /// mapping in `file_node_index`. The primary key `(repo_id, file_path, node_id)`
+    /// is unique; duplicate inserts are silently ignored.
+    pub fn file_node_index_upsert(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+        node_id: &str,
+        node_label: &str,
+    ) -> Result<(), MetadataError> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO file_node_index
+                 (repo_id, file_path, node_id, node_label)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![repo_id, file_path, node_id, node_label],
+        )?;
+        Ok(())
+    }
+
+    /// Phase23b — return all `(node_id, node_label)` pairs associated with
+    /// `file_path` in `repo_id`. Returns an empty vec when the file has no
+    /// indexed nodes (e.g. first run or file never extracted).
+    pub fn file_node_index_get(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<Vec<(String, String)>, MetadataError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT node_id, node_label
+               FROM file_node_index
+              WHERE repo_id = ?1 AND file_path = ?2",
+        )?;
+        let rows = stmt.query_map(params![repo_id, file_path], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// Phase23b — delete all rows for `file_path` in `repo_id` from
+    /// `file_node_index`. Called after bitemporal-closing the nodes for a
+    /// changed file so the index does not accumulate stale entries.
+    pub fn file_node_index_remove_file(
+        &self,
+        repo_id: &str,
+        file_path: &str,
+    ) -> Result<usize, MetadataError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM file_node_index WHERE repo_id = ?1 AND file_path = ?2",
+            params![repo_id, file_path],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Phase23b — delete all rows for a specific `node_id` across all file
+    /// paths in `repo_id`. Called when a node is explicitly removed from the
+    /// graph (e.g. after bitemporal-close for a deleted file).
+    pub fn file_node_index_remove_node(
+        &self,
+        repo_id: &str,
+        node_id: &str,
+    ) -> Result<usize, MetadataError> {
+        let deleted = self.conn.execute(
+            "DELETE FROM file_node_index WHERE repo_id = ?1 AND node_id = ?2",
+            params![repo_id, node_id],
+        )?;
+        Ok(deleted)
+    }
+
+    /// Phase23b — move all index entries from `old_path` to `new_path` within
+    /// `repo_id`. Used for rename rebind: the nodes keep the same IDs but
+    /// their file provenance pointer updates.
+    pub fn file_node_index_rename(
+        &self,
+        repo_id: &str,
+        old_path: &str,
+        new_path: &str,
+    ) -> Result<usize, MetadataError> {
+        let updated = self.conn.execute(
+            "UPDATE file_node_index SET file_path = ?3
+              WHERE repo_id = ?1 AND file_path = ?2",
+            params![repo_id, old_path, new_path],
+        )?;
+        Ok(updated)
+    }
 }
 
 /// Phase10c — assert the bootstrap dedup ledger exists on `conn`.
@@ -1337,6 +1462,36 @@ pub fn apply_phase15f_schema(conn: &Connection) -> Result<(), MetadataError> {
         );
         CREATE INDEX IF NOT EXISTS canary_runs_ts
             ON canary_runs (ts DESC);",
+    )?;
+    Ok(())
+}
+
+/// Phase23b — assert the graph incremental-indexer fingerprint table and
+/// file-node index table exist. Both are idempotent (`CREATE TABLE IF NOT EXISTS`).
+///
+/// `graph_indexed_commits`: one row per repo_id — tracks the last HEAD SHA
+/// seen by the incremental graph indexer.
+///
+/// `file_node_index`: maps `(repo_id, file_path) → (node_id, node_label)`.
+/// Each file can map to multiple graph nodes (e.g. a `.rs` file → multiple
+/// Symbol nodes). The indexer maintains this table so removed / modified
+/// files can be bitemporal-closed in O(1) without scanning Nexus.
+pub fn apply_phase23b_schema(conn: &Connection) -> Result<(), MetadataError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS graph_indexed_commits (
+            repo_id          TEXT PRIMARY KEY,
+            last_commit_hash TEXT NOT NULL,
+            indexed_at       TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS file_node_index (
+            repo_id     TEXT NOT NULL,
+            file_path   TEXT NOT NULL,
+            node_id     TEXT NOT NULL,
+            node_label  TEXT NOT NULL,
+            PRIMARY KEY (repo_id, file_path, node_id)
+        );
+        CREATE INDEX IF NOT EXISTS file_node_index_by_node
+            ON file_node_index (repo_id, node_id);",
     )?;
     Ok(())
 }
@@ -2850,5 +3005,185 @@ mod tests {
         }
         let rows = s.list_canary_runs(3).unwrap();
         assert_eq!(rows.len(), 3);
+    }
+
+    // ── Phase23b: fingerprint persistence ──────────────────────────────
+
+    #[test]
+    fn get_indexed_commit_hash_returns_none_for_unknown_repo() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        let result = s.get_indexed_commit_hash("no-such-repo").unwrap();
+        assert!(result.is_none(), "first run must resolve to None");
+    }
+
+    #[test]
+    fn set_then_get_indexed_commit_hash_round_trips() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.set_indexed_commit_hash("cortex", "abc123def456", "2026-06-24T00:00:00Z")
+            .unwrap();
+        let hash = s
+            .get_indexed_commit_hash("cortex")
+            .unwrap()
+            .expect("must return the stored hash");
+        assert_eq!(hash, "abc123def456");
+    }
+
+    #[test]
+    fn set_indexed_commit_hash_overwrites_previous_value() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.set_indexed_commit_hash("cortex", "old111", "2026-06-24T00:00:00Z")
+            .unwrap();
+        s.set_indexed_commit_hash("cortex", "new222", "2026-06-24T01:00:00Z")
+            .unwrap();
+        let hash = s
+            .get_indexed_commit_hash("cortex")
+            .unwrap()
+            .expect("must return the updated hash");
+        assert_eq!(hash, "new222");
+    }
+
+    #[test]
+    fn fingerprints_are_isolated_per_repo_id() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.set_indexed_commit_hash("repo-a", "aaa", "2026-06-24T00:00:00Z")
+            .unwrap();
+        s.set_indexed_commit_hash("repo-b", "bbb", "2026-06-24T00:00:00Z")
+            .unwrap();
+        assert_eq!(
+            s.get_indexed_commit_hash("repo-a").unwrap().as_deref(),
+            Some("aaa")
+        );
+        assert_eq!(
+            s.get_indexed_commit_hash("repo-b").unwrap().as_deref(),
+            Some("bbb")
+        );
+        assert!(s.get_indexed_commit_hash("repo-c").unwrap().is_none());
+    }
+
+    // ── Phase23b: file_node_index ──────────────────────────────────────
+
+    #[test]
+    fn file_node_index_get_returns_empty_for_unknown_path() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        let result = s.file_node_index_get("cortex", "src/lib.rs").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn file_node_index_upsert_then_get_round_trips() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("cortex", "src/lib.rs", "node-001", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("cortex", "src/lib.rs", "node-002", "Function")
+            .unwrap();
+        let mut rows = s.file_node_index_get("cortex", "src/lib.rs").unwrap();
+        rows.sort();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0], ("node-001".to_string(), "Symbol".to_string()));
+        assert_eq!(rows[1], ("node-002".to_string(), "Function".to_string()));
+    }
+
+    #[test]
+    fn file_node_index_duplicate_insert_is_ignored() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("cortex", "src/lib.rs", "node-001", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("cortex", "src/lib.rs", "node-001", "Symbol")
+            .unwrap();
+        let rows = s.file_node_index_get("cortex", "src/lib.rs").unwrap();
+        assert_eq!(rows.len(), 1, "duplicate must be ignored");
+    }
+
+    #[test]
+    fn file_node_index_remove_file_deletes_all_nodes_for_path() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("cortex", "src/lib.rs", "n1", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("cortex", "src/lib.rs", "n2", "Function")
+            .unwrap();
+        let deleted = s
+            .file_node_index_remove_file("cortex", "src/lib.rs")
+            .unwrap();
+        assert_eq!(deleted, 2);
+        assert!(s
+            .file_node_index_get("cortex", "src/lib.rs")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn file_node_index_remove_file_does_not_affect_other_paths() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("cortex", "src/a.rs", "n1", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("cortex", "src/b.rs", "n2", "Symbol")
+            .unwrap();
+        s.file_node_index_remove_file("cortex", "src/a.rs").unwrap();
+        assert!(s
+            .file_node_index_get("cortex", "src/a.rs")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            s.file_node_index_get("cortex", "src/b.rs").unwrap().len(),
+            1
+        );
+    }
+
+    #[test]
+    fn file_node_index_remove_node_removes_specific_node() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("cortex", "src/a.rs", "n1", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("cortex", "src/a.rs", "n2", "Function")
+            .unwrap();
+        let deleted = s.file_node_index_remove_node("cortex", "n1").unwrap();
+        assert_eq!(deleted, 1);
+        let rows = s.file_node_index_get("cortex", "src/a.rs").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "n2");
+    }
+
+    #[test]
+    fn file_node_index_rename_rebinds_path() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("cortex", "old/path.rs", "n1", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("cortex", "old/path.rs", "n2", "Class")
+            .unwrap();
+        let updated = s
+            .file_node_index_rename("cortex", "old/path.rs", "new/path.rs")
+            .unwrap();
+        assert_eq!(updated, 2);
+        assert!(s
+            .file_node_index_get("cortex", "old/path.rs")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            s.file_node_index_get("cortex", "new/path.rs")
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn file_node_index_is_scoped_by_repo_id() {
+        let s = MetadataStore::open_in_memory().unwrap();
+        s.file_node_index_upsert("repo-a", "src/lib.rs", "n1", "Symbol")
+            .unwrap();
+        s.file_node_index_upsert("repo-b", "src/lib.rs", "n2", "Symbol")
+            .unwrap();
+        assert_eq!(
+            s.file_node_index_get("repo-a", "src/lib.rs").unwrap().len(),
+            1
+        );
+        assert_eq!(
+            s.file_node_index_get("repo-b", "src/lib.rs").unwrap().len(),
+            1
+        );
+        assert_eq!(
+            s.file_node_index_get("repo-a", "src/lib.rs").unwrap()[0].0,
+            "n1"
+        );
     }
 }

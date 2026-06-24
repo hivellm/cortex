@@ -1,0 +1,16 @@
+{
+  "id": "2026-06-24T06-00-08-incremental-graph-indexer-file-node-index-fingerprint-pattern",
+  "title": "Incremental graph indexer: file_node_index + fingerprint pattern",
+  "content": "## Pattern: fingerprint-gated incremental graph merge\n\nPhase23b UA incremental indexer. Key design choices and traps:\n\n1. **file_node_index table** (`(repo_id, file_path, node_id) PRIMARY KEY`) is essential for O(1) node lookup by file path. Without it you'd scan Nexus on every change. Populate it during graph extraction; query it during merge.\n\n2. **Equal-hash fast path MUST be checked before spawning git subprocess.** `if from == to { return Ok(vec![]); }` — avoids spawning git diff for every heartbeat/no-op call.\n\n3. **`ChangeTier: Default` doesn't work** when deriving `Default` on structs that contain `ChangeTier`. Implement the struct init explicitly with `tier: ChangeTier::Noop` rather than derive. The enum has no sensible default.\n\n4. **Cosmetic detection is extension-only** (`.md`/`.txt`/`.rst`/`.adoc`/`.asciidoc`). You can't detect whitespace-only changes from `git diff --name-status` without reading file content. Accept this as conservative — err toward triggering re-analysis.\n\n5. **Bitemporal close via Cypher**: `MATCH (n) WHERE n.id IN [...] SET n.valid_to='...', n.lifecycle='superseded'` — no hard deletes, preserves ADR-018 history. The existing `StaleEdgeSweeper` handles dangling edges.\n\n6. **`consolidation_triggers_for_reindex` gating**: NOOP + PARTIAL emit nothing; ARCH + FULL emit `{\"kind\":\"nightly_topic\",\"repo\":repo_id}`. This is intentional — avoid re-synthesizing topic cards on trivial doc/comment changes.\n\n7. **Multi-dir detection heuristic**: structural additions/deletions/renames spanning 2+ distinct top-level directories → `ArchitectureUpdate`. Conservative proxy for \"did the module structure change.\"\n\n8. **Fixture-repo tests**: Use `tempfile::TempDir` + `std::process::Command` to run real `git init` / `git commit` in the test. This is the only way to exercise the `git diff` subprocess without mocking it.\n\n9. **Anti-pattern — `GraphClientError::Internal`**: This variant doesn't exist in `nexus_client.rs`. Use `GraphClientError::Nexus(String)` for wrapping arbitrary Nexus-level errors.\n",
+  "source": "manual",
+  "relatedTask": "phase23b_ua-incremental-indexer",
+  "tags": [
+    "graph",
+    "indexer",
+    "incremental",
+    "fingerprint",
+    "bitemporal",
+    "sqlite"
+  ],
+  "createdAt": "2026-06-24T06:00:08.308Z"
+}

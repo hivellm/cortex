@@ -60,9 +60,7 @@ fn is_wildcard(compartment_grants: &[String]) -> bool {
 /// When the grants list contains `"*"`, the compartment clause is
 /// omitted entirely (super-admin pass-through).
 pub fn meili_acl_filter(clearance_level: u8, compartment_grants: &[String]) -> String {
-    let level_clause = format!(
-        "(class_level IS EMPTY OR class_level <= {clearance_level})"
-    );
+    let level_clause = format!("(class_level IS EMPTY OR class_level <= {clearance_level})");
 
     if is_wildcard(compartment_grants) {
         return level_clause;
@@ -199,7 +197,10 @@ mod tests {
     #[test]
     fn meili_single_compartment_in_list() {
         let out = meili_acl_filter(1, &["financial".to_string()]);
-        assert!(out.contains("class_compartments IN ['financial']"), "got: {out}");
+        assert!(
+            out.contains("class_compartments IN ['financial']"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -244,7 +245,12 @@ mod tests {
     #[test]
     fn vectorizer_grants_when_all_compartments_held() {
         let grants = vec!["financial".to_string(), "hr".to_string()];
-        assert!(vectorizer_acl_matches(2, &grants, Some(1), &["financial".to_string()]));
+        assert!(vectorizer_acl_matches(
+            2,
+            &grants,
+            Some(1),
+            &["financial".to_string()]
+        ));
         assert!(vectorizer_acl_matches(
             2,
             &grants,
@@ -266,10 +272,12 @@ mod tests {
 
     #[test]
     fn vectorizer_wildcard_bypasses_compartment_check() {
-        assert!(vectorizer_acl_matches(2, &["*".to_string()], Some(2), &[
-            "financial".to_string(),
-            "restricted_ops".to_string()
-        ]));
+        assert!(vectorizer_acl_matches(
+            2,
+            &["*".to_string()],
+            Some(2),
+            &["financial".to_string(), "restricted_ops".to_string()]
+        ));
     }
 
     #[test]
@@ -282,26 +290,23 @@ mod tests {
     #[test]
     fn nexus_level_only_for_wildcard() {
         let out = nexus_acl_where(3, &["*".to_string()]);
-        assert_eq!(
-            out,
-            "(n.class_level IS NULL OR n.class_level <= 3)"
-        );
+        assert_eq!(out, "(n.class_level IS NULL OR n.class_level <= 3)");
     }
 
     #[test]
     fn nexus_empty_grants_restricts_to_unclassified() {
         let out = nexus_acl_where(1, &[]);
-        assert!(
-            out.contains("SIZE(n.class_compartments) = 0"),
-            "got: {out}"
-        );
+        assert!(out.contains("SIZE(n.class_compartments) = 0"), "got: {out}");
         assert!(!out.contains("ANY("), "got: {out}");
     }
 
     #[test]
     fn nexus_single_compartment_any_clause() {
         let out = nexus_acl_where(2, &["legal".to_string()]);
-        assert!(out.contains("ANY(c IN n.class_compartments WHERE c IN [\"legal\"])"), "got: {out}");
+        assert!(
+            out.contains("ANY(c IN n.class_compartments WHERE c IN [\"legal\"])"),
+            "got: {out}"
+        );
     }
 
     #[test]
@@ -312,11 +317,7 @@ mod tests {
 
     #[test]
     fn nexus_level_clause_present_in_all_variants() {
-        for grants in [
-            vec![],
-            vec!["financial".to_string()],
-            vec!["*".to_string()],
-        ] {
+        for grants in [vec![], vec!["financial".to_string()], vec!["*".to_string()]] {
             let out = nexus_acl_where(2, &grants);
             assert!(
                 out.contains("n.class_level IS NULL OR n.class_level <= 2"),
