@@ -441,6 +441,7 @@ fn merge_tiny_sections(sections: Vec<RawSection>) -> Vec<RawSection> {
             });
         } else if let Some(mut c) = carry.take() {
             c.byte_end = section.byte_end;
+            c.path = section.path.clone();
             c.text.push_str(&section.text);
             out.push(c);
         } else {

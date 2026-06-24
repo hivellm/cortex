@@ -216,19 +216,21 @@ fn build_chunk(
 /// Extract the chunkable text from a redacted payload.
 ///
 /// Priority:
-/// 1. Classifier summary when produced by a real model (non-empty).
-/// 2. Per-kind deterministic NL projection — human-readable fields
+/// 1. Per-kind deterministic NL projection — human-readable fields
 ///    instead of raw JSON, so NL queries embed meaningfully even when
 ///    the classifier runs in static-fallback mode.
-/// 3. Legacy common string keys: `content` → `text` → `body`.
-/// 4. Deterministic pretty-JSON so two runs of the same event always
+/// 2. Legacy common string keys: `content` → `text` → `body`.
+/// 3. Deterministic pretty-JSON so two runs of the same event always
 ///    produce identical windows.
+///
+/// The classifier `summary` is NOT included here — it is used exclusively
+/// by the oversize substitution path in `VectorizerEmbedder::embed_batch`
+/// which produces a `Summary` + `RawOversize` chunk pair when a raw
+/// chunk exceeds `OVERSIZE_CHUNK_BYTES`. Promoting summary to priority 1
+/// here prevents the oversize detection from firing (the summary is always
+/// small) so `RawOversize` records are never emitted for large Artifact
+/// events that carry a summary.
 pub fn event_text(event: &EnrichedEvent) -> String {
-    if let Some(s) = event.classifier.summary.as_deref() {
-        if !s.is_empty() {
-            return s.to_string();
-        }
-    }
     let proj = nl_projection(event);
     if !proj.is_empty() {
         return proj;
@@ -289,7 +291,9 @@ fn nl_projection(event: &EnrichedEvent) -> String {
         Kind::LawViolation => join_fields(&[p.get("message").and_then(|v| v.as_str())]),
         Kind::Artifact => join_fields(&[
             event.context_path.as_deref(),
-            p.get("body").and_then(|v| v.as_str()),
+            p.get("body")
+                .or_else(|| p.get("content"))
+                .and_then(|v| v.as_str()),
         ]),
         Kind::Knowledge => join_fields(&[
             p.get("title").and_then(|v| v.as_str()),
@@ -449,16 +453,20 @@ mod tests {
     }
 
     #[test]
-    fn classifier_summary_wins_over_nl_projection() {
+    fn summary_does_not_override_nl_projection() {
+        // The classifier summary is reserved for oversize substitution in
+        // VectorizerEmbedder::embed_batch (Summary + RawOversize chunk pair).
+        // It must NOT take priority in event_text — doing so suppresses the
+        // oversize detection, preventing RawOversize records from being emitted.
         let mut e = event(
             Kind::Turn,
-            json!({"user_message": "ignored if summary present"}),
+            json!({"user_message": "the actual user message"}),
         );
         e.classifier.summary = Some("Classifier produced this summary.".into());
         let text = event_text(&e);
         assert_eq!(
-            text, "Classifier produced this summary.",
-            "classifier summary must take priority"
+            text, "the actual user message",
+            "NL projection must win over classifier summary in event_text"
         );
     }
 
