@@ -106,6 +106,13 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE INDEX topic_card_id_idx IF NOT EXISTS FOR (tc:TopicCard) ON (tc.id)",
     "CREATE INDEX branch_id_idx IF NOT EXISTS FOR (b:Branch) ON (b.id)",
     "CREATE INDEX timeline_event_id_idx IF NOT EXISTS FOR (t:TimelineEvent) ON (t.id)",
+    // phase23d — non-code parser node labels
+    "CREATE INDEX schema_table_nk_idx IF NOT EXISTS FOR (t:SchemaTable) ON (t.natural_key)",
+    "CREATE INDEX schema_nk_idx IF NOT EXISTS FOR (s:Schema) ON (s.natural_key)",
+    "CREATE INDEX infra_resource_nk_idx IF NOT EXISTS FOR (r:InfraResource) ON (r.natural_key)",
+    "CREATE INDEX service_nk_idx IF NOT EXISTS FOR (s:Service) ON (s.natural_key)",
+    "CREATE INDEX config_nk_idx IF NOT EXISTS FOR (c:Config) ON (c.natural_key)",
+    "CREATE INDEX endpoint_nk_idx IF NOT EXISTS FOR (e:Endpoint) ON (e.natural_key)",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like

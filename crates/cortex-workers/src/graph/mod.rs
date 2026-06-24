@@ -26,6 +26,7 @@ pub mod markdown;
 pub mod metrics;
 pub mod migration;
 pub mod nexus_client;
+pub mod noncode_parsers;
 pub mod patch;
 pub mod projection;
 pub mod reindex_alias;
