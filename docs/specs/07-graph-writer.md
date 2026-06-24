@@ -266,6 +266,10 @@ CREATE INDEX symbol_repo_name IF NOT EXISTS FOR (s:Symbol) ON (s.repo, s.name);
 
 Idempotent; runs every startup. Failure here is fatal — no writes happen without schema. The five `*_natural_key` uniqueness constraints shipped in phase4c-phase11k were retired in phase11l §4.1; Nexus 2.1's `ExternalIdIndex` enforces uniqueness on `_id` structurally, removing the need for per-label constraints on the legacy `natural_key` property. ADR-004 records the supersession.
 
+**phase25 §3 — single-prop MERGE-key indexes.** Before phase25, the bootstrap only issued identity CONSTRAINTs. `MERGE (n:Turn { id: $v })` needed an index on `Turn.id` for the planner to seek, but no such index existed — Nexus 2.3.1's planner does *not* derive a seek from a CONSTRAINT alone. Result: every node MERGE and edge-endpoint MATCH was a full O(N) label scan, and the edge MATCH on a 150k-node graph timed out (13–34 min/batch). Phase25 adds 18 `CREATE INDEX … ON (n.prop)` statements (one per MERGE-key property per label) to `SCHEMA_STATEMENTS`. The key map is identical to `LiveNexusClient::key_field_for`: `Artifact → natural_key`, `Repo → name`, all other labels → `id`. All 18 are idempotent and run alongside the constraints on every startup.
+
+**Nexus index persistence caveat (nexus#11).** As of Nexus 2.3.4, property indexes created by `CREATE INDEX` are not persisted across a Nexus container restart — they are held in-memory only during the session. The Cortex graph worker mitigates this with two mechanisms: (1) schema bootstrap on every startup re-issues all `CREATE INDEX` and `CREATE CONSTRAINT` statements, so a freshly-started worker immediately re-applies the index set; (2) a periodic schema re-ensure timer (default every 5 min) re-issues the full set in the background so indexes survive Nexus restarts even when the graph worker stays up. The timer failure is logged at WARN level and retried on the next tick.
+
 ### Concurrency
 
 ```
@@ -483,6 +487,7 @@ See `phase1_graph_writer_nexus_compat` (archived under `.rulebook/tasks/_archive
 5. **Patch coalescer lives client-side.** Nexus charges per op; coalescing before the wire saves ~40% on bootstrap.
 6. **Orphans are allowed.** In distributed event streams, out-of-order arrivals are normal. Orphan `Turn{orphan:true}` nodes are a debuggable signal, not a data-loss error.
 7. **Inline-literal Cypher for writes (Nexus 1.15 compat).** Render every `MERGE` per-row with values escaped into the literal via `cypher_str_escape`; refuse implicit silent successes by appending `RETURN count(*) AS written` and asserting the rows array is non-empty. Revisit once Nexus fixes parametrised writes.
+8. **Sequential MATCH for edge endpoint lookup (phase25 §2.1, Nexus ≥2.3.1).** Edge writes used `MATCH (a:L1{k}),(b:L2{k}) MERGE (a)-[r:T]->(b)` — a comma-joined pattern the Nexus planner converts to a cartesian product (O(n²) on the endpoint label buckets, timing out at ~271s on a 150k-node graph). The fix: two sequential MATCH clauses — `MATCH (a:L1{k}) MATCH (b:L2{k}) MERGE (a)-[r:T]->(b)`. Each MATCH can be independently index-sought in O(log n) by Nexus ≥2.3.1 (nexus#8 / nexus#9). Endpoint keys remain inline literals (not `$param`) per the nexus#3 finding: Nexus 2.3.4 rejects `$param` inside MERGE inline property maps with "Complex expressions not supported in CREATE properties". See `render_edge_merge` in `crates/cortex-workers/src/graph/nexus_client.rs`.
 
 ## Post-write verification contract
 

@@ -516,8 +516,21 @@ fn render_edge_merge(edge: &EdgeOp) -> String {
     // queries (MATCH...MERGE) fail with "Complex expressions not supported
     // in CREATE properties". Endpoint keys must remain inline literals.
     let inline = render_edge_props_inline(&edge.props);
+    // phase25 §2.1 — two sequential MATCH clauses instead of the
+    // comma-joined `MATCH (a),(b)` form. The comma-join is a cartesian
+    // product in the Nexus planner; it scans both label buckets and
+    // cross-multiplies before applying filters (O(n²) on a 150k-node
+    // graph → minutes per edge). Sequential MATCH lets the planner
+    // apply the property-index seek on each node independently, so
+    // both endpoints resolve in O(log n) and the MERGE is O(1).
+    // Requires Nexus ≥2.3.1 (nexus#8/#9 — index-backed MERGE + indexed
+    // single-MATCH seeks). Endpoint keys remain inline literals (not
+    // $params) per the phase22 §3.3 finding: Nexus 2.3.4 rejects
+    // `$param` in MERGE inline maps ("Complex expressions not
+    // supported in CREATE properties").
     format!(
-        "MATCH (a:{fl} {{ {fkf}: {fk} }}), (b:{tl} {{ {tkf}: {tk} }}) \
+        "MATCH (a:{fl} {{ {fkf}: {fk} }}) \
+         MATCH (b:{tl} {{ {tkf}: {tk} }}) \
          MERGE (a)-[r:{rt}{inline}]->(b) RETURN count(r) AS written",
         fl = edge.from_label,
         fkf = from_kf,
@@ -1012,6 +1025,37 @@ mod tests {
             "props inline in the MERGE pattern (the form nexus#25 persists): {cy}"
         );
         assert!(!cy.contains("SET"), "no SET clause: {cy}");
+    }
+
+    // phase25 §2.1 — edge MERGE must use sequential MATCH, not a
+    // comma-joined cartesian form. Two sequential MATCH clauses let
+    // Nexus ≥2.3.1 index-seek each endpoint independently (O(log n));
+    // the comma-joined form causes an O(n²) cartesian scan.
+    #[test]
+    fn render_edge_merge_uses_sequential_match_not_cartesian() {
+        let cy = super::render_edge_merge(&edge_with(vec![]));
+        // Exactly two MATCH clauses (one per endpoint).
+        let match_count = cy.matches("MATCH").count();
+        assert_eq!(
+            match_count, 2,
+            "expected 2 sequential MATCH clauses, got {match_count}: {cy}"
+        );
+        // No comma-separated cartesian join between the two node patterns.
+        // The cartesian form is `MATCH (a:...), (b:...)` — the `), (` token
+        // is only present in the old comma-join, never in sequential MATCH.
+        assert!(
+            !cy.contains("), (b:"),
+            "must not use comma-joined cartesian MATCH: {cy}"
+        );
+        // Each endpoint label appears in its own MATCH clause.
+        assert!(
+            cy.contains("MATCH (a:ToolCall"),
+            "from-endpoint MATCH missing: {cy}"
+        );
+        assert!(
+            cy.contains("MATCH (b:Artifact"),
+            "to-endpoint MATCH missing: {cy}"
+        );
     }
 
     // phase15c — rendering the same edge twice is byte-identical
