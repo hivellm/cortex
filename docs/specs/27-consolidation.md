@@ -95,10 +95,32 @@ is safe — the daemon's `decision:<decision_id>` producer checkpoint
 (§2.4) skips a decision already consolidated. Trigger-publish failures
 are non-fatal: enrichment + ack proceed regardless.
 
-The **session-end** and **nightly-topic** producers require new session
-idle-tracking and a scheduler respectively and are not yet wired; the
-`run-session` / `run-topic` / `nightly` CLI subcommands remain the manual
-path for those grains.
+The **session-end** producer is now also wired in the classifier worker
+(phase24 §1.2). A `session_last_seen: Mutex<BTreeMap<String, i64>>`
+tracks the last wall-clock ms for each `session_id`. On every enriched
+event, `evaluate_idle_sessions` stamps the current session and returns
+any session silent for more than `SESSION_IDLE_MS` (30 min). Each
+returned session gets a `session_end` trigger via
+`session_end_trigger(&session_id)`. The lock is released before the
+async publish so no await is held under it.
+
+The **nightly-topic** producer is also live in the classifier worker
+(phase24 §1.3). Because the worker holds no Meili client, it cannot
+read the current `TopicCardPayload` to feed `TopicTrigger::evaluate`.
+Instead a `repo_event_counts: Mutex<BTreeMap<String, u32>>` tracks
+per-repo event counts in-process. When the count for a repo reaches
+`TRIGGER_EVENTS_THRESHOLD` (8) a `nightly_topic` trigger is published
+via `topic_threshold_trigger(repo, None, kind, &|| 1.0, 0)` (the
+`card=None` first-emit path always returns `Rewrite`) and the counter
+resets. This provides rate-limited topic triggers without a Meili
+round-trip on the hot path.
+
+Both the session-end and nightly-topic hooks share the same opt-in flag
+(`CORTEX_CONSOLIDATOR_TRIGGER_PRODUCER_ENABLED`, default **off**) and
+the same non-fatal publish contract as the decision-landed hook.
+
+The `run-session` / `run-topic` / `nightly` CLI subcommands remain
+available as the manual override path.
 
 ## §4 Cost telemetry (phase14a §2.4)
 

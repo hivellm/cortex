@@ -633,6 +633,13 @@ pub struct Worker {
     /// pool via `Arc<Worker>`; the critical section is sync (no await
     /// held under the lock).
     session_last_seen: Mutex<BTreeMap<String, i64>>,
+    /// phase24 §1.3 — per-repo event count since the last `nightly_topic`
+    /// trigger was published. When the count reaches
+    /// [`crate::topic_cards::trigger::TRIGGER_EVENTS_THRESHOLD`], a
+    /// `nightly_topic` trigger is published and the counter resets.
+    /// Lock discipline mirrors `session_last_seen`: sync critical section,
+    /// no await held while locked.
+    repo_event_counts: Mutex<BTreeMap<String, u32>>,
     /// Phase8b — total Synap messages the worker has processed end
     /// to end. Bumped after each `run_once` returns a non-zero count.
     pub jobs_processed_total: AtomicU64,
@@ -675,6 +682,7 @@ impl Worker {
             pricing: PricingTable::HAIKU_4_5,
             processed: Mutex::new(BTreeSet::new()),
             session_last_seen: Mutex::new(BTreeMap::new()),
+            repo_event_counts: Mutex::new(BTreeMap::new()),
             jobs_processed_total: AtomicU64::new(0),
             last_job_ts_ms: AtomicU64::new(0),
             last_consume_ts_ms: AtomicU64::new(0),
@@ -970,6 +978,54 @@ impl Worker {
                             session_id = %session_id,
                             "consolidator session_end trigger publish failed"
                         );
+                    }
+                }
+            }
+
+            // phase24 §1.3 — per-repo event-count topic-grain threshold.
+            // The classifier worker has no Meili client, so we can't read
+            // the current TopicCardPayload to feed `evaluate()`. We use the
+            // card=None first-emit path: `topic_threshold_trigger` with
+            // `card=None` always returns Some, so we gate it with our own
+            // in-process counter instead. When the count reaches
+            // TRIGGER_EVENTS_THRESHOLD the nightly_topic trigger is
+            // published and the counter resets.
+            if let Some(repo) = enriched.context_repo.as_deref() {
+                let threshold_reached = {
+                    let mut counts = self
+                        .repo_event_counts
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    let count = counts.entry(repo.to_string()).or_insert(0);
+                    *count += 1;
+                    if *count >= crate::topic_cards::trigger::TRIGGER_EVENTS_THRESHOLD {
+                        *count = 0;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if threshold_reached {
+                    if let Some(trigger) =
+                        crate::consolidator::trigger_producer::topic_threshold_trigger(
+                            repo,
+                            None,
+                            enriched.kind,
+                            &|| 1.0,
+                            0,
+                        )
+                    {
+                        if let Err(err) = self
+                            .publisher
+                            .publish(crate::consolidator::daemon::TRIGGER_STREAM, &trigger)
+                            .await
+                        {
+                            tracing::warn!(
+                                error = %err,
+                                repo = %repo,
+                                "consolidator nightly_topic trigger publish failed"
+                            );
+                        }
                     }
                 }
             }
@@ -1470,6 +1526,82 @@ mod tests {
                 .iter()
                 .all(|(room, _)| room != crate::consolidator::daemon::TRIGGER_STREAM),
             "a turn must never trigger consolidation"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Phase24 §1.3 — per-repo topic-grain threshold tests.
+    // -----------------------------------------------------------------
+
+    fn turn_message_with_repo(offset: u64, repo: &str) -> ConsumedMessage {
+        ConsumedMessage {
+            offset,
+            kind: "turn".into(),
+            payload: json!({
+                "event_id": format!("01ARZ3NDEKTSV4RRFFQ69G5F{:02}", offset),
+                "schema_version": "1",
+                "occurred_at": "2026-06-06T12:00:00.000Z",
+                "session_id": format!("sess-{offset}"),
+                "stream": "live",
+                "tool": "claude-code",
+                "kind": "turn",
+                "context": { "repo": repo, "platform": "claude-code" },
+                "payload": {"user_message": "hi", "assistant_message": "yo", "tokens": null},
+                "content_hash": format!("sha256:turn{offset}")
+            }),
+            event_id: Some(format!("01ARZ3NDEKTSV4RRFFQ69G5F{:02}", offset)),
+        }
+    }
+
+    #[tokio::test]
+    async fn topic_trigger_fires_after_threshold_events_from_same_repo() {
+        let pub_ = Arc::new(RecordingPublisher::default());
+        let worker = worker_with_trigger(true, pub_.clone());
+        let threshold = crate::topic_cards::trigger::TRIGGER_EVENTS_THRESHOLD;
+        // Send exactly `threshold` events for the same repo.
+        for i in 0..threshold {
+            worker
+                .handle_message(STREAM_RAW, turn_message_with_repo(u64::from(i) + 100, "cortex"))
+                .await
+                .expect("handle turn");
+        }
+        let calls = pub_.calls.lock().unwrap();
+        let nightly = calls
+            .iter()
+            .find(|(room, body)| {
+                room == crate::consolidator::daemon::TRIGGER_STREAM
+                    && body.get("kind").and_then(|v| v.as_str()) == Some("nightly_topic")
+            });
+        assert!(
+            nightly.is_some(),
+            "a nightly_topic trigger must fire after {threshold} events for the same repo"
+        );
+        if let Some((_, body)) = nightly {
+            assert_eq!(body["repo"], "cortex");
+        }
+    }
+
+    #[tokio::test]
+    async fn topic_trigger_does_not_fire_before_threshold() {
+        let pub_ = Arc::new(RecordingPublisher::default());
+        let worker = worker_with_trigger(true, pub_.clone());
+        let threshold = crate::topic_cards::trigger::TRIGGER_EVENTS_THRESHOLD;
+        // Send one fewer than the threshold.
+        for i in 0..(threshold - 1) {
+            worker
+                .handle_message(STREAM_RAW, turn_message_with_repo(u64::from(i) + 200, "nexus"))
+                .await
+                .expect("handle turn");
+        }
+        let calls = pub_.calls.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .all(|(room, body)| {
+                    !(room == crate::consolidator::daemon::TRIGGER_STREAM
+                        && body.get("kind").and_then(|v| v.as_str()) == Some("nightly_topic"))
+                }),
+            "nightly_topic must NOT fire before threshold events"
         );
     }
 
