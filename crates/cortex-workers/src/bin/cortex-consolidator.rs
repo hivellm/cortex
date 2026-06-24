@@ -2004,45 +2004,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn require_api_key_errors_when_unset() {
-        let cli = Cli {
-            verbose: false,
-            api_key: None,
-            api_url: None,
-            claude_bin: None,
-            ingest_url: None,
-            monthly_cents_cap: 100_000,
-            archive_root: None,
-            metadata_db: None,
-            command: Command::Nightly {
-                dry_run: true,
-                all: false,
-            },
-        };
-        let err = require_api_key(&cli).expect_err("no key");
-        assert!(format!("{err:#}").contains("ANTHROPIC_API_KEY"));
-    }
-
-    #[test]
-    fn require_api_key_returns_value_when_set() {
-        let cli = Cli {
-            verbose: false,
-            api_key: Some("sk-test-12345".into()),
-            api_url: None,
-            claude_bin: None,
-            ingest_url: None,
-            monthly_cents_cap: 100_000,
-            archive_root: None,
-            metadata_db: None,
-            command: Command::Nightly {
-                dry_run: true,
-                all: false,
-            },
-        };
-        assert_eq!(require_api_key(&cli).unwrap(), "sk-test-12345");
-    }
-
     // ----------------------------------------------------------------
     // Phase11p §2.6 — bin tests for the live read-path wiring.
     // ----------------------------------------------------------------
@@ -2088,8 +2049,6 @@ mod tests {
     fn enumerate_recent_sessions_returns_empty_when_db_unset() {
         let cli = Cli {
             verbose: false,
-            api_key: None,
-            api_url: None,
             claude_bin: None,
             ingest_url: None,
             monthly_cents_cap: 100_000,
@@ -2111,8 +2070,6 @@ mod tests {
     fn resolve_archive_root_honours_explicit_flag() {
         let cli = Cli {
             verbose: false,
-            api_key: None,
-            api_url: None,
             claude_bin: None,
             ingest_url: None,
             monthly_cents_cap: 100_000,

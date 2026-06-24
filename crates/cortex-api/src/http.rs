@@ -268,7 +268,9 @@ pub fn build_router_with_auth_and_cfg(
             "/v1/entity/{id}/supersession",
             get(crate::timeline_routes::handle_entity_supersession),
         )
-        .with_state(state);
+        .with_state(state.clone());
+    // Phase21 §6.2 — ACL admin routes (/v1/acl/*).
+    router = router.merge(crate::acl_routes::build_acl_router(state));
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from
     // `SimilarSessionsState` (a `dyn ConsolidationSearchSource`)
@@ -778,6 +780,25 @@ async fn handle_query(
     headers: HeaderMap,
     Json(req): Json<QueryRequest>,
 ) -> Response {
+    // Phase21 §6.3 / §7.2 — deny-on-missing-principal gate. When AC is
+    // active and the caller carries no explicit credential, reject rather
+    // than silently downgrading to the public-only view. When AC is disabled
+    // (`access_control.enabled = false`) this entire check is a no-op so
+    // unauthenticated callers still reach all data (backward-compat ADR-1.3).
+    if state.cfg.access_control.enabled
+        && state.service.principal_store.is_some()
+        && crate::principal_resolver::deny_on_missing_principal()
+        && !crate::principal_resolver::has_explicit_auth(&headers)
+    {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "reason": "forbidden_classified",
+                "detail": "an authenticated principal is required; supply a Bearer token"
+            })),
+        )
+            .into_response();
+    }
     let caller = headers
         .get(CALLER_HEADER)
         .and_then(|v| v.to_str().ok())

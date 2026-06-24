@@ -4,10 +4,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::sub::{
-    AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig, ClassifierConfig,
-    ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig, DoctorConfig,
-    EmbedderConfig, IngestionConfig, McpConfig, MeiliConfig, NexusConfig, PreThinkingConfig,
-    RerankerConfig, RetentionConfig, RulebookConfig, TemporalConfig, VerifyConfig,
+    AccessControlConfig, AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig,
+    ClassifierConfig, ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig,
+    DoctorConfig, EmbedderConfig, IngestionConfig, McpConfig, MeiliConfig, NexusConfig,
+    PreThinkingConfig, RerankerConfig, RetentionConfig, RulebookConfig, TemporalConfig,
+    VerifyConfig,
 };
 
 /// Current schema version. Bump when a sub-struct gains an
@@ -96,6 +97,10 @@ pub struct Config {
     /// first 2 weeks, then operators switch to `"filter"`.
     #[serde(default)]
     pub verify: VerifyConfig,
+    /// Phase21 §7.1 — Bell-LaPadula access-control feature flag + posture knobs.
+    /// Default OFF for backward compatibility (ADR-1.3).
+    #[serde(default)]
+    pub access_control: AccessControlConfig,
 }
 
 fn default_schema_version() -> String {
@@ -127,6 +132,7 @@ impl Default for Config {
             cross_project: CrossProjectConfig::default(),
             reranker: RerankerConfig::default(),
             verify: VerifyConfig::default(),
+            access_control: AccessControlConfig::default(),
         }
     }
 }

@@ -249,7 +249,70 @@ let principal = state.service.resolve_principal(&headers);
 
 ---
 
-## 10. Filter renderer reference
+## 10. Config knobs + disabled-pass-through guarantee (Phase21 §7)
+
+### 10.1 `[access_control]` config block
+
+| TOML field | Env var | Default | Description |
+|---|---|---|---|
+| `enabled` | `CORTEX_ACCESS_CONTROL_ENABLED` | `false` | Master switch. When `false` every enforcement point is a **no-op pass-through** (see §10.2). |
+| `default_level` | `CORTEX_ACCESS_CONTROL_DEFAULT_LEVEL` | `1` (`internal`) | Sensitivity level assigned to facts that carry no explicit `class_level`. |
+| `deny_on_missing_principal` | `CORTEX_ACCESS_CONTROL_DENY_ON_MISSING_PRINCIPAL` | `true` | When `enabled = true` and the caller supplies no Bearer token / API key, return `403 forbidden_classified` rather than downgrading to the default clearance. |
+| `default_compartments` | `CORTEX_ACCESS_CONTROL_DEFAULT_COMPARTMENTS` | `[]` | Compartment grants assigned to principals that resolve to the default binding. |
+
+Type: `crates/cortex-config/src/sub.rs::AccessControlConfig`.
+Wired into `Config` at `access_control`, exported from `cortex_config`.
+Env vars are registered in `env_map.rs` (ASCII-sorted between `CORTEX_ACCESS_CONTROL_*` and `CORTEX_ADAPTER_*`).
+
+### 10.2 Disabled-pass-through guarantee
+
+**When `access_control.enabled = false` (the default), every enforcement point MUST be a silent no-op regardless of principal clearance or compartment grants.**
+
+This guarantee exists to ensure deployments that have not opted into AC (all deployments before phase21) continue to work byte-for-byte with no behaviour change.
+
+Enforcement points and their disabled behaviour:
+
+| Point | File | Disabled behaviour |
+|---|---|---|
+| `run_with_principal` | `orchestrator.rs` | Early-returns `self.run(req)` — no lattice check, no ACL wedge. |
+| Post-fusion ACL wedge (`apply_acl_wedge`) | `orchestrator.rs` | Never reached when `enabled = false` (no `AclContext` is passed to `run_with_acl`). |
+| Deny-on-missing-principal gate | `http.rs`, `search_proxy.rs` | First condition `state.cfg.access_control.enabled` is `false` → short-circuits, gate skipped. |
+| Bundle filter | `cortex-pre-thinking/src/bundle.rs` | Caller threads `principal = None` when AC is off → `filter_snippets_by_acl(_, None)` is a no-op. |
+| Per-lane filters (Meili, Vectorizer, Nexus) | `meili_lane.rs`, `vectorizer_lane.rs`, `nexus_graph_lane.rs` | `AclContext` is not injected by the orchestrator when AC is off → lanes receive `acl: None` → no filter clause. |
+
+**SHALL requirement:**
+
+The system SHALL allow a principal with clearance_level=0 and no compartment grants to receive all retrieval results (including `restricted` level=3 and compartment-gated facts) when `access_control.enabled = false`.
+
+#### Scenario: AC disabled — low-clearance principal sees everything
+
+```
+Given access_control.enabled = false (default)
+  And a corpus seeded with hits at levels 0, 1, 2, 3 and various compartments
+  And a principal with clearance_level = 0 and no compartment_grants
+When run_with_principal is called
+Then all 4 hits must appear in the response
+  And no hit must be dropped by the ACL wedge
+```
+
+**Pinned test**: `crates/cortex-api/tests/ac_disabled_passthrough_it.rs::disabled_ac_passes_all_hits_to_low_clearance_principal`
+
+#### Scenario: AC enabled — same principal sees only eligible hits
+
+```
+Given access_control.enabled = true
+  And a corpus seeded with hits at levels 0, 1, 2, 3
+  And a principal with clearance_level = 1 and no compartment_grants
+When run_with_principal is called
+Then only level=0 and level=1 hits must appear (2 hits)
+  And level=2 and level=3 hits must be dropped
+```
+
+**Pinned test**: `crates/cortex-api/tests/ac_disabled_passthrough_it.rs::enabling_ac_restores_filtering_for_low_clearance_principal`
+
+---
+
+## 11. Filter renderer reference
 
 `crates/cortex-workers/src/acl/filter.rs`
 
@@ -271,6 +334,8 @@ Compartment strings in Nexus output are double-quoted and escaped (`\"`, `\\`).
 |---|---|---|
 | `crates/cortex-workers/src/acl/filter.rs` (unit) | 17 | All renderer variants + escaping |
 | `crates/cortex-api/tests/acl_wedge_it.rs` | 3 | Post-fusion wedge |
+| `crates/cortex-api/tests/ac_disabled_passthrough_it.rs` | 2 | §7.2 disabled pass-through + re-enable restores filtering |
+| `crates/cortex-api/src/search/orchestrator.rs` (unit) | 3 | `AccessControlConfig` handle methods |
 | `crates/cortex-api/tests/raw_proxy_acl_it.rs` | 3 | Raw proxy enforcement |
 | `crates/cortex-api/tests/meili_keyword_lane.rs` | subset | Meili lane ACL |
 | `crates/cortex-api/tests/vectorizer_lane.rs` | 3 | Vectorizer lane ACL |

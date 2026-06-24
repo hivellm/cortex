@@ -19,7 +19,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use cortex_eval::report::{is_regression, SuiteReport};
 use cortex_eval::suite::{
-    classification, consolidation, mcp_search, retrieval, AcceptanceVerdict, SuiteName,
+    access_control, classification, consolidation, mcp_search, retrieval, AcceptanceVerdict,
+    SuiteName,
 };
 use cortex_eval::CI_REGRESSION_THRESHOLD;
 use tracing_subscriber::EnvFilter;
@@ -110,6 +111,7 @@ async fn run(cli: &Cli) -> Result<ExitCode> {
         SuiteName::Consolidation => run_consolidation(&http, &api_url, &golden).await?,
         SuiteName::Classification => run_classification(&http, &classifier_url, &golden).await?,
         SuiteName::McpSearch => run_mcp_search(&http, &api_url, &golden).await?,
+        SuiteName::AccessControl => run_access_control(&golden).await?,
     };
 
     emit(&report, &cli.output)?;
@@ -420,6 +422,22 @@ async fn run_mcp_search_row(
         .filter_map(|h| h.get(key).and_then(|v| v.as_str()).map(String::from))
         .take(5)
         .collect()
+}
+
+/// Phase21 §9.1 — access-control golden suite driver.
+///
+/// Unlike the other suites, this driver evaluates the Bell-LaPadula
+/// predicate locally (no HTTP stack required). Each row in the CSV
+/// is evaluated by `can_read_local` and the result is compared to
+/// the `expected` label. The acceptance gate is `false_grant_count == 0`.
+async fn run_access_control(
+    golden: &std::path::Path,
+) -> Result<(SuiteReport, AcceptanceVerdict)> {
+    let rows = access_control::load_csv(golden)?;
+    let observed: Vec<bool> = rows.iter().map(|r| r.evaluate()).collect();
+    let report = access_control::build_report(&rows, &observed);
+    let acceptance = access_control::access_control_acceptance(&report);
+    Ok((report, acceptance))
 }
 
 #[cfg(test)]

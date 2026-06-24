@@ -701,6 +701,16 @@ async fn main() -> Result<()> {
     // orchestrator wedges (which bump it) and the `/metrics` renderer
     // (which reads it via DashboardState).
     let temporal_metrics = Arc::new(cortex_api::TemporalMetrics::new());
+
+    // Phase21 §8.2 — ACL decision metrics registry. Allocated only when
+    // access control is enabled; otherwise the orchestrator and dashboard
+    // both receive `None` (zero-cost pass-through, backward compat).
+    let acl_metrics: Option<Arc<cortex_api::AclMetrics>> = if cfg.access_control.enabled {
+        Some(Arc::new(cortex_api::AclMetrics::new()))
+    } else {
+        None
+    };
+
     let dashboard_state = cortex_api::DashboardState {
         lane: keyword_memory.clone(),
         nexus: nexus_client,
@@ -710,6 +720,7 @@ async fn main() -> Result<()> {
         loader_metrics: loader_metrics.clone(),
         temporal_metrics: temporal_metrics.clone(),
         events_bus: dashboard_bus,
+        acl_metrics: acl_metrics.clone(),
     };
 
     // Phase11i §3.6 — load relevance.toml first so the env-derived
@@ -733,7 +744,15 @@ async fn main() -> Result<()> {
     let mut orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
         .with_fusion(fusion)
         .with_rewriter(rewriter)
-        .with_temporal_metrics(temporal_metrics.clone());
+        .with_temporal_metrics(temporal_metrics.clone())
+        // Phase21 §7.2 — thread the access-control posture snapshot so the
+        // orchestrator's enforcement points read from the operator config
+        // (CORTEX_ACCESS_CONTROL_ENABLED, etc.) rather than the default OFF.
+        .with_access_control(cfg.access_control.clone());
+    // Phase21 §8.2 — wire the ACL metrics handle when AC is enabled.
+    if let Some(ref m) = acl_metrics {
+        orchestrator = orchestrator.with_acl_metrics(m.clone());
+    }
     // phase0 retrieval-ranking §3 — construct + attach the cross-encoder
     // reranker when an endpoint is configured. phase17 shipped the rerank
     // step + the `with_reranker` builder but never built the instance in

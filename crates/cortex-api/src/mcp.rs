@@ -61,7 +61,12 @@ pub fn tool_descriptor() -> Value {
     json!({
         "name": TOOL_NAME,
         "description": "Hybrid retrieval (vector + keyword + graph) over Cortex. \
-                        Returns a structured context bundle for an agent prompt.",
+                        Returns a structured context bundle for an agent prompt. \
+                        Phase21 §6.4: principal-aware — the caller's access clearance \
+                        and compartment grants are derived from the API key the MCP \
+                        server was configured with (forwarded as a Bearer token). \
+                        Classified facts are filtered per Bell-LaPadula before the \
+                        bundle is returned.",
         "inputSchema": input_schema(),
         "outputSchema": output_schema(),
     })

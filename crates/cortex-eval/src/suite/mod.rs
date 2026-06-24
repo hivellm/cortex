@@ -5,6 +5,7 @@
 //! be able to run against a remote stack (CI runners hit the dev
 //! compose) without pulling the cortex-api crate as a build dep.
 
+pub mod access_control;
 pub mod classification;
 pub mod consolidation;
 pub mod mcp_search;
@@ -27,6 +28,9 @@ pub enum SuiteName {
     /// against each granular MCP tool (entity / topic / file-touched
     /// lookups + the rest).
     McpSearch,
+    /// Phase21 §9.1 — `tests/golden/access_control.csv` → zero
+    /// false-grants across the clearance×level×compartment matrix.
+    AccessControl,
 }
 
 impl SuiteName {
@@ -37,6 +41,7 @@ impl SuiteName {
             "consolidation" => Some(Self::Consolidation),
             "classification" => Some(Self::Classification),
             "mcp_search" => Some(Self::McpSearch),
+            "access_control" => Some(Self::AccessControl),
             _ => None,
         }
     }
@@ -48,6 +53,7 @@ impl SuiteName {
             Self::Consolidation => "consolidation",
             Self::Classification => "classification",
             Self::McpSearch => "mcp_search",
+            Self::AccessControl => "access_control",
         }
     }
 }
@@ -69,7 +75,13 @@ mod tests {
 
     #[test]
     fn suite_name_parse_round_trip() {
-        for s in ["retrieval", "consolidation", "classification", "mcp_search"] {
+        for s in [
+            "retrieval",
+            "consolidation",
+            "classification",
+            "mcp_search",
+            "access_control",
+        ] {
             assert_eq!(SuiteName::parse(s).unwrap().as_str(), s);
         }
         assert!(SuiteName::parse("garbage").is_none());

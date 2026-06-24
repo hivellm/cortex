@@ -8,6 +8,8 @@
 //! [`crate`] (see `lib.rs`).
 
 pub mod acl;
+pub mod acl_metrics;
+pub mod acl_routes;
 pub mod audit;
 pub mod audit_store;
 pub mod auth;

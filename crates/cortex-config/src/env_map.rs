@@ -20,6 +20,23 @@
 /// `binary_search_by_key` is valid (the round-trip test pins
 /// the sort).
 pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
+    // Phase21 §7.1 — access-control posture knobs (sorted before CORTEX_ADAPTER_*).
+    (
+        "CORTEX_ACCESS_CONTROL_DEFAULT_COMPARTMENTS",
+        "/access_control/default_compartments",
+    ),
+    (
+        "CORTEX_ACCESS_CONTROL_DEFAULT_LEVEL",
+        "/access_control/default_level",
+    ),
+    (
+        "CORTEX_ACCESS_CONTROL_DENY_ON_MISSING_PRINCIPAL",
+        "/access_control/deny_on_missing_principal",
+    ),
+    (
+        "CORTEX_ACCESS_CONTROL_ENABLED",
+        "/access_control/enabled",
+    ),
     ("CORTEX_ADAPTER_ADMIN_PORT", "/adapter/adapter_admin_port"),
     ("CORTEX_ADAPTER_DISABLE", "/adapter/adapter_disable"),
     ("CORTEX_ADAPTER_HTTP_BIND", "/adapter/http_bind"),

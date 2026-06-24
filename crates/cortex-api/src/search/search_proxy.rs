@@ -271,6 +271,19 @@ pub async fn handle_keyword_search(
 ) -> Response {
     use axum::response::IntoResponse;
 
+    // Phase21 §6.3 / §7.2 — deny unauthenticated calls when the gate is
+    // active. No-op when `access_control.enabled = false` (ADR-1.3).
+    if state.cfg.access_control.enabled
+        && state.service.principal_store.is_some()
+        && crate::principal_resolver::deny_on_missing_principal()
+        && !crate::principal_resolver::has_explicit_auth(&headers)
+    {
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "forbidden_classified",
+            "an authenticated principal is required; supply a Bearer token",
+        );
+    }
     let index = req.index.trim();
     if index.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "bad_input", "`index` is required");
@@ -442,6 +455,19 @@ pub async fn handle_vector_search(
 ) -> Response {
     use axum::response::IntoResponse;
 
+    // Phase21 §6.3 / §7.2 — deny unauthenticated calls when the gate is
+    // active. No-op when `access_control.enabled = false` (ADR-1.3).
+    if state.cfg.access_control.enabled
+        && state.service.principal_store.is_some()
+        && crate::principal_resolver::deny_on_missing_principal()
+        && !crate::principal_resolver::has_explicit_auth(&headers)
+    {
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "forbidden_classified",
+            "an authenticated principal is required; supply a Bearer token",
+        );
+    }
     let collection = req.collection.trim();
     if collection.is_empty() {
         return json_err(
@@ -629,6 +655,20 @@ pub async fn handle_graph_query(
     Json(req): Json<GraphQueryRequest>,
 ) -> Response {
     use axum::response::IntoResponse;
+
+    // Phase21 §6.3 / §7.2 — deny unauthenticated calls when the gate is
+    // active. No-op when `access_control.enabled = false` (ADR-1.3).
+    if state.cfg.access_control.enabled
+        && state.service.principal_store.is_some()
+        && crate::principal_resolver::deny_on_missing_principal()
+        && !crate::principal_resolver::has_explicit_auth(&headers)
+    {
+        return json_err(
+            StatusCode::FORBIDDEN,
+            "forbidden_classified",
+            "an authenticated principal is required; supply a Bearer token",
+        );
+    }
 
     // Phase21 §5.7 — resolve once; both Neighbors and Cypher arms need it.
     let principal = state.service.resolve_principal(&headers);

@@ -50,6 +50,7 @@ fn build_test_router() -> Router {
         loader_metrics: Arc::new(LoaderMetrics::new()),
         temporal_metrics: Arc::new(cortex_api::TemporalMetrics::new()),
         events_bus: cortex_api::dashboard_watcher::DashboardEventBus::new(),
+        acl_metrics: None,
     };
     build_router_with(service, Some(dashboard))
 }

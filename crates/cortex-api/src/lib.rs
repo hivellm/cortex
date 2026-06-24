@@ -111,6 +111,8 @@ pub use search::timeline_routes;
 pub use search::tool_calls;
 pub use search::topic_search;
 pub use security::acl;
+pub use security::acl_metrics;
+pub use security::acl_routes;
 pub use security::audit;
 pub use security::audit_store;
 pub use security::auth;
@@ -124,8 +126,12 @@ pub use security::redaction;
 // pre-reorg lib.rs so call sites like `cortex_api::LaneHit`
 // continue to resolve). -----------------------------------------------------
 pub use acl::{AclDecision, AclStore};
+pub use acl_metrics::AclMetrics;
 pub use principal::{can_read, Principal, PrincipalRef};
-pub use principal_resolver::resolve_request_principal;
+pub use principal_resolver::{
+    deny_on_missing_principal, has_explicit_auth, resolve_request_principal,
+    ENV_DENY_ON_MISSING_PRINCIPAL,
+};
 pub use principal_store::{PrincipalStore, RoleBinding};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,

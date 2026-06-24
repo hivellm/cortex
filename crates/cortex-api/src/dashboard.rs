@@ -65,6 +65,11 @@ pub struct DashboardState {
     /// SSE subscribers on `/v1/dashboard/stream` fan these out to GUI
     /// clients. Cloning is cheap (`Arc` inside).
     pub events_bus: crate::dashboard_watcher::DashboardEventBus,
+    /// Phase21 §8.2 — ACL decision metrics aggregator. When `Some`,
+    /// the `/v1/dashboard/acl-stats` endpoint serves live counters +
+    /// time-series. `None` means AC is disabled and the endpoint
+    /// returns all-zero stubs.
+    pub acl_metrics: Option<Arc<crate::AclMetrics>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +140,9 @@ use self::coverage::coverage;
 mod producers;
 use self::producers::producers;
 
+mod acl_stats;
+use self::acl_stats::acl_stats_handler;
+
 mod canary;
 use self::canary::canary;
 
@@ -198,6 +206,7 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         .route("/v1/dashboard/coverage", get(coverage))
         .route("/v1/dashboard/producers", get(producers))
         .route("/v1/dashboard/canary", get(canary))
+        .route("/v1/dashboard/acl-stats", get(acl_stats_handler))
         .route(
             "/v1/dashboard/active-work",
             get(crate::active_work::active_work_handler),

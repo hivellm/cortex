@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_thirty_descriptors() {
+    async fn tools_list_returns_thirty_seven_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
@@ -273,8 +273,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            35,
-            "phase18 §4.6 adds 5 timeline/branch tools (30 -> 35)"
+            37,
+            "phase21 §6.4 adds 2 ACL admin tools (35 -> 37)"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [

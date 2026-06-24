@@ -21,7 +21,7 @@ use crate::types::{
     empty_response, BudgetReport, DebugNote, DecisionRef, GraphNeighbor, IncludeField, Intent,
     LawRef, QueryRequest, QueryResponse, SimilarTurn, Snippet, ViolationRef,
 };
-use cortex_config::{CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig};
+use cortex_config::{AccessControlConfig, CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig};
 use cortex_workers::rerank::{Candidate as RerankCandidate, Reranker};
 use cortex_workers::temporal::classifier::{
     classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
@@ -60,6 +60,11 @@ pub struct Orchestrator {
     /// the snapshot in place. Default OFF per ADR-020; the live binary
     /// overrides via `with_cross_project` at boot.
     pub cross_project: Arc<RwLock<CrossProjectConfig>>,
+    /// Phase21 §7.2 — Bell-LaPadula access-control posture snapshot.
+    /// Mirrors temporal/cross_project (Arc<RwLock<_>>) so SIGHUP reloads
+    /// can hot-swap the config. Default OFF (ADR-1.3); when disabled every
+    /// enforcement point in this orchestrator is a no-op pass-through.
+    pub access_control: Arc<RwLock<AccessControlConfig>>,
     /// Phase6f — pre-fan-out query rewriter. Defaults to
     /// [`PassthroughRewriter`] so existing constructors and tests
     /// reproduce today's behaviour. The live binary swaps in
@@ -72,6 +77,10 @@ pub struct Orchestrator {
     /// into this registry. `None` (the default) is a no-op so all
     /// existing `Orchestrator::new` call sites compile unchanged.
     pub temporal_metrics: Option<Arc<crate::TemporalMetrics>>,
+    /// Phase21 §8.2 — optional ACL decision metrics handle. When `Some`,
+    /// `apply_acl_wedge` pushes every decision into the aggregating store
+    /// so the dashboard can surface denial rate + top denied principals.
+    pub acl_metrics: Option<Arc<crate::AclMetrics>>,
     /// Phase17 §2.3 — optional cross-encoder reranker. When `Some` and
     /// `reranker_cfg.enabled`, the top-`top_k_input` fused candidates are
     /// sent to the TEI service before the dedupe/truncate step.
@@ -105,8 +114,10 @@ impl Orchestrator {
             fusion: Arc::new(RwLock::new(FusionConfig::default())),
             temporal: Arc::new(RwLock::new(TemporalConfig::default())),
             cross_project: Arc::new(RwLock::new(CrossProjectConfig::default())),
+            access_control: Arc::new(RwLock::new(AccessControlConfig::default())),
             rewriter: Arc::new(PassthroughRewriter),
             temporal_metrics: None,
+            acl_metrics: None,
             reranker: None,
             reranker_cfg: RerankerConfig::default(),
             verify_cfg: VerifyConfig::default(),
@@ -169,6 +180,34 @@ impl Orchestrator {
             .clone()
     }
 
+    /// Phase21 §7.2 — install a non-default access-control config at boot.
+    /// Mirrors [`Orchestrator::with_temporal`] / `with_cross_project`.
+    pub fn with_access_control(self, cfg: AccessControlConfig) -> Self {
+        *self
+            .access_control
+            .write()
+            .expect("access_control lock poisoned") = cfg;
+        self
+    }
+
+    /// Phase21 §7.2 — hot-replace the live access-control config (SIGHUP
+    /// reload path; matches `replace_temporal` / `replace_cross_project`).
+    pub fn replace_access_control(&self, cfg: AccessControlConfig) {
+        *self
+            .access_control
+            .write()
+            .expect("access_control lock poisoned") = cfg;
+    }
+
+    /// Phase21 §7.2 — clone the current access-control snapshot. Cheap
+    /// (single read lock); called once per request at every enforcement point.
+    pub fn current_access_control(&self) -> AccessControlConfig {
+        self.access_control
+            .read()
+            .expect("access_control lock poisoned")
+            .clone()
+    }
+
     /// Phase6c — replace the default fusion config with one parsed
     /// from `CORTEX_RRF_ALPHA` / `CORTEX_RRF_K` (or any test
     /// override). Builder method so existing
@@ -214,6 +253,15 @@ impl Orchestrator {
         self
     }
 
+    /// Phase21 §8.2 — attach an `AclMetrics` handle. When set, every
+    /// ACL decision in `apply_acl_wedge` is recorded into the aggregating
+    /// store. Omitting this builder leaves `acl_metrics = None` and all
+    /// existing constructors compile unchanged (no recording = no-op).
+    pub fn with_acl_metrics(mut self, m: Arc<crate::AclMetrics>) -> Self {
+        self.acl_metrics = Some(m);
+        self
+    }
+
     /// Phase17 §2.3 — attach a cross-encoder reranker. The live binary
     /// wires in [`cortex_workers::rerank::bge_v2m3::BgeRerankerV2M3`]
     /// when `CORTEX_RERANKER_ENDPOINT` is set. Omitting this builder
@@ -245,7 +293,7 @@ impl Orchestrator {
     /// Use [`Self::run_with_principal`] when Bell-LaPadula filtering is
     /// required.
     pub async fn run(&self, req: &QueryRequest) -> (QueryResponse, RewrittenQuery) {
-        self.run_with_acl(req, None).await
+        self.run_with_acl(req, None, None).await
     }
 
     /// Phase21 §5.2 — ACL-aware entry point. Resolves the principal's
@@ -263,6 +311,12 @@ impl Orchestrator {
         req: &QueryRequest,
         principal: &crate::security::principal::Principal,
     ) -> (QueryResponse, RewrittenQuery) {
+        // Phase21 §7.2 — when AC is disabled every enforcement point is a
+        // no-op; delegate straight to the unconstrained runner so classified
+        // rows are visible to every principal (backward-compat, ADR-1.3).
+        if !self.current_access_control().enabled {
+            return self.run(req).await;
+        }
         if principal.is_acl_admin() {
             return self.run(req).await;
         }
@@ -270,16 +324,18 @@ impl Orchestrator {
             clearance_level: principal.clearance_level,
             compartment_grants: principal.compartment_grants.clone(),
         };
-        self.run_with_acl(req, Some(acl)).await
+        self.run_with_acl(req, Some(acl), Some(principal.id.as_str())).await
     }
 
     /// Private inner runner. `acl_override` is stamped onto every keyword
     /// lane request so the Meili backend can apply the Bell-LaPadula filter
     /// server-side. `None` = passthrough (scope-only filters, backward compat).
+    /// `principal_id` threads through to the post-fusion wedge for audit logging.
     async fn run_with_acl(
         &self,
         req: &QueryRequest,
         acl_override: Option<crate::lanes::AclContext>,
+        principal_id: Option<&str>,
     ) -> (QueryResponse, RewrittenQuery) {
         let started = Instant::now();
 
@@ -559,7 +615,13 @@ impl Orchestrator {
         // also filtered, and BEFORE the reranker so we don't score
         // hits that will be discarded.
         if let Some(acl) = &acl_override {
-            apply_acl_wedge(&mut fused, acl, &response.query_id);
+            apply_acl_wedge(
+                &mut fused,
+                acl,
+                &response.query_id,
+                principal_id,
+                self.acl_metrics.as_deref(),
+            );
         }
 
         // Phase17 §2.3 — cross-encoder reranker step (fail-open, §2.5).
@@ -1060,11 +1122,31 @@ fn apply_temporal_classifier(
 /// Emits per-hit + per-request audit events on `cortex_audit` so
 /// operators can diagnose "why did Cortex hide this fact" without
 /// needing the explain path.
+/// Phase21 §8.1 — categorise the reason for an ACL decision so the
+/// `access_decision` envelope carries a human-readable `reason` field.
+fn acl_decision_reason(
+    acl: &crate::lanes::AclContext,
+    fact_level: Option<u8>,
+    permit: bool,
+) -> &'static str {
+    if !permit {
+        let level = fact_level.unwrap_or(0);
+        if acl.clearance_level < level {
+            return "above_clearance_level";
+        }
+        return "missing_compartment";
+    }
+    "granted"
+}
+
 fn apply_acl_wedge(
     fused: &mut Vec<LaneHit>,
     acl: &crate::lanes::AclContext,
     query_id: &str,
+    principal_id: Option<&str>,
+    acl_metrics: Option<&crate::AclMetrics>,
 ) {
+    let pid = principal_id.unwrap_or("anonymous");
     let mut kept: Vec<LaneHit> = Vec::with_capacity(fused.len());
     let mut evaluated: u32 = 0;
     let mut granted: u32 = 0;
@@ -1097,17 +1179,31 @@ fn apply_acl_wedge(
             &fact_compartments,
         );
 
-        let verdict = if permit { "grant" } else { "deny" };
+        let verdict: &'static str = if permit { "grant" } else { "deny" };
+        let reason = acl_decision_reason(acl, fact_level, permit);
+        let comps = fact_compartments.join(",");
         tracing::event!(
             target: "cortex_audit",
             tracing::Level::INFO,
             kind = "access_decision",
             query_id = %query_id,
+            principal_id = %pid,
             doc_id = %hit.doc_id,
             fact_level = ?fact_level,
+            fact_compartments = %comps,
             clearance_level = acl.clearance_level,
-            verdict = verdict,
+            verdict = %verdict,
+            reason = %reason,
         );
+
+        // Phase21 §8.2 — push this decision into the metrics store when wired.
+        if let Some(m) = acl_metrics {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            m.record(now_secs, verdict, pid, fact_level.unwrap_or(0), reason, &hit.doc_id);
+        }
 
         if permit {
             granted += 1;
@@ -1122,6 +1218,7 @@ fn apply_acl_wedge(
         tracing::Level::INFO,
         kind = "access_decision_summary",
         query_id = %query_id,
+        principal_id = %pid,
         evaluated = evaluated,
         granted = granted,
         denied = denied,
@@ -2016,6 +2113,56 @@ mod tests {
         assert_eq!(hits.len(), 1, "demoted hits are kept");
         let expected = 2.0 * f64::from(cfg.demote_factor);
         assert!((hits[0].score - expected).abs() < 1e-6);
+    }
+
+    // -----------------------------------------------------------
+    // Phase21 §7.2 — AccessControlConfig handle + disabled pass-through.
+    // -----------------------------------------------------------
+
+    #[test]
+    fn access_control_defaults_disabled_and_reader_returns_snapshot() {
+        let orch = Orchestrator::new(
+            Arc::new(crate::lanes::MemoryVectorLane::new()),
+            Arc::new(crate::lanes::MemoryKeywordLane::new()),
+            Arc::new(crate::lanes::MemoryGraphLane::new()),
+        );
+        let cfg = orch.current_access_control();
+        assert!(!cfg.enabled, "default AC config must be OFF (ADR-1.3)");
+        assert_eq!(cfg.default_level, 1, "default_level must be 1 (internal)");
+        assert!(
+            cfg.deny_on_missing_principal,
+            "deny_on_missing_principal must default true"
+        );
+        assert!(cfg.default_compartments.is_empty());
+    }
+
+    #[test]
+    fn with_access_control_installs_enabled_config() {
+        let orch = Orchestrator::new(
+            Arc::new(crate::lanes::MemoryVectorLane::new()),
+            Arc::new(crate::lanes::MemoryKeywordLane::new()),
+            Arc::new(crate::lanes::MemoryGraphLane::new()),
+        )
+        .with_access_control(AccessControlConfig {
+            enabled: true,
+            ..AccessControlConfig::default()
+        });
+        assert!(orch.current_access_control().enabled);
+    }
+
+    #[test]
+    fn replace_access_control_hot_swaps_snapshot() {
+        let orch = Orchestrator::new(
+            Arc::new(crate::lanes::MemoryVectorLane::new()),
+            Arc::new(crate::lanes::MemoryKeywordLane::new()),
+            Arc::new(crate::lanes::MemoryGraphLane::new()),
+        );
+        assert!(!orch.current_access_control().enabled);
+        orch.replace_access_control(AccessControlConfig {
+            enabled: true,
+            ..AccessControlConfig::default()
+        });
+        assert!(orch.current_access_control().enabled);
     }
 
     #[test]

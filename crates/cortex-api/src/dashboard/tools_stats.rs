@@ -140,6 +140,7 @@ mod tests {
             loader_metrics: Arc::new(crate::LoaderMetrics::new()),
             temporal_metrics: Arc::new(crate::TemporalMetrics::new()),
             events_bus: crate::dashboard_watcher::DashboardEventBus::new(),
+            acl_metrics: None,
         }
     }
 

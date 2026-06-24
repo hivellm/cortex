@@ -83,6 +83,10 @@ pub struct ToolContext {
     /// `CORTEX_MCP_TOOL_TIMEOUT_MS_{TOOL_NAME}` (the name is
     /// upper-cased + non-alnum collapsed to `_`).
     pub tool_timeouts: std::collections::BTreeMap<String, std::time::Duration>,
+    /// Phase21 §6.4 — optional API key forwarded as `Authorization: Bearer <key>`
+    /// on every upstream request so cortex-api can resolve the caller's principal
+    /// from the RBAC binding and apply the Bell-LaPadula lattice filter.
+    pub api_key: Option<String>,
 }
 
 impl ToolContext {
@@ -99,7 +103,15 @@ impl ToolContext {
             started_at: std::time::Instant::now(),
             tool_timeout_default: std::time::Duration::from_millis(MCP_TOOL_TIMEOUT_MS),
             tool_timeouts: std::collections::BTreeMap::new(),
+            api_key: None,
         }
+    }
+
+    /// Phase21 §6.4 — set the API key forwarded as `Authorization: Bearer`
+    /// on every upstream request. Builder form.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
     }
 
     /// Phase14i §2.3 — resolve the timeout for `tool_name`. Falls
@@ -140,6 +152,7 @@ impl ToolContext {
             started_at: std::time::Instant::now(),
             tool_timeout_default: std::time::Duration::from_millis(MCP_TOOL_TIMEOUT_MS),
             tool_timeouts: std::collections::BTreeMap::new(),
+            api_key: None,
         }
     }
 }
@@ -282,6 +295,8 @@ impl ToolRegistry {
                 Arc::new(BranchShowTool::new()),
                 Arc::new(HistoryTool::new()),
                 Arc::new(SupersessionTool::new()),
+                Arc::new(AclWhoamiTool::new()),
+                Arc::new(AclGrantTool::new()),
             ],
         }
     }
@@ -375,6 +390,11 @@ impl Tool for QueryTool {
             .header(cortex_api::CALLER_HEADER, CALLER);
         if let Some(cwd) = &cwd_header {
             request = request.header("x-cortex-cwd", cwd);
+        }
+        // Phase21 §6.4 — forward API key so cortex-api resolves the
+        // caller's principal from the RBAC binding.
+        if let Some(key) = &ctx.api_key {
+            request = request.bearer_auth(key);
         }
         let resp = match request.json(&req).send().await {
             Ok(r) => r,
@@ -3086,13 +3106,11 @@ impl Tool for EventsByKindTool {
 /// verbatim into a `ToolResult`.
 async fn proxy_get(ctx: &ToolContext, path: &str) -> Result<ToolResult, ToolError> {
     let url = format!("{}{}", ctx.api_url.trim_end_matches('/'), path);
-    let resp = match ctx
-        .http
-        .get(&url)
-        .header(cortex_api::CALLER_HEADER, CALLER)
-        .send()
-        .await
-    {
+    let mut req = ctx.http.get(&url).header(cortex_api::CALLER_HEADER, CALLER);
+    if let Some(key) = &ctx.api_key {
+        req = req.bearer_auth(key);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
             return Ok(ToolResult::soft_error(
@@ -3127,14 +3145,15 @@ async fn proxy_get(ctx: &ToolContext, path: &str) -> Result<ToolResult, ToolErro
 /// other failures → `ToolResult::soft_error`.
 async fn proxy_search(ctx: &ToolContext, path: &str, args: Value) -> Result<ToolResult, ToolError> {
     let url = format!("{}{}", ctx.api_url.trim_end_matches('/'), path);
-    let resp = match ctx
+    let mut req = ctx
         .http
         .post(&url)
         .header(cortex_api::CALLER_HEADER, CALLER)
-        .json(&args)
-        .send()
-        .await
-    {
+        .json(&args);
+    if let Some(key) = &ctx.api_key {
+        req = req.bearer_auth(key);
+    }
+    let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
             return Ok(ToolResult::soft_error(
@@ -3511,17 +3530,152 @@ fn optional_str(args: &Value, key: &str) -> Option<String> {
     Some(raw.to_string())
 }
 
+// ---------------------------------------------------------------------
+// cortex_acl_whoami  (Phase21 §6.4)
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `GET <api_url>/v1/acl/whoami`.
+///
+/// Returns the effective principal (id, clearance_level, compartments,
+/// roles) for the API key the MCP server is configured with.
+pub struct AclWhoamiTool;
+
+impl AclWhoamiTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for AclWhoamiTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for AclWhoamiTool {
+    fn name(&self) -> &'static str {
+        "cortex_acl_whoami"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_acl_whoami",
+            "description": "Phase21 §6.4 — resolve and return the effective principal for the \
+                            current API key: clearance level (0=public … 3=restricted), \
+                            compartment grants, and role assignments. \
+                            Useful for verifying that the MCP server is authenticated correctly \
+                            before running classified queries.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, _args: Value) -> Result<ToolResult, ToolError> {
+        proxy_get(ctx, "/v1/acl/whoami").await
+    }
+}
+
+// ---------------------------------------------------------------------
+// cortex_acl_grant  (Phase21 §6.4)
+// ---------------------------------------------------------------------
+
+/// MCP wrapper for `POST <api_url>/v1/acl/grants`.
+///
+/// Assigns a clearance level, compartments, or a named RBAC role to a
+/// principal. Requires `acl_admin` on the calling API key.
+pub struct AclGrantTool;
+
+impl AclGrantTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for AclGrantTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for AclGrantTool {
+    fn name(&self) -> &'static str {
+        "cortex_acl_grant"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_acl_grant",
+            "description": "Phase21 §6.4 — assign a clearance level, compartments, or a named \
+                            RBAC role to a principal. Creates a synthetic per-principal binding \
+                            that overrides the role default for that caller. \
+                            Requires the `acl_admin` role on the current API key.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["principal_id"],
+                "properties": {
+                    "principal_id": {
+                        "type": "string",
+                        "description": "The principal to grant access to (API key id or a named principal)."
+                    },
+                    "role": {
+                        "type": "string",
+                        "description": "Name of a registered RBAC role whose clearance + compartments are copied into a per-principal binding."
+                    },
+                    "clearance_level": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 3,
+                        "description": "Direct clearance grant (0=public, 1=internal, 2=confidential, 3=restricted). Ignored when `role` is set."
+                    },
+                    "compartments": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Compartment grants to union into the binding (e.g. [\"financial\", \"hr\"])."
+                    }
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let principal_id = args
+            .get("principal_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| ToolError::invalid_input("`principal_id` is required"))?
+            .to_string();
+        let mut body = serde_json::json!({ "principal_id": principal_id });
+        if let Some(role) = args.get("role").and_then(Value::as_str) {
+            body["role"] = serde_json::Value::String(role.to_string());
+        }
+        if let Some(level) = args.get("clearance_level").and_then(Value::as_u64) {
+            body["clearance_level"] = serde_json::Value::Number(level.into());
+        }
+        if let Some(comps) = args.get("compartments").and_then(Value::as_array) {
+            body["compartments"] = serde_json::Value::Array(comps.clone());
+        }
+        proxy_search(ctx, "/v1/acl/grants", body).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_thirty_five_tools_with_unique_names() {
+    fn registry_returns_thirty_seven_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            35,
-            "phase18 §4.6 adds 5 timeline/branch tools (30 -> 35)"
+            37,
+            "phase21 §6.4 adds 2 ACL admin tools (35 -> 37)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -3560,6 +3714,8 @@ mod tests {
             "cortex_branch_show",
             "cortex_history",
             "cortex_supersession",
+            "cortex_acl_whoami",
+            "cortex_acl_grant",
         ] {
             assert!(
                 names.contains(&expected),
@@ -3574,14 +3730,15 @@ mod tests {
         }
     }
 
-    /// Phase18 §4.8 — the repo ships no `mcp validate` binary; the
-    /// honest equivalent is compiling every advertised `inputSchema`
-    /// as a JSON Schema and asserting the MCP descriptor envelope
-    /// (`name` / `description` / `inputSchema`) is well-formed. A tool
-    /// whose schema fails to compile would be rejected by any spec-
-    /// compliant MCP client at `tools/list` time, so this gate stands
-    /// in for that client-side validation. Covers all 35 tools incl.
-    /// the 5 phase18 §4.6 timeline/branch additions.
+    /// Phase18 §4.8 / Phase21 §6.4 — the repo ships no `mcp validate`
+    /// binary; the honest equivalent is compiling every advertised
+    /// `inputSchema` as a JSON Schema and asserting the MCP descriptor
+    /// envelope (`name` / `description` / `inputSchema`) is well-formed.
+    /// A tool whose schema fails to compile would be rejected by any
+    /// spec-compliant MCP client at `tools/list` time, so this gate
+    /// stands in for that client-side validation. Covers all 37 tools
+    /// incl. the 5 phase18 §4.6 timeline/branch additions and the 2
+    /// phase21 §6.4 ACL admin tools.
     #[test]
     fn every_tool_descriptor_inputschema_is_valid_json_schema() {
         let reg = ToolRegistry::default_set();
@@ -4447,5 +4604,72 @@ mod tests {
         assert_eq!(payload["meili_deleted"], false);
         assert_eq!(payload["nexus_deleted"], false);
         assert_eq!(payload["archive_rewritten"], false);
+    }
+
+    // ── Phase21 §6.4 — ACL admin tool descriptor tests ──────────────────────
+
+    #[test]
+    fn acl_whoami_descriptor_is_well_formed() {
+        let d = AclWhoamiTool::new().descriptor();
+        assert_eq!(d["name"], "cortex_acl_whoami");
+        assert!(
+            d.get("description").and_then(Value::as_str).is_some(),
+            "cortex_acl_whoami must carry a string description"
+        );
+        let schema = &d["inputSchema"];
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"].is_object());
+        // No required fields — whoami takes no inputs.
+        assert!(
+            schema.get("required").is_none(),
+            "cortex_acl_whoami has no required fields"
+        );
+    }
+
+    #[test]
+    fn acl_grant_descriptor_requires_principal_id() {
+        let d = AclGrantTool::new().descriptor();
+        assert_eq!(d["name"], "cortex_acl_grant");
+        assert!(
+            d.get("description").and_then(Value::as_str).is_some(),
+            "cortex_acl_grant must carry a string description"
+        );
+        let schema = &d["inputSchema"];
+        assert_eq!(schema["type"], "object");
+        let req = schema["required"]
+            .as_array()
+            .expect("cortex_acl_grant must declare required fields");
+        let req_names: Vec<&str> = req.iter().filter_map(Value::as_str).collect();
+        assert!(
+            req_names.contains(&"principal_id"),
+            "principal_id must be required; got {req_names:?}"
+        );
+        let props = schema["properties"].as_object().unwrap();
+        assert!(props.contains_key("principal_id"));
+        assert!(props.contains_key("role"));
+        assert!(props.contains_key("clearance_level"));
+        assert!(props.contains_key("compartments"));
+    }
+
+    #[tokio::test]
+    async fn acl_grant_rejects_missing_principal_id() {
+        let t = AclGrantTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({}))
+            .await
+            .expect_err("missing principal_id must return Err");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
+    }
+
+    #[tokio::test]
+    async fn acl_grant_rejects_empty_principal_id() {
+        let t = AclGrantTool::new();
+        let ctx = ToolContext::new("http://127.0.0.1:1");
+        let err = t
+            .call(&ctx, json!({ "principal_id": "  " }))
+            .await
+            .expect_err("empty principal_id must return Err");
+        assert_eq!(err.reason, reasons::INVALID_INPUT);
     }
 }

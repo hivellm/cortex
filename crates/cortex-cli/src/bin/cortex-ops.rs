@@ -93,6 +93,8 @@ mod timeline_backfill;
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
 mod turn_digest_live;
+#[path = "cortex-ops/acl.rs"]
+mod acl_cmd;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -1438,6 +1440,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Phase21 §6.1 — access-control admin commands.
+    /// Manage role bindings, principal grants, classification
+    /// rules, and caller identity resolution.
+    Acl {
+        #[command(subcommand)]
+        command: AclCommand,
+    },
 }
 
 /// Phase18 §4.2 — `cortex-ops branch` subcommand surface.
@@ -1647,6 +1656,85 @@ enum GraphCommand {
         #[arg(long)]
         nexus: Option<String>,
         /// Emit JSON instead of plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Phase21 §6.1 — `cortex-ops acl role` subcommands.
+#[derive(Subcommand)]
+enum AclRoleCommand {
+    /// Create or overwrite a role binding.
+    Create {
+        /// Role name (e.g. `finance`, `acl_admin`).
+        name: String,
+        /// Sensitivity level 0–3 (public / internal / confidential / restricted).
+        #[arg(long)]
+        clearance: u8,
+        /// Comma-separated compartment names granted by this role.
+        #[arg(long, value_delimiter = ',', default_value = "")]
+        compartments: Vec<String>,
+        /// Cortex API base URL (defaults to config `dashboard.api_url`).
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the plain-text confirmation.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List every registered role binding.
+    List {
+        /// Cortex API base URL.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+/// Phase21 §6.1 — `cortex-ops acl` subcommands.
+#[derive(Subcommand)]
+enum AclCommand {
+    /// Manage RBAC role bindings (create / list).
+    Role {
+        #[command(subcommand)]
+        command: AclRoleCommand,
+    },
+    /// Grant a principal an explicit role, clearance level, or compartments.
+    Grant {
+        /// Principal identifier (API key id or subject claim).
+        principal_id: String,
+        /// Role name to assign.
+        #[arg(long)]
+        role: Option<String>,
+        /// Override clearance level (0–3).
+        #[arg(long)]
+        clearance: Option<u8>,
+        /// Comma-separated compartments to grant.
+        #[arg(long, value_delimiter = ',')]
+        compartments: Vec<String>,
+        /// Cortex API base URL.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of plain text.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List all active classification path rules (from cortex.toml).
+    ClassifyRuleList {
+        /// Cortex API base URL.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Resolve and print the caller's effective clearance/compartments.
+    Whoami {
+        /// Cortex API base URL.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the lattice table.
         #[arg(long)]
         json: bool,
     },
@@ -2264,6 +2352,30 @@ fn run() -> ExitCode {
             dry_run,
             json,
         } => meili_rekey::meili_rekey(index, meili_url, meili_key, dry_run, json),
+        Command::Acl { command } => match command {
+            AclCommand::Role { command: role_cmd } => match role_cmd {
+                AclRoleCommand::Create {
+                    name,
+                    clearance,
+                    compartments,
+                    api_url,
+                    json,
+                } => acl_cmd::acl_role_create(name, clearance, compartments, api_url, json),
+                AclRoleCommand::List { api_url, json } => acl_cmd::acl_role_list(api_url, json),
+            },
+            AclCommand::Grant {
+                principal_id,
+                role,
+                clearance,
+                compartments,
+                api_url,
+                json,
+            } => acl_cmd::acl_grant(principal_id, role, clearance, compartments, api_url, json),
+            AclCommand::ClassifyRuleList { api_url, json } => {
+                acl_cmd::acl_classify_rule_list(api_url, json)
+            }
+            AclCommand::Whoami { api_url, json } => acl_cmd::acl_whoami(api_url, json),
+        },
     }
 }
 

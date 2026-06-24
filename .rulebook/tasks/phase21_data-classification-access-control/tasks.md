@@ -45,28 +45,28 @@
 - [x] 5.8 Spec `docs/specs/42-access-enforcement.md` (the lattice predicate, the four enforcement points, the defense-in-depth rationale, pinned tests).
 
 ## 6. P5 — Public surfaces (CLI / HTTP / MCP)
-- [ ] 6.1 Admin CLI `crates/cortex-cli/src/bin/cortex-ops/acl.rs`: `cortex-ops acl role create|list`, `acl grant <principal> --role|--clearance|--compartments`, `acl classify-rule list`, `acl whoami` (resolve + print the caller's effective clearance/compartments). Unit tests for arg parsing + the `whoami` lattice render.
-- [ ] 6.2 HTTP `/v1/acl/*` (`crates/cortex-api/src/http.rs` + new `acl_routes.rs`): role CRUD, principal grant, whoami; all mutations gated by the `acl_admin` role; `403` envelope shape. IT.
-- [ ] 6.3 Principal-aware `/v1/query` + raw search routes: accept the resolved principal; return `403 forbidden_classified` when a classified scope is queried without sufficient clearance per `deny_on_missing_principal`. IT.
-- [ ] 6.4 MCP: principal-aware `cortex_query` (extend schema in `crates/cortex-api/src/mcp.rs`) + admin tools `cortex_acl_whoami` / `cortex_acl_grant` in `crates/cortex-mcp-server/src/tools.rs`; bump the tool-count assertions. The MCP caller's principal derives from its API key. mcp-server tests green + the §4.8-style schema gate stays green.
-- [ ] 6.5 Spec `docs/specs/43-acl-admin-api.md`.
+- [x] 6.1 Admin CLI `crates/cortex-cli/src/bin/cortex-ops/acl.rs`: `cortex-ops acl role create|list`, `acl grant <principal> --role|--clearance|--compartments`, `acl classify-rule list`, `acl whoami` (resolve + print the caller's effective clearance/compartments). Unit tests for arg parsing + the `whoami` lattice render.
+- [x] 6.2 HTTP `/v1/acl/*` (`crates/cortex-api/src/http.rs` + new `acl_routes.rs`): role CRUD, principal grant, whoami; all mutations gated by the `acl_admin` role; `403` envelope shape. IT.
+- [x] 6.3 Principal-aware `/v1/query` + raw search routes: accept the resolved principal; return `403 forbidden_classified` when a classified scope is queried without sufficient clearance per `deny_on_missing_principal`. IT.
+- [x] 6.4 MCP: principal-aware `cortex_query` (extend schema in `crates/cortex-api/src/mcp.rs`) + admin tools `cortex_acl_whoami` / `cortex_acl_grant` in `crates/cortex-mcp-server/src/tools.rs`; bump the tool-count assertions. The MCP caller's principal derives from its API key. mcp-server tests green + the §4.8-style schema gate stays green.
+- [x] 6.5 Spec `docs/specs/43-acl-admin-api.md`.
 
 ## 7. P6 — Config + default posture
-- [ ] 7.1 `AccessControlConfig` in `crates/cortex-config/src/sub.rs`: `enabled` (default false), `default_level` (default `internal`), `deny_on_missing_principal` (default true when enabled), `default_compartments` (default empty). Wire into top-level `Config` + `lib.rs` export; register `CORTEX_ACCESS_CONTROL_*` env vars ASCII-sorted in `env_map.rs`. Unit tests (defaults, TOML round-trip, partial-TOML fallback).
-- [ ] 7.2 Orchestrator + bundle + proxies read the AC snapshot via an `Arc<RwLock<AccessControlConfig>>` handle (mirror the temporal/cross_project handles); when `enabled=false` every enforcement point is a no-op pass-through (backward-compat). Pinned IT: disabled ⇒ a low-clearance principal sees everything.
-- [ ] 7.3 Spec section in `docs/specs/42-...` documenting the config knobs + the disabled-pass-through guarantee.
+- [x] 7.1 `AccessControlConfig` in `crates/cortex-config/src/sub.rs`: `enabled` (default false), `default_level` (default `internal`), `deny_on_missing_principal` (default true when enabled), `default_compartments` (default empty). Wire into top-level `Config` + `lib.rs` export; register `CORTEX_ACCESS_CONTROL_*` env vars ASCII-sorted in `env_map.rs`. Unit tests (defaults, TOML round-trip, partial-TOML fallback).
+- [x] 7.2 Orchestrator + bundle + proxies read the AC snapshot via an `Arc<RwLock<AccessControlConfig>>` handle (mirror the temporal/cross_project handles); when `enabled=false` every enforcement point is a no-op pass-through (backward-compat). Pinned IT: disabled ⇒ a low-clearance principal sees everything.
+- [x] 7.3 Spec section in `docs/specs/42-...` documenting the config knobs + the disabled-pass-through guarantee.
 
 ## 8. P7 — Audit + observability
-- [ ] 8.1 `access_decision` audit envelope on the `cortex_audit` target from every enforcement point (principal id, fact/doc id, fact level + compartments, verdict grant|deny, reason, query_id) + a per-request `access_decision_summary` (evaluated / granted / denied counts). Pinned IT with a recording subscriber (mirror `temporal_audit_it.rs`).
-- [ ] 8.2 Dashboard panels + GUI surface: denial rate over time, classification distribution per repo, top denied principals. Reads the audit store. GUI view + vitest (happy/empty/error).
-- [ ] 8.3 Spec `docs/specs/44-access-audit-and-eval.md` (audit envelope shapes + dashboard contract).
+- [x] 8.1 `access_decision` audit envelope on the `cortex_audit` target from every enforcement point (principal id, fact/doc id, fact level + compartments, verdict grant|deny, reason, query_id) + a per-request `access_decision_summary` (evaluated / granted / denied counts). Pinned IT with a recording subscriber (mirror `temporal_audit_it.rs`).
+- [x] 8.2 Dashboard panels + GUI surface: denial rate over time, classification distribution per repo, top denied principals. Reads the audit store. GUI view + vitest (happy/empty/error).
+- [x] 8.3 Spec `docs/specs/44-access-audit-and-eval.md` (audit envelope shapes + dashboard contract).
 
 ## 9. P8 — Eval + leak-detection gate
-- [ ] 9.1 Golden access-control suite in `crates/cortex-eval/src/suite/access_control.rs` + `tests/golden/access_control.csv` (rows: principal clearance/compartments × fact level/compartments × expected visible|hidden). Metric: zero false-grants (a leak) + correct grants recall. Acceptance: **false-grant count MUST be 0**.
-- [ ] 9.2 Adversarial leak probe: a low-clearance principal runs every surface (query / raw proxies / pre-thinking / MCP tools) against a corpus seeded with `restricted` facts and MUST retrieve none. Wired as a hard CI gate (a single leak fails CI).
-- [ ] 9.3 Spec section in `docs/specs/44-...` documenting the eval gates + the zero-leak CI gate.
+- [x] 9.1 Golden access-control suite in `crates/cortex-eval/src/suite/access_control.rs` + `tests/golden/access_control.csv` (rows: principal clearance/compartments × fact level/compartments × expected visible|hidden). Metric: zero false-grants (a leak) + correct grants recall. Acceptance: **false-grant count MUST be 0**.
+- [x] 9.2 Adversarial leak probe: a low-clearance principal runs every surface (query / raw proxies / pre-thinking / MCP tools) against a corpus seeded with `restricted` facts and MUST retrieve none. Wired as a hard CI gate (a single leak fails CI).
+- [x] 9.3 Spec section in `docs/specs/44-...` documenting the eval gates + the zero-leak CI gate.
 
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [ ] 99.1 Update or create documentation covering the implementation — specs 40-44 + the 7 P0 ADRs + the `docs/analysis/data-classification-access-control/` analysis + inline doc comments at every code site.
-- [ ] 99.2 Write tests covering the new behavior — unit tests per stamper/predicate/filter + ITs per enforcement point + the P8 golden access-control suite + the adversarial leak probe.
-- [ ] 99.3 Run tests and confirm they pass — `cargo check --workspace` clean, `cargo clippy --workspace -- -D warnings` clean, all unit + IT green, the access-control eval suite reports **zero false-grants**.
+- [x] 99.1 Update or create documentation covering the implementation — specs 40-44 + the 7 P0 ADRs + the `docs/analysis/data-classification-access-control/` analysis + inline doc comments at every code site.
+- [x] 99.2 Write tests covering the new behavior — unit tests per stamper/predicate/filter + ITs per enforcement point + the P8 golden access-control suite + the adversarial leak probe.
+- [x] 99.3 Run tests and confirm they pass — `cargo check --workspace` clean, `cargo clippy --workspace -- -D warnings` clean, all unit + IT green, the access-control eval suite reports **zero false-grants**.

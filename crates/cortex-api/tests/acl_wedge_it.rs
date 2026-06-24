@@ -15,6 +15,7 @@ use cortex_api::lanes::{
 use cortex_api::orchestrator::Orchestrator;
 use cortex_api::types::{IncludeField, Intent, QueryRequest, Scope};
 use cortex_api::Principal;
+use cortex_config::AccessControlConfig;
 use serde_json::json;
 
 #[derive(Default)]
@@ -86,7 +87,10 @@ fn orch(hits: Vec<LaneHit>) -> Orchestrator {
     let v = Arc::new(EmptyVectorLane);
     let k: Arc<dyn KeywordLane> = Arc::new(StaticKeywordLane(hits));
     let g = Arc::new(MemoryGraphLane::new());
-    Orchestrator::new(v, k, g)
+    Orchestrator::new(v, k, g).with_access_control(AccessControlConfig {
+        enabled: true,
+        ..AccessControlConfig::default()
+    })
 }
 
 /// Phase21 §5.5 — principal with clearance=1 must receive only

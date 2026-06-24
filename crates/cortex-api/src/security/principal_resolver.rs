@@ -104,6 +104,43 @@ pub fn resolve_request_principal(
     p
 }
 
+/// Phase21 §6.3 — env var name for the deny-on-missing-principal gate.
+///
+/// When set to `1` / `true` / `yes` / `on`, any request that carries NO
+/// explicit auth credential (no Bearer token, no trusted `x-cortex-principal`
+/// header) is rejected with `403 forbidden_classified` whenever a
+/// `PrincipalStore` is active. This prevents unauthenticated callers from
+/// silently receiving public-only results when AC is enabled.
+///
+/// Superseded by `AccessControlConfig.deny_on_missing_principal` in §7.1.
+pub const ENV_DENY_ON_MISSING_PRINCIPAL: &str = "CORTEX_ACCESS_CONTROL_DENY_ON_MISSING_PRINCIPAL";
+
+/// Phase21 §6.3 — whether unauthenticated calls should be hard-rejected.
+pub fn deny_on_missing_principal() -> bool {
+    matches!(
+        std::env::var(ENV_DENY_ON_MISSING_PRINCIPAL).as_deref(),
+        Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("on")
+    )
+}
+
+/// Phase21 §6.3 — whether the request carries any explicit auth credential.
+///
+/// Returns `true` when a Bearer token or a (trusted) `x-cortex-principal`
+/// header is present. Used to decide if an unauthenticated call should be
+/// denied when `deny_on_missing_principal` is active.
+pub fn has_explicit_auth(headers: &HeaderMap) -> bool {
+    if extract_bearer_token(headers).is_some() {
+        return true;
+    }
+    // The principal-override header is only trusted when the env gate is on,
+    // but even without the gate we consider its presence as "explicit auth"
+    // so callers on internal networks are not spuriously rejected.
+    if extract_principal_header(headers).is_some() {
+        return true;
+    }
+    false
+}
+
 /// Extract the Bearer token from the `Authorization` header.
 ///
 /// Returns `None` when the header is absent, malformed, or holds an empty

@@ -43,6 +43,7 @@ fn build_test_router_no_metadata() -> Router {
         loader_metrics: Arc::new(LoaderMetrics::new()),
         temporal_metrics: Arc::new(cortex_api::TemporalMetrics::new()),
         events_bus: cortex_api::dashboard_watcher::DashboardEventBus::new(),
+        acl_metrics: None,
     };
     build_router_with(service, Some(dashboard))
 }
@@ -65,6 +66,7 @@ fn build_test_router_with_metadata(store: MetadataStore) -> Router {
         loader_metrics: Arc::new(LoaderMetrics::new()),
         temporal_metrics: Arc::new(cortex_api::TemporalMetrics::new()),
         events_bus: cortex_api::dashboard_watcher::DashboardEventBus::new(),
+        acl_metrics: None,
     };
     build_router_with(service, Some(dashboard))
 }

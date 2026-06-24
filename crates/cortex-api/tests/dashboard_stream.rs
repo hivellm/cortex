@@ -34,6 +34,7 @@ fn build_router(events_bus: DashboardEventBus) -> axum::Router {
         loader_metrics: Arc::new(cortex_api::LoaderMetrics::new()),
         temporal_metrics: Arc::new(cortex_api::TemporalMetrics::new()),
         events_bus,
+        acl_metrics: None,
     };
     build_dashboard_router(state)
 }

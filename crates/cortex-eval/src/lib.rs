@@ -35,6 +35,7 @@ pub mod suite;
 pub use metrics::{f1, macro_f1, mrr_at_k, recall_at_k};
 pub use report::{MetricRow, SuiteReport};
 pub use suite::{
+    access_control::{access_control_acceptance, AccessControlRow},
     classification::{classification_acceptance, ClassificationRow},
     consolidation::{consolidation_acceptance, ConsolidationRow},
     retrieval::{retrieval_acceptance, RetrievalRow},

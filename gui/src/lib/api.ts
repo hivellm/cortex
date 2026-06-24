@@ -446,6 +446,40 @@ export type ProducerCheckpointsReportView = {
   total: number;
 };
 
+// Phase21 §8.2 — ACL dashboard types. Mirror the Rust structs in
+// `crates/cortex-api/src/dashboard/acl_stats.rs`.
+
+/** One 5-minute bucket in the denial-rate time series. */
+export type DenialRateBucket = {
+  ts: number;
+  denied: number;
+  evaluated: number;
+};
+
+/** Classification distribution for one `(repo, level)` pair. */
+export type ClassificationDistributionRow = {
+  repo: string;
+  /** 0=public, 1=internal, 2=confidential, 3=restricted */
+  level: number;
+  count: number;
+};
+
+/** One entry in the top-denied-principals list. */
+export type TopDeniedPrincipal = {
+  principal_id: string;
+  denial_count: number;
+};
+
+/** Response body from `GET /v1/dashboard/acl-stats`. */
+export type AclStatsBody = {
+  total_evaluated: number;
+  total_granted: number;
+  total_denied: number;
+  denial_rate_over_time: DenialRateBucket[];
+  classification_distribution: ClassificationDistributionRow[];
+  top_denied_principals: TopDeniedPrincipal[];
+};
+
 /// Per-session summary the Conversations list view renders. Each row
 /// is one chat thread the user can drill into via `api.conversation`.
 export type ConversationSummary = {
@@ -729,6 +763,7 @@ export const api = {
   coverage: () => getJson<CoverageReportView>("/v1/dashboard/coverage"),
   producers: () =>
     getJson<ProducerCheckpointsReportView>("/v1/dashboard/producers"),
+  aclStats: () => getJson<AclStatsBody>("/v1/dashboard/acl-stats"),
   dashboardCanary: () => getJson<CanaryReport>("/v1/dashboard/canary"),
   /// Pull the graph panorama. `repos` narrows the canvas to the
   /// listed projects' artifacts (sessions / decisions / memories

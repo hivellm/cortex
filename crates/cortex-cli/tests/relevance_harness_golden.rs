@@ -30,6 +30,8 @@ fn snip(rank: usize, path: &str) -> Snippet {
         why: None,
         verified: None,
         verdict: None,
+        class_level: None,
+        class_compartments: vec![],
     }
 }
 

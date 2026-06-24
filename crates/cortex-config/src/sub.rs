@@ -1347,6 +1347,111 @@ mod tests_verify_config {
     }
 }
 
+// ── AccessControlConfig ───────────────────────────────────────────────────────
+
+fn default_ac_default_level() -> u8 {
+    1 // internal
+}
+
+fn default_ac_deny_on_missing_principal() -> bool {
+    true
+}
+
+/// Phase21 §7.1 — Bell-LaPadula access-control feature flag + posture knobs.
+///
+/// Feature default is OFF (`enabled = false`) for backward compatibility per
+/// ADR-1.3. When ON, the enforcement stack filters classified facts per the
+/// principal's clearance level and compartment grants. The `deny_on_missing_principal`
+/// flag controls whether an un-authenticated caller sees only `public` facts
+/// or is rejected with `403 forbidden_classified`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AccessControlConfig {
+    /// Master switch. `false` (default) — every enforcement point is a no-op
+    /// pass-through so existing deployments are unaffected.
+    /// Env: `CORTEX_ACCESS_CONTROL_ENABLED`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Sensitivity level assigned to facts that carry no explicit classification.
+    /// Valid range 0–3 (`public`=0, `internal`=1, `confidential`=2, `restricted`=3).
+    /// Default `1` (`internal`) — the conservative choice for mixed-content
+    /// deployments. Env: `CORTEX_ACCESS_CONTROL_DEFAULT_LEVEL`.
+    #[serde(default = "default_ac_default_level")]
+    pub default_level: u8,
+    /// When `true` (the default when AC is enabled), an un-authenticated caller
+    /// — one that carries no Bearer token or `x-cortex-principal` header —
+    /// receives `403 forbidden_classified` rather than a downgraded `public`
+    /// view. Operators can set `false` to allow public-view fallback for
+    /// unauthenticated callers.
+    /// Env: `CORTEX_ACCESS_CONTROL_DENY_ON_MISSING_PRINCIPAL`.
+    #[serde(default = "default_ac_deny_on_missing_principal")]
+    pub deny_on_missing_principal: bool,
+    /// Compartments stamped on facts that carry no explicit compartment set.
+    /// Default empty — unclassified facts are accessible to any principal
+    /// whose clearance level meets the `default_level` threshold.
+    /// Env: `CORTEX_ACCESS_CONTROL_DEFAULT_COMPARTMENTS` (comma-separated).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub default_compartments: Vec<String>,
+}
+
+impl Default for AccessControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            default_level: default_ac_default_level(),
+            deny_on_missing_principal: default_ac_deny_on_missing_principal(),
+            default_compartments: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_access_control_config {
+    use super::*;
+
+    #[test]
+    fn defaults_match_adr_1_3() {
+        let cfg = AccessControlConfig::default();
+        assert!(!cfg.enabled, "AC must default OFF (ADR-1.3 backward compat)");
+        assert_eq!(cfg.default_level, 1, "default level is internal (1)");
+        assert!(
+            cfg.deny_on_missing_principal,
+            "deny-on-missing-principal defaults true when AC is enabled"
+        );
+        assert!(cfg.default_compartments.is_empty());
+    }
+
+    #[test]
+    fn toml_round_trips_defaults() {
+        let cfg = AccessControlConfig::default();
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: AccessControlConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn partial_toml_keeps_serde_defaults_for_missing_fields() {
+        let raw = "enabled = true\n";
+        let cfg: AccessControlConfig = toml::from_str(raw).expect("parse");
+        assert!(cfg.enabled);
+        assert_eq!(cfg.default_level, 1);
+        assert!(cfg.deny_on_missing_principal);
+        assert!(cfg.default_compartments.is_empty());
+    }
+
+    #[test]
+    fn toml_round_trips_full_config() {
+        let cfg = AccessControlConfig {
+            enabled: true,
+            default_level: 2,
+            deny_on_missing_principal: false,
+            default_compartments: vec!["financial".to_string(), "hr".to_string()],
+        };
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: AccessControlConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+}
+
 // ── RerankerConfig ────────────────────────────────────────────────────────────
 
 fn default_reranker_enabled() -> bool {
