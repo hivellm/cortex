@@ -113,6 +113,10 @@ pub const SCHEMA_STATEMENTS: &[&str] = &[
     "CREATE INDEX service_nk_idx IF NOT EXISTS FOR (s:Service) ON (s.natural_key)",
     "CREATE INDEX config_nk_idx IF NOT EXISTS FOR (c:Config) ON (c.natural_key)",
     "CREATE INDEX endpoint_nk_idx IF NOT EXISTS FOR (e:Endpoint) ON (e.natural_key)",
+    // phase23e — doc-graph node labels
+    "CREATE INDEX article_nk_idx IF NOT EXISTS FOR (a:Article) ON (a.natural_key)",
+    "CREATE INDEX entity_nk_idx IF NOT EXISTS FOR (e:Entity) ON (e.natural_key)",
+    "CREATE INDEX claim_nk_idx IF NOT EXISTS FOR (c:Claim) ON (c.natural_key)",
 ];
 
 /// Owned-string clone of [`SCHEMA_STATEMENTS`] for callers (like

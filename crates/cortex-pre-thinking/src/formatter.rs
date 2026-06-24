@@ -86,6 +86,10 @@ pub mod section_caps {
     pub const SUPERSESSION_OVERLAY_BYTES: usize = 1_000;
     /// Phase18 §6.1 — byte budget for the "Branch context" section.
     pub const BRANCH_CONTEXT_BYTES: usize = 800;
+    /// Phase23e §4.2 — max contradiction-band rows to render.
+    pub const DOC_CONTRADICTIONS: usize = 5;
+    /// Phase23e §4.2 — byte budget for the "Doc↔decision contradictions" section.
+    pub const DOC_CONTRADICTIONS_BYTES: usize = 1_000;
 }
 
 /// Trim mode applied by the budget clipper to snippets. Spec 12
@@ -162,6 +166,8 @@ pub struct GroundingSections {
     pub supersession_overlay: Option<SupersessionOverlay>,
     /// Phase18 §6.1 — branch context. None ⇒ section skipped.
     pub branch_context: Option<BranchContext>,
+    /// Phase23e §4.2 — doc↔decision contradiction pairs. Empty ⇒ section skipped.
+    pub doc_contradictions: Vec<ContradictionRow>,
 }
 
 impl Default for FormatOptions {
@@ -307,6 +313,12 @@ pub fn format_bundle(intent: &str, response: &QueryResponse, opts: &FormatOption
     let adr = render_adr_provenance(&opts.grounding.adr_provenance);
     if !adr.is_empty() {
         out.push_str(&adr);
+        out.push('\n');
+    }
+    // Phase23e §4.2 — doc↔decision contradiction band.
+    let dc = render_doc_contradictions(&opts.grounding.doc_contradictions);
+    if !dc.is_empty() {
+        out.push_str(&dc);
         out.push('\n');
     }
 
@@ -941,6 +953,58 @@ pub struct AdrProvenanceRow {
     pub title: String,
 }
 
+/// Phase23e §4.2 — one row in the doc↔decision contradiction band.
+/// Populated by the orchestrator from [`DocDrift`](cortex_workers::graph::doc_drift)
+/// findings after the doc annotator runs.
+#[derive(Debug, Clone, Default)]
+pub struct ContradictionRow {
+    /// Natural key (`"{repo}|{path}"`) of the article that exhibits the drift.
+    pub doc_key: String,
+    /// Id of the ADR that the document cites (superseded, or contradicted).
+    pub decision_id: String,
+    /// Human-readable description of the contradiction / drift kind.
+    pub kind: String,
+    /// Supporting evidence excerpt (from the edge `description` field).
+    pub evidence: String,
+}
+
+/// Phase23e §4.2 — render the "Doc↔decision contradictions" section.
+///
+/// Bounded by [`section_caps::DOC_CONTRADICTIONS_BYTES`]. Returns an empty
+/// string when `rows` is empty (fail-open: if the detector found nothing,
+/// no section is emitted). The orchestrator is responsible for calling the
+/// drift detector before populating this field — the pre-thinking pipeline
+/// never errors on a missing contradiction section.
+pub fn render_doc_contradictions(rows: &[ContradictionRow]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let capped = rows.iter().take(section_caps::DOC_CONTRADICTIONS);
+    let _ = writeln!(&mut out, "## Doc↔decision contradictions");
+    for row in capped {
+        let doc_short = row.doc_key.split('|').next_back().unwrap_or(&row.doc_key);
+        let evidence = if row.evidence.is_empty() {
+            String::new()
+        } else {
+            format!(" — \"{ev}\"", ev = trim_one_line(&row.evidence))
+        };
+        let line = format!(
+            "- **{decision}** ↔ `{doc}` ({kind}){evidence}\n",
+            decision = row.decision_id,
+            doc = doc_short,
+            kind = row.kind,
+            evidence = evidence,
+        );
+        if out.len() + line.len() > section_caps::DOC_CONTRADICTIONS_BYTES {
+            out.push_str("- … (truncated)\n");
+            break;
+        }
+        out.push_str(&line);
+    }
+    out
+}
+
 /// One event row in the timeline-window section. Mirrors the
 /// `TimelineEvent` shape the §4.4 `/v1/timeline` route returns.
 #[derive(Debug, Clone, Default)]
@@ -1128,6 +1192,14 @@ pub fn count_sections(
         .unwrap_or(0);
     if branch_context > 0 {
         map.insert("branch_context".to_string(), branch_context);
+    }
+    let doc_contradictions = opts
+        .grounding
+        .doc_contradictions
+        .len()
+        .min(section_caps::DOC_CONTRADICTIONS) as u32;
+    if doc_contradictions > 0 {
+        map.insert("doc_contradictions".to_string(), doc_contradictions);
     }
 
     map
@@ -2779,6 +2851,62 @@ mod tests {
             counts.get("timeline_window").copied().unwrap_or(0),
             2,
             "count must match actual event count when below TIMELINE_WINDOW_EVENTS cap"
+        );
+    }
+
+    // ── Phase23e §4.2 — contradiction band ────────────────────────────────────
+
+    /// Fail-open: empty rows → empty string, no panic.
+    #[test]
+    fn doc_contradictions_empty_rows_returns_empty_string() {
+        let result = render_doc_contradictions(&[]);
+        assert!(
+            result.is_empty(),
+            "render_doc_contradictions must return empty string when rows is empty (fail-open)"
+        );
+    }
+
+    /// Non-empty rows → section header present.
+    #[test]
+    fn doc_contradictions_renders_section_header() {
+        let row = ContradictionRow {
+            doc_key: "repo|docs/my-doc.md".to_string(),
+            decision_id: "DEC-0042".to_string(),
+            kind: "CanonicalDrift".to_string(),
+            evidence: "the doc argues against DEC-0042".to_string(),
+        };
+        let result = render_doc_contradictions(std::slice::from_ref(&row));
+        assert!(
+            result.contains("## Doc↔decision contradictions"),
+            "rendered section must contain the heading"
+        );
+        assert!(result.contains("DEC-0042"));
+    }
+
+    /// `count_sections` reports contradiction rows.
+    #[test]
+    fn count_sections_includes_doc_contradictions() {
+        let resp = populated_response();
+        let mut opts = FormatOptions::default();
+        opts.grounding.doc_contradictions = vec![
+            ContradictionRow {
+                doc_key: "repo|a.md".to_string(),
+                decision_id: "DEC-0001".to_string(),
+                kind: "CitesSuperseded".to_string(),
+                evidence: String::new(),
+            },
+            ContradictionRow {
+                doc_key: "repo|b.md".to_string(),
+                decision_id: "DEC-0002".to_string(),
+                kind: "CanonicalDrift".to_string(),
+                evidence: "explicit evidence".to_string(),
+            },
+        ];
+        let counts = count_sections(&resp, &opts);
+        assert_eq!(
+            counts.get("doc_contradictions").copied().unwrap_or(0),
+            2,
+            "count_sections must report both contradiction rows"
         );
     }
 }
