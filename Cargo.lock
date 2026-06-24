@@ -680,6 +680,7 @@ dependencies = [
  "flate2",
  "globset",
  "ignore",
+ "nexus-graph-sdk",
  "reqwest 0.12.28",
  "rusqlite",
  "serde",

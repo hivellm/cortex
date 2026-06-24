@@ -370,26 +370,15 @@ impl GraphClient for LiveNexusClient {
         patch: &GraphPatch,
         _templates: &CypherTemplates,
     ) -> GraphClientResult<WriteStats> {
-        // Nexus 1.15.0 silently drops every write that touches an `UNWIND`
-        // row or that uses `$param` substitution inside a write clause:
-        // the HTTP call returns 200 with zero rows but nothing is
-        // persisted. (Reads with `$param` work fine; only the write
-        // substitution path is broken.) Until a Nexus version that fixes
-        // this ships, every write is rendered as a per-row Cypher
-        // statement with values escaped into the literal — so MERGE,
-        // SET, and the relationship-MATCH/MERGE pair all see literal
-        // values rather than parameter slots.
+        // Nexus 2.3.4 nexus#3 fix: $param works in READ-only queries
+        // (WHERE clauses, RETURN) but NOT in write-path inline property
+        // maps ({ id: $param } in MERGE/MATCH...MERGE). Both node UNWIND
+        // rows and edge endpoint keys must remain inline literals.
         //
         // The `_templates` registry is kept as a parameter for API
-        // stability; the live writer no longer reads from it. See task
-        // `phase1_graph_writer_nexus_compat` for the full diagnosis.
-        // phase25 §4.2 — UNWIND-batch node upserts. The nexus_sdk client
-        // shares one transport (requests serialize), so per-row writes
-        // are round-trip bound (~1-2/s); batching collapses N MERGEs into
-        // one statement per (label, prop-shape) group. Nexus 2.3.2
-        // persists UNWIND+MERGE node writes (nexus#13). Edges still go
-        // per-row below: UNWIND+MATCH+MERGE is rejected server-side
-        // (nexus#14), and the single transport serializes anyway.
+        // stability; the live writer no longer reads from it. Edges go
+        // per-row: UNWIND+MATCH+MERGE is rejected server-side (nexus#14),
+        // and the single transport serializes anyway.
         //
         // Group nodes by (label, prop-key signature) so each batch has a
         // uniform SET clause. `props` is a BTreeMap, so the key order is
@@ -521,6 +510,11 @@ fn render_edge_merge(edge: &EdgeOp) -> String {
     // / analyzer_version + extractor props) and MERGE is idempotent. The
     // stale-edge sweeper filters on analyzer_version / source_event_id,
     // both retained; it does not read created_at_ms.
+    //
+    // phase22 §3.3 finding — Nexus 2.3.4 nexus#3 fix applies to READ
+    // queries only. Inline property maps ({ id: $param }) in write-path
+    // queries (MATCH...MERGE) fail with "Complex expressions not supported
+    // in CREATE properties". Endpoint keys must remain inline literals.
     let inline = render_edge_props_inline(&edge.props);
     format!(
         "MATCH (a:{fl} {{ {fkf}: {fk} }}), (b:{tl} {{ {tkf}: {tk} }}) \
@@ -560,11 +554,11 @@ fn render_edge_props_inline(
 
 /// phase25 §4.2 — render one UNWIND batch that MERGEs many same-shape
 /// nodes (same label + same `prop_keys` set) in a single statement.
-/// Values are inlined as escaped Cypher literals (Nexus rejects `$param`
-/// writes); the merge key rides under `row._k`. Nexus 2.3.2 persists
-/// UNWIND+MERGE node writes (nexus#13), so this collapses N per-row
-/// round-trips into one. `RETURN count(n)` lets the caller assert the
-/// batch landed.
+/// Row values are inlined as escaped Cypher literals — Nexus 2.3.4 rejects
+/// `row._k` as a "complex expression" in MERGE inline property maps, so
+/// per-row scalar param binding is not viable for UNWIND batches. The
+/// merge key rides under `row._k`. `RETURN count(n)` lets the caller
+/// assert the batch landed.
 fn render_node_unwind(label: &str, prop_keys: &[&str], nodes: &[&NodeOp]) -> String {
     let kf = LiveNexusClient::key_field_for(label);
     let mut rows = String::from("[");

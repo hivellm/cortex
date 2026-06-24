@@ -148,8 +148,9 @@ fn primary_node_alias(template: &str) -> Option<&'static str> {
 
 /// Phase21 §5.4 — build the ACL-augmented Cypher for a template when
 /// an ACL context is present. Inserts the Bell-LaPadula WHERE fragment
-/// (inline literals, per the Nexus 2.2.0 param-binding workaround
-/// nexus#3) immediately before the `RETURN` keyword by replacing the
+/// (inline literals — the ACL filter is generated as a static string
+/// fragment and is not a user-supplied value, so inline is the correct
+/// form here) immediately before the `RETURN` keyword by replacing the
 /// first occurrence of ` RETURN `. Returns the base template unchanged
 /// (as `String`) when ACL is `None` or the template has no registered
 /// primary alias (structural templates like `cross_project_ref`).

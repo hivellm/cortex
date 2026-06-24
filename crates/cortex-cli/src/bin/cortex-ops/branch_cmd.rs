@@ -10,13 +10,16 @@
 //!   ADR-021 strategy choice,
 //! - `abandon` — close a branch without merge (audit-only).
 //!
-//! Reads land on `LiveNexusClient::sdk().execute_cypher`; writes
-//! emit inlined-literal Cypher per the same Nexus 2.2.0 binding
-//! workaround the §4.1 timeline reader uses.
+//! Reads use `$param` binding (nexus#3 fixed in 2.3.4; WHERE clause
+//! pattern confirmed working). Write-path queries (MERGE/SET) retain
+//! inline literals — Nexus 2.3.4 still rejects `$param` in MERGE
+//! inline property maps.
 
+use std::collections::HashMap;
 use std::process::ExitCode;
 
 use chrono::{DateTime, Utc};
+use nexus_sdk::Value as NexusValue;
 
 use cortex_workers::graph::bitemporal::DEFAULT_BRANCH;
 use cortex_workers::graph::branch::{
@@ -30,21 +33,24 @@ pub(super) fn branch_list(project: String, nexus: Option<String>, json: bool) ->
         Err(code) => return code,
     };
 
+    let mut list_params: HashMap<String, NexusValue> = HashMap::new();
+    list_params.insert("proj".to_string(), NexusValue::String(project.clone()));
     let cypher = format!(
-        "MATCH (b:{label}) WHERE b.project_id = '{proj}' \
+        "MATCH (b:{label}) WHERE b.project_id = $proj \
          RETURN b.id AS id, b.name AS name, b.parent_branch_id AS parent_branch_id, \
                 b.status AS status, b.merge_strategy AS merge_strategy, \
                 b.created_at AS created_at, b.created_by AS created_by \
          ORDER BY b.created_at ASC",
         label = BRANCH_LABEL,
-        proj = sanitize_literal(&project),
     );
 
     let runtime = match build_runtime() {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+    let rows = match runtime
+        .block_on(async { client.sdk().execute_cypher(&cypher, Some(list_params)).await })
+    {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus cypher: {e}");
@@ -108,16 +114,19 @@ pub(super) fn branch_show(
         Err(code) => return code,
     };
     let composite = compose_id(&project, &branch);
+    let mut show_params: HashMap<String, NexusValue> = HashMap::new();
+    show_params.insert("id".to_string(), NexusValue::String(composite.clone()));
     let cypher = format!(
-        "MATCH (b:{label} {{ id: '{id}' }}) RETURN b",
+        "MATCH (b:{label}) WHERE b.id = $id RETURN b",
         label = BRANCH_LABEL,
-        id = sanitize_literal(&composite),
     );
     let runtime = match build_runtime() {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+    let rows = match runtime
+        .block_on(async { client.sdk().execute_cypher(&cypher, Some(show_params)).await })
+    {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus cypher: {e}");
@@ -177,8 +186,9 @@ pub(super) fn branch_create(
         .map(|s| format!("'{}'", sanitize_literal(s)))
         .unwrap_or_else(|| "NULL".to_string());
 
-    // Inline-literal Cypher: create the branch node + FORKED_FROM
-    // edge. The MERGE on the Branch ensures idempotency on retry.
+    // Inline-literal Cypher: Nexus 2.3.4 param binding fails in MERGE
+    // inline property maps ("Complex expressions not supported in CREATE
+    // properties") — write-path queries retain sanitized inline literals.
     let cypher = format!(
         "MERGE (parent:{label} {{ id: '{parent}' }}) \
          MERGE (b:{label} {{ id: '{child}' }}) \
@@ -264,17 +274,19 @@ pub(super) fn branch_merge(
     // Locate the parent_branch_id off the existing Branch node so the
     // merge edge stamps the right endpoint. A missing branch is a hard
     // failure (status code 1).
+    let mut lookup_params: HashMap<String, NexusValue> = HashMap::new();
+    lookup_params.insert("id".to_string(), NexusValue::String(child_id.clone()));
     let lookup_cypher = format!(
-        "MATCH (b:{label} {{ id: '{id}' }}) RETURN b.parent_branch_id AS parent_branch_id",
+        "MATCH (b:{label}) WHERE b.id = $id RETURN b.parent_branch_id AS parent_branch_id",
         label = BRANCH_LABEL,
-        id = sanitize_literal(&child_id),
     );
     let runtime = match build_runtime() {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let parent_branch_id =
-        match runtime.block_on(async { client.sdk().execute_cypher(&lookup_cypher, None).await }) {
+    let parent_branch_id = match runtime
+        .block_on(async { client.sdk().execute_cypher(&lookup_cypher, Some(lookup_params)).await })
+    {
             Ok(out) => out.rows.first().and_then(|row| {
                 row.get("parent_branch_id")
                     .and_then(|v| v.as_str())
@@ -292,6 +304,8 @@ pub(super) fn branch_merge(
         return ExitCode::from(1);
     };
 
+    // Write-path: MATCH...SET...MERGE contains SET, which rejects $param
+    // binding in Nexus 2.3.4 — retain sanitized inline literals.
     let cypher = format!(
         "MATCH (b:{label} {{ id: '{child}' }}), (parent:{label} {{ id: '{parent}' }}) \
          SET b.status = 'merged', \
@@ -361,6 +375,7 @@ pub(super) fn branch_abandon(
         Err(code) => return code,
     };
     let child_id = compose_id(&project, &branch);
+    // Write-path: MATCH...SET rejects $param in Nexus 2.3.4 — retain inline literals.
     let cypher = format!(
         "MATCH (b:{label} {{ id: '{child}' }}) \
          SET b.status = 'abandoned', b.abandonment_reason = '{reason}' \

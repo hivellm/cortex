@@ -13,9 +13,11 @@
 //! command renders the timeline as it was believed at that point
 //! in valid time (ADR-018 second-precision).
 
+use std::collections::HashMap;
 use std::process::ExitCode;
 
 use chrono::DateTime;
+use nexus_sdk::Value as NexusValue;
 
 /// Phase18 §4.1 — `cortex-ops timeline` dispatcher.
 #[allow(clippy::too_many_arguments)]
@@ -82,14 +84,16 @@ pub(super) fn timeline(
         .unwrap_or(cortex_workers::graph::bitemporal::DEFAULT_BRANCH);
     let branch_id = cortex_workers::temporal::branch_filter::compose_id(&project, branch_name);
 
-    // Render the Cypher with inlined sanitized literals. Nexus
-    // 2.2.0's parameter substitution path is bug-affected
-    // (upstream issue #3) — every other `cortex-ops` handler
-    // already inlines its filters for the same reason.
-    let mut clauses: Vec<String> = vec![format!("t.project_id = '{}'", sanitize_literal(&project))];
-    clauses.push(format!("t.branch_id = '{}'", sanitize_literal(&branch_id)));
+    // Nexus 2.3.4 (nexus#3 fixed): $param binding works in WHERE clauses.
+    let mut params: HashMap<String, NexusValue> = HashMap::new();
+    params.insert("project_id".to_string(), NexusValue::String(project.clone()));
+    params.insert("branch_id".to_string(), NexusValue::String(branch_id.clone()));
+
+    let mut clauses: Vec<String> =
+        vec!["t.project_id = $project_id".to_string(), "t.branch_id = $branch_id".to_string()];
     if let Some(k) = kind.as_deref().filter(|s| !s.is_empty()) {
-        clauses.push(format!("t.kind = '{}'", sanitize_literal(k)));
+        params.insert("kind".to_string(), NexusValue::String(k.to_string()));
+        clauses.push("t.kind = $kind".to_string());
     }
     if let Some(f) = from_unix {
         clauses.push(format!("t.valid_from_unix >= {f}"));
@@ -120,7 +124,9 @@ pub(super) fn timeline(
         }
     };
 
-    let rows = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+    let rows = match runtime
+        .block_on(async { client.sdk().execute_cypher(&cypher, Some(params)).await })
+    {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus cypher: {e}");
@@ -187,16 +193,6 @@ pub(super) fn timeline(
     ExitCode::SUCCESS
 }
 
-/// Sanitize a literal that will be inlined into a Cypher string.
-/// Strips single quotes + backslashes — the inline values are
-/// `project_id` / `branch_id` / `kind`, all controlled by clap so
-/// the typical shapes are alphanumeric + `:` / `-` / `_` / `/`.
-fn sanitize_literal(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(c, '\'' | '"' | '\\' | '\n' | '\r'))
-        .collect()
-}
-
 /// Parse RFC-3339 OR a day-precision (`YYYY-MM-DD`) string into
 /// epoch seconds. ADR-018 §1.4 permits day-precision input on the
 /// CLI; the converter expands `<date>` → `<date>T00:00:00Z`.
@@ -251,13 +247,6 @@ mod tests {
     #[test]
     fn parse_rfc3339_or_date_rejects_garbage() {
         assert!(parse_rfc3339_or_date(Some("not-a-date")).is_err());
-    }
-
-    #[test]
-    fn sanitize_literal_strips_quotes_and_backslashes() {
-        assert_eq!(sanitize_literal("cortex"), "cortex");
-        assert_eq!(sanitize_literal("a'b\"c\\d"), "abcd");
-        assert_eq!(sanitize_literal("a\nb\rc"), "abc");
     }
 
     #[test]

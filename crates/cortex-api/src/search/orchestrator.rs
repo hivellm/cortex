@@ -419,21 +419,19 @@ impl Orchestrator {
             .max(Duration::from_millis(1));
         // Phase20 §12.2 — the spec-11 default split (20% to graph)
         // gives the graph lane only ~100ms on the canonical
-        // `budget_ms = 500`. Nexus 2.2.0 cypher seek + serialize
-        // for a property-keyed match consistently takes 150–250ms
-        // on the live graph (137k+ nodes), so the lane was
-        // erroring out with `budget exceeded` on essentially
-        // every query — see the §1.2 baseline harness +
-        // `query_explain` debug dumps. Bump the graph lane to a
-        // 250ms floor so the lane lands within budget on a
-        // healthy stack while still capping at total_budget /2
-        // (the lanes fan out in parallel, so the floor never
-        // delays the response beyond the slowest lane). When the
-        // operator-tuned split already grants ≥250ms the
+        // `budget_ms = 500`. Nexus 2.3.4's CONTAINS scan on the
+        // Artifact label (16k+ nodes, no full-text index) takes
+        // ~1600ms — a regression vs 2.2.0's property-keyed seek
+        // (150–250ms on 137k nodes). Bump the floor to 2000ms so
+        // the lane lands within budget on a healthy stack; match
+        // the vector lane cap at `total_budget` (not `/ 2`) since
+        // all three lanes fan out in parallel — the cap is an
+        // early per-lane kill, not a serialisation barrier. When
+        // the operator-tuned split already grants ≥2000ms the
         // computed value wins.
         let graph_budget = Duration::from_millis(req.budget_ms * split.graph as u64 / 100)
-            .max(Duration::from_millis(250))
-            .min(total_budget / 2);
+            .max(Duration::from_millis(2000))
+            .min(total_budget);
 
         let mut response = empty_response(req);
         response.budget.cap_ms = req.budget_ms;

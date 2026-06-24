@@ -14,9 +14,11 @@
 //! - `supersession <entity-id>` walks the `SUPERSEDES` chain
 //!   off the entity (ADR-023 §1.6) and prints the lineage.
 
+use std::collections::HashMap;
 use std::process::ExitCode;
 
 use chrono::DateTime;
+use nexus_sdk::Value as NexusValue;
 use serde_json::{json, Value};
 
 /// Phase18 §4.3 — `cortex-ops query`.
@@ -132,8 +134,9 @@ pub(super) fn history(
             return ExitCode::from(2);
         }
     };
-    let mut clauses: Vec<String> =
-        vec![format!("t.entity_id = '{}'", sanitize_literal(&entity_id))];
+    let mut hist_params: HashMap<String, NexusValue> = HashMap::new();
+    hist_params.insert("entity_id".to_string(), NexusValue::String(entity_id.clone()));
+    let mut clauses: Vec<String> = vec!["t.entity_id = $entity_id".to_string()];
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));
     }
@@ -150,7 +153,9 @@ pub(super) fn history(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+    let rows = match runtime
+        .block_on(async { client.sdk().execute_cypher(&cypher, Some(hist_params)).await })
+    {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus history: {e}");
@@ -207,20 +212,23 @@ pub(super) fn supersession(entity_id: String, nexus: Option<String>, json_out: b
     // entity: predecessors (this fact replaced what?) + successors
     // (this fact was replaced by what?). The classifier (§3.3
     // wedge) reads the same edges to derive the SUPERSEDED state.
-    let cypher = format!(
-        "OPTIONAL MATCH p_path = (this {{ id: '{id}' }})-[:SUPERSEDES*0..10]->(predecessor) \
-         WITH this, [n IN nodes(p_path) | {{ id: n.id, kind: head(labels(n)) }}] AS predecessors \
+    let mut sup_params: HashMap<String, NexusValue> = HashMap::new();
+    sup_params.insert("id".to_string(), NexusValue::String(entity_id.clone()));
+    let cypher =
+        "OPTIONAL MATCH p_path = (this)-[:SUPERSEDES*0..10]->(predecessor) WHERE this.id = $id \
+         WITH this, [n IN nodes(p_path) | { id: n.id, kind: head(labels(n)) }] AS predecessors \
          OPTIONAL MATCH s_path = (successor)-[:SUPERSEDES*0..10]->(this) \
          RETURN this.id AS id, head(labels(this)) AS label, \
                 predecessors, \
-                [n IN nodes(s_path) | {{ id: n.id, kind: head(labels(n)) }}] AS successors",
-        id = sanitize_literal(&entity_id),
-    );
+                [n IN nodes(s_path) | { id: n.id, kind: head(labels(n)) }] AS successors"
+        .to_string();
     let runtime = match build_runtime() {
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime.block_on(async { client.sdk().execute_cypher(&cypher, None).await }) {
+    let rows = match runtime
+        .block_on(async { client.sdk().execute_cypher(&cypher, Some(sup_params)).await })
+    {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus supersession: {e}");
@@ -300,12 +308,6 @@ fn build_runtime() -> Result<tokio::runtime::Runtime, ExitCode> {
         eprintln!("ERROR: build tokio runtime: {e}");
         ExitCode::from(1)
     })
-}
-
-fn sanitize_literal(s: &str) -> String {
-    s.chars()
-        .filter(|c| !matches!(c, '\'' | '"' | '\\' | '\n' | '\r'))
-        .collect()
 }
 
 fn parse_rfc3339_or_date(raw: &str) -> Result<Option<String>, String> {
@@ -404,9 +406,4 @@ mod tests {
         assert_eq!(format_unix_day(unix), "2026-04-01");
     }
 
-    #[test]
-    fn sanitize_literal_drops_dangerous_chars() {
-        assert_eq!(sanitize_literal("DEC-013"), "DEC-013");
-        assert_eq!(sanitize_literal("a'b\"c\\d"), "abcd");
-    }
 }

@@ -2,10 +2,10 @@
 //! retrieval routes.
 //!
 //! Every handler in this file talks to Nexus through the shared
-//! `ApiState::nexus` handle. Reads use inlined-literal Cypher to
-//! sidestep the Nexus 2.2.0 parameter-binding bug; the writers
-//! reuse the same per-call `sanitize_literal` filter as the
-//! `cortex-ops branch` CLI (phase18 §4.2).
+//! `ApiState::nexus` handle. Read queries use `$param` binding
+//! (nexus#3 fixed in Nexus 2.3.4; WHERE clause pattern confirmed
+//! working). Write-path queries (MERGE/SET) retain inline literals —
+//! Nexus 2.3.4 still rejects `$param` in MERGE inline property maps.
 //!
 //! Routes shipped:
 //!
@@ -18,11 +18,14 @@
 //! - `GET  /v1/entity/{id}/history`
 //! - `GET  /v1/entity/{id}/supersession`
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{DateTime, Utc};
+use nexus_sdk::Value as NexusValue;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -149,19 +152,23 @@ pub async fn handle_timeline(
     let branch_id = compose_id(&project, branch_name);
     let limit = clamp_limit(q.limit);
 
+    let mut params: HashMap<String, NexusValue> = HashMap::new();
     let mut clauses: Vec<String> = Vec::new();
     if !all_projects {
-        clauses.push(format!("t.project_id = '{}'", sanitize_literal(&project)));
+        params.insert("project_id".to_string(), NexusValue::String(project.clone()));
+        clauses.push("t.project_id = $project_id".to_string());
         // Only constrain the branch when the caller named one — in the
         // single-project default we still union across branches unless
         // an explicit `branch` filter is supplied, so a project's full
         // progress shows by default.
         if q.branch.as_deref().filter(|s| !s.is_empty()).is_some() {
-            clauses.push(format!("t.branch_id = '{}'", sanitize_literal(&branch_id)));
+            params.insert("branch_id".to_string(), NexusValue::String(branch_id.clone()));
+            clauses.push("t.branch_id = $branch_id".to_string());
         }
     }
     if let Some(k) = q.kind.as_deref().filter(|s| !s.is_empty()) {
-        clauses.push(format!("t.kind = '{}'", sanitize_literal(k)));
+        params.insert("kind".to_string(), NexusValue::String(k.to_string()));
+        clauses.push("t.kind = $kind".to_string());
     }
     if let Some(f) = from_unix {
         clauses.push(format!("t.valid_from_unix >= {f}"));
@@ -177,6 +184,7 @@ pub async fn handle_timeline(
     } else {
         format!("WHERE {} ", clauses.join(" AND "))
     };
+    let tl_params = if params.is_empty() { None } else { Some(params) };
     let cypher = format!(
         "MATCH (t:TimelineEvent) {where_clause}\
          RETURN t.id AS id, t.kind AS kind, t.project_id AS project_id, \
@@ -186,7 +194,7 @@ pub async fn handle_timeline(
                 t.title AS title, t.summary AS summary \
          ORDER BY t.valid_from_unix DESC LIMIT {limit}",
     );
-    match nexus.execute_cypher(&cypher, None).await {
+    match nexus.execute_cypher(&cypher, tl_params).await {
         Ok(out) => (
             StatusCode::OK,
             Json(json!({
@@ -223,16 +231,17 @@ pub async fn handle_branch_list(
             "cortex-api was started without a Nexus client",
         );
     };
+    let mut bl_params: HashMap<String, NexusValue> = HashMap::new();
+    bl_params.insert("proj".to_string(), NexusValue::String(project.clone()));
     let cypher = format!(
-        "MATCH (b:{label}) WHERE b.project_id = '{proj}' \
+        "MATCH (b:{label}) WHERE b.project_id = $proj \
          RETURN b.id AS id, b.name AS name, b.parent_branch_id AS parent_branch_id, \
                 b.status AS status, b.merge_strategy AS merge_strategy, \
                 b.created_at AS created_at, b.created_by AS created_by \
          ORDER BY b.created_at ASC",
         label = BRANCH_LABEL,
-        proj = sanitize_literal(&project),
     );
-    match nexus.execute_cypher(&cypher, None).await {
+    match nexus.execute_cypher(&cypher, Some(bl_params)).await {
         Ok(out) => (
             StatusCode::OK,
             Json(json!({
@@ -303,6 +312,9 @@ pub async fn handle_branch_create(
             )
         }
     };
+    // Write-path: Nexus 2.3.4 param binding fails in MERGE inline
+    // property maps ("Complex expressions not supported in CREATE
+    // properties") — retain sanitized inline literals.
     let cypher = format!(
         "MERGE (parent:{label} {{ id: '{parent}' }}) \
          MERGE (b:{label} {{ id: '{child}' }}) \
@@ -359,12 +371,13 @@ pub async fn handle_branch_show(
         );
     };
     let id = compose_id(&project, &branch);
+    let mut bs_params: HashMap<String, NexusValue> = HashMap::new();
+    bs_params.insert("id".to_string(), NexusValue::String(id.clone()));
     let cypher = format!(
-        "MATCH (b:{label} {{ id: '{id}' }}) RETURN b",
+        "MATCH (b:{label}) WHERE b.id = $id RETURN b",
         label = BRANCH_LABEL,
-        id = sanitize_literal(&id),
     );
-    match nexus.execute_cypher(&cypher, None).await {
+    match nexus.execute_cypher(&cypher, Some(bs_params)).await {
         Ok(out) => {
             if out.rows.is_empty() {
                 return err(
@@ -421,12 +434,13 @@ pub async fn handle_branch_merge(
         );
     };
     let child_id = compose_id(&project, &branch);
+    let mut lkup_params: HashMap<String, NexusValue> = HashMap::new();
+    lkup_params.insert("id".to_string(), NexusValue::String(child_id.clone()));
     let lookup_cypher = format!(
-        "MATCH (b:{label} {{ id: '{id}' }}) RETURN b.parent_branch_id AS parent_branch_id",
+        "MATCH (b:{label}) WHERE b.id = $id RETURN b.parent_branch_id AS parent_branch_id",
         label = BRANCH_LABEL,
-        id = sanitize_literal(&child_id),
     );
-    let parent_id = match nexus.execute_cypher(&lookup_cypher, None).await {
+    let parent_id = match nexus.execute_cypher(&lookup_cypher, Some(lkup_params)).await {
         Ok(out) => out.rows.first().and_then(|r| {
             r.get("parent_branch_id")
                 .and_then(|v| v.as_str())
@@ -449,6 +463,7 @@ pub async fn handle_branch_merge(
             .filter(|c| c.is_ascii_digit())
             .collect::<String>()
     );
+    // Write-path: MATCH...SET...MERGE rejects $param in Nexus 2.3.4 — retain inline literals.
     let cypher = format!(
         "MATCH (b:{label} {{ id: '{child}' }}), (parent:{label} {{ id: '{parent}' }}) \
          SET b.status = 'merged', \
@@ -516,6 +531,7 @@ pub async fn handle_branch_abandon(
         );
     };
     let id = compose_id(&project, &branch);
+    // Write-path: MATCH...SET rejects $param in Nexus 2.3.4 — retain inline literals.
     let cypher = format!(
         "MATCH (b:{label} {{ id: '{id}' }}) \
          SET b.status = 'abandoned', b.abandonment_reason = '{reason}' \
@@ -581,7 +597,9 @@ pub async fn handle_entity_history(
         Err(e) => return err(StatusCode::BAD_REQUEST, "bad_input", format!("as_of: {e}")),
     };
     let limit = clamp_limit(q.limit);
-    let mut clauses = vec![format!("t.entity_id = '{}'", sanitize_literal(&entity_id))];
+    let mut eh_params: HashMap<String, NexusValue> = HashMap::new();
+    eh_params.insert("entity_id".to_string(), NexusValue::String(entity_id.clone()));
+    let mut clauses = vec!["t.entity_id = $entity_id".to_string()];
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));
     }
@@ -594,7 +612,7 @@ pub async fn handle_entity_history(
          ORDER BY t.valid_from_unix DESC LIMIT {limit}",
         where_ = clauses.join(" AND "),
     );
-    match nexus.execute_cypher(&cypher, None).await {
+    match nexus.execute_cypher(&cypher, Some(eh_params)).await {
         Ok(out) => (
             StatusCode::OK,
             Json(json!({
@@ -624,16 +642,17 @@ pub async fn handle_entity_supersession(
             "cortex-api was started without a Nexus client",
         );
     };
-    let cypher = format!(
-        "OPTIONAL MATCH p_path = (this {{ id: '{id}' }})-[:SUPERSEDES*0..10]->(predecessor) \
-         WITH this, [n IN nodes(p_path) | {{ id: n.id, kind: head(labels(n)) }}] AS predecessors \
+    let mut es_params: HashMap<String, NexusValue> = HashMap::new();
+    es_params.insert("id".to_string(), NexusValue::String(entity_id.clone()));
+    let cypher =
+        "OPTIONAL MATCH p_path = (this)-[:SUPERSEDES*0..10]->(predecessor) WHERE this.id = $id \
+         WITH this, [n IN nodes(p_path) | { id: n.id, kind: head(labels(n)) }] AS predecessors \
          OPTIONAL MATCH s_path = (successor)-[:SUPERSEDES*0..10]->(this) \
          RETURN this.id AS id, head(labels(this)) AS label, \
                 predecessors, \
-                [n IN nodes(s_path) | {{ id: n.id, kind: head(labels(n)) }}] AS successors",
-        id = sanitize_literal(&entity_id),
-    );
-    match nexus.execute_cypher(&cypher, None).await {
+                [n IN nodes(s_path) | { id: n.id, kind: head(labels(n)) }] AS successors"
+            .to_string();
+    match nexus.execute_cypher(&cypher, Some(es_params)).await {
         Ok(out) => {
             if out.rows.is_empty() {
                 return err(
