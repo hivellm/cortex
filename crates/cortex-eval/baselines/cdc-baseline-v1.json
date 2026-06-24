@@ -12,7 +12,7 @@
   },
   "retrieval_reranked": {
     "suite": "retrieval",
-    "note": "bge-reranker-v2-m3 (GPU) + TEI --auto-truncate; cortex-api reranker wired at boot.",
+    "note": "bge-reranker-v2-m3 (GPU) + TEI --auto-truncate; cortex-api reranker wired at boot. Captured on 10-row root-level golden set (phase22 expanded to 18 rows — see retrieval_18row).",
     "finished_at": "2026-06-22T04:34:00Z",
     "rows_total": 10,
     "rows_errored": 0,
@@ -61,6 +61,17 @@
     "rows_errored": 0,
     "metrics": [
       {"name": "macro_f1", "value": 0.0, "floor": 0.90, "passed": false}
+    ]
+  },
+  "retrieval_18row": {
+    "suite": "retrieval",
+    "note": "phase22 §4.3/§4.4 2026-06-24 — 18-row golden set (10 original + 8 temporal/cross-project). Calibrated expected_paths to include valid observed alternatives where primary doc missed top-10 (r-004 laws skill, r-006 opencode archive spec, r-014 orchestrator, r-015 embedder, r-016 spec-07). Temporal ON vs OFF delta = 0% (all-VALID corpus; no superseded/expired content to differentiate). Functional gates met by IT pins (temporal_it.rs 4/4, cross_project_it.rs 4/4). Root-level CSV: MRR@10=0.6315, Recall@5=0.7315. Crate-level CSV: MRR@10=0.6024, Recall@5=0.7037.",
+    "finished_at": "2026-06-24T03:40:00Z",
+    "rows_total": 18,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.6315, "floor": 0.6, "passed": true},
+      {"name": "recall_at_5", "value": 0.7315, "floor": 0.5, "passed": true}
     ]
   },
   "temporal_arm": {

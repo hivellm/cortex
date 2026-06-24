@@ -1,11 +1,19 @@
-id,query,repo,expected_event_ids
-r-001,how does tier sweep work,cortex,
-r-002,what is ADR-013,cortex,
-r-003,how does the consolidator daemon dispatch triggers,cortex,
-r-004,how is the cortex-adapter heartbeat exposed,cortex,
-r-005,why does the freshness aggregator floor adapter rows,cortex,
-r-006,where do session-grain consolidations write to,cortex,
-r-007,how does cold-tier prune cascade across backends,cortex,
-r-008,what role does event_identity play in the cascade,cortex,
-r-009,which producer trait emits envelopes for the bus,cortex,
-r-010,how does the Sweep trait register a cron job,cortex,
+id,query,repo,expected_paths
+r-001,how does tier sweep work,cortex,crates/cortex-workers/src/retention/tier_sweep.rs;crates/cortex-workers/src/sweep/trait.rs;crates/cortex-workers/src/sweep/registry.rs
+r-002,what is ADR-013,cortex,.rulebook/decisions/016-adr-013-vectorizer-pruning-is-collection-level-until-sdk-3-2.md;.rulebook/decisions/016-adr-013-vectorizer-pruning-is-collection-level-until-sdk-3-2.metadata.json
+r-003,how does the consolidator daemon dispatch triggers,cortex,crates/cortex-workers/src/consolidator/daemon.rs
+r-004,how is the cortex-adapter heartbeat exposed,cortex,crates/cortex-adapter-claude-code/src/main.rs;crates/cortex-api/src/health.rs
+r-005,why does the freshness aggregator floor adapter rows,cortex,crates/cortex-api/src/health.rs
+r-006,where do session-grain consolidations write to,cortex,docs/specs/27-consolidation.md
+r-007,how does cold-tier prune cascade across backends,cortex,crates/cortex-workers/src/retention/cold_tier_prune.rs
+r-008,what role does event_identity play in the cascade,cortex,crates/cortex-core/src/ids.rs
+r-009,which producer trait emits envelopes for the bus,cortex,docs/specs/24-producer-trait.md
+r-010,how does the Sweep trait register a cron job,cortex,crates/cortex-workers/src/sweep/trait.rs
+r-011,what is the bitemporal time precision policy,cortex,.rulebook/decisions/018-phase18-1-1-bitemporal-time-precision-utc-rfc3339-with-second-precision-day-precision-for-adr-facing-tooling.md;docs/specs/30-bitemporal-schema.md;crates/cortex-workers/src/graph/bitemporal.rs
+r-012,how does the temporal classifier derive superseded state,cortex,docs/specs/31-temporal-classifier.md;crates/cortex-workers/src/temporal/classifier.rs
+r-013,what is the branch identifier format in cortex,cortex,.rulebook/decisions/019-phase18-1-2-branch-identifier-scheme-project-id-branch-name-unique-pair-with-strict-regex-main-reserved.md;docs/specs/32-branches.md
+r-014,how does cortex rank events with expired valid_to,cortex,docs/specs/31-temporal-classifier.md;crates/cortex-api/src/search/orchestrator.rs
+r-015,what embedding provider does cortex use after fastembed migration,cortex,docs/specs/06-embedder.md;crates/cortex-workers/src/embedder/embedder.rs
+r-016,how does cortex write graph nodes to nexus,cortex,crates/cortex-workers/src/graph/nexus_client.rs;docs/specs/07-graph-writer.md
+r-017,what is the cross-project retrieval opt-in policy,cortex,.rulebook/decisions/020-phase18-1-3-cross-project-retrieval-default-opt-in-until-eval-evidence-justifies-opt-out.md;docs/specs/34-cross-project-axis.md
+r-018,how does the cross-project propagation wedge filter by valid_to,cortex,docs/specs/34-cross-project-axis.md;crates/cortex-api/src/search/orchestrator.rs

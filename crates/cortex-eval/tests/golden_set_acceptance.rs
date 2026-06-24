@@ -180,23 +180,40 @@ async fn live_retrieval_suite_meets_reranked_gates() {
 
     let mut observed: Vec<Vec<String>> = Vec::with_capacity(rows.len());
     for row in &rows {
+        // Match the live /v1/query contract: `intent` is required and `repo`
+        // lives under `scope` (not as a top-level key).
         let body = serde_json::json!({
             "query": row.query,
-            "repo": if row.repo.is_empty() { serde_json::Value::Null } else { row.repo.clone().into() },
+            "intent": "free_search",
+            "scope": { "repo": row.repo },
             "limit": 10,
         });
-        let resp = client
+        let resp = match client
             .post(format!("{api_url}/v1/query"))
             .json(&body)
             .send()
             .await
-            .expect("POST /v1/query");
-        let json: serde_json::Value = resp.json().await.expect("parse /v1/query response");
-        let paths: Vec<String> = json["results"]["snippets"]
-            .as_array()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("row {}: HTTP error: {e}", row.id);
+                observed.push(Vec::new());
+                continue;
+            }
+        };
+        if !resp.status().is_success() {
+            eprintln!("row {}: non-2xx status {}", row.id, resp.status());
+            observed.push(Vec::new());
+            continue;
+        }
+        let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        let paths: Vec<String> = json
+            .get("results")
+            .and_then(|r| r.get("snippets"))
+            .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|s| s["path"].as_str().map(str::to_string))
+                    .filter_map(|s| s.get("path").and_then(|p| p.as_str()).map(str::to_string))
                     .collect()
             })
             .unwrap_or_default();
