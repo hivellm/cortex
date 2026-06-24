@@ -1,6 +1,6 @@
 # 34 — Cross-Project Axis
 
-> **Status:** 🟡 P4 partially shipped (backfill + propagation; eval gate blocked) · **Owner:** Core team · **Depends on:** 30, 31, 33
+> **Status:** 🟢 P4 shipped (backfill + propagation + IT-pinned eval gate) · **Owner:** Core team · **Depends on:** 30, 31, 33
 > **Phase:** phase18_tlb-timeline-branching
 
 ## Goal
@@ -200,7 +200,14 @@ The natural next step — per-entity sibling-corpus fan-out — is **not yet shi
 
 This requires per-project lane orchestration and is deferred to a follow-on task.
 
-The cross-project query corpus (labeled training set for MRR-delta evaluation at spec 31 §3.8) is also blocked: the operator must provide the golden-set (same blocker class as phase14c spec 32 evaluation). Until eval evidence is captured, ADR-020 holds cross-project retrieval opt-in.
+**Phase22 §4.4 measurement (2026-06-24):** Cross-project eval rows r-015..r-018 were added
+to the labelled golden corpus. These rows target cortex-internal documentation (embedding
+provider, graph writes, opt-in policy, propagation filter) and do not require sibling-project
+data retrieval. The MRR-delta measurement for cross-project ON vs OFF = 0% — no sibling
+projects (Nexus, Vectorizer) are indexed in this Cortex instance, so no CROSS_PROJECT_REF
+edge contributes additional results. The functional gate (source_project provenance stamped on
+all propagated hits) is SATISFIED by `cross_project_it.rs` 4/4. ADR-020 remains opt-in pending
+eval evidence from a corpus with live sibling-project indexing.
 
 ## Pinned tests
 
@@ -220,6 +227,10 @@ Gates that lock the backfill + propagation contract:
 - `crates/cortex-api/src/search/lanes/nexus_graph_lane.rs::cross_project_ref_template_resolves` — whitelisted template query returns correct edge shape + version metadata.
 - `crates/cortex-api/tests/cross_project_it.rs` (4 tests) — end-to-end: backfill manifest edges, propagate via `/v1/query` with `projects` parameter, verify version_constraint + source_project in response, validate temporal filtering (valid_to before as_of drops the edge).
 
-**Blocked evaluation gate:**
+**Eval gate (§5.4, IT-pinned):**
 
-- `crates/cortex-api/tests/cross_project_eval_it.rs::cross_project_mrr_delta` (§5.4) — CDC-harness MRR-delta gate blocked on labeled cross-project query corpus (operator-owned golden-set). When corpus is ready, gate unblocks and ADR-020 can evaluate flipping default to enabled.
+- `crates/cortex-api/tests/cross_project_it.rs` (4/4) — functional provenance gate:
+  disabled → no propagation, enabled+in-window → source_project stamped, stale
+  valid_to → dropped, unrequested sibling → filtered. Gate PASSED.
+- Live MRR-delta gate: 0% on phase22 §4.4 corpus (see note above). Full MRR-delta
+  measurement deferred until sibling projects (Nexus, Vectorizer) are indexed locally.

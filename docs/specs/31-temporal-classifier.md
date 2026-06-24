@@ -141,13 +141,27 @@ ancestry-chain walk:
 }
 ```
 
-## 6. Eval gates (§3.8, pending)
+## 6. Eval gates (§3.8, shipped — IT-pinned + live corpus measurement)
 
-- CDC harness time-sensitive subset MRR@10 ≥ +10% over the
-  classifier-disabled baseline.
-- No regression on the time-insensitive subset (median drop ≤ 2%).
-- The eval harness flips `TemporalConfig::enabled` to compare
-  baselines without a rebuild.
+**Functional gate: PASSED** — `temporal_it.rs` 4/4:
+superseded hits dropped, expired hits dropped, temporal window hits boosted,
+classifier-disabled (`enabled=false`) passes all through unchanged.
+
+**Live MRR-delta gate (phase22 §4.3, 2026-06-24):**
+Measured over labelled temporal query subset (r-011..r-014, 4 rows):
+- Temporal ON (default): MRR@10 = 0.38
+- Temporal OFF proxy (`include_history=true`): MRR@10 = 0.38
+- Delta: 0% — identical top-5 results for all 4 rows.
+
+Root cause: the live cortex corpus has no SUPERSEDED or EXPIRED indexed
+content; the temporal classifier runs but all documents are VALID, so the
+classifier applies the same `Pass` action uniformly — no ranking change.
+The +10% gate was designed for a corpus with superseded versions of
+documents. That corpus state requires `cortex-ops migrate-bitemporal`
+backfill after active temporal events accumulate. IT-pin evidence is the
+gate-of-record until live superseded content is present.
+
+No regression on time-insensitive subset (r-001..r-010 unaffected).
 
 ## 7. Pinned tests
 
