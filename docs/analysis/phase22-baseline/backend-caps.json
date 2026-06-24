@@ -1,0 +1,107 @@
+{
+  "label": "phase22 backend-capability assertions",
+  "captured_at": "2026-06-23",
+  "note": "Baseline probe run to determine gate status for P1 (vectorizer#306) and P2 (nexus#3/#4) before proceeding with gated phases.",
+
+  "vectorizer": {
+    "image": "hivehub/vectorizer:3.4.0-fastembed",
+    "host_port": 17001,
+    "status_endpoint": "/status",
+    "status": {
+      "online": true,
+      "version": "3.4.0",
+      "collections_count": 148,
+      "uptime_seconds": 45200
+    },
+    "embed_probe": {
+      "endpoint": "/embed",
+      "request_text": "probe test",
+      "response_model": "fastembed:all-MiniLM-L6-v2",
+      "response_dimension": 384,
+      "is_dense": true,
+      "is_bm25": false
+    },
+    "sample_collection_provider": "fastembed:all-MiniLM-L6-v2",
+    "sample_collection_dimension": 384,
+    "sample_collection_metric": "Cosine",
+    "coverage_from_cortex_status": {
+      "expected": 846,
+      "present": 90,
+      "missing": 756,
+      "unexpected": 51,
+      "severity": "warn"
+    },
+    "gate_vectorizer_306": {
+      "status": "MET",
+      "reason": "Vectorizer 3.4.0-fastembed serves fastembed:all-MiniLM-L6-v2 (a dense embedding model at dim=384). The /embed endpoint returns real dense vectors, not BM25/keyword fallback. The BM25-coercion bug (vectorizer#306) is not present in 3.4.0-fastembed.",
+      "dim_note": "Deployed dim is 384 (all-MiniLM-L6-v2), not 768 as the proposal anticipated. CORTEX_EMBEDDER_DIM=384 in .env. Phase22 §2.2 must flip to 384, not 768."
+    }
+  },
+
+  "nexus": {
+    "image": "hivehub/nexus:2.3.4",
+    "host_port": 17002,
+    "health_endpoint": "/",
+    "health": {
+      "status": "Healthy",
+      "version": "2.3.4",
+      "components": ["database", "storage", "indexes", "wal", "page_cache"],
+      "all_healthy": true
+    },
+    "cypher_endpoint": "/cypher",
+    "param_binding_probe": {
+      "query": "RETURN $x AS val",
+      "params": {"x": "param-binding-test"},
+      "response": {"columns": ["val"], "rows": [["param-binding-test"]]},
+      "binding_works": true,
+      "execution_time_ms": 6
+    },
+    "match_param_probe": {
+      "query": "RETURN $x AS val",
+      "note": "nexus#3 (RETURN $param) confirmed working — inline-literal workarounds can be removed once P2 begins"
+    },
+    "total_nodes": 37067,
+    "property_less_nodes": {
+      "count": 4789,
+      "pct_of_total": 12.9,
+      "breakdown": {
+        "ToolCall": 2118,
+        "Artifact": 2096,
+        "Turn": 545,
+        "Repo": 22,
+        "Session": 6,
+        "Memory": 2
+      },
+      "raw_shape": {"_nexus_id": "<internal-only>"},
+      "note": "These nodes have only the internal _nexus_id — no Cortex properties (id, kind, repo, etc.). This is consistent with the nexus#4 property-loss class: MERGE ran but SET was not persisted for a subset of writes."
+    },
+    "no_id_nodes": {
+      "count": 19605,
+      "pct_of_total": 52.9,
+      "note": "Nodes where n.id IS NULL — superset of property-less nodes; includes edge-of-graph connectors and partially-written nodes."
+    },
+    "gate_nexus_3": {
+      "status": "MET",
+      "reason": "Nexus 2.3.4 correctly binds $x in RETURN $x AS val. Param binding is functional. Inline-literal Cypher workarounds introduced for nexus#3 can be removed in P2 §3.3-§3.5."
+    },
+    "gate_nexus_4": {
+      "status": "PARTIAL",
+      "reason": "4789/37067 nodes (12.9%) in the live graph are property-less (only _nexus_id). These are legacy nodes written under the buggy write path. A fresh-write verification (MERGE → read-back, confirmed property persistence) is required in P2 §3.3 before declaring the corruption class resolved. The existing straggler cohort may need a re-seed to clear."
+    }
+  },
+
+  "gate_summary": {
+    "P1_dense_lane": {
+      "gate": "vectorizer#306",
+      "status": "MET",
+      "blocker": null,
+      "action": "Proceed to P1 (§2.1-§2.5): re-index corpus at dim 384, assert dense hits, measure MRR"
+    },
+    "P2_graph_workaround_removal": {
+      "gate": "nexus#3 + nexus#4",
+      "status": "nexus#3=MET; nexus#4=PARTIAL",
+      "blocker": "nexus#4 straggler cohort (4789 property-less nodes) needs fresh-write round-trip verification in §3.3 before claiming the corruption class is resolved",
+      "action": "Proceed to §3.2 (param-binding smoke IT), then §3.3 (write→read IT) to confirm nexus#4 status before removing workarounds"
+    }
+  }
+}

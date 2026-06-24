@@ -1,0 +1,4 @@
+# Config env-var loading silently falls back to default when cortex.toml is present
+**Source**: manual
+**Date**: 2026-06-24
+Config::load() uses unwrap_or_default() — if toml load or validation fails, all env overrides are lost and Config::default() returns. More importantly, even without failure, the cortex.toml in the repo root layers cleanly but this means tests relying on env vars (set_var) to enable access_control.enabled will work correctly IF Config::load() succeeds. However, the safest pattern for integration tests that need a specific config value is to call build_router_with_auth_and_cfg() directly with a pre-built Config struct rather than relying on env-var propagation through Config::load(). This avoids any subtle toml-merge ordering issues and makes the test self-describing.

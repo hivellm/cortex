@@ -1,0 +1,76 @@
+{
+  "label": "phase22 §2.4 post-dense-lane MCP battery",
+  "captured_at": "2026-06-23",
+  "note": "Re-run of the §1.1 battery after confirming dense lane is live (fastembed:all-MiniLM-L6-v2, dim=384). All cortex-cortex-* collections exist with vector_count > 0. Assertion: at least one source:vector hit in paraphrase query, top-K topically relevant.",
+
+  "queries": [
+    {
+      "label": "lexical",
+      "query": "Bell-LaPadula access control clearance level classification",
+      "intent": "free_search",
+      "query_id": "01KVVN1J0S9AE87YAEPQWD0J8M",
+      "budget_used_ms": 579,
+      "cache": "miss",
+      "lanes_ms": { "vector": 47, "keyword": 50 },
+      "hits": [
+        { "rank": 1, "source": "keyword", "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/tasks.md",    "score": 0.9404625 },
+        { "rank": 2, "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/proposal.md", "score": 0.9015746, "collection": "cortex-cortex-docs" },
+        { "rank": 3, "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/tasks.md",    "score": 0.2274693, "collection": "cortex-cortex-docs" },
+        { "rank": 4, "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/specs/access-control/spec.md", "score": 0.0819595, "collection": "cortex-cortex-docs" },
+        { "rank": 5, "source": "keyword", "repo": "cortex", "path": ".rulebook/handoff/2026-05-01T16-48-42.md", "score": 0.0275982 }
+      ],
+      "delta_vs_baseline": "Vector hit moved from rank 3 (baseline) to rank 2 (post-dense). Score unchanged (cache eviction). Top-2 now includes a strong dense vector hit at 0.90."
+    },
+
+    {
+      "label": "semantic_paraphrase",
+      "query": "how do we prevent sensitive information leaking to unauthorized users",
+      "intent": "free_search",
+      "query_id": "01KVVMZP31E8K7K4GA6GYFGQRK",
+      "budget_used_ms": 513,
+      "cache": "miss",
+      "lanes_ms": { "vector": 45, "keyword": 42 },
+      "hits": [
+        { "rank": 1, "source": "keyword", "repo": "cortex", "path": "crates/cortex-cli/src/bin/cortex-ops.rs", "score": 0.1418748 },
+        { "rank": 2, "source": "keyword", "repo": "cortex", "path": ".rulebook/tasks/phase18_tlb-timeline-branching/proposal.md", "score": 0.0630194 },
+        { "rank": 3, "source": "vector",  "repo": "cortex", "path": "CLAUDE.md", "score": 0.0515804, "collection": "cortex-cortex-misc" },
+        { "rank": 4, "source": "vector",  "repo": "cortex", "path": ".rulebook/handoff/2026-04-29T17-22-45.md", "score": 0.0487158, "collection": "cortex-cortex-misc" },
+        { "rank": 5, "source": "vector",  "repo": "cortex", "path": ".rulebook/handoff/2026-05-08T00-26-19.md", "score": 0.0366099, "collection": "cortex-cortex-misc" }
+      ],
+      "assertion_vector_hit": true,
+      "assertion_topically_relevant": "PARTIAL — vector hits (CLAUDE.md, handoff files) are loosely relevant (auth/security rules appear in CLAUDE.md). The AC-specific phase21 spec is NOT surfaced by this paraphrase; semantic vocabulary mismatch between 'preventing leaks' and 'Bell-LaPadula classification' limits recall. Keyword hits at ranks 1-2 are off-topic (cortex-ops.rs, phase18 TLB). This confirms the known embedding model limitation for domain-specific security terminology with all-MiniLM-L6-v2 at dim=384."
+    },
+
+    {
+      "label": "similar_problems",
+      "query": "test helper struct missing field compile error after adding new field",
+      "intent": "similar_problems",
+      "query_id": "01KVVN1K30X0APPWQDWB04SYBS",
+      "budget_used_ms": 752,
+      "cache": "miss",
+      "lanes_ms": { "vector": 140, "keyword": 14, "graph": 214 },
+      "hits": [
+        { "rank": 1, "source": "vector",  "repo": "cortex", "collection": "cortex-cortex-turns", "score": 0.0555151,
+          "summary": "Turn evidence: 16 files changed — Vec::new() for empty-vec field defaults; workspace suite 0 failures" },
+        { "rank": 2, "source": "keyword", "repo": "cortex", "score": 0.0300433,
+          "summary": "682 files changed — archived task trees + 18 ADRs + knowledge/learnings entries" }
+      ],
+      "delta_vs_baseline": "IMPROVED — baseline had 'graph: budget exceeded' and 'vector: budget exceeded'. Post-dense: vector at rank 1 (no budget exceeded), graph lane at 214ms (within budget). Similar-problems query now functional with all lanes contributing."
+    }
+  ],
+
+  "assertions": {
+    "vector_lane_contributes": true,
+    "paraphrase_has_vector_hit": true,
+    "similar_problems_no_budget_exceeded": true,
+    "graph_lane_within_budget": true,
+    "topically_relevant_paraphrase": "PARTIAL — see semantic_paraphrase observation above"
+  },
+
+  "mrr_at_10": {
+    "value": 0.70,
+    "floor": 0.60,
+    "passed": true,
+    "note": "Measured by cortex-eval --suite retrieval with labelled tests/golden/retrieval.csv (10 rows filled in as part of §2.x). MRR@10=0.70 > 0.60 floor ✓. Recall@5=0.85 > 0.50 floor ✓."
+  }
+}

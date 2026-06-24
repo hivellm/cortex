@@ -1,0 +1,76 @@
+{
+  "label": "phase22 pre-update cortex-eval baseline",
+  "captured_at": "2026-06-23",
+  "note": "Pre-update snapshot before vectorizer#306 (dense lane) and nexus#3/#4 (graph workarounds). Retrieval scores are 0 because retrieval.csv expected_paths column is unlabelled (all rows blank) — that's intentional; §4.1 fills the labels. Consolidation is healthy. Classification degraded (classifier worker returns Unknown for all classes).",
+  "csv_fix_note": "Two CSV header mismatches (phase0 re-keying not propagated to CSVs) fixed as part of this capture: retrieval.csv expected_event_ids→expected_paths, consolidation.csv session_id→consolidation_id.",
+
+  "suites": {
+    "retrieval": {
+      "suite": "retrieval",
+      "finished_at": "2026-06-24T01:30:57Z",
+      "rows_total": 10,
+      "rows_errored": 0,
+      "metrics": [
+        { "name": "mrr_at_10",   "value": 0.0, "floor": 0.6, "passed": false },
+        { "name": "recall_at_5", "value": 0.0, "floor": 0.5, "passed": false }
+      ],
+      "reason_for_zero": "expected_paths column is blank for all 10 rows — matches nothing. Scoring is vacuously zero. The observed top-K per-row (see mcp-pre.json) shows retrieval is functioning; the labels are missing, not the retrieval.",
+      "observed_top_k_sample": {
+        "r-001": ["crates/cortex-eval/src/suite/retrieval.rs", "crates/cortex-workers/src/sweep/registry.rs", "tests/golden/README.md"],
+        "r-003": ["docs/specs/27-consolidation.md", "crates/cortex-workers/src/consolidator/daemon.rs", "scripts/smoke-consolidator-daemon.sh"],
+        "r-010": ["crates/cortex-workers/src/sweep/trait.rs", "crates/cortex-workers/src/retention/tier_sweep.rs"]
+      }
+    },
+
+    "consolidation": {
+      "suite": "consolidation",
+      "finished_at": "2026-06-24T01:31:05Z",
+      "rows_total": 5,
+      "rows_errored": 0,
+      "metrics": [
+        { "name": "entity_recall", "value": 0.9333, "floor": 0.85, "passed": true },
+        { "name": "fact_recall",   "value": 0.7,    "floor": 0.7,  "passed": true }
+      ],
+      "status": "GREEN — both metrics at or above floor",
+      "per_row": {
+        "c-001": { "entity_recall": 1.0,    "fact_recall": 0.5 },
+        "c-002": { "entity_recall": 0.6667, "fact_recall": 0.0 },
+        "c-003": { "entity_recall": 1.0,    "fact_recall": 1.0 },
+        "c-004": { "entity_recall": 1.0,    "fact_recall": 1.0 },
+        "c-005": { "entity_recall": 1.0,    "fact_recall": 1.0 }
+      }
+    },
+
+    "classification": {
+      "suite": "classification",
+      "finished_at": "2026-06-24T01:29:20Z",
+      "rows_total": 10,
+      "rows_errored": 0,
+      "metrics": [
+        { "name": "macro_f1",   "value": 0.0, "floor": 0.9, "passed": false },
+        { "name": "f1.AgentCall", "value": 0.0, "passed": true },
+        { "name": "f1.Decision",  "value": 0.0, "passed": true },
+        { "name": "f1.Knowledge", "value": 0.0, "passed": true },
+        { "name": "f1.Learning",  "value": 0.0, "passed": true },
+        { "name": "f1.Memory",    "value": 0.0, "passed": true },
+        { "name": "f1.ToolCall",  "value": 0.0, "passed": true },
+        { "name": "f1.Turn",      "value": 0.0, "passed": true },
+        { "name": "f1.Unknown",   "value": 0.0, "passed": true }
+      ],
+      "status": "DEGRADED — classifier worker returns Unknown for all 10 rows; macro_F1=0.0",
+      "reason": "Classifier worker at http://127.0.0.1:17021 is either unreachable or returning a default Unknown classification for all inputs. Per-class F1s show 0/0 true-positives for every expected class.",
+      "all_predicted_unknown": true
+    }
+  },
+
+  "summary": {
+    "retrieval_mrr_at_10":  0.0,
+    "retrieval_recall_at_5": 0.0,
+    "consolidation_entity_recall": 0.9333,
+    "consolidation_fact_recall": 0.7,
+    "classification_macro_f1": 0.0,
+    "vector_lane_status": "partial — 90/846 collections indexed (see mcp-pre.json coverage)",
+    "graph_lane_status":  "degraded — zero graph hits across all MCP battery queries",
+    "keyword_lane_status": "healthy"
+  }
+}

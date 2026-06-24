@@ -1,0 +1,98 @@
+{
+  "label": "phase22 pre-update MCP query baseline",
+  "captured_at": "2026-06-23",
+  "note": "Snapshot taken before upstream backend fixes (vectorizer#306, nexus#3/#4). Dense lane coverage warn (90/846); graph lane partial. Used to prove retrieval delta after updates.",
+
+  "cortex_status": {
+    "api_reachable": true,
+    "api_url": "http://127.0.0.1:17000",
+    "daemon_version": "0.1.0",
+    "daemon_uptime_ms": 94942063,
+    "indexed_repo_count": 101,
+    "coverage": {
+      "overall_severity": "warn",
+      "vectorizer": { "expected": 846, "present": 90, "missing": 756, "unexpected": 51 },
+      "meili":      { "expected": 846, "present": 176, "missing": 670, "unexpected": 64 }
+    }
+  },
+
+  "queries": [
+    {
+      "label": "lexical",
+      "query": "Bell-LaPadula access control clearance level classification",
+      "intent": "free_search",
+      "query_id": "01KVVKPXFE3D5YVNG1T7ZZJ5WD",
+      "budget_used_ms": 1942,
+      "cache": "miss",
+      "lanes_ms": { "vector": 1212, "keyword": 97 },
+      "hits": [
+        { "rank": 1, "source": "keyword", "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/tasks.md",    "score": 0.9404625 },
+        { "rank": 2, "source": "keyword", "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/proposal.md", "score": 0.9390248 },
+        { "rank": 3, "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/proposal.md", "score": 0.9015746, "collection": "cortex-cortex-docs" },
+        { "rank": 4, "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/tasks.md",    "score": 0.2274693, "collection": "cortex-cortex-docs" },
+        { "rank": 5, "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/specs/access-control/spec.md", "score": 0.1497917, "collection": "cortex-cortex-docs" },
+        { "rank": 6, "source": "vector",  "repo": "cortex", "path": ".rulebook/handoff/2026-05-08T00-26-19.md",  "score": 0.0863780, "collection": "cortex-cortex-misc" },
+        { "rank": 7, "source": "vector",  "repo": "cortex", "path": ".rulebook/handoff/2026-05-03T01-55-28.md",  "score": 0.0850405, "collection": "cortex-cortex-misc" },
+        { "rank": 8, "source": "vector",  "repo": "cortex", "path": ".rulebook/handoff/2026-04-30T16-26-03.md",  "score": 0.0802776, "collection": "cortex-cortex-misc" },
+        { "rank": 9, "source": "vector",  "repo": "cortex", "path": "CLAUDE.md",                                  "score": 0.0777866, "collection": "cortex-cortex-misc" },
+        { "rank": 10,"source": "vector",  "repo": "cortex", "path": ".rulebook/handoff/2026-05-25T02-05-14.md",  "score": 0.0752793, "collection": "cortex-cortex-misc" }
+      ],
+      "observation": "Top-2 from keyword (high confidence). Ranks 3-10 from vector — all low scores (<0.23 except rank 3). No graph hits. Dense lane present but weak beyond exact task-doc matches."
+    },
+
+    {
+      "label": "semantic_paraphrase",
+      "query": "how do we prevent sensitive information leaking to unauthorized users",
+      "intent": "free_search",
+      "query_id": "01KVVKPZHPY96B15PRMJRTPQMS",
+      "budget_used_ms": 236,
+      "cache": "miss",
+      "lanes_ms": { "vector": 89, "keyword": 86 },
+      "hits": [
+        { "rank": 1,  "source": "vector",  "repo": "cortex", "path": ".rulebook/tasks/phase21_data-classification-access-control/specs/access-control/spec.md", "score": 0.1515293, "collection": "cortex-cortex-docs" },
+        { "rank": 2,  "source": "vector",  "repo": "cortex", "path": "docs/specs/15-deep-analysis.md",    "score": 0.0946909, "collection": "cortex-cortex-docs" },
+        { "rank": 3,  "source": "keyword", "repo": "cortex", "path": null, "score": 0.0889846 },
+        { "rank": 4,  "source": "keyword", "repo": "cortex", "path": "crates/cortex-api/src/bin/cortex-ops.rs", "score": 0.0887912 },
+        { "rank": 5,  "source": "keyword", "repo": "cortex", "path": "crates/cortex-api/src/service.rs",       "score": 0.0884493 },
+        { "rank": 6,  "source": "keyword", "repo": "cortex", "path": ".opencode/agents/api-designer.md",       "score": 0.0867852 },
+        { "rank": 7,  "source": "keyword", "repo": "cortex", "path": ".claude/agents/api-designer.md",         "score": 0.0866686 },
+        { "rank": 8,  "source": "keyword", "repo": "cortex", "path": ".rulebook/tasks/phase18_tlb-timeline-branching/proposal.md", "score": 0.0630194 },
+        { "rank": 9,  "source": "keyword", "repo": "cortex", "path": ".rulebook/specs/MULTI_AGENT.md",         "score": 0.0539653 },
+        { "rank": 10, "source": "keyword", "repo": "cortex", "path": ".rulebook/specs/GIT.md",                 "score": 0.0533011 }
+      ],
+      "observation": "Semantic retrieval weak for this paraphrase — only rank-1 vector hit is on-topic (score 0.15). Ranks 3-10 are keyword fallbacks with low relevance (0.05-0.09). The phrase-level AC concepts are not well-embedded. Expect improvement post vectorizer#306 (dense lane backfill)."
+    },
+
+    {
+      "label": "similar_problems",
+      "query": "test helper struct missing field compile error after adding new field",
+      "intent": "similar_problems",
+      "query_id": "01KVVKPZYNAVDXJDHCQAHGX7CN",
+      "budget_used_ms": 2422,
+      "cache": "miss",
+      "lanes_ms": { "keyword": 45 },
+      "lane_errors": { "graph": "budget exceeded", "vector": "budget exceeded" },
+      "truncated": true,
+      "hits": [
+        { "rank": 1, "source": "keyword", "repo": "cortex", "path": null, "score": 0.1446314,
+          "summary": "85 files changed — field_reassign_with_default (8 sites): inline assignments into struct-literal initialisers across multiple crates" }
+      ],
+      "similar_turns": [
+        { "turn_id": "01KTEJ4VQ9EQHMHD17X2HV8CSX", "score": 0.1446314,
+          "summary": "Prior session: 85-file clippy fix pass; field_reassign_with_default resolutions in struct literals" }
+      ],
+      "observation": "Budget exceeded on vector+graph lanes — only keyword lane returned. Graph lane not contributing. Expect graph hits post nexus#3/#4 fix. The prior session's 85-file clippy-fix commit was correctly surfaced as a similar problem."
+    }
+  ],
+
+  "baseline_summary": {
+    "keyword_lane": "healthy — fast (45-97ms), top-ranked hits for exact-term queries",
+    "vector_lane": "partial — 90/846 collections indexed; fast when cached (89ms) but budget-exceeded on similar_problems query; semantic paraphrase relevance weak",
+    "graph_lane": "degraded — contributed zero hits across all three queries (budget exceeded on similar_problems); no graph hits on free_search queries either",
+    "coverage_gap": "756/846 vector collections missing; 670/846 meili indexes missing — limits recall on non-cortex repos",
+    "expected_improvements": [
+      "vectorizer#306: dense lane backfill → stronger semantic paraphrase hits, no budget-exceeded on vector",
+      "nexus#3/#4: graph lane workaround removal → graph hits surface for relationship-type queries"
+    ]
+  }
+}

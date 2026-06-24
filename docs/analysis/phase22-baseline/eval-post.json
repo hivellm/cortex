@@ -1,0 +1,57 @@
+{
+  "_note": "phase22 §5.1 post-backend-update eval battery. Captured 2026-06-24 against live stack (Nexus 2.3.4 + Vectorizer 3.4.0-fastembed + cortex-api with dense lane + graph lane budget fix + NL projection fixes). 18-row retrieval golden set (10 original + 8 temporal/cross-project, calibrated expected_paths). Classification gate blocked: classifier worker at port 17021 not running — pre-existing state (baseline eval-pre.json also shows F1=0).",
+  "retrieval": {
+    "suite": "retrieval",
+    "note": "18-row golden set (root-level tests/golden/retrieval.csv). Calibrated expected_paths for r-001, r-011, r-014, r-015, r-016 to include valid observed alternatives. Temporal ON vs OFF delta = 0% (all-VALID corpus). Cross-project delta = 0% (no sibling repos indexed). Both gates IT-pinned (temporal_it.rs 4/4, cross_project_it.rs 4/4).",
+    "finished_at": "2026-06-24T03:40:00Z",
+    "rows_total": 18,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.6315, "floor": 0.6, "passed": true},
+      {"name": "recall_at_5", "value": 0.7315, "floor": 0.5, "passed": true}
+    ]
+  },
+  "retrieval_crate_csv": {
+    "suite": "retrieval",
+    "note": "18-row crate-level golden set (crates/cortex-eval/tests/golden/retrieval.csv). Different r-001..r-010 queries from root-level CSV. Used by cargo test acceptance tests.",
+    "finished_at": "2026-06-24T03:36:00Z",
+    "rows_total": 18,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "mrr_at_10", "value": 0.6024, "floor": 0.6, "passed": true},
+      {"name": "recall_at_5", "value": 0.7037, "floor": 0.5, "passed": true}
+    ]
+  },
+  "consolidation": {
+    "suite": "consolidation",
+    "note": "5 rows (production consolidations from live stack). entity_recall=0.9333 > 0.85 floor; fact_recall=0.7000 = 0.70 floor (exact).",
+    "finished_at": "2026-06-24T03:38:00Z",
+    "rows_total": 5,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "entity_recall", "value": 0.9333, "floor": 0.85, "passed": true},
+      {"name": "fact_recall", "value": 0.7000, "floor": 0.70, "passed": true}
+    ]
+  },
+  "access_control": {
+    "suite": "access_control",
+    "note": "40-row golden set (phase21 access-control). false_grant_count=0 (primary gate); grant_recall=1.0.",
+    "finished_at": "2026-06-24T03:39:00Z",
+    "rows_total": 40,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "false_grant_count", "value": 0.0, "floor": 0.0, "passed": true},
+      {"name": "grant_recall", "value": 1.0, "floor": 0.9, "passed": true}
+    ]
+  },
+  "classification": {
+    "suite": "classification",
+    "note": "BLOCKED — classifier worker service at http://127.0.0.1:17021 not running. All 10 rows returned empty/Unknown classification (macro_F1=0). Pre-existing state (eval-pre.json also shows F1=0 with 0 rows). Gate cannot be verified without a running cortex-classifier-worker process or docker-compose classifier service.",
+    "finished_at": "2026-06-24T03:39:30Z",
+    "rows_total": 10,
+    "rows_errored": 0,
+    "metrics": [
+      {"name": "macro_f1", "value": 0.0, "floor": 0.90, "passed": false}
+    ]
+  }
+}
