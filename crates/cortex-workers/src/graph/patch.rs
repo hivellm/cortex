@@ -133,11 +133,28 @@ impl NodeOp {
     }
 }
 
+/// Direction of a graph edge (UA `GraphEdge.direction`, phase23a ADR #35).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeDirection {
+    /// Edge flows from source to target (default).
+    #[default]
+    Forward,
+    /// Edge flows from target to source.
+    Backward,
+    /// Edge applies in both directions.
+    Bidirectional,
+}
+
 /// Upsert entry for a single edge.
 ///
 /// Edges are stored directed (from → to), matched against the natural keys
 /// of their endpoints; the endpoint nodes are expected to be upserted in
 /// the same patch (or already exist).
+///
+/// Phase23a (ADR #35) added the UA edge shape fields (`direction`, `weight`,
+/// `description`, `provenance`, `valid_from`, `valid_to`). All are optional
+/// with `serde` defaults so pre-phase23a edges deserialize without error.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeOp {
     /// Cypher relationship type (e.g. `HAS_TURN`, `TOUCHED`).
@@ -152,6 +169,50 @@ pub struct EdgeOp {
     pub to_key: String,
     /// Property bag set on the relationship.
     pub props: BTreeMap<String, serde_json::Value>,
+    /// Edge directionality (UA `direction`). Defaults to `Forward`.
+    #[serde(default, skip_serializing_if = "is_default_direction")]
+    pub direction: EdgeDirection,
+    /// Semantic weight in `[0.0, 1.0]` (UA `weight`).
+    /// `None` = unweighted (legacy edges and deterministic structural edges).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f32>,
+    /// Human-readable description of what this edge means (UA `description`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Extractor / agent that emitted this edge (Cortex extension, UA lacks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
+    /// Bitemporal open timestamp — Unix ms when the edge became valid
+    /// (Cortex extension, UA lacks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<i64>,
+    /// Bitemporal close timestamp — Unix ms when the edge was superseded.
+    /// `None` = still valid (Cortex extension, UA lacks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<i64>,
+}
+
+fn is_default_direction(d: &EdgeDirection) -> bool {
+    *d == EdgeDirection::Forward
+}
+
+impl Default for EdgeOp {
+    fn default() -> Self {
+        Self {
+            edge_type: String::new(),
+            from_label: String::new(),
+            from_key: String::new(),
+            to_label: String::new(),
+            to_key: String::new(),
+            props: BTreeMap::new(),
+            direction: EdgeDirection::Forward,
+            weight: None,
+            description: None,
+            provenance: None,
+            valid_from: None,
+            valid_to: None,
+        }
+    }
 }
 
 impl EdgeOp {
@@ -220,6 +281,7 @@ mod tests {
             to_label: "B".into(),
             to_key: "b".into(),
             props: BTreeMap::new(),
+            ..Default::default()
         }
     }
 
@@ -407,6 +469,94 @@ mod tests {
         let parsed: NodeOp = serde_json::from_str(legacy).unwrap();
         assert!(parsed.external_id.is_none());
         assert_eq!(parsed.conflict_policy, ConflictPolicy::Match);
+    }
+
+    // ---------- Phase23a — EdgeOp UA shape + bitemporal ----------
+
+    #[test]
+    fn edge_direction_default_is_forward() {
+        assert_eq!(EdgeDirection::default(), EdgeDirection::Forward);
+    }
+
+    #[test]
+    fn edge_direction_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&EdgeDirection::Forward).unwrap(),
+            "\"forward\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeDirection::Backward).unwrap(),
+            "\"backward\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EdgeDirection::Bidirectional).unwrap(),
+            "\"bidirectional\""
+        );
+    }
+
+    #[test]
+    fn edge_op_ua_fields_serialize_when_set() {
+        let e = EdgeOp {
+            edge_type: "CONTRADICTS".into(),
+            from_label: "Claim".into(),
+            from_key: "c-001".into(),
+            to_label: "Claim".into(),
+            to_key: "c-002".into(),
+            props: BTreeMap::new(),
+            direction: EdgeDirection::Bidirectional,
+            weight: Some(0.8),
+            description: Some("claim A contradicts claim B".into()),
+            provenance: Some("consolidator-v1".into()),
+            valid_from: Some(1_700_000_000_000),
+            valid_to: None,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains("\"direction\":\"bidirectional\""), "{json}");
+        assert!(json.contains("\"weight\":0.8"), "{json}");
+        assert!(json.contains("\"description\":"), "{json}");
+        assert!(json.contains("\"provenance\":\"consolidator-v1\""), "{json}");
+        assert!(json.contains("\"valid_from\":1700000000000"), "{json}");
+        assert!(!json.contains("\"valid_to\""), "valid_to None must be omitted: {json}");
+
+        let parsed: EdgeOp = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.direction, EdgeDirection::Bidirectional);
+        assert_eq!(parsed.weight, Some(0.8));
+        assert_eq!(parsed.valid_from, Some(1_700_000_000_000));
+        assert!(parsed.valid_to.is_none());
+    }
+
+    #[test]
+    fn edge_op_legacy_json_without_ua_fields_deserializes_with_defaults() {
+        let legacy = r#"{
+            "edge_type":"IMPORTS_FILE",
+            "from_label":"Artifact","from_key":"a","to_label":"Artifact","to_key":"b",
+            "props":{}
+        }"#;
+        let parsed: EdgeOp = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.direction, EdgeDirection::Forward);
+        assert!(parsed.weight.is_none());
+        assert!(parsed.description.is_none());
+        assert!(parsed.provenance.is_none());
+        assert!(parsed.valid_from.is_none());
+        assert!(parsed.valid_to.is_none());
+    }
+
+    #[test]
+    fn edge_op_forward_direction_omitted_in_json() {
+        let e = EdgeOp {
+            edge_type: "CALLS".into(),
+            from_label: "Symbol".into(),
+            from_key: "a".into(),
+            to_label: "Symbol".into(),
+            to_key: "b".into(),
+            props: BTreeMap::new(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(
+            !json.contains("direction"),
+            "forward direction should be omitted (default skip): {json}"
+        );
     }
 }
 

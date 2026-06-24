@@ -48,6 +48,7 @@ fn edge(rel: &str, from_label: &str, from_key: &str, to_label: &str, to_key: &st
         to_label: to_label.to_string(),
         to_key: to_key.to_string(),
         props: empty_props(),
+        ..Default::default()
     }
 }
 

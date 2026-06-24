@@ -74,6 +74,7 @@ pub fn extract(env: &EnrichedEvent, ctx: &ExtractCtx) -> Vec<Edge> {
             to_label,
             to_key,
             props: std::collections::BTreeMap::new(),
+            ..Default::default()
         };
         out.push(stamp_provenance(edge, env, ctx));
     }
@@ -92,6 +93,7 @@ pub fn extract(env: &EnrichedEvent, ctx: &ExtractCtx) -> Vec<Edge> {
             to_label: "Decision".to_string(),
             to_key: dec_id,
             props: std::collections::BTreeMap::new(),
+            ..Default::default()
         };
         out.push(stamp_provenance(edge, env, ctx));
     }

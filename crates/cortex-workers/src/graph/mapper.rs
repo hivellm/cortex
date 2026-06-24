@@ -281,6 +281,7 @@ fn emit_classifier_entities(event: &EnrichedEvent, patch: &mut GraphPatch) {
                 to_label: target_label.to_string(),
                 to_key: target_key,
                 props,
+                ..Default::default()
             }
             .with_confidence(EdgeConfidence::Inferred, None),
         );
@@ -432,6 +433,7 @@ fn emit_turn(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) {
         to_label: "Turn".to_string(),
         to_key: turn_id,
         props: BTreeMap::new(),
+        ..Default::default()
     });
 }
 
@@ -515,6 +517,7 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
             to_label: "ToolCall".to_string(),
             to_key: tool_call_id.clone(),
             props: BTreeMap::new(),
+            ..Default::default()
         });
     } else {
         patch.edges.push(EdgeOp {
@@ -524,6 +527,7 @@ fn emit_tool_call(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatc
             to_label: "ToolCall".to_string(),
             to_key: tool_call_id.clone(),
             props: BTreeMap::new(),
+            ..Default::default()
         });
     }
 
@@ -568,6 +572,7 @@ fn emit_touched_edge(
         to_label: "Artifact".to_string(),
         to_key: artifact_key,
         props: edge_props,
+        ..Default::default()
     });
 }
 
@@ -662,6 +667,7 @@ fn emit_symbol_patches(event: &EnrichedEvent, repo: &str, path: &str, patch: &mu
             to_label: "Artifact".to_string(),
             to_key: artifact_key.clone(),
             props: BTreeMap::new(),
+            ..Default::default()
         });
     }
 }
@@ -707,6 +713,7 @@ fn emit_artifact_node(repo: &str, path: &str, content_hash: &str, patch: &mut Gr
         to_label: "Repo".to_string(),
         to_key: repo.to_string(),
         props: BTreeMap::new(),
+        ..Default::default()
     });
 }
 
@@ -751,6 +758,7 @@ fn emit_memory(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPatch) 
         to_label: "Memory".to_string(),
         to_key: memory_id,
         props: BTreeMap::new(),
+        ..Default::default()
     });
 }
 
@@ -827,6 +835,7 @@ fn emit_topic_card(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPat
         to_label: "TopicCard".to_string(),
         to_key: topic_card_key.clone(),
         props: BTreeMap::new(),
+        ..Default::default()
     });
 
     let payload = match payload {
@@ -867,6 +876,7 @@ fn emit_topic_card(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPat
             to_label: target_label.to_string(),
             to_key: ev.id.clone(),
             props: edge_props,
+            ..Default::default()
         });
     }
 
@@ -892,6 +902,7 @@ fn emit_topic_card(event: &EnrichedEvent, session_id: &str, patch: &mut GraphPat
                 to_label: "TopicCard".to_string(),
                 to_key: to,
                 props: BTreeMap::new(),
+                ..Default::default()
             });
         }
     }
@@ -953,6 +964,7 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
             to_label: "Decision".to_string(),
             to_key: decision_key.clone(),
             props: edge_props,
+            ..Default::default()
         });
     }
 
@@ -969,6 +981,7 @@ fn emit_decision(event: &EnrichedEvent, patch: &mut GraphPatch) {
                 to_label: "Decision".to_string(),
                 to_key: prior_id.to_string(),
                 props: BTreeMap::new(),
+                ..Default::default()
             });
         }
     }
@@ -1093,6 +1106,7 @@ fn emit_analysis(event: &EnrichedEvent, patch: &mut GraphPatch) {
             to_label: "Repo".to_string(),
             to_key: repo.to_string(),
             props: BTreeMap::new(),
+            ..Default::default()
         });
     }
 }
@@ -1165,6 +1179,7 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
             to_label: "Law".to_string(),
             to_key: law_id,
             props: BTreeMap::new(),
+            ..Default::default()
         });
     }
 
@@ -1192,6 +1207,7 @@ fn emit_law_violation(event: &EnrichedEvent, patch: &mut GraphPatch) {
                     to_label: label.to_string(),
                     to_key: observed_id.to_string(),
                     props: BTreeMap::new(),
+                    ..Default::default()
                 });
             }
         }

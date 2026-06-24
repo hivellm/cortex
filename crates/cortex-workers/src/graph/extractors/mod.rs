@@ -235,6 +235,7 @@ pub(crate) fn extract_via_classifier_relations(
             to_label: to.0,
             to_key: to.1,
             props: std::collections::BTreeMap::new(),
+            ..Default::default()
         };
         out.push(stamp_provenance(edge, env, ctx));
     }
@@ -294,6 +295,7 @@ pub(crate) mod tests {
             to_label: "Symbol".into(),
             to_key: "cortex|rust|crate::b".into(),
             props: std::collections::BTreeMap::new(),
+            ..Default::default()
         }
     }
 

@@ -169,6 +169,7 @@ mod tests {
             to_label: "B".into(),
             to_key: to.into(),
             props: BTreeMap::new(),
+            ..Default::default()
         }
     }
 

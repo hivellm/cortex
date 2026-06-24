@@ -1,0 +1,8 @@
+# Adding fields to a widely-used Rust struct: use Default + ..Default::default() at all call sites
+**Source**: manual
+**Date**: 2026-06-24
+**Related Task**: phase23a_ua-graph-ontology
+**Tags**: rust, struct-extension, default-impl, call-sites, anti-pattern
+When extending a struct that has many construction sites (EdgeOp had 30+ across 8 files), the cleanest approach is: (1) implement `Default` for the struct (even if the defaults are empty strings for required fields — it's only used as a fill-in for the new optional fields), (2) add `..Default::default()` to every struct literal construction site. cargo check with `grep "E0063" -A 3 | grep " --> "` gives the exact file:line list. Do NOT try to update them all manually without the compiler list — the grep for `EdgeOp {` also matches function signatures and misses test files.
+
+Key gotcha: `cargo check --lib` only finds lib errors; test files (`tests/*.rs`) compile separately as separate binaries and only appear as errors in `cargo test`. Run both `cargo check` AND `cargo test --lib` to catch all sites.

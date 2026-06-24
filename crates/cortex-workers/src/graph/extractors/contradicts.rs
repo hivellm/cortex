@@ -98,6 +98,7 @@ fn contradiction_to_edge(c: &Contradiction, evidence: &[EvidenceRef]) -> Option<
         to_label: evidence_kind_to_label(b.kind).to_string(),
         to_key: b.id.clone(),
         props,
+        ..Default::default()
     })
 }
 

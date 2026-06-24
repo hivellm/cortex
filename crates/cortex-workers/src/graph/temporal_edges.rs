@@ -72,6 +72,7 @@ pub fn build_obsoletes(from_label: &str, from_key: &str, to_label: &str, to_key:
         to_label: to_label.to_string(),
         to_key: to_key.to_string(),
         props: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -89,6 +90,7 @@ pub fn build_evolves_from(
         to_label: to_label.to_string(),
         to_key: to_key.to_string(),
         props: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -108,6 +110,7 @@ pub fn build_conflicts_with(
         to_label: to_label.to_string(),
         to_key: to_key.to_string(),
         props: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -121,6 +124,7 @@ pub fn build_forked_from(child_id: &str, parent_id: &str) -> EdgeOp {
         to_label: super::branch::BRANCH_LABEL.to_string(),
         to_key: parent_id.to_string(),
         props: BTreeMap::new(),
+        ..Default::default()
     }
 }
 
@@ -148,6 +152,7 @@ pub fn build_merged_into(
         to_label: super::branch::BRANCH_LABEL.to_string(),
         to_key: parent_id.to_string(),
         props,
+        ..Default::default()
     }
 }
 
@@ -186,6 +191,7 @@ pub fn build_cross_project_ref(
         to_label: to_label.to_string(),
         to_key: to_key.to_string(),
         props,
+        ..Default::default()
     }
 }
 

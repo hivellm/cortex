@@ -48,66 +48,111 @@ pub use typescript::TypescriptAnalyzer;
 /// [`EdgeType::label`]. Adding a new variant requires updating
 /// every per-language analyzer that produces it; the compiler's
 /// exhaustive-match check enforces consistency.
+///
+/// **UA-adopted variants** (phase23a ADR #35): the 15 new variants at
+/// the bottom are part of the Understand-Anything taxonomy. Existing
+/// variants are unchanged for backward compat. Conceptual aliases:
+/// `ImportsFile` = UA `imports`, `Documents`/`DocumentedBy` = UA
+/// `documents`, `Cites` = UA `cites`, `Contains` = UA `contains`,
+/// `Implements` = UA `implements`, `Extends` = UA `inherits`,
+/// `Calls` = UA `calls`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeType {
+    // ── Existing variants (backward-compat, unchanged) ────────────────
     /// File-level import resolved to another workspace artifact.
+    /// UA alias: `imports`.
     ImportsFile,
     /// File-level import that did NOT resolve inside the workspace.
-    /// Targets an [`ResolutionTarget::ExternalPackage`].
+    /// Targets a [`ResolutionTarget::ExternalPackage`]. Cortex-only.
     ImportsExternal,
     /// Function / method call. Source = calling symbol, target =
-    /// called symbol.
+    /// called symbol. UA: `calls`.
     Calls,
     /// Type reference in a signature / field / generic bound.
+    /// Cortex-only (finer-grained than UA `depends_on`).
     UsesType,
     /// Rust `impl Trait for Type` block. Source = impl block's
-    /// type, target = trait.
+    /// type, target = trait. UA: `implements`.
     Implements,
-    /// Class inheritance (TS / Python / Java).
+    /// Class inheritance (TS / Python / Java). UA: `inherits`.
     Extends,
-    /// Rust `pub use foo::Bar` re-export.
+    /// Rust `pub use foo::Bar` re-export. Cortex-only.
     ReExports,
     /// Import the resolver could not place inside the workspace or
     /// against any declared external package. Targets a sentinel
     /// `:UnresolvedImport` node so the dashboard can surface coverage
-    /// holes.
+    /// holes. Cortex-only.
     UnresolvedImport,
     /// Markdown link `[text](path)` whose target is another markdown
-    /// document.
+    /// document. Cortex-only.
     LinksTo,
     /// Markdown link `[text](src/path.rs)` whose target is a
     /// recognised source-code artifact (the doc *documents* the file).
+    /// UA alias: `documents`.
     Documents,
     /// Markdown link `[text](path#anchor)` or in-document
-    /// `[text](#anchor)` — points at a `:DocSection`.
+    /// `[text](#anchor)` — points at a `:DocSection`. Cortex-only.
     LinksToSection,
     /// Backtick-token mention of a symbol inside markdown prose.
+    /// Cortex-only.
     Mentions,
     /// Fenced-code first-line `// path/to/file.rs` — the surrounding
-    /// section *describes* the artifact at `path`.
+    /// section *describes* the artifact at `path`. Cortex-only.
     DescribesPath,
     /// Rust intra-doc reference (`/// ... [`crate::Sym`]`) — the
-    /// section is documentation for the symbol.
+    /// section is documentation for the symbol. UA alias: `documents`.
     DocumentedBy,
     /// Reference inside a Rust doc comment that resolves to another
-    /// symbol (the `:DOCSTRING_REFERENCES` edge from §3.6).
+    /// symbol (the `:DOCSTRING_REFERENCES` edge from §3.6). Cortex-only.
     DocstringReferences,
     /// `Decision`/`Knowledge`/`Learning` body cites another node by
-    /// link. Fired by §4.1's body walker.
+    /// link. Fired by §4.1's body walker. UA: `cites`.
     Cites,
     /// `Consolidation.payload.source_event_ids[]` → derived edges
-    /// (§4.3).
+    /// (§4.3). Cortex-only.
     DerivedFrom,
     /// `:DocSection` parent → child relationship for nested headings.
+    /// UA: `contains`.
     Contains,
+
+    // ── UA-adopted variants (phase23a ADR #35) ─────────────────────────
+    /// Module / file publicly re-exports a symbol. UA `exports`.
+    Exports,
+    /// Code reads from a table / resource. UA `reads_from`.
+    ReadsFrom,
+    /// Code writes to a table / resource. UA `writes_to`.
+    WritesTo,
+    /// Generic dependency edge (package / library). UA `depends_on`.
+    DependsOn,
+    /// Test artifact covers a source artifact. UA `tested_by`.
+    TestedBy,
+    /// Config artifact configures a service / component. UA `configures`.
+    Configures,
+    /// Deploys a service to an environment. UA `deploys`.
+    Deploys,
+    /// IaC resource provisions an infra resource. UA `provisions`.
+    Provisions,
+    /// Hook / pipeline triggers another pipeline / job. UA `triggers`.
+    Triggers,
+    /// SQL migration applies to a schema / table. UA `migrates`.
+    Migrates,
+    /// Router routes a path to an endpoint handler. UA `routes`.
+    Routes,
+    /// Protobuf / GraphQL / DDL file defines a schema. UA `defines_schema`.
+    DefinesSchema,
+    /// One claim contradicts another. High-value knowledge edge. UA `contradicts`.
+    Contradicts,
+    /// Claim / learning builds on (extends) another. UA `builds_on`.
+    BuildsOn,
+    /// Node is categorized under a topic. UA `categorized_under`.
+    CategorizedUnder,
 }
 
 impl EdgeType {
-    /// Nexus edge label string. Matches the SCREAMING_SNAKE_CASE
-    /// convention from
-    /// [`crate::graph::mapper::normalise_relation_label`].
+    /// Nexus edge label string (SCREAMING_SNAKE_CASE convention).
     pub fn label(self) -> &'static str {
         match self {
+            // existing variants — unchanged
             EdgeType::ImportsFile => "IMPORTS_FILE",
             EdgeType::ImportsExternal => "IMPORTS_EXTERNAL",
             EdgeType::Calls => "CALLS",
@@ -126,7 +171,113 @@ impl EdgeType {
             EdgeType::Cites => "CITES",
             EdgeType::DerivedFrom => "DERIVED_FROM",
             EdgeType::Contains => "CONTAINS",
+            // UA-adopted variants
+            EdgeType::Exports => "EXPORTS",
+            EdgeType::ReadsFrom => "READS_FROM",
+            EdgeType::WritesTo => "WRITES_TO",
+            EdgeType::DependsOn => "DEPENDS_ON",
+            EdgeType::TestedBy => "TESTED_BY",
+            EdgeType::Configures => "CONFIGURES",
+            EdgeType::Deploys => "DEPLOYS",
+            EdgeType::Provisions => "PROVISIONS",
+            EdgeType::Triggers => "TRIGGERS",
+            EdgeType::Migrates => "MIGRATES",
+            EdgeType::Routes => "ROUTES",
+            EdgeType::DefinesSchema => "DEFINES_SCHEMA",
+            EdgeType::Contradicts => "CONTRADICTS",
+            EdgeType::BuildsOn => "BUILDS_ON",
+            EdgeType::CategorizedUnder => "CATEGORIZED_UNDER",
         }
+    }
+
+    /// Reverse-lookup from a Nexus relation string. Handles both canonical
+    /// labels and legacy alias strings so reads of pre-phase23a graph data
+    /// still resolve (§4.2 backward-compat requirement).
+    ///
+    /// Legacy aliases accepted:
+    /// - `"IMPORTS"` → [`EdgeType::ImportsFile`]
+    /// - `"DOCUMENTED_BY"` → [`EdgeType::DocumentedBy`]
+    /// - `"IMPORTS_FILE"` → [`EdgeType::ImportsFile`]
+    pub fn from_nexus_label(label: &str) -> Option<Self> {
+        Some(match label {
+            // existing / legacy
+            "IMPORTS_FILE" | "IMPORTS" => EdgeType::ImportsFile,
+            "IMPORTS_EXTERNAL" => EdgeType::ImportsExternal,
+            "CALLS" => EdgeType::Calls,
+            "USES_TYPE" => EdgeType::UsesType,
+            "IMPLEMENTS" => EdgeType::Implements,
+            "EXTENDS" => EdgeType::Extends,
+            "RE_EXPORTS" => EdgeType::ReExports,
+            "UNRESOLVED_IMPORT" => EdgeType::UnresolvedImport,
+            "LINKS_TO" => EdgeType::LinksTo,
+            "DOCUMENTS" => EdgeType::Documents,
+            "LINKS_TO_SECTION" => EdgeType::LinksToSection,
+            "MENTIONS" => EdgeType::Mentions,
+            "DESCRIBES_PATH" => EdgeType::DescribesPath,
+            "DOCUMENTED_BY" => EdgeType::DocumentedBy,
+            "DOCSTRING_REFERENCES" => EdgeType::DocstringReferences,
+            "CITES" => EdgeType::Cites,
+            "DERIVED_FROM" => EdgeType::DerivedFrom,
+            "CONTAINS" => EdgeType::Contains,
+            // UA-adopted
+            "EXPORTS" => EdgeType::Exports,
+            "READS_FROM" => EdgeType::ReadsFrom,
+            "WRITES_TO" => EdgeType::WritesTo,
+            "DEPENDS_ON" => EdgeType::DependsOn,
+            "TESTED_BY" => EdgeType::TestedBy,
+            "CONFIGURES" => EdgeType::Configures,
+            "DEPLOYS" => EdgeType::Deploys,
+            "PROVISIONS" => EdgeType::Provisions,
+            "TRIGGERS" => EdgeType::Triggers,
+            "MIGRATES" => EdgeType::Migrates,
+            "ROUTES" => EdgeType::Routes,
+            "DEFINES_SCHEMA" => EdgeType::DefinesSchema,
+            "CONTRADICTS" => EdgeType::Contradicts,
+            "BUILDS_ON" => EdgeType::BuildsOn,
+            "CATEGORIZED_UNDER" => EdgeType::CategorizedUnder,
+            _ => return None,
+        })
+    }
+
+    /// UA ontology name for variants that map to the UA taxonomy, `None`
+    /// for Cortex-only variants. Used in documentation and crosswalk
+    /// tooling; the Nexus wire format always uses [`Self::label`].
+    pub fn ua_name(self) -> Option<&'static str> {
+        Some(match self {
+            EdgeType::ImportsFile => "imports",
+            EdgeType::Calls => "calls",
+            EdgeType::Implements => "implements",
+            EdgeType::Extends => "inherits",
+            EdgeType::Documents | EdgeType::DocumentedBy => "documents",
+            EdgeType::Cites => "cites",
+            EdgeType::Contains => "contains",
+            EdgeType::Exports => "exports",
+            EdgeType::ReadsFrom => "reads_from",
+            EdgeType::WritesTo => "writes_to",
+            EdgeType::DependsOn => "depends_on",
+            EdgeType::TestedBy => "tested_by",
+            EdgeType::Configures => "configures",
+            EdgeType::Deploys => "deploys",
+            EdgeType::Provisions => "provisions",
+            EdgeType::Triggers => "triggers",
+            EdgeType::Migrates => "migrates",
+            EdgeType::Routes => "routes",
+            EdgeType::DefinesSchema => "defines_schema",
+            EdgeType::Contradicts => "contradicts",
+            EdgeType::BuildsOn => "builds_on",
+            EdgeType::CategorizedUnder => "categorized_under",
+            // Cortex-only — no UA equivalent
+            EdgeType::ImportsExternal
+            | EdgeType::UsesType
+            | EdgeType::ReExports
+            | EdgeType::UnresolvedImport
+            | EdgeType::LinksTo
+            | EdgeType::LinksToSection
+            | EdgeType::Mentions
+            | EdgeType::DescribesPath
+            | EdgeType::DocstringReferences
+            | EdgeType::DerivedFrom => return None,
+        })
     }
 }
 
@@ -367,5 +518,78 @@ mod tests {
         assert_ne!(scoped, external);
         assert_ne!(bare, external);
         assert_ne!(resolved, bare);
+    }
+
+    // ---------- Phase23a — EdgeType UA vocabulary ----------
+
+    /// Every EdgeType round-trips through label() → from_nexus_label().
+    #[test]
+    fn edge_type_label_round_trips() {
+        let all = [
+            // existing
+            EdgeType::ImportsFile, EdgeType::ImportsExternal, EdgeType::Calls,
+            EdgeType::UsesType, EdgeType::Implements, EdgeType::Extends, EdgeType::ReExports,
+            EdgeType::UnresolvedImport, EdgeType::LinksTo, EdgeType::Documents,
+            EdgeType::LinksToSection, EdgeType::Mentions, EdgeType::DescribesPath,
+            EdgeType::DocumentedBy, EdgeType::DocstringReferences, EdgeType::Cites,
+            EdgeType::DerivedFrom, EdgeType::Contains,
+            // UA-adopted
+            EdgeType::Exports, EdgeType::ReadsFrom, EdgeType::WritesTo, EdgeType::DependsOn,
+            EdgeType::TestedBy, EdgeType::Configures, EdgeType::Deploys, EdgeType::Provisions,
+            EdgeType::Triggers, EdgeType::Migrates, EdgeType::Routes, EdgeType::DefinesSchema,
+            EdgeType::Contradicts, EdgeType::BuildsOn, EdgeType::CategorizedUnder,
+        ];
+        for et in all {
+            let lbl = et.label();
+            let parsed = EdgeType::from_nexus_label(lbl);
+            assert_eq!(
+                parsed,
+                Some(et),
+                "EdgeType::{et:?} round-trip failed: label={lbl:?}, from_nexus_label={parsed:?}"
+            );
+        }
+    }
+
+    /// Legacy aliases resolve to the canonical variant (§4.2 backward-compat).
+    #[test]
+    fn edge_type_legacy_aliases_resolve() {
+        assert_eq!(
+            EdgeType::from_nexus_label("IMPORTS"),
+            Some(EdgeType::ImportsFile),
+            "IMPORTS alias must resolve to ImportsFile"
+        );
+        assert_eq!(
+            EdgeType::from_nexus_label("IMPORTS_FILE"),
+            Some(EdgeType::ImportsFile),
+            "IMPORTS_FILE canonical must still resolve"
+        );
+        assert_eq!(
+            EdgeType::from_nexus_label("DOCUMENTED_BY"),
+            Some(EdgeType::DocumentedBy),
+            "DOCUMENTED_BY canonical must resolve"
+        );
+        assert_eq!(
+            EdgeType::from_nexus_label("CITES"),
+            Some(EdgeType::Cites),
+            "CITES canonical must resolve"
+        );
+    }
+
+    /// from_nexus_label returns None for unknown strings (forward-compat).
+    #[test]
+    fn edge_type_unknown_label_returns_none() {
+        assert!(EdgeType::from_nexus_label("UNKNOWN_FUTURE_EDGE").is_none());
+        assert!(EdgeType::from_nexus_label("").is_none());
+    }
+
+    /// UA-mapped variants report their ua_name; Cortex-only ones return None.
+    #[test]
+    fn edge_type_ua_name() {
+        assert_eq!(EdgeType::ImportsFile.ua_name(), Some("imports"));
+        assert_eq!(EdgeType::Contradicts.ua_name(), Some("contradicts"));
+        assert_eq!(EdgeType::Contains.ua_name(), Some("contains"));
+        assert!(EdgeType::ImportsExternal.ua_name().is_none());
+        assert!(EdgeType::UsesType.ua_name().is_none());
+        assert!(EdgeType::DerivedFrom.ua_name().is_none());
     }
 }

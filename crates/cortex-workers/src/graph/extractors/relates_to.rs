@@ -74,6 +74,7 @@ pub fn extract(env: &EnrichedEvent, ctx: &ExtractCtx) -> Vec<Edge> {
             to_label,
             to_key,
             props,
+            ..Default::default()
         };
         out.push(stamp_provenance(edge, env, ctx));
     }

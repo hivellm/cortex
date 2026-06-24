@@ -245,7 +245,24 @@ fn emit_workspace_edge(
         | EdgeType::Documents
         | EdgeType::DescribesPath
         | EdgeType::Cites
-        | EdgeType::DerivedFrom => ("Artifact", canonical_artifact_key.as_str()),
+        | EdgeType::DerivedFrom
+        // UA-adopted variants (phase23a) — default to Artifact until
+        // per-language analyzer support lands (phases 23b-23e).
+        | EdgeType::Exports
+        | EdgeType::ReadsFrom
+        | EdgeType::WritesTo
+        | EdgeType::DependsOn
+        | EdgeType::TestedBy
+        | EdgeType::Configures
+        | EdgeType::Deploys
+        | EdgeType::Provisions
+        | EdgeType::Triggers
+        | EdgeType::Migrates
+        | EdgeType::Routes
+        | EdgeType::DefinesSchema
+        | EdgeType::Contradicts
+        | EdgeType::BuildsOn
+        | EdgeType::CategorizedUnder => ("Artifact", canonical_artifact_key.as_str()),
         EdgeType::Calls
         | EdgeType::UsesType
         | EdgeType::Implements
@@ -362,6 +379,7 @@ fn make_edge(
         to_label: to_label.to_string(),
         to_key: to_key.to_string(),
         props,
+        ..Default::default()
     }
     // phase27a — the static analyzer's resolution tier is itself a
     // confidence signal: a target resolved against a known file/crate is

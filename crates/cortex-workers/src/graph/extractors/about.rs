@@ -47,6 +47,7 @@ pub fn extract(env: &EnrichedEvent, ctx: &ExtractCtx) -> Vec<Edge> {
                 to_label: "Topic".to_string(),
                 to_key: topic,
                 props: std::collections::BTreeMap::new(),
+                ..Default::default()
             };
             stamp_provenance(edge, env, ctx)
         })

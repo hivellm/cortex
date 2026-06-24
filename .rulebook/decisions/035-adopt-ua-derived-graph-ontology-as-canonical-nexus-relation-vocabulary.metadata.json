@@ -1,0 +1,11 @@
+{
+  "id": 35,
+  "slug": "adopt-ua-derived-graph-ontology-as-canonical-nexus-relation-vocabulary",
+  "title": "Adopt UA-derived graph ontology as canonical Nexus relation vocabulary",
+  "status": "proposed",
+  "date": "2026-06-24",
+  "relatedTasks": [
+    "phase23a_ua-graph-ontology"
+  ],
+  "supersededBy": null
+}

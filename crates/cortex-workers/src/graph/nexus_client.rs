@@ -951,6 +951,7 @@ mod tests {
             to_label: "Artifact".into(),
             to_key: "repo|path|hash".into(),
             props: props.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            ..Default::default()
         }
     }
 
