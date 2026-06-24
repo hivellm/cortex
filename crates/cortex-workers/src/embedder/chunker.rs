@@ -9,17 +9,25 @@ use super::embedder::EnrichedEvent;
 
 /// A unit of content that will be embedded and upserted into Vectorizer.
 ///
-/// The struct carries the **client-side dedup key** (see
-/// [`super::identity::dedup_key`]) which is stored as `metadata.dedup_key`
-/// on the upserted vector. The **server-assigned UUID** is the actual
-/// primary id and is only available post-upsert, surfaced through
-/// [`super::vectorizer_client::UpsertedChunk::server_id`].
+/// Two ids are maintained per chunk:
+///
+/// * `dedup_key` — content-dependent (folds the chunk content hash). Stored as
+///   `metadata.dedup_key` and used by the `exists_by_dedup_key` pre-check to
+///   skip re-embedding when content is unchanged.
+///
+/// * `vector_id` — content-independent (event id + ordinal only). This is the
+///   id sent to Vectorizer's `insert_texts`; a re-embed with changed content
+///   reuses this id and REPLACES the prior vector in place (phase26e §1.2).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
-    /// Deterministic dedup key, stored as metadata. The server-assigned
-    /// UUID is the actual primary id and is returned post-upsert via
-    /// [`super::vectorizer_client::UpsertedChunk`].
+    /// Deterministic dedup key, stored as `metadata.dedup_key`. Used by the
+    /// `exists_by_dedup_key` pre-check to detect unchanged content and skip
+    /// re-embedding. See [`super::identity::dedup_key`].
     pub dedup_key: String,
+    /// Content-independent stable vector id (see [`super::identity::vector_id`]).
+    /// This is the id sent to Vectorizer's `insert_texts`; a re-embed with
+    /// changed content reuses this id and REPLACES the vector in place.
+    pub vector_id: String,
     /// Parent enriched-event id.
     pub parent_event_id: String,
     /// Parent event content hash (pre-chunking).

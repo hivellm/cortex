@@ -154,6 +154,7 @@ async fn embedder_worker_skips_identity_writeback_when_metadata_absent() {
         Chunk {
             // silence unused-import: types are wired through embedder
             dedup_key: String::new(),
+            vector_id: String::new(),
             parent_event_id: String::new(),
             parent_content_hash: String::new(),
             chunk_content_hash: String::new(),

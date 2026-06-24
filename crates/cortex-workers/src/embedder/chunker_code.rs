@@ -20,7 +20,7 @@ use tree_sitter::{Language, Node, Parser};
 use super::chunker::{Chunk, ChunkMetadata, ChunkSource, Chunker};
 use super::chunker_fallback::{sha256_hex, FallbackChunker};
 use super::embedder::EnrichedEvent;
-use super::identity::dedup_key;
+use super::identity::{dedup_key, vector_id};
 use super::routing::collection_for;
 
 /// Top-level declarations whose raw byte length exceeds this are windowed
@@ -313,6 +313,7 @@ impl Chunker for CodeChunker {
             let symbol = extract_symbol(&child, bytes, lang);
             let chunk_hash = sha256_hex(decl_text);
             let key = dedup_key(&event.event_id, ordinal, &chunk_hash);
+            let vid = vector_id(&event.event_id, ordinal);
             let mut metadata = ChunkMetadata {
                 kind: event.kind,
                 topics: event.classifier.topics.clone(),
@@ -340,6 +341,7 @@ impl Chunker for CodeChunker {
             metadata.stamp_classification(event);
             out.push(Chunk {
                 dedup_key: key,
+                vector_id: vid,
                 parent_event_id: event.event_id.clone(),
                 parent_content_hash: event.content_hash.clone(),
                 chunk_content_hash: chunk_hash,

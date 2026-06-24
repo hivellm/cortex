@@ -880,12 +880,15 @@ impl VectorizerClient for LiveVectorizerClient {
 /// Translate a [`Chunk`] into the SDK's `BatchTextRequest`, flattening
 /// metadata into the SDK's `HashMap<String, String>` bag.
 ///
-/// The chunk's `dedup_key` is stored under the `dedup_key` metadata key
-/// so [`LiveVectorizerClient::list_stored_dedup_keys`] can round-trip
-/// client-side dedup keys even though the server reassigns its own UUIDs
-/// on write (documented server bug — see ADR 0001). The `BatchTextRequest`'s
-/// `id` field is also set to the dedup key so SDK 3.0.3's
-/// `BatchResultEntry::client_id` round-trip resolves to the key we expect.
+/// The `BatchTextRequest.id` is set to `chunk.vector_id` — a
+/// content-independent stable id derived from (event_id, ordinal). The
+/// Vectorizer `insert_texts` endpoint upserts by this id, so a re-embed
+/// with changed content REPLACES the prior vector in place rather than
+/// orphaning it (phase26e §1.2).
+///
+/// The chunk's `dedup_key` (content-dependent) is preserved in the
+/// `metadata["dedup_key"]` payload so the `exists_by_dedup_key` pre-check
+/// can detect unchanged content and skip redundant re-embeds.
 fn chunk_to_batch_request(chunk: &Chunk) -> BatchTextRequest {
     let mut metadata: HashMap<String, String> = HashMap::with_capacity(16);
     metadata.insert("dedup_key".into(), chunk.dedup_key.clone());
@@ -893,7 +896,7 @@ fn chunk_to_batch_request(chunk: &Chunk) -> BatchTextRequest {
         metadata.insert(k, v);
     }
     BatchTextRequest {
-        id: chunk.dedup_key.clone(),
+        id: chunk.vector_id.clone(),
         text: chunk.text.clone(),
         metadata: Some(metadata),
     }
@@ -981,18 +984,31 @@ pub enum MemoryCall {
     MoveVectors(String, String, Vec<String>),
 }
 
+/// Per-vector record stored by [`MemoryVectorizerClient`].
+///
+/// The map key is `vector_id` (content-independent, the primary upsert key).
+/// `dedup_key` is kept separately for `exists_by_dedup_key` look-ups.
+#[derive(Debug, Clone)]
+pub struct StoredVec {
+    /// Content-dependent dedup key; used only for `exists_by_dedup_key`.
+    pub dedup_key: String,
+    /// Synthetic server UUID, minted at first upsert.
+    pub server_id: String,
+}
+
 /// In-memory Vectorizer client for tests.
 ///
-/// Stores a per-collection `dedup_key -> server_id` map so replays of the
-/// same dedup key return a stable `UpsertedChunk` rather than allocating a
-/// fresh UUID. The orchestrator relies on the mapping surviving the
-/// round-trip.
+/// Stores a per-collection `vector_id -> StoredVec` map. The Vectorizer
+/// server upserts by id, so keying by `vector_id` (content-independent)
+/// makes a re-embed with changed content replace the entry rather than
+/// grow the collection (phase26e §1.2). The `dedup_key` is preserved
+/// inside `StoredVec` for `exists_by_dedup_key` look-ups.
 #[derive(Default)]
 pub struct MemoryVectorizerClient {
     /// Call log, in order.
     pub calls: Mutex<Vec<MemoryCall>>,
-    /// Per-collection `dedup_key` → synthetic server UUID map.
-    pub dedup_keys_per_collection: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    /// Per-collection `vector_id` → [`StoredVec`] map.
+    pub dedup_keys_per_collection: Mutex<BTreeMap<String, BTreeMap<String, StoredVec>>>,
 }
 
 impl MemoryVectorizerClient {
@@ -1058,19 +1074,30 @@ impl VectorizerClient for MemoryVectorizerClient {
         let mut deduped = 0u32;
         let mut new_entries: Vec<UpsertedChunk> = Vec::with_capacity(chunks.len());
         for chunk in chunks {
-            if map.contains_key(&chunk.dedup_key) {
-                deduped = deduped.saturating_add(1);
-            } else {
-                // Synthetic server id — shape-identical to a UUID so
-                // downstream code treats it as opaque.
-                let server_id = format!("mem-{}", Ulid::new().to_string().to_lowercase());
-                map.insert(chunk.dedup_key.clone(), server_id.clone());
-                written = written.saturating_add(1);
-                new_entries.push(UpsertedChunk {
-                    dedup_key: chunk.dedup_key.clone(),
-                    server_id,
-                });
+            // Upsert keyed by vector_id (content-independent). If the
+            // vector_id already exists with the SAME dedup_key the content
+            // is unchanged → idempotent no-op (deduped). If the dedup_key
+            // differs the content changed → replace in place (written).
+            if let Some(existing) = map.get(&chunk.vector_id) {
+                if existing.dedup_key == chunk.dedup_key {
+                    deduped = deduped.saturating_add(1);
+                    continue;
+                }
             }
+            // New or content-changed entry — upsert (replace) by vector_id.
+            let server_id = format!("mem-{}", Ulid::new().to_string().to_lowercase());
+            map.insert(
+                chunk.vector_id.clone(),
+                StoredVec {
+                    dedup_key: chunk.dedup_key.clone(),
+                    server_id: server_id.clone(),
+                },
+            );
+            written = written.saturating_add(1);
+            new_entries.push(UpsertedChunk {
+                dedup_key: chunk.dedup_key.clone(),
+                server_id,
+            });
         }
         Ok(UpsertReport {
             written,
@@ -1097,9 +1124,13 @@ impl VectorizerClient for MemoryVectorizerClient {
             .map_err(|_| VectorizerClientError::Other("memory client mutex poisoned".into()))?;
         let empty = BTreeMap::new();
         let map = stored.get(collection).unwrap_or(&empty);
+        // Match against the stored dedup_key inside each StoredVec, not the
+        // map key (which is now vector_id).
+        let stored_dedup_keys: BTreeSet<&str> =
+            map.values().map(|sv| sv.dedup_key.as_str()).collect();
         Ok(dedup_keys
             .iter()
-            .filter(|k| map.contains_key(*k))
+            .filter(|k| stored_dedup_keys.contains(k.as_str()))
             .cloned()
             .collect())
     }
@@ -1125,7 +1156,7 @@ impl VectorizerClient for MemoryVectorizerClient {
         let mut failed = 0usize;
         let mut results: Vec<VectorOpResult> = Vec::with_capacity(ids.len());
         for (idx, id) in ids.iter().enumerate() {
-            // The Memory client stores by `dedup_key` and round-trips a
+            // The Memory client stores by `vector_id` and round-trips a
             // synthetic `server_id` on upsert. Match either to keep
             // tests symmetric with whatever id the caller threads back
             // through the demotion path.
@@ -1134,7 +1165,7 @@ impl VectorizerClient for MemoryVectorizerClient {
             } else {
                 let by_server: Option<String> = map
                     .iter()
-                    .find(|(_, sid)| sid.as_str() == id)
+                    .find(|(_, sv)| sv.server_id.as_str() == id)
                     .map(|(k, _)| k.clone());
                 if let Some(k) = by_server {
                     map.remove(&k);
@@ -1195,30 +1226,30 @@ impl VectorizerClient for MemoryVectorizerClient {
         let mut failed = 0usize;
         let mut results: Vec<VectorOpResult> = Vec::with_capacity(ids.len());
         for id in ids {
-            // Look up the (dedup_key, server_id) pair in src by either
-            // side of the mapping — the live SDK addresses by server id,
-            // tests address by dedup key; the trait abstraction has to
-            // tolerate both.
+            // Look up the (vector_id, StoredVec) pair in src by either
+            // side of the mapping — the live SDK addresses by server_id,
+            // tests address by vector_id; the trait abstraction tolerates
+            // both.
             let pair = {
                 let src_map = stored.get(src);
                 src_map.and_then(|m| {
-                    if let Some(sid) = m.get(id) {
-                        Some((id.clone(), sid.clone()))
+                    if let Some(sv) = m.get(id) {
+                        Some((id.clone(), sv.clone()))
                     } else {
                         m.iter()
-                            .find(|(_, sid)| sid.as_str() == id.as_str())
-                            .map(|(k, sid)| (k.clone(), sid.clone()))
+                            .find(|(_, sv)| sv.server_id.as_str() == id.as_str())
+                            .map(|(k, sv)| (k.clone(), sv.clone()))
                     }
                 })
             };
             match pair {
-                Some((dedup_key, server_id)) => {
+                Some((vector_id, stored_vec)) => {
                     // Insert into dst FIRST (mirrors the server invariant).
                     let dst_map = stored.entry(dst.to_string()).or_default();
-                    dst_map.insert(dedup_key.clone(), server_id.clone());
+                    dst_map.insert(vector_id.clone(), stored_vec);
                     // Then delete from src.
                     if let Some(src_map) = stored.get_mut(src) {
-                        src_map.remove(&dedup_key);
+                        src_map.remove(&vector_id);
                     }
                     moved += 1;
                     results.push(VectorOpResult {
@@ -1253,6 +1284,98 @@ impl VectorizerClient for MemoryVectorizerClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::chunker::{ChunkMetadata, ChunkSource};
+    use crate::classifier::Severity;
+    use cortex_core::events::Kind;
+
+    /// Build a minimal [`Chunk`] with distinct `vector_id` and `dedup_key`
+    /// for use in unit tests.
+    fn make_test_chunk(vector_id: &str, dedup_key: &str, text: &str) -> Chunk {
+        Chunk {
+            vector_id: vector_id.to_string(),
+            dedup_key: dedup_key.to_string(),
+            parent_event_id: "evt-test".into(),
+            parent_content_hash: "parent-hash".into(),
+            chunk_content_hash: format!("content-{dedup_key}"),
+            collection: "test-col".into(),
+            text: text.to_string(),
+            metadata: ChunkMetadata {
+                kind: Kind::ToolCall,
+                topics: vec![],
+                severity: Severity::Info,
+                repo: None,
+                path: None,
+                symbol: None,
+                byte_range: None,
+                language: None,
+                source: ChunkSource::FallbackWindow,
+                prompt_version: None,
+                project_id: None,
+                branch_id: None,
+                lifecycle: None,
+                valid_from_unix: None,
+                valid_to_unix: None,
+                superseded_at_unix: None,
+                class_level: None,
+                class_compartments: None,
+            },
+        }
+    }
+
+    #[test]
+    fn chunk_to_batch_request_uses_vector_id_as_id_and_keeps_dedup_key_in_metadata() {
+        let chunk = make_test_chunk("stable-vid-001", "content-dedup-abc", "some text");
+        let req = chunk_to_batch_request(&chunk);
+        assert_eq!(req.id, "stable-vid-001", "id must be the stable vector_id");
+        let meta = req.metadata.expect("metadata must be present");
+        assert_eq!(
+            meta.get("dedup_key").map(String::as_str),
+            Some("content-dedup-abc"),
+            "dedup_key must survive in metadata for the exists pre-check"
+        );
+    }
+
+    #[tokio::test]
+    async fn reembed_with_changed_content_replaces_in_place() {
+        let client = MemoryVectorizerClient::default();
+
+        // First upsert: vector_id=V, dedup_key=D1 (original content).
+        let chunk_v1 = make_test_chunk("vid-stable", "dedup-d1", "original text");
+        let r1 = client
+            .upsert_chunks("col", &[chunk_v1])
+            .await
+            .expect("upsert ok");
+        assert_eq!(r1.written, 1);
+        assert_eq!(client.stored_count_for("col"), 1);
+
+        // Second upsert: same vector_id=V but different dedup_key=D2 (changed content).
+        let chunk_v2 = make_test_chunk("vid-stable", "dedup-d2", "updated text");
+        let r2 = client
+            .upsert_chunks("col", &[chunk_v2])
+            .await
+            .expect("upsert ok");
+        assert_eq!(r2.written, 1, "changed content must count as written (replace)");
+        // stored_count must still be 1 — REPLACE, not additive.
+        assert_eq!(
+            client.stored_count_for("col"),
+            1,
+            "re-embed with changed content must replace the prior vector, not grow the collection"
+        );
+
+        // The stored dedup_key must now be D2.
+        let present = client
+            .exists_by_dedup_key("col", &["dedup-d1".to_string(), "dedup-d2".to_string()])
+            .await
+            .expect("exists ok");
+        assert!(
+            !present.contains("dedup-d1"),
+            "old dedup_key must no longer be present after replace"
+        );
+        assert!(
+            present.contains("dedup-d2"),
+            "new dedup_key must be present after replace"
+        );
+    }
 
     #[test]
     fn is_collection_already_exists_detects_http_409() {

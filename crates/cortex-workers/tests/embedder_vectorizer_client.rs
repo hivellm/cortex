@@ -12,6 +12,7 @@ use std::sync::Arc;
 fn make_chunk(id: &str) -> Chunk {
     Chunk {
         dedup_key: id.to_string(),
+        vector_id: format!("vid-{id}"),
         parent_event_id: "evt".into(),
         parent_content_hash: "hash".into(),
         chunk_content_hash: format!("hash-{id}"),

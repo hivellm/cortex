@@ -168,6 +168,7 @@ pub fn enriched_event(
 pub fn make_chunk(id: &str, collection: &str, text: &str) -> Chunk {
     Chunk {
         dedup_key: id.to_string(),
+        vector_id: format!("vid-{id}"),
         parent_event_id: "evt_it".into(),
         parent_content_hash: "parent-it".into(),
         chunk_content_hash: format!("content-{id}"),

@@ -1,8 +1,17 @@
-## §1. Gap A — purge stale raw-JSON vectors, clean re-embed (Bug #8 finish)
+## §1. Gap A — stable vector id (replace-in-place), clean re-embed (Bug #8 finish)
 
-- [ ] §1.1 Backfill the `analyses` index summaries (phase26d found 22% coverage; turns/code/docs already 100%).
-- [ ] §1.2 Add a purge path to the embedder/re-embed: re-embed must delete-then-insert per event id, not add a duplicate vector.
-- [ ] §1.3 Re-embed the `cortex` repo collections through the purge path.
+> Research finding (phase26e): the Vectorizer `insert_texts` UPSERTS by the
+> client-supplied id, and the vector id == the embedder's `dedup_key`. Because
+> `dedup_key = f(event_id, ordinal, chunk_content_hash)` folds the content hash
+> into the id, a content change (e.g. phase0 raw-JSON→NL projection) produces a
+> NEW id and orphans the old vector — that is the additive bloat (turns: 33k
+> vectors for ~8k events). There is no delete-by-filter and the list scan is
+> capped at 10k, so a per-event scan-delete does not scale. The fix is a
+> **content-independent stable id** so a re-embed replaces in place.
+
+- [x] §1.2 Embedder: introduced `vector_id(event_id, ordinal)` (content-independent) used as the `insert_texts` id; kept content-hash `dedup_key` in payload + exists pre-check for dedupe-on-unchanged. Content change now re-upserts the SAME id (replace), no orphan. MemoryVectorizerClient re-keyed by vector_id to model upsert-by-id. Tests: vector_id determinism/ordinal/content-independence/≠dedup_key (identity.rs), chunk_to_batch_request_uses_vector_id_as_id_and_keeps_dedup_key_in_metadata, reembed_with_changed_content_replaces_in_place. embedder 59/59, pruner 18/18, clippy clean. (Built before §1.1/§1.3 — exemption #1: the re-embed must run through the stable-id path or it re-orphans.)
+- [ ] §1.1 Backfill the `analyses` index summaries (phase26d found 22% coverage; turns/code/docs already 100%) — satisfied by the §1.3 bootstrap --force re-run, which re-runs the static classifier (summaries) over all cortex events.
+- [ ] §1.3 One-time transition: drop the stale cortex vector collections (`cortex-cortex-{turns,code,docs,analyses,knowledge}`) then re-embed via `cortex-bootstrap --force --only cortex` so the collections refill with clean NL vectors under stable ids.
 - [ ] §1.4 Re-measure: `/v1/query` repo=cortex query="event classification system" top vector hit must clear 0.50 (phase26d measured 0.238 with additive vectors).
 
 ## §2. Gap B — observable bundle-cache hit rate

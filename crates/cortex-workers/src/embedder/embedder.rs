@@ -32,7 +32,7 @@ use super::chunker_code::{detect_language_from_path, CodeChunker};
 use super::chunker_doc::DocChunker;
 use super::chunker_fallback::{event_text, sha256_hex, FallbackChunker};
 use super::config::EmbedderConfig;
-use super::identity::dedup_key;
+use super::identity::{dedup_key, vector_id};
 use super::metrics::Metrics;
 use super::routing::collection_for;
 use super::vectorizer_client::{
@@ -337,8 +337,10 @@ impl Embedder for VectorizerEmbedder {
                 let summary_hash = sha256_hex(&summary_text);
                 let summary_ord = (ordinal * 2) as u32;
                 let summary_key = dedup_key(&event.event_id, summary_ord, &summary_hash);
+                let summary_vid = vector_id(&event.event_id, summary_ord);
                 substituted.push(Chunk {
                     dedup_key: summary_key,
+                    vector_id: summary_vid,
                     parent_event_id: chunk.parent_event_id.clone(),
                     parent_content_hash: chunk.parent_content_hash.clone(),
                     chunk_content_hash: summary_hash,
@@ -362,8 +364,10 @@ impl Embedder for VectorizerEmbedder {
                 let raw_hash = sha256_hex(&chunk.text);
                 let raw_ord = (ordinal * 2 + 1) as u32;
                 let raw_key = dedup_key(&event.event_id, raw_ord, &raw_hash);
+                let raw_vid = vector_id(&event.event_id, raw_ord);
                 substituted.push(Chunk {
                     dedup_key: raw_key,
+                    vector_id: raw_vid,
                     parent_event_id: chunk.parent_event_id.clone(),
                     parent_content_hash: chunk.parent_content_hash.clone(),
                     chunk_content_hash: raw_hash,

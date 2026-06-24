@@ -74,8 +74,20 @@ mod tests {
             let map = stored
                 .entry(cortex_storage::names::COLLECTION_CONSOLIDATION_PQ.to_string())
                 .or_default();
-            map.insert("k1".to_string(), "srv-k1".to_string());
-            map.insert("k2".to_string(), "srv-k2".to_string());
+            map.insert(
+                "k1".to_string(),
+                crate::embedder::vectorizer_client::StoredVec {
+                    dedup_key: "k1".to_string(),
+                    server_id: "srv-k1".to_string(),
+                },
+            );
+            map.insert(
+                "k2".to_string(),
+                crate::embedder::vectorizer_client::StoredVec {
+                    dedup_key: "k2".to_string(),
+                    server_id: "srv-k2".to_string(),
+                },
+            );
         }
 
         let action = DemotionAction {

@@ -156,11 +156,23 @@ mod tests {
             stored
                 .entry(cortex_storage::names::COLLECTION_CONSOLIDATION_FP32.into())
                 .or_default()
-                .insert("v-warm".into(), "srv-warm".into());
+                .insert(
+                    "v-warm".into(),
+                    crate::embedder::vectorizer_client::StoredVec {
+                        dedup_key: "v-warm".into(),
+                        server_id: "srv-warm".into(),
+                    },
+                );
             stored
                 .entry(cortex_storage::names::COLLECTION_CONSOLIDATION_PQ.into())
                 .or_default()
-                .insert("v-cold".into(), "srv-cold".into());
+                .insert(
+                    "v-cold".into(),
+                    crate::embedder::vectorizer_client::StoredVec {
+                        dedup_key: "v-cold".into(),
+                        server_id: "srv-cold".into(),
+                    },
+                );
         }
         let meili = RecordingMeili::default();
         let now = ts(2026, 5, 4);

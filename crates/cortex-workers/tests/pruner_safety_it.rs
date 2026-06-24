@@ -99,7 +99,13 @@ async fn active_consolidation_vectors_survive_demotion() {
             stored
                 .entry((*src).into())
                 .or_default()
-                .insert(vec_id.clone(), format!("srv-{vec_id}"));
+                .insert(
+                    vec_id.clone(),
+                    cortex_workers::embedder::vectorizer_client::StoredVec {
+                        dedup_key: vec_id.clone(),
+                        server_id: format!("srv-{vec_id}"),
+                    },
+                );
         }
         // Seed the meili row with the consolidation metadata.
         {

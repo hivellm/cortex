@@ -28,7 +28,7 @@ pub use chunker_doc::DocChunker;
 pub use chunker_fallback::FallbackChunker;
 pub use config::EmbedderConfig;
 pub use embedder::{EmbedError, EmbedReport, Embedder, EnrichedEvent, VectorizerEmbedder};
-pub use identity::dedup_key;
+pub use identity::{dedup_key, vector_id};
 pub use metrics::Metrics;
 pub use routing::collection_for;
 pub use token_cache::{parse_jwt_exp_ms, TokenCache, DEFAULT_TOKEN_TTL_SECS, REFRESH_BUFFER_SECS};
