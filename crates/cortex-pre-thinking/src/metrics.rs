@@ -201,6 +201,34 @@ impl Metrics {
         )
     }
 
+    /// phase26e §3 — quantiles of the recorded pre-thinking *assembly*
+    /// latency (`cortex.prethink.latency_ms`, populated by the pipeline
+    /// run). Returns `(count, p50, p95, p99)`. This is the TRUE
+    /// bundle-assembly latency, distinct from the dashboard's
+    /// `pre_thinking_p95_ms` series — which is the p95 of generic
+    /// envelope `duration_ms` and therefore reflects unrelated
+    /// long-running tool_calls (phase26d gap C). Empty → all zeros.
+    pub fn latency_quantiles(&self) -> (u64, u32, u32, u32) {
+        let samples = match self.latency_ms.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if samples.is_empty() {
+            return (0, 0, 0, 0);
+        }
+        let mut sorted: Vec<u32> = samples
+            .iter()
+            .map(|&ms| u32::try_from(ms).unwrap_or(u32::MAX))
+            .collect();
+        sorted.sort_unstable();
+        (
+            sorted.len() as u64,
+            percentile(&sorted, 0.50),
+            percentile(&sorted, 0.95),
+            percentile(&sorted, 0.99),
+        )
+    }
+
     /// Phase14f — snapshot per-intent bundle-byte quantiles. Each
     /// inner map carries `{ count, p50, p95, p99 }`. Empty intents
     /// are omitted.
@@ -318,6 +346,22 @@ mod tests {
         assert_eq!(row.p95, 95);
         // round((100-1)*0.99) = 98 → sorted[98] = 99
         assert_eq!(row.p99, 99);
+    }
+
+    #[test]
+    fn latency_quantiles_picks_p50_p95_p99_and_is_empty_safe() {
+        // phase26e §3 — empty histogram → all zeros.
+        let m = Metrics::new();
+        assert_eq!(m.latency_quantiles(), (0, 0, 0, 0));
+        // 1..=100 ms → same percentile indices as the bundle-bytes test.
+        for n in 1u64..=100 {
+            m.observe_latency_ms(n);
+        }
+        let (count, p50, p95, p99) = m.latency_quantiles();
+        assert_eq!(count, 100);
+        assert_eq!(p50, 51);
+        assert_eq!(p95, 95);
+        assert_eq!(p99, 99);
     }
 
     #[test]

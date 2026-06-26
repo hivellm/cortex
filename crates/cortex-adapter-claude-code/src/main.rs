@@ -139,6 +139,10 @@ async fn run_daemon(
     let _replayed = publisher.replay_wal().await;
 
     let sync = Arc::new(SyncClient::new(&adapter, metrics.clone()));
+    // phase26e §2.1 — grab the BundleCache metrics handle before `sync`
+    // is moved into the Dispatcher, so the /healthz closure below can
+    // surface the live cache hit/miss counters.
+    let prethink_metrics_for_health = sync.prethink_metrics();
     let sessions = Arc::new(SessionManager::new());
     let pid = std::process::id();
     let dispatcher = Arc::new(
@@ -294,6 +298,36 @@ async fn run_daemon(
         extras.insert(
             "last_heartbeat_ts_ms".into(),
             serde_json::json!(last_heartbeat_ts_ms),
+        );
+        // phase26e §2.1 — bundle-cache hit/miss counters from the
+        // daemon's SyncClient. Lets the operator see the live
+        // pre-thinking cache hit-rate via `/v1/health` cortex-adapter
+        // extras (the cortex-api pre-thinking health source is unwired
+        // and in a different process — phase26d gap B).
+        let (cache_hit_total, cache_miss_total) = prethink_metrics_for_health.cache_counters();
+        extras.insert(
+            "pre_thinking_cache_hit_total".into(),
+            serde_json::json!(cache_hit_total),
+        );
+        extras.insert(
+            "pre_thinking_cache_miss_total".into(),
+            serde_json::json!(cache_miss_total),
+        );
+        // phase26e §3 — TRUE pre-thinking bundle-assembly latency
+        // quantiles (cortex.prethink.latency_ms), distinct from the
+        // dashboard `pre_thinking_p95_ms` series (which is generic
+        // envelope duration_ms — phase26d gap C). Surfacing the real
+        // p50/p95/p99 here gives operators an accurate latency signal.
+        let (lat_count, lat_p50, lat_p95, lat_p99) =
+            prethink_metrics_for_health.latency_quantiles();
+        extras.insert(
+            "pre_thinking_latency_ms".into(),
+            serde_json::json!({
+                "count": lat_count,
+                "p50": lat_p50,
+                "p95": lat_p95,
+                "p99": lat_p99,
+            }),
         );
         let now_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
         // Stall detection now honours the heartbeat: if the

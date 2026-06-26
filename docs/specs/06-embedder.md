@@ -87,13 +87,26 @@ pub struct ChunkMetadata {
 
 ### Chunk identity
 
-- **Primary id**: server-assigned UUID. Vectorizer's `POST /insert_texts`
-  ignores any client-supplied `id` and returns a server-generated UUID
-  per entry in the `BatchResponse`. The embedder treats this UUID as
-  the canonical chunk id and carries it in `UpsertedChunk::server_id`
-  for downstream consumers (graph writer, query API).
+- **Primary id**: the **content-independent stable `vector_id`** (phase26e §1.2).
+  The current Vectorizer build upserts by the client-supplied `BatchTextRequest.id`
+  (verified: inserting the same id twice keeps the collection total at 1 and
+  replaces the payload), so the embedder sends a stable id and lets the server
+  replace in place:
+
+  ```
+  vector_id = ulid_from_hash(parent_event_id || ':' || chunk_ordinal)
+  ```
+
+  Crucially the content hash is **not** folded into the id. A content change
+  (e.g. a text-projection migration) therefore re-upserts the **same** id —
+  the old vector is replaced, not orphaned. Folding the content hash into the
+  id (the pre-phase26e scheme) was the additive-bloat root cause: every
+  projection change minted a new id and left the old vector behind (turns
+  carried 33k vectors for ~8k events). `UpsertedChunk::server_id` still carries
+  whatever id the server echoes for downstream consumers (graph writer, query API).
 - **Dedup key** (client-side, metadata): a deterministic string stored
-  as `metadata.dedup_key` on every vector:
+  as `metadata.dedup_key` on every vector, used ONLY for the skip-on-unchanged
+  pre-check (NOT as the vector id):
 
   ```
   dedup_key = ulid_from_hash(parent_event_id || ':' || chunk_ordinal
@@ -102,8 +115,18 @@ pub struct ChunkMetadata {
 
   The orchestrator does a `list_vectors`-paginated scan before upsert
   to collect the present `dedup_key` set for each target collection,
-  filtering out already-embedded chunks. Re-runs produce the same
-  `dedup_key` set → zero new upserts → idempotent re-runs.
+  filtering out already-embedded chunks (unchanged content → dedup_key
+  present → skipped). Changed content → dedup_key absent → re-upsert, which
+  replaces the prior vector because the `vector_id` is stable. Re-runs of
+  unchanged content produce the same `dedup_key` set → zero new upserts.
+
+  > **Caveat** (phase26e): a chunker change that *reduces* an event's chunk
+  > count leaves higher-ordinal `vector_id`s orphaned (no replacement, no
+  > skip). Immutable-content events keep stable chunk counts, so this only
+  > bites on a deliberate chunker migration — resolved by a drop+re-embed of
+  > the affected collections (the same one-time transition phase26e §1.3 ran:
+  > ~169k→~15.7k cortex vectors after dropping the stale content-hash-id
+  > collections and re-embedding under stable ids).
 
 ### Collections (per-kind, per-repo)
 

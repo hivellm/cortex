@@ -402,6 +402,23 @@ cortex.prethink.timeouts           counter
 
 Every call emits a span with `query_id`, `intent`, `scope_hash`, `bundle_bytes`, `sections_included`.
 
+**Operator-visible health surface (phase26e §2/§3).** The pre-thinking
+`BundleCache` and the `cortex.prethink.latency_ms` histogram are process-local
+to the **adapter daemon** (the long-lived `cortex-adapter-claude` that holds the
+`SyncClient`). The cortex-api `/v1/health/pre-thinking` endpoint runs in a
+separate process with an unwired source, so it cannot see them. Instead the
+daemon `/healthz` exports them in its `extras` (→ cortex-api `/v1/health`
+`cortex-adapter` subsystem extras):
+
+- `pre_thinking_cache_hit_total` / `pre_thinking_cache_miss_total` — live
+  BundleCache hit/miss counts (a repeated identical query within the 60 s TTL is
+  a hit).
+- `pre_thinking_latency_ms` `{count, p50, p95, p99}` — the TRUE bundle-assembly
+  latency. This is distinct from the GUI dashboard's `pre_thinking_p95_ms`
+  series, which is the p95 of generic envelope `duration_ms` and so reflects
+  unrelated long-running tool_calls (phase26d gap C). Repointing the GUI series
+  to this source is tracked as a follow-up.
+
 ## Acceptance criteria
 
 - [ ] Given a user prompt "refactor hnsw_search to take ef per call" in the Vectorizer repo, `scope_derive` produces `repo=Vectorizer, files=[src/index/hnsw/mod.rs]`, `intent=pre_change_context`.

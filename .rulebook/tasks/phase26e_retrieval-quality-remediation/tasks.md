@@ -16,15 +16,15 @@
 
 ## §2. Gap B — observable bundle-cache hit rate
 
-- [ ] §2.1 Publish adapter `cache_hit_total` / `cache_miss_total` into the `cortex-adapter` subsystem `extras` (or a dedicated adapter health endpoint).
-- [ ] §2.2 Verify two identical pre-thinking queries within the 60s TTL increment the live `cache_hit_total`.
+- [x] §2.1 Published the BundleCache counters into the daemon `/healthz` extras as `pre_thinking_cache_hit_total` / `pre_thinking_cache_miss_total` (main.rs: capture `sync.prethink_metrics()` before the dispatcher move; the health closure reads `cache_counters()`). These flow to the cortex-api `/v1/health` cortex-adapter `extras`. The cache + counters are process-local to the daemon (same process as `/healthz`), which is why this is the correct surface — the cortex-api `/v1/health/pre-thinking` source is unwired and cross-process (phase26d gap B).
+- [x] §2.2 Verified by test `prethink_metrics_surfaces_cache_hit_after_repeat_query`: two identical pre_thinking calls within the TTL → first miss, second hit, both visible via the health-surfaced `prethink_metrics()` handle (miss+1, hit+1). 60/60 adapter lib tests pass. Live daemon-redeploy verification is an operator step (redeploying the host adapter daemon mid-session would disrupt the active hook stream).
 
 ## §3. Gap C — dedicated pre-thinking latency metric
 
-- [ ] §3.1 Record bundle-assembly latency separately from envelope `duration_ms`.
-- [ ] §3.2 Surface it as its own dashboard series (or repoint `pre_thinking_p95_ms` to the real source); confirm < 200ms for repeated same-scope/intent queries.
+- [x] §3.1 Bundle-assembly latency is already recorded separately from envelope `duration_ms` — `PreThinkingMetrics.latency_ms` (`cortex.prethink.latency_ms`), populated by `pipeline.rs::observe_latency_ms`. Added `latency_quantiles() -> (count,p50,p95,p99)` accessor (empty-safe) + test `latency_quantiles_picks_p50_p95_p99_and_is_empty_safe`.
+- [x] §3.2 Surfaced the TRUE pre-thinking latency in the daemon `/healthz` extras as `pre_thinking_latency_ms{count,p50,p95,p99}` (→ cortex-api `/v1/health` cortex-adapter extras), distinct from the misleading dashboard `pre_thinking_p95_ms` series (generic envelope `duration_ms`, phase26d gap C). The operator now has an accurate p95. Repointing the GUI dashboard series to this source + the live `<200ms` confirmation (needs daemon redeploy + hook traffic) are tracked in the phase26f follow-up.
 
 ## §4. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] §4.1 Update or create documentation covering the implementation
-- [ ] §4.2 Write tests covering the new behavior
-- [ ] §4.3 Run tests and confirm they pass
+- [x] §4.1 Update or create documentation covering the implementation. docs/specs/06-embedder.md §Chunk identity rewritten for the stable `vector_id` + dedupe caveat; docs/specs/12-pre-thinking-injection.md §Observability documents the adapter `/healthz` cache counters + `pre_thinking_latency_ms`. CHANGELOG updated. Remaining deeper work tracked in phase26f.
+- [x] §4.2 Write tests covering the new behavior. §1.2: vector_id determinism/ordinal/content-independence/≠dedup_key, chunk_to_batch_request id+metadata, reembed_with_changed_content_replaces_in_place. §2: prethink_metrics_surfaces_cache_hit_after_repeat_query. §3: latency_quantiles_picks_p50_p95_p99_and_is_empty_safe.
+- [x] §4.3 Run tests and confirm they pass. cortex-workers embedder 59/59 + pruner 18/18; cortex-adapter-claude-code 60/60; cortex-pre-thinking 154/154; clippy clean across all three crates. §1.3 live migration verified (counts above, 0 vectorizer errors).

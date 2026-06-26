@@ -523,4 +523,31 @@ mod tests {
             r.bundle
         );
     }
+
+    #[tokio::test]
+    async fn prethink_metrics_surfaces_cache_hit_after_repeat_query() {
+        // phase26e §2.1 — the daemon /healthz closure reads
+        // `sync.prethink_metrics().cache_counters()`. Prove that handle
+        // reflects live cache activity: a repeated identical query within
+        // the TTL is a hit, and both the miss and the hit are visible
+        // through the same handle the health surface uses.
+        let cfg = AdapterSection {
+            api_endpoint: "http://127.0.0.1:1".into(),
+            pre_thinking: crate::config::PreThinkingSection {
+                timeout_ms: 50,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let metrics = Arc::new(Metrics::new());
+        let client = SyncClient::new(&cfg, metrics);
+        let (hit0, miss0) = client.prethink_metrics().cache_counters();
+        let r1 = client.pre_thinking("same prompt", "s", None, Some("/r")).await;
+        let r2 = client.pre_thinking("same prompt", "s", None, Some("/r")).await;
+        assert!(!r1.cache_hit, "first call is a cache miss");
+        assert!(r2.cache_hit, "second identical call within TTL is a cache hit");
+        let (hit1, miss1) = client.prethink_metrics().cache_counters();
+        assert_eq!(miss1 - miss0, 1, "one miss recorded via the health-surfaced handle");
+        assert_eq!(hit1 - hit0, 1, "one hit recorded via the health-surfaced handle");
+    }
 }
