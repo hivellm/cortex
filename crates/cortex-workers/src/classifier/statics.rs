@@ -204,11 +204,94 @@ fn static_summary(kind: &Kind, payload: &Value, context_repo: Option<&str>) -> S
         .or(context_repo)
         .unwrap_or("unknown");
 
-    // Snippet: first 120 Unicode scalar values of the flat JSON string.
-    let flat = payload_to_string(payload);
-    let snippet: String = flat.chars().take(120).collect();
+    // phase26f §2.1 — extract a clean, human-readable per-kind snippet
+    // instead of the raw flattened JSON (the old `payload_to_string`
+    // path produced `{"text":...}`-style noise that polluted the Meili
+    // summary + keyword lane). Mirrors the embedder's `nl_projection`
+    // field selection so the summary reads like prose.
+    let nl = nl_summary_snippet(kind, payload);
+    let snippet: String = nl.chars().take(160).collect();
 
     format!("{kind_str} in {location}: {snippet}")
+}
+
+/// phase26f §2.1 — pull a human-readable snippet from the payload's
+/// per-kind text fields (no raw JSON). Falls back to generic
+/// `content`/`text`/`body` fields, then to an empty string. Whitespace
+/// is collapsed so the summary stays single-line.
+fn nl_summary_snippet(kind: &Kind, payload: &Value) -> String {
+    let field = |k: &str| {
+        payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    let join = |parts: &[Option<&str>]| -> String {
+        parts
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" — ")
+    };
+    let raw = match kind {
+        Kind::Turn => join(&[field("user_message"), field("assistant_message")]),
+        Kind::ToolCall => {
+            let tool = field("tool_name").unwrap_or("tool");
+            let input = payload
+                .get("input")
+                .map(summarize_value)
+                .unwrap_or_default();
+            if input.is_empty() {
+                tool.to_string()
+            } else {
+                format!("{tool}: {input}")
+            }
+        }
+        Kind::AgentCall => join(&[field("description"), field("prompt")]),
+        Kind::Memory => join(&[field("name"), field("body"), field("description")]),
+        Kind::Decision => join(&[field("title"), field("status"), field("body")]),
+        Kind::Analysis => join(&[field("question"), field("title")]),
+        Kind::Law => join(&[field("title"), field("body")]),
+        Kind::LawViolation => join(&[field("law_id"), field("message")]),
+        Kind::Knowledge | Kind::Learning => join(&[field("title"), field("body")]),
+        Kind::Consolidation => join(&[field("summary_markdown"), field("title")]),
+        Kind::TopicCard => join(&[field("synthesis_markdown"), field("title")]),
+        _ => String::new(),
+    };
+    // Generic fallback when the per-kind fields were absent.
+    let chosen = if raw.is_empty() {
+        join(&[field("body"), field("content"), field("text")])
+    } else {
+        raw
+    };
+    // Collapse all whitespace runs to single spaces for a clean line.
+    chosen.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Compact, JSON-free rendering of a tool-call `input` value: object
+/// values become `k=v` pairs, scalars print directly. Keeps the
+/// summary readable without embedding raw JSON braces.
+fn summarize_value(v: &Value) -> String {
+    match v {
+        Value::Object(map) => map
+            .iter()
+            .take(4)
+            .map(|(k, val)| {
+                let vs = match val {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                let vs: String = vs.chars().take(40).collect();
+                format!("{k}={vs}")
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 fn classify_one(kind: &Kind, payload: &Value) -> (Option<String>, Vec<String>, Severity, PiiRisk) {
@@ -681,11 +764,39 @@ mod tests {
             !summary.contains("static summary"),
             "old garbage marker must not reappear; got: {summary:?}"
         );
-        // Template caps snippet at 120 chars — total length is bounded.
+        // Template caps snippet at 160 chars — total length is bounded.
         assert!(
             summary.len() <= 200,
             "summary must be short; got {} chars",
             summary.len()
         );
+    }
+
+    #[test]
+    fn nl_summary_snippet_is_clean_prose_not_raw_json() {
+        // phase26f §2.1 — a Turn summary reads the message fields as
+        // prose, never the raw JSON braces.
+        let turn = serde_json::json!({
+            "user_message": "how do I add an index",
+            "assistant_message": "use CREATE INDEX on the prop",
+        });
+        let s = nl_summary_snippet(&Kind::Turn, &turn);
+        assert_eq!(s, "how do I add an index — use CREATE INDEX on the prop");
+        assert!(!s.contains('{') && !s.contains("\":"), "no raw JSON: {s}");
+
+        // A ToolCall renders `tool: k=v` pairs, not a JSON object.
+        let tc = serde_json::json!({
+            "tool_name": "Bash",
+            "input": { "command": "cargo test", "timeout": 60 },
+        });
+        let s = nl_summary_snippet(&Kind::ToolCall, &tc);
+        assert!(s.starts_with("Bash:"), "tool prefix: {s}");
+        assert!(s.contains("command=cargo test"), "input rendered: {s}");
+        assert!(!s.contains('{'), "no raw JSON braces: {s}");
+
+        // Generic fallback when no per-kind fields are present.
+        let other = serde_json::json!({ "text": "  plain   body  text " });
+        let s = nl_summary_snippet(&Kind::Artifact, &other);
+        assert_eq!(s, "plain body text", "whitespace collapsed, text used");
     }
 }

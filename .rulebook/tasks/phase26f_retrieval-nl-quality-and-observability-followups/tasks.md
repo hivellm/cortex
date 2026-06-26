@@ -1,12 +1,12 @@
 ## §1. Turns clean re-embed (raw-JSON → NL)
 
-- [ ] §1.1 Wire/trigger a `cortex-claude-archive` replay of historical sessions so turn events re-flow through classifier + embedder.
-- [ ] §1.2 Drop `cortex-cortex-turns` and re-embed through the stable-id embedder; confirm turn vectors carry NL projection (not raw JSON) and top turn cosine for an NL query rises above ~0.23.
+- [ ] §1.1 ⏸ blocked: destructive op needing operator authorization. Wire/trigger a `cortex-claude-archive` replay of historical sessions so turn events re-flow through classifier + embedder.
+- [ ] §1.2 ⏸ blocked: requires §1.1 + an explicit operator "yes, drop turns". Drop `cortex-cortex-turns` and re-embed through the stable-id embedder; confirm turn vectors carry NL projection (not raw JSON) and top turn cosine for an NL query rises above ~0.23.
 
 ## §2. NL summary quality (clear the static-summary ceiling)
 
-- [ ] §2.1 Replace the raw-JSON-snippet static `summary` with a human-readable per-kind NL projection (no raw JSON), OR wire the CLI-mode classifier (local logged-in `claude` CLI, never the Anthropic API).
-- [ ] §2.2 Re-embed the affected collections; confirm top vector cosine for the audit query rises above the ~0.45 static ceiling.
+- [x] §2.1 Replaced the raw-JSON-snippet static `summary` with a clean per-kind NL extraction in `classifier/statics.rs` (`nl_summary_snippet` + `summarize_value`): Turn→messages, ToolCall→`tool: k=v`, Decision→title/status/body, etc., generic body/content/text fallback, whitespace collapsed; the embedder hot-path `nl_projection` was intentionally left untouched. Tests: `nl_summary_snippet_is_clean_prose_not_raw_json`; statics 19/19, clippy clean. (CLI-classifier path remains an alternative but is operator-credential-gated.) Built ahead of §1 because §1 is operator-authorization-blocked (LAW-CORTEX-001 exemption #2).
+- [ ] §2.2 ⏸ blocked: needs an embedder/classifier docker redeploy + re-embed (operator window). Re-embed the affected collections; confirm top vector cosine for the audit query rises above the ~0.45 static ceiling.
 
 ## §3. Dashboard latency series repoint
 
