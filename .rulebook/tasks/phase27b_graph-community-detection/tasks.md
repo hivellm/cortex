@@ -7,9 +7,9 @@ The live Nexus graph has NO architecture edges (CALLS/IMPORTS/DEFINES) — only 
 
 ## 2. Community detection worker
 > STATUS (2026-06-21): a first cut of `community.rs` (Louvain + the two guards) was attempted but the implementation was incorrect — 2 unit tests failed and 3 hung (non-terminating Louvain/​split loop), which would wedge the `cargo test` gate. It was removed (uncommitted) to keep the suite green. §2 needs a CORRECT from-scratch implementation in a focused session (the algorithm must converge deterministically — pin a pass cap + a strictly-decreasing modularity guard + a recursion-depth cap on the oversized-split). Also note ADR-027: this whole worker has NO live value until the semantic projection is enabled (nexus#12 → phase25), so phase25 is the de-facto unblocker.
-- [ ] 2.1 New `crates/cortex-workers/src/graph/community.rs`: snapshot the architecture subgraph (calls/imports/defines/inherits; down-weight session-plumbing edges) and run Leiden — MUST be deterministic + provably terminating (pass cap + modularity-monotonicity + recursion-depth cap)
-- [ ] 2.2 Port oversized-community recursive split (community > ~25% of nodes → re-partition)
-- [ ] 2.3 Port hub-percentile exclusion + neighbor-majority re-attachment
+- [x] 2.1 New `crates/cortex-workers/src/graph/community.rs`: in-memory `CommunityGraph` + hierarchical Louvain `detect_communities()` — deterministic (fixed iteration order + stable tie-breaks) and provably terminating (hard caps: `max_local_move_passes`, modularity-gain epsilon, `max_levels`). NOTE: the live Nexus snapshot of the architecture subgraph is §2.4-adjacent and gated on the semantic projection (ADR-027); the algorithm core operates on a pure in-memory graph and is fully offline-unit-tested. Tests: two_cliques→2, determinism, K20 termination, empty/singleton. check + clippy clean.
+- [x] 2.2 Oversized-community recursive split (> `oversized_fraction` 0.25 of nodes → re-partition the induced subgraph, reindexed; depth-capped `max_split_depth`; stops when a re-partition makes no progress). Test `oversized_community_is_split`.
+- [x] 2.3 Hub-percentile exclusion (top 1% by degree, `hub_percentile` 0.99) + neighbor-majority re-attachment (ties → lowest community id); hubs marked `is_hub`. Test `hub_is_excluded_then_reattached_to_neighbor_majority`.
 - [ ] 2.4 Write `community_id` + hierarchy `level` back onto nodes via the `NodeOp` surface (idempotent, deterministic seed)
 - [ ] 2.5 Register a cron grain in the scheduler (nightly; never blocks ingestion)
 
