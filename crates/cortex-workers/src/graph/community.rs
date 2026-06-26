@@ -25,6 +25,8 @@
 
 use std::collections::HashMap;
 
+use super::patch::NodeOp;
+
 // ── Constants ──────────────────────────────────────────────────────────────
 
 /// Modularity-gain threshold below which a local-move pass is considered
@@ -468,6 +470,52 @@ pub fn detect_communities(graph: &CommunityGraph, cfg: &CommunityConfig) -> Comm
     result
 }
 
+// ── §2.4 — NodeOp writeback ───────────────────────────────────────────────
+
+/// Node property: the detected community id.
+pub const COMMUNITY_ID_PROP: &str = "community_id";
+/// Node property: the hierarchy level the community was last updated at.
+pub const COMMUNITY_LEVEL_PROP: &str = "community_level";
+/// Node property: `true` for a hub / "god node" (§2.3).
+pub const COMMUNITY_GOD_NODE_PROP: &str = "is_god_node";
+
+/// phase27b §2.4 — map a [`CommunityResult`] to idempotent [`NodeOp`]s that
+/// stamp `community_id` + `community_level` (+ `is_god_node`) onto each graph
+/// node, ready to push onto a `GraphPatch`.
+///
+/// - **Idempotent**: every op is built via [`NodeOp::with_identity`], whose
+///   default [`super::patch::ConflictPolicy::Match`] sets only these three
+///   props on re-run and never clobbers other downstream-stamped properties.
+/// - **Deterministic**: ops are emitted sorted by node id, and the community
+///   ids come from the deterministic [`detect_communities`] pass.
+/// - `label_for` resolves each node id to its Cypher label (the architecture
+///   nodes the semantic projection produces). Nodes whose label cannot be
+///   resolved are skipped — the live architecture subgraph is gated on the
+///   projection (ADR-027), so this stays a pure, offline-testable mapper.
+pub fn community_node_ops(
+    result: &CommunityResult,
+    label_for: impl Fn(&str) -> Option<String>,
+) -> Vec<NodeOp> {
+    let mut ids: Vec<&NodeId> = result.keys().collect();
+    ids.sort();
+    let mut ops = Vec::with_capacity(ids.len());
+    for id in ids {
+        let Some(label) = label_for(id) else {
+            continue;
+        };
+        let a = &result[id];
+        let mut op = NodeOp::with_identity(label, id.clone());
+        op.props
+            .insert(COMMUNITY_ID_PROP.into(), serde_json::json!(a.community_id));
+        op.props
+            .insert(COMMUNITY_LEVEL_PROP.into(), serde_json::json!(a.level));
+        op.props
+            .insert(COMMUNITY_GOD_NODE_PROP.into(), serde_json::json!(a.is_hub));
+        ops.push(op);
+    }
+    ops
+}
+
 // ── §2.1 — Louvain driver ─────────────────────────────────────────────────
 
 /// Run Louvain local-move + Leiden refinement on `graph`.
@@ -791,6 +839,35 @@ mod tests {
         // Bridge: n0 — n5
         edges.push(("n0".into(), "n5".into(), 0.01));
         CommunityGraph::new(node_ids, edges)
+    }
+
+    #[test]
+    fn community_node_ops_are_idempotent_sorted_and_skip_unresolved() {
+        // phase27b §2.4 — the writeback mapper emits one idempotent NodeOp
+        // per node, sorted by id, carrying the three community props.
+        let g = two_cliques_one_bridge();
+        let result = detect_communities(&g, &CommunityConfig::default());
+
+        let ops = community_node_ops(&result, |_| Some("Symbol".to_string()));
+        assert_eq!(ops.len(), 10, "one op per node");
+
+        let keys: Vec<&str> = ops.iter().map(|o| o.natural_key.as_str()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort_unstable();
+        assert_eq!(keys, sorted, "ops emitted deterministically sorted by node id");
+
+        for op in &ops {
+            assert_eq!(op.label, "Symbol");
+            // with_identity stamps external_id == natural_key + Match policy.
+            assert_eq!(op.external_id.as_deref(), Some(op.natural_key.as_str()));
+            assert!(op.props.contains_key(COMMUNITY_ID_PROP));
+            assert!(op.props.contains_key(COMMUNITY_LEVEL_PROP));
+            assert!(op.props.contains_key(COMMUNITY_GOD_NODE_PROP));
+        }
+
+        // Unresolved labels are skipped (live nodes gated on the projection).
+        let none_ops = community_node_ops(&result, |_| None);
+        assert!(none_ops.is_empty(), "nodes with no resolved label are skipped");
     }
 
     #[test]
