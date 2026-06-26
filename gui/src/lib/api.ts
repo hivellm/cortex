@@ -195,6 +195,11 @@ export type Overview = {
   recent_repos: RepoCount[];
   series: SeriesBlock;
   classifier_cost_unavailable_until_spec05: boolean;
+  // phase26f §3.1 — TRUE pre-thinking bundle-assembly p95 (ms) from the
+  // adapter /healthz. The honest counterpart to series.pre_thinking_p95_ms,
+  // which is the p95 of generic envelope duration_ms (phase26d gap C).
+  // 0 when the adapter is unreachable or has no pre-thinking samples yet.
+  pre_thinking_assembly_p95_ms: number;
 };
 
 export type TimelineEvent = {

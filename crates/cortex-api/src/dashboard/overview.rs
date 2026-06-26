@@ -32,6 +32,14 @@ pub struct OverviewBody {
     /// The wire shape stays stable across the cut-over so clients
     /// don't need a v2 endpoint.
     pub classifier_cost_unavailable_until_spec05: bool,
+    /// phase26f §3.1 — the TRUE pre-thinking bundle-assembly p95 (ms),
+    /// read from the adapter daemon's `/healthz`
+    /// `extras.pre_thinking_latency_ms.p95`. This is the honest
+    /// counterpart to `series.pre_thinking_p95_ms`, which is the p95
+    /// of generic envelope `duration_ms` and therefore reflects
+    /// unrelated long-running tool_calls (phase26d gap C). `0` when the
+    /// adapter is unreachable or has recorded no pre-thinking calls yet.
+    pub pre_thinking_assembly_p95_ms: u64,
 }
 
 /// Time-bucketed series block. Each array carries a fixed number of
@@ -112,6 +120,19 @@ pub(super) async fn overview(State(state): State<DashboardState>) -> Response {
         classifier_cost_usd_today: classifier_cost_series,
     };
 
+    // phase26f §3.1 — pull the REAL pre-thinking bundle-assembly p95
+    // from the adapter `/healthz` extras. Bounded by the aggregator's
+    // per-probe timeout; concurrent fan-out so a down subsystem doesn't
+    // stack latency. Defaults to 0 when the adapter is unreachable or
+    // has no pre-thinking samples yet.
+    let pre_thinking_assembly_p95_ms = crate::health::gather_subsystem_extras()
+        .await
+        .get("cortex-adapter")
+        .and_then(|s| s.extras.get("pre_thinking_latency_ms"))
+        .and_then(|v| v.get("p95"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
     let body = OverviewBody {
         events_total,
         repos_indexed: repos_sorted.len() as u64,
@@ -125,6 +146,7 @@ pub(super) async fn overview(State(state): State<DashboardState>) -> Response {
         recent_repos: repos_sorted,
         series,
         classifier_cost_unavailable_until_spec05: classifier_cost_stub,
+        pre_thinking_assembly_p95_ms,
     };
     (StatusCode::OK, Json(body)).into_response()
 }
@@ -246,6 +268,10 @@ mod tests {
             24
         );
         assert_eq!(parsed["classifier_cost_unavailable_until_spec05"], true);
+        // phase26f §3.1 — the real bundle-assembly p95 field is always
+        // present; it defaults to 0 here because the adapter `/healthz`
+        // is unreachable in the test (connection refused → instant).
+        assert_eq!(parsed["pre_thinking_assembly_p95_ms"].as_u64(), Some(0));
         assert!(series["pre_thinking_p95_ms"]
             .as_array()
             .unwrap()

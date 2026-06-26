@@ -525,6 +525,7 @@ export function TimelineView() {
         kindBreakdown={overviewQ.data?.kind_breakdown ?? []}
         eventsPerMin={eventsPerMin}
         preThinkingP95={preThinkingP95}
+        preThinkingAssemblyP95={overviewQ.data?.pre_thinking_assembly_p95_ms ?? 0}
       />
 
       {hasAnyFilter(filters) ? (
@@ -718,27 +719,18 @@ function TimelineStats({
   kindBreakdown,
   eventsPerMin,
   preThinkingP95,
+  preThinkingAssemblyP95,
 }: {
   eventsTotal: number;
   reposIndexed: number;
   kindBreakdown: { kind: string; count: number }[];
   eventsPerMin: number[];
   preThinkingP95: (number | null)[];
+  preThinkingAssemblyP95: number;
 }) {
   const turnCount = kindBreakdown.find((k) => k.kind === "turn")?.count ?? 0;
   const toolCount = kindBreakdown.find((k) => k.kind === "tool_call")?.count ?? 0;
   const lastMinute = eventsPerMin[eventsPerMin.length - 1] ?? 0;
-  // Latest non-null bucket — the "current" P95 reading. Walks
-  // backwards so a gap in the most-recent bucket falls back to the
-  // last real sample without hiding the fact that the freshest
-  // minute had no samples.
-  const latestP95 = (() => {
-    for (let i = preThinkingP95.length - 1; i >= 0; i--) {
-      const v = preThinkingP95[i];
-      if (v != null) return v;
-    }
-    return null;
-  })();
   return (
     <div className="stats-grid" style={{ marginBottom: 14 }}>
       <div className="stat">
@@ -753,17 +745,21 @@ function TimelineStats({
       </div>
       <div className="stat">
         <div className="stat__label">Pre-thinking P95</div>
+        {/* phase26f §3.1 — headline is the TRUE bundle-assembly p95 from
+            the adapter /healthz; the sparkline below is the legacy
+            envelope-duration series (honestly labelled), which reflects
+            generic tool/agent durations, not pre-thinking. */}
         <div className="stat__value tabular">
-          {latestP95 != null ? fmtNum(latestP95) : "—"}
-          {latestP95 != null ? <span className="stat__unit">ms</span> : null}
+          {preThinkingAssemblyP95 > 0 ? fmtNum(preThinkingAssemblyP95) : "—"}
+          {preThinkingAssemblyP95 > 0 ? <span className="stat__unit">ms</span> : null}
         </div>
         <div className="stat__delta">
-          {latestP95 != null
-            ? "tool/agent durations · last 20 min"
-            : "no duration stamps yet (turns lack latency until spec-12)"}
+          {preThinkingAssemblyP95 > 0
+            ? "bundle-assembly · adapter /healthz"
+            : "no pre-thinking samples yet (or adapter unreachable)"}
         </div>
         {preThinkingP95.some((v) => v != null) ? (
-          <div className="stat__spark">
+          <div className="stat__spark" title="envelope tool/agent durations — not pre-thinking latency">
             <Sparkline data={preThinkingP95} color="var(--ok)" bridgeGaps />
           </div>
         ) : null}

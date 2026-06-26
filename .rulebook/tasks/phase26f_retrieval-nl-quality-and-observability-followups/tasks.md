@@ -10,7 +10,7 @@
 
 ## §3. Dashboard latency series repoint
 
-- [ ] §3.1 Repoint the cortex-api `pre_thinking_p95_ms` dashboard series (and GUI) to the adapter `/healthz` `pre_thinking_latency_ms` source (or add a new series).
+- [x] §3.1 Surfaced the TRUE bundle-assembly p95 on the dashboard (additive, no GUI breakage): cortex-api `OverviewBody.pre_thinking_assembly_p95_ms` reads the adapter `/healthz` `extras.pre_thinking_latency_ms.p95` via `gather_subsystem_extras()` (instant connection-refused → 0 when the adapter is down). The GUI "Pre-thinking P95" tile headline now shows this real value; the legacy `pre_thinking_p95_ms` sparkline is kept but relabeled "envelope tool/agent durations — not pre-thinking latency". Test `overview_carries_full_series_block_*` asserts the field; cortex-api 3/3 + clippy clean; GUI `tsc --noEmit` clean.
 
 ## §4. Live verification of phase26e §2/§3 surfaces
 
