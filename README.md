@@ -1,6 +1,6 @@
 # Cortex
 
-> **Status:** Draft v0.1 · specs in [`docs/specs/`](docs/specs/) · architecture in [`docs/architecture.md`](docs/architecture.md)
+> **Status:** Active development · 43 specs (13+ core specs shipped) in [docs/specs/](docs/specs/) · architecture in [docs/architecture.md](docs/architecture.md) · current state & roadmap in [docs/analysis/cortex-platform-2026-07/](docs/analysis/cortex-platform-2026-07/)
 
 **Cortex is the cognitive substrate of the HiveLLM ecosystem** — a single, queryable, governed memory of every meaningful interaction an AI agent has with our codebases.
 
@@ -95,7 +95,7 @@ Code (`cortex-core`, `cortex-workers`, `cortex-api`, `cortex-classifier`, `corte
 2. [`docs/specs/00-index.md`](docs/specs/00-index.md) — spec index + dependency order.
 3. [`AGENTS.md`](AGENTS.md) — rules for contributors and AI agents working in this repo.
 
-Because no spec has flipped to 🟢 *implemented* yet, there is no runnable binary in `master` at the time of writing. The work unfolds in spec order (see below).
+The local stack is now live via docker-compose with 12 services running (Cortex API, ingestion, classifiers, embedders, graph/fulltext/reranker workers, data services). Most core specs (01–18) are implemented and shipped. See [`docs/specs/00-index.md`](docs/specs/00-index.md) for the per-spec status and [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/) for known current issues (e.g., graph-worker degradation since 2026-06-27, pending active fix).
 
 ### First-time indexing (per repo)
 
@@ -162,6 +162,8 @@ Five phases, mapped to the spec list:
   Multi-tenant, distributed deployment, trust-score feed into cloud routing.
 
 Exact timelines are aspirational; each spec has its own acceptance criteria and dependency list.
+
+**Current delivery status:** The five-phase sketch above is the original plan from April 2026. Actual delivery has now progressed through Phase 0 and Phases 1–27+ (spanning bootstrap, ACL/governance groundwork, bitemporal/branching support, GraphRAG foundations, and live-ops hardening). For the current, accurate roadmap and the full list of phases in progress, see [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/). Per-spec implementation status is tracked in [`docs/specs/00-index.md`](docs/specs/00-index.md).
 
 ## Contributing
 

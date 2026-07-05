@@ -1,5 +1,7 @@
 # 11 — Platform Vision: Cortex as General Assistance Tool (2026-06-09)
 
+> **⚠️ SUPERSEDED (2026-07-05):** this document's roadmap direction (general business-assistance platform — Person/Project/Case entities, Slack/Linear/Notion connectors, multi-tenant) has been explicitly de-prioritized. See [`docs/analysis/cortex-platform-2026-07/`](../cortex-platform-2026-07/README.md) for the current analysis, which re-scopes Cortex around making it indispensable for Claude's own AI-assisted implementation work (retrieval, agent workflows, observability, continuity). Several factual claims below (MCP tool count, adapter status) were also found stale during that pass. This file is kept as historical record; do not use it to plan new work.
+
 > **Author:** strategic audit · **Source data:** full codebase review at commit `c8a037e` + archived phase history + specs 01–36 + knowledge base.
 > **Scope:** comprehensive analysis of what Cortex has built, what the existing MCP/tools deliver, and the full roadmap to make Cortex a general assistance platform — for both software engineering and general company knowledge (timelines, cases, business context).
 > **Audience:** project owner (André), future maintainers, and anyone deciding what to build next.

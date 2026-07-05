@@ -1,6 +1,6 @@
 # Spec 20 — Cortex MCP Tool Surface
 
-> Status: phase10j accepted. Source of truth for every Cortex MCP
+> Status: phase10j accepted; re-verified against ToolRegistry::default_set() 2026-07 (37 tools). Source of truth for every Cortex MCP
 > tool. Cross-reference for [spec 18](./18-claude-code-plugin.md)
 > (transport / wire protocol) and [spec 11](./11-query-api.md) (the
 > HTTP endpoints the tools wrap).
@@ -31,15 +31,77 @@ the rest are READ.
 
 ## Registry
 
-| Tool                        | Schema (required)             | HTTP endpoint                                    | Spec      | R/W   |
-|-----------------------------|-------------------------------|--------------------------------------------------|-----------|-------|
-| `cortex_query`              | `intent`, `query`             | `POST /v1/query`                                 | spec 11   | read  |
-| `cortex_pre_thinking`       | `user_prompt`, `cwd`          | `POST /v1/query` (orchestrated by spec-12)       | spec 12   | read  |
-| `cortex_status`             | —                             | `GET /v1/status`                                 | spec 18   | read  |
-| `cortex_audit`              | `query_id`                    | `GET /v1/audit/{query_id}`                       | spec 11 §audit / spec 20 | read  |
-| `cortex_capture_memory`     | `kind`, `body`, `repo`        | `POST /v1/ingest`                                | spec 12 §capture / spec 20 | **write** |
-| `cortex_session_replay`     | `session_id`                  | `GET /v1/dashboard/conversations/{session_id}`   | spec 16 / spec 20 | read  |
-| `cortex_forget`             | `event_id`, `confirmation_token`, `dry_run` | `POST /v1/admin/forget`                          | spec 19 / phase11t | **write (irreversible)** |
+### Core Query, Audit & Ingest Operations
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_query`              | `intent`, `query`             | `POST /v1/query`                                 | Hybrid retrieval via spec-11 fusion (snippet + decision + vector lanes) | read  |
+| `cortex_pre_thinking`       | `user_prompt`, `cwd`          | `POST /v1/query` (orchestrated)                  | Spec-12 pre-thinking pipeline against cortex-api | read  |
+| `cortex_status`             | —                             | `GET /v1/status`                                 | Cortex daemon health snapshot (pid, queue, errors, WAL bytes) | read  |
+| `cortex_audit`              | `query_id`                    | `GET /v1/audit/{query_id}`                       | Audit envelope for prior cortex_query/cortex_pre_thinking call | read  |
+| `cortex_capture_memory`     | `kind`, `body`, `repo`        | `POST /v1/ingest`                                | Capture in-session fact (memory/knowledge/learning) to live retrieval lane | **write** |
+| `cortex_session_replay`     | `session_id`                  | `GET /v1/dashboard/conversations/{session_id}`   | Ordered turns for prior Cortex session | read  |
+| `cortex_forget`             | `event_id`, `confirmation_token` | `POST /v1/admin/forget`                          | Hard-purge event across Vectorizer + Meili + Nexus + Parquet (irreversible) | **write** |
+| `cortex_query_explain`      | `query`                       | `POST /v1/query/explain`                         | Diagnostic view of cortex_query run (intent, per-lane hits, fusion math) | read  |
+
+### Fine-Grained Search Interfaces
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_keyword_search`     | `index`                       | `POST /v1/search/keyword`                        | Raw Meilisearch keyword search against named index | read  |
+| `cortex_vector_search`      | `collection`, `query_vector`  | `POST /v1/search/vector`                         | Raw Vectorizer cosine search against named collection | read  |
+| `cortex_graph_query`        | `mode`                        | `POST /v1/search/graph`                          | Direct Nexus graph query (neighbors walk or Cypher) | read  |
+
+### Session & Dashboard Surface
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_active_work`        | —                             | `GET /v1/dashboard/active-work`                  | Operator-state snapshot (rulebook tasks + recent archives) | read  |
+| `cortex_similar_sessions`   | `query`, `repo`               | `POST /v1/search/similar-sessions`               | Vector search over consolidation collection for past sessions | read  |
+| `cortex_decision_chain`     | `event_id`                    | `GET /v1/search/decision-chain`                  | Walk `:SUPERSEDES` edges from Decision node in both directions | read  |
+| `cortex_events_by_kind`     | `kind`                        | `POST /v1/search/events`                         | List envelopes filtered by kind (turn/tool_call/consolidation/decision/etc) | read  |
+| `cortex_session_timeline`   | `session_id`                  | `GET /v1/sessions/{session_id}/timeline`         | Full chronological timeline for one session | read  |
+| `cortex_tool_calls`         | —                             | `POST /v1/search/tool-calls`                     | Granular ToolCall envelope search (by tool_name/outcome/repo/window) | read  |
+| `cortex_files_touched`      | —                             | `GET /v1/sessions/{session_id}/files-touched` or `POST /v1/search/files-touched` | Aggregate files touched by ToolCall envelopes (per-session or window) | read  |
+| `cortex_topic_search`       | `topic_prefix`                | `POST /v1/topic-cards/search`                    | Search TopicCards by topic tag (Meili direct) | read  |
+
+### Consolidations Suite
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_consolidation_get`  | `id`                          | `GET /v1/consolidations/{id}`                    | Fetch one consolidation by event_id or consolidation_id | read  |
+| `cortex_consolidations_recent` | —                            | `GET /v1/consolidations/recent`                  | Chronological feed of consolidations (newest-first, filterable) | read  |
+| `cortex_consolidations_by_entity` | `entity`                   | `POST /v1/consolidations/by-entity`              | List consolidations referencing entity (file/function/decision_id/repo/model) | read  |
+| `cortex_consolidations_search` | `query`                     | `POST /v1/consolidations/search`                 | Text-driven search (BM25-only, no fusion) over consolidations | read  |
+| `cortex_consolidation_lineage` | `id`                        | `GET /v1/consolidations/{id}/lineage`            | Structured citation view for one consolidation | read  |
+| `cortex_consolidations_diff` | `since_ts`                    | `GET /v1/consolidations/diff`                    | Return consolidations at/after epoch-ms cursor (poll pattern) | read  |
+| `cortex_consolidation_costs` | `since`, `until`, `group_by`  | `POST /v1/consolidations/costs`                  | Aggregate consolidation counts by grain/model/day | read  |
+
+### Governance, Decisions & Feedback
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_law_violations`     | `repo`                        | `POST /v1/laws/violations`                       | List LawViolation envelopes with optional filters | read  |
+| `cortex_feedback_signals`   | —                             | `POST /v1/feedback/list`                         | List pre-thinking feedback rows (helpful/intent/window) | read  |
+| `cortex_feedback_record`    | `query_id`, `helpful`         | `POST /v1/pre-thinking/feedback`                 | Record post-thinking feedback on Cortex bundle | **write** |
+| `cortex_decision_search`    | —                             | `POST /v1/decisions/search`                      | List Decision envelopes (status/tag/repo/window, no chain walks) | read  |
+
+### Phase18 Bitemporal Timeline
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_timeline`           | `project`                     | `GET /v1/timeline/{project}`                     | Phase18 timeline view for one project | read  |
+| `cortex_branch_list`        | `project`                     | `GET /v1/branch/{project}`                       | Phase18 — list every Branch node for a project | read  |
+| `cortex_branch_show`        | `project`, `branch`           | `GET /v1/branch/{project}/{branch}`              | Phase18 — full Branch payload by project:branch id | read  |
+| `cortex_history`            | `entity_id`                   | `GET /v1/entity/{entity_id}/history`             | Phase18 — return every TimelineEvent tagged with entity | read  |
+| `cortex_supersession`       | `entity_id`                   | `GET /v1/entity/{entity_id}/supersession`        | Phase18 — walk `:SUPERSEDES` chain in both directions | read  |
+
+### Phase21 Access Control
+
+| Tool                        | Required Input                | HTTP endpoint                                    | Purpose | R/W   |
+|-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
+| `cortex_acl_whoami`         | —                             | `GET /v1/acl/whoami`                             | Phase21 §6.4 — resolve effective principal (clearance, compartments, roles) | read  |
+| `cortex_acl_grant`          | `principal_id`                | `POST /v1/acl/grants`                            | Phase21 §6.4 — assign clearance, compartments, or RBAC role to principal | **write** |
 
 The MCP server's runtime registry is the binding contract: every name
 listed above MUST be returned by `tools/list`, and every tool MUST
@@ -121,6 +183,24 @@ them.
 - And `cortex-ops doctor` SHOULD surface a yellow warning when the
   registry diverges from the live tool list (future work — phase10k
   doctor entry).
+
+### Requirement: registry drift is caught before it reaches 30 undocumented tools
+
+The Registry table (this document, ## Registry section) MUST enumerate
+exactly as many tools as `ToolRegistry::default_set().len()` returns at
+runtime. The cardinality check MUST be automated in CI (doc-coherence
+scan) and in the `cortex-ops doctor` diagnostic; a drift ≥2 tools
+MUST block pull requests, preventing silent drift where new tools ship
+without corresponding Registry entries.
+
+#### Scenario: registry-runtime cardinality mismatch is caught in CI
+- Given the Registry table documents 7 tools (2024-06 baseline)
+- When a developer ships 30 additional MCP tools without updating the Registry
+- Then CI's doc-coherence check MUST parse the Registry table and count rows
+- And MUST compare the count (7) against `ToolRegistry::default_set().len()` (37)
+- And MUST fail the pull request with a cardinality error
+- So this incident (silent 6-month drift, 30 undocumented tools, operators
+  unaware of 81% of the MCP surface) does not recur.
 
 ## Bounded-memory contract
 

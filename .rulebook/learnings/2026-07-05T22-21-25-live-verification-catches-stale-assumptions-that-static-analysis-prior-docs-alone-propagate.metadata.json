@@ -1,0 +1,13 @@
+{
+  "id": "2026-07-05T22-21-25-live-verification-catches-stale-assumptions-that-static-analysis-prior-docs-alone-propagate",
+  "title": "Live verification catches stale assumptions that static analysis + prior docs alone propagate",
+  "content": "During the 2026-07-05 Cortex platform analysis, an initial static-analysis pass (reading code/specs/CHANGELOG only) produced a roadmap brief that turned out to contain several stale claims: it assumed the retrieval-eval golden fixtures were still 10-row placeholders (they'd already been seeded with real data by an archived phase0 task; the actual live bug was a fixture-path mismatch between the CI workflow and the cargo test IT), and it assumed cortex-adapter-opencode was \"still a placeholder\" (it was actually code-complete and shipped; live validation had been explicitly deprioritized by an operator decision, not left unbuilt). Both errors were caught only because the task-authoring sub-agents re-verified against current code/task-archive state instead of trusting the brief they were handed, and corrected the resulting Rulebook tasks accordingly (phase28_retrieval-eval-gate-live, phase33_adapter-opencode-cursor).\n\nWhy this matters: a fast-moving project with heavy phase/task cadence makes yesterday's analysis stale surprisingly quickly (days, not months) — even an analysis produced hours earlier in the same session can already be wrong about specific claims once someone else has moved a task to archive in the meantime. Any agent authoring implementation-adjacent artifacts (tasks, specs, docs) from a prior analysis MUST re-verify specific factual claims (file existence, task archive status, config values) against current state before writing them down as fact, not just relay the analysis verbatim.\n\nHow to apply: when materializing a roadmap/analysis into concrete tasks, brief the authoring agent with the analysis as context but explicitly instruct it to verify load-bearing claims against current code/task state and correct the task content (not just the analysis) if it finds drift — exactly as happened here.",
+  "source": "manual",
+  "relatedTask": "phase28_docs-truth-reconciliation",
+  "tags": [
+    "cortex",
+    "analysis:cortex-platform-2026-07",
+    "process"
+  ],
+  "createdAt": "2026-07-05T22:21:25.399Z"
+}

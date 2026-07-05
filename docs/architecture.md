@@ -1,8 +1,8 @@
 # Cortex — Architecture
 
-> **Status:** Draft v0.1 — initial architecture proposal
+> **Status:** Original architecture vision (2026-04-17), substantially implemented since; see [`docs/analysis/cortex-platform-2026-07/`](../analysis/cortex-platform-2026-07/) for current state and open items.
 > **Owners:** HiveLLM core team
-> **Last updated:** 2026-04-17
+> **Design intent from:** 2026-04-17
 
 ---
 
@@ -578,13 +578,13 @@ Throughput target v1: **500 events/sec sustained**, **2 000 events/sec burst**, 
 
 ## 12. Open Questions (decide before Phase 0 ends)
 
-1. **Classifier migration trigger.** What metric flips us from Haiku-via-CLI to a local model (Expert or other)? Candidates: monthly $ ceiling, P95 latency persistently > 3 s, batch failure rate, or privacy-sensitive deployment. Define the threshold before we hit it.
-2. **Event bus durability.** Synap streams give us speed; do we also persist raw events to object storage for replay/audit?
-3. **Adapter granularity.** Do we capture every keystroke-level edit or only PostToolUse diffs? Affects volume by 10–100x.
-4. **Law authoring UX.** YAML/Markdown vs. a small DSL vs. visual editor? Start with Markdown, evolve later.
-5. **Cross-repo identity.** When the same function is referenced across repos, do we deduplicate? Probably yes via content-hash + symbol resolution.
-6. **Punishment for the *user***, not the model. If a human pushes despite a blocking law, what's the audit trail look like?
-7. **Schema evolution.** v1 events will be wrong about something. Migration story for existing embeddings/graph nodes when schema changes.
+1. **Classifier migration trigger.** What metric flips us from Haiku-via-CLI to a local model (Expert or other)? Candidates: monthly $ ceiling, P95 latency persistently > 3 s, batch failure rate, or privacy-sensitive deployment. Define the threshold before we hit it. **Status: still open**
+2. **Event bus durability.** Synap streams give us speed; do we also persist raw events to object storage for replay/audit? **Status: not verified in this pass**
+3. **Adapter granularity.** Do we capture every keystroke-level edit or only PostToolUse diffs? Affects volume by 10–100x. **Status: resolved to PostToolUse diffs per live config**
+4. **Law authoring UX.** YAML/Markdown vs. a small DSL vs. visual editor? Start with Markdown, evolve later. **Status: resolved to Markdown/YAML per §5.4**
+5. **Cross-repo identity.** When the same function is referenced across repos, do we deduplicate? Probably yes via content-hash + symbol resolution. **Status: resolved via (repo, path, content_hash) idempotent identity per §6.2**
+6. **Punishment for the *user***, not the model. If a human pushes despite a blocking law, what's the audit trail look like? **Status: still open (punishment ladder today targets model, not user)**
+7. **Schema evolution.** v1 events will be wrong about something. Migration story for existing embeddings/graph nodes when schema changes. **Status: not verified in this pass**
 
 ---
 

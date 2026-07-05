@@ -1,0 +1,17 @@
+{
+  "id": "container-healthcheck-passing-does-not-mean-the-worker-s-consume-loop-is-progressing",
+  "type": "anti-pattern",
+  "title": "Container HEALTHCHECK passing does not mean the worker's consume loop is progressing",
+  "category": "observability",
+  "description": "cortex-graph-worker showed Docker-level \"healthy\" continuously for 2+ weeks because its HEALTHCHECK only probes that /healthz responds. The actual Nexus-consumer loop silently stopped processing events on 2026-06-27 (after a run of transient Nexus errors) and stayed dead for 8 days undetected at the container level. It was cortex-api's own application-level /v1/health freshness check (a 600-second no-activity threshold, admin_health.rs) that correctly flagged it \"degraded\" — Docker's healthcheck and the application's own freshness signal disagreed, and the freshness signal was the one telling the truth.",
+  "whenToUse": "Designing HEALTHCHECK directives (or any liveness probe) for a background worker/consumer process.",
+  "whenNotToUse": "Stateless request/response services where \"the HTTP listener answers\" is actually equivalent to \"the service works.\"",
+  "createdAt": "2026-07-05T21:58:51.092Z",
+  "tags": [
+    "cortex",
+    "observability",
+    "docker",
+    "analysis:cortex-platform-2026-07"
+  ],
+  "source": "manual"
+}
