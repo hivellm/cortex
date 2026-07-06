@@ -573,6 +573,7 @@ fn apply_extensions(event: &EnrichedEvent, doc: &mut Document) {
                             cortex_core::events::ConsolidationGrain::Session => "session",
                             cortex_core::events::ConsolidationGrain::Topic => "topic",
                             cortex_core::events::ConsolidationGrain::DecisionTrace => "decision_trace",
+                            cortex_core::events::ConsolidationGrain::Community => "community",
                         },
                         "depth": match c.depth {
                             cortex_core::events::ConsolidationDepth::Shallow => "shallow",

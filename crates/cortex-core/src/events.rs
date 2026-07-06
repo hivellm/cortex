@@ -353,6 +353,11 @@ pub enum ConsolidationGrain {
     Topic,
     /// `Kind::Decision` + ancestor chain up to N hops.
     DecisionTrace,
+    /// Phase27c §1 — one graph community (subsystem cluster) from
+    /// the phase27b Leiden partition: its member nodes, god nodes,
+    /// and cross-community edges, summarised at one hierarchy
+    /// level (coarse subsystem → fine module).
+    Community,
 }
 
 /// Phase11j §1 — depth signal carried alongside the model the
@@ -382,6 +387,15 @@ pub enum ConsolidationScope {
     Topic(String),
     /// `grain = DecisionTrace`: the originating decision id.
     DecisionId(String),
+    /// `grain = Community` (phase27c §1.2): the graph community
+    /// this consolidation summarises, plus the Leiden hierarchy
+    /// level it was cut at (0 = coarsest subsystem view).
+    Community {
+        /// `community_id` stamped by the phase27b writeback mapper.
+        community_id: u32,
+        /// Leiden hierarchy level the summary was produced at.
+        level: u32,
+    },
 }
 
 /// Phase11j §1 — temporal span the consolidation covers.
@@ -885,9 +899,30 @@ mod consolidation_tests {
         let session = serde_json::to_value(ConsolidationGrain::Session).unwrap();
         let topic = serde_json::to_value(ConsolidationGrain::Topic).unwrap();
         let trace = serde_json::to_value(ConsolidationGrain::DecisionTrace).unwrap();
+        let community = serde_json::to_value(ConsolidationGrain::Community).unwrap();
         assert_eq!(session, Value::String("session".into()));
         assert_eq!(topic, Value::String("topic".into()));
         assert_eq!(trace, Value::String("decision_trace".into()));
+        assert_eq!(community, Value::String("community".into()));
+    }
+
+    #[test]
+    fn community_scope_round_trips_with_structured_value() {
+        // Phase27c §1.2 — the Community scope carries a structured
+        // {community_id, level} value instead of a plain string.
+        // Pin the wire shape so the JSON Schema's community oneOf
+        // arm and this serde layout can't silently diverge.
+        let scope = ConsolidationScope::Community {
+            community_id: 7,
+            level: 1,
+        };
+        let raw = serde_json::to_string(&scope).unwrap();
+        let v: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["kind"], "community");
+        assert_eq!(v["value"]["community_id"], 7);
+        assert_eq!(v["value"]["level"], 1);
+        let decoded: ConsolidationScope = serde_json::from_str(&raw).unwrap();
+        assert_eq!(scope, decoded);
     }
 
     #[test]

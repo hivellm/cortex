@@ -212,6 +212,10 @@ pub fn validate_consolidation_payload(
                 ConsolidationGrain::DecisionTrace,
                 ConsolidationScope::DecisionId(_),
             )
+            | (
+                ConsolidationGrain::Community,
+                ConsolidationScope::Community { .. },
+            )
     );
     if !pair_ok {
         return Err(ValidationError::Schema {
@@ -577,6 +581,33 @@ mod consolidation_validate_tests {
     }
 
     #[test]
+    fn rust_validator_accepts_community_grain_with_community_scope() {
+        // Phase27c §1.2 — the new pair must clear the allowlist.
+        let mut p = ok_payload();
+        p.grain = ConsolidationGrain::Community;
+        p.scope = ConsolidationScope::Community {
+            community_id: 3,
+            level: 0,
+        };
+        validate_consolidation_payload(&p).expect("community grain+scope");
+    }
+
+    #[test]
+    fn rust_validator_rejects_community_scope_under_other_grain() {
+        let mut p = ok_payload();
+        // grain stays Topic; scope flips to Community — must reject.
+        p.scope = ConsolidationScope::Community {
+            community_id: 3,
+            level: 0,
+        };
+        let err = validate_consolidation_payload(&p).expect_err("mismatch");
+        match err {
+            ValidationError::Schema { path, .. } => assert_eq!(path, "/payload/scope"),
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
     fn rust_validator_rejects_count_below_inline_ids_len() {
         let mut p = ok_payload();
         p.source_event_ids = vec!["a".into(), "b".into(), "c".into()];
@@ -648,6 +679,36 @@ mod consolidation_validate_tests {
             }
         });
         validate_event(&envelope).expect("minimal payload validates");
+    }
+
+    #[test]
+    fn json_schema_accepts_community_consolidation_payload() {
+        // Phase27c §1.2 — the community grain's structured scope
+        // value ({community_id, level}) must clear the schema's
+        // community oneOf arm end-to-end through `validate_event`.
+        let envelope = serde_json::json!({
+            "event_id": "01HXEVT0000000000000000000",
+            "schema_version": "1",
+            "occurred_at": "2026-04-20T17:47:59.616Z",
+            "stream": "live",
+            "tool": "cortex-cli",
+            "kind": "consolidation",
+            "session_id": "01HXSESS00000000000000000A",
+            "content_hash": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "context": { "platform": "linux" },
+            "payload": {
+                "consolidation_id": "01CON",
+                "grain": "community",
+                "scope": { "kind": "community", "value": { "community_id": 3, "level": 0 } },
+                "title": "subsystem: graph pipeline",
+                "summary_markdown": "x".repeat(200),
+                "source_event_count": 0,
+                "model": "claude-haiku-4-5",
+                "depth": "shallow",
+                "temporal_span": { "start_ms": 0, "end_ms": 0, "duration_ms": 0 }
+            }
+        });
+        validate_event(&envelope).expect("community payload validates");
     }
 
     #[test]

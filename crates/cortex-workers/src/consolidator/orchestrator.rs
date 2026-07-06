@@ -38,6 +38,13 @@ pub enum Trigger {
         /// in at routing time.
         force_deep: bool,
     },
+    /// Phase27c §1 — a graph-community partition landed (the
+    /// phase27b writeback ran) — produces one Community
+    /// consolidation per community per hierarchy level.
+    CommunityDetected {
+        /// Repo the partition snapshot was scoped to.
+        repo: String,
+    },
 }
 
 /// Phase11j §2.7 — routing decision the orchestrator emits.
@@ -79,6 +86,11 @@ impl ProducerSelection {
                 },
                 repo: None,
             },
+            Trigger::CommunityDetected { repo } => Self {
+                grain: ConsolidationGrain::Community,
+                summariser: SummariserKind::Haiku45,
+                repo: Some(repo.clone()),
+            },
         }
     }
 
@@ -90,6 +102,7 @@ impl ProducerSelection {
             ConsolidationGrain::Session => "session",
             ConsolidationGrain::Topic => "topic",
             ConsolidationGrain::DecisionTrace => "decision_trace",
+            ConsolidationGrain::Community => "community",
         }
     }
 }
@@ -181,6 +194,24 @@ impl Orchestrator {
         self.gate_budget(sel.summariser, "topic")?;
         let summariser = self.summariser_for(&sel);
         let produced = super::producer::topic::produce(cluster, summariser.as_ref()).await?;
+        self.record_cost(sel.grain_label(), produced.cost_cents);
+        Ok(produced)
+    }
+
+    /// Phase27c §1.2 — run the Community producer against `input`.
+    /// Picks Haiku via the trigger rule, gates against the budget,
+    /// records the realised cost.
+    pub async fn run_community(
+        &self,
+        input: &super::producer::community::CommunityInput,
+    ) -> Result<super::producer::ProducedConsolidation, super::producer::ProducerError> {
+        let trigger = Trigger::CommunityDetected {
+            repo: input.repo.clone(),
+        };
+        let sel = ProducerSelection::for_trigger(&trigger);
+        self.gate_budget(sel.summariser, "community")?;
+        let summariser = self.summariser_for(&sel);
+        let produced = super::producer::community::produce(input, summariser.as_ref()).await?;
         self.record_cost(sel.grain_label(), produced.cost_cents);
         Ok(produced)
     }

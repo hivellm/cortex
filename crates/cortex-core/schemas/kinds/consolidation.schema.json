@@ -22,18 +22,39 @@
       "description": "Stable id (ULID). Independent of envelope event_id."
     },
     "grain": {
-      "enum": ["session", "topic", "decision_trace"],
+      "enum": ["session", "topic", "decision_trace", "community"],
       "description": "Producer mode discriminator."
     },
     "scope": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "value"],
-      "properties": {
-        "kind": { "enum": ["session_id", "topic", "decision_id"] },
-        "value": { "type": "string", "minLength": 1 }
-      },
-      "description": "Discriminator must match `grain` (validated in Rust — JSON Schema cannot express the cross-field rule cleanly)."
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "enum": ["session_id", "topic", "decision_id"] },
+            "value": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "value"],
+          "properties": {
+            "kind": { "const": "community" },
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["community_id", "level"],
+              "properties": {
+                "community_id": { "type": "integer", "minimum": 0 },
+                "level": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        }
+      ],
+      "description": "Discriminator must match `grain` (validated in Rust — JSON Schema cannot express the cross-field rule cleanly). The community variant (phase27c) carries a structured value: {community_id, level}."
     },
     "title": { "type": "string", "minLength": 1, "maxLength": 200 },
     "summary_markdown": {

@@ -163,6 +163,12 @@ impl Consolidator for TopicGrain {
                     expected: "nightly_topic",
                 })
             }
+            Trigger::CommunityDetected { .. } => {
+                return Err(ConsolidatorError::TriggerMismatch {
+                    got: "community_detected",
+                    expected: "nightly_topic",
+                })
+            }
         };
 
         let started = Instant::now();

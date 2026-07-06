@@ -28,7 +28,7 @@ use tokio::time::sleep;
 use crate::consolidator::consolidator_trait::{
     ConsolidationReport, Consolidator, ConsolidatorCtx, ConsolidatorError,
 };
-use crate::consolidator::grains::{DecisionTraceGrain, SessionGrain, TopicGrain};
+use crate::consolidator::grains::{CommunityGrain, DecisionTraceGrain, SessionGrain, TopicGrain};
 use crate::consolidator::orchestrator::Trigger;
 use crate::producer::{EnvelopeProducer, ProducerMetadataHandle};
 
@@ -102,6 +102,11 @@ pub struct ConsolidatorDaemon {
     session: Arc<SessionGrain>,
     topic: Arc<TopicGrain>,
     decision: Arc<DecisionTraceGrain>,
+    /// Phase27c §1 — optional: the community grain needs a live
+    /// graph client, which not every deployment configures. A
+    /// `CommunityDetected` trigger arriving with no grain wired
+    /// is surfaced as a failed (acked) run, never a queue wedge.
+    community: Option<Arc<CommunityGrain>>,
     source: Arc<dyn TriggerSource>,
     ctx: ConsolidatorCtx,
     metadata: ProducerMetadataHandle,
@@ -127,11 +132,21 @@ impl ConsolidatorDaemon {
             session,
             topic,
             decision,
+            community: None,
             source,
             ctx,
             metadata,
             idle_poll: DEFAULT_IDLE_POLL,
         }
+    }
+
+    /// Builder shim — wire the phase27c community grain. Deployments
+    /// without a graph client skip this; `CommunityDetected`
+    /// triggers then fail-and-ack instead of wedging the queue.
+    #[must_use]
+    pub fn with_community(mut self, community: Arc<CommunityGrain>) -> Self {
+        self.community = Some(community);
+        self
     }
 
     /// Builder shim — override the idle poll interval.
@@ -177,6 +192,21 @@ impl ConsolidatorDaemon {
                 self.decision.name(),
                 format!("decision:{decision_id}"),
             ),
+            Trigger::CommunityDetected { repo } => match &self.community {
+                Some(community) => (
+                    community.on_trigger(&pending.trigger, &run_ctx).await,
+                    community.name(),
+                    format!("community:{repo}"),
+                ),
+                None => (
+                    Err(ConsolidatorError::Other(
+                        "community grain not configured (daemon built without a graph client)"
+                            .into(),
+                    )),
+                    "consolidator.community",
+                    format!("community:{repo}"),
+                ),
+            },
         };
 
         // Write the producer-checkpoint row BEFORE acking the

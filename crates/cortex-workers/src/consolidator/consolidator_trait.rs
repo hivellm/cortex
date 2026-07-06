@@ -78,6 +78,11 @@ pub enum TriggerLabel {
         /// Decision id that triggered the run.
         decision_id: String,
     },
+    /// Phase27c §1 — a graph-community partition landed.
+    CommunityDetected {
+        /// Repo slug the partition snapshot scoped to.
+        repo: String,
+    },
 }
 
 impl From<&Trigger> for TriggerLabel {
@@ -90,6 +95,7 @@ impl From<&Trigger> for TriggerLabel {
             Trigger::DecisionLanded { decision_id, .. } => Self::DecisionLanded {
                 decision_id: decision_id.clone(),
             },
+            Trigger::CommunityDetected { repo } => Self::CommunityDetected { repo: repo.clone() },
         }
     }
 }
@@ -101,6 +107,7 @@ impl TriggerLabel {
             Self::SessionEnd { .. } => "session_end",
             Self::NightlyTopic { .. } => "nightly_topic",
             Self::DecisionLanded { .. } => "decision_landed",
+            Self::CommunityDetected { .. } => "community_detected",
         }
     }
 }

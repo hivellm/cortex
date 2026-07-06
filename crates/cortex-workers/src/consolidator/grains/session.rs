@@ -148,6 +148,12 @@ impl Consolidator for SessionGrain {
                     expected: "session_end",
                 })
             }
+            Trigger::CommunityDetected { .. } => {
+                return Err(ConsolidatorError::TriggerMismatch {
+                    got: "community_detected",
+                    expected: "session_end",
+                })
+            }
         };
 
         let started = Instant::now();

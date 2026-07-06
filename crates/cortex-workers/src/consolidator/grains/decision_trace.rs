@@ -139,6 +139,12 @@ impl Consolidator for DecisionTraceGrain {
                     expected: "decision_landed",
                 })
             }
+            Trigger::CommunityDetected { .. } => {
+                return Err(ConsolidatorError::TriggerMismatch {
+                    got: "community_detected",
+                    expected: "decision_landed",
+                })
+            }
         };
 
         let started = Instant::now();

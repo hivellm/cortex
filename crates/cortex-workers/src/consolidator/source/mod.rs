@@ -22,10 +22,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod community;
 pub mod decision_trace;
 pub mod session;
 pub mod topic;
 
+pub use community::LiveCommunitySource;
 pub use decision_trace::LiveDecisionTraceSource;
 pub use session::LiveSessionSource;
 pub use topic::LiveTopicSource;

@@ -33,6 +33,8 @@ pub const SESSION_TEMPLATE_BODY: &str = include_str!("../../templates/session.md
 pub const TOPIC_TEMPLATE_BODY: &str = include_str!("../../templates/topic.md");
 /// Decision-trace producer prompt body.
 pub const DECISION_TRACE_TEMPLATE_BODY: &str = include_str!("../../templates/decision_trace.md");
+/// Phase27c §1 — community (graph subsystem) producer prompt body.
+pub const COMMUNITY_TEMPLATE_BODY: &str = include_str!("../../templates/community.md");
 
 impl Template {
     /// Resolve the template for a grain.
@@ -55,6 +57,12 @@ impl Template {
                 body: DECISION_TRACE_TEMPLATE_BODY,
                 max_output_bytes: 2_000,
                 takeaways_count: 7,
+            },
+            ConsolidationGrain::Community => Self {
+                grain,
+                body: COMMUNITY_TEMPLATE_BODY,
+                max_output_bytes: 2_000,
+                takeaways_count: 4,
             },
         }
     }

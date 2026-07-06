@@ -337,6 +337,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
                 cortex_core::events::ConsolidationGrain::Session => "session",
                 cortex_core::events::ConsolidationGrain::Topic => "topic",
                 cortex_core::events::ConsolidationGrain::DecisionTrace => "decision_trace",
+                cortex_core::events::ConsolidationGrain::Community => "community",
             });
             consolidation_depth = Some(match cp.depth {
                 cortex_core::events::ConsolidationDepth::Shallow => "shallow",

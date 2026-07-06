@@ -8,6 +8,7 @@
 //! so the producer bodies (§2.4..§2.7) can land without reshaping
 //! the surrounding modules.
 
+pub mod community;
 pub mod decision_trace;
 pub mod session;
 pub mod topic;
@@ -65,11 +66,16 @@ pub fn derive_consolidation_id(
         G::Session => "ses",
         G::Topic => "top",
         G::DecisionTrace => "dec",
+        G::Community => "com",
     };
     let scope_key = match scope {
         S::SessionId(s) => format!("session_id:{s}"),
         S::Topic(s) => format!("topic:{s}"),
         S::DecisionId(s) => format!("decision_id:{s}"),
+        S::Community {
+            community_id,
+            level,
+        } => format!("community:{community_id}@{level}"),
     };
     let mut hasher = Sha256::new();
     hasher.update(grain_short.as_bytes());
