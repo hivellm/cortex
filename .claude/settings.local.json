@@ -186,7 +186,10 @@
       "Bash(git --no-pager diff --staged --stat)",
       "Bash(git --no-pager log --oneline -5)",
       "Bash(git --no-pager diff crates/cortex-workers/src/classifier/statics.rs)",
-      "Bash(git --no-pager diff .claude/settings.local.json)"
+      "Bash(git --no-pager diff .claude/settings.local.json)",
+      "Bash(git --no-pager show bf58a1b --stat)",
+      "Bash(git --no-pager show bf58a1b -- crates/cortex-workers/src/classifier/statics.rs)",
+      "Bash(git --no-pager log --oneline -5 -- \"E:/HiveLLM/Cortex/.rulebook/tasks/phase26f_retrieval-nl-quality-and-observability-followups/tasks.md\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
