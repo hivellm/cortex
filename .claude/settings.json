@@ -30,6 +30,14 @@
       "Bash(npm run type-check:*)",
       "Bash(npm test:*)",
       "mcp__rulebook"
+    ],
+    "defaultMode": "auto"
+  },
+  "autoMode": {
+    "environment": [
+      "$defaults",
+      "Organization: solo maintainer's personal project (HiveLLM ecosystem, e:/HiveLLM/*)",
+      "Repository visibility: private, local-only"
     ]
   },
   "hooks": {
