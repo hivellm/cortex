@@ -195,7 +195,24 @@
       "Bash(xargs cat)",
       "Bash(cargo fmt *)",
       "Bash(rustfmt crates/cortex-adapter-claude-code/tests/prethink_health_live_it.rs)",
-      "Bash(rustfmt --edition 2021 crates/cortex-adapter-claude-code/tests/prethink_health_live_it.rs)"
+      "Bash(rustfmt --edition 2021 crates/cortex-adapter-claude-code/tests/prethink_health_live_it.rs)",
+      "Bash(find / -iname \"*.rs\" -path \"*wiremock*/matchers*\" 2>/dev/null | head -20)",
+      "Read(//e//**)",
+      "Bash(cargo metadata *)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/wiremock-0.6.5/src/**)",
+      "Bash(find \"C:\\\\Users\\\\Bolado\\\\.cargo\\\\registry\\\\src\" -maxdepth 1 -iname \"*nexus*\" 2>/dev/null)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/**)",
+      "Bash(rm -f /tmp_meta.json)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nexus-graph-sdk-2.1.0/src/**)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nexus-graph-sdk-2.1.0/src/transport/**)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nexus-graph-sdk-2.1.0/**)",
+      "Bash(rustfmt --edition 2021 crates/cortex-api/src/dashboard/graph.rs)",
+      "Bash(rustfmt --edition 2021 crates/cortex-api/src/dashboard.rs)",
+      "Bash(rustfmt --edition 2021 crates/cortex-mcp-server/src/tools.rs)",
+      "Bash(rustfmt --edition 2021 crates/cortex-mcp-server/src/server.rs)",
+      "Bash(rustfmt --edition 2021 crates/cortex-mcp-server/src/transport_stdio.rs)",
+      "Bash(rustfmt --edition 2021 --check crates/cortex-api/src/dashboard/graph.rs crates/cortex-api/src/dashboard.rs crates/cortex-mcp-server/src/tools.rs crates/cortex-mcp-server/src/server.rs crates/cortex-mcp-server/src/transport_stdio.rs crates/cortex-api/tests/graph_communities_it.rs)",
+      "Bash(echo \"exit:$?\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
