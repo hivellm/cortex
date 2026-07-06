@@ -17,6 +17,6 @@
 - [ ] §4.1 After the host adapter daemon is redeployed, confirm `pre_thinking_cache_hit_total` increments on a repeated query within the TTL and `pre_thinking_latency_ms.p95` < 200ms under normal session load.
 
 ## §5. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] §5.1 Update or create documentation covering the implementation
+- [x] §5.1 Reconciled the three affected spec docs with the shipped §2.1/§3.1 code (they still described pre-phase26f behavior): `docs/specs/05-classifier.md` "Summary contract" (static path never returns `None` since phase26c §1.2; `{snippet}` is the phase26f §2.1 per-kind NL extraction, not raw JSON), `docs/specs/12-pre-thinking-injection.md` "Operator-visible health surface" (closes the "repointing the GUI series is tracked as a follow-up" note — phase26f §3.1 shipped `pre_thinking_assembly_p95_ms`), `docs/specs/16-dashboard.md` `/v1/dashboard/overview` series block (documents the new top-level field + honest GUI relabeling). Spec 06 (embedder) intentionally left untouched — its `nl_projection` hot path was not changed by §2.1.
 - [ ] §5.2 Write tests covering the new behavior
 - [ ] §5.3 Run tests and confirm they pass

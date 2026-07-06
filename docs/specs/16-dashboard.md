@@ -200,11 +200,15 @@ The overview body now carries a `series` block alongside the existing counters. 
     "violations_7d_daily":     [u64; 7],             // daily count of `kind=law_violation`
     "classifier_cost_usd_today": [f64; 24]           // hourly USD; all 0.0 today (see flag below)
   },
-  "classifier_cost_unavailable_until_spec05": true   // flips to `false` once spec-05 stamps cost on the lane
+  "classifier_cost_unavailable_until_spec05": true,  // flips to `false` once spec-05 stamps cost on the lane
+  "pre_thinking_assembly_p95_ms": 0                  // phase26f §3.1 — TRUE bundle-assembly p95 (ms) from the
+                                                      // adapter daemon `/healthz`; 0 when unreachable / no samples yet
 }
 ```
 
 `pre_thinking_p95_ms` reads `extras["duration_ms"]` — `archive_loader::envelope_to_hit` stamps that field for `ToolCall` and `AgentCall` envelopes. Turns alone do not populate it today; spec-12 owns turn-level latency stamping.
+
+**`phase26f §3.1` — honest pre-thinking latency.** `pre_thinking_p95_ms` above is a proxy signal (generic envelope duration, not pre-thinking specifically — phase26d gap C). The top-level `pre_thinking_assembly_p95_ms` field is the real one: it reads `extras.pre_thinking_latency_ms.p95` from the adapter daemon's `/healthz` (see [spec 12 — Pre-thinking injection](12-pre-thinking-injection.md), "Operator-visible health surface") via the same `gather_subsystem_extras()` aggregator `/v1/health` uses, defaulting to `0` when the adapter is unreachable or has recorded no pre-thinking calls yet. The GUI's "Pre-thinking P95" tile headlines this field; the legacy `pre_thinking_p95_ms` sparkline stays underneath but is relabeled "envelope tool/agent durations — not pre-thinking latency" so it's no longer presented as ground truth.
 
 #### `/v1/dashboard/tools/stats` — heatmap matrix (phase2g)
 

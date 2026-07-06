@@ -414,10 +414,17 @@ daemon `/healthz` exports them in its `extras` (→ cortex-api `/v1/health`
   BundleCache hit/miss counts (a repeated identical query within the 60 s TTL is
   a hit).
 - `pre_thinking_latency_ms` `{count, p50, p95, p99}` — the TRUE bundle-assembly
-  latency. This is distinct from the GUI dashboard's `pre_thinking_p95_ms`
+  latency. This is distinct from the GUI dashboard's legacy `pre_thinking_p95_ms`
   series, which is the p95 of generic envelope `duration_ms` and so reflects
-  unrelated long-running tool_calls (phase26d gap C). Repointing the GUI series
-  to this source is tracked as a follow-up.
+  unrelated long-running tool_calls (phase26d gap C). **`phase26f §3.1`** adds
+  the honest counterpart: `cortex-api`'s `OverviewBody.pre_thinking_assembly_p95_ms`
+  (see [spec 16 — Dashboard](./16-dashboard.md), `/v1/dashboard/overview` series
+  block) reads `extras.pre_thinking_latency_ms.p95` from this same `/healthz`
+  surface via `gather_subsystem_extras()`, defaulting to `0` when the adapter is
+  unreachable or has recorded no pre-thinking calls yet. The GUI's "Pre-thinking
+  P95" tile now headlines this field; the legacy `pre_thinking_p95_ms` series is
+  kept (additive, no breaking change) but relabeled as envelope tool/agent
+  durations, not pre-thinking latency.
 
 ## Acceptance criteria
 
