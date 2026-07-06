@@ -51,6 +51,7 @@ the rest are READ.
 | `cortex_keyword_search`     | `index`                       | `POST /v1/search/keyword`                        | Raw Meilisearch keyword search against named index | read  |
 | `cortex_vector_search`      | `collection`, `query_vector`  | `POST /v1/search/vector`                         | Raw Vectorizer cosine search against named collection | read  |
 | `cortex_graph_query`        | `mode`                        | `POST /v1/search/graph`                          | Direct Nexus graph query (neighbors walk or Cypher) | read  |
+| `cortex_graph_communities`  | —                              | `GET /v1/dashboard/graph/communities`            | Phase27b §3.1 — lists detected graph communities (member count, god nodes, cross-community edges); empty until the §2.5 writeback worker is live (gated on ADR-027) | read  |
 
 ### Session & Dashboard Surface
 

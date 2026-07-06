@@ -533,6 +533,266 @@ async fn query_nexus_graph(
     Ok(GraphPayload { nodes, edges })
 }
 
+// ---------------------------------------------------------------------------
+// Phase27b §3.1/§3.2 — community surface
+//
+// Reads the `community_id` / `community_level` / `is_god_node` node
+// properties the phase27b §2.4 writeback mapper (`community_node_ops`
+// in `cortex-workers`) stamps onto architecture nodes, once the §2.5
+// worker (blocked on the semantic graph projection — ADR-027) actually
+// runs. Until then no node carries these properties, so both queries
+// below return zero rows and this handler answers an honest empty
+// payload instead of an error — never a client-visible failure just
+// because the upstream projection isn't live yet.
+//
+// §3.2 (dashboard "subsystems" view) reuses this exact endpoint as its
+// data source rather than standing up a duplicate query — the shape
+// (communities + god nodes + cross-community edges) is the same data
+// a "subsystems" view needs; a dedicated frontend rendering of it is a
+// follow-up, not part of this backend slice.
+// ---------------------------------------------------------------------------
+
+/// One detected community and its members, as surfaced by
+/// `GET /v1/dashboard/graph/communities`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommunitySummary {
+    /// Community id stamped by the phase27b Leiden/Louvain worker.
+    pub community_id: u32,
+    /// Hierarchy level the community was last updated at (0 = base level).
+    pub level: u32,
+    /// Total number of member nodes (including god nodes).
+    pub member_count: usize,
+    /// God nodes (hub-percentile-excluded, re-attached by majority
+    /// vote — see `is_god_node` in `cortex-workers::graph::community`)
+    /// that landed in this community.
+    pub god_nodes: Vec<CommunityGodNode>,
+}
+
+/// One god node within a [`CommunitySummary`].
+#[derive(Debug, Clone, Serialize)]
+pub struct CommunityGodNode {
+    /// Node identity (`_id`, Nexus 2.1 reserved slot).
+    pub id: String,
+    /// Human-readable display name (falls back to `id` when absent).
+    pub name: String,
+}
+
+/// A "surprise" edge connecting two nodes in different communities.
+#[derive(Debug, Clone, Serialize)]
+pub struct CrossCommunityEdge {
+    /// Source node id.
+    pub from: String,
+    /// Source node's community id.
+    pub from_community: u32,
+    /// Target node id.
+    pub to: String,
+    /// Target node's community id.
+    pub to_community: u32,
+    /// Edge relationship type (`type(r)` in Cypher).
+    pub relation: String,
+}
+
+/// Response payload for `GET /v1/dashboard/graph/communities`.
+#[derive(Debug, Clone, Serialize)]
+pub struct CommunitiesPayload {
+    /// Every detected community, sorted by `community_id` ascending.
+    pub communities: Vec<CommunitySummary>,
+    /// Cross-community edges ("surprises"), sorted for determinism.
+    pub cross_community_edges: Vec<CrossCommunityEdge>,
+}
+
+/// Query params for `/v1/dashboard/graph/communities`.
+#[derive(Debug, Default, Deserialize)]
+pub struct CommunitiesQuery {
+    /// Restrict to one hierarchy level. Unset returns every level.
+    #[serde(default)]
+    pub level: Option<u32>,
+    /// Cap the number of member rows / edge rows pulled per query.
+    /// Defaults to 500, max 20,000.
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+pub(super) async fn communities(
+    State(state): State<DashboardState>,
+    Query(params): Query<CommunitiesQuery>,
+) -> Response {
+    let limit = params.limit.unwrap_or(500).clamp(1, 20_000);
+
+    if let Some(nx) = state.nexus.as_ref() {
+        match query_nexus_communities(nx.as_ref(), params.level, limit).await {
+            Ok(payload) => return (StatusCode::OK, Json(payload)).into_response(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "nexus community query failed; returning empty result"
+                );
+            }
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(CommunitiesPayload {
+            communities: Vec::new(),
+            cross_community_edges: Vec::new(),
+        }),
+    )
+        .into_response()
+}
+
+/// Run the two Cypher passes behind `communities()`: one gathering
+/// every node carrying `community_id` (grouped into
+/// [`CommunitySummary`] rows with their god nodes), one gathering
+/// edges whose endpoints sit in different communities.
+///
+/// Label-less `MATCH (n)` / `MATCH (a)-[r]->(b)` Cypher is already
+/// precedented in this codebase (`graph/indexer.rs`,
+/// `lanes/nexus_graph_lane.rs`) — community membership is not scoped
+/// to one Cypher label, so neither query anchors on one.
+async fn query_nexus_communities(
+    client: &NexusClient,
+    level: Option<u32>,
+    limit: usize,
+) -> anyhow::Result<CommunitiesPayload> {
+    let node_level_clause = level
+        .map(|l| format!(" AND n.community_level = {l}"))
+        .unwrap_or_default();
+    let members_cypher = format!(
+        "MATCH (n) WHERE n.community_id IS NOT NULL{node_level_clause} \
+         RETURN n._id AS id, n.name AS name, n.community_id AS community_id, \
+                n.community_level AS level, n.is_god_node AS is_god_node \
+         LIMIT {limit}"
+    );
+    let members_res = client
+        .execute_cypher(
+            &members_cypher,
+            Some(std::collections::HashMap::<String, NexusValue>::new()),
+        )
+        .await?;
+
+    let mut by_community: std::collections::BTreeMap<u32, CommunitySummary> =
+        std::collections::BTreeMap::new();
+    for row in &members_res.rows {
+        let cells = match row.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
+        let id = match cell_str(cells.first()) {
+            Some(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        let Some(community_id) = cell_u32(cells.get(2)) else {
+            continue;
+        };
+        let name = cell_str(cells.get(1))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| id.clone());
+        let node_level = cell_u32(cells.get(3)).unwrap_or(0);
+        let is_god_node = cell_bool(cells.get(4)).unwrap_or(false);
+
+        let entry = by_community
+            .entry(community_id)
+            .or_insert_with(|| CommunitySummary {
+                community_id,
+                level: node_level,
+                member_count: 0,
+                god_nodes: Vec::new(),
+            });
+        entry.member_count += 1;
+        if is_god_node {
+            entry.god_nodes.push(CommunityGodNode { id, name });
+        }
+    }
+    for summary in by_community.values_mut() {
+        summary.god_nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+
+    let edge_level_clause = level
+        .map(|l| format!(" AND a.community_level = {l} AND b.community_level = {l}"))
+        .unwrap_or_default();
+    let edges_cypher = format!(
+        "MATCH (a)-[r]->(b) WHERE a.community_id IS NOT NULL \
+         AND b.community_id IS NOT NULL AND a.community_id <> b.community_id{edge_level_clause} \
+         RETURN a._id AS from_id, a.community_id AS from_community, \
+                b._id AS to_id, b.community_id AS to_community, type(r) AS rel_type \
+         LIMIT {limit}"
+    );
+    let edges_res = client
+        .execute_cypher(
+            &edges_cypher,
+            Some(std::collections::HashMap::<String, NexusValue>::new()),
+        )
+        .await?;
+
+    let mut cross_community_edges: Vec<CrossCommunityEdge> = Vec::new();
+    for row in &edges_res.rows {
+        let cells = match row.as_array() {
+            Some(a) => a,
+            None => continue,
+        };
+        let from = match cell_str(cells.first()) {
+            Some(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        let to = match cell_str(cells.get(2)) {
+            Some(s) if !s.is_empty() => s,
+            _ => continue,
+        };
+        let (Some(from_community), Some(to_community)) =
+            (cell_u32(cells.get(1)), cell_u32(cells.get(3)))
+        else {
+            continue;
+        };
+        let relation = cell_str(cells.get(4)).unwrap_or_default();
+        cross_community_edges.push(CrossCommunityEdge {
+            from,
+            from_community,
+            to,
+            to_community,
+            relation,
+        });
+    }
+    cross_community_edges
+        .sort_by(|a, b| (&a.from, &a.to, &a.relation).cmp(&(&b.from, &b.to, &b.relation)));
+
+    Ok(CommunitiesPayload {
+        communities: by_community.into_values().collect(),
+        cross_community_edges,
+    })
+}
+
+/// Pull a row cell as `u32`, accepting a JSON number or a numeric
+/// string. Returns `None` for null / missing / non-numeric cells.
+fn cell_u32(v: Option<&serde_json::Value>) -> Option<u32> {
+    let v = v?;
+    if v.is_null() {
+        return None;
+    }
+    if let Some(n) = v.as_u64() {
+        return u32::try_from(n).ok();
+    }
+    v.as_str()?.parse::<u32>().ok()
+}
+
+/// Pull a row cell as `bool`, accepting a JSON bool or the strings
+/// `"true"` / `"false"`. Returns `None` for null / missing / other
+/// cells (the caller defaults to `false`).
+fn cell_bool(v: Option<&serde_json::Value>) -> Option<bool> {
+    let v = v?;
+    if v.is_null() {
+        return None;
+    }
+    if let Some(b) = v.as_bool() {
+        return Some(b);
+    }
+    match v.as_str() {
+        Some("true") => Some(true),
+        Some("false") => Some(false),
+        _ => None,
+    }
+}
+
 /// Pull a row cell as `String`, accepting either a JSON string or a
 /// non-null scalar (number / bool) that we stringify. Returns `None`
 /// for null / missing cells so the caller can substitute a fallback.

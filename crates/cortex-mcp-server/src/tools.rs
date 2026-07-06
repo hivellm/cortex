@@ -270,6 +270,7 @@ impl ToolRegistry {
                 Arc::new(KeywordSearchTool::new()),
                 Arc::new(VectorSearchTool::new()),
                 Arc::new(GraphQueryTool::new()),
+                Arc::new(GraphCommunitiesTool::new()),
                 Arc::new(ActiveWorkTool::new()),
                 Arc::new(SimilarSessionsTool::new()),
                 Arc::new(DecisionChainTool::new()),
@@ -1557,6 +1558,71 @@ impl Tool for ActiveWorkTool {
             }
         }
         Ok(ToolResult::ok(value))
+    }
+}
+
+/// MCP wrapper for `GET <api_url>/v1/dashboard/graph/communities`
+/// (phase27b §3.1). Returns detected graph communities (god nodes +
+/// member counts) and cross-community "surprise" edges.
+///
+/// **Results are empty today.** The community-detection writeback
+/// worker (phase27b §2.5) is blocked on the semantic graph projection
+/// (ADR-027, tracked separately as phase29_graph-projection-unblock)
+/// — until that lands, no Nexus node carries `community_id`, so this
+/// tool honestly returns `{ "communities": [], "cross_community_edges": [] }`
+/// rather than an error.
+pub struct GraphCommunitiesTool;
+
+impl GraphCommunitiesTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for GraphCommunitiesTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for GraphCommunitiesTool {
+    fn name(&self) -> &'static str {
+        "cortex_graph_communities"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_graph_communities",
+            "description": "Lists detected graph communities (subsystem clusters) — each with a member count, its god nodes (hub-percentile super-connectors), and cross-community \"surprise\" edges connecting nodes in different communities. Results are empty today: the community-detection writeback worker is blocked on the semantic graph projection (ADR-027) and no live node carries `community_id` yet. Optional `level` filters to one hierarchy level; `limit` caps the row count pulled per query.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "level": {"type": "integer", "minimum": 0, "description": "Optional hierarchy level filter."},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 20000, "default": 500, "description": "Cap on member/edge rows pulled per query."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let level = args.get("level").and_then(Value::as_u64);
+        let limit = args.get("limit").and_then(Value::as_u64);
+
+        let mut path = String::from("/v1/dashboard/graph/communities");
+        let mut qs: Vec<String> = Vec::new();
+        if let Some(l) = level {
+            qs.push(format!("level={l}"));
+        }
+        if let Some(l) = limit {
+            qs.push(format!("limit={l}"));
+        }
+        if !qs.is_empty() {
+            path.push('?');
+            path.push_str(&qs.join("&"));
+        }
+        proxy_get(ctx, &path).await
     }
 }
 
@@ -3670,12 +3736,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_thirty_seven_tools_with_unique_names() {
+    fn registry_returns_thirty_eight_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            37,
-            "phase21 §6.4 adds 2 ACL admin tools (35 -> 37)"
+            38,
+            "phase27b §3.1 adds cortex_graph_communities (37 -> 38)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -3689,6 +3755,7 @@ mod tests {
             "cortex_keyword_search",
             "cortex_vector_search",
             "cortex_graph_query",
+            "cortex_graph_communities",
             "cortex_active_work",
             "cortex_similar_sessions",
             "cortex_decision_chain",
@@ -3736,9 +3803,10 @@ mod tests {
     /// envelope (`name` / `description` / `inputSchema`) is well-formed.
     /// A tool whose schema fails to compile would be rejected by any
     /// spec-compliant MCP client at `tools/list` time, so this gate
-    /// stands in for that client-side validation. Covers all 37 tools
-    /// incl. the 5 phase18 §4.6 timeline/branch additions and the 2
-    /// phase21 §6.4 ACL admin tools.
+    /// stands in for that client-side validation. Covers all 38 tools
+    /// incl. the 5 phase18 §4.6 timeline/branch additions, the 2
+    /// phase21 §6.4 ACL admin tools, and phase27b §3.1's
+    /// `cortex_graph_communities`.
     #[test]
     fn every_tool_descriptor_inputschema_is_valid_json_schema() {
         let reg = ToolRegistry::default_set();
@@ -4560,6 +4628,91 @@ mod tests {
         let payload: Value = serde_json::from_str(text).unwrap();
         assert_eq!(payload["mode"], "cypher");
         assert!(payload["nodes"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn graph_communities_descriptor_advertises_optional_level_and_limit() {
+        let t = GraphCommunitiesTool::new();
+        let d = t.descriptor();
+        assert_eq!(d["name"], "cortex_graph_communities");
+        assert!(
+            d.get("input_schema").is_none(),
+            "snake_case input_schema must not be emitted"
+        );
+        let props = d["inputSchema"]["properties"].as_object().unwrap();
+        assert!(props.contains_key("level"));
+        assert!(props.contains_key("limit"));
+        assert_eq!(props["limit"]["maximum"].as_u64().unwrap(), 20000);
+        // Both params optional — no `required` array on this tool.
+        assert!(d["inputSchema"].get("required").is_none());
+        let desc = d["description"].as_str().unwrap();
+        assert!(
+            desc.contains("empty today") && desc.contains("ADR-027"),
+            "descriptor must not overclaim live results before the writeback worker ships: {desc}"
+        );
+    }
+
+    #[tokio::test]
+    async fn graph_communities_tool_proxies_get_with_query_params() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/graph/communities"))
+            .and(query_param("level", "2"))
+            .and(query_param("limit", "50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "communities": [
+                    { "community_id": 1, "level": 2, "member_count": 3, "god_nodes": [] }
+                ],
+                "cross_community_edges": []
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphCommunitiesTool::new();
+        let res = tool
+            .call(&ctx, json!({ "level": 2, "limit": 50 }))
+            .await
+            .expect("happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["communities"].as_array().unwrap().len(), 1);
+        assert_eq!(payload["communities"][0]["community_id"], 1);
+        assert!(payload["cross_community_edges"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn graph_communities_tool_round_trips_empty_result_with_no_query_params() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/graph/communities"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "communities": [],
+                "cross_community_edges": []
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphCommunitiesTool::new();
+        let res = tool
+            .call(&ctx, json!({}))
+            .await
+            .expect("no-args happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert!(payload["communities"].as_array().unwrap().is_empty());
+        assert!(payload["cross_community_edges"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

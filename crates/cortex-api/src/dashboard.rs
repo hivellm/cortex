@@ -122,7 +122,7 @@ mod classifications;
 use self::classifications::classifications;
 
 mod graph;
-use self::graph::graph;
+use self::graph::{communities, graph};
 
 mod tasks;
 use self::tasks::{tasks_detail, tasks_list, tasks_summary};
@@ -184,6 +184,11 @@ pub fn build_dashboard_router(state: DashboardState) -> Router {
         )
         .route("/v1/dashboard/tools/stats", get(tools_stats))
         .route("/v1/dashboard/graph", get(graph))
+        // phase27b §3.1/§3.2 — community membership + god nodes +
+        // cross-community "surprise" edges. Also the data source for
+        // the dashboard "subsystems" view (§3.2 reuses this endpoint
+        // rather than duplicating the query).
+        .route("/v1/dashboard/graph/communities", get(communities))
         .route("/v1/dashboard/sessions", get(sessions))
         .route("/v1/dashboard/trust", get(trust))
         .route("/v1/dashboard/decisions/{id}", get(decision_detail))
