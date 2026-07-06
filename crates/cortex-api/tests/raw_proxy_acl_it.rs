@@ -20,8 +20,10 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 
-/// Serialize all env-var-mutating tests so mock server ports don't conflict.
-static ENV_MX: Mutex<()> = Mutex::new(());
+/// Serialize all env-var-mutating tests so mock server ports don't
+/// conflict. Async-aware (`tokio::sync::Mutex`) because each guard is
+/// deliberately held across the whole test body's await points.
+static ENV_MX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn min_service(ps: PrincipalStore) -> Arc<QueryService> {
     let v = Arc::new(MemoryVectorLane::new());
@@ -86,7 +88,7 @@ async fn keyword_proxy_injects_acl_filter_for_non_admin() {
     )
     .await;
 
-    let _lock = ENV_MX.lock().unwrap();
+    let _lock = ENV_MX.lock().await;
     std::env::set_var("CORTEX_FULLTEXT_MEILI_URL", format!("http://127.0.0.1:{port}"));
 
     let svc = min_service(PrincipalStore::deny_by_default());
@@ -154,7 +156,7 @@ async fn vector_proxy_drops_classified_hits_for_non_admin() {
     )
     .await;
 
-    let _lock = ENV_MX.lock().unwrap();
+    let _lock = ENV_MX.lock().await;
     std::env::set_var(
         "CORTEX_EMBEDDER_VECTORIZER_URL",
         format!("http://127.0.0.1:{port}"),
@@ -202,7 +204,7 @@ async fn vector_proxy_drops_classified_hits_for_non_admin() {
 /// WHERE injection into arbitrary Cypher is not safe; require acl_admin.
 #[tokio::test]
 async fn graph_proxy_cypher_blocked_for_non_admin() {
-    let _lock = ENV_MX.lock().unwrap();
+    let _lock = ENV_MX.lock().await;
     std::env::set_var("CORTEX_GRAPH_CYPHER_ENABLED", "true");
 
     // nexus is None (no Nexus URL configured) — the ACL gate fires before

@@ -931,7 +931,7 @@ mod tests {
         // Every node assigned.
         assert_eq!(result.len(), 20, "all 20 nodes must be assigned");
         // All community_ids are valid u32 values — just verify no panic.
-        for (_, a) in &result {
+        for a in result.values() {
             let _ = a.community_id;
         }
     }
@@ -995,22 +995,23 @@ mod tests {
             "b0".into(), "b1".into(), "b2".into(),
             "h".into(),
         ];
-        let mut edges = Vec::new();
-        // Cluster A internal.
-        edges.push(("a0".into(), "a1".into(), 1.0));
-        edges.push(("a0".into(), "a2".into(), 1.0));
-        edges.push(("a1".into(), "a2".into(), 1.0));
-        // Cluster B internal.
-        edges.push(("b0".into(), "b1".into(), 1.0));
-        edges.push(("b0".into(), "b2".into(), 1.0));
-        edges.push(("b1".into(), "b2".into(), 1.0));
-        // Hub connects to cluster A (3 edges) and cluster B (3 edges).
-        edges.push(("h".into(), "a0".into(), 1.0));
-        edges.push(("h".into(), "a1".into(), 1.0));
-        edges.push(("h".into(), "a2".into(), 1.0));
-        edges.push(("h".into(), "b0".into(), 1.0));
-        edges.push(("h".into(), "b1".into(), 1.0));
-        edges.push(("h".into(), "b2".into(), 1.0));
+        let edges: Vec<(NodeId, NodeId, f64)> = vec![
+            // Cluster A internal.
+            ("a0".into(), "a1".into(), 1.0),
+            ("a0".into(), "a2".into(), 1.0),
+            ("a1".into(), "a2".into(), 1.0),
+            // Cluster B internal.
+            ("b0".into(), "b1".into(), 1.0),
+            ("b0".into(), "b2".into(), 1.0),
+            ("b1".into(), "b2".into(), 1.0),
+            // Hub connects to cluster A (3 edges) and cluster B (3 edges).
+            ("h".into(), "a0".into(), 1.0),
+            ("h".into(), "a1".into(), 1.0),
+            ("h".into(), "a2".into(), 1.0),
+            ("h".into(), "b0".into(), 1.0),
+            ("h".into(), "b1".into(), 1.0),
+            ("h".into(), "b2".into(), 1.0),
+        ];
 
         let g = CommunityGraph::new(node_ids, edges);
         // hub_percentile=0.8 → top 20% by degree = hub "h" (degree 6 vs ~3).

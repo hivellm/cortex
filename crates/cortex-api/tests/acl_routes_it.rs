@@ -208,9 +208,8 @@ async fn role_create_and_list_for_acl_admin() {
         "acl_admin must be able to create roles"
     );
     let create_body = json_body(create_resp).await;
-    assert_eq!(
+    assert!(
         create_body["ok"].as_bool().unwrap_or(false),
-        true,
         "create response must carry ok=true; body={create_body}"
     );
     assert_eq!(

@@ -80,8 +80,7 @@ pub async fn acl_stats_handler(State(state): State<DashboardState>) -> Response 
 
     // Compute classification distribution from the keyword lane.
     let hits = collect_lane_hits(&state.lane);
-    let mut dist: std::collections::BTreeMap<(String, u8), u64> =
-        std::collections::BTreeMap::new();
+    let mut dist: std::collections::BTreeMap<(String, u8), u64> = std::collections::BTreeMap::new();
     for hit in &hits {
         let repo = hit.repo.as_deref().unwrap_or("unknown").to_string();
         let level = hit
@@ -103,7 +102,11 @@ pub async fn acl_stats_handler(State(state): State<DashboardState>) -> Response 
         total_denied,
         denial_rate_over_time: denial_time
             .into_iter()
-            .map(|(ts, denied, evaluated)| DenialRateBucket { ts, denied, evaluated })
+            .map(|(ts, denied, evaluated)| DenialRateBucket {
+                ts,
+                denied,
+                evaluated,
+            })
             .collect(),
         classification_distribution,
         top_denied_principals: top_denied

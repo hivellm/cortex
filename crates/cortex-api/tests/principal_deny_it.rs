@@ -9,7 +9,7 @@
 //! When the gate env var is unset or when the principal_store is None
 //! (backward-compat), requests proceed normally.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, RwLock};
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
@@ -22,12 +22,14 @@ use cortex_config::{AccessControlConfig, Config};
 use serde_json::Value;
 use tower::ServiceExt;
 
-/// Serialize all tests that mutate env vars.
-/// Uses poison-safe acquisition so a panicking test doesn't block others.
-static ENV_MX: Mutex<()> = Mutex::new(());
+/// Serialize all tests that mutate env vars. Async-aware
+/// (`tokio::sync::Mutex`) because each guard is deliberately held
+/// across the whole test body's await points; tokio's mutex has no
+/// poisoning, so a panicking test can't block the others either.
+static ENV_MX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    ENV_MX.lock().unwrap_or_else(|e| e.into_inner())
+async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    ENV_MX.lock().await
 }
 
 fn make_router_with_ac(svc: Arc<QueryService>) -> axum::Router {
@@ -102,7 +104,7 @@ fn post_json(uri: &str, body: &Value) -> Request<Body> {
 /// Phase21 §6.3 — /v1/query with AC active + gate on + no auth → 403.
 #[tokio::test]
 async fn query_denies_unauthenticated_when_gate_active() {
-    let _lock = env_lock();
+    let _lock = env_lock().await;
     std::env::set_var(ENV_DENY_ON_MISSING_PRINCIPAL, "1");
 
     let svc = make_service_with_ac();
@@ -138,7 +140,7 @@ async fn query_denies_unauthenticated_when_gate_active() {
 /// (200 or any non-403, depending on service outcome).
 #[tokio::test]
 async fn query_passes_unauthenticated_when_gate_off() {
-    let _lock = env_lock();
+    let _lock = env_lock().await;
     std::env::remove_var(ENV_DENY_ON_MISSING_PRINCIPAL);
 
     let svc = make_service_with_ac();
@@ -167,7 +169,7 @@ async fn query_passes_unauthenticated_when_gate_off() {
 /// + gate on → request still proceeds (gate requires AC to be active).
 #[tokio::test]
 async fn query_passes_when_no_principal_store_even_with_gate() {
-    let _lock = env_lock();
+    let _lock = env_lock().await;
     std::env::set_var(ENV_DENY_ON_MISSING_PRINCIPAL, "1");
 
     let svc = make_service_no_ac();
@@ -196,7 +198,7 @@ async fn query_passes_when_no_principal_store_even_with_gate() {
 /// Phase21 §6.3 — keyword search proxy with AC + gate + no auth → 403.
 #[tokio::test]
 async fn keyword_proxy_denies_unauthenticated_when_gate_active() {
-    let _lock = env_lock();
+    let _lock = env_lock().await;
     std::env::set_var(ENV_DENY_ON_MISSING_PRINCIPAL, "1");
 
     let svc = make_service_with_ac();
@@ -223,7 +225,7 @@ async fn keyword_proxy_denies_unauthenticated_when_gate_active() {
 /// Phase21 §6.3 — graph search proxy with AC + gate + no auth → 403.
 #[tokio::test]
 async fn graph_proxy_denies_unauthenticated_when_gate_active() {
-    let _lock = env_lock();
+    let _lock = env_lock().await;
     std::env::set_var(ENV_DENY_ON_MISSING_PRINCIPAL, "1");
 
     let svc = make_service_with_ac();
