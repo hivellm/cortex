@@ -1,5 +1,6 @@
 {
   "permissions": {
+    "defaultMode": "acceptEdits",
     "allow": [
       "Bash(*)",
       "Read(*)",
@@ -12,12 +13,8 @@
       "WebFetch(*)",
       "WebSearch(*)",
       "Skill(*)",
-      "PowerShell(*)",
-      "ToolSearch(*)",
       "mcp__tml__*",
       "mcp__rulebook__*",
-      "mcp__cortex__*",
-      "mcp__plugin_playwright_playwright__*",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(grep:*)",
@@ -29,15 +26,8 @@
       "Bash(git blame:*)",
       "Bash(npm run type-check:*)",
       "Bash(npm test:*)",
+      "Bash(*)",
       "mcp__rulebook"
-    ],
-    "defaultMode": "bypassPermissions"
-  },
-  "autoMode": {
-    "environment": [
-      "$defaults",
-      "Organization: solo maintainer's personal project (HiveLLM ecosystem, e:/HiveLLM/*)",
-      "Repository visibility: private, local-only"
     ]
   },
   "hooks": {
@@ -55,11 +45,5 @@
   },
   "env": {
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  },
-  "statusLine": {
-    "type": "command",
-    "command": "echo \"$(basename \"$(pwd)\")$(git branch --show-current 2>/dev/null | sed \"s/^/ | /\")\""
-  },
-  "model": "sonnet",
-  "skipDangerousModePermissionPrompt": true
+  }
 }
