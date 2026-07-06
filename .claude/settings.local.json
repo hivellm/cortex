@@ -166,7 +166,20 @@
       "Bash(git check-ignore *)",
       "Bash(python3 -c \"import json; json.load\\(open\\('.claude/settings.json'\\)\\)\")",
       "Bash(ls -la \"C:/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/637ec1dd-d71d-4de8-a368-111e2b9c8338/subagents/workflows/wf_5aa4c7b9-859/\" 2>&1)",
-      "Read(//c/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/637ec1dd-d71d-4de8-a368-111e2b9c8338/subagents/workflows/wf_5aa4c7b9-859/**)"
+      "Read(//c/Users/Bolado/.claude/projects/e--HiveLLM-Cortex/637ec1dd-d71d-4de8-a368-111e2b9c8338/subagents/workflows/wf_5aa4c7b9-859/**)",
+      "Bash(git --no-pager diff .rulebook/tasks/phase26f_retrieval-nl-quality-and-observability-followups/tasks.md docs/specs/05-classifier.md docs/specs/12-pre-thinking-injection.md docs/specs/16-dashboard.md)",
+      "Bash(git --no-pager diff --cached .claude/settings.local.json)",
+      "Bash(git restore *)",
+      "Bash(git --no-pager log --oneline -6)",
+      "Bash(git --no-pager show --stat --oneline HEAD)",
+      "Bash(git --no-pager reflog -15)",
+      "Bash(git --no-pager diff .claude/settings.local.json CHANGELOG.md)",
+      "Bash(git --no-pager show --stat HEAD)",
+      "Bash(git --no-pager diff --cached .claude/settings.json)",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('.claude/settings.json','utf8'\\)\\)\")",
+      "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('.claude/settings.json','utf8'\\)\\); console.log\\('valid json'\\)\")",
+      "Bash(git --no-pager diff .claude/settings.json)",
+      "Bash(git --no-pager diff --cached --stat)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

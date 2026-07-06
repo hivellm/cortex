@@ -31,7 +31,7 @@
       "Bash(npm test:*)",
       "mcp__rulebook"
     ],
-    "defaultMode": "auto"
+    "defaultMode": "acceptEdits"
   },
   "autoMode": {
     "environment": [
