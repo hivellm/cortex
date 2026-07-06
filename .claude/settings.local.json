@@ -192,7 +192,10 @@
       "Bash(git --no-pager log --oneline -5 -- \"E:/HiveLLM/Cortex/.rulebook/tasks/phase26f_retrieval-nl-quality-and-observability-followups/tasks.md\")",
       "Bash(curl -s http://127.0.0.1:17011/healthz)",
       "Bash(echo \"---exit:$?\")",
-      "Bash(xargs cat)"
+      "Bash(xargs cat)",
+      "Bash(cargo fmt *)",
+      "Bash(rustfmt crates/cortex-adapter-claude-code/tests/prethink_health_live_it.rs)",
+      "Bash(rustfmt --edition 2021 crates/cortex-adapter-claude-code/tests/prethink_health_live_it.rs)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"
