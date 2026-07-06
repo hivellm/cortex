@@ -179,7 +179,14 @@
       "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('.claude/settings.json','utf8'\\)\\)\")",
       "Bash(node -e \"JSON.parse\\(require\\('fs'\\).readFileSync\\('.claude/settings.json','utf8'\\)\\); console.log\\('valid json'\\)\")",
       "Bash(git --no-pager diff .claude/settings.json)",
-      "Bash(git --no-pager diff --cached --stat)"
+      "Bash(git --no-pager diff --cached --stat)",
+      "Bash(grep -rn \"std::env::set_var\\\\|env::set_var\" crates/cortex-api/src/dashboard)",
+      "Bash(grep -rln \"std::env::set_var\\\\|env::set_var\" crates/cortex-api/src)",
+      "Bash(cargo clippy *)",
+      "Bash(git --no-pager diff --staged --stat)",
+      "Bash(git --no-pager log --oneline -5)",
+      "Bash(git --no-pager diff crates/cortex-workers/src/classifier/statics.rs)",
+      "Bash(git --no-pager diff .claude/settings.local.json)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude\\plugins\\cache\\hivellm-cortex"

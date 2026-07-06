@@ -799,4 +799,87 @@ mod tests {
         let s = nl_summary_snippet(&Kind::Artifact, &other);
         assert_eq!(s, "plain body text", "whitespace collapsed, text used");
     }
+
+    #[test]
+    fn nl_summary_snippet_covers_decision_knowledge_and_learning_kinds() {
+        // phase26f §2.1 / spec-05 "Summary contract" — Decision reads
+        // title/status/body as prose, never the raw JSON object.
+        let decision = serde_json::json!({
+            "title": "Adopt stable vector ids",
+            "status": "accepted",
+            "body": "Avoids re-embedding on every bootstrap replay.",
+        });
+        let s = nl_summary_snippet(&Kind::Decision, &decision);
+        assert_eq!(
+            s,
+            "Adopt stable vector ids — accepted — Avoids re-embedding on every bootstrap replay."
+        );
+        assert!(!s.contains('{') && !s.contains("\":"), "no raw JSON: {s}");
+
+        // Knowledge and Learning both project title/body.
+        let knowledge = serde_json::json!({
+            "title": "wiremock is already a dev-dependency",
+            "body": "cortex-api and cortex-workers both pin wiremock 0.6.",
+        });
+        let s = nl_summary_snippet(&Kind::Knowledge, &knowledge);
+        assert_eq!(
+            s,
+            "wiremock is already a dev-dependency — cortex-api and cortex-workers both pin wiremock 0.6."
+        );
+        assert!(!s.contains('{'), "no raw JSON braces: {s}");
+
+        let learning = serde_json::json!({
+            "title": "env-var globals race across concurrent tests",
+            "body": "Prefer constructor injection over process env for test doubles.",
+        });
+        let s = nl_summary_snippet(&Kind::Learning, &learning);
+        assert_eq!(
+            s,
+            "env-var globals race across concurrent tests — Prefer constructor injection over process env for test doubles."
+        );
+        assert!(!s.contains('{'), "no raw JSON braces: {s}");
+    }
+
+    #[test]
+    fn nl_summary_snippet_covers_agent_call_and_memory_kinds() {
+        // AgentCall projects description/prompt.
+        let agent_call = serde_json::json!({
+            "description": "spawn implementer",
+            "prompt": "implement §5.2 tests",
+        });
+        let s = nl_summary_snippet(&Kind::AgentCall, &agent_call);
+        assert_eq!(s, "spawn implementer — implement §5.2 tests");
+        assert!(!s.contains('{'), "no raw JSON braces: {s}");
+
+        // Memory projects name/body/description.
+        let memory = serde_json::json!({
+            "name": "phase26f",
+            "body": "retrieval NL quality follow-ups",
+        });
+        let s = nl_summary_snippet(&Kind::Memory, &memory);
+        assert_eq!(s, "phase26f — retrieval NL quality follow-ups");
+        assert!(!s.contains('{'), "no raw JSON braces: {s}");
+    }
+
+    #[test]
+    fn static_summary_wraps_decision_kind_without_raw_json() {
+        // phase26f §2.1 — the public `static_summary` wrapper (used by
+        // `classify_batch`) must carry the same clean prose through to
+        // the final `{kind} in {location}: {snippet}` string; this is
+        // the black-box path the fulltext worker + embedder consume.
+        let decision = serde_json::json!({
+            "title": "Adopt stable vector ids",
+            "status": "accepted",
+            "body": "Avoids re-embedding on every bootstrap replay.",
+        });
+        let summary = static_summary(&Kind::Decision, &decision, Some("Cortex"));
+        assert!(
+            summary.starts_with("decision in Cortex: Adopt stable vector ids"),
+            "summary must lead with kind/location/title; got: {summary:?}"
+        );
+        assert!(
+            !summary.contains('{') && !summary.contains("\":"),
+            "no raw JSON leaking into the wrapped summary: {summary:?}"
+        );
+    }
 }
