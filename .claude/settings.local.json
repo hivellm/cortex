@@ -275,7 +275,9 @@
       "Bash(node -e \"const p=require\\('./.claude/settings.json'\\); console.log\\('PROJECT settings.json OK — defaultMode:', p.permissions.defaultMode, '| allow count:', p.permissions.allow.length\\)\")",
       "Bash(cargo clippy *)",
       "Bash(cargo test *)",
-      "Bash(awk -F'[ ;]' '{p+=$4} END {print \"TOTAL PASSED:\", p}')"
+      "Bash(awk -F'[ ;]' '{p+=$4} END {print \"TOTAL PASSED:\", p}')",
+      "Bash(cargo check *)",
+      "Bash(rustfmt --edition 2021 crates/cortex-api/src/search/architecture_route.rs crates/cortex-api/src/search/strategies.rs crates/cortex-api/src/search.rs)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude"
