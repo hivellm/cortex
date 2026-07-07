@@ -4,8 +4,8 @@
 - [x] 1.3 Multi-resolution: one input per `(community_id, level)` — grouping splits levels (test `group_into_inputs_splits_by_community_and_level`), distinct consolidation ids per level (test `produce_multi_resolution_levels_get_distinct_ids`), grain emits one envelope per community per level (test `community_grain_emits_one_envelope_per_community_per_level`).
 
 ## 2. Global query route
-- [ ] 2.1 Detect architecture-level intent in the orchestrator (`crates/cortex-api/src/search/`)
-- [ ] 2.2 Map-reduce over community summaries → synthesized answer (instead of per-chunk fusion); budgeted top-N within the pre-thinking byte budget
+- [x] 2.1 Architecture-intent detection: new `search/architecture_route.rs` — pure `is_architecture_query()` over a conservative marker list (tests cover positives + symbol/bug-query negatives); wired into `build_plan` for `Intent::FreeSearch` ONLY, so a detector false positive can never degrade the `pre_change_context` agent hot path (test `pre_change_context_never_reroutes_on_architecture_phrasing` pins this).
+- [x] 2.2 Global route follows GraphRAG's own map-reduce split: the expensive MAP runs offline (§1 — one Haiku summary per community per level, already in the consolidation corpus) and the query-time REDUCE is `architecture_plan()` — budgeted top-N (req.k/req.limit) over `cortex.consolidation.fp32` + `cortex_consolidations` with no per-chunk code/docs fusion, no graph fan-out, no overlays; the pre-thinking renderer's existing `Consolidated context` byte budget caps the assembled answer. A query-time LLM reduce was deliberately excluded (800ms sync budget vs ~1.5s Haiku call) — documented in the module header as the design, not a shortcut. Tests: 3 in architecture_route + 2 in strategies (reroute + hot-path isolation).
 
 ## 3. Community-aware entity dedup
 - [ ] 3.1 Lift the MinHash util out of `crates/cortex-cli/src/ops/memory_consolidate.rs` into a shared crate

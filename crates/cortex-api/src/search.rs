@@ -9,6 +9,7 @@
 //! [`crate`] (see `lib.rs`).
 
 pub mod analyzer;
+pub mod architecture_route;
 pub mod budget;
 pub mod cache;
 pub mod consolidation_costs;

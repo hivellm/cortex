@@ -94,6 +94,14 @@ pub fn build_plan(req: &QueryRequest) -> Plan {
         Intent::DecisionLookup => decision_lookup(req),
         Intent::SimilarProblems => similar_problems(req),
         Intent::LawCheck => law_check(req),
+        // Phase27c §2.1 — architecture-level ("global") questions
+        // reroute to the community-summaries corpus instead of
+        // per-chunk fusion. FreeSearch ONLY: the pre_change_context
+        // agent hot path keeps its plan so a detector false positive
+        // can never degrade primary pre-thinking retrieval.
+        Intent::FreeSearch if super::architecture_route::is_architecture_query(&req.query) => {
+            super::architecture_route::architecture_plan(req)
+        }
         Intent::FreeSearch => free_search(req),
         Intent::Explain => explain(req),
     }
@@ -697,6 +705,41 @@ mod tests {
         let plan = build_plan(&req(Intent::FreeSearch));
         assert!(plan.overlays.is_empty());
         assert!(plan.graphs.is_empty());
+    }
+
+    #[test]
+    fn free_search_architecture_query_reroutes_to_consolidation_corpus() {
+        // Phase27c §2.1 — the global route: an architecture-level
+        // question goes to the community-summaries corpus instead of
+        // per-chunk fusion.
+        let mut r = req(Intent::FreeSearch);
+        r.query = "what is the architecture of this system?".into();
+        let plan = build_plan(&r);
+        assert_eq!(plan.vectors.len(), 1);
+        assert_eq!(plan.vectors[0].collection, COLLECTION_CONSOLIDATION_FP32);
+        assert_eq!(plan.keywords.len(), 1);
+        assert_eq!(plan.keywords[0].index, INDEX_CONSOLIDATIONS);
+        assert!(plan.graphs.is_empty());
+        assert!(plan.overlays.is_empty());
+    }
+
+    #[test]
+    fn pre_change_context_never_reroutes_on_architecture_phrasing() {
+        // Phase27c §2.1 — the agent hot path must keep its per-chunk
+        // plan even when the prompt mentions architecture, so a
+        // detector false positive cannot degrade pre-thinking.
+        let mut r = req(Intent::PreChangeContext);
+        r.query = "refactor the architecture of the HNSW configurator".into();
+        r.scope.repo = Some("cortex".into());
+        let plan = build_plan(&r);
+        assert!(
+            plan.vectors.len() > 1,
+            "pre_change_context keeps its multi-collection fan-out"
+        );
+        assert!(
+            plan.vectors.iter().any(|v| v.collection.contains("-code")),
+            "code corpus stays in the plan"
+        );
     }
 
     #[test]
