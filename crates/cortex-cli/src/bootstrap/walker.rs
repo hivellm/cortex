@@ -193,11 +193,10 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
         }
 
         let class = classify_path(&rel_path, cfg);
-        let (class_level, class_compartments) =
-            match cfg.classification.apply_to_path(&rel_path) {
-                Some((lv, comps)) => (Some(lv), Some(comps)),
-                None => (None, None),
-            };
+        let (class_level, class_compartments) = match cfg.classification.apply_to_path(&rel_path) {
+            Some((lv, comps)) => (Some(lv), Some(comps)),
+            None => (None, None),
+        };
         out.push(WalkEntry::Accepted {
             path: path.to_path_buf(),
             rel_path,
@@ -300,11 +299,10 @@ pub fn walk_repo(repo_root: &Path, cfg: &CortexSection) -> Vec<WalkEntry> {
             continue;
         }
         let class = classify_path(&rel_path, cfg);
-        let (class_level, class_compartments) =
-            match cfg.classification.apply_to_path(&rel_path) {
-                Some((lv, comps)) => (Some(lv), Some(comps)),
-                None => (None, None),
-            };
+        let (class_level, class_compartments) = match cfg.classification.apply_to_path(&rel_path) {
+            Some((lv, comps)) => (Some(lv), Some(comps)),
+            None => (None, None),
+        };
         out.push(WalkEntry::Accepted {
             path: path.to_path_buf(),
             rel_path,
@@ -681,9 +679,8 @@ mod tests {
 
     #[test]
     fn walk_entry_accepted_carries_nil_class_fields_when_no_rules() {
-        use crate::bootstrap::config::ClassificationConfig;
         let cfg = CortexSection::default(); // no classification rules
-        // Simulate what walk_repo does for a matched path.
+                                            // Simulate what walk_repo does for a matched path.
         let (cl, cc) = match cfg.classification.apply_to_path("docs/financial/report.md") {
             Some((lv, comps)) => (Some(lv), Some(comps)),
             None => (None, None),
@@ -695,13 +692,15 @@ mod tests {
     #[test]
     fn walk_entry_accepted_carries_class_floor_from_matching_rule() {
         use crate::bootstrap::config::{ClassificationConfig, ClassificationRule};
-        let mut cfg = CortexSection::default();
-        cfg.classification = ClassificationConfig {
-            rules: vec![ClassificationRule {
-                pattern: "docs/financial/**".into(),
-                level: "confidential".into(),
-                compartments: vec!["financial".into()],
-            }],
+        let cfg = CortexSection {
+            classification: ClassificationConfig {
+                rules: vec![ClassificationRule {
+                    pattern: "docs/financial/**".into(),
+                    level: "confidential".into(),
+                    compartments: vec!["financial".into()],
+                }],
+            },
+            ..CortexSection::default()
         };
         let (cl, cc) = match cfg.classification.apply_to_path("docs/financial/q1.md") {
             Some((lv, comps)) => (Some(lv), Some(comps)),

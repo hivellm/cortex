@@ -18,6 +18,7 @@ pub mod community;
 pub mod config;
 pub mod cross_project;
 pub mod cypher;
+pub mod dedup;
 pub mod extraction_contract;
 pub mod extractors;
 pub mod identity;

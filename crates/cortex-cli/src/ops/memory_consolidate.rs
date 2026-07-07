@@ -310,48 +310,18 @@ impl Default for HashingEmbedder {
 #[async_trait]
 impl Embedder for HashingEmbedder {
     async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
-        let mut vec = vec![0.0f32; self.dim];
-        let lower = text.to_ascii_lowercase();
-        let bytes = lower.as_bytes();
-        if bytes.len() < 4 {
-            // Single bin for tiny inputs.
-            vec[0] = 1.0;
-            return Ok(vec);
-        }
-        for window in bytes.windows(4) {
-            let h = fnv1a_64(window);
-            let bin = (h as usize) % self.dim;
-            vec[bin] += 1.0;
-        }
-        // Unit-normalise so cosine == dot product.
-        let norm: f32 = vec.iter().map(|x| x * x).sum::<f32>().sqrt();
-        if norm > 0.0 {
-            for v in &mut vec {
-                *v /= norm;
-            }
-        }
-        Ok(vec)
+        // Phase27c §3.1 — the n-gram bag implementation moved to the
+        // shared `cortex_core::textsim` module so the graph dedup
+        // pass and this CLI share one copy.
+        Ok(cortex_core::textsim::ngram_vector(text, self.dim))
     }
-}
-
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in bytes {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
 }
 
 /// Cosine similarity between two unit-norm vectors. Falls back to
 /// `0.0` on length mismatch so the caller never panics on a bad
-/// embedder.
-pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() {
-        return 0.0;
-    }
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum::<f32>()
-}
+/// embedder. Re-exported from the shared textsim module (phase27c
+/// §3.1) so existing callers keep their path.
+pub use cortex_core::textsim::cosine;
 
 /// One cluster from the matcher.
 #[derive(Debug, Clone)]

@@ -97,6 +97,10 @@ ulid = { workspace = true }
 reqwest = { workspace = true }
 clap = { workspace = true }
 zstd = { workspace = true }
+# Phase27c §3.2 — Jaro-Winkler verify step in the graph dedup pass.
+# Already resolved in the workspace tree transitively (0.11.1); this
+# just makes it a direct dep of the one module that calls it.
+strsim = "0.11"
 
 vectorizer-sdk = { workspace = true }
 hdbscan = { workspace = true }

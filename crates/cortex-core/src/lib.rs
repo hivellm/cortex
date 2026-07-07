@@ -14,6 +14,7 @@ pub mod dashboard_event;
 pub mod events;
 pub mod ids;
 pub mod redact;
+pub mod textsim;
 pub mod validate;
 pub mod vocab;
 
