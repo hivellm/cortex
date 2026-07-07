@@ -103,10 +103,7 @@ impl DecisionRegistry {
     /// `to_key` is typically `"{repo}|{path}"` from the annotator output.
     pub fn resolve_to_decision<'a>(&'a self, to_key: &str) -> Option<&'a DecisionRecord> {
         // Strip the repo prefix if present (`"repo|path"` → `"path"`).
-        let path_part = to_key
-            .split_once('|')
-            .map(|(_, p)| p)
-            .unwrap_or(to_key);
+        let path_part = to_key.split_once('|').map(|(_, p)| p).unwrap_or(to_key);
         let path_lower = path_part.to_ascii_lowercase();
 
         // Exact path → id lookup.
@@ -209,7 +206,10 @@ impl<'r> DocDrift<'r> {
 
         for doc_key in all_docs {
             let cited = cited_by_doc.get(&doc_key).map(Vec::as_slice).unwrap_or(&[]);
-            let contradicted = contradicted_by_doc.get(&doc_key).map(Vec::as_slice).unwrap_or(&[]);
+            let contradicted = contradicted_by_doc
+                .get(&doc_key)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
 
             // Check each cited target: is it a superseded ADR?
             for cite_target in cited {
@@ -314,7 +314,10 @@ mod tests {
         let findings = detector.detect(&edges);
         assert_eq!(findings.len(), 1);
         match &findings[0].kind {
-            DriftKind::CitesSuperseded { superseded_id, current_id } => {
+            DriftKind::CitesSuperseded {
+                superseded_id,
+                current_id,
+            } => {
                 assert_eq!(superseded_id, "DEC-0002");
                 assert_eq!(current_id.as_deref(), Some("DEC-0003"));
             }
@@ -338,7 +341,10 @@ mod tests {
         let findings = detector.detect(&edges);
         assert_eq!(findings.len(), 1);
         match &findings[0].kind {
-            DriftKind::CanonicalDrift { superseded_id, current_id } => {
+            DriftKind::CanonicalDrift {
+                superseded_id,
+                current_id,
+            } => {
                 assert_eq!(superseded_id, "DEC-0002");
                 assert_eq!(current_id, "DEC-0003");
             }
@@ -357,7 +363,10 @@ mod tests {
             "repo|decisions/DEC-0001-active.md",
         )];
         let findings = detector.detect(&edges);
-        assert!(findings.is_empty(), "citing an active ADR must not trigger drift");
+        assert!(
+            findings.is_empty(),
+            "citing an active ADR must not trigger drift"
+        );
     }
 
     /// Contradicts-only edge (no CITES) — not canonical drift on its own.

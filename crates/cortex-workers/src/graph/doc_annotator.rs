@@ -209,19 +209,17 @@ impl DocAnnotator {
             stdin.write_all(prompt.as_bytes()).await.ok()?;
         }
 
-        let output =
-            tokio::time::timeout(self.timeout, child.wait_with_output())
-                .await
-                .ok()?
-                .ok()?;
+        let output = tokio::time::timeout(self.timeout, child.wait_with_output())
+            .await
+            .ok()?
+            .ok()?;
 
         if !output.status.success() {
             return None;
         }
 
         // Parse outer JSON envelope: {"result": "...", ...}
-        let envelope: serde_json::Value =
-            serde_json::from_slice(&output.stdout).ok()?;
+        let envelope: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
         envelope
             .get("result")
             .and_then(|v| v.as_str())
@@ -316,7 +314,10 @@ mod tests {
         path: &str,
         annotation_json: &str,
     ) -> (GraphPatch, usize) {
-        let base_patch = DocPass { repo: repo.to_string() }.scan_file(doc_content, path);
+        let base_patch = DocPass {
+            repo: repo.to_string(),
+        }
+        .scan_file(doc_content, path);
         let facts = FactSet::from_extracted(&base_patch);
         let existing_related: std::collections::HashSet<(String, String)> = base_patch
             .edges
@@ -384,8 +385,7 @@ mod tests {
             annotation_patch.edges.push(edge);
         }
 
-        let (gated, rejections) =
-            apply_gate(annotation_patch, &facts, &GateConfig::default());
+        let (gated, rejections) = apply_gate(annotation_patch, &facts, &GateConfig::default());
         let mut out = base_patch;
         out.nodes.extend(gated.nodes);
         out.edges.extend(gated.edges);
@@ -417,7 +417,8 @@ mod tests {
     fn annotator_requires_evidence_for_relations() {
         let doc = "# A\n\nSimilar to [[other-doc]].\n";
         // Empty evidence — relation should be dropped
-        let annotation = r#"{"claims":[],"relations":[{"to_doc":"other-doc","kind":"cites","evidence":""}]}"#;
+        let annotation =
+            r#"{"claims":[],"relations":[{"to_doc":"other-doc","kind":"cites","evidence":""}]}"#;
         let (patch, _) = apply_annotation(doc, "repo", "a.md", annotation);
         let has_cites = patch.edges.iter().any(|e| e.edge_type == "CITES");
         assert!(!has_cites, "relation without evidence must be dropped");
@@ -433,8 +434,16 @@ mod tests {
         let annotation = r#"{"claims":[],"relations":[{"to_doc":"other-doc","kind":"cites","evidence":"as in other-doc"}]}"#;
         let (patch, _) = apply_annotation(doc, "repo", "a.md", annotation);
         // One RELATED from wikilink, one CITES from annotation
-        let related_count = patch.edges.iter().filter(|e| e.edge_type == "RELATED").count();
-        let cites_count = patch.edges.iter().filter(|e| e.edge_type == "CITES").count();
+        let related_count = patch
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "RELATED")
+            .count();
+        let cites_count = patch
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "CITES")
+            .count();
         assert_eq!(related_count, 1, "only one RELATED edge (from wikilink)");
         assert_eq!(cites_count, 1, "CITES edge from annotation is preserved");
     }

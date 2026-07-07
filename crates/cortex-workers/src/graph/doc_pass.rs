@@ -100,17 +100,12 @@ impl DocPass {
                 });
             }
             patch.edges.push(make_edge(
-                "RELATED",
-                "Article",
-                &article_k,
-                "Article",
-                &target_k,
+                "RELATED", "Article", &article_k, "Article", &target_k,
             ));
         }
 
         // Bold inline terms → Entity nodes + MENTIONS edges.
-        let mut seen_entities: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut seen_entities: std::collections::HashSet<String> = std::collections::HashSet::new();
         for term in extract_bold_terms(body) {
             if seen_entities.contains(&term) {
                 continue;
@@ -134,7 +129,9 @@ impl DocPass {
                     },
                 });
             }
-            patch.edges.push(make_edge("MENTIONS", "Article", &article_k, "Entity", &ek));
+            patch
+                .edges
+                .push(make_edge("MENTIONS", "Article", &article_k, "Entity", &ek));
         }
 
         patch
@@ -303,16 +300,17 @@ See also [[noncode-parsers|Non-Code Parsers]] for the registry design.
 "#;
 
     fn run_fixture() -> GraphPatch {
-        DocPass { repo: "myrepo".to_string() }
-            .scan_file(FIXTURE, "docs/analysis/ua-architecture.md")
+        DocPass {
+            repo: "myrepo".to_string(),
+        }
+        .scan_file(FIXTURE, "docs/analysis/ua-architecture.md")
     }
 
     #[test]
     fn doc_pass_emits_article_node() {
         let p = run_fixture();
         let has_article = p.nodes.iter().any(|n| {
-            n.label == "Article"
-                && n.natural_key == "myrepo|docs/analysis/ua-architecture.md"
+            n.label == "Article" && n.natural_key == "myrepo|docs/analysis/ua-architecture.md"
         });
         assert!(has_article, "should emit Article node for the file");
     }
@@ -338,8 +336,11 @@ See also [[noncode-parsers|Non-Code Parsers]] for the registry design.
     #[test]
     fn doc_pass_extracts_wikilinks_as_related_edges() {
         let p = run_fixture();
-        let related_edges: Vec<_> =
-            p.edges.iter().filter(|e| e.edge_type == "RELATED").collect();
+        let related_edges: Vec<_> = p
+            .edges
+            .iter()
+            .filter(|e| e.edge_type == "RELATED")
+            .collect();
         // [[extraction-contract]], [[incremental-indexer]], [[noncode-parsers|...]]
         assert_eq!(related_edges.len(), 3, "should emit 3 RELATED edges");
     }
@@ -351,7 +352,10 @@ See also [[noncode-parsers|Non-Code Parsers]] for the registry design.
             .nodes
             .iter()
             .any(|n| n.label == "Article" && n.natural_key.contains("extraction-contract"));
-        assert!(has_ec, "forward-ref Article for extraction-contract must be emitted");
+        assert!(
+            has_ec,
+            "forward-ref Article for extraction-contract must be emitted"
+        );
     }
 
     #[test]
@@ -362,7 +366,10 @@ See also [[noncode-parsers|Non-Code Parsers]] for the registry design.
             .nodes
             .iter()
             .any(|n| n.label == "Article" && n.natural_key.contains("noncode-parsers"));
-        assert!(has_ncp, "alias wikilink must use path portion not display alias");
+        assert!(
+            has_ncp,
+            "alias wikilink must use path portion not display alias"
+        );
     }
 
     #[test]
@@ -372,7 +379,10 @@ See also [[noncode-parsers|Non-Code Parsers]] for the registry design.
             .nodes
             .iter()
             .any(|n| n.label == "Entity" && n.natural_key.contains("ua pipeline"));
-        assert!(has_ua_pipeline, "should emit Entity for bold term 'ua pipeline'");
+        assert!(
+            has_ua_pipeline,
+            "should emit Entity for bold term 'ua pipeline'"
+        );
     }
 
     #[test]
@@ -397,14 +407,19 @@ See also [[noncode-parsers|Non-Code Parsers]] for the registry design.
 
     #[test]
     fn doc_pass_no_frontmatter_still_emits_article() {
-        let p = DocPass { repo: "r".to_string() }
-            .scan_file("# Simple doc\n\nNo frontmatter here.", "notes.md");
+        let p = DocPass {
+            repo: "r".to_string(),
+        }
+        .scan_file("# Simple doc\n\nNo frontmatter here.", "notes.md");
         assert!(p.nodes.iter().any(|n| n.label == "Article"));
     }
 
     #[test]
     fn doc_pass_empty_file_emits_only_article_node() {
-        let p = DocPass { repo: "r".to_string() }.scan_file("", "empty.md");
+        let p = DocPass {
+            repo: "r".to_string(),
+        }
+        .scan_file("", "empty.md");
         assert_eq!(
             p.nodes.iter().filter(|n| n.label == "Article").count(),
             1,

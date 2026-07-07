@@ -97,10 +97,7 @@ impl CommunityGraph {
         let mut degree = vec![0.0_f64; n];
 
         for u in 0..n {
-            let mut neighbors: Vec<(usize, f64)> = adj[u]
-                .iter()
-                .map(|(&v, &w)| (v, w))
-                .collect();
+            let mut neighbors: Vec<(usize, f64)> = adj[u].iter().map(|(&v, &w)| (v, w)).collect();
             neighbors.sort_unstable_by_key(|&(v, _)| v);
             for &(v, w) in &neighbors {
                 degree[u] += w;
@@ -200,12 +197,7 @@ impl LouvainState {
     }
 
     /// `k_{i,C}`: sum of edge weights from node `i` to community `c`.
-    fn k_i_c(
-        &self,
-        node: usize,
-        target_comm: usize,
-        adj: &[Vec<(usize, f64)>],
-    ) -> f64 {
+    fn k_i_c(&self, node: usize, target_comm: usize, adj: &[Vec<(usize, f64)>]) -> f64 {
         adj[node]
             .iter()
             .filter(|&&(v, _)| self.comm[v] == target_comm)
@@ -227,12 +219,7 @@ impl LouvainState {
 /// `(g(dst) - g(src)) * 2 / two_m`.  We only need the sign and ranking,
 /// so comparing `g` values directly is sufficient.
 #[inline]
-fn modularity_gain_proportional(
-    k_i_c: f64,
-    sigma_tot_c: f64,
-    ki: f64,
-    two_m: f64,
-) -> f64 {
+fn modularity_gain_proportional(k_i_c: f64, sigma_tot_c: f64, ki: f64, two_m: f64) -> f64 {
     k_i_c - sigma_tot_c * ki / two_m
 }
 
@@ -270,19 +257,13 @@ fn local_move_phase(
             // Baseline gain: staying in (now empty) current_comm.
             // After removal sigma_tot[current_comm] no longer includes ki,
             // so gain of "re-inserting into current_comm" uses updated value.
-            let gain_current = modularity_gain_proportional(
-                k_i_current,
-                state.sigma_tot[current_comm],
-                ki,
-                two_m,
-            );
+            let gain_current =
+                modularity_gain_proportional(k_i_current, state.sigma_tot[current_comm], ki, two_m);
 
             // Collect candidate communities from neighbours only
             // (we always consider current_comm as the baseline).
-            let mut candidates: Vec<usize> = graph.adj[i]
-                .iter()
-                .map(|&(v, _)| state.comm[v])
-                .collect();
+            let mut candidates: Vec<usize> =
+                graph.adj[i].iter().map(|&(v, _)| state.comm[v]).collect();
             candidates.sort_unstable();
             candidates.dedup();
 
@@ -297,12 +278,7 @@ fn local_move_phase(
                     continue; // moving to own community is never a net gain
                 }
                 let k_i_c = state.k_i_c(i, c, &graph.adj);
-                let gain_c = modularity_gain_proportional(
-                    k_i_c,
-                    state.sigma_tot[c],
-                    ki,
-                    two_m,
-                );
+                let gain_c = modularity_gain_proportional(k_i_c, state.sigma_tot[c], ki, two_m);
                 let delta = gain_c - gain_current;
                 if delta > best_delta || (delta == best_delta && c < best_comm) {
                     best_delta = delta;
@@ -405,7 +381,6 @@ fn leiden_refinement(n: usize, comm: &[usize], adj: &[Vec<(usize, f64)>]) -> Vec
 
     result
 }
-
 
 // ── Public entry point ─────────────────────────────────────────────────────
 
@@ -664,10 +639,7 @@ fn split_oversized(
 
 /// Identify hub nodes (top `hub_percentile` by degree).
 /// Returns `(non_hub_indices, hub_indices)`.
-fn identify_hubs(
-    graph: &CommunityGraph,
-    cfg: &CommunityConfig,
-) -> (Vec<usize>, Vec<usize>) {
+fn identify_hubs(graph: &CommunityGraph, cfg: &CommunityConfig) -> (Vec<usize>, Vec<usize>) {
     let n = graph.n();
     if n == 0 {
         return (vec![], vec![]);
@@ -742,7 +714,10 @@ fn reattach_hubs(
 
 /// Build a sub-graph containing only `member_indices` (a subset of
 /// `graph.nodes`). Returns `(sub_graph, sub_to_original_index_map)`.
-fn build_subgraph(graph: &CommunityGraph, member_indices: &[usize]) -> (CommunityGraph, Vec<usize>) {
+fn build_subgraph(
+    graph: &CommunityGraph,
+    member_indices: &[usize],
+) -> (CommunityGraph, Vec<usize>) {
     // member_indices must already be in a stable order for determinism.
     let local_idx: HashMap<usize, usize> = member_indices
         .iter()
@@ -759,11 +734,7 @@ fn build_subgraph(graph: &CommunityGraph, member_indices: &[usize]) -> (Communit
     for &gi in member_indices {
         for &(v, w) in &graph.adj[gi] {
             if local_idx.contains_key(&v) && gi < v {
-                raw_edges.push((
-                    graph.nodes[gi].clone(),
-                    graph.nodes[v].clone(),
-                    w,
-                ));
+                raw_edges.push((graph.nodes[gi].clone(), graph.nodes[v].clone(), w));
             }
         }
     }
@@ -854,7 +825,10 @@ mod tests {
         let keys: Vec<&str> = ops.iter().map(|o| o.natural_key.as_str()).collect();
         let mut sorted = keys.clone();
         sorted.sort_unstable();
-        assert_eq!(keys, sorted, "ops emitted deterministically sorted by node id");
+        assert_eq!(
+            keys, sorted,
+            "ops emitted deterministically sorted by node id"
+        );
 
         for op in &ops {
             assert_eq!(op.label, "Symbol");
@@ -867,7 +841,10 @@ mod tests {
 
         // Unresolved labels are skipped (live nodes gated on the projection).
         let none_ops = community_node_ops(&result, |_| None);
-        assert!(none_ops.is_empty(), "nodes with no resolved label are skipped");
+        assert!(
+            none_ops.is_empty(),
+            "nodes with no resolved label are skipped"
+        );
     }
 
     #[test]
@@ -879,8 +856,12 @@ mod tests {
         assert_eq!(result.len(), 10, "all 10 nodes must be assigned");
 
         // Collect community for each clique.
-        let comm_a: Vec<u32> = (0..5).map(|i| result[&format!("n{i}")].community_id).collect();
-        let comm_b: Vec<u32> = (5..10).map(|i| result[&format!("n{i}")].community_id).collect();
+        let comm_a: Vec<u32> = (0..5)
+            .map(|i| result[&format!("n{i}")].community_id)
+            .collect();
+        let comm_b: Vec<u32> = (5..10)
+            .map(|i| result[&format!("n{i}")].community_id)
+            .collect();
 
         // All nodes in clique A must share one community.
         assert!(
@@ -912,10 +893,7 @@ mod tests {
                     a.community_id, b.community_id,
                     "community_id differs across runs for {node_id}"
                 );
-                assert_eq!(
-                    a.level, b.level,
-                    "level differs across runs for {node_id}"
-                );
+                assert_eq!(a.level, b.level, "level differs across runs for {node_id}");
             }
         }
     }
@@ -991,8 +969,12 @@ mod tests {
         // Because hub has degree 6 vs cluster nodes degree ~3, hub_percentile=0.8
         // will exclude it.
         let node_ids: Vec<NodeId> = vec![
-            "a0".into(), "a1".into(), "a2".into(),
-            "b0".into(), "b1".into(), "b2".into(),
+            "a0".into(),
+            "a1".into(),
+            "a2".into(),
+            "b0".into(),
+            "b1".into(),
+            "b2".into(),
             "h".into(),
         ];
         let edges: Vec<(NodeId, NodeId, f64)> = vec![
@@ -1031,14 +1013,20 @@ mod tests {
             .iter()
             .map(|n| result[*n].community_id)
             .collect();
-        assert!(ca.windows(2).all(|w| w[0] == w[1]), "cluster A must share a community");
+        assert!(
+            ca.windows(2).all(|w| w[0] == w[1]),
+            "cluster A must share a community"
+        );
 
         // Cluster B must be together.
         let cb: Vec<u32> = ["b0", "b1", "b2"]
             .iter()
             .map(|n| result[*n].community_id)
             .collect();
-        assert!(cb.windows(2).all(|w| w[0] == w[1]), "cluster B must share a community");
+        assert!(
+            cb.windows(2).all(|w| w[0] == w[1]),
+            "cluster B must share a community"
+        );
 
         // Hub must land in one of the two cluster communities (re-attached to
         // majority-neighbor community). Since hub has equal weight to both
