@@ -277,7 +277,19 @@
       "Bash(cargo test *)",
       "Bash(awk -F'[ ;]' '{p+=$4} END {print \"TOTAL PASSED:\", p}')",
       "Bash(cargo check *)",
-      "Bash(rustfmt --edition 2021 crates/cortex-api/src/search/architecture_route.rs crates/cortex-api/src/search/strategies.rs crates/cortex-api/src/search.rs)"
+      "Bash(rustfmt --edition 2021 crates/cortex-api/src/search/architecture_route.rs crates/cortex-api/src/search/strategies.rs crates/cortex-api/src/search.rs)",
+      "Bash(awk -F'[ ;.]' '{p+=$5; f+=$7} END {print \"passed:\", p, \"failed:\", f}')",
+      "Bash(rust-analyzer --version)",
+      "Bash(\"/c/Users/Bolado/.cargo/bin/rust-analyzer\" --version)",
+      "Bash(\"/c/Users/Bolado/.cargo/bin/rust-analyzer\" scip *)",
+      "Read(//c/Users/Bolado/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/**)",
+      "Bash(\"/c/Users/Bolado/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin/rust-analyzer\" --version)",
+      "Bash(rustup component *)",
+      "Bash(rust-analyzer scip *)",
+      "Bash(protoc --version)",
+      "Bash(protoc --decode_raw)",
+      "Bash(rustc --version)",
+      "Bash(rustfmt --edition 2021 crates/cortex-workers/src/graph/scip.rs crates/cortex-workers/src/graph/mod.rs)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude"
