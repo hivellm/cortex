@@ -256,6 +256,27 @@ never retrievable via the fused query path
 collection/index that does not exist simply returns zero hits, so the
 extra lanes are safe.
 
+#### Global route: architecture-level questions (phase27c §2)
+
+Before `free_search` builds its per-repo plan, `build_plan` runs the
+`search/architecture_route.rs` detector (`is_architecture_query` — a
+conservative lowercase-marker heuristic: "architecture",
+"subsystems", "system overview", "major components", …). On a match,
+the request reroutes to the GraphRAG **global** plan instead: vector
+`cortex.consolidation.fp32` + keyword `cortex_consolidations` (where
+the phase27c §1 community summaries live), no graph fan-out, no
+overlays, 50/50 budget split. The map-reduce split follows GraphRAG's
+own shape — the expensive MAP runs offline in the Community
+consolidation grain; the query-time REDUCE is this budgeted top-N
+selection, assembled by the pre-thinking renderer within its byte
+budget. A query-time LLM reduce is deliberately excluded (800 ms sync
+budget vs ~1.5 s per Haiku call).
+
+The detector applies to `free_search` ONLY: `pre_change_context` (the
+agent pre-thinking hot path) always keeps its per-chunk plan, so a
+detector false positive can never degrade primary retrieval — pinned
+by `pre_change_context_never_reroutes_on_architecture_phrasing`.
+
 ### Execution plan
 
 ```rust

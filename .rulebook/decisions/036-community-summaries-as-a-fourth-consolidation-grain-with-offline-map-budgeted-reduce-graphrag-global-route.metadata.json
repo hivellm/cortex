@@ -1,0 +1,13 @@
+{
+  "id": 36,
+  "slug": "community-summaries-as-a-fourth-consolidation-grain-with-offline-map-budgeted-reduce-graphrag-global-route",
+  "title": "Community summaries as a fourth consolidation grain with offline-map / budgeted-reduce GraphRAG global route",
+  "status": "proposed",
+  "date": "2026-07-07",
+  "relatedTasks": [
+    "phase27c_graphrag-community-summaries",
+    "phase27b_graph-community-detection",
+    "phase29_graph-projection-unblock"
+  ],
+  "supersededBy": null
+}

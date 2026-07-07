@@ -26,16 +26,28 @@ pub trait Consolidator: EnvelopeProducer {
 }
 ```
 
-Three impls land under `consolidator/grains/`:
+Four impls land under `consolidator/grains/`:
 
 | Grain               | Module                                    | Trigger              | Auto-promoted to Opus? |
 |---------------------|-------------------------------------------|----------------------|------------------------|
 | `Session`           | `grains/session.rs::SessionGrain`         | `SessionEnd`         | no (Haiku default)     |
 | `Topic`             | `grains/topic.rs::TopicGrain`             | `NightlyTopic`       | no (Haiku default)     |
 | `DecisionTrace`     | `grains/decision_trace.rs::DecisionTraceGrain` | `DecisionLanded` | yes (Orchestrator)     |
+| `Community` (phase27c §1) | `grains/community.rs::CommunityGrain` | `CommunityDetected`  | no (Haiku default)     |
 
 Each grain composes `EnvelopeProducer` so the daemon shares the
 `producer_checkpoints` SQLite table all phase13b producers write to.
+
+The `Community` grain (phase27c §1) summarises one graph community
+(subsystem cluster) per Leiden hierarchy level — its scope carries a
+structured `{community_id, level}` value instead of a plain string,
+so multi-resolution summaries are the same producer run once per
+level. It is OPTIONAL on the daemon (`with_community()` builder):
+deployments without a graph client skip it, and a `CommunityDetected`
+trigger arriving with no grain wired fails-and-acks instead of
+wedging the queue. Live value is gated on the phase27b §2.5 writeback
+worker (ADR-027 — semantic projection): until that runs, the source
+snapshot is empty and every trigger is a benign zero-envelope run.
 
 ## §2 Dispatch contract
 
