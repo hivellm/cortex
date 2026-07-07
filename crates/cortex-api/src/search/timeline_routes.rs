@@ -155,14 +155,20 @@ pub async fn handle_timeline(
     let mut params: HashMap<String, NexusValue> = HashMap::new();
     let mut clauses: Vec<String> = Vec::new();
     if !all_projects {
-        params.insert("project_id".to_string(), NexusValue::String(project.clone()));
+        params.insert(
+            "project_id".to_string(),
+            NexusValue::String(project.clone()),
+        );
         clauses.push("t.project_id = $project_id".to_string());
         // Only constrain the branch when the caller named one — in the
         // single-project default we still union across branches unless
         // an explicit `branch` filter is supplied, so a project's full
         // progress shows by default.
         if q.branch.as_deref().filter(|s| !s.is_empty()).is_some() {
-            params.insert("branch_id".to_string(), NexusValue::String(branch_id.clone()));
+            params.insert(
+                "branch_id".to_string(),
+                NexusValue::String(branch_id.clone()),
+            );
             clauses.push("t.branch_id = $branch_id".to_string());
         }
     }
@@ -184,7 +190,11 @@ pub async fn handle_timeline(
     } else {
         format!("WHERE {} ", clauses.join(" AND "))
     };
-    let tl_params = if params.is_empty() { None } else { Some(params) };
+    let tl_params = if params.is_empty() {
+        None
+    } else {
+        Some(params)
+    };
     let cypher = format!(
         "MATCH (t:TimelineEvent) {where_clause}\
          RETURN t.id AS id, t.kind AS kind, t.project_id AS project_id, \
@@ -440,7 +450,10 @@ pub async fn handle_branch_merge(
         "MATCH (b:{label}) WHERE b.id = $id RETURN b.parent_branch_id AS parent_branch_id",
         label = BRANCH_LABEL,
     );
-    let parent_id = match nexus.execute_cypher(&lookup_cypher, Some(lkup_params)).await {
+    let parent_id = match nexus
+        .execute_cypher(&lookup_cypher, Some(lkup_params))
+        .await
+    {
         Ok(out) => out.rows.first().and_then(|r| {
             r.get("parent_branch_id")
                 .and_then(|v| v.as_str())
@@ -598,7 +611,10 @@ pub async fn handle_entity_history(
     };
     let limit = clamp_limit(q.limit);
     let mut eh_params: HashMap<String, NexusValue> = HashMap::new();
-    eh_params.insert("entity_id".to_string(), NexusValue::String(entity_id.clone()));
+    eh_params.insert(
+        "entity_id".to_string(),
+        NexusValue::String(entity_id.clone()),
+    );
     let mut clauses = vec!["t.entity_id = $entity_id".to_string()];
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));

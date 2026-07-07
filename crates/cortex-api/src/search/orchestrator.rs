@@ -21,7 +21,9 @@ use crate::types::{
     empty_response, BudgetReport, DebugNote, DecisionRef, GraphNeighbor, IncludeField, Intent,
     LawRef, QueryRequest, QueryResponse, SimilarTurn, Snippet, ViolationRef,
 };
-use cortex_config::{AccessControlConfig, CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig};
+use cortex_config::{
+    AccessControlConfig, CrossProjectConfig, RerankerConfig, TemporalConfig, VerifyConfig,
+};
 use cortex_workers::rerank::{Candidate as RerankCandidate, Reranker};
 use cortex_workers::temporal::classifier::{
     classify, Action as TemporalAction, Candidate as TemporalCandidate, IncludeFlags,
@@ -324,7 +326,8 @@ impl Orchestrator {
             clearance_level: principal.clearance_level,
             compartment_grants: principal.compartment_grants.clone(),
         };
-        self.run_with_acl(req, Some(acl), Some(principal.id.as_str())).await
+        self.run_with_acl(req, Some(acl), Some(principal.id.as_str()))
+            .await
     }
 
     /// Private inner runner. `acl_override` is stamped onto every keyword
@@ -1200,7 +1203,14 @@ fn apply_acl_wedge(
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
                 .unwrap_or(0);
-            m.record(now_secs, verdict, pid, fact_level.unwrap_or(0), reason, &hit.doc_id);
+            m.record(
+                now_secs,
+                verdict,
+                pid,
+                fact_level.unwrap_or(0),
+                reason,
+                &hit.doc_id,
+            );
         }
 
         if permit {

@@ -20,7 +20,12 @@
 //! `CORTEX_GRAPH_NEXUS_URL`), so the daemon does not need extra
 //! configuration plumbing for this surface.
 
-use axum::{extract::State, http::{HeaderMap, StatusCode}, response::Response, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::Response,
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -244,7 +249,12 @@ fn vector_hit_passes_acl(hit: &Value, clearance_level: u8, compartment_grants: &
         .get("class_compartments")
         .or_else(|| nested.and_then(|n| n.get("class_compartments")))
         .and_then(Value::as_array)
-        .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
         .unwrap_or_default();
     cortex_workers::acl::filter::vectorizer_acl_matches(
         clearance_level,
@@ -1050,7 +1060,10 @@ mod tests {
 
     #[test]
     fn merged_meili_filter_wraps_both_in_parens() {
-        let out = merged_meili_filter(Some("repo = 'cortex'"), "(class_level IS EMPTY OR class_level <= 1)");
+        let out = merged_meili_filter(
+            Some("repo = 'cortex'"),
+            "(class_level IS EMPTY OR class_level <= 1)",
+        );
         assert_eq!(
             out,
             "(repo = 'cortex') AND ((class_level IS EMPTY OR class_level <= 1))"
@@ -1071,8 +1084,14 @@ mod tests {
             "id": "evt-001",
             "payload": { "class_level": 3, "class_compartments": [] }
         });
-        assert!(!vector_hit_passes_acl(&hit, 1, &[]), "clearance 1 must not see level 3");
-        assert!(vector_hit_passes_acl(&hit, 3, &[]), "clearance 3 may see level 3");
+        assert!(
+            !vector_hit_passes_acl(&hit, 1, &[]),
+            "clearance 1 must not see level 3"
+        );
+        assert!(
+            vector_hit_passes_acl(&hit, 3, &[]),
+            "clearance 3 may see level 3"
+        );
     }
 
     #[test]
@@ -1084,7 +1103,10 @@ mod tests {
                 "class_compartments": ["financial"]
             }
         });
-        assert!(!vector_hit_passes_acl(&hit, 2, &[]), "no grant must be denied");
+        assert!(
+            !vector_hit_passes_acl(&hit, 2, &[]),
+            "no grant must be denied"
+        );
         assert!(
             vector_hit_passes_acl(&hit, 2, &["financial".to_string()]),
             "grant held must pass"
@@ -1109,8 +1131,17 @@ mod tests {
                 }
             }
         });
-        assert!(!vector_hit_passes_acl(&hit, 1, &["hr".to_string()]), "level gate must fire");
-        assert!(!vector_hit_passes_acl(&hit, 2, &[]), "missing compartment grant");
-        assert!(vector_hit_passes_acl(&hit, 2, &["hr".to_string()]), "both pass");
+        assert!(
+            !vector_hit_passes_acl(&hit, 1, &["hr".to_string()]),
+            "level gate must fire"
+        );
+        assert!(
+            !vector_hit_passes_acl(&hit, 2, &[]),
+            "missing compartment grant"
+        );
+        assert!(
+            vector_hit_passes_acl(&hit, 2, &["hr".to_string()]),
+            "both pass"
+        );
     }
 }
