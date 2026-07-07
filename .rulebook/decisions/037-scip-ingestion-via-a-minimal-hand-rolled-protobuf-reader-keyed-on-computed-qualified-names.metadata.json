@@ -1,0 +1,13 @@
+{
+  "id": 37,
+  "slug": "scip-ingestion-via-a-minimal-hand-rolled-protobuf-reader-keyed-on-computed-qualified-names",
+  "title": "SCIP ingestion via a minimal hand-rolled protobuf reader keyed on computed qualified names",
+  "status": "proposed",
+  "date": "2026-07-07",
+  "relatedTasks": [
+    "phase27d_scip-precise-extraction",
+    "phase23c_ua-extraction-contract",
+    "phase30_live-e2e-smoke-and-doctor-wiring"
+  ],
+  "supersededBy": null
+}
