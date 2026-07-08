@@ -23,6 +23,7 @@ pub mod decision_search;
 pub mod events_by_kind;
 pub mod files_touched;
 pub mod fusion;
+pub mod graph_seeds;
 pub mod law_violations;
 pub mod orchestrator;
 pub mod query_explain;

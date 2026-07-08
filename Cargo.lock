@@ -626,6 +626,7 @@ dependencies = [
  "cortex-workers",
  "data-encoding",
  "futures",
+ "lru",
  "nexus-graph-sdk",
  "notify",
  "notify-debouncer-mini",

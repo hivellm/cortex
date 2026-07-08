@@ -49,6 +49,9 @@ futures = "0.3"
 regex = { workspace = true }
 notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
+# Phase27e §1.1/§1.2 — LRU-cached per-token document-frequency probes
+# for IDF-gated graph seed selection (nexus_graph_lane.rs).
+lru = { workspace = true }
 
 synap-sdk = { workspace = true }
 nexus-graph-sdk = { workspace = true }

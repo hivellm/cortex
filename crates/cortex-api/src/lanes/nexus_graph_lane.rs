@@ -16,19 +16,67 @@
 //! Unknown templates are rejected at the lane boundary so a buggy
 //! caller can't reach Nexus with arbitrary Cypher.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use lru::LruCache;
 use nexus_sdk::{NexusClient, Value as NexusValue};
 use serde_json::Value;
 
 use crate::lanes::{GraphLane, GraphRequest, LaneError, LaneHit};
+use crate::search::graph_seeds::{self, SeedTerm};
+
+/// Phase27e §1.1 — strategy templates whose WHERE clause matches
+/// free-text query terms against node labels via `CONTAINS` and are
+/// therefore eligible for IDF-gated seed fan-out. `cross_project_ref`
+/// is invoked directly by the orchestrator's propagation helper with
+/// a structural `<project>:branch` id (not a natural-language query),
+/// so it keeps the single raw-query pass unconditionally.
+const SEED_FAN_OUT_TEMPLATES: &[&str] = &[
+    "edge_artifact_touched_neighbours",
+    "decision_supersedes_chain",
+    "turn_analysis_decision_chain",
+    "law_violations_last_30d",
+];
+
+/// Phase27e §1.3 — multiplicative bonus applied to a hit's native
+/// score when its projected label/path contains one of the surviving
+/// seed tokens. Large enough to break ties in favour of "where is X"
+/// style queries, small enough not to override a legitimately closer
+/// (lower-hop) match.
+const SOURCE_PATH_BONUS: f64 = 1.2;
+
+/// LRU capacity for the per-(template, token) document-frequency
+/// cache — comfortably covers a session's worth of repeated queries
+/// without unbounded growth.
+const DF_CACHE_CAPACITY: usize = 1024;
+
+/// Generic, label-less node count used to seed the IDF denominator.
+/// `MATCH (n)` without a label is already precedented in this
+/// codebase (`graph/indexer.rs`, `dashboard/graph.rs`'s community
+/// query) — community/seed scoring is not scoped to one Cypher label.
+const TOTAL_NODES_CYPHER: &str = "MATCH (n) RETURN count(n) AS n";
 
 /// Concrete `GraphLane` backed by a live Nexus instance.
 #[derive(Clone)]
 pub struct NexusGraphLane {
     client: Arc<NexusClient>,
+    /// Phase27e §1.1 — per-(template, token) document-frequency cache.
+    /// Shared across `Clone`s via `Arc` so the boot-time singleton
+    /// (`main.rs` clones this lane into the orchestrator) amortises
+    /// repeated queries within the same process.
+    df_cache: Arc<Mutex<LruCache<(String, String), u64>>>,
+    /// Phase27e §1.1 — total node count, probed once and cached for
+    /// the lane's lifetime. Staleness tradeoff: the count does not
+    /// track nodes written after the first probe. IDF only needs an
+    /// order-of-magnitude denominator to rank tokens *relative to each
+    /// other* within one query, so a stale total does not change which
+    /// tokens clear the 80% gate in practice; re-probing on every
+    /// query would double the Cypher round-trips for no measurable
+    /// ranking benefit.
+    total_nodes: Arc<Mutex<Option<u64>>>,
 }
 
 impl std::fmt::Debug for NexusGraphLane {
@@ -43,8 +91,93 @@ impl NexusGraphLane {
     /// between this lane and `DashboardState` so the daemon doesn't
     /// open two TCP sessions to the same server.
     pub fn new(client: Arc<NexusClient>) -> Self {
-        Self { client }
+        Self {
+            client,
+            df_cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(DF_CACHE_CAPACITY).expect("non-zero DF cache capacity"),
+            ))),
+            total_nodes: Arc::new(Mutex::new(None)),
+        }
     }
+
+    /// Phase27e §1.1 — total node count, probed once per lane instance
+    /// and cached (see the `total_nodes` field docs for the staleness
+    /// tradeoff). Falls back to `1` (a safe non-zero denominator) when
+    /// the probe fails, so a transient Nexus hiccup degrades to
+    /// "every token equally rare" rather than propagating an error out
+    /// of the seed-selection path.
+    async fn total_node_count(&self) -> u64 {
+        if let Some(n) = self.total_nodes.lock().ok().and_then(|g| *g) {
+            return n;
+        }
+        let n = match self.client.execute_cypher(TOTAL_NODES_CYPHER, None).await {
+            Ok(res) => res
+                .rows
+                .first()
+                .and_then(|row| row.as_array())
+                .and_then(|cells| cell_to_u64(cells.first()))
+                .unwrap_or(1)
+                .max(1),
+            Err(_) => 1,
+        };
+        if let Ok(mut g) = self.total_nodes.lock() {
+            *g = Some(n);
+        }
+        n
+    }
+
+    /// Phase27e §1.1 — per-token document frequency for `template`,
+    /// backed by the LRU cache. A cache miss issues one COUNT Cypher
+    /// probe against Nexus (mirroring the template's own WHERE
+    /// shape — see [`count_cypher_for`]); a probe failure or a
+    /// template outside [`SEED_FAN_OUT_TEMPLATES`] is treated as
+    /// `doc_freq = 0` (the token behaves as maximally rare — safe:
+    /// it can still be gated out later if another token is
+    /// legitimately rarer, and worst case it survives as a seed,
+    /// which only adds a traversal, never drops one).
+    async fn doc_freq(&self, template: &str, token: &str) -> u64 {
+        let key = (template.to_string(), token.to_string());
+        if let Some(df) = self
+            .df_cache
+            .lock()
+            .ok()
+            .and_then(|mut g| g.get(&key).copied())
+        {
+            return df;
+        }
+        let Some(count_cy) = count_cypher_for(template) else {
+            return 0;
+        };
+        let mut params: HashMap<String, NexusValue> = HashMap::new();
+        params.insert("t".to_string(), NexusValue::String(token.to_string()));
+        let df = match self.client.execute_cypher(count_cy, Some(params)).await {
+            Ok(res) => res
+                .rows
+                .first()
+                .and_then(|row| row.as_array())
+                .and_then(|cells| cell_to_u64(cells.first()))
+                .unwrap_or(0),
+            Err(_) => 0,
+        };
+        if let Ok(mut g) = self.df_cache.lock() {
+            g.put(key, df);
+        }
+        df
+    }
+}
+
+/// Read a Cypher COUNT-result cell as `u64`, tolerating whichever
+/// numeric JSON representation the Nexus SDK deserialises the count
+/// into (`u64`, `i64`, or `f64`).
+fn cell_to_u64(cell: Option<&Value>) -> Option<u64> {
+    let v = cell?;
+    if let Some(u) = v.as_u64() {
+        return Some(u);
+    }
+    if let Some(i) = v.as_i64() {
+        return Some(i.max(0) as u64);
+    }
+    v.as_f64().map(|f| f.max(0.0) as u64)
 }
 
 /// Resolve a strategies-layer template name to a parametrised
@@ -130,6 +263,39 @@ fn cypher_for(template: &str) -> Option<&'static str> {
     }
 }
 
+/// Phase27e §1.1 — per-template document-frequency COUNT probe.
+/// Mirrors each fan-out-eligible template's own WHERE shape (same
+/// `CONTAINS` predicates, same primary node alias — see
+/// [`primary_node_alias`]) but returns `count(<alias>)` instead of
+/// projecting rows, so the result reflects exactly the set of nodes
+/// that template's own hit-query would traverse from. `$t` is bound
+/// to one candidate seed token at a time. Only checks the primary
+/// alias's own text fields (not every OR-branch of the hit query) —
+/// the same simplification `primary_node_alias` already makes for the
+/// ACL filter. Returns `None` for templates outside
+/// [`SEED_FAN_OUT_TEMPLATES`] (`cross_project_ref` included).
+fn count_cypher_for(template: &str) -> Option<&'static str> {
+    match template {
+        "edge_artifact_touched_neighbours" => Some(
+            "MATCH (a:Artifact) WHERE a.path CONTAINS $t OR a.natural_key CONTAINS $t \
+             RETURN count(a) AS n",
+        ),
+        "decision_supersedes_chain" => Some(
+            "MATCH (d:Decision) WHERE d.id CONTAINS $t OR d.title CONTAINS $t \
+             RETURN count(d) AS n",
+        ),
+        "turn_analysis_decision_chain" => Some(
+            "MATCH (an:Analysis) WHERE an.id CONTAINS $t OR an.title CONTAINS $t \
+             RETURN count(an) AS n",
+        ),
+        "law_violations_last_30d" => Some(
+            "MATCH (v:LawViolation) WHERE v.law_id CONTAINS $t OR v.body CONTAINS $t \
+             RETURN count(v) AS n",
+        ),
+        _ => None,
+    }
+}
+
 /// Phase21 §5.4 — map a template name to the primary node alias used
 /// in its WHERE clause. The ACL injection appends predicates on this
 /// alias so the Bell-LaPadula level + compartment check applies to the
@@ -193,37 +359,120 @@ impl GraphLane for NexusGraphLane {
         let cy_owned = cypher_with_acl(base, &req.template, req.acl.as_ref());
         let cy = cy_owned.as_str();
 
-        // Bind `$q` from the strategies-supplied params. Every
-        // current template uses the same `query` param name; if a
-        // future template needs a different shape, add a per-template
-        // binder rather than a free-form `params` walk (the trait
-        // surface keeps the lane locked to whitelisted shapes).
-        let q = req
+        // Every current template uses the same `query` param name; if
+        // a future template needs a different shape, add a
+        // per-template binder rather than a free-form `params` walk
+        // (the trait surface keeps the lane locked to whitelisted
+        // shapes).
+        let raw_query = req
             .params
             .get("query")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let mut params: HashMap<String, NexusValue> = HashMap::new();
-        params.insert("q".to_string(), NexusValue::String(q));
 
-        let res = match self.client.execute_cypher(cy, Some(params)).await {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(LaneError::Transport(format!(
-                    "execute_cypher({}): {e}",
-                    req.template
-                )));
+        // Phase27e §1.1/§1.2 — IDF-gated seed fan-out. Tokenize the
+        // raw query, resolve each surviving token's document frequency
+        // (LRU-cached COUNT probe) and keep only the tokens clearing
+        // graphify's 80%-of-top-IDF gate. Only the four strategy
+        // templates in `SEED_FAN_OUT_TEMPLATES` participate;
+        // `cross_project_ref` always falls through to the raw-query
+        // pass below.
+        let seeds: Vec<SeedTerm> = if SEED_FAN_OUT_TEMPLATES.contains(&req.template.as_str()) {
+            let tokens = graph_seeds::tokenize(&raw_query);
+            if tokens.is_empty() {
+                Vec::new()
+            } else {
+                let total_nodes = self.total_node_count().await;
+                let mut df_map: HashMap<String, u64> = HashMap::with_capacity(tokens.len());
+                for t in &tokens {
+                    let df = self.doc_freq(&req.template, t).await;
+                    df_map.insert(t.clone(), df);
+                }
+                graph_seeds::select_seeds(
+                    &tokens,
+                    &|t: &str| *df_map.get(t).unwrap_or(&0),
+                    total_nodes,
+                    graph_seeds::DEFAULT_TOP_GATE,
+                )
             }
+        } else {
+            Vec::new()
         };
+        let seed_tokens: Vec<String> = seeds.into_iter().map(|s| s.token).collect();
 
-        let hits = res
-            .rows
-            .iter()
-            .filter_map(|row| project_row(row, &req.template))
-            .collect();
-        Ok(hits)
+        // Fallback: when zero seeds survive (empty / all-stopword
+        // query, or a template outside the fan-out list), keep the
+        // pre-phase27e single raw-query pass so nothing regresses.
+        let query_values = query_values_for(&seed_tokens, &raw_query);
+
+        let mut passes: Vec<Vec<Value>> = Vec::with_capacity(query_values.len());
+        for q in &query_values {
+            let mut params: HashMap<String, NexusValue> = HashMap::new();
+            params.insert("q".to_string(), NexusValue::String(q.clone()));
+
+            let res = match self.client.execute_cypher(cy, Some(params)).await {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(LaneError::Transport(format!(
+                        "execute_cypher({}): {e}",
+                        req.template
+                    )));
+                }
+            };
+            passes.push(res.rows);
+        }
+
+        Ok(merge_rows(&req.template, &seed_tokens, &passes))
     }
+}
+
+/// Phase27e §1.2 — resolve the list of `$q` bindings `query()` issues
+/// one Cypher pass per: the surviving seed tokens, or — when zero
+/// seeds survive (empty / all-stopword query, or a template outside
+/// [`SEED_FAN_OUT_TEMPLATES`]) — a single-element fallback carrying
+/// the raw query, exactly matching the pre-phase27e behaviour.
+/// Extracted as a pure function so the fallback branch is
+/// unit-testable without a Nexus round-trip.
+fn query_values_for(seed_tokens: &[String], raw_query: &str) -> Vec<String> {
+    if seed_tokens.is_empty() {
+        vec![raw_query.to_string()]
+    } else {
+        seed_tokens.to_vec()
+    }
+}
+
+/// Phase27e §1.1 — merge the rows collected from every Cypher pass in
+/// `passes` (one pass per surviving seed token, or the single
+/// raw-query fallback pass), project each row via [`project_row`]
+/// (which applies the §1.3 source-path bonus against `seed_tokens`),
+/// and dedup by `(edge_from, edge_to, edge_type)` so the same edge
+/// surfaced by two different seed tokens counts once. The merged,
+/// deduped set is truncated at 50 to preserve the per-template
+/// Cypher's own `LIMIT 50` semantics. Extracted as a pure function so
+/// seed fan-out + dedup + the source-path bonus are unit-testable
+/// without a live Nexus instance — `query()` supplies `passes` from
+/// `self.client.execute_cypher` per query value.
+fn merge_rows(template: &str, seed_tokens: &[String], passes: &[Vec<Value>]) -> Vec<LaneHit> {
+    let mut seen: HashSet<(String, String, String)> = HashSet::new();
+    let mut hits: Vec<LaneHit> = Vec::new();
+    for rows in passes {
+        for row in rows {
+            let Some(hit) = project_row(row, template, seed_tokens) else {
+                continue;
+            };
+            let dedup_key = (
+                hit.overlay.edge_from.clone().unwrap_or_default(),
+                hit.overlay.edge_to.clone().unwrap_or_default(),
+                hit.symbol.clone().unwrap_or_default(),
+            );
+            if seen.insert(dedup_key) {
+                hits.push(hit);
+            }
+        }
+    }
+    hits.truncate(50);
+    hits
 }
 
 /// Phase27a §3.1 — map an edge-confidence tier (+ optional explicit
@@ -248,7 +497,22 @@ fn confidence_weight(tier: Option<&str>, score: Option<f64>) -> f64 {
     }
 }
 
-fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
+/// Phase27e §1.3 — true when `label` or `edge_to` (the hit's
+/// projected path — the artifact template's `edge_to` cell IS the
+/// node's `path`) contains any of `seed_tokens` as a case-insensitive
+/// substring. Boosts "where is X" queries: a graph hit whose own
+/// label/path echoes a seed term outranks a same-hop hit that
+/// doesn't. Empty `seed_tokens` (raw-query fallback path) never
+/// applies the bonus.
+fn source_path_bonus_applies(label: &str, edge_to: &str, seed_tokens: &[String]) -> bool {
+    if seed_tokens.is_empty() {
+        return false;
+    }
+    let haystack = format!("{label} {edge_to}").to_ascii_lowercase();
+    seed_tokens.iter().any(|t| haystack.contains(t.as_str()))
+}
+
+fn project_row(row: &Value, template: &str, seed_tokens: &[String]) -> Option<LaneHit> {
     let cells = row.as_array()?;
     let edge_from = cells.first().and_then(Value::as_str)?.to_string();
     let edge_to = cells.get(1).and_then(Value::as_str)?.to_string();
@@ -343,6 +607,17 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
         ..crate::lanes::Overlay::default()
     };
 
+    // Phase27e §1.3 — source-path bonus: a hit whose own label/path
+    // echoes a surviving seed token is more likely to BE the thing
+    // the caller asked about ("where is X") rather than merely a
+    // neighbour of it, so its native score is boosted before fusion.
+    let base_score = (1.0 / (hops as f64).max(1.0)) * weight;
+    let score = if source_path_bonus_applies(&label, &edge_to, seed_tokens) {
+        base_score * SOURCE_PATH_BONUS
+    } else {
+        base_score
+    };
+
     Some(LaneHit {
         // Doc-id keys per (template, from, to) so RRF buckets stay
         // distinct across templates that surface the same node pair.
@@ -361,7 +636,9 @@ fn project_row(row: &Value, template: &str) -> Option<LaneHit> {
         // fused order whenever two graph edges differ only in
         // confidence. Edges without a confidence property keep weight
         // 1.0 (back-compatible with everything written pre-phase27a).
-        score: (1.0 / (hops as f64).max(1.0)) * weight,
+        // Phase27e §1.3 layers the source-path bonus on top (see
+        // `source_path_bonus_applies`).
+        score,
         ts: 0,
         severity: None,
         extras,
@@ -407,7 +684,7 @@ mod tests {
             1_i64,
             "Adopt RRF fusion"
         ]);
-        let hit = project_row(&row, "decision_supersedes_chain").unwrap();
+        let hit = project_row(&row, "decision_supersedes_chain", &[]).unwrap();
         assert_eq!(
             hit.doc_id,
             "graph|decision_supersedes_chain|DEC-0042|DEC-0001"
@@ -471,8 +748,8 @@ mod tests {
         let inferred = serde_json::json!([
             "S2", "about", "RELATES_TO", 1_i64, "about", "inferred", 0.7
         ]);
-        let he = project_row(&extracted, "edge_artifact_touched_neighbours").unwrap();
-        let hi = project_row(&inferred, "edge_artifact_touched_neighbours").unwrap();
+        let he = project_row(&extracted, "edge_artifact_touched_neighbours", &[]).unwrap();
+        let hi = project_row(&inferred, "edge_artifact_touched_neighbours", &[]).unwrap();
         assert!((he.score - 1.0).abs() < 1e-9, "extracted keeps full score");
         assert!((hi.score - 0.7).abs() < 1e-9, "inferred down-weighted ×0.7");
         assert!(hi.score < he.score);
@@ -488,7 +765,7 @@ mod tests {
         // A 5-cell row (pre-phase27a edge, or an edge missing the
         // property) must keep weight 1.0 — no down-weighting.
         let row = serde_json::json!(["A", "B", "SUPERSEDES", 1_i64, "label"]);
-        let hit = project_row(&row, "decision_supersedes_chain").unwrap();
+        let hit = project_row(&row, "decision_supersedes_chain", &[]).unwrap();
         assert!((hit.score - 1.0).abs() < 1e-9);
         assert!(
             !hit.extras.contains_key("confidence"),
@@ -513,7 +790,7 @@ mod tests {
             "2026-01-01",
             "2026-12-31"
         ]);
-        let hit = project_row(&row, "cross_project_ref").unwrap();
+        let hit = project_row(&row, "cross_project_ref", &[]).unwrap();
         assert!((hit.score - 0.4).abs() < 1e-9, "ambiguous ×0.4");
         assert_eq!(
             hit.extras.get("version_constraint").and_then(|v| v.as_str()),
@@ -537,8 +814,8 @@ mod tests {
     fn projects_drops_rows_with_empty_endpoints() {
         let empty_from = serde_json::json!(["", "DEC-0001", "SUPERSEDES", 1_i64, "label"]);
         let empty_to = serde_json::json!(["DEC-0042", "", "SUPERSEDES", 1_i64, "label"]);
-        assert!(project_row(&empty_from, "decision_supersedes_chain").is_none());
-        assert!(project_row(&empty_to, "decision_supersedes_chain").is_none());
+        assert!(project_row(&empty_from, "decision_supersedes_chain", &[]).is_none());
+        assert!(project_row(&empty_to, "decision_supersedes_chain", &[]).is_none());
     }
 
     #[test]
@@ -642,5 +919,171 @@ mod tests {
         let cy = cypher_with_acl(base, "cross_project_ref", Some(&acl));
         // cross_project_ref has no primary alias → base returned unchanged.
         assert_eq!(cy, base, "structural template must not be ACL-filtered");
+    }
+
+    // ── Phase27e §1.1 — count_cypher_for (DF probe resolution) ──────
+
+    #[test]
+    fn count_cypher_for_resolves_for_every_fan_out_template() {
+        for template in SEED_FAN_OUT_TEMPLATES {
+            assert!(
+                count_cypher_for(template).is_some(),
+                "template {template} must resolve a DF-count Cypher string",
+            );
+        }
+    }
+
+    #[test]
+    fn count_cypher_for_excludes_cross_project_ref_and_unknown() {
+        // cross_project_ref is invoked with a structural branch id, not
+        // a free-text query — it never participates in seed fan-out,
+        // so it must not resolve a DF-count probe either.
+        assert!(count_cypher_for("cross_project_ref").is_none());
+        assert!(count_cypher_for("drop_database").is_none());
+    }
+
+    #[test]
+    fn count_cypher_for_binds_t_not_q() {
+        // The DF probe must bind a distinct `$t` param name from the
+        // hit query's `$q` so a lane-level caller cannot confuse the
+        // two Cypher shapes.
+        for template in SEED_FAN_OUT_TEMPLATES {
+            let cy = count_cypher_for(template).unwrap();
+            assert!(cy.contains("$t"), "template {template} must bind $t: {cy}");
+            assert!(
+                cy.to_ascii_lowercase().contains("count("),
+                "template {template} must project a count(): {cy}"
+            );
+        }
+    }
+
+    // ── Phase27e §1.3 — source_path_bonus_applies ────────────────────
+
+    #[test]
+    fn source_path_bonus_applies_matches_label_case_insensitively() {
+        let seeds = vec!["foobarservice".to_string()];
+        assert!(source_path_bonus_applies("src/FooBarService.rs", "irrelevant", &seeds));
+        assert!(source_path_bonus_applies("irrelevant", "src/FooBarService.rs", &seeds));
+        assert!(!source_path_bonus_applies("unrelated", "also unrelated", &seeds));
+    }
+
+    #[test]
+    fn source_path_bonus_applies_false_when_no_seed_tokens() {
+        // The raw-query fallback path carries no seed tokens — the
+        // bonus must never apply there.
+        assert!(!source_path_bonus_applies("src/FooBarService.rs", "src/FooBarService.rs", &[]));
+    }
+
+    #[test]
+    fn source_path_bonus_applies_requires_a_matching_token() {
+        let seeds = vec!["render".to_string(), "merge".to_string()];
+        assert!(!source_path_bonus_applies("src/handler.rs", "src/handler.rs", &seeds));
+    }
+
+    // ── Phase27e §1.3 — project_row source-path bonus wiring ─────────
+
+    #[test]
+    fn project_row_applies_source_path_bonus_when_label_matches_seed_token() {
+        let row = serde_json::json!([
+            "S1", "src/foo_bar_service.rs", "TOUCHED", 1_i64, "src/foo_bar_service.rs"
+        ]);
+        let seeds = vec!["foo_bar_service".to_string()];
+        let boosted = project_row(&row, "edge_artifact_touched_neighbours", &seeds).unwrap();
+        let baseline = project_row(&row, "edge_artifact_touched_neighbours", &[]).unwrap();
+        assert!(
+            (boosted.score - baseline.score * SOURCE_PATH_BONUS).abs() < 1e-9,
+            "boosted={} baseline*bonus={}",
+            boosted.score,
+            baseline.score * SOURCE_PATH_BONUS
+        );
+        assert!(boosted.score > baseline.score);
+    }
+
+    #[test]
+    fn project_row_no_bonus_when_seed_token_does_not_match_label() {
+        let row = serde_json::json!([
+            "S1", "src/foo_bar_service.rs", "TOUCHED", 1_i64, "src/foo_bar_service.rs"
+        ]);
+        let seeds = vec!["unrelated_token".to_string()];
+        let hit = project_row(&row, "edge_artifact_touched_neighbours", &seeds).unwrap();
+        let baseline = project_row(&row, "edge_artifact_touched_neighbours", &[]).unwrap();
+        assert!((hit.score - baseline.score).abs() < 1e-9);
+    }
+
+    // ── Phase27e §1.2 — query_values_for (fallback resolution) ───────
+
+    #[test]
+    fn query_values_for_falls_back_to_raw_query_when_no_seeds_survive() {
+        let values = query_values_for(&[], "how does render_edge_merge work");
+        assert_eq!(values, vec!["how does render_edge_merge work".to_string()]);
+    }
+
+    #[test]
+    fn query_values_for_uses_seed_tokens_when_present() {
+        let seeds = vec!["foobarservice".to_string(), "render".to_string()];
+        let values = query_values_for(&seeds, "raw query text is ignored here");
+        assert_eq!(values, seeds);
+    }
+
+    // ── Phase27e §1.1 — merge_rows (seed fan-out + dedup) ────────────
+
+    fn decision_row(from: &str, to: &str, label: &str) -> Value {
+        serde_json::json!([from, to, "SUPERSEDES", 1_i64, label])
+    }
+
+    #[test]
+    fn merge_rows_issues_one_projected_pass_per_surviving_seed_token() {
+        // Two seed tokens, each surfacing a distinct edge in its own
+        // Cypher pass — both must appear in the merged result.
+        let passes = vec![
+            vec![decision_row("DEC-0001", "DEC-0000", "Adopt RRF")],
+            vec![decision_row("DEC-0042", "DEC-0041", "Adopt reranker")],
+        ];
+        let seeds = vec!["rrf".to_string(), "reranker".to_string()];
+        let hits = merge_rows("decision_supersedes_chain", &seeds, &passes);
+        assert_eq!(hits.len(), 2, "one hit per pass: {hits:?}");
+        let doc_ids: Vec<&str> = hits.iter().map(|h| h.doc_id.as_str()).collect();
+        assert!(doc_ids.contains(&"graph|decision_supersedes_chain|DEC-0001|DEC-0000"));
+        assert!(doc_ids.contains(&"graph|decision_supersedes_chain|DEC-0042|DEC-0041"));
+    }
+
+    #[test]
+    fn merge_rows_dedups_the_same_edge_surfaced_by_two_seed_tokens() {
+        // Both seed tokens' Cypher passes happen to return the same
+        // edge — it must only appear once in the merged result.
+        let row = decision_row("DEC-0007", "DEC-0006", "Shared decision");
+        let passes = vec![vec![row.clone()], vec![row]];
+        let seeds = vec!["alpha".to_string(), "bravo".to_string()];
+        let hits = merge_rows("decision_supersedes_chain", &seeds, &passes);
+        assert_eq!(hits.len(), 1, "duplicate edge across seed passes must dedup: {hits:?}");
+    }
+
+    #[test]
+    fn merge_rows_fallback_single_raw_query_pass_matches_pre_phase27e_shape() {
+        // Zero seeds survived → `query_values_for` yields one raw-query
+        // value → `merge_rows` receives exactly one pass, no bonus
+        // applies (seed_tokens empty), matching the pre-phase27e
+        // single-pass behaviour byte-for-byte.
+        let passes = vec![vec![decision_row("DEC-0042", "DEC-0001", "Adopt RRF fusion")]];
+        let hits = merge_rows("decision_supersedes_chain", &[], &passes);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].doc_id, "graph|decision_supersedes_chain|DEC-0042|DEC-0001");
+        assert!((hits[0].score - 1.0).abs() < 1e-9, "no bonus without seed tokens");
+    }
+
+    #[test]
+    fn merge_rows_caps_merged_result_at_fifty() {
+        let passes: Vec<Vec<Value>> = (0..60)
+            .map(|i| vec![decision_row(&format!("DEC-{i:04}"), "DEC-0000", "label")])
+            .collect();
+        let hits = merge_rows("decision_supersedes_chain", &[], &passes);
+        assert_eq!(hits.len(), 50, "merged result must cap at the template's LIMIT 50");
+    }
+
+    #[test]
+    fn merge_rows_drops_invalid_rows_without_panicking() {
+        let passes = vec![vec![serde_json::json!(["", "DEC-0001", "SUPERSEDES", 1_i64, "label"])]];
+        let hits = merge_rows("decision_supersedes_chain", &[], &passes);
+        assert!(hits.is_empty());
     }
 }
