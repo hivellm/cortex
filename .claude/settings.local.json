@@ -289,7 +289,12 @@
       "Bash(protoc --version)",
       "Bash(protoc --decode_raw)",
       "Bash(rustc --version)",
-      "Bash(rustfmt --edition 2021 crates/cortex-workers/src/graph/scip.rs crates/cortex-workers/src/graph/mod.rs)"
+      "Bash(rustfmt --edition 2021 crates/cortex-workers/src/graph/scip.rs crates/cortex-workers/src/graph/mod.rs)",
+      "Read(//e//**)",
+      "Bash(cargo metadata *)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/**)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nexus-graph-sdk-2.1.0/**)",
+      "Read(//c/Users/Bolado/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/nexus-graph-sdk-2.1.0/src/**)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Bolado\\.claude"
