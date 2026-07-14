@@ -1,13 +1,13 @@
 ## 1. Renumbering & cross-reference cleanup
-- [ ] 1.1 Rename `docs/specs/20-opencode-adapter.md` → `docs/specs/23-opencode-adapter.md`; update its `# NN — Title` header
-- [ ] 1.2 Rename `docs/specs/26-eval.md` → `docs/specs/29-eval.md`; update its header
-- [ ] 1.3 Rename `docs/specs/27-retrieval-rerank.md` → `docs/specs/37-retrieval-rerank.md` (fewer inbound references than `27-consolidation.md`); update its header
-- [ ] 1.4 Rename `docs/specs/28-gui-contract.md` → `docs/specs/38-gui-contract.md` (fewer inbound references than `28-phantom-link-verifier.md`); update its header
-- [ ] 1.5 Grep `docs/`, `crates/`, `.rulebook/` for every inbound reference to the four old filenames and update each to the new filename
-- [ ] 1.6 Update `docs/specs/00-index.md`: replace the "Known numbering collisions" callout with a resolved-changelog note and fix the table rows for the four moved specs
-- [ ] 1.7 Add an automated check (script or `cortex-ops doctor` check) that fails when two files in `docs/specs/` share a leading number
+- [x] 1.1 `git mv` 20-opencode-adapter.md → 23-opencode-adapter.md; header `# 20 —` → `# 23 —`
+- [x] 1.2 `git mv` 26-eval.md → 29-eval.md; header updated
+- [x] 1.3 `git mv` 27-retrieval-rerank.md → 37-retrieval-rerank.md; header updated
+- [x] 1.4 `git mv` 28-gui-contract.md → 38-gui-contract.md; header updated
+- [x] 1.5 All inbound references rewritten (README, crate READMEs ×2, CHANGELOG links, cortex-eval golden `retrieval.csv` expected-path, live task files phase28_retrieval-eval-gate-live + phase33, and 12 `.rulebook/archive/**` docs); post-sweep grep finds zero references to the old names outside this task's own files (which document the rename)
+- [x] 1.6 00-index.md: collisions callout → "Numbering changelog" resolved note; the four rows moved to their new numbers (sorted in place, "(was NN)" note kept); missing row for `45-graph-communities.md` also added while reconciling
+- [x] 1.7 Two automated checks: `crates/cortex-cli/tests/spec_numbering.rs` (fails `cargo test` on any duplicate leading number) + `scripts/check-spec-numbering.sh` (shell-native for CI/pre-commit) — both verified failing-free against the renamed tree
 
 ## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 2.1 Update or create documentation covering the implementation
-- [ ] 2.2 Write tests covering the new behavior
-- [ ] 2.3 Run tests and confirm they pass
+- [x] 2.1 Docs: 00-index numbering changelog note; the four renamed specs' own headers; CHANGELOG entry
+- [x] 2.2 Tests: `spec_numbering.rs` (the §1.7 gate is itself the test — asserts non-empty scan + zero duplicates)
+- [x] 2.3 Verified: `bash scripts/check-spec-numbering.sh` → ok; `cargo test -p cortex-cli --test spec_numbering` 1/1; full cortex-cli suite green

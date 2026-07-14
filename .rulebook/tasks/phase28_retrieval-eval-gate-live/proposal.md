@@ -93,7 +93,7 @@ two half-measured gates) rather than a wholesale re-seeding effort.
 ## Impact
 
 - Affected specs: new `eval` module spec added by this task; touches
-  the acceptance language implied by `docs/specs/27-retrieval-rerank.md`
+  the acceptance language implied by `docs/specs/37-retrieval-rerank.md`
   §2.7 and `docs/specs/28-phantom-link-verifier.md` §3.10.
 - Affected code: `tests/golden/*` (repo root),
   `crates/cortex-eval/tests/golden/*`,

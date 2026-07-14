@@ -5,7 +5,7 @@ OpenCode plugin bridging session lifecycle events to the
 pre-thinking injection + law-check parity with the Claude Code
 adapter (spec 10), targeted at the OpenCode host.
 
-Full spec: [`docs/specs/20-opencode-adapter.md`](../../docs/specs/20-opencode-adapter.md).
+Full spec: [`docs/specs/23-opencode-adapter.md`](../../docs/specs/23-opencode-adapter.md).
 
 ## Install
 

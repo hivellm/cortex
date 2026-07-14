@@ -18,7 +18,7 @@ Today the fidelity IT validates takeaway length, not truth. The user reports "os
 
 ## Impact
 
-- Affected specs: new `docs/specs/26-eval.md`.
+- Affected specs: new `docs/specs/29-eval.md`.
 - Affected code: `crates/cortex-eval/` (new), `tests/golden/{retrieval,consolidation,classification}.csv` (new), `.github/workflows/ci.yml` (new step).
 - Breaking change: NO.
 - User benefit: retrieval quality becomes measurable; "nada relevante" becomes a measurable + bug-tractable claim.

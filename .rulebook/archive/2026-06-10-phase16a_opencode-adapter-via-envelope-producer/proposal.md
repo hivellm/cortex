@@ -18,7 +18,7 @@ This task re-scopes the OpenCode adapter as the FIRST consumer of the `EnvelopeP
 
 ## Impact
 
-- Affected specs: new `docs/specs/20-opencode-adapter.md` (was scoped in phase11w; refresh against the trait).
+- Affected specs: new `docs/specs/23-opencode-adapter.md` (was scoped in phase11w; refresh against the trait).
 - Affected code: `crates/cortex-adapter-opencode/` (new crate replacing the per-adapter daemon), `packages/cortex-opencode-plugin/` (new TS package), `.opencode/`, `opencode.json`.
 - Breaking change: NO. Claude Code path unchanged.
 - User benefit: Cortex envelope capture inside OpenCode at parity with Claude Code; new adapter takes <1 day going forward.

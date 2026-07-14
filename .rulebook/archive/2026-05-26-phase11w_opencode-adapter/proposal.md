@@ -60,13 +60,13 @@ memory or governance.
 - Tests: unit tests for event mapping, integration test for HTTP
   transport on the daemon, end-to-end smoke that publishes envelopes
   via the plugin to a fake Synap.
-- Docs: `docs/specs/20-opencode-adapter.md` (new spec), update root
+- Docs: `docs/specs/23-opencode-adapter.md` (new spec), update root
   README + `crates/cortex-adapter-claude-code/README.md`.
 - ADR-016 — OpenCode adapter via TS plugin + shared Rust daemon.
 
 ## Impact
 
-- **Affected specs**: `docs/specs/20-opencode-adapter.md` (new),
+- **Affected specs**: `docs/specs/23-opencode-adapter.md` (new),
   `docs/specs/10-claude-code-adapter.md` (update tool-enum reference),
   envelope schema (`crates/cortex-core/schemas/envelope.schema.json`).
 - **Affected code**:

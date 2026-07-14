@@ -18,7 +18,7 @@ still a placeholder; that assumption did not survive reading the code):
   ADR-017) are code-complete, not placeholders. Both shipped in
   `phase16a_opencode-adapter-via-envelope-producer` (archived
   2026-06-10) with green unit tests (Rust producer tests + 18 TS
-  tests), and `docs/specs/20-opencode-adapter.md` already carries
+  tests), and `docs/specs/23-opencode-adapter.md` already carries
   status "Implemented."
 - What never happened is live end-to-end verification. phase16a's
   §4.4/§6.1-6.3 (run a real OpenCode session; confirm envelopes with
@@ -87,7 +87,7 @@ spending the time on it.
 
 ## Impact
 
-- Affected specs: `docs/specs/20-opencode-adapter.md` (add the
+- Affected specs: `docs/specs/23-opencode-adapter.md` (add the
   live-verified confirmation once item 3 closes),
   `docs/specs/17-additional-adapters.md` (Cursor's acceptance-criteria
   subset), new spec delta `adapters` (this task).

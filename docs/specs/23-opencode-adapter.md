@@ -1,4 +1,4 @@
-# 20 — OpenCode adapter (TS plugin + shared Rust daemon)
+# 23 — OpenCode adapter (TS plugin + shared Rust daemon)
 
 > **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 10, 11, 12, 18
 

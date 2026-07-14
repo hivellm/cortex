@@ -62,7 +62,7 @@
       schedule was `workflow_dispatch`-only.
 
 ## 6. Verify the phase17 P2/P3 gates measure something meaningful
-- [ ] 6.1 P2 (reranker, ADR-025 / `docs/specs/27-retrieval-rerank.md`
+- [ ] 6.1 P2 (reranker, ADR-025 / `docs/specs/37-retrieval-rerank.md`
       §2.7): confirm the already-measured +36% MRR@10 delta still
       holds against the reconciled baseline; add the still-missing
       p95-under-load measurement (≤ +250ms) that was explicitly left
@@ -75,7 +75,7 @@
 
 ## 7. Tail (mandatory — enforced by rulebook v5.3.0)
 - [ ] 7.1 Update or create documentation covering the implementation
-      (`docs/specs/27-retrieval-rerank.md` §2.7 status, `docs/specs/28-phantom-link-verifier.md`
+      (`docs/specs/37-retrieval-rerank.md` §2.7 status, `docs/specs/28-phantom-link-verifier.md`
       §3.10 status, new `eval` spec, CHANGELOG)
 - [ ] 7.2 Write tests covering the new behavior (phantom-rate metric
       unit tests; reconciled golden CSV structural tests)

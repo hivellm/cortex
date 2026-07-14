@@ -1,4 +1,4 @@
-# Spec 26 — cortex-eval golden-set harness
+# Spec 29 — cortex-eval golden-set harness
 
 Status: **active** (phase14c)
 Authors: phase14c_golden-set-eval-harness.

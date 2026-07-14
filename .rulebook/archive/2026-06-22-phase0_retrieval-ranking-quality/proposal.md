@@ -44,7 +44,7 @@ against the golden baseline (recall@5 must stay ≥ 1.0; MRR@10 must rise):
 
 ## Impact
 - Affected specs: `docs/specs/11-query-api.md` (RRF/fusion),
-  `docs/specs/27-retrieval-rerank.md` (reranker eval gate),
+  `docs/specs/37-retrieval-rerank.md` (reranker eval gate),
   `docs/specs/05-classifier.md` / `06-embedder.md` (summary→embedding).
 - Affected code: `crates/cortex-api/src/search/{fusion,orchestrator,
   relevance_config}.rs`, `crates/cortex-workers/src/classifier_worker/`

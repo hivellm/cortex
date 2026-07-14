@@ -4,7 +4,7 @@ r-002,what is ADR-016 and why was config migrated,cortex,.rulebook/archive/2026-
 r-003,how does pre-thinking injection inject context into the prompt,cortex,.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
 r-004,what laws govern destructive git operations,cortex,docs/specs/13-laws-dsl.md;packages/cortex-claude-plugin/skills/cortex-laws/SKILL.md;cortex-plugin/skills/cortex-laws/SKILL.md
 r-005,how does the graph projection handle EMITTED_BY edges,cortex,crates/cortex-workers/src/graph/extractors/mod.rs
-r-006,what is the OpenCode adapter and how does it differ from the Claude Code adapter,cortex,docs/specs/20-opencode-adapter.md;.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
+r-006,what is the OpenCode adapter and how does it differ from the Claude Code adapter,cortex,docs/specs/23-opencode-adapter.md;.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
 r-007,how does the bootstrap CLI resume from a checkpoint,cortex,crates/cortex-cli/src/bootstrap/cli.rs
 r-008,what is the classifier worker and how does it enrich events,cortex,docs/specs/05-classifier.md
 r-009,how does Reciprocal Rank Fusion combine BM25 and dense results,cortex,.rulebook/archive/2026-04-29-phase6c_relevance_score_aware_rrf/tasks.md

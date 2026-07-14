@@ -35,11 +35,11 @@
 - [ ] ⏸ 6.3 Audit envelope shows the pre-thinking bundle reached the model. — Blocked on §6.1.
 
 ## 7. Tail (mandatory)
-- [x] 7.1 New `docs/specs/20-opencode-adapter.md` + root README hosts list + `CHANGELOG.md`. — spec already present from phase11w; README box expanded + OpenCode added to hosts list + capture row; CHANGELOG phase16a entry added.
+- [x] 7.1 New `docs/specs/23-opencode-adapter.md` + root README hosts list + `CHANGELOG.md`. — spec already present from phase11w; README box expanded + OpenCode added to hosts list + capture row; CHANGELOG phase16a entry added.
 - [x] 7.2 Tests: §3.6 + §6 smoke + Rust producer unit tests. — §3.6 18/18 TS ✓; Rust producer `name_returns_opencode` + schema round-trip (11/11) ✓; §6 smoke ⏸ (requires live OpenCode session — cannot run in dev env).
 - [x] 7.3 `cargo check --workspace && cargo clippy -- -D warnings && cargo test --workspace && pnpm -C packages/cortex-opencode-plugin test` clean. — check + clippy clean; cortex-core 11/11, cortex-adapter-claude-code lib 59/59, cortex-adapter-opencode 0/0 (unit test is in lib), TS 18/18 all green. Workspace-level link failure on cortex-hook binary is a transient Windows file-lock (binary in use), not a code error.
 - [ ] ⏸ 7.4 Archive blocked task `phase11w_opencode-adapter` once §6 verifies parity. — Blocked on §6.1 (live OpenCode session).
 ## 99. Mandatory tail (rulebook v5.3.0)
-- [x] 99.1 Update or create documentation covering the implementation. — README + CHANGELOG + docs/specs/20-opencode-adapter.md (already existed from phase11w; no changes needed).
+- [x] 99.1 Update or create documentation covering the implementation. — README + CHANGELOG + docs/specs/23-opencode-adapter.md (already existed from phase11w; no changes needed).
 - [x] 99.2 Write tests covering the new behavior. — `opencode_tool_value_passes_schema` + `unknown_tool_value_fails_schema` in cortex-core; `name_returns_opencode` unit test in cortex-adapter-opencode producer.rs.
 - [x] 99.3 Run tests and confirm they pass. — All targeted test runs green (see §7.3).

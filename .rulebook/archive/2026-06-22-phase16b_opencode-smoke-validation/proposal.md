@@ -11,7 +11,7 @@ phase16a shipped the `cortex-adapter-opencode` Rust crate and the TS plugin but 
 - Archive task `phase11w_opencode-adapter` once parity is confirmed.
 
 ## Impact
-- Affected specs: `docs/specs/20-opencode-adapter.md`
+- Affected specs: `docs/specs/23-opencode-adapter.md`
 - Affected code: none (validation only)
 - Breaking change: NO
 - User benefit: Confirms the OpenCode adapter is production-ready end-to-end.

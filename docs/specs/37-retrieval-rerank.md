@@ -1,4 +1,4 @@
-# 27 — Retrieval Rerank (Cross-Encoder)
+# 37 — Retrieval Rerank (Cross-Encoder)
 
 > **Status:** ✅ P2 shipped · **Owner:** Core team · **Depends on:** 11 (fusion lane), cortex-config ADR-016
 > **Phase:** phase17_cdc-code-doc-correlation

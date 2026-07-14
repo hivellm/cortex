@@ -4,9 +4,9 @@
 >
 > Status legend: 🟢 *implemented* · 🟡 *spec drafted* · 🔴 *not started*
 
-## Known numbering collisions
+## Numbering changelog
 
-This index documents **43 distinct spec files**. Four spec numbers are currently used by two files each: **20** (mcp-tool-surface.md + opencode-adapter.md), **26** (eval.md + cortex-config.md), **27** (consolidation.md + retrieval-rerank.md), and **28** (gui-contract.md + phantom-link-verifier.md). Additionally, numbers 23, 29, and 37–39 have no corresponding file on disk. These numbering conflicts will be resolved by a follow-up renumbering task (`phase28_docs-truth-reconciliation`) rather than silently fixed here.
+Four historical numbering collisions were resolved on 2026-07-14 (`phase28_docs-truth-reconciliation`): `20-opencode-adapter.md` → **23**, `26-eval.md` → **29**, `27-retrieval-rerank.md` → **37**, `28-gui-contract.md` → **38** (in each pair, the file with fewer inbound references moved). Every spec number now maps to exactly one file; numbers 39 remains intentionally unused. Two automated checks fail when two files in this folder share a leading number: `crates/cortex-cli/tests/spec_numbering.rs` (runs on every `cargo test`) and `scripts/check-spec-numbering.sh` (shell-native, for CI steps / pre-commit).
 
 | #  | Spec                                                            | Status | Depends on        | Maps to / Notes              |
 |----|-----------------------------------------------------------------|:------:|-------------------|------------------------------|
@@ -30,17 +30,15 @@ This index documents **43 distinct spec files**. Four spec numbers are currently
 | 18 | [Claude Code plugin — MCP server + commands + skills](18-claude-code-plugin.md) | 🟢 | 10, 11, 12 | §5.1, §8         |
 | 19 | [Retention — decay & purge policy](19-retention.md)             |   🟢   | —                 | phase9a+11o+13a              |
 | 20 | [MCP tool surface registry](20-mcp-tool-surface.md)             |   🟢   | 11, 12, 16, 18    | §5.1, §8                     |
-| 20 | [OpenCode adapter — TypeScript plugin + daemon](20-opencode-adapter.md) | 🟢 | 10, 11, 12, 18 | §5.1                    |
 | 21 | [Dashboard push — SSE deltas via Synap](21-dashboard-push.md)   |   🟡   | 16, 20            | §5.6                         |
 | 22 | [Fine-grained search — direct read-only proxies](22-fine-grained-search.md) | 🟢 | 11, 18 | phase11v                     |
+| 23 | [OpenCode adapter — TypeScript plugin + daemon](23-opencode-adapter.md) | 🟢 | 10, 11, 12, 18 | §5.1 (was 20)           |
 | 24 | [Producer trait — checkpoint accumulation](24-producer-trait.md) |   🟢   | —                 | ADR-010 (phase13b)           |
 | 25 | [Event identity — cross-backend join key](25-event-identity.md) |   🟡   | 02, 06, 07, 08    | ADR-012                      |
-| 26 | [Eval — end-to-end quality gates](26-eval.md)                   |   🟢   | —                 | phase14c                     |
 | 26 | [Typed Config crate](26-cortex-config.md)                       |   🟢   | all crates        | ADR-016                      |
 | 27 | [Consolidation — daemon, triggers, grain dispatch](27-consolidation.md) | 🟢 | — | phase14a                     |
-| 27 | [Retrieval reranker — BGE-reranker-v2-m3 via TEI](27-retrieval-rerank.md) | 🟢 | 11 | phase17 (P2)                 |
-| 28 | [GUI contract — codegen pipeline for type safety](28-gui-contract.md) | 🟢 | — | phase14d                     |
 | 28 | [Phantom link verifier — (path, symbol) validation](28-phantom-link-verifier.md) | 🟢 | 11, 27 | phase17 (P3)        |
+| 29 | [Eval — end-to-end quality gates](29-eval.md)                   |   🟢   | —                 | phase14c (was 26)            |
 | 30 | [Bitemporal schema — temporal + branching retrieval](30-bitemporal-schema.md) | 🟢 | 07, 08, 11, 16 | phase18 (P0+P1)       |
 | 31 | [Temporal classifier — bitemporal axis filtering](31-temporal-classifier.md) | 🟡 | 11, 30 | phase18 (P2, partial)         |
 | 32 | [Branches — retrieval scope for exploration paths](32-branches.md) | 🟡 | 30, 31 | phase18 (P2, partial)         |
@@ -48,11 +46,14 @@ This index documents **43 distinct spec files**. Four spec numbers are currently
 | 34 | [Cross-project axis — ecosystem navigation](34-cross-project-axis.md) | 🟢 | 30, 31, 33 | phase18 (P4)         |
 | 35 | [Temporal pre-thinking — bitemporal anchors](35-temporal-pre-thinking.md) | 🟡 | 12, 30, 31, 32 | phase18 (P5, partial)  |
 | 36 | [Temporal observability — audit envelopes](36-temporal-observability.md) | 🟡 | 31, 34 | phase18 (P6, partial)      |
+| 37 | [Retrieval reranker — BGE-reranker-v2-m3 via TEI](37-retrieval-rerank.md) | 🟢 | 11 | phase17 (P2) (was 27)        |
+| 38 | [GUI contract — codegen pipeline for type safety](38-gui-contract.md) | 🟢 | — | phase14d (was 28)                |
 | 40 | [Classification model — Bell-LaPadula lattice](40-classification-model.md) | 🟡 | 07, 08, 30 | phase21 (P1, schema)     |
 | 41 | [Principal + RBAC — identity + clearance](41-principal-and-rbac.md) | 🟢 | — | phase21 §4                   |
 | 42 | [Access enforcement — ACL filtering stack](42-access-enforcement.md) | 🟢 | 40, 41 | phase21 §5                   |
 | 43 | [ACL admin API — CLI/HTTP/MCP surfaces](43-acl-admin-api.md)    |   🟢   | 41                | phase21 §6                   |
 | 44 | [Access audit & eval — audit envelopes, CI gates](44-access-audit-and-eval.md) | 🟢 | 42, 41 | phase21 §8-§9      |
+| 45 | [Graph communities — Leiden/Louvain detection + summaries](45-graph-communities.md) | 🟢 | 07, 11 | phase27b/27c       |
 
 ## Spec format
 

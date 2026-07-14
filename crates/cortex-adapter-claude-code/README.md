@@ -8,7 +8,7 @@
 > plugin that posts to it ships in
 > [`packages/cortex-opencode-plugin`](../../packages/cortex-opencode-plugin)
 > and the host-agnostic adapter spec lives at
-> [`docs/specs/20-opencode-adapter.md`](../../docs/specs/20-opencode-adapter.md).
+> [`docs/specs/23-opencode-adapter.md`](../../docs/specs/23-opencode-adapter.md).
 
 Claude Code adapter for Cortex. Captures every meaningful interaction
 inside a Claude Code session — user prompts, tool calls, agent calls,

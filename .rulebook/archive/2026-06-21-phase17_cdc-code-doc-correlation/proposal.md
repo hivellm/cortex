@@ -17,7 +17,7 @@ Tier-B and Tier-C items (AST chunking, trace-link mining, provenance enforcement
 
 ## Impact
 
-- **Affected specs:** `docs/specs/26-eval.md` (extends via phase14c), new spec `docs/specs/27-retrieval-rerank.md`, new spec `docs/specs/28-phantom-link-verifier.md`, new spec `docs/specs/29-decision-supersession-weighting.md`.
+- **Affected specs:** `docs/specs/29-eval.md` (extends via phase14c), new spec `docs/specs/37-retrieval-rerank.md`, new spec `docs/specs/28-phantom-link-verifier.md`, new spec `docs/specs/29-decision-supersession-weighting.md`.
 - **Affected code:** `crates/cortex-workers/src/{rerank,verify,scoring}/`, `crates/cortex-config/src/config.rs` (new sections), `crates/cortex-api/src/http.rs` (audit emission), `crates/cortex-pre-thinking/src/bundle.rs` (consume verifier output).
 - **Breaking change:** NO. All four features land behind feature flags with `enabled = true` defaults justified by eval gate.
 - **User benefit:** Measurable retrieval quality lift (target MRR@10 +15% combined) + elimination of phantom-symbol citations + correct ADR ranking + a measurement substrate that prevents regressions on every future Cortex change.

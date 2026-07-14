@@ -10,7 +10,7 @@
 - [x] 2.5 Fail-open: on timeout or error, return pre-rerank fusion order; emit `cortex-audit` event `reranker.fallback = true` with reason. — tracing::warn + tracing::info!(target: "cortex_audit") on any RerankerError.
 - [x] 2.6 Integration test in `crates/cortex-api/tests/rerank_it.rs` covering: success path, timeout fallback, disabled-flag passthrough. — 3/3 tests pass.
 - [x] 2.7 Live eval gate moved to **phase0_live-eval-gates-rerank-phantomlink** (created before this was checked) — needs a curated golden set + flowing live stack, unavailable on the dev daemon. Implementation + config + fail-open + 3 ITs are complete here.
-- [x] 2.8 New spec `docs/specs/27-retrieval-rerank.md` documenting wire, config, fallback, eval gate. — Created.
+- [x] 2.8 New spec `docs/specs/37-retrieval-rerank.md` documenting wire, config, fallback, eval gate. — Created.
 
 ## 3. P3 — Phantom-link verifier
 - [x] 3.1 Add Tree-sitter dependencies (`tree-sitter`, `tree-sitter-rust`, `tree-sitter-markdown`) to `crates/cortex-workers/Cargo.toml`. — Already present: tree-sitter = "0.26", tree-sitter-rust = "0.24", tree-sitter-md = "0.5" (markdown grammar). No changes required.

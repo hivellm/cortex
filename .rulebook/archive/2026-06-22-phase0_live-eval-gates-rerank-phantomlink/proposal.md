@@ -36,7 +36,7 @@ unconfigured on the dev stack (`CORTEX_RERANKER_ENABLED` /
   (gate ≤ 1%). Capture results back into the baseline + knowledge base.
 
 ## Impact
-- Affected specs: `docs/specs/27-retrieval-rerank.md`,
+- Affected specs: `docs/specs/37-retrieval-rerank.md`,
   `docs/specs/28-phantom-link-verifier.md` (eval-gate sections).
 - Affected code: `crates/cortex-eval/` (golden CSVs, baseline JSON) — no
   product-code change expected; this is measurement + curation.

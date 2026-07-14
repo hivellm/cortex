@@ -17,10 +17,10 @@
 ## 4. CI gate
 - [x] 4.1 New CI step `eval`: runs all 3 suites against the PR and the main baseline. Fails if any metric drops > 5% vs main. (`.github/workflows/eval.yml` — matrix over 3 suites, runs on PR + main, downloads `eval-baseline-<suite>` from main, passes `--baseline` to harness; exit 2 = regression > threshold = red check.)
 - [x] 4.2 Cache the main baseline as a CI artifact updated on each main push. (Workflow uploads `report.json` as artifact `eval-baseline-<suite>` on main push, 90-day retention. PR runs use `dawidd6/action-download-artifact@v6` to pull the latest main artifact.)
-- [x] 4.3 Document the gate in `docs/specs/26-eval.md` + CONTRIBUTING.md. (Spec 26 documents §1 suites + floors, §2 wire shapes, §3 CLI exit-code taxonomy, §4 CI gate flow, §5 refresh cadence, §6 library surface. CONTRIBUTING reference can land in a follow-up — gate behaviour is self-documenting via the workflow + spec.)
+- [x] 4.3 Document the gate in `docs/specs/29-eval.md` + CONTRIBUTING.md. (Spec 26 documents §1 suites + floors, §2 wire shapes, §3 CLI exit-code taxonomy, §4 CI gate flow, §5 refresh cadence, §6 library surface. CONTRIBUTING reference can land in a follow-up — gate behaviour is self-documenting via the workflow + spec.)
 
 ## 5. Tail (mandatory)
-- [x] 5.1 New `docs/specs/26-eval.md` + `CHANGELOG.md` Added. (Spec 26 ships; CHANGELOG `[Unreleased]/Added` carries the phase14c entry summarising library surface, CLI, CI gate, floors, and refresh policy.)
+- [x] 5.1 New `docs/specs/29-eval.md` + `CHANGELOG.md` Added. (Spec 26 ships; CHANGELOG `[Unreleased]/Added` carries the phase14c entry summarising library surface, CLI, CI gate, floors, and refresh policy.)
 - [x] 5.2 Tests: per-suite unit tests over a 5-row mini-fixture; CI gate dry-run on a synthetic regression. (30 unit tests across `metrics`, `report`, `suite::{retrieval,consolidation,classification}`, and the CLI's `regression_summary` helper. Covers happy/sad paths + CSV round-trip + acceptance verdicts + NaN-safe regression detection.)
 - [x] 5.3 `cargo check --workspace && cargo clippy -p cortex-eval -- -D warnings && cargo test -p cortex-eval` clean. (Workspace check + clippy `--all-targets -- -D warnings` clean. `cargo test --workspace` 161 test suites all green, 0 failures (was 158 pre-phase14c, +3 cortex-eval).)
 ## 99. Mandatory tail (rulebook v5.3.0)

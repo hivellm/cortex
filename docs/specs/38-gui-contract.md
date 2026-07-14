@@ -1,4 +1,4 @@
-# Spec 28 — GUI ↔ Rust contract test
+# Spec 38 — GUI ↔ Rust contract test
 
 Status: **active** (phase14d)
 Authors: phase14d_gui-rust-contract-test.
