@@ -10,4 +10,4 @@ if [ -f .env ]; then
     set +a
 fi
 
-cargo run -q -p cortex-ops -- doctor
+cargo run -q -p cortex-cli --bin cortex-ops -- doctor

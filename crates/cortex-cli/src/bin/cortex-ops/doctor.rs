@@ -10,9 +10,40 @@ pub(super) fn doctor(
     synap: Option<String>,
     meili: Option<String>,
 ) -> ExitCode {
-    // We intentionally do not pull in reqwest here: this binary should stay
-    // dependency-light. Doctor delegates to `curl` which is present on every
-    // Unix + Windows-with-modern-powershell host.
+    // In-process reqwest probes (phase28 §1.3): the previous `curl -o
+    // /dev/null` shell-out broke on native Windows (`/dev/null` does
+    // not exist there), and this binary already links reqwest for the
+    // other doctor subcommands — no dependency saved by shelling out.
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("doctor: tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let http = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("doctor: http client: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let probe_ok = |url: &str| -> bool {
+        rt.block_on(async {
+            http.get(url)
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .unwrap_or(false)
+        })
+    };
+
     let vectorizer = vectorizer.or_else(|| std::env::var("VECTORIZER_URL").ok());
     let nexus = nexus.or_else(|| std::env::var("NEXUS_URL").ok());
     let synap = synap.or_else(|| std::env::var("SYNAP_URL").ok());
@@ -30,11 +61,7 @@ pub(super) fn doctor(
         match base {
             Some(b) => {
                 let url = format!("{}{}", b.trim_end_matches('/'), path);
-                let ok = std::process::Command::new("curl")
-                    .args(["-fsS", "--max-time", "3", "-o", "/dev/null", &url])
-                    .status()
-                    .map(|s| s.success())
-                    .unwrap_or(false);
+                let ok = probe_ok(&url);
                 if ok {
                     println!("ok     {:<12} {url}", name);
                 } else {
@@ -65,11 +92,7 @@ pub(super) fn doctor(
             "/v1/health/config",
         ] {
             let url = format!("{}{}", api.trim_end_matches('/'), path);
-            let ok = std::process::Command::new("curl")
-                .args(["-fsS", "--max-time", "3", "-o", "/dev/null", &url])
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+            let ok = probe_ok(&url);
             let label = format!("api{path}");
             if ok {
                 println!("ok     {label:<28} {url}");
@@ -94,18 +117,13 @@ pub(super) fn doctor(
     if let Some(classifier) = cfg.classifier.health_url.clone().filter(|s| !s.is_empty()) {
         let staleness_ms: u64 = cfg.classifier.staleness_ms.unwrap_or(60_000);
         let url = format!("{}/healthz", classifier.trim_end_matches('/'));
-        let body = std::process::Command::new("curl")
-            .args(["-fsS", "--max-time", "3", &url])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    Some(o.stdout)
-                } else {
-                    None
-                }
-            })
-            .and_then(|b| String::from_utf8(b).ok());
+        let body: Option<String> = rt.block_on(async {
+            let resp = http.get(&url).send().await.ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            resp.text().await.ok()
+        });
         match body {
             Some(b) => {
                 let parsed: serde_json::Value = serde_json::from_str(&b).unwrap_or_default();
@@ -1275,8 +1293,8 @@ async fn scan_decisions_index(
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(key) = api_key {
         let bearer = format!("Bearer {key}");
-        let val = HeaderValue::from_str(&bearer)
-            .map_err(|e| anyhow::anyhow!("invalid api key: {e}"))?;
+        let val =
+            HeaderValue::from_str(&bearer).map_err(|e| anyhow::anyhow!("invalid api key: {e}"))?;
         headers.insert(AUTHORIZATION, val);
     }
     let client = reqwest::Client::builder()
@@ -1395,7 +1413,9 @@ pub(super) fn doctor_content_addressable(
                 println!("total docs:              {total}");
                 println!("fixable legacy:          {fixable} (non-bootstrap- WITH repo+path+content_hash)");
                 println!("  of which title==id:    {title_id}");
-                println!("no-triple (live-keyed):  {no_triple} (no path — legitimately ULID-keyed)");
+                println!(
+                    "no-triple (live-keyed):  {no_triple} (no path — legitimately ULID-keyed)"
+                );
                 println!();
                 if fail {
                     println!(
@@ -1449,8 +1469,8 @@ async fn scan_content_addressable(
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     if let Some(key) = api_key {
         let bearer = format!("Bearer {key}");
-        let val = HeaderValue::from_str(&bearer)
-            .map_err(|e| anyhow::anyhow!("invalid api key: {e}"))?;
+        let val =
+            HeaderValue::from_str(&bearer).map_err(|e| anyhow::anyhow!("invalid api key: {e}"))?;
         headers.insert(AUTHORIZATION, val);
     }
     let client = reqwest::Client::builder()
@@ -1459,7 +1479,11 @@ async fn scan_content_addressable(
         .build()
         .map_err(|e| anyhow::anyhow!("reqwest: {e}"))?;
 
-    let endpoint = format!("{}/indexes/{}/search", meili_url.trim_end_matches('/'), index);
+    let endpoint = format!(
+        "{}/indexes/{}/search",
+        meili_url.trim_end_matches('/'),
+        index
+    );
     let mut total = 0usize;
     let mut fixable = 0usize;
     let mut title_id = 0usize;

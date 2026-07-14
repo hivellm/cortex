@@ -265,6 +265,14 @@ fn nl_projection(event: &EnrichedEvent) -> String {
                 .get("output")
                 .and_then(|o| o.get("text").and_then(|v| v.as_str()))
                 .unwrap_or("");
+            // No tool-call fields at all → no projection, so
+            // `event_text` falls through to the payload's own
+            // content/text/body (a placeholder "()" here would
+            // otherwise shadow the raw source text — the
+            // `unknown_language_falls_back` regression).
+            if tool.is_empty() && input.is_empty() && output.is_empty() {
+                return String::new();
+            }
             let mut parts = vec![format!("{tool}({input})")];
             if !output.is_empty() {
                 parts.push(output.to_string());

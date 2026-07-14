@@ -11,4 +11,4 @@ if (Test-Path .env) {
         }
     }
 }
-cargo run -q -p cortex-ops -- doctor
+cargo run -q -p cortex-cli --bin cortex-ops -- doctor
