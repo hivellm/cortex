@@ -61,9 +61,9 @@ notify-debouncer-mini = "0.7"
 hdbscan = "0.10"
 criterion = { version = "0.7", default-features = false, features = ["plotters", "cargo_bench_support"] }
 
-synap-sdk = "0.12"
-vectorizer-sdk = "3.3.0"
-nexus-graph-sdk = "2.1"
+synap-sdk = "1.0"
+vectorizer-sdk = "3.5.0"
+nexus-graph-sdk = "2.5"
 
 # Pin rustls-webpki >= 0.103.13 to close RUSTSEC-2026-0104 (panic in CRL parsing).
 # Reaches us via vectorizer-sdk -> reqwest 0.13 -> rustls-platform-verifier.

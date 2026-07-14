@@ -1,6 +1,6 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:3.4.0-fastembed
+    image: hivehub/vectorizer:3.5.0-fastembed
     container_name: cortex-vectorizer
     user: "0:0"
     working_dir: /data
@@ -36,7 +36,7 @@ services:
     restart: unless-stopped
 
   nexus:
-    image: hivehub/nexus:2.3.4
+    image: hivehub/nexus:2.5.0
     container_name: cortex-nexus
     networks: [cortex-net]
     ports:
@@ -65,7 +65,7 @@ services:
     restart: unless-stopped
 
   synap:
-    image: hivehub/synap:latest
+    image: hivehub/synap:1.0.0
     container_name: cortex-synap
     networks: [cortex-net]
     ports:

@@ -2201,9 +2201,9 @@ dependencies = [
 
 [[package]]
 name = "nexus-graph-sdk"
-version = "2.1.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5175ab5b8b38fb6d8214656f7217efdbb8daba82dda7e6a3eeacef237916ef63"
+checksum = "1b101c052cf5db7c07a8533261056eb356ecf74c91fd9ed255f3b843da30891b"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2221,9 +2221,9 @@ dependencies = [
 
 [[package]]
 name = "nexus-protocol"
-version = "2.1.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a357557e13535cf79c9e85ecef915a5dc8c7fcce5e477eb26373d66ab4145a46"
+checksum = "e7dc689c95abd8c0cb0cac2ce20116082e9612918a3d7e36003f5b5f1c07dd11"
 dependencies = [
  "anyhow",
  "hyper",
@@ -3008,14 +3008,12 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-rustls",
- "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams",
  "web-sys",
  "webpki-roots",
 ]
@@ -3028,8 +3026,10 @@ checksum = "ab3f43e3283ab1488b624b44b0e988d0acea0b3214e694730a055cb6b2efa801"
 dependencies = [
  "base64",
  "bytes",
+ "encoding_rs",
  "futures-core",
  "futures-util",
+ "h2",
  "http",
  "http-body",
  "http-body-util",
@@ -3038,6 +3038,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime",
  "mime_guess",
  "percent-encoding",
  "pin-project-lite",
@@ -3050,12 +3051,14 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
+ "tokio-util",
  "tower",
  "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -3574,10 +3577,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "synap-sdk"
-version = "0.12.0"
+name = "synap-protocol"
+version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "154a02408de0073eeaab3fbc1c0067ab879cf758fe947852c5f5eb21a322d17a"
+checksum = "7b04f067d82528cda54141baed6759edd69b12c1d232dde986d3dd729a3695b7"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "synap-sdk"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4156179a4f825fffb53da6b2408a49f1e5849a63582e48a6416eca7d36c690fc"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3585,10 +3601,11 @@ dependencies = [
  "futures",
  "futures-util",
  "pin-project",
- "reqwest 0.12.28",
+ "reqwest 0.13.2",
  "rmp-serde",
  "serde",
  "serde_json",
+ "synap-protocol",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -4392,9 +4409,9 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vectorizer-protocol"
-version = "3.3.0"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84f6a7ff958eba5da6bc24a5b7667db2efa5f9b56117242cdbe93ac806cfaadd"
+checksum = "010b576edece2a84a6760cd099c88397ba44961d4e9c111c851430eac949a472"
 dependencies = [
  "prost",
  "prost-types",
@@ -4412,9 +4429,9 @@ dependencies = [
 
 [[package]]
 name = "vectorizer-sdk"
-version = "3.3.0"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65fa6a47954060c6772a66d2ae457e009e306a14507d4164eb91ad337739020e"
+checksum = "2283c79c3d2963bdcb8ce60e86255278ddd81342cf18dbcdf97ae8446508c140"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4565,9 +4582,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-streams"
-version = "0.4.2"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
+checksum = "9d1ec4f6517c9e11ae630e200b2b65d193279042e28edd4a2cda233e46670bbb"
 dependencies = [
  "futures-util",
  "js-sys",
