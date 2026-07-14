@@ -36,6 +36,7 @@ fn snippet_at(id: &str, level: u8, compartments: &[&str]) -> Snippet {
         path: Some(format!("{id}.rs")),
         symbol: None,
         content_hash: None,
+        doc_id: None,
         text: id.to_string(),
         body_truncated: false,
         score: 1.0,

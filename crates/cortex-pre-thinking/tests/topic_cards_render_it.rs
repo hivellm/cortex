@@ -65,6 +65,7 @@ fn populated_response_with_topic(card: Option<TopicCardRef>) -> QueryResponse {
                 path: Some("src/lib.rs".into()),
                 symbol: Some("foo".into()),
                 content_hash: None,
+                doc_id: None,
                 text: "pub fn foo() {}".into(),
                 body_truncated: false,
                 score: 0.9,

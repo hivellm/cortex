@@ -5,17 +5,9 @@
 - [x] 1.4 Confirmed intentionally synthetic: `access_control.csv` is a Bell-LaPadula truth-table over (clearance × grants × fact-label) driving the zero-false-grant gate — a predicate matrix has no live counterpart to harvest. Already lives only in the canonical tree; README row added documenting this.
 
 ## 2. Grow the golden set to a statistically meaningful size
-- [ ] 2.1 Expand `retrieval.csv` and `consolidation.csv` toward the
-      curation targets in `tests/golden/README.md` (currently 18 and
-      10 rows respectively), pulling from real historical
-      queries/sessions where available.
-- [ ] 2.2 Tag each row with the query intent it exercises and ensure
-      coverage of all five: `pre_change_context`, `decision_lookup`,
-      `similar_problems`, `law_check`, `free_search`.
-- [ ] 2.3 Expand `classification.csv` to at least 2 examples per `Kind`
-      variant (currently 1×10 rows; missing `Analysis` and `TopicCard`
-      of the 12 kinds) so the suite has a meaningful set to run
-      against for the first time.
+- [x] 2.1 retrieval.csv 18 → **27** rows (every new row's expected value live-verified in the top-10 of an actual `/v1/query` under its own intent; ~4 candidates discarded because the correct answer did not surface); consolidation.csv 6 → **10** rows (real consolidation ULIDs harvested from `/v1/consolidations/recent`, entities/facts verified as literal substrings of the live summaries). Long-term targets (100/50) remain future curation cadence.
+- [x] 2.2 New `intent` column (5-column schema; `#[serde(default)]` keeps 4-column fixtures loading, blank → free_search) + driver sends the row intent. All 27 rows tagged; coverage: pre_change_context 6, decision_lookup 5, similar_problems 2, law_check 2, free_search 12. **Two intent-semantics discoveries fixed en route:** (a) `law_check` strips `results.snippets` BY SPEC (only `laws_active` + violations surface) — law_check rows are keyed by law id and the driver reads `laws_active[].id`; (b) `similar_problems` fans out to the turns corpora whose hits carry NO `path` — added the additive `doc_id` field to the wire `Snippet` (lane-level document id, skip-serialising) and the driver falls back `path → doc_id`, rows keyed by `meili|cortex-<repo>-turns|<event_ulid>`. Three rows the sub-agent had mis-tagged similar_problems (docs-path expectations that can never surface there) retagged to free_search.
+- [x] 2.3 classification.csv 10 → **26** rows: ≥2 per Kind for ALL 13 variants (the task text undercounted — `Law` was also missing, not just `Analysis`/`TopicCard`); expected_kind uses the loader's snake_case labels.
 
 ## 3. Re-run the retrieval eval suite and re-lock the baseline
 - [ ] 3.1 Run `cortex-eval --suite retrieval|consolidation|classification`

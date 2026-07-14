@@ -1487,6 +1487,7 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
         path: hit.path.clone(),
         symbol,
         content_hash: hit.content_hash.clone(),
+        doc_id: (!hit.doc_id.trim().is_empty()).then(|| hit.doc_id.clone()),
         text: hit.text.clone(),
         body_truncated,
         score: hit.score,

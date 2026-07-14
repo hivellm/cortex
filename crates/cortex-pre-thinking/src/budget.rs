@@ -159,6 +159,7 @@ mod tests {
                 path: Some(format!("src/{i}.rs")),
                 symbol: Some(format!("fn_{i}")),
                 content_hash: None,
+                doc_id: None,
                 text: "x".repeat(8 * 1024),
                 body_truncated: false,
                 score: 0.5,

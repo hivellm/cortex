@@ -181,6 +181,7 @@ mod tests {
             path: Some(format!("src/{rank}.rs")),
             symbol: None,
             content_hash: None,
+            doc_id: None,
             text: text.to_string(),
             body_truncated: false,
             score: 1.0,

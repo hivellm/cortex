@@ -246,6 +246,14 @@ pub struct Snippet {
     /// `sha256:...` over the chunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Lane-level document identifier (Meili doc id / Vectorizer
+    /// vector id / graph edge key). Phase28 (retrieval-eval-gate-live
+    /// §2.2) — the only stable identity for path-less corpora (turn
+    /// hits carry no `path`), used by the eval harness to key
+    /// `similar_problems` rows. Additive + skip-serialising, so the
+    /// wire shape stays backwards-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub doc_id: Option<String>,
     /// Snippet text (already redacted by upstream, re-redacted by api).
     pub text: String,
     /// phase10b §2.2 — `true` when the keyword lane could not

@@ -50,6 +50,7 @@ mod tests {
             path: Some(format!("{id}.rs")),
             symbol: None,
             content_hash: None,
+            doc_id: None,
             text: id.into(),
             body_truncated: false,
             score: 1.0,

@@ -302,6 +302,7 @@ mod scoring_math {
             path: Some(path.into()),
             symbol: symbol.map(String::from),
             content_hash: None,
+            doc_id: None,
             text: String::new(),
             body_truncated: false,
             score: 1.0 / rank as f64,

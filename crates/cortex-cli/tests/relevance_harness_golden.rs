@@ -24,6 +24,7 @@ fn snip(rank: usize, path: &str) -> Snippet {
         path: Some(path.into()),
         symbol: None,
         content_hash: None,
+        doc_id: None,
         text: format!("snippet {path}"),
         body_truncated: false,
         score: 1.0 / rank as f64,

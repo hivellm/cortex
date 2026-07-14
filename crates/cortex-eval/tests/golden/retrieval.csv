@@ -1,19 +1,28 @@
-id,query,repo,expected_paths
-r-001,how does the EnvelopeProducer trait work,cortex,crates/cortex-workers/src/producer/trait.rs
-r-002,what is ADR-016 and why was config migrated,cortex,.rulebook/archive/2026-05-25-phase13e_cortex-config-crate-adr-016/proposal.md
-r-003,how does pre-thinking injection inject context into the prompt,cortex,.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
-r-004,what laws govern destructive git operations,cortex,docs/specs/13-laws-dsl.md;packages/cortex-claude-plugin/skills/cortex-laws/SKILL.md;cortex-plugin/skills/cortex-laws/SKILL.md
-r-005,how does the graph projection handle EMITTED_BY edges,cortex,crates/cortex-workers/src/graph/extractors/mod.rs
-r-006,what is the OpenCode adapter and how does it differ from the Claude Code adapter,cortex,docs/specs/23-opencode-adapter.md;.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
-r-007,how does the bootstrap CLI resume from a checkpoint,cortex,crates/cortex-cli/src/bootstrap/cli.rs
-r-008,what is the classifier worker and how does it enrich events,cortex,docs/specs/05-classifier.md
-r-009,how does Reciprocal Rank Fusion combine BM25 and dense results,cortex,.rulebook/archive/2026-04-29-phase6c_relevance_score_aware_rrf/tasks.md
-r-010,what Nexus graph schema does the graph writer use for tool call edges,cortex,docs/specs/07-graph-writer.md
-r-011,what is the bitemporal time precision policy,cortex,.rulebook/decisions/018-phase18-1-1-bitemporal-time-precision-utc-rfc3339-with-second-precision-day-precision-for-adr-facing-tooling.md;docs/specs/30-bitemporal-schema.md
-r-012,how does the temporal classifier derive superseded state,cortex,docs/specs/31-temporal-classifier.md;crates/cortex-workers/src/temporal/classifier.rs
-r-013,what is the branch identifier format in cortex,cortex,.rulebook/decisions/019-phase18-1-2-branch-identifier-scheme-project-id-branch-name-unique-pair-with-strict-regex-main-reserved.md;docs/specs/32-branches.md
-r-014,how does cortex rank events with expired valid_to,cortex,docs/specs/31-temporal-classifier.md;crates/cortex-api/src/search/orchestrator.rs
-r-015,what embedding provider does cortex use after fastembed migration,cortex,docs/specs/06-embedder.md;crates/cortex-workers/src/embedder/embedder.rs
-r-016,how does cortex write graph nodes to nexus,cortex,crates/cortex-workers/src/graph/nexus_client.rs;docs/specs/07-graph-writer.md
-r-017,what is the cross-project retrieval opt-in policy,cortex,.rulebook/decisions/020-phase18-1-3-cross-project-retrieval-default-opt-in-until-eval-evidence-justifies-opt-out.md;docs/specs/34-cross-project-axis.md
-r-018,how does the cross-project propagation wedge filter by valid_to,cortex,docs/specs/34-cross-project-axis.md;crates/cortex-api/src/search/orchestrator.rs
+id,query,repo,intent,expected_paths
+r-001,how does the EnvelopeProducer trait work,cortex,free_search,crates/cortex-workers/src/producer/trait.rs
+r-002,what is ADR-016 and why was config migrated,cortex,decision_lookup,.rulebook/archive/2026-05-25-phase13e_cortex-config-crate-adr-016/proposal.md
+r-003,how does pre-thinking injection inject context into the prompt,cortex,free_search,.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
+r-004,what laws govern destructive git operations,cortex,law_check,LAW-TIER1-PROHIBITIONS-02-prohibition-2-no-destructive-git
+r-005,how does the graph projection handle EMITTED_BY edges,cortex,pre_change_context,crates/cortex-workers/src/graph/extractors/mod.rs
+r-006,what is the OpenCode adapter and how does it differ from the Claude Code adapter,cortex,free_search,docs/specs/23-opencode-adapter.md;.rulebook/archive/2026-05-26-phase11w_opencode-adapter/specs/opencode-adapter/spec.md
+r-007,how does the bootstrap CLI resume from a checkpoint,cortex,pre_change_context,crates/cortex-cli/src/bootstrap/cli.rs
+r-008,what is the classifier worker and how does it enrich events,cortex,free_search,docs/specs/05-classifier.md
+r-009,how does Reciprocal Rank Fusion combine BM25 and dense results,cortex,free_search,.rulebook/archive/2026-04-29-phase6c_relevance_score_aware_rrf/tasks.md
+r-010,what Nexus graph schema does the graph writer use for tool call edges,cortex,free_search,docs/specs/07-graph-writer.md
+r-011,what is the bitemporal time precision policy,cortex,decision_lookup,.rulebook/decisions/018-phase18-1-1-bitemporal-time-precision-utc-rfc3339-with-second-precision-day-precision-for-adr-facing-tooling.md;docs/specs/30-bitemporal-schema.md
+r-012,how does the temporal classifier derive superseded state,cortex,free_search,docs/specs/31-temporal-classifier.md;crates/cortex-workers/src/temporal/classifier.rs
+r-013,what is the branch identifier format in cortex,cortex,decision_lookup,.rulebook/decisions/019-phase18-1-2-branch-identifier-scheme-project-id-branch-name-unique-pair-with-strict-regex-main-reserved.md;docs/specs/32-branches.md
+r-014,how does cortex rank events with expired valid_to,cortex,free_search,docs/specs/31-temporal-classifier.md;crates/cortex-api/src/search/orchestrator.rs
+r-015,what embedding provider does cortex use after fastembed migration,cortex,free_search,docs/specs/06-embedder.md;crates/cortex-workers/src/embedder/embedder.rs
+r-016,how does cortex write graph nodes to nexus,cortex,pre_change_context,crates/cortex-workers/src/graph/nexus_client.rs;docs/specs/07-graph-writer.md
+r-017,what is the cross-project retrieval opt-in policy,cortex,decision_lookup,.rulebook/decisions/020-phase18-1-3-cross-project-retrieval-default-opt-in-until-eval-evidence-justifies-opt-out.md;docs/specs/34-cross-project-axis.md
+r-018,how does the cross-project propagation wedge filter by valid_to,cortex,free_search,docs/specs/34-cross-project-axis.md;crates/cortex-api/src/search/orchestrator.rs
+r-019,which rules forbid stubs TODOs and placeholder implementations,cortex,law_check,LAW-TIER1-PROHIBITIONS-01-prohibition-1-no-shortcuts-stubs
+r-020,how does the fulltext indexer apply meili settings to an index,cortex,pre_change_context,crates/cortex-workers/src/fulltext/indexer.rs
+r-021,how does the bootstrap CLI walk repositories and emit events,cortex,pre_change_context,docs/specs/09-bootstrap-cli.md;crates/cortex-cli/src/bootstrap/emitter.rs
+r-022,what is the pre-thinking bundle and what sections does it carry,cortex,free_search,docs/specs/12-pre-thinking-injection.md
+r-023,what decision locked the consolidation grain dispatch design,cortex,decision_lookup,.rulebook/decisions/005-consolidation-grain-choice-session-topic-decisiontrace.md
+r-024,how are meilisearch indexes partitioned per repo and family,cortex,free_search,docs/specs/02-storage-layout.md
+r-025,how does the mcp server register its tool registry,cortex,pre_change_context,crates/cortex-mcp-server/src/tools.rs
+r-026,how did we fix the vectorizer collections being wiped on container restart,cortex,similar_problems,meili|cortex-cortex-turns|01KTE0X90FQA99NJT2SHKBPZZ1
+r-027,how did we repair the malformed cortex_laws index documents,cortex,similar_problems,meili|cortex-cortex-turns|01KVRRC8TZX0VX5CCGDB2YYYRN

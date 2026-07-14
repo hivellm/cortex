@@ -30,6 +30,13 @@ pub struct RetrievalRow {
     /// Optional repo scope. Empty means cross-repo.
     #[serde(default)]
     pub repo: String,
+    /// Query intent the row exercises — one of the five `/v1/query`
+    /// intents (`pre_change_context`, `decision_lookup`,
+    /// `similar_problems`, `law_check`, `free_search`). Empty defaults
+    /// to `free_search` so pre-phase28 four-column fixtures keep
+    /// loading (phase28 retrieval-eval-gate-live §2.2).
+    #[serde(default)]
+    pub intent: String,
     /// `;`-delimited list of repo-relative snippet paths the row
     /// expects to surface in the top-10 results. Parsed via
     /// [`RetrievalRow::expected_paths`].
@@ -45,6 +52,17 @@ impl RetrievalRow {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect()
+    }
+
+    /// The `/v1/query` intent this row exercises; defaults to
+    /// `free_search` when the column is empty.
+    pub fn intent(&self) -> &str {
+        let trimmed = self.intent.trim();
+        if trimmed.is_empty() {
+            "free_search"
+        } else {
+            trimmed
+        }
     }
 }
 
@@ -160,7 +178,8 @@ mod tests {
             id: "r1".into(),
             query: "q".into(),
             repo: "".into(),
-            expected_paths:"a; b ; ; c".into(),
+            intent: "".into(),
+            expected_paths: "a; b ; ; c".into(),
         };
         assert_eq!(row.expected_paths(), vec!["a", "b", "c"]);
     }
@@ -171,7 +190,8 @@ mod tests {
             id: "r1".into(),
             query: "q".into(),
             repo: "".into(),
-            expected_paths:"a".into(),
+            intent: "".into(),
+            expected_paths: "a".into(),
         }];
         let observed = vec![vec!["a".to_string(), "b".to_string()]];
         let r = build_report(&rows, &observed);
@@ -188,7 +208,8 @@ mod tests {
             id: "r1".into(),
             query: "q".into(),
             repo: "".into(),
-            expected_paths:"a".into(),
+            intent: "".into(),
+            expected_paths: "a".into(),
         }];
         let observed = vec![vec!["x".to_string(), "y".to_string()]];
         let r = build_report(&rows, &observed);
@@ -216,5 +237,25 @@ mod tests {
             rows[0].expected_paths(),
             vec!["crates/a/sweep.rs", "docs/specs/19.md"]
         );
+        // Pre-phase28 four-column fixture (no `intent` header) —
+        // defaults to free_search.
+        assert_eq!(rows[0].intent(), "free_search");
+    }
+
+    #[test]
+    fn load_csv_reads_intent_column_and_defaults_blank_to_free_search() {
+        // Phase28 §2.2 — five-column shape with a per-row intent.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("retrieval.csv");
+        std::fs::write(
+            &path,
+            "id,query,repo,intent,expected_paths\n\
+             r1,what laws govern git,cortex,law_check,docs/specs/13-laws-dsl.md\n\
+             r2,what is ADR-013,cortex,,docs/specs/02.md\n",
+        )
+        .unwrap();
+        let rows = load_csv(&path).unwrap();
+        assert_eq!(rows[0].intent(), "law_check");
+        assert_eq!(rows[1].intent(), "free_search", "blank intent defaults");
     }
 }

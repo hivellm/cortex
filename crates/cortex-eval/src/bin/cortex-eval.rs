@@ -196,10 +196,12 @@ async fn run_retrieval(
         // phase0 2026-06-22 — match the live /v1/query contract: `intent`
         // is required, `repo` lives under `scope`, and the response is
         // `results.snippets[]` keyed by `path` (content-addressed), not
-        // `hits[].event_id`.
+        // `hits[].event_id`. phase28 §2.2 — the intent comes from the
+        // row so the suite exercises all five intents, not just
+        // free_search.
         let body = serde_json::json!({
             "query": row.query,
-            "intent": "free_search",
+            "intent": row.intent(),
             "scope": { "repo": row.repo },
             "limit": 10,
         });
@@ -218,20 +220,38 @@ async fn run_retrieval(
             continue;
         }
         let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
-        let snippets = json
-            .get("results")
-            .and_then(|r| r.get("snippets"))
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let ids: Vec<String> = snippets
-            .iter()
-            .filter_map(|h| {
-                h.get("path")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .collect();
+        // Phase28 §2.2 — law_check strips `results.snippets` BY SPEC
+        // (only violations + `laws_active` surface), so its rows are
+        // keyed by law id from the top-level `laws_active` array; the
+        // other four intents stay keyed by snippet path.
+        let ids: Vec<String> = if row.intent() == "law_check" {
+            json.get("laws_active")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|l| l.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            json.get("results")
+                .and_then(|r| r.get("snippets"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|h| {
+                            // Path-less corpora (turn hits under
+                            // similar_problems) key by the lane-level
+                            // `doc_id` the API exposes since phase28.
+                            h.get("path")
+                                .and_then(|v| v.as_str())
+                                .or_else(|| h.get("doc_id").and_then(|v| v.as_str()))
+                                .map(|s| s.to_string())
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         observed.push(ids);
     }
     let report = retrieval::build_report(&rows, &observed);
