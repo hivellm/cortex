@@ -192,6 +192,10 @@ async fn run_retrieval(
 ) -> Result<(SuiteReport, AcceptanceVerdict)> {
     let rows = retrieval::load_csv(golden)?;
     let mut observed: Vec<Vec<String>> = Vec::with_capacity(rows.len());
+    // Phase28 §6.2 — tally the phantom-link verifier stamps across
+    // every snippet the run returns (ADR-026 ≤1% gate).
+    let mut verified_true: u64 = 0;
+    let mut verified_false: u64 = 0;
     for row in &rows {
         // phase0 2026-06-22 — match the live /v1/query contract: `intent`
         // is required, `repo` lives under `scope`, and the response is
@@ -220,6 +224,21 @@ async fn run_retrieval(
             continue;
         }
         let json: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+        // Phase28 §6.2 — count verifier stamps before id extraction so
+        // the phantom rate covers every snippet the run surfaced.
+        if let Some(snips) = json
+            .get("results")
+            .and_then(|r| r.get("snippets"))
+            .and_then(|v| v.as_array())
+        {
+            for s in snips {
+                match s.get("verified").and_then(|v| v.as_bool()) {
+                    Some(true) => verified_true += 1,
+                    Some(false) => verified_false += 1,
+                    None => {}
+                }
+            }
+        }
         // Phase28 §2.2 — law_check strips `results.snippets` BY SPEC
         // (only violations + `laws_active` surface), so its rows are
         // keyed by law id from the top-level `laws_active` array; the
@@ -254,7 +273,12 @@ async fn run_retrieval(
         };
         observed.push(ids);
     }
-    let report = retrieval::build_report(&rows, &observed);
+    let mut report = retrieval::build_report(&rows, &observed);
+    // Phase28 §6.2 — append the phantom-link-rate metric when the
+    // verifier stamped anything; acceptance honours its `passed`.
+    if let Some(m) = retrieval::phantom_metric(verified_true, verified_false) {
+        report.metrics.push(m);
+    }
     let verdict = retrieval::retrieval_acceptance(&report);
     Ok((report, verdict))
 }

@@ -380,7 +380,7 @@ services:
       # is re-scored by bge-reranker-v2-m3 so the genuinely-relevant hit
       # rises to #1. TOP_K kept modest + TIMEOUT generous because the TEI
       # runs on CPU here (the prod p95≤250ms gate needs GPU).
-      CORTEX_RERANKER_ENABLED: "true"
+      CORTEX_RERANKER_ENABLED: "${CORTEX_RERANKER_ENABLED:-true}"
       CORTEX_RERANKER_ENDPOINT: http://cortex-reranker:80
       CORTEX_RERANKER_TOP_K: "30"
       CORTEX_RERANKER_TIMEOUT_MS: "15000"

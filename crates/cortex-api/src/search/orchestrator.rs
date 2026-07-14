@@ -1447,8 +1447,26 @@ const SYMBOL_KIND_LABELS: &[&str] = &[
     "decision",
     "analysis",
     "memory",
+    "law",
     "law_violation",
+    "knowledge",
+    "learning",
+    "consolidation",
+    "topic_card",
 ];
+
+/// True when `s` is a Kind label masquerading as a code symbol.
+/// Phase28 (retrieval-eval-gate-live §6.2) — the comparison is
+/// ASCII-case-insensitive: the vector/keyword lanes stamp PascalCase
+/// labels (`Artifact`, `Turn`) while this list is snake_case, and the
+/// old case-sensitive check let them leak into the wire `symbol`
+/// field, where the phantom-link verifier then failed to find a
+/// "symbol" named `Artifact` in every file (74% false phantom rate
+/// measured live before this fix).
+fn is_kind_label(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    SYMBOL_KIND_LABELS.contains(&lower.as_str())
+}
 
 fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
     // phase10b §2.1 — strip kind labels from the wire `symbol`
@@ -1463,7 +1481,7 @@ fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
         .or_else(|| {
             hit.symbol
                 .as_deref()
-                .filter(|s| !SYMBOL_KIND_LABELS.contains(s))
+                .filter(|s| !is_kind_label(s))
                 .map(String::from)
         });
     // ADR-011 — typed overlay carries the truncation flag. Fall

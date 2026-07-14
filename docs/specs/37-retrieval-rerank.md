@@ -43,7 +43,16 @@ preserved and an audit event is emitted.
 - TEI service deployment / Dockerfile: operator-managed, not shipped in
   this phase.
 - Reranker caching / local ONNX inference: future work.
-- p95-latency gate (≤ 250ms): requires a load test run; not yet measured.
+- p95-latency gate (≤ 250ms): **measured 2026-07-14 (phase28
+  retrieval-eval-gate-live §6.1) and FAILING** — 40 cache-busting
+  queries end-to-end through `/v1/query`: p95 102ms (reranker off) vs
+  2224ms (on) = **+2122ms, ~8.5× over the gate**, despite GPU TEI
+  (a direct in-network `POST /rerank` with 30 docs returns in
+  ~200–400ms, so the excess sits in the cortex-api rerank path —
+  candidate causes: oversized candidate texts, the 15s timeout path,
+  serialization; root-cause is follow-up work). The MRR delta
+  re-confirmed on the reconciled 27-row multi-intent set: fusion-only
+  0.4333 → reranked 0.5864 (**+35.3%**).
 
 ## Eval results (phase0, 2026-06-22)
 

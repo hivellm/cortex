@@ -51,7 +51,22 @@ in `"filter"` mode, removes unverified snippets entirely.
   measures MRR/recall, not phantom rate; a dedicated harness addition is
   needed to count `verified=false` snippets per query.
 
-## Live status (phase0, 2026-06-22)
+## Live status (phase0, 2026-06-22 · updated phase28, 2026-07-14)
+
+**§3.10 gate first measured (phase28 retrieval-eval-gate-live §6.2):**
+`cortex-eval --suite retrieval` now emits a `phantom_link_rate` metric
+(share of `verified == false` among verifier-stamped snippets;
+`retrieval_acceptance` enforces the ≤1% gate whenever the metric is
+present). First real measurement: **0.50 — the gate FAILS today.**
+Two findings en route: (a) a 74% fake rate was traced to PascalCase
+kind labels (`Artifact`, `Turn`) leaking into the wire `symbol` field
+(the strip list was lowercase/case-sensitive and incomplete — fixed,
+comparison now case-insensitive across all 13 kinds); (b) the residual
+0.50 is genuine `(path, symbol)` verification misses on real
+tree-sitter symbols — likely index staleness vs the moving workspace
+plus matcher strictness; root-causing it is follow-up work. Note the
+verifier only stamps snippets carrying BOTH `path` and `symbol`, so
+the denominator excludes doc/turn hits.
 
 The dead-code wiring gap (§3.10 originally blocked) was closed in phase0.
 `main.rs` now calls `with_verify(cfg.verify, root)` at boot — the same
