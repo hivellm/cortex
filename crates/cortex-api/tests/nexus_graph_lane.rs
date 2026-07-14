@@ -274,6 +274,11 @@ async fn acl_context_injects_where_clause_into_cypher_body() {
     };
     let _ = lane.query(&req).await;
 
+    // Phase27e §1 gate: an ACL'd request must NOT fan out into
+    // un-ACL'd DF/total COUNT probes — it keeps the pre-phase27e
+    // single ACL-decorated pass (Bell-LaPadula inference channel
+    // otherwise: the probe statistics aggregate over nodes outside
+    // the principal's clearance).
     let received = server.received_requests().await.unwrap();
     assert_eq!(received.len(), 1, "exactly one POST /cypher");
     let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
@@ -334,7 +339,10 @@ async fn acl_wildcard_grant_emits_level_only_fragment() {
     };
     let _ = lane.query(&req).await;
 
+    // Same phase27e §1 gate as above: ACL present → no probe fan-out,
+    // the one POST is the ACL-decorated hit query.
     let received = server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 1, "exactly one POST /cypher");
     let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
     let cypher = body["query"].as_str().unwrap();
 
@@ -382,12 +390,18 @@ async fn no_acl_context_sends_unmodified_cypher() {
     };
     let _ = lane.query(&req).await;
 
+    // Without ACL the phase27e §1 seed fan-out MAY issue additional
+    // COUNT probes (total-nodes + per-token DF) before the hit
+    // query — assert the no-ACL invariant across EVERY POST body,
+    // not just the first, so the probes are covered too.
     let received = server.received_requests().await.unwrap();
-    let body: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
-    let cypher = body["query"].as_str().unwrap();
-
-    assert!(
-        !cypher.contains("class_level") && !cypher.contains("class_compartments"),
-        "no ACL context must produce no ACL predicates; got: {cypher}"
-    );
+    assert!(!received.is_empty(), "at least one POST /cypher");
+    for r in &received {
+        let body: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+        let cypher = body["query"].as_str().unwrap();
+        assert!(
+            !cypher.contains("class_level") && !cypher.contains("class_compartments"),
+            "no ACL context must produce no ACL predicates; got: {cypher}"
+        );
+    }
 }

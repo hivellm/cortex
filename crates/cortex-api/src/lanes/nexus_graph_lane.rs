@@ -378,7 +378,17 @@ impl GraphLane for NexusGraphLane {
         // templates in `SEED_FAN_OUT_TEMPLATES` participate;
         // `cross_project_ref` always falls through to the raw-query
         // pass below.
-        let seeds: Vec<SeedTerm> = if SEED_FAN_OUT_TEMPLATES.contains(&req.template.as_str()) {
+        //
+        // ACL'd requests (phase21 §5.4) stay on the single raw-query
+        // pass: the DF/total COUNT probes carry no ACL predicates and
+        // the DF cache is shared across principals, so fanning out on
+        // their statistics would leak aggregate information about
+        // nodes outside the principal's clearance (a Bell-LaPadula
+        // inference channel). The hit query itself remains
+        // ACL-decorated either way via `cypher_with_acl`.
+        let seeds: Vec<SeedTerm> = if req.acl.is_none()
+            && SEED_FAN_OUT_TEMPLATES.contains(&req.template.as_str())
+        {
             let tokens = graph_seeds::tokenize(&raw_query);
             if tokens.is_empty() {
                 Vec::new()
