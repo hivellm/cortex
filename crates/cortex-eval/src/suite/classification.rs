@@ -19,7 +19,7 @@ use crate::metrics::{f1, macro_f1};
 use crate::report::{MetricRow, SuiteReport};
 use crate::suite::AcceptanceVerdict;
 
-/// One row in `tests/golden/classification.csv`.
+/// One row in `crates/cortex-eval/tests/golden/classification.csv`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ClassificationRow {
     /// Stable row id.

@@ -45,22 +45,41 @@ mod tests {
     #[test]
     fn baked_in_settings_parse() {
         let v = settings_v1_json().expect("v1 settings parse");
-        // Phase21 §2.5 — bumped to v8 so the settings-version
-        // watcher triggers a re-index pass that adds the
-        // `class_level` (filterable + sortable) and
-        // `class_compartments` (filterable) columns the ACL wedge
-        // (phase21 §5) filters by. Phase18's v7 added bitemporal
-        // axes; phase11r's v6 added `ext.topic_card.*`; phase11k's
-        // v5 added governance top-level projection; phase11j's v4
-        // added `ext.consolidation.*`; phase11i's v3 added
-        // `model`/`tool`/`session_id`/`outcome`; phase11b's v2
-        // introduced `path_prefixes`.
-        assert_eq!(v["version"], "v8");
+        // Phase28 (retrieval-eval-gate-live §1.3) — bumped to v9:
+        // `ext.tool_call.tool_name` / `ext.tool_call.outcome` become
+        // FILTERABLE. Live tool_call docs carry the nested ext shape,
+        // but only flat `tool`/`outcome` (which the docs don't carry)
+        // were filterable, so `/v1/search/tool-calls`'s tool_name
+        // filter 400'd on every settings-conformant index. Phase21's
+        // v8 added `class_level`/`class_compartments` (ACL wedge);
+        // Phase18's v7 added bitemporal axes; phase11r's v6 added
+        // `ext.topic_card.*`; phase11k's v5 added governance top-level
+        // projection; phase11j's v4 added `ext.consolidation.*`;
+        // phase11i's v3 added `model`/`tool`/`session_id`/`outcome`;
+        // phase11b's v2 introduced `path_prefixes`.
+        assert_eq!(v["version"], "v9");
         assert!(v["searchableAttributes"].as_array().unwrap().len() >= 4);
         assert!(v["sortableAttributes"]
             .as_array()
             .unwrap()
             .contains(&Value::String("ts".to_string())));
+    }
+
+    #[test]
+    fn tool_call_ext_fields_are_filterable() {
+        // Phase28 — pins the v9 contract: the tool-calls search
+        // handler filters on the NESTED ext shape the fulltext
+        // builders actually emit.
+        let v = settings_v1_json().expect("v1 settings parse");
+        let filterable = v["filterableAttributes"]
+            .as_array()
+            .expect("filterableAttributes is an array");
+        for required in ["ext.tool_call.tool_name", "ext.tool_call.outcome"] {
+            assert!(
+                filterable.contains(&Value::String(required.to_string())),
+                "filterableAttributes must include `{required}` for the tool-calls search filter"
+            );
+        }
     }
 
     #[test]

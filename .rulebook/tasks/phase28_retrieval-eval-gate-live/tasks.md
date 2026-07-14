@@ -1,24 +1,8 @@
 ## 1. Reconcile and audit the golden fixture trees
-- [ ] 1.1 Diff `tests/golden/*.csv` (repo root, read by
-      `.github/workflows/eval.yml`'s relative `--golden` path — no
-      `working-directory:` override) against
-      `crates/cortex-eval/tests/golden/*.csv` (read by
-      `golden_set_acceptance.rs` via `CARGO_MANIFEST_DIR`); pick the
-      single source of truth and point both the CI workflow and any
-      remaining root-relative references at it.
-- [ ] 1.2 Retire or sync whichever tree is not canonical — root
-      `tests/golden/README.md` currently documents the old
-      `expected_event_ids` column against a `retrieval.csv` that
-      already uses `expected_paths`; fix or remove it as part of this.
-- [ ] 1.3 Backfill the 16 blank `expected_ids` rows in the root
-      `mcp_search.csv` (or drop rows for the tools already found
-      broken/unwired — 502/400/empty responses, per the archived
-      `phase0_live-eval-gates-rerank-phantomlink` findings) using real
-      ids from a live Cortex run.
-- [ ] 1.4 Confirm `access_control.csv` (40-row synthetic Bell-LaPadula
-      matrix) is intentionally synthetic — not a placeholder needing
-      live harvesting — and carry it into the canonical tree (it does
-      not exist at the root today).
+- [x] 1.1 Canonical = `crates/cortex-eval/tests/golden/` (real recent ULIDs, backfilled mcp rows, only tree with access_control.csv; root tree was stale phase14c-era content). `.github/workflows/eval.yml --golden`, the binary's `--golden` default, and every doc reference now point at the crate tree.
+- [x] 1.2 Root `tests/golden/` retired (`git rm`); its still-relevant curation targets (retrieval 100 / consolidation 50 / classification 200, quarterly + per-incident cadence, RFC-4180 tips) merged into the canonical README before deletion.
+- [x] 1.3 Backfilled 2 rows with live-harvested ids after fixing their root causes: **m-003 `cortex_tool_calls`** — the handler filtered on flat `tool_name`/`outcome` but live docs carry the NESTED `ext.tool_call.*` shape and only the flat names were filterable → settings v9 adds `ext.tool_call.tool_name`/`.outcome` to filterableAttributes (applied live to `cortex-cortex-code`, verified: 1000 Bash hits), handler repointed to nested paths (row pins the low-frequency `WebSearch` so ts-sorted top-5 stays stable); **m-008 `cortex_consolidations_by_entity`** — the eval driver omitted the `repo` hint the API requires (no global consolidations index) → driver fixed, ADR-016 ids harvested live. Kept dropped with findings recorded: `files_touched` (works but full-archive scan ≈30s/call AND `repo:"cortex"` matches zero envelopes in any window — `context.repo` value mismatch, real defect), `topic_search` (0 topic_card docs in the live corpus), `law_violations` (0 law_violation docs — only 274 law definitions), plus the 7 tools without top-K-id semantics (already excluded by the driver by design).
+- [x] 1.4 Confirmed intentionally synthetic: `access_control.csv` is a Bell-LaPadula truth-table over (clearance × grants × fact-label) driving the zero-false-grant gate — a predicate matrix has no live counterpart to harvest. Already lives only in the canonical tree; README row added documenting this.
 
 ## 2. Grow the golden set to a statistically meaningful size
 - [ ] 2.1 Expand `retrieval.csv` and `consolidation.csv` toward the

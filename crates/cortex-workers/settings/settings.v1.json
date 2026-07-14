@@ -1,5 +1,5 @@
 {
-  "version": "v8",
+  "version": "v9",
   "searchableAttributes": [
     "title",
     "body",
@@ -29,6 +29,8 @@
     "tool",
     "session_id",
     "outcome",
+    "ext.tool_call.tool_name",
+    "ext.tool_call.outcome",
     "ext.consolidation.grain",
     "ext.consolidation.depth",
     "ext.consolidation.model",

@@ -77,7 +77,7 @@ pub fn can_read_local(
 // CSV row type
 // ---------------------------------------------------------------------------
 
-/// One row in `tests/golden/access_control.csv`.
+/// One row in `crates/cortex-eval/tests/golden/access_control.csv`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct AccessControlRow {
     /// Stable row identifier.

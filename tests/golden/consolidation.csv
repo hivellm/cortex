@@ -1,6 +1,0 @@
-id,consolidation_id,expected_entities,expected_facts
-c-001,01KSGZ0QQ9HV94WZCZR8RD8Y1Z,HiveLLM;projects;knowledge,18 projects;structured knowledge
-c-002,01KSGZ3Y3993SC3SN5G8XJ30S8,Cortex rework;analysis;roadmap,32 tasks;phases 12-16
-c-003,01KSH0PMD9862BHH5FZW84E943,retention daemon;phase11v;tool-call digest,memory bloat;independent gaps
-c-004,01KSH0RHKZDKN7NB9M64KN6N8E,ADR-011;ADR-012;EventIdentity,Sessions table;PATH
-c-005,01KSH031QHAD2HEJQ0T97M9026,phase13a;phase13b;consolidation,post-consolidation cleanup

@@ -3,9 +3,9 @@
 //!
 //! Subcommand-less; selects the suite via `--suite`. Three modes:
 //!
-//! - `cortex-eval --suite retrieval --golden tests/golden/retrieval.csv [--api-url URL] [--output json|md]`
-//! - `cortex-eval --suite consolidation --golden tests/golden/consolidation.csv [--api-url URL]`
-//! - `cortex-eval --suite classification --golden tests/golden/classification.csv [--classifier-url URL]`
+//! - `cortex-eval --suite retrieval --golden crates/cortex-eval/tests/golden/retrieval.csv [--api-url URL] [--output json|md]`
+//! - `cortex-eval --suite consolidation --golden crates/cortex-eval/tests/golden/consolidation.csv [--api-url URL]`
+//! - `cortex-eval --suite classification --golden crates/cortex-eval/tests/golden/classification.csv [--classifier-url URL]`
 //!
 //! When `--baseline <path>` is supplied, the binary loads the prior
 //! JSON report and fails (exit 2) on a regression > `--threshold`
@@ -37,7 +37,7 @@ struct Cli {
     #[arg(long)]
     suite: String,
     /// Path to the suite's golden CSV. Defaults to
-    /// `tests/golden/<suite>.csv` next to the binary's cwd.
+    /// `crates/cortex-eval/tests/golden/<suite>.csv` resolved from the workspace root cwd.
     #[arg(long)]
     golden: Option<PathBuf>,
     /// cortex-api base URL. Defaults to
@@ -88,10 +88,12 @@ fn init_tracing(verbose: bool) {
 async fn run(cli: &Cli) -> Result<ExitCode> {
     let suite =
         SuiteName::parse(&cli.suite).with_context(|| format!("unknown --suite={}", cli.suite))?;
-    let golden = cli
-        .golden
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(format!("tests/golden/{}.csv", suite.as_str())));
+    let golden = cli.golden.clone().unwrap_or_else(|| {
+        PathBuf::from(format!(
+            "crates/cortex-eval/tests/golden/{}.csv",
+            suite.as_str()
+        ))
+    });
     let api_url = cli
         .api_url
         .clone()
@@ -354,8 +356,13 @@ async fn run_mcp_search_row(
         ),
         "cortex_consolidations_by_entity" => (
             format!("{base}/v1/consolidations/by-entity"),
+            // `repo` is REQUIRED for non-repo entity kinds — live
+            // Meili has no global consolidations index, so the API
+            // rejects repo-less lookups with `bad_input` (phase28
+            // retrieval-eval-gate-live §1.3 finding).
             serde_json::json!({
                 "entity": {"kind": "decision_id", "value": row.query},
+                "repo": row.repo,
                 "limit": 5
             }),
             "event_id",
@@ -430,9 +437,7 @@ async fn run_mcp_search_row(
 /// predicate locally (no HTTP stack required). Each row in the CSV
 /// is evaluated by `can_read_local` and the result is compared to
 /// the `expected` label. The acceptance gate is `false_grant_count == 0`.
-async fn run_access_control(
-    golden: &std::path::Path,
-) -> Result<(SuiteReport, AcceptanceVerdict)> {
+async fn run_access_control(golden: &std::path::Path) -> Result<(SuiteReport, AcceptanceVerdict)> {
     let rows = access_control::load_csv(golden)?;
     let observed: Vec<bool> = rows.iter().map(|r| r.evaluate()).collect();
     let report = access_control::build_report(&rows, &observed);

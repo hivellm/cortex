@@ -20,7 +20,7 @@ use crate::metrics::{mrr_at_k, recall_at_k};
 use crate::report::{MetricRow, SuiteReport};
 use crate::suite::AcceptanceVerdict;
 
-/// One row in `tests/golden/retrieval.csv`.
+/// One row in `crates/cortex-eval/tests/golden/retrieval.csv`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RetrievalRow {
     /// Stable row id — feeds [`SuiteReport::per_row`].

@@ -120,7 +120,14 @@ pub(crate) fn build_filter(req: &ToolCallsRequest) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        clauses.push(format!("tool_name = \"{}\"", meili_escape(tn)));
+        // Live tool_call docs carry the NESTED ext shape
+        // (`ext.tool_call.tool_name`), not a flat `tool_name` —
+        // phase28 (retrieval-eval-gate-live §1.3) made the nested
+        // path filterable (settings v9) and repointed this filter.
+        clauses.push(format!(
+            "ext.tool_call.tool_name = \"{}\"",
+            meili_escape(tn)
+        ));
     }
     if let Some(out) = req
         .outcome
@@ -128,7 +135,7 @@ pub(crate) fn build_filter(req: &ToolCallsRequest) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        clauses.push(format!("outcome = \"{}\"", meili_escape(out)));
+        clauses.push(format!("ext.tool_call.outcome = \"{}\"", meili_escape(out)));
     }
     if let Some(repo) = req.repo.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         clauses.push(format!("repo = \"{}\"", meili_escape(repo)));
@@ -347,8 +354,8 @@ mod tests {
         r.outcome = Some("error".into());
         r.repo = Some("cortex".into());
         let f = build_filter(&r).expect("filter");
-        assert!(f.contains("tool_name = \"Bash\""));
-        assert!(f.contains("outcome = \"error\""));
+        assert!(f.contains("ext.tool_call.tool_name = \"Bash\""));
+        assert!(f.contains("ext.tool_call.outcome = \"error\""));
         assert!(f.contains("repo = \"cortex\""));
         // AND-joined.
         assert_eq!(f.matches(" AND ").count(), 2);
@@ -377,7 +384,7 @@ mod tests {
         let mut r = req();
         r.tool_name = Some("evil\"name".into());
         let f = build_filter(&r).expect("filter");
-        assert!(f.contains("tool_name = \"evil\"\"name\""));
+        assert!(f.contains("ext.tool_call.tool_name = \"evil\"\"name\""));
     }
 
     #[test]

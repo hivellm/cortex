@@ -15,20 +15,20 @@ pub mod retrieval;
 /// into this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SuiteName {
-    /// `tests/golden/retrieval.csv` → MRR@10 + recall@5 against
+    /// `crates/cortex-eval/tests/golden/retrieval.csv` → MRR@10 + recall@5 against
     /// `/v1/query`.
     Retrieval,
-    /// `tests/golden/consolidation.csv` → entity-recall +
+    /// `crates/cortex-eval/tests/golden/consolidation.csv` → entity-recall +
     /// fact-recall against the consolidation index.
     Consolidation,
-    /// `tests/golden/classification.csv` → per-kind F1 + macro-F1
+    /// `crates/cortex-eval/tests/golden/classification.csv` → per-kind F1 + macro-F1
     /// against the classifier worker.
     Classification,
-    /// Phase19 §5.3 — `tests/golden/mcp_search.csv` → recall@5
+    /// Phase19 §5.3 — `crates/cortex-eval/tests/golden/mcp_search.csv` → recall@5
     /// against each granular MCP tool (entity / topic / file-touched
     /// lookups + the rest).
     McpSearch,
-    /// Phase21 §9.1 — `tests/golden/access_control.csv` → zero
+    /// Phase21 §9.1 — `crates/cortex-eval/tests/golden/access_control.csv` → zero
     /// false-grants across the clearance×level×compartment matrix.
     AccessControl,
 }

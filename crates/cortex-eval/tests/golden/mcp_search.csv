@@ -1,5 +1,7 @@
 id,tool,query,repo,expected_ids
 m-001,cortex_events_by_kind,tool_call,cortex,01KVPT3WQZRAMYRR2HFEPW5NRK
+m-003,cortex_tool_calls,WebSearch,cortex,01KWVK9BEV15YHCKSBNGCD8AHV;01KVE6C3PBRPR220T61PHMGCNF
 m-007,cortex_consolidations_recent,,cortex,01KVPQHXK372ZBYYKW3C0R00J2
+m-008,cortex_consolidations_by_entity,ADR-016,cortex,01KVPPJ9PAACJE5YN9YJ745F3Y;01KSH0RHKZDKN7NB9M64KN6N8E
 m-009,cortex_consolidations_search,OpenCode adapter,cortex,01KVPMMP6ZDBK5BGJE1X1HT576
 m-014,cortex_decision_search,accepted,cortex,01KVKG87CHEASF63G8J0NJNNWR

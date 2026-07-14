@@ -4,11 +4,11 @@
 //! Cortex releases:
 //!
 //! - **retrieval** — MRR@10 + recall@5 against
-//!   `tests/golden/retrieval.csv`.
+//!   `crates/cortex-eval/tests/golden/retrieval.csv`.
 //! - **consolidation** — entity-recall + fact-recall against
-//!   `tests/golden/consolidation.csv`.
+//!   `crates/cortex-eval/tests/golden/consolidation.csv`.
 //! - **classification** — per-kind F1 + macro-F1 against
-//!   `tests/golden/classification.csv`.
+//!   `crates/cortex-eval/tests/golden/classification.csv`.
 //!
 //! Library surface ships the metric primitives + suite types so
 //! the bin (`cortex-eval`) and unit tests share one implementation.

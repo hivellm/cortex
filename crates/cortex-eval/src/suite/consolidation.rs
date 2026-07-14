@@ -1,5 +1,5 @@
 //! Phase14c consolidation suite — entity-recall + fact-recall
-//! against `tests/golden/consolidation.csv`.
+//! against `crates/cortex-eval/tests/golden/consolidation.csv`.
 //!
 //! Each row pairs a session_id with the entities and facts the
 //! ideal Session-grain consolidation MUST cover. The harness:
@@ -28,7 +28,7 @@ use crate::metrics::set_recall;
 use crate::report::{MetricRow, SuiteReport};
 use crate::suite::AcceptanceVerdict;
 
-/// One row in `tests/golden/consolidation.csv`.
+/// One row in `crates/cortex-eval/tests/golden/consolidation.csv`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ConsolidationRow {
     /// Stable row id.

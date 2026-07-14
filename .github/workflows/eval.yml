@@ -1,7 +1,7 @@
 name: eval
 
 # Phase14c golden-set harness — currently runs against the 10-row
-# starter fixtures committed in `tests/golden/`. Those fixtures do
+# starter fixtures committed in `crates/cortex-eval/tests/golden/`. Those fixtures do
 # not (and were never meant to) satisfy the production acceptance
 # floors hardcoded in `cortex-eval`. The harness is correct; the
 # fixtures are a placeholder pending operator-led seeding.
@@ -81,7 +81,7 @@ jobs:
           fi
           ./target/release/cortex-eval \
             --suite ${{ matrix.suite }} \
-            --golden tests/golden/${{ matrix.suite }}.csv \
+            --golden crates/cortex-eval/tests/golden/${{ matrix.suite }}.csv \
             --output json \
             $BASELINE_FLAG \
             > report.json
