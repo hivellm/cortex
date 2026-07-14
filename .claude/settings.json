@@ -13,8 +13,16 @@
       "WebFetch(*)",
       "WebSearch(*)",
       "Skill(*)",
+      "ToolSearch(*)",
+      "Workflow(*)",
+      "SendMessage(*)",
+      "TaskOutput(*)",
+      "TaskStop(*)",
+      "Monitor(*)",
+      "NotebookEdit(*)",
       "mcp__tml__*",
       "mcp__rulebook__*",
+      "mcp__cortex__*",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(grep:*)",
@@ -27,7 +35,9 @@
       "Bash(npm run type-check:*)",
       "Bash(npm test:*)",
       "Bash(*)",
-      "mcp__rulebook"
+      "mcp__rulebook",
+      "WebSearch",
+      "TodoWrite"
     ]
   },
   "hooks": {
@@ -37,7 +47,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/enforce-pre-tool.sh"
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/protect-task-scaffolding.sh"
           }
         ]
       }
