@@ -1,21 +1,31 @@
 name: eval
 
-# Phase14c golden-set harness — currently runs against the 10-row
-# starter fixtures committed in `crates/cortex-eval/tests/golden/`. Those fixtures do
-# not (and were never meant to) satisfy the production acceptance
-# floors hardcoded in `cortex-eval`. The harness is correct; the
-# fixtures are a placeholder pending operator-led seeding.
+# Phase14c golden-set harness, reconciled by phase28
+# (retrieval-eval-gate-live): the fixtures in
+# `crates/cortex-eval/tests/golden/` are real (27-row multi-intent
+# retrieval, 26-row all-kinds classification, live-harvested
+# consolidation/mcp rows, synthetic access_control matrix) and the
+# floors in `cortex-eval` are re-derived from the re-locked
+# 2026-07-14 baseline (`crates/cortex-eval/baselines/cdc-baseline-v1.json`).
 #
-# Until the fixtures grow to cover the floor, the eval gate runs
-# on a manual trigger only. The nightly schedule was removed because
-# it only ever failed (placeholder fixtures can't meet the floor) and
-# flooded the maintainer's inbox with failure mail. The CI is
-# preserved structurally (artefact upload + baseline comparison still
-# works when run by hand); re-add a `schedule:` block once the golden
-# fixtures are seeded to satisfy the acceptance floors.
+# NIGHTLY runs only the suites whose data prerequisites this CI stack
+# can genuinely satisfy: `access_control` (pure predicate matrix, no
+# stack at all) and `classification` (needs only the classifier
+# worker, booted below). The other three suites (retrieval /
+# consolidation / mcp_search) measure recall against the maintainer's
+# LIVE corpus — turns, consolidations, and event ULIDs that exist only
+# in the developer stack and cannot be reproduced from a bare checkout
+# — so they stay on `workflow_dispatch` and are exercised locally per
+# the golden README's curation cadence. Scheduling them here would
+# just recreate the red-nightly inbox flood this workflow's history
+# warns about.
 
 on:
   workflow_dispatch:
+  schedule:
+    # Nightly at 03:17 UTC — offset from the top of the hour to dodge
+    # the GitHub cron thundering herd.
+    - cron: "17 3 * * *"
 
 jobs:
   eval:
@@ -25,10 +35,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [retrieval, consolidation, classification]
+        # On the nightly schedule, run only the CI-satisfiable suites
+        # (see the header comment); manual dispatch runs all five.
+        # (job-level `if` cannot see `matrix.*`, hence the conditional
+        # matrix expression.)
+        suite: ${{ github.event_name == 'schedule' && fromJSON('["classification","access_control"]') || fromJSON('["retrieval","consolidation","classification","mcp_search","access_control"]') }}
     services:
       synap:
-        image: hivehub/synap:latest
+        image: hivehub/synap:1.0.0
         ports: ["15500:15500"]
       meilisearch:
         image: getmeili/meilisearch:v1.10
@@ -54,11 +68,24 @@ jobs:
       - name: Build cortex-eval
         run: cargo build --release -p cortex-eval
       - name: Start cortex-api stack
+        if: matrix.suite != 'access_control' && matrix.suite != 'classification'
         run: |
           cargo run --release -p cortex-api -- --bind 0.0.0.0:17000 &
           # Wait for cortex-api health endpoint
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:17000/v1/status >/dev/null; then break; fi
+            sleep 1
+          done
+      - name: Start classifier worker (classification suite)
+        if: matrix.suite == 'classification'
+        env:
+          CORTEX_CLASSIFIER_MODE: static
+          CORTEX_CLASSIFIER_SYNAP_URL: http://127.0.0.1:15500
+        run: |
+          cargo run --release -p cortex-workers --bin classifier-worker &
+          # Wait for the admin listener (hosts POST /v1/classify).
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:17021/healthz >/dev/null; then break; fi
             sleep 1
           done
       - name: Fetch baseline (from main branch artifact)

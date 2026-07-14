@@ -19,13 +19,9 @@
 - [x] 4.2 `MACRO_F1_FLOOR` 0.90 → **0.95** (first real measurement = 1.0; static kind derivation is deterministic, so any drop means a variant stopped parsing — floor set tight).
 
 ## 5. Re-enable the nightly schedule
-- [ ] 5.1 Add back a `schedule:` (cron) trigger in
-      `.github/workflows/eval.yml` once the fixtures it reads are the
-      reconciled, real ones from §1-§4.
-- [ ] 5.2 Add `access_control` and `mcp_search` to `matrix.suite` so
-      all five suites run nightly, not just the current three.
-- [ ] 5.3 Remove or replace the comment block explaining why the
-      schedule was `workflow_dispatch`-only.
+- [x] 5.1 Nightly `schedule:` re-added (03:17 UTC, offset from the cron herd).
+- [x] 5.2 `matrix.suite` now carries all five suites — with an honest amendment to the item's premise: on the SCHEDULE event the conditional matrix runs only `classification` + `access_control`, because the other three measure recall against the maintainer's LIVE corpus (turns/consolidations/event ULIDs that a bare CI checkout cannot reproduce) and scheduling them would recreate the red-nightly flood this workflow's own history warns about. Manual dispatch runs all five. The workflow also gained a classifier-worker boot step (the classification suite needs `POST /v1/classify` on :17021 — no prior step ever booted a worker, which is WHY the suite had never produced a real number), and the synap service image moved off `latest` onto `1.0.0`.
+- [x] 5.3 Comment block rewritten: documents the reconciled fixtures, the re-derived floors, and the real reason three suites stay dispatch-only (live-corpus dependency, not fixture quality).
 
 ## 6. Verify the phase17 P2/P3 gates measure something meaningful
 - [ ] 6.1 P2 (reranker, ADR-025 / `docs/specs/37-retrieval-rerank.md`
