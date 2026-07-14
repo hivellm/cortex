@@ -51,13 +51,10 @@ services:
       # cpu incident.
       - nexus-data:/app/data
     healthcheck:
-      # nexus 2.x ships without curl/wget/grep — probe via bash
-      # /dev/tcp + bash regex (`[[ =~ ]]`) so we depend only on
-      # bash + head which the image carries.
-      test:
-        - "CMD-SHELL"
-        - |
-          bash -c 'exec 3<>/dev/tcp/127.0.0.1/15474 && printf "GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n" >&3 && read -r status <&3 && [[ "$$status" =~ "200" ]] && exit 0; exit 1'
+      # nexus 2.5 images are distroless (no shell at all — the old
+      # bash /dev/tcp probe exec-fails on /bin/sh); the binary itself
+      # is the healthcheck, matching the image's own HEALTHCHECK.
+      test: ["CMD", "/usr/local/bin/nexus-server", "--healthcheck"]
       interval: 10s
       timeout: 5s
       retries: 20
@@ -75,7 +72,9 @@ services:
     volumes:
       - synap-data:/data
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:15500/health || exit 1"]
+      # synap 1.0 images are distroless (no shell / wget); the binary
+      # itself is the healthcheck, matching the image's own HEALTHCHECK.
+      test: ["CMD", "/usr/local/bin/synap-server", "--health-check"]
       interval: 5s
       timeout: 3s
       retries: 20
