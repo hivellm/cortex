@@ -2,7 +2,7 @@
 
 > **Status:** 🟢 Implemented · **Owner:** Core team · **Depends on:** 02
 >
-> Implementation: [`docker-compose.yml`](../../docker-compose.yml), [`.env.example`](../../.env.example), [`bin/`](../../bin/) (bash + PowerShell wrappers), [`Makefile`](../../Makefile), and [`crates/cortex-ops/`](../../crates/cortex-ops/) which emits the bootstrap plan JSON consumed by `bin/cortex-init.sh`. `cortex-api` / `cortex-workers` container stanzas land with spec 04.
+> Implementation: [`docker-compose.yml`](../../docker-compose.yml), [`.env.example`](../../.env.example), [`bin/`](../../bin/) (bash + PowerShell wrappers), [`Makefile`](../../Makefile), and the `cortex-ops` binary (a `[[bin]]` target inside [`crates/cortex-cli/`](../../crates/cortex-cli/) — `cargo run -p cortex-cli --bin cortex-ops`) which emits the bootstrap plan JSON consumed by `bin/cortex-init.sh` and hosts the `doctor*` probes.
 
 ## Goal
 
@@ -25,18 +25,33 @@ Provide a single `docker-compose.yml` (plus a small `bin/cortex-up` wrapper) tha
 
 ## Inputs / Outputs
 
-### Service map
+### Service map (12 services — reconciled with the shipped `docker-compose.yml`, 2026-07-14)
 
-| Service           | Image                                                  | Ports (host:container) | Volume                 | Health |
-|-------------------|--------------------------------------------------------|------------------------|------------------------|--------|
-| `vectorizer`      | `hivellm/vectorizer:2.5.1`                             | `17001:17001`          | `vec-data:/data`       | `/health` |
-| `nexus`           | `hivehub/nexus:v1.14.0`                                | `17002:15474`          | `nexus-data:/data`     | `/health` |
-| `synap`           | `hivellm/synap:0.11.0`                                 | `17003:17003`          | `synap-data:/data`     | `PING`    |
-| `meilisearch`     | `getmeili/meilisearch:v1.10`                           | `17004:7700`           | `meili-data:/meili_data`| `/health`|
-| `cortex-api`      | (built locally from `./cortex-api/Dockerfile`)         | `17000:17000`          | `cortex-cas:/cas`, `cortex-archive:/archive`, `cortex-meta:/meta` | `/healthz` |
-| `cortex-workers`  | (built locally from `./cortex-workers/Dockerfile`)     | —                      | shares `cortex-cas`, `cortex-archive`, `cortex-meta` | `/healthz` |
+**Backends (pulled images):**
 
-Port range `17000–15099` is reserved for Cortex local dev, picked to avoid collisions with the standalone defaults of each Hive service when running outside Cortex.
+| Service       | Image                                | Ports (host:container, defaults)                    | Volume(s)                                   | Health |
+|---------------|--------------------------------------|-----------------------------------------------------|---------------------------------------------|--------|
+| `vectorizer`  | `hivehub/vectorizer:3.5.0-fastembed` | `17001:15002` (REST), `17005:15503` (binary RPC)    | `vec-data:/data` (config), `vec-state:/.local/share/vectorizer` (real state — collections/vectors/auth) | `/health` (no compose healthcheck) |
+| `nexus`       | `hivehub/nexus:2.5.0`                | `17002:15474` (REST), `17012:15475` (binary RPC)    | `nexus-data:/app/data`                      | `nexus-server --healthcheck` (exec-form; image is distroless, no shell) |
+| `synap`       | `hivehub/synap:1.0.0`                | `17003:15500` (HTTP), `17013:15501` (WS), `16379:6379` (RESP) | `synap-data:/data`                | `synap-server --health-check` (exec-form; distroless) |
+| `meilisearch` | `getmeili/meilisearch:v1.10`         | `17004:7700`                                        | `meili-data:/meili_data`                    | `wget /health` |
+| `cortex-reranker` | `ghcr.io/huggingface/text-embeddings-inference:89-1.8` | — (bridge-only)                   | `tei-data:/data`                            | none |
+
+**Cortex services (built locally, `cortex/<name>:dev`):**
+
+| Service                    | Image                        | Port (host)      | Depends on                                          |
+|----------------------------|------------------------------|------------------|-----------------------------------------------------|
+| `cortex-ingestion`         | `cortex/ingestion:dev`       | `17010`          | `synap`                                             |
+| `cortex-classifier-worker` | `cortex/classifier-worker:dev` | `17021`        | `synap`, `cortex-ingestion`                         |
+| `cortex-embedder-worker`   | `cortex/embedder-worker:dev` | `17022`          | `synap`, `vectorizer`                               |
+| `cortex-fulltext-worker`   | `cortex/fulltext-worker:dev` | `17023`          | `synap`, `meilisearch`                              |
+| `cortex-graph-worker`      | `cortex/graph-worker:dev`    | `17024`          | `synap`, `nexus`                                    |
+| `cortex-api`               | `cortex/api:dev`             | `17000`          | `synap`, `nexus`, `meilisearch`, `vectorizer`, `cortex-ingestion` |
+| `cortex-claude-archive`    | `cortex/claude-archive:dev`  | `17030`          | `synap`, `cortex-ingestion`                         |
+
+Every host port is overridable via `.env` (`*_HOST_PORT` / `CORTEX_*_PORT` variables); the values above are the defaults. The `1700x`/`170xx` range is reserved for Cortex local dev, picked to avoid collisions with the standalone defaults of each Hive service when running outside Cortex. Host port `17011` is deliberately NOT used by any container — it is reserved for the host-side `cortex-adapter-claude` daemon admin `/healthz`.
+
+The original two-container plan (`cortex-api` + a single `cortex-workers`) evolved into one container per worker so each indexer restarts, scales, and reports health independently; the SQLite CAS/metadata/archive stores live on the host under `~/.cortex` (bind-mounted into `cortex-ingestion`, `cortex-api`, and `cortex-claude-archive`) rather than in named volumes.
 
 ### Networks
 
@@ -44,52 +59,41 @@ Port range `17000–15099` is reserved for Cortex local dev, picked to avoid col
 
 ### Volumes
 
-| Volume             | Purpose                                              |
-|--------------------|------------------------------------------------------|
-| `vec-data`         | Vectorizer `.vecdb` files + snapshots                |
-| `nexus-data`       | Nexus WAL + page store                               |
-| `synap-data`       | Synap snapshot + AOF                                 |
-| `meili-data`       | Meilisearch LMDB                                     |
-| `cortex-cas`       | SQLite blob store (CAS, spec 02)                     |
-| `cortex-archive`   | Parquet event archive                                |
-| `cortex-meta`      | SQLite metadata DB                                   |
+| Volume       | Purpose                                                             |
+|--------------|---------------------------------------------------------------------|
+| `vec-data`   | Vectorizer `/data` working dir (holds `config.yml`)                 |
+| `vec-state`  | Vectorizer XDG data dir — the REAL persistent state (collections, vectors, auth keys, snapshots). Without this mount every recreate wiped every collection (discovered 2026-05-27) |
+| `nexus-data` | Nexus WAL + page store (`/app/data` — Nexus 2.x WORKDIR)            |
+| `synap-data` | Synap snapshot + AOF                                                |
+| `meili-data` | Meilisearch LMDB                                                    |
+| `tei-data`   | Reranker (text-embeddings-inference) model cache                    |
 
-All volumes are **named** (not bind mounts) so a `docker volume rm` reset is one command. A `--bind` flag on `cortex-up` switches to bind mounts under `./data/` for inspection.
+Backend state uses **named volumes** so a `docker volume rm` reset is one command. The Cortex-side stores (CAS SQLite, event archive, metadata DB) intentionally do NOT use volumes: they bind-mount the host's `~/.cortex` (override via `CORTEX_HOME_HOST`) so the host-side CLI tools, the adapter daemon, and the containers all see the same files; `cortex-claude-archive` additionally bind-mounts the host's `~/.claude/projects` read-only, and `cortex-graph-worker` persists its consumer offsets under `./.cortex-state/graph`.
 
 ### Environment (`.env.example`)
 
 ```dotenv
-# Cortex
-CORTEX_LOG_LEVEL=info
+# Host ports (every service's host-facing port is overridable)
 CORTEX_API_PORT=17000
-CORTEX_BIND=127.0.0.1
+VECTORIZER_HOST_PORT=17001
+NEXUS_HOST_PORT=17002
+SYNAP_HOST_PORT=17003
+MEILI_HOST_PORT=17004
 
-# Backends (internal hostnames on the cortex-net bridge)
-VECTORIZER_URL=http://vectorizer:17001
-NEXUS_URL=http://nexus:17002
-SYNAP_URL=redis://synap:17003
-MEILI_URL=http://meilisearch:7700
-MEILI_MASTER_KEY=cortex-dev-master-key   # dev only
-
-# Classifier (spec 05)
-CORTEX_CLASSIFIER_MODE=cli               # cli | sdk
-CORTEX_CLASSIFIER_MODEL=claude-haiku-4-5
-CLAUDE_CODE_BIN=claude                   # CLI path; required if mode=cli
-ANTHROPIC_API_KEY=                       # required only if mode=sdk
-
-# Embedder
-CORTEX_EMBED_MODEL=nomic-embed-text-v1.5
-CORTEX_EMBED_BATCH=64
-
-# Budgets
-CORTEX_CLASSIFIER_USD_PER_DAY=20
-
-# Retention
-CORTEX_RETENTION_PII_HIGH_DAYS=30
-CORTEX_RETENTION_PII_MED_DAYS=365
-CORTEX_RETENTION_FP32_TO_PQ_DAYS=30
-CORTEX_RETENTION_PQ_TO_BIN_DAYS=365
+# Backend URLs as seen from the HOST (cortex-doctor, host-side CLI).
+# In-cluster consumers dial the bridge hostnames + container ports
+# instead (e.g. http://synap:15500, vectorizer://vectorizer:15503).
+VECTORIZER_URL=http://127.0.0.1:17001
+NEXUS_URL=http://127.0.0.1:17002
+SYNAP_URL=http://127.0.0.1:17003
+MEILI_URL=http://127.0.0.1:17004
+CORTEX_EMBEDDER_VECTORIZER_URL=http://127.0.0.1:17001
+CORTEX_EMBEDDER_SYNAP_URL=http://127.0.0.1:17003
+CORTEX_FULLTEXT_MEILI_URL=http://127.0.0.1:17004
+CORTEX_FULLTEXT_SYNAP_URL=http://127.0.0.1:17003
 ```
+
+The full knob inventory (classifier mode/model, embedder batch sizes, budgets, retention windows, …) lives in [`.env.example`](../../.env.example) and is type-checked by `cortex-config` (ADR-016); this spec only pins the topology-level variables.
 
 ### Bootstrap script — `bin/cortex-init.sh`
 
@@ -122,14 +126,19 @@ Implemented in bash + a Powershell sibling for Windows hosts.
 ### Compose dependency ordering
 
 ```
-synap, meilisearch, vectorizer, nexus  (no inter-deps; start in parallel)
+synap, meilisearch, vectorizer, nexus, cortex-reranker  (no inter-deps; start in parallel)
         │
-        └──> cortex-api (depends_on: all four, with `service_healthy` condition)
-                │
-                └──> cortex-workers (depends_on: cortex-api healthy)
+        ├──> cortex-ingestion (depends_on: synap)
+        │        │
+        │        ├──> cortex-classifier-worker (synap + ingestion)
+        │        ├──> cortex-claude-archive    (synap + ingestion)
+        │        └──> cortex-api               (synap + nexus + meilisearch + vectorizer + ingestion)
+        ├──> cortex-embedder-worker  (synap + vectorizer)
+        ├──> cortex-fulltext-worker  (synap + meilisearch)
+        └──> cortex-graph-worker     (synap + nexus)
 ```
 
-`condition: service_healthy` is mandatory — Cortex services never start until their backends pass healthchecks, so retries on first boot are unnecessary.
+Each worker depends only on the backends it actually writes to, so a single unhealthy backend degrades one lane instead of blocking the whole stack. Workers additionally carry their own runtime backpressure (pause + half-open probe + sustained-stall restart supervisor, phase28 §1.4) so a backend that turns unhealthy AFTER boot degrades gracefully too.
 
 ### Resource limits (compose v3 deploy.resources)
 
@@ -148,25 +157,21 @@ Total: ~10 GB RAM, fits on a 16 GB laptop with room for the IDE. Production-like
 
 ### Healthchecks
 
-All defined inline in compose, 5 s interval, 30 s start-period, 3 retries. Failures restart the service.
+Defined inline in compose for the backends that ship a usable probe. The nexus 2.5 / synap 1.0 images are **distroless** (no shell, no curl/wget), so their healthchecks are exec-form invocations of the server binary's own health flag — a `CMD-SHELL` probe exec-fails on the missing `/bin/sh` and marks the container unhealthy forever:
 
 ```yaml
-vectorizer:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:17001/health"]
 nexus:
   healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:17002/health"]
+    test: ["CMD", "/usr/local/bin/nexus-server", "--healthcheck"]
 synap:
   healthcheck:
-    test: ["CMD", "redis-cli", "-p", "17003", "PING"]
+    test: ["CMD", "/usr/local/bin/synap-server", "--health-check"]
 meilisearch:
   healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
-cortex-api:
-  healthcheck:
-    test: ["CMD", "curl", "-f", "http://localhost:17000/healthz"]
+    test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7700/health || exit 1"]
 ```
+
+`vectorizer` and the Cortex services expose HTTP health endpoints (`/health` / `/healthz`) probed by `bin/cortex-doctor` and the `cortex-api` `/v1/health` aggregator rather than compose healthchecks.
 
 ### Override files
 
@@ -190,25 +195,26 @@ After `git clone` and `cp .env.example .env`:
 $ bin/cortex-up
 [1/3] Pulling and building images...           ✓
 [2/3] Starting services (this may take ~30s on first run)...
-        vectorizer ........ healthy
-        nexus ............. healthy
-        synap ............. healthy
-        meilisearch ....... healthy
-        cortex-api ........ healthy
-        cortex-workers .... healthy
+        vectorizer ................. up
+        nexus ...................... healthy
+        synap ...................... healthy
+        meilisearch ................ healthy
+        cortex-reranker ............ up
+        cortex-ingestion ........... up
+        cortex-classifier-worker ... up
+        cortex-embedder-worker ..... up
+        cortex-fulltext-worker ..... up
+        cortex-graph-worker ........ up
+        cortex-claude-archive ...... up
+        cortex-api ................. up
 [3/3] First-run init: provisioning collections, indexes, streams...
-        12 Vectorizer collections created
-        14 Nexus labels + indexes created
-        8 Meilisearch indexes created
-        6 Synap streams + 5 KV namespaces declared
-        SQLite metadata schema applied
 Cortex is up at http://127.0.0.1:17000  →  http://127.0.0.1:17000/dashboard
 ```
 
 ## Acceptance criteria
 
 - [ ] `git clone && cp .env.example .env && bin/cortex-up` brings the stack up on a fresh machine in < 90 s (warm pull).
-- [ ] All six healthchecks pass within the start period.
+- [ ] The three compose healthchecks (nexus, synap, meilisearch) pass within the start period, and `bin/cortex-doctor` reports `ok` for all four backends.
 - [ ] `bin/cortex-doctor` reports green status for every backend after init.
 - [ ] `docker stats` shows total RAM ≤ 10 GB at idle.
 - [ ] Killing any backend container triggers automatic restart and Cortex-API recovers without operator intervention.
