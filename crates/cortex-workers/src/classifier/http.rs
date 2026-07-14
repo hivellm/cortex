@@ -53,7 +53,7 @@ async fn handle_classify(Json(envelope): Json<Value>) -> Response {
     let payload = envelope.get("payload").cloned().unwrap_or(Value::Null);
     let input = EnrichmentInput {
         event_id: "eval-classify".to_string(),
-        kind: kind.clone(),
+        kind,
         content_hash: String::new(),
         redacted_payload: payload,
         context_repo: None,
@@ -63,7 +63,7 @@ async fn handle_classify(Json(envelope): Json<Value>) -> Response {
             let out = outputs.first();
             // Round-trip the Kind through serde so the wire label is
             // exactly the canonical snake_case string.
-            let kind_label = serde_json::to_value(&kind)
+            let kind_label = serde_json::to_value(kind)
                 .ok()
                 .and_then(|v| v.as_str().map(String::from))
                 .unwrap_or(kind_str);
