@@ -66,7 +66,7 @@ mod tests {
         assert_eq!(init["id"], 1);
         let list: serde_json::Value = serde_json::from_str(lines.next().unwrap()).unwrap();
         assert_eq!(list["id"], 2);
-        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 38);
+        assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 40);
         assert!(lines.next().is_none(), "no extra response for notification");
     }
 

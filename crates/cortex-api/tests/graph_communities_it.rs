@@ -204,3 +204,198 @@ async fn communities_endpoint_groups_members_god_nodes_and_cross_community_edges
     assert_eq!(edges[1]["to"], "sym-d");
     assert_eq!(edges[1]["relation"], "IMPORTS");
 }
+
+// ── Phase27e §2 — graph query primitives: path + compare ──────────────────
+
+/// One-row endpoint-resolution reply: `[id, name, [label]]`.
+fn resolve_body(id: &str, name: &str, label: &str) -> serde_json::Value {
+    serde_json::json!({
+        "columns": ["id", "name", "labels"],
+        "rows": [[id, name, [label]]],
+        "execution_time_ms": 1
+    })
+}
+
+/// Neighbour-expansion reply: rows of `[id, name, [label], rel]`.
+fn neighbors_body(rows: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "columns": ["id", "name", "labels", "rel"],
+        "rows": rows,
+        "execution_time_ms": 1
+    })
+}
+
+#[tokio::test]
+async fn path_endpoint_returns_not_found_when_no_nexus_client() {
+    let router = build_test_router(None);
+    let (status, body) = get_json(router, "/v1/dashboard/graph/path?from=a&to=b").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["found"], false);
+    assert_eq!(body["hops"], 0);
+    assert!(body["path"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn path_endpoint_finds_two_hop_path_across_synthetic_graph() {
+    // node-a --DEFINES--> node-b --CALLS--> node-c
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+
+    // Endpoint resolution (query carries `LIMIT 1`).
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("node-a"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(resolve_body("node-a", "A", "Artifact")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("node-c"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(resolve_body("node-c", "C", "Symbol")),
+        )
+        .mount(&server)
+        .await;
+
+    // Frontier expansions (query shape `(a)-[r]-(b)`).
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("a._id = 'node-a'"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([[
+                "node-b",
+                "B",
+                ["Symbol"],
+                "DEFINES"
+            ]]))),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("a._id = 'node-b'"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([
+                ["node-a", "A", ["Artifact"], "DEFINES"],
+                ["node-c", "C", ["Symbol"], "CALLS"]
+            ]))),
+        )
+        .mount(&server)
+        .await;
+
+    let router = build_test_router(Some(nexus_client_for(&server.uri())));
+    let (status, body) = get_json(router, "/v1/dashboard/graph/path?from=node-a&to=node-c").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["found"], true, "path must be found; body={body}");
+    assert_eq!(body["hops"], 2);
+    let ids: Vec<&str> = body["path"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["node-a", "node-b", "node-c"]);
+    let edges = body["edges"].as_array().unwrap();
+    assert_eq!(edges.len(), 2);
+    assert_eq!(edges[0]["relation"], "DEFINES");
+    assert_eq!(edges[1]["relation"], "CALLS");
+}
+
+#[tokio::test]
+async fn path_endpoint_unresolvable_endpoint_is_found_false_not_error() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    // Every Cypher (incl. resolution) returns zero rows.
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(empty_cypher_body()))
+        .mount(&server)
+        .await;
+    let router = build_test_router(Some(nexus_client_for(&server.uri())));
+    let (status, body) = get_json(router, "/v1/dashboard/graph/path?from=ghost&to=phantom").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["found"], false);
+}
+
+#[tokio::test]
+async fn compare_endpoint_returns_shared_and_divergent_sets() {
+    // X neighbours: {S, OA}; Y neighbours: {S, OB}
+    // → shared = [S], only_a = [OA], only_b = [OB].
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("node-x"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(resolve_body("node-x", "X", "Symbol")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("node-y"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(resolve_body("node-y", "Y", "Symbol")),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("a._id = 'node-x'"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([
+                ["node-s", "Shared", ["Symbol"], "CALLS"],
+                ["node-oa", "OnlyA", ["Symbol"], "CALLS"]
+            ]))),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("a._id = 'node-y'"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([
+                ["node-s", "Shared", ["Symbol"], "CALLS"],
+                ["node-ob", "OnlyB", ["Symbol"], "IMPORTS"]
+            ]))),
+        )
+        .mount(&server)
+        .await;
+
+    let router = build_test_router(Some(nexus_client_for(&server.uri())));
+    let (status, body) = get_json(router, "/v1/dashboard/graph/compare?a=node-x&b=node-y").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["found_a"], true);
+    assert_eq!(body["found_b"], true);
+    assert_eq!(body["shared_count"], 1);
+    assert_eq!(body["only_a_count"], 1);
+    assert_eq!(body["only_b_count"], 1);
+    assert_eq!(body["shared"][0]["id"], "node-s");
+    assert_eq!(body["only_a"][0]["id"], "node-oa");
+    assert_eq!(body["only_b"][0]["id"], "node-ob");
+}
+
+#[tokio::test]
+async fn compare_endpoint_no_nexus_client_is_empty_not_error() {
+    let router = build_test_router(None);
+    let (status, body) = get_json(router, "/v1/dashboard/graph/compare?a=x&b=y").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["found_a"], false);
+    assert_eq!(body["found_b"], false);
+    assert_eq!(body["shared_count"], 0);
+}

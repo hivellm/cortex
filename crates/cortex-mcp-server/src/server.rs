@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_thirty_eight_descriptors() {
+    async fn tools_list_returns_forty_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
@@ -273,8 +273,8 @@ mod tests {
         let arr = v["result"]["tools"].as_array().expect("tools array");
         assert_eq!(
             arr.len(),
-            38,
-            "phase27b §3.1 adds cortex_graph_communities (37 -> 38)"
+            40,
+            "phase27e §2 adds cortex_path + cortex_compare (38 -> 40)"
         );
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [

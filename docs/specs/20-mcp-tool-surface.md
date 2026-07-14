@@ -52,6 +52,8 @@ the rest are READ.
 | `cortex_vector_search`      | `collection`, `query_vector`  | `POST /v1/search/vector`                         | Raw Vectorizer cosine search against named collection | read  |
 | `cortex_graph_query`        | `mode`                        | `POST /v1/search/graph`                          | Direct Nexus graph query (neighbors walk or Cypher) | read  |
 | `cortex_graph_communities`  | —                              | `GET /v1/dashboard/graph/communities`            | Phase27b §3.1 — lists detected graph communities (member count, god nodes, cross-community edges); empty until the §2.5 writeback worker is live (gated on ADR-027) | read  |
+| `cortex_path`               | `from`, `to`                   | `GET /v1/dashboard/graph/path`                   | Phase27e §2.1 — BFS shortest path (by hop count, undirected) between two nodes resolved by exact `_id` or `name`; `found: false` (never an error) when an endpoint misses or no path exists within `max_hops` | read  |
+| `cortex_compare`            | `a`, `b`                       | `GET /v1/dashboard/graph/compare`                | Phase27e §2.2 — shared vs divergent neighbourhoods of two nodes (`shared`/`only_a`/`only_b`, capped at 100 with true totals); `depth` 1-3 | read  |
 
 ### Session & Dashboard Surface
 

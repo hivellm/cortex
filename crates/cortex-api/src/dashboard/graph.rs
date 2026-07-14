@@ -762,6 +762,414 @@ async fn query_nexus_communities(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Phase27e §2 — graph query primitives: path(a, b) + compare(a, b)
+//
+// Both run client-side BFS over per-node neighbour Cypher: Nexus's
+// Cypher subset carries no `shortestPath()` procedure (verified — no
+// usage anywhere in this workspace), and per-hop expansion with hard
+// caps keeps the worst case bounded regardless of graph size. Both
+// endpoints follow the communities() contract: an absent Nexus
+// client, a Cypher failure, or an unresolvable endpoint is an honest
+// `200 OK` "not found / empty" payload, never a 5xx.
+// ---------------------------------------------------------------------------
+
+/// One node on a path / in a neighbourhood set.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GraphPathNode {
+    /// Node identity (`_id`).
+    pub id: String,
+    /// Display name (falls back to `id`).
+    pub name: String,
+    /// Primary label.
+    pub label: String,
+}
+
+/// One traversed edge on a path.
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphPathEdge {
+    /// Source node id.
+    pub from: String,
+    /// Target node id.
+    pub to: String,
+    /// Relationship type.
+    pub relation: String,
+}
+
+/// Response payload for `GET /v1/dashboard/graph/path`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphPathPayload {
+    /// `true` when both endpoints resolved AND a path was found.
+    pub found: bool,
+    /// Nodes along the path, source first, target last. Empty when
+    /// `found` is `false`.
+    pub path: Vec<GraphPathNode>,
+    /// Edges traversed, in path order.
+    pub edges: Vec<GraphPathEdge>,
+    /// Number of hops (`edges.len()`).
+    pub hops: usize,
+}
+
+/// Query params for `/v1/dashboard/graph/path`.
+#[derive(Debug, Default, Deserialize)]
+pub struct GraphPathQuery {
+    /// Source node — exact `_id` or exact `name`.
+    #[serde(default)]
+    pub from: String,
+    /// Target node — exact `_id` or exact `name`.
+    #[serde(default)]
+    pub to: String,
+    /// BFS depth cap (1..=8, default 5).
+    #[serde(default)]
+    pub max_hops: Option<usize>,
+}
+
+/// Response payload for `GET /v1/dashboard/graph/compare`.
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphComparePayload {
+    /// `true` when endpoint `a` resolved.
+    pub found_a: bool,
+    /// `true` when endpoint `b` resolved.
+    pub found_b: bool,
+    /// Neighbours reachable from BOTH `a` and `b` (sorted by id,
+    /// capped at [`COMPARE_LIST_CAP`]; the count carries the total).
+    pub shared: Vec<GraphPathNode>,
+    /// Neighbours reachable only from `a`.
+    pub only_a: Vec<GraphPathNode>,
+    /// Neighbours reachable only from `b`.
+    pub only_b: Vec<GraphPathNode>,
+    /// True total of `shared` before the list cap.
+    pub shared_count: usize,
+    /// True total of `only_a` before the list cap.
+    pub only_a_count: usize,
+    /// True total of `only_b` before the list cap.
+    pub only_b_count: usize,
+}
+
+/// Query params for `/v1/dashboard/graph/compare`.
+#[derive(Debug, Default, Deserialize)]
+pub struct GraphCompareQuery {
+    /// First node — exact `_id` or exact `name`.
+    #[serde(default)]
+    pub a: String,
+    /// Second node — exact `_id` or exact `name`.
+    #[serde(default)]
+    pub b: String,
+    /// Neighbourhood depth (1..=3, default 1).
+    #[serde(default)]
+    pub depth: Option<usize>,
+}
+
+/// Per-frontier-node neighbour cap — bounds each expansion query.
+const BFS_NEIGHBOR_CAP: usize = 200;
+/// Per-hop frontier cap — at most this many nodes get expanded per
+/// BFS level, keeping worst-case query count `max_hops × cap`.
+const BFS_FRONTIER_CAP: usize = 50;
+/// Total visited-node cap — hard stop for pathological graphs.
+const BFS_VISITED_CAP: usize = 1_000;
+/// Cap on each returned list in the compare payload; the `*_count`
+/// fields carry the true totals.
+const COMPARE_LIST_CAP: usize = 100;
+
+/// Escape a user-supplied endpoint string for inline single-quoted
+/// Cypher (the same inline-literal discipline the graph writer uses —
+/// Nexus rejects `$param` in several positions).
+fn cypher_escape(raw: &str) -> String {
+    raw.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Resolve an endpoint by exact `_id` OR exact `name`.
+async fn resolve_endpoint(client: &NexusClient, ident: &str) -> Option<GraphPathNode> {
+    let ident = ident.trim();
+    if ident.is_empty() {
+        return None;
+    }
+    let esc = cypher_escape(ident);
+    let cypher = format!(
+        "MATCH (n) WHERE n._id = '{esc}' OR n.name = '{esc}' \
+         RETURN n._id AS id, n.name AS name, labels(n) AS labels LIMIT 1"
+    );
+    let res = client
+        .execute_cypher(
+            &cypher,
+            Some(std::collections::HashMap::<String, NexusValue>::new()),
+        )
+        .await
+        .ok()?;
+    let cells = res.rows.first()?.as_array()?;
+    let id = cell_str(cells.first()).filter(|s| !s.is_empty())?;
+    let name = cell_str(cells.get(1))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| id.clone());
+    let label = cells
+        .get(2)
+        .and_then(|c| c.as_array())
+        .and_then(|l| l.first())
+        .and_then(|c| c.as_str())
+        .unwrap_or("Node")
+        .to_string();
+    Some(GraphPathNode { id, name, label })
+}
+
+/// Fetch a node's undirected neighbours (both edge directions), as
+/// `(neighbour, relation)` pairs. Bounded by [`BFS_NEIGHBOR_CAP`].
+async fn fetch_neighbors(client: &NexusClient, node_id: &str) -> Vec<(GraphPathNode, String)> {
+    let esc = cypher_escape(node_id);
+    let cypher = format!(
+        "MATCH (a)-[r]-(b) WHERE a._id = '{esc}' \
+         RETURN b._id AS id, b.name AS name, labels(b) AS labels, type(r) AS rel \
+         LIMIT {BFS_NEIGHBOR_CAP}"
+    );
+    let Ok(res) = client
+        .execute_cypher(
+            &cypher,
+            Some(std::collections::HashMap::<String, NexusValue>::new()),
+        )
+        .await
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for row in &res.rows {
+        let Some(cells) = row.as_array() else {
+            continue;
+        };
+        let Some(id) = cell_str(cells.first()).filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        let name = cell_str(cells.get(1))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| id.clone());
+        let label = cells
+            .get(2)
+            .and_then(|c| c.as_array())
+            .and_then(|l| l.first())
+            .and_then(|c| c.as_str())
+            .unwrap_or("Node")
+            .to_string();
+        let relation = cell_str(cells.get(3)).unwrap_or_default();
+        out.push((GraphPathNode { id, name, label }, relation));
+    }
+    out
+}
+
+/// BFS shortest path (by hop count) from `from` to `to`.
+async fn bfs_path(
+    client: &NexusClient,
+    from: GraphPathNode,
+    to_id: &str,
+    max_hops: usize,
+) -> Option<(Vec<GraphPathNode>, Vec<GraphPathEdge>)> {
+    use std::collections::HashMap;
+    if from.id == to_id {
+        return Some((vec![from], Vec::new()));
+    }
+    // parent[node_id] = (parent_id, relation, node)
+    let mut parent: HashMap<String, (String, String, GraphPathNode)> = HashMap::new();
+    let mut visited: std::collections::HashSet<String> =
+        std::collections::HashSet::from([from.id.clone()]);
+    let mut frontier = vec![from.clone()];
+
+    for _hop in 0..max_hops {
+        let mut next = Vec::new();
+        for node in frontier.iter().take(BFS_FRONTIER_CAP) {
+            for (nb, rel) in fetch_neighbors(client, &node.id).await {
+                if !visited.insert(nb.id.clone()) {
+                    continue;
+                }
+                parent.insert(nb.id.clone(), (node.id.clone(), rel, nb.clone()));
+                if nb.id == to_id {
+                    // Reconstruct.
+                    let mut path_nodes = vec![nb.clone()];
+                    let mut path_edges = Vec::new();
+                    let mut cur = nb.id.clone();
+                    while let Some((pid, rel, node)) = parent.get(&cur) {
+                        path_edges.push(GraphPathEdge {
+                            from: pid.clone(),
+                            to: node.id.clone(),
+                            relation: rel.clone(),
+                        });
+                        cur = pid.clone();
+                        if cur == from.id {
+                            break;
+                        }
+                    }
+                    path_nodes_extend_front(&mut path_nodes, &parent, &from, &nb.id);
+                    path_edges.reverse();
+                    return Some((path_nodes, path_edges));
+                }
+                if visited.len() >= BFS_VISITED_CAP {
+                    return None;
+                }
+                next.push(nb);
+            }
+        }
+        if next.is_empty() {
+            return None;
+        }
+        frontier = next;
+    }
+    None
+}
+
+/// Rebuild the node list source-first by walking parents from the
+/// target back to the source.
+fn path_nodes_extend_front(
+    path_nodes: &mut Vec<GraphPathNode>,
+    parent: &std::collections::HashMap<String, (String, String, GraphPathNode)>,
+    from: &GraphPathNode,
+    target_id: &str,
+) {
+    let mut ordered = Vec::new();
+    let mut cur = target_id.to_string();
+    while let Some((pid, _, node)) = parent.get(&cur) {
+        ordered.push(node.clone());
+        cur = pid.clone();
+        if cur == from.id {
+            break;
+        }
+    }
+    ordered.push(from.clone());
+    ordered.reverse();
+    *path_nodes = ordered;
+}
+
+/// Collect the set of nodes reachable from `start` within `depth`
+/// hops (excluding `start` itself). Keyed + deduped by node id.
+async fn bfs_neighborhood(
+    client: &NexusClient,
+    start: &GraphPathNode,
+    depth: usize,
+) -> std::collections::BTreeMap<String, GraphPathNode> {
+    let mut seen: std::collections::BTreeMap<String, GraphPathNode> =
+        std::collections::BTreeMap::new();
+    let mut visited: std::collections::HashSet<String> =
+        std::collections::HashSet::from([start.id.clone()]);
+    let mut frontier = vec![start.clone()];
+    for _ in 0..depth {
+        let mut next = Vec::new();
+        for node in frontier.iter().take(BFS_FRONTIER_CAP) {
+            for (nb, _rel) in fetch_neighbors(client, &node.id).await {
+                if !visited.insert(nb.id.clone()) {
+                    continue;
+                }
+                seen.insert(nb.id.clone(), nb.clone());
+                if visited.len() >= BFS_VISITED_CAP {
+                    return seen;
+                }
+                next.push(nb);
+            }
+        }
+        if next.is_empty() {
+            break;
+        }
+        frontier = next;
+    }
+    seen
+}
+
+pub(super) async fn graph_path(
+    State(state): State<DashboardState>,
+    Query(params): Query<GraphPathQuery>,
+) -> Response {
+    let max_hops = params.max_hops.unwrap_or(5).clamp(1, 8);
+    let empty = GraphPathPayload {
+        found: false,
+        path: Vec::new(),
+        edges: Vec::new(),
+        hops: 0,
+    };
+    let Some(nx) = state.nexus.as_ref() else {
+        return (StatusCode::OK, Json(empty)).into_response();
+    };
+    let (Some(from), Some(to)) = (
+        resolve_endpoint(nx.as_ref(), &params.from).await,
+        resolve_endpoint(nx.as_ref(), &params.to).await,
+    ) else {
+        return (StatusCode::OK, Json(empty)).into_response();
+    };
+    match bfs_path(nx.as_ref(), from, &to.id, max_hops).await {
+        Some((path, edges)) => {
+            let hops = edges.len();
+            (
+                StatusCode::OK,
+                Json(GraphPathPayload {
+                    found: true,
+                    path,
+                    edges,
+                    hops,
+                }),
+            )
+                .into_response()
+        }
+        None => (StatusCode::OK, Json(empty)).into_response(),
+    }
+}
+
+pub(super) async fn graph_compare(
+    State(state): State<DashboardState>,
+    Query(params): Query<GraphCompareQuery>,
+) -> Response {
+    let depth = params.depth.unwrap_or(1).clamp(1, 3);
+    let mut payload = GraphComparePayload {
+        found_a: false,
+        found_b: false,
+        shared: Vec::new(),
+        only_a: Vec::new(),
+        only_b: Vec::new(),
+        shared_count: 0,
+        only_a_count: 0,
+        only_b_count: 0,
+    };
+    let Some(nx) = state.nexus.as_ref() else {
+        return (StatusCode::OK, Json(payload)).into_response();
+    };
+    let a = resolve_endpoint(nx.as_ref(), &params.a).await;
+    let b = resolve_endpoint(nx.as_ref(), &params.b).await;
+    payload.found_a = a.is_some();
+    payload.found_b = b.is_some();
+    let (Some(a), Some(b)) = (a, b) else {
+        return (StatusCode::OK, Json(payload)).into_response();
+    };
+    let hood_a = bfs_neighborhood(nx.as_ref(), &a, depth).await;
+    let hood_b = bfs_neighborhood(nx.as_ref(), &b, depth).await;
+
+    let mut shared = Vec::new();
+    let mut only_a = Vec::new();
+    for (id, node) in &hood_a {
+        // The endpoints themselves are not "neighbourhood" members.
+        if id == &a.id || id == &b.id {
+            continue;
+        }
+        if hood_b.contains_key(id) {
+            shared.push(node.clone());
+        } else {
+            only_a.push(node.clone());
+        }
+    }
+    let mut only_b = Vec::new();
+    for (id, node) in &hood_b {
+        if id == &a.id || id == &b.id {
+            continue;
+        }
+        if !hood_a.contains_key(id) {
+            only_b.push(node.clone());
+        }
+    }
+    // BTreeMap iteration is id-sorted already; the caps trim tails.
+    payload.shared_count = shared.len();
+    payload.only_a_count = only_a.len();
+    payload.only_b_count = only_b.len();
+    shared.truncate(COMPARE_LIST_CAP);
+    only_a.truncate(COMPARE_LIST_CAP);
+    only_b.truncate(COMPARE_LIST_CAP);
+    payload.shared = shared;
+    payload.only_a = only_a;
+    payload.only_b = only_b;
+
+    (StatusCode::OK, Json(payload)).into_response()
+}
+
 /// Pull a row cell as `u32`, accepting a JSON number or a numeric
 /// string. Returns `None` for null / missing / non-numeric cells.
 fn cell_u32(v: Option<&serde_json::Value>) -> Option<u32> {

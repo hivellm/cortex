@@ -271,6 +271,8 @@ impl ToolRegistry {
                 Arc::new(VectorSearchTool::new()),
                 Arc::new(GraphQueryTool::new()),
                 Arc::new(GraphCommunitiesTool::new()),
+                Arc::new(GraphPathTool::new()),
+                Arc::new(GraphCompareTool::new()),
                 Arc::new(ActiveWorkTool::new()),
                 Arc::new(SimilarSessionsTool::new()),
                 Arc::new(DecisionChainTool::new()),
@@ -1621,6 +1623,124 @@ impl Tool for GraphCommunitiesTool {
         if !qs.is_empty() {
             path.push('?');
             path.push_str(&qs.join("&"));
+        }
+        proxy_get(ctx, &path).await
+    }
+}
+
+/// Phase27e §2.1 — MCP wrapper for
+/// `GET <api_url>/v1/dashboard/graph/path`. BFS shortest path (by
+/// hop count) between two graph nodes.
+pub struct GraphPathTool;
+
+impl GraphPathTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for GraphPathTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for GraphPathTool {
+    fn name(&self) -> &'static str {
+        "cortex_path"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_path",
+            "description": "Shortest path (BFS by hop count, undirected) between two graph nodes, with the intermediate hops and edge types. Endpoints resolve by exact node `_id` OR exact `name`. Returns `found: false` (never an error) when an endpoint doesn't resolve or no path exists within `max_hops` — the realistic outcome for architecture symbols until the semantic graph projection is enabled (ADR-027).",
+            "inputSchema": {
+                "type": "object",
+                "required": ["from", "to"],
+                "properties": {
+                    "from": {"type": "string", "description": "Source node — exact `_id` or exact `name`."},
+                    "to": {"type": "string", "description": "Target node — exact `_id` or exact `name`."},
+                    "max_hops": {"type": "integer", "minimum": 1, "maximum": 8, "default": 5, "description": "BFS depth cap."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let from = args.get("from").and_then(Value::as_str).unwrap_or_default();
+        let to = args.get("to").and_then(Value::as_str).unwrap_or_default();
+        if from.trim().is_empty() || to.trim().is_empty() {
+            return Err(ToolError::invalid_input("`from` and `to` are required"));
+        }
+        let max_hops = args.get("max_hops").and_then(Value::as_u64);
+        let mut path = format!(
+            "/v1/dashboard/graph/path?from={}&to={}",
+            urlencode(from),
+            urlencode(to)
+        );
+        if let Some(h) = max_hops {
+            path.push_str(&format!("&max_hops={h}"));
+        }
+        proxy_get(ctx, &path).await
+    }
+}
+
+/// Phase27e §2.2 — MCP wrapper for
+/// `GET <api_url>/v1/dashboard/graph/compare`. Shared vs divergent
+/// neighbourhoods of two graph nodes.
+pub struct GraphCompareTool;
+
+impl GraphCompareTool {
+    /// Build the tool.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for GraphCompareTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for GraphCompareTool {
+    fn name(&self) -> &'static str {
+        "cortex_compare"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_compare",
+            "description": "Compares two graph nodes' neighbourhoods: which neighbours they SHARE vs which are reachable from only one side (shared / only_a / only_b, each capped at 100 with true totals in *_count). Endpoints resolve by exact node `_id` OR exact `name`; `depth` (1-3) sets how many hops count as the neighbourhood. Returns found_a/found_b: false (never an error) for unresolvable endpoints.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["a", "b"],
+                "properties": {
+                    "a": {"type": "string", "description": "First node — exact `_id` or exact `name`."},
+                    "b": {"type": "string", "description": "Second node — exact `_id` or exact `name`."},
+                    "depth": {"type": "integer", "minimum": 1, "maximum": 3, "default": 1, "description": "Neighbourhood hop depth."}
+                }
+            }
+        })
+    }
+
+    async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
+        let a = args.get("a").and_then(Value::as_str).unwrap_or_default();
+        let b = args.get("b").and_then(Value::as_str).unwrap_or_default();
+        if a.trim().is_empty() || b.trim().is_empty() {
+            return Err(ToolError::invalid_input("`a` and `b` are required"));
+        }
+        let depth = args.get("depth").and_then(Value::as_u64);
+        let mut path = format!(
+            "/v1/dashboard/graph/compare?a={}&b={}",
+            urlencode(a),
+            urlencode(b)
+        );
+        if let Some(d) = depth {
+            path.push_str(&format!("&depth={d}"));
         }
         proxy_get(ctx, &path).await
     }
@@ -3736,12 +3856,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_returns_thirty_eight_tools_with_unique_names() {
+    fn registry_returns_forty_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            38,
-            "phase27b §3.1 adds cortex_graph_communities (37 -> 38)"
+            40,
+            "phase27e §2 adds cortex_path + cortex_compare (38 -> 40)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
@@ -3756,6 +3876,8 @@ mod tests {
             "cortex_vector_search",
             "cortex_graph_query",
             "cortex_graph_communities",
+            "cortex_path",
+            "cortex_compare",
             "cortex_active_work",
             "cortex_similar_sessions",
             "cortex_decision_chain",
@@ -3803,10 +3925,11 @@ mod tests {
     /// envelope (`name` / `description` / `inputSchema`) is well-formed.
     /// A tool whose schema fails to compile would be rejected by any
     /// spec-compliant MCP client at `tools/list` time, so this gate
-    /// stands in for that client-side validation. Covers all 38 tools
+    /// stands in for that client-side validation. Covers all 40 tools
     /// incl. the 5 phase18 §4.6 timeline/branch additions, the 2
-    /// phase21 §6.4 ACL admin tools, and phase27b §3.1's
-    /// `cortex_graph_communities`.
+    /// phase21 §6.4 ACL admin tools, phase27b §3.1's
+    /// `cortex_graph_communities`, and phase27e §2's
+    /// `cortex_path` / `cortex_compare`.
     #[test]
     fn every_tool_descriptor_inputschema_is_valid_json_schema() {
         let reg = ToolRegistry::default_set();
@@ -4713,6 +4836,135 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn path_and_compare_descriptors_require_endpoints_and_stay_honest() {
+        let p = GraphPathTool::new();
+        let dp = p.descriptor();
+        assert_eq!(dp["name"], "cortex_path");
+        assert!(dp.get("input_schema").is_none());
+        let req: Vec<&str> = dp["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(req, vec!["from", "to"]);
+        assert_eq!(
+            dp["inputSchema"]["properties"]["max_hops"]["maximum"]
+                .as_u64()
+                .unwrap(),
+            8
+        );
+        assert!(
+            dp["description"].as_str().unwrap().contains("ADR-027"),
+            "path descriptor must not overclaim pre-projection results"
+        );
+
+        let c = GraphCompareTool::new();
+        let dc = c.descriptor();
+        assert_eq!(dc["name"], "cortex_compare");
+        let req: Vec<&str> = dc["inputSchema"]["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(req, vec!["a", "b"]);
+        assert_eq!(
+            dc["inputSchema"]["properties"]["depth"]["maximum"]
+                .as_u64()
+                .unwrap(),
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn path_tool_proxies_get_with_urlencoded_endpoints() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/graph/path"))
+            // Splicing raw ids with `|`/`/` must arrive decoded intact.
+            .and(query_param("from", "cortex|src/lib.rs|sha256:abc"))
+            .and(query_param("to", "Worker"))
+            .and(query_param("max_hops", "3"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "found": true,
+                "path": [
+                    { "id": "cortex|src/lib.rs|sha256:abc", "name": "lib.rs", "label": "Artifact" },
+                    { "id": "Worker", "name": "Worker", "label": "Symbol" }
+                ],
+                "edges": [
+                    { "from": "cortex|src/lib.rs|sha256:abc", "to": "Worker", "relation": "DEFINES" }
+                ],
+                "hops": 1
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphPathTool::new();
+        let res = tool
+            .call(
+                &ctx,
+                json!({ "from": "cortex|src/lib.rs|sha256:abc", "to": "Worker", "max_hops": 3 }),
+            )
+            .await
+            .expect("happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["found"], true);
+        assert_eq!(payload["hops"], 1);
+        assert_eq!(payload["edges"][0]["relation"], "DEFINES");
+    }
+
+    #[tokio::test]
+    async fn path_tool_rejects_missing_endpoints_before_any_http() {
+        let ctx = ToolContext::new("http://127.0.0.1:9".to_string());
+        let tool = GraphPathTool::new();
+        let err = tool
+            .call(&ctx, json!({ "from": "  " }))
+            .await
+            .expect_err("blank endpoints must be rejected client-side");
+        assert!(format!("{err:?}").contains("required"));
+    }
+
+    #[tokio::test]
+    async fn compare_tool_round_trips_shared_and_divergent_sets() {
+        use wiremock::matchers::{method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/graph/compare"))
+            .and(query_param("a", "Worker"))
+            .and(query_param("b", "Store"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "found_a": true,
+                "found_b": true,
+                "shared": [{ "id": "n1", "name": "shared_dep", "label": "Symbol" }],
+                "only_a": [],
+                "only_b": [{ "id": "n2", "name": "store_only", "label": "Symbol" }],
+                "shared_count": 1,
+                "only_a_count": 0,
+                "only_b_count": 1
+            })))
+            .mount(&server)
+            .await;
+        let ctx = ToolContext::new(server.uri());
+        let tool = GraphCompareTool::new();
+        let res = tool
+            .call(&ctx, json!({ "a": "Worker", "b": "Store" }))
+            .await
+            .expect("happy path must succeed");
+        assert!(!res.is_error);
+        let text = res.content[0].get("text").and_then(|v| v.as_str()).unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(payload["shared_count"], 1);
+        assert_eq!(payload["shared"][0]["name"], "shared_dep");
+        assert_eq!(payload["only_b"][0]["id"], "n2");
     }
 
     #[tokio::test]

@@ -4,10 +4,10 @@
 - [x] 1.3 Source-path bonus: `SOURCE_PATH_BONUS = 1.2` multiplier on the hit's native score when its label/path contains any seed token (applied in row projection; tested).
 
 ## 2. Query primitives
-- [ ] 2.1 `path(a, b)` MCP tool (shortest path between two symbols, with intermediate hops)
-- [ ] 2.2 `compare(a, b)` MCP tool (shared vs. divergent neighborhoods)
+- [x] 2.1 `cortex_path` MCP tool + `GET /v1/dashboard/graph/path`: BFS shortest path (by hop count, undirected — Nexus's Cypher subset has no `shortestPath()`, verified) with client-side per-frontier expansion, hard caps (neighbor 200/frontier 50/visited 1000, max_hops 1..=8), endpoint resolution by exact `_id` OR exact `name` with single-quote Cypher escaping on user input, `found:false`-never-5xx contract. Registry 38→40 (count assertions in tools.rs/server.rs/transport_stdio.rs updated).
+- [x] 2.2 `cortex_compare` MCP tool + `GET /v1/dashboard/graph/compare`: shared vs divergent neighbourhoods at depth 1..=3, id-sorted lists capped at 100 with true totals in `*_count`, endpoints excluded from the sets, same graceful-empty contract.
 
 ## 3. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 3.1 Update or create documentation (spec 11 seed selection; CHANGELOG)
-- [ ] 3.2 Write tests (IDF + 80%-gate unit tests; path/compare tool ITs; relevance-eval delta on `crates/cortex-eval`)
-- [ ] 3.3 Run tests and confirm they pass (`cargo check` + `clippy -D warnings` + `cargo test --workspace`)
+- [x] 3.1 Docs: spec 11 seed-selection coverage rides the §1 entry in CHANGELOG + the lane's own module docs; spec 20 registry gained the `cortex_path`/`cortex_compare` rows (per its registry-sync requirement); CHANGELOG entries for §1 and §2.
+- [x] 3.2 Tests: §1 = graph_seeds 14 units (tokenizer/IDF/80%-gate/determinism) + 11 new lane tests (fan-out, dedup, fallback, source-path bonus); §2 = 5 new endpoint ITs in graph_communities_it.rs (2-hop path across synthetic graph, unresolvable→found:false, shared/divergent sets, no-client empties ×2) + 4 new MCP tool tests (descriptors incl. honest ADR-027 wording, urlencoded proxying, blank-endpoint rejection, compare round-trip). Relevance-eval delta on cortex-eval is meaningfully measurable only after the golden-set work (phase28_retrieval-eval-gate-live §1 reconciles the diverged fixture trees) — recorded there, not silently dropped.
+- [x] 3.3 Verified: `cargo check` clean on cortex-api + cortex-mcp-server (`--all-targets`); `cargo clippy --all-targets -- -D warnings` clean on both; graph_communities_it 8/8, cortex-mcp-server lib 85/85, graph_seeds 14/14, nexus_graph_lane 31/31, strategies 19/19 — all independently re-run post-format. Full-workspace state unchanged otherwise: the single pre-existing `unknown_language_falls_back` failure remains tracked as phase28_live-testing-bugfixes item 1.
