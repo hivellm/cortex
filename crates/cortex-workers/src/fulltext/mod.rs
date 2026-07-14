@@ -40,5 +40,5 @@ pub use sweep::{sweep_stale_indexes, SweepReport};
 pub use worker::{
     BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer,
     MemorySynapPublisher, OffsetTracker, SynapConsumer, SynapHandle, SynapPublisher, Worker,
-    BACKPRESSURE_SOAK, STREAM_ENRICHED, STREAM_FULLTEXT_INDEXED, STREAM_INVALID,
+    BACKPRESSURE_RETRY, BACKPRESSURE_SOAK, STREAM_ENRICHED, STREAM_FULLTEXT_INDEXED, STREAM_INVALID,
 };

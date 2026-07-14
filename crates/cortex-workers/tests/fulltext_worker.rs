@@ -350,3 +350,24 @@ async fn backpressure_state_record_lifecycle() {
     bp.record_success();
     assert!(!bp.is_active());
 }
+
+#[tokio::test]
+async fn paused_backpressure_half_opens_after_retry_window() {
+    // Phase28 §1.4 — same latent deadlock as the graph worker's
+    // 2026-06-27 stall: a permanent pause could never be cleared
+    // because no index batch (and thus no `record_success`) could ever
+    // run again. The pause must expire BACKPRESSURE_RETRY after the
+    // most recent transient so a probe batch can flow.
+    use cortex_workers::fulltext::BACKPRESSURE_RETRY;
+    let bp = BackpressureState::new();
+    bp.force_since(Instant::now() - BACKPRESSURE_SOAK - Duration::from_secs(1));
+    assert!(bp.is_paused(), "soaked + fresh transient pauses");
+    bp.force_last_transient(Instant::now() - BACKPRESSURE_RETRY - Duration::from_secs(1));
+    assert!(!bp.is_paused(), "elapsed retry window half-opens");
+    assert!(bp.is_active(), "gauge stays armed until a success");
+    bp.record_transient();
+    assert!(bp.is_paused(), "fresh transient re-arms");
+    bp.record_success();
+    assert!(!bp.is_paused());
+    assert!(!bp.is_active());
+}

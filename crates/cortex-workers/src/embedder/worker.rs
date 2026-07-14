@@ -47,6 +47,12 @@ pub const STREAM_INVALID: &str = "cortex.events.invalid";
 /// consumption entirely, per spec 06 §Worker concurrency.
 pub const BACKPRESSURE_SOAK: Duration = Duration::from_secs(30);
 
+/// Phase28 §1.4 — half-open retry window. While paused, the state
+/// reads as un-paused again once the MOST RECENT rate-limit is older
+/// than this, letting the loop attempt one probe batch per window so
+/// `record_success` can ever fire again after Vectorizer recovers.
+pub const BACKPRESSURE_RETRY: Duration = Duration::from_secs(60);
+
 // ---------- Consumer abstraction ----------------------------------------
 
 /// One message delivered by a [`SynapConsumer`].
@@ -126,11 +132,21 @@ impl OffsetTracker {
 
 /// Tracks whether Vectorizer has been rate-limiting for long enough that
 /// the worker should stop consuming new messages.
+///
+/// Phase28 §1.4 — the pause is half-open, not permanent (same latent
+/// deadlock as the graph worker's 2026-06-27 stall: a paused worker
+/// never attempts an embed, so `record_success` could never fire and
+/// the pause outlived Vectorizer's recovery). The pause expires
+/// [`BACKPRESSURE_RETRY`] after the MOST RECENT rate-limit so a probe
+/// batch can flow: success disarms, another rate-limit re-arms.
 #[derive(Debug, Default)]
 pub struct BackpressureState {
     /// Instant the first `RateLimited` observation became "live", or `None`
     /// when Vectorizer is currently healthy.
     since: Mutex<Option<Instant>>,
+    /// Instant of the most recent `RateLimited` observation — drives
+    /// the half-open retry window.
+    last_rate_limit: Mutex<Option<Instant>>,
     /// Whether the gauge is currently armed.
     active: AtomicBool,
 }
@@ -141,20 +157,29 @@ impl BackpressureState {
         Self::default()
     }
 
-    /// Record a `RateLimited` observation. No-ops if already armed.
+    /// Record a `RateLimited` observation. Arms the gauge, stamps the
+    /// first-observation instant once, and refreshes the
+    /// most-recent-observation instant every time (re-arming the
+    /// half-open retry window).
     pub fn record_rate_limit(&self) {
         if let Ok(mut guard) = self.since.lock() {
             if guard.is_none() {
                 *guard = Some(Instant::now());
             }
         }
+        if let Ok(mut guard) = self.last_rate_limit.lock() {
+            *guard = Some(Instant::now());
+        }
         self.active.store(true, Ordering::Relaxed);
     }
 
-    /// Record a successful embed; clears the rate-limit timestamp and
-    /// disarms the gauge.
+    /// Record a successful embed; clears both timestamps and disarms
+    /// the gauge.
     pub fn record_success(&self) {
         if let Ok(mut guard) = self.since.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.last_rate_limit.lock() {
             *guard = None;
         }
         self.active.store(false, Ordering::Relaxed);
@@ -166,28 +191,47 @@ impl BackpressureState {
         self.active.load(Ordering::Relaxed)
     }
 
-    /// Return `true` once the rate-limit condition has persisted for at
-    /// least [`BACKPRESSURE_SOAK`] (30 s by default). The worker halts
-    /// consumption in that state.
+    /// Return `true` while the rate-limit condition has persisted for
+    /// at least [`BACKPRESSURE_SOAK`] (30 s by default) AND the most
+    /// recent rate-limit is younger than [`BACKPRESSURE_RETRY`]. Once
+    /// the retry window elapses the state reads as un-paused so a probe
+    /// batch can flow and `record_success` can fire again.
     pub fn is_paused(&self) -> bool {
-        let guard = match self.since.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
+        let soaked = match self.since.lock() {
+            Ok(g) => matches!(*g, Some(t) if t.elapsed() >= BACKPRESSURE_SOAK),
+            Err(_) => false,
         };
-        match *guard {
-            Some(t) => t.elapsed() >= BACKPRESSURE_SOAK,
-            None => false,
+        if !soaked {
+            return false;
+        }
+        match self.last_rate_limit.lock() {
+            Ok(g) => matches!(*g, Some(t) if t.elapsed() < BACKPRESSURE_RETRY),
+            Err(_) => false,
         }
     }
 
-    /// Force-arm the state at a specific `since` instant. Used by tests to
-    /// avoid real 30 s sleeps.
+    /// Force-arm the state at a specific `since` instant (also used as
+    /// the most-recent-rate-limit instant). Used by tests to avoid real
+    /// 30 s sleeps.
     #[doc(hidden)]
     pub fn force_since(&self, instant: Instant) {
         if let Ok(mut guard) = self.since.lock() {
             *guard = Some(instant);
         }
+        if let Ok(mut guard) = self.last_rate_limit.lock() {
+            *guard = Some(Instant::now());
+        }
         self.active.store(true, Ordering::Relaxed);
+    }
+
+    /// Force the most-recent-rate-limit instant independently of
+    /// `since`. Used by tests to simulate an elapsed retry window
+    /// without a real [`BACKPRESSURE_RETRY`] sleep.
+    #[doc(hidden)]
+    pub fn force_last_rate_limit(&self, instant: Instant) {
+        if let Ok(mut guard) = self.last_rate_limit.lock() {
+            *guard = Some(instant);
+        }
     }
 }
 

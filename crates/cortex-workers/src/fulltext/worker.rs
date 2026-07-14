@@ -39,6 +39,12 @@ pub const STREAM_INVALID: &str = "cortex.events.invalid";
 /// consumption entirely.
 pub const BACKPRESSURE_SOAK: Duration = Duration::from_secs(30);
 
+/// Phase28 §1.4 — half-open retry window. While paused, the state
+/// reads as un-paused again once the MOST RECENT transient is older
+/// than this, letting the loop attempt one probe batch per window so
+/// `record_success` can ever fire again after Meilisearch recovers.
+pub const BACKPRESSURE_RETRY: Duration = Duration::from_secs(60);
+
 // ---------- Consumer / Publisher abstraction ---------------------------
 
 /// One message delivered by a [`SynapConsumer`].
@@ -107,9 +113,18 @@ impl OffsetTracker {
 
 /// Tracks whether Meilisearch has been returning transient errors
 /// long enough to halt consumption.
+///
+/// Phase28 §1.4 — the pause is half-open, not permanent (same latent
+/// deadlock as the graph worker's 2026-06-27 stall: a paused worker
+/// never attempts an index batch, so `record_success` could never fire
+/// and the pause outlived Meilisearch's recovery). The pause expires
+/// [`BACKPRESSURE_RETRY`] after the MOST RECENT transient so a probe
+/// batch can flow: success disarms, another transient re-arms.
 #[derive(Debug, Default)]
 pub struct BackpressureState {
     since: Mutex<Option<Instant>>,
+    /// Most recent transient — drives the half-open retry window.
+    last_transient: Mutex<Option<Instant>>,
     active: AtomicBool,
 }
 
@@ -118,12 +133,17 @@ impl BackpressureState {
     pub fn new() -> Self {
         Self::default()
     }
-    /// Record a transient observation.
+    /// Record a transient observation. Arms the gauge, stamps the
+    /// first-observation instant once, and refreshes the
+    /// most-recent-observation instant every time.
     pub fn record_transient(&self) {
         if let Ok(mut guard) = self.since.lock() {
             if guard.is_none() {
                 *guard = Some(Instant::now());
             }
+        }
+        if let Ok(mut guard) = self.last_transient.lock() {
+            *guard = Some(Instant::now());
         }
         self.active.store(true, Ordering::Relaxed);
     }
@@ -132,21 +152,29 @@ impl BackpressureState {
         if let Ok(mut guard) = self.since.lock() {
             *guard = None;
         }
+        if let Ok(mut guard) = self.last_transient.lock() {
+            *guard = None;
+        }
         self.active.store(false, Ordering::Relaxed);
     }
     /// Whether the gauge is currently armed.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::Relaxed)
     }
-    /// Whether the soak has reached the pause threshold.
+    /// Whether the soak has reached the pause threshold AND the most
+    /// recent transient is younger than [`BACKPRESSURE_RETRY`] (the
+    /// half-open probe window — see the struct docs).
     pub fn is_paused(&self) -> bool {
-        let guard = match self.since.lock() {
-            Ok(g) => g,
-            Err(_) => return false,
+        let soaked = match self.since.lock() {
+            Ok(g) => matches!(*g, Some(t) if t.elapsed() >= BACKPRESSURE_SOAK),
+            Err(_) => false,
         };
-        match *guard {
-            Some(t) => t.elapsed() >= BACKPRESSURE_SOAK,
-            None => false,
+        if !soaked {
+            return false;
+        }
+        match self.last_transient.lock() {
+            Ok(g) => matches!(*g, Some(t) if t.elapsed() < BACKPRESSURE_RETRY),
+            Err(_) => false,
         }
     }
     /// Force-arm with a specific instant (test hook).
@@ -155,7 +183,18 @@ impl BackpressureState {
         if let Ok(mut guard) = self.since.lock() {
             *guard = Some(instant);
         }
+        if let Ok(mut guard) = self.last_transient.lock() {
+            *guard = Some(Instant::now());
+        }
         self.active.store(true, Ordering::Relaxed);
+    }
+    /// Force the most-recent-transient instant independently of
+    /// `since` (test hook for the half-open window).
+    #[doc(hidden)]
+    pub fn force_last_transient(&self, instant: Instant) {
+        if let Ok(mut guard) = self.last_transient.lock() {
+            *guard = Some(instant);
+        }
     }
 }
 

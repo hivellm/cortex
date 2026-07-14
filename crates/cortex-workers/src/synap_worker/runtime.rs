@@ -40,6 +40,24 @@ pub enum RunError {
         /// Last error message.
         last: String,
     },
+
+    /// Supervisor tripped: the back-pressure gate stayed
+    /// [`BackpressureGate::Paused`] continuously for longer than
+    /// [`SynapWorker::max_backpressure_pause`]. Phase28 §1.4 —
+    /// a pause the worker cannot clear on its own (the 2026-06-27
+    /// graph-worker stall) must surface as a restart request, not
+    /// an infinite silent park.
+    #[error(
+        "{worker}: backpressure paused continuously for {paused_secs}s (threshold {threshold_secs}s); requesting restart"
+    )]
+    StalledPause {
+        /// Worker name.
+        worker: &'static str,
+        /// How long the gate has been continuously paused.
+        paused_secs: u64,
+        /// Configured threshold.
+        threshold_secs: u64,
+    },
 }
 
 /// Drive the shared loop for `worker` until `shutdown` flips.
@@ -52,12 +70,36 @@ pub async fn run_forever<W: SynapWorker>(
 ) -> Result<(), RunError> {
     tracing::info!(worker = worker.worker_name(), "synap worker started");
     let consecutive = AtomicU32::new(0);
+    // Phase28 §1.4 — sustained-pause supervisor. Tracks how long the
+    // gate has been CONTINUOUSLY paused; any Active observation resets
+    // it. Fires `RunError::StalledPause` past
+    // `max_backpressure_pause()` so a pause the worker cannot clear on
+    // its own becomes a process restart instead of a silent stall.
+    let mut paused_since: Option<std::time::Instant> = None;
     while !shutdown.load(Ordering::Relaxed) {
         if matches!(worker.backpressure(), BackpressureGate::Paused) {
             worker.on_backpressure_pause();
+            let started = *paused_since.get_or_insert_with(std::time::Instant::now);
+            let cap = worker.max_backpressure_pause();
+            if !cap.is_zero() && started.elapsed() >= cap {
+                let paused_secs = started.elapsed().as_secs();
+                let threshold_secs = cap.as_secs();
+                tracing::error!(
+                    worker = worker.worker_name(),
+                    paused_secs,
+                    threshold_secs,
+                    "supervisor: backpressure paused past threshold; requesting restart"
+                );
+                return Err(RunError::StalledPause {
+                    worker: worker.worker_name(),
+                    paused_secs,
+                    threshold_secs,
+                });
+            }
             tokio::time::sleep(worker.backpressure_sleep()).await;
             continue;
         }
+        paused_since = None;
         match worker.run_once().await {
             Ok(handled) => {
                 consecutive.store(0, Ordering::Relaxed);
@@ -160,6 +202,9 @@ mod tests {
         pause_after: AtomicU64,
         threshold: AtomicU32,
         gate: Mutex<BackpressureGate>,
+        /// Phase28 §1.4 — sustained-pause cap in ms; `0` disables
+        /// (mirrors the trait's `Duration::ZERO` contract).
+        max_pause_ms: AtomicU64,
     }
 
     impl CountingWorker {
@@ -221,6 +266,9 @@ mod tests {
         }
         fn on_backpressure_pause(&self) {
             self.backpressure_calls.fetch_add(1, Ordering::Relaxed);
+        }
+        fn max_backpressure_pause(&self) -> Duration {
+            Duration::from_millis(self.max_pause_ms.load(Ordering::Relaxed))
         }
     }
 
@@ -285,6 +333,7 @@ mod tests {
                 assert_eq!(consecutive, 3);
                 assert_eq!(last, "c");
             }
+            other => panic!("expected Supervisor, got {other:?}"),
         }
     }
 
@@ -300,6 +349,67 @@ mod tests {
         });
         run_forever(worker.clone(), shutdown).await.unwrap();
         assert!(worker.backpressure_calls.load(Ordering::Relaxed) >= 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn stalled_pause_supervisor_trips_past_threshold() {
+        // Phase28 §1.4 — a gate that stays Paused (the 2026-06-27
+        // graph-worker stall shape: nothing can ever disarm it) must
+        // surface as RunError::StalledPause instead of parking the
+        // loop forever.
+        let worker = Arc::new(CountingWorker::with_plan(vec![]));
+        *worker.gate.lock().unwrap() = BackpressureGate::Paused;
+        worker.max_pause_ms.store(20, Ordering::Relaxed);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let err = run_forever(worker.clone(), shutdown).await.unwrap_err();
+        match err {
+            RunError::StalledPause {
+                worker: name,
+                paused_secs: _,
+                threshold_secs,
+            } => {
+                assert_eq!(name, "counting-test");
+                assert_eq!(threshold_secs, 0, "20ms cap truncates to 0s");
+            }
+            other => panic!("expected StalledPause, got {other:?}"),
+        }
+        assert_eq!(
+            worker.runs.load(Ordering::Relaxed),
+            0,
+            "paused loop never reaches run_once"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn active_gate_resets_the_stalled_pause_timer() {
+        // The cap fires on CONTINUOUS pause only — an Active
+        // observation in between resets the timer, so two pause
+        // segments each below the cap never trip even when their sum
+        // exceeds it.
+        let worker = Arc::new(CountingWorker::with_plan(vec![]));
+        *worker.gate.lock().unwrap() = BackpressureGate::Paused;
+        worker.max_pause_ms.store(100, Ordering::Relaxed);
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shut_clone = shutdown.clone();
+        let worker_clone = worker.clone();
+        tokio::spawn(async move {
+            // First pause segment ~50ms < 100ms cap.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            *worker_clone.gate.lock().unwrap() = BackpressureGate::Active;
+            // One Active loop iteration resets the timer.
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            *worker_clone.gate.lock().unwrap() = BackpressureGate::Paused;
+            // Second pause segment ~60ms < 100ms cap.
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            shut_clone.store(true, Ordering::Relaxed);
+        });
+        run_forever(worker.clone(), shutdown)
+            .await
+            .expect("no StalledPause: neither continuous segment exceeded the cap");
+        assert!(
+            worker.runs.load(Ordering::Relaxed) >= 1,
+            "the Active window must have reached run_once to reset the timer"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

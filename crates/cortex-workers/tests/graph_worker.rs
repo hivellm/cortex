@@ -18,7 +18,7 @@ use cortex_workers::graph::worker::orphan_turn_patch;
 use cortex_workers::graph::{
     BackpressureState, ConsumedMessage, EnrichedEvent, GraphConfig, GraphWriter,
     MemorySynapConsumer, MemorySynapPublisher, Metrics, OutOfOrderBuffer, Worker,
-    BACKPRESSURE_SOAK, STREAM_GRAPHED, STREAM_INVALID,
+    BACKPRESSURE_RETRY, BACKPRESSURE_SOAK, STREAM_GRAPHED, STREAM_INVALID,
 };
 use serde_json::{json, Value};
 
@@ -462,6 +462,74 @@ async fn backpressure_state_record_lifecycle() {
     bp.record_success();
     assert!(!bp.is_active());
     assert!(!bp.is_paused());
+}
+
+// ---------- Phase28 §1.4 — half-open pause recovery ----------
+
+#[tokio::test]
+async fn paused_backpressure_half_opens_after_retry_window() {
+    // Regression for the 2026-06-27 permanent stall: once paused, the
+    // worker never attempted a write, so `record_success` could never
+    // fire and the pause outlived Nexus's recovery. The pause must
+    // expire BACKPRESSURE_RETRY after the most recent transient.
+    let bp = BackpressureState::new();
+    let aged = Instant::now() - BACKPRESSURE_SOAK - Duration::from_secs(1);
+    bp.force_since(aged);
+    assert!(
+        bp.is_paused(),
+        "soaked + fresh transient keeps the pause armed"
+    );
+
+    // Age the most-recent transient past the retry window: the state
+    // must read un-paused so a probe batch can flow.
+    bp.force_last_transient(Instant::now() - BACKPRESSURE_RETRY - Duration::from_secs(1));
+    assert!(
+        !bp.is_paused(),
+        "elapsed retry window must half-open the pause"
+    );
+    assert!(bp.is_active(), "gauge stays armed until a success");
+
+    // A still-failing Nexus re-arms the window…
+    bp.record_transient();
+    assert!(bp.is_paused(), "fresh transient re-arms the pause");
+
+    // …and a success fully disarms.
+    bp.record_success();
+    assert!(!bp.is_paused());
+    assert!(!bp.is_active());
+}
+
+#[tokio::test]
+async fn half_open_probe_reaches_writer_and_success_clears_pause() {
+    // End-to-end: a paused worker whose retry window elapsed must let
+    // run_once consume, and the successful probe write disarms the
+    // gauge entirely.
+    let writer: Arc<dyn GraphWriter> = Arc::new(CountingWriter::default());
+    let (worker, consumer, publisher) = build_worker(writer);
+
+    let aged = Instant::now() - BACKPRESSURE_SOAK - Duration::from_secs(1);
+    worker.backpressure().force_since(aged);
+    worker
+        .backpressure()
+        .force_last_transient(Instant::now() - BACKPRESSURE_RETRY - Duration::from_secs(1));
+    assert!(!worker.backpressure().is_paused());
+
+    let turn = enriched(
+        "turn-probe",
+        Kind::Turn,
+        json!({ "user_message": "probe" }),
+        None,
+    );
+    enqueue(&consumer, 0, &turn);
+
+    let processed = worker.run_once().await.expect("run_once");
+    assert_eq!(processed, 1, "half-open worker must consume the probe");
+    assert!(
+        !worker.backpressure().is_active(),
+        "successful probe write disarms the gauge"
+    );
+    assert!(!worker.backpressure().is_paused());
+    assert_eq!(publisher.calls_on(STREAM_GRAPHED).len(), 1);
 }
 
 // ---------- §7.2 acceptance suite ----------

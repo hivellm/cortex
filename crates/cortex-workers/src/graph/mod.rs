@@ -61,6 +61,7 @@ pub use stale_sweeper::{StaleEdgeSweeper, SweepReport, DEFAULT_SWEEP_INTERVAL_SE
 pub use worker::{
     BackpressureState, ConsumedMessage, LiveSynapConsumer, LiveSynapPublisher, MemorySynapConsumer,
     MemorySynapPublisher, OffsetTracker, OutOfOrderBuffer, ReadyBatch, SynapConsumer, SynapHandle,
-    SynapPublisher, Worker, BACKPRESSURE_SOAK, STREAM_ENRICHED, STREAM_GRAPHED, STREAM_INVALID,
+    SynapPublisher, Worker, BACKPRESSURE_RETRY, BACKPRESSURE_SOAK, STREAM_ENRICHED, STREAM_GRAPHED,
+    STREAM_INVALID,
 };
 pub use writer::{GraphWriter, NexusGraphWriter};

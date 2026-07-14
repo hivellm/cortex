@@ -248,6 +248,31 @@ async fn rate_limit_arms_backpressure_and_halts_batch() {
 }
 
 #[tokio::test]
+async fn paused_backpressure_half_opens_after_retry_window() {
+    // Phase28 §1.4 — same latent deadlock as the graph worker's
+    // 2026-06-27 stall: a paused embedder never attempts an embed, so
+    // `record_success` could never fire and the pause outlived
+    // Vectorizer's recovery. The pause must expire BACKPRESSURE_RETRY
+    // after the most recent rate-limit so a probe batch can flow.
+    use cortex_workers::embedder::worker::{
+        BackpressureState, BACKPRESSURE_RETRY, BACKPRESSURE_SOAK,
+    };
+    let bp = BackpressureState::new();
+    bp.force_since(std::time::Instant::now() - BACKPRESSURE_SOAK - Duration::from_secs(1));
+    assert!(bp.is_paused(), "soaked + fresh rate-limit pauses");
+    bp.force_last_rate_limit(
+        std::time::Instant::now() - BACKPRESSURE_RETRY - Duration::from_secs(1),
+    );
+    assert!(!bp.is_paused(), "elapsed retry window half-opens");
+    assert!(bp.is_active(), "gauge stays armed until a success");
+    bp.record_rate_limit();
+    assert!(bp.is_paused(), "fresh rate-limit re-arms");
+    bp.record_success();
+    assert!(!bp.is_paused());
+    assert!(!bp.is_active());
+}
+
+#[tokio::test]
 async fn replayed_event_is_deduped_by_inmemory_guard() {
     let consumer = Arc::new(MemorySynapConsumer::new());
     let publisher = Arc::new(MemorySynapPublisher::new());

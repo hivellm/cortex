@@ -102,4 +102,19 @@ pub trait SynapWorker: Send + Sync + 'static {
     fn error_backoff(&self) -> Duration {
         Duration::from_millis(500)
     }
+
+    /// Maximum CONTINUOUS back-pressure pause before the runtime
+    /// returns [`crate::synap_worker::runtime::RunError::StalledPause`]
+    /// so the bin propagates a non-zero exit and Docker restarts the
+    /// container fresh (phase28 §1.4 defense in depth: the 2026-06-27
+    /// graph-worker stall showed a pause that no success could ever
+    /// clear silently parks the loop forever, and the consecutive-error
+    /// supervisor never sees it because the pause branch short-circuits
+    /// before `run_once`). `Duration::ZERO` disables the check.
+    /// Defaults to 10 minutes — an order of magnitude above every
+    /// worker's half-open retry window, so it only fires when recovery
+    /// probes are themselves not clearing the gauge.
+    fn max_backpressure_pause(&self) -> Duration {
+        Duration::from_secs(600)
+    }
 }
