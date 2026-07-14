@@ -32,8 +32,14 @@ pub struct ClassificationRow {
     pub expected_kind: String,
 }
 
-/// Acceptance floor for macro-F1 per the phase14c proposal.
-pub const MACRO_F1_FLOOR: f64 = 0.90;
+/// Acceptance floor for macro-F1. Phase28 (retrieval-eval-gate-live
+/// §4.2) — the first REAL measurement (2026-07-14, 26 rows, 2 per
+/// Kind for all 13 variants via the classifier worker's
+/// `POST /v1/classify`) scored 1.0: the static path's kind
+/// derivation is deterministic serde round-tripping, so any drop
+/// below perfect means a Kind variant stopped parsing or the static
+/// enrichment path errored. Floor = 1.0 − 0.05 tolerance.
+pub const MACRO_F1_FLOOR: f64 = 0.95;
 
 /// Phase14c §3.4 acceptance gate for the classification suite.
 pub fn classification_acceptance(report: &SuiteReport) -> AcceptanceVerdict {

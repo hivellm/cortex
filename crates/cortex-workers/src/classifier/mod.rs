@@ -10,6 +10,7 @@ pub mod cache;
 pub mod composer;
 pub mod errors;
 pub mod haiku_cli;
+pub mod http;
 pub mod prompt;
 pub mod statics;
 pub mod stats;

@@ -66,10 +66,17 @@ impl RetrievalRow {
     }
 }
 
-/// Acceptance floors per the phase14c proposal.
-pub const MRR_AT_10_FLOOR: f64 = 0.60;
-/// Acceptance floor for recall@5.
-pub const RECALL_AT_5_FLOOR: f64 = 0.50;
+/// Acceptance floor for MRR@10. Phase28 (retrieval-eval-gate-live
+/// §4.1) — re-derived from the re-locked 2026-07-14 baseline of the
+/// 27-row multi-intent golden set (mrr_at_10 = 0.5864) minus a small
+/// tolerance, so the floor is a REAL regression gate. The old 0.60
+/// was calibrated for the 18-row free_search-only set (0.6315) and
+/// would have permanently failed the harder intent-diverse set.
+pub const MRR_AT_10_FLOOR: f64 = 0.55;
+/// Acceptance floor for recall@5 — baseline 0.5926 minus tolerance
+/// (was 0.50, which the suite cleared by a wide margin; §4.1 wants
+/// floors the current system only just clears).
+pub const RECALL_AT_5_FLOOR: f64 = 0.55;
 
 /// Phase14c k for MRR.
 pub const MRR_K: usize = 10;

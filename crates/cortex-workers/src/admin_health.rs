@@ -12,7 +12,8 @@
 //! aggregator on cortex-api fans out across them at `/v1/health`.
 
 use cortex_health::server::{
-    serve_standalone, serve_standalone_with_metrics, MetricsRenderer, SnapshotProvider,
+    serve_standalone, serve_standalone_with_metrics, serve_standalone_with_metrics_and_router,
+    MetricsRenderer, SnapshotProvider,
 };
 
 /// Spawn the admin `/healthz` listener on `port` for the given
@@ -83,6 +84,47 @@ pub fn spawn_health_listener_with_metrics(
         subsystem = subsystem_name,
         port,
         metrics = has_metrics,
+        "admin /healthz listening on http://0.0.0.0:{port}/healthz"
+    );
+}
+
+/// Phase28 (retrieval-eval-gate-live §3) — same as
+/// [`spawn_health_listener_with_metrics`] but merges an extra
+/// worker-specific [`axum::Router`] onto the same port (the
+/// classifier worker mounts `POST /v1/classify` for the eval
+/// harness this way).
+pub fn spawn_health_listener_with_metrics_and_router(
+    port: u16,
+    subsystem_name: &'static str,
+    crate_version: &'static str,
+    provider: SnapshotProvider,
+    metrics: Option<MetricsRenderer>,
+    extra: Option<axum::Router>,
+) {
+    let started_at = chrono::Utc::now().to_rfc3339();
+    tokio::spawn(async move {
+        if let Err(e) = serve_standalone_with_metrics_and_router(
+            port,
+            subsystem_name,
+            crate_version,
+            started_at,
+            provider,
+            metrics,
+            extra,
+        )
+        .await
+        {
+            tracing::warn!(
+                subsystem = subsystem_name,
+                port,
+                error = %e,
+                "admin /healthz listener failed; worker continues without health endpoint"
+            );
+        }
+    });
+    tracing::info!(
+        subsystem = subsystem_name,
+        port,
         "admin /healthz listening on http://0.0.0.0:{port}/healthz"
     );
 }

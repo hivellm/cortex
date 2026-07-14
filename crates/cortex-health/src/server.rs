@@ -170,7 +170,29 @@ pub async fn serve_standalone_with_metrics(
     provider: SnapshotProvider,
     metrics: Option<MetricsRenderer>,
 ) -> std::io::Result<()> {
-    let app = router_with_metrics(name, version, since, provider, metrics);
+    serve_standalone_with_metrics_and_router(port, name, version, since, provider, metrics, None)
+        .await
+}
+
+/// `serve_standalone_with_metrics` plus an optional extra
+/// [`Router`] merged onto the same listener. Phase28
+/// (retrieval-eval-gate-live §3) — lets a worker mount
+/// worker-specific admin routes (the classifier's `/v1/classify`
+/// eval probe) next to `/healthz` without a second port.
+#[allow(clippy::too_many_arguments)]
+pub async fn serve_standalone_with_metrics_and_router(
+    port: u16,
+    name: &'static str,
+    version: &'static str,
+    since: String,
+    provider: SnapshotProvider,
+    metrics: Option<MetricsRenderer>,
+    extra: Option<Router>,
+) -> std::io::Result<()> {
+    let mut app = router_with_metrics(name, version, since, provider, metrics);
+    if let Some(extra) = extra {
+        app = app.merge(extra);
+    }
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(port, name, "health endpoint listening");
     let listener = tokio::net::TcpListener::bind(addr).await?;

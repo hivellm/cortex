@@ -12,7 +12,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use cortex_storage::MetadataStore;
 use cortex_workers::admin_health::{
-    resolve_port_from_env, rules, spawn_health_listener_with_metrics, DEFAULT_CLASSIFIER_PORT,
+    resolve_port_from_env, rules, spawn_health_listener_with_metrics_and_router,
+    DEFAULT_CLASSIFIER_PORT,
 };
 use cortex_workers::classifier::{
     build_offline_stack, build_stack, BudgetTracker, Classifier, ClassifierCache, ClassifierStack,
@@ -166,12 +167,15 @@ async fn main() -> Result<()> {
     let worker_for_prom = worker.clone();
     let renderer: cortex_health::server::MetricsRenderer =
         std::sync::Arc::new(move || worker_for_prom.render_prom());
-    spawn_health_listener_with_metrics(
+    spawn_health_listener_with_metrics_and_router(
         port,
         "cortex-classifier-worker",
         env!("CARGO_PKG_VERSION"),
         provider,
         Some(renderer),
+        // Phase28 (retrieval-eval-gate-live §3) — POST /v1/classify
+        // for the cortex-eval classification suite.
+        Some(cortex_workers::classifier::http::classify_router()),
     );
 
     worker.run_pool(shutdown).await

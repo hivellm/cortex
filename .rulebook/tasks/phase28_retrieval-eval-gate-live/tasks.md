@@ -10,23 +10,13 @@
 - [x] 2.3 classification.csv 10 → **26** rows: ≥2 per Kind for ALL 13 variants (the task text undercounted — `Law` was also missing, not just `Analysis`/`TopicCard`); expected_kind uses the loader's snake_case labels.
 
 ## 3. Re-run the retrieval eval suite and re-lock the baseline
-- [ ] 3.1 Run `cortex-eval --suite retrieval|consolidation|classification`
-      against the bootstrapped corpus using the reconciled golden set
-      from §1-§2.
-- [ ] 3.2 Record the first real `classification` result in
-      `cdc-baseline-v1.json`, replacing the `finished_at:
-      1970-01-01T00:00:00Z` / `rows_total: 0` placeholder entry.
-- [ ] 3.3 Re-lock `crates/cortex-eval/baselines/cdc-baseline-v1.json`
-      with every suite's real numbers.
+- [x] 3.1 All FIVE suites run live against the reconciled set (2026-07-14): retrieval 27 rows mrr 0.5864 / recall@5 0.5926; consolidation 10 rows 1.0/1.0; classification 26 rows macro_f1 **1.0**; mcp_search 6 rows 0.667; access_control 40 rows zero false-grants. **The classification suite required implementing the endpoint its driver targets** — no worker ever exposed `POST /v1/classify`, so every row degraded to `Unknown` (macro_f1 0.0). Shipped: `cortex_health::server::serve_standalone_with_metrics_and_router` (extra Router merged onto the admin port), `classifier::http::classify_router()` (serde Kind derivation — the same contract ingestion applies — + StaticClassifier enrichment, 400 on unknown kind), wired in the classifier-worker bin, image rebuilt + redeployed, verified live. Also found live: law_check's `laws_active` at limit 10 does NOT surface the genuinely most-relevant law that limit 5 ranks #1 (r-004/r-019 honestly score 0 — a real ranking gap the gate now tracks), and law-definition docs carry `law_id` slugs truncated at ~59 chars at index time (upstream builder quirk, deterministic).
+- [x] 3.2 Real classification entry recorded (26 rows, macro_f1 1.0, real finished_at) — 1970 placeholder gone.
+- [x] 3.3 `cdc-baseline-v1.json` re-locked with all five suites' real reports (full per_row detail); historical entries (retrieval_18row, reranked arms) retained; `_note` documents the 2026-07-14 re-lock, the harder-set context, and the known ts-sorted instability of the mcp_search decision_search/events_by_kind rows (their pinned ids age out as new events land — refresh rides the quarterly curation cadence).
 
 ## 4. Review and reset the regression-gate floors
-- [ ] 4.1 Compare `RECALL_AT_5_FLOOR` / `MRR_AT_10_FLOOR` in
-      `crates/cortex-eval/src/suite/retrieval.rs` against the
-      re-locked baseline; set each to baseline minus a small tolerance
-      so the floor is a real regression gate rather than a value the
-      suite already clears by a wide margin.
-- [ ] 4.2 Do the same review for the `classification` suite's
-      `macro_f1` floor now that it has a real first measurement.
+- [x] 4.1 `MRR_AT_10_FLOOR` 0.60 → **0.55**, `RECALL_AT_5_FLOOR` 0.50 → **0.55** — both re-derived as baseline − small tolerance (0.5864/0.5926 measured). The old mrr floor was calibrated for the easier 18-row free_search-only set and would have permanently failed the harder multi-intent set; the old recall floor was cleared by a wide margin. All five suites re-run post-change: exit 0.
+- [x] 4.2 `MACRO_F1_FLOOR` 0.90 → **0.95** (first real measurement = 1.0; static kind derivation is deterministic, so any drop means a variant stopped parsing — floor set tight).
 
 ## 5. Re-enable the nightly schedule
 - [ ] 5.1 Add back a `schedule:` (cron) trigger in
