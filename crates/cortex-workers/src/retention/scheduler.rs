@@ -336,6 +336,19 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-ops memory-consolidate --apply",
             enabled: true,
         },
+        // Phase29 (graph-projection-unblock §4.1, unblocking phase27b
+        // §2.5) — nightly community detection over the architecture
+        // subgraph. 02:30 sits between the consolidator (02:00) and
+        // retention.sweep (03:00); the writeback is idempotent
+        // MATCH-policy NodeOps so re-runs are safe and never create
+        // nodes. Never blocks ingestion — it reads a bounded snapshot
+        // and writes props only.
+        DefaultJob {
+            name: "graph.community_detect",
+            schedule: "30 2 * * *",
+            command: "cortex-ops graph communities-detect",
+            enabled: true,
+        },
         // Phase11p §3.1 — nightly envelope consolidator. Sits at
         // 02:00, one hour before `retention.consolidation_prune`
         // (03:00) so the pruner sweeps over fresh consolidation
@@ -1012,18 +1025,26 @@ mod tests {
     }
 
     #[test]
-    fn seed_defaults_inserts_ten_jobs_idempotently() {
+    fn seed_defaults_inserts_fifteen_jobs_idempotently() {
         let s = store();
         // phase11w — count bumped from 10 → 11 with the addition of
         // `retention.tool_call_digest`.
         // phase12b — 11 → 12 with the addition of `retention.archive_purge`.
         // 2026-05-20 — 12 → 13 with `retention.sessions_backfill`.
         // phase0 §5 — 13 → 14 with `health.watchdog`.
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 14);
+        // phase29 — 14 → 15 with `graph.community_detect`.
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 15);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 14);
+        assert_eq!(jobs.len(), 15);
+        let communities = jobs
+            .iter()
+            .find(|j| j.name == "graph.community_detect")
+            .expect("graph.community_detect must seed");
+        assert!(communities.enabled, "community detection defaults enabled");
+        assert_eq!(communities.schedule, "30 2 * * *");
+        assert_eq!(communities.command, "cortex-ops graph communities-detect");
         let watchdog = jobs
             .iter()
             .find(|j| j.name == "health.watchdog")

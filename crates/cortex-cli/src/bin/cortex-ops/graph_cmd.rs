@@ -352,6 +352,202 @@ fn classify_coverage(
     (missing, warnings)
 }
 
+/// Phase29 (graph-projection-unblock §4.1, unblocking phase27b §2.5) —
+/// `cortex-ops graph communities-detect`. Snapshot → detect → writeback:
+///
+/// 1. Snapshot the architecture subgraph from Nexus: every
+///    `DEFINES | CALLS | IMPORTS | ABOUT` edge with both endpoints'
+///    stable `id` + label (the same kinds the phase27b analysis called
+///    the partition input; structural identity edges like `HAS_TURN`
+///    are deliberately excluded — they would glue everything into one
+///    giant community).
+/// 2. Run the phase27b Louvain+Leiden pass
+///    (`cortex_workers::graph::community::detect_communities`,
+///    default config).
+/// 3. Write `community_id` / `community_level` / `is_god_node` back via
+///    `community_node_ops` (idempotent MATCH-policy NodeOps) through
+///    the real `NexusGraphWriter`.
+pub(super) fn graph_communities_detect(
+    nexus: Option<String>,
+    edge_limit: usize,
+    dry_run: bool,
+    json: bool,
+) -> ExitCode {
+    use cortex_workers::graph::community::{
+        community_node_ops, detect_communities, CommunityConfig, CommunityGraph,
+    };
+    use cortex_workers::graph::cypher::load_from_dir;
+    use cortex_workers::graph::patch::GraphPatch;
+    use cortex_workers::graph::writer::GraphWriter;
+    use cortex_workers::graph::{
+        GraphClient, GraphConfig, LiveNexusClient, Metrics, NexusGraphWriter,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    const ARCHITECTURE_EDGE_KINDS: &str = "DEFINES|CALLS|IMPORTS|ABOUT";
+
+    let nexus_url = nexus
+        .or_else(|| {
+            cortex_config::Config::load()
+                .ok()
+                .and_then(|c| c.nexus.nexus_url)
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:17002".to_string());
+    let cfg = GraphConfig {
+        nexus_url: nexus_url.clone(),
+        ..GraphConfig::default()
+    };
+    let client: Arc<dyn GraphClient> = match LiveNexusClient::new(cfg.clone()) {
+        Ok(c) => Arc::new(c),
+        Err(e) => {
+            eprintln!("ERROR: connect to Nexus at {nexus_url}: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("ERROR: build tokio runtime: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // 1. Snapshot. `a.id` is the stable natural-key id every mapper
+    // node carries; `labels(a)` feeds `community_node_ops`'s label
+    // resolver so the writeback NodeOps target the right label.
+    // `coalesce` because node identity varies by label: Symbol nodes
+    // carry `id`, Artifact nodes key on `natural_key` (their `id` is
+    // null) — without the fallback every DEFINES target row dropped
+    // and only the ABOUT edges survived (measured live: 28 of 7880).
+    let cypher = format!(
+        "MATCH (a)-[r:{ARCHITECTURE_EDGE_KINDS}]->(b) \
+         RETURN coalesce(a.id, a.natural_key, a.path) AS from_id, \
+                labels(a) AS from_labels, \
+                coalesce(b.id, b.natural_key, b.path) AS to_id, \
+                labels(b) AS to_labels \
+         LIMIT {edge_limit}"
+    );
+    let snap = match runtime.block_on(async {
+        let live = LiveNexusClient::new(GraphConfig {
+            nexus_url: nexus_url.clone(),
+            ..GraphConfig::default()
+        })
+        .map_err(|e| format!("client: {e}"))?;
+        live.sdk()
+            .execute_cypher(&cypher, None)
+            .await
+            .map_err(|e| format!("query: {e}"))
+    }) {
+        Ok(out) => out,
+        Err(e) => {
+            eprintln!("ERROR: snapshot architecture subgraph: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut labels_by_id: HashMap<String, String> = HashMap::new();
+    let mut node_ids: Vec<String> = Vec::new();
+    let mut raw_edges: Vec<(String, String, f64)> = Vec::new();
+    for row in &snap.rows {
+        let Some(cells) = row.as_array() else {
+            continue;
+        };
+        let from_id = cells.first().and_then(|v| v.as_str()).unwrap_or("");
+        let to_id = cells.get(2).and_then(|v| v.as_str()).unwrap_or("");
+        if from_id.is_empty() || to_id.is_empty() {
+            continue;
+        }
+        let label_of = |cell: Option<&serde_json::Value>| {
+            cell.and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        };
+        if let Some(l) = label_of(cells.get(1)) {
+            labels_by_id.entry(from_id.to_string()).or_insert(l);
+        }
+        if let Some(l) = label_of(cells.get(3)) {
+            labels_by_id.entry(to_id.to_string()).or_insert(l);
+        }
+        node_ids.push(from_id.to_string());
+        node_ids.push(to_id.to_string());
+        raw_edges.push((from_id.to_string(), to_id.to_string(), 1.0));
+    }
+    let edges_snapshotted = raw_edges.len();
+
+    // 2. Detect.
+    let graph = CommunityGraph::new(node_ids, raw_edges);
+    let result = detect_communities(&graph, &CommunityConfig::default());
+    let mut community_ids: Vec<u32> = result.values().map(|a| a.community_id).collect();
+    community_ids.sort_unstable();
+    community_ids.dedup();
+    let god_nodes = result.values().filter(|a| a.is_hub).count();
+
+    // 3. Writeback (idempotent MATCH-policy NodeOps — never creates).
+    let ops = community_node_ops(&result, |id| labels_by_id.get(id).cloned());
+    let ops_total = ops.len();
+    let mut ops_written = 0u64;
+    if !dry_run && !ops.is_empty() {
+        let cypher_dir = cortex_config::Config::load()
+            .ok()
+            .and_then(|c| c.nexus.cypher_dir)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("crates/cortex-graph/cypher"));
+        let templates = Arc::new(load_from_dir(&cypher_dir).unwrap_or_default());
+        let writer = NexusGraphWriter::new(cfg, client, templates, Arc::new(Metrics::new()));
+        let write_result = runtime.block_on(async {
+            let mut written = 0u64;
+            for chunk in ops.chunks(256) {
+                let patch = GraphPatch {
+                    nodes: chunk.to_vec(),
+                    edges: vec![],
+                };
+                let report = writer.write_patches(vec![patch]).await?;
+                written += u64::from(report.nodes_upserted) + u64::from(report.nodes_deduped);
+            }
+            Ok::<u64, cortex_workers::graph::nexus_client::GraphClientError>(written)
+        });
+        match write_result {
+            Ok(w) => ops_written = w,
+            Err(e) => {
+                eprintln!("ERROR: write community props to Nexus at {nexus_url}: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    if json {
+        let payload = serde_json::json!({
+            "nexus_url": nexus_url,
+            "mode": if dry_run { "dry-run" } else { "apply" },
+            "edges_snapshotted": edges_snapshotted,
+            "nodes_partitioned": result.len(),
+            "communities": community_ids.len(),
+            "god_nodes": god_nodes,
+            "writeback_ops": ops_total,
+            "writeback_written": ops_written,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_default()
+        );
+    } else {
+        println!(
+            "cortex-ops graph communities-detect ({}) @ {nexus_url}",
+            if dry_run { "dry-run" } else { "apply" }
+        );
+        println!("  edges_snapshotted = {edges_snapshotted}");
+        println!("  nodes_partitioned = {}", result.len());
+        println!("  communities       = {}", community_ids.len());
+        println!("  god_nodes         = {god_nodes}");
+        println!("  writeback_ops     = {ops_total}");
+        println!("  writeback_written = {ops_written}");
+    }
+    ExitCode::SUCCESS
+}
+
 pub(super) fn doctor_graph_coverage(nexus: Option<String>, floor: f64, json: bool) -> ExitCode {
     use cortex_workers::graph::config::GraphConfig;
     use cortex_workers::graph::nexus_client::{GraphClient, LiveNexusClient};

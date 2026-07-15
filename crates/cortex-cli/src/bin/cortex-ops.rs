@@ -17,18 +17,12 @@
 // default search for `mod <name>;` in a bin file is `src/bin/<name>.rs`
 // (sibling to the bin), so we point each module at the correct path
 // explicitly. Keeps the bin's submodule layout self-contained.
+#[path = "cortex-ops/acl.rs"]
+mod acl_cmd;
 #[path = "cortex-ops/backfill_cross_project.rs"]
 mod backfill_cross_project;
 #[path = "cortex-ops/bootstrap.rs"]
 mod bootstrap;
-#[path = "cortex-ops/decisions_reindex.rs"]
-mod decisions_reindex;
-#[path = "cortex-ops/laws_reindex.rs"]
-mod laws_reindex;
-#[path = "cortex-ops/meili_rekey.rs"]
-mod meili_rekey;
-#[path = "cortex-ops/laws_repair.rs"]
-mod laws_repair;
 #[path = "cortex-ops/branch_cmd.rs"]
 mod branch_cmd;
 #[path = "cortex-ops/canary.rs"]
@@ -39,6 +33,8 @@ mod cas;
 mod config_audit;
 #[path = "cortex-ops/consolidation.rs"]
 mod consolidation;
+#[path = "cortex-ops/decisions_reindex.rs"]
+mod decisions_reindex;
 #[path = "cortex-ops/digest.rs"]
 mod digest;
 #[path = "cortex-ops/doctor.rs"]
@@ -55,14 +51,22 @@ mod helpers;
 mod identity_coverage;
 #[path = "cortex-ops/intent_stats.rs"]
 mod intent_stats;
+#[path = "cortex-ops/laws_reindex.rs"]
+mod laws_reindex;
+#[path = "cortex-ops/laws_repair.rs"]
+mod laws_repair;
 #[path = "cortex-ops/meili.rs"]
 mod meili;
 #[path = "cortex-ops/meili_audit.rs"]
 mod meili_audit;
+#[path = "cortex-ops/meili_rekey.rs"]
+mod meili_rekey;
 #[path = "cortex-ops/memory_consolidate_cmd.rs"]
 mod memory_consolidate_cmd;
 #[path = "cortex-ops/metadata.rs"]
 mod metadata;
+#[path = "cortex-ops/migrate_classification.rs"]
+mod migrate_classification;
 #[path = "cortex-ops/pii.rs"]
 mod pii;
 #[path = "cortex-ops/plan.rs"]
@@ -77,14 +81,10 @@ mod retention_archive_purge;
 mod rollup;
 #[path = "cortex-ops/schedule_cmd.rs"]
 mod schedule_cmd;
-#[path = "cortex-ops/migrate_classification.rs"]
-mod migrate_classification;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
 #[path = "cortex-ops/temporal_digest.rs"]
 mod temporal_digest;
-#[path = "cortex-ops/watchdog.rs"]
-mod watchdog;
 #[path = "cortex-ops/timeline.rs"]
 mod timeline;
 #[path = "cortex-ops/timeline_backfill.rs"]
@@ -93,8 +93,8 @@ mod timeline_backfill;
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
 mod turn_digest_live;
-#[path = "cortex-ops/acl.rs"]
-mod acl_cmd;
+#[path = "cortex-ops/watchdog.rs"]
+mod watchdog;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -1659,6 +1659,30 @@ enum GraphCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Phase29 (graph-projection-unblock §4.1, unblocking phase27b
+    /// §2.5) — snapshot the architecture subgraph
+    /// (DEFINES / CALLS / IMPORTS / ABOUT edges), run Louvain+Leiden
+    /// community detection over it, and write `community_id` /
+    /// `community_level` / `is_god_node` back onto the member nodes
+    /// (idempotent MATCH-policy NodeOps — re-running never creates
+    /// nodes). Driven nightly by the `graph.community_detect` cron
+    /// seed; safe to run by hand at any time.
+    CommunitiesDetect {
+        /// Override the Nexus URL. Defaults to
+        /// `cortex_config::NexusConfig.nexus_url` then
+        /// `http://127.0.0.1:17002`.
+        #[arg(long)]
+        nexus: Option<String>,
+        /// Cap on the number of architecture edges snapshotted.
+        #[arg(long, default_value_t = 100_000)]
+        edge_limit: usize,
+        /// Detect + report communities but write nothing back.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit JSON instead of plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 /// Phase21 §6.1 — `cortex-ops acl role` subcommands.
@@ -2270,6 +2294,12 @@ fn run() -> ExitCode {
                 nexus,
                 json,
             } => graph_cmd::graph_backfill(since, archive_root, apply, limit, nexus, json),
+            GraphCommand::CommunitiesDetect {
+                nexus,
+                edge_limit,
+                dry_run,
+                json,
+            } => graph_cmd::graph_communities_detect(nexus, edge_limit, dry_run, json),
         },
         Command::SweepEmpty {
             meili,

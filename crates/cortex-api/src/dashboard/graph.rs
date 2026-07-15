@@ -658,9 +658,13 @@ async fn query_nexus_communities(
     let node_level_clause = level
         .map(|l| format!(" AND n.community_level = {l}"))
         .unwrap_or_default();
+    // Phase29 — `n._id` projects null on Nexus 2.5 (regression vs
+    // 2.3.4, reported upstream); coalesce through the visible identity
+    // props so the payload keeps working on both versions.
     let members_cypher = format!(
         "MATCH (n) WHERE n.community_id IS NOT NULL{node_level_clause} \
-         RETURN n._id AS id, n.name AS name, n.community_id AS community_id, \
+         RETURN coalesce(n._id, n.id, n.natural_key, n.path, n.name) AS id, \
+                n.name AS name, n.community_id AS community_id, \
                 n.community_level AS level, n.is_god_node AS is_god_node \
          LIMIT {limit}"
     );
@@ -714,8 +718,10 @@ async fn query_nexus_communities(
     let edges_cypher = format!(
         "MATCH (a)-[r]->(b) WHERE a.community_id IS NOT NULL \
          AND b.community_id IS NOT NULL AND a.community_id <> b.community_id{edge_level_clause} \
-         RETURN a._id AS from_id, a.community_id AS from_community, \
-                b._id AS to_id, b.community_id AS to_community, type(r) AS rel_type \
+         RETURN coalesce(a._id, a.id, a.natural_key, a.path, a.name) AS from_id, \
+                a.community_id AS from_community, \
+                coalesce(b._id, b.id, b.natural_key, b.path, b.name) AS to_id, \
+                b.community_id AS to_community, type(r) AS rel_type \
          LIMIT {limit}"
     );
     let edges_res = client
@@ -878,7 +884,12 @@ fn cypher_escape(raw: &str) -> String {
     raw.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
-/// Resolve an endpoint by exact `_id` OR exact `name`.
+/// Resolve an endpoint by exact identity (`_id` / `id` /
+/// `natural_key` / `path`) OR exact `name`.
+///
+/// Phase29 — `n._id` projects null on Nexus 2.5 (regression vs 2.3.4,
+/// reported upstream), so both the match set and the projected id
+/// coalesce through the visible identity props.
 async fn resolve_endpoint(client: &NexusClient, ident: &str) -> Option<GraphPathNode> {
     let ident = ident.trim();
     if ident.is_empty() {
@@ -886,8 +897,10 @@ async fn resolve_endpoint(client: &NexusClient, ident: &str) -> Option<GraphPath
     }
     let esc = cypher_escape(ident);
     let cypher = format!(
-        "MATCH (n) WHERE n._id = '{esc}' OR n.name = '{esc}' \
-         RETURN n._id AS id, n.name AS name, labels(n) AS labels LIMIT 1"
+        "MATCH (n) WHERE n._id = '{esc}' OR n.id = '{esc}' OR n.natural_key = '{esc}' \
+         OR n.path = '{esc}' OR n.name = '{esc}' \
+         RETURN coalesce(n._id, n.id, n.natural_key, n.path, n.name) AS id, \
+                n.name AS name, labels(n) AS labels LIMIT 1"
     );
     let res = client
         .execute_cypher(
@@ -913,42 +926,67 @@ async fn resolve_endpoint(client: &NexusClient, ident: &str) -> Option<GraphPath
 
 /// Fetch a node's undirected neighbours (both edge directions), as
 /// `(neighbour, relation)` pairs. Bounded by [`BFS_NEIGHBOR_CAP`].
+///
+/// Phase29 — two DIRECTED passes (outgoing + incoming) instead of one
+/// undirected `-[r]-` pattern: Nexus 2.5's Cypher subset silently
+/// returns ZERO rows for undirected relationship matches (verified
+/// live — `(a)-[r]->(b)` and `(a)<-[r]-(b)` both work, `(a)-[r]-(b)`
+/// never does). `a.name` participates in the anchor match because BFS
+/// node ids come from the same coalesce chain `resolve_endpoint`
+/// uses, whose last fallback IS the name (nodes like `Repo` carry no
+/// identity prop at all).
 async fn fetch_neighbors(client: &NexusClient, node_id: &str) -> Vec<(GraphPathNode, String)> {
     let esc = cypher_escape(node_id);
-    let cypher = format!(
-        "MATCH (a)-[r]-(b) WHERE a._id = '{esc}' \
-         RETURN b._id AS id, b.name AS name, labels(b) AS labels, type(r) AS rel \
-         LIMIT {BFS_NEIGHBOR_CAP}"
+    let anchor = format!(
+        "a._id = '{esc}' OR a.id = '{esc}' OR a.natural_key = '{esc}' \
+         OR a.path = '{esc}' OR a.name = '{esc}'"
     );
-    let Ok(res) = client
-        .execute_cypher(
-            &cypher,
-            Some(std::collections::HashMap::<String, NexusValue>::new()),
-        )
-        .await
-    else {
-        return Vec::new();
-    };
+    let per_direction_cap = BFS_NEIGHBOR_CAP / 2;
+    let queries = [
+        format!(
+            "MATCH (a)-[r]->(b) WHERE {anchor} \
+             RETURN coalesce(b._id, b.id, b.natural_key, b.path, b.name) AS id, \
+                    b.name AS name, labels(b) AS labels, type(r) AS rel \
+             LIMIT {per_direction_cap}"
+        ),
+        format!(
+            "MATCH (a)<-[r]-(b) WHERE {anchor} \
+             RETURN coalesce(b._id, b.id, b.natural_key, b.path, b.name) AS id, \
+                    b.name AS name, labels(b) AS labels, type(r) AS rel \
+             LIMIT {per_direction_cap}"
+        ),
+    ];
     let mut out = Vec::new();
-    for row in &res.rows {
-        let Some(cells) = row.as_array() else {
+    for cypher in &queries {
+        let Ok(res) = client
+            .execute_cypher(
+                cypher,
+                Some(std::collections::HashMap::<String, NexusValue>::new()),
+            )
+            .await
+        else {
             continue;
         };
-        let Some(id) = cell_str(cells.first()).filter(|s| !s.is_empty()) else {
-            continue;
-        };
-        let name = cell_str(cells.get(1))
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| id.clone());
-        let label = cells
-            .get(2)
-            .and_then(|c| c.as_array())
-            .and_then(|l| l.first())
-            .and_then(|c| c.as_str())
-            .unwrap_or("Node")
-            .to_string();
-        let relation = cell_str(cells.get(3)).unwrap_or_default();
-        out.push((GraphPathNode { id, name, label }, relation));
+        for row in &res.rows {
+            let Some(cells) = row.as_array() else {
+                continue;
+            };
+            let Some(id) = cell_str(cells.first()).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            let name = cell_str(cells.get(1))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| id.clone());
+            let label = cells
+                .get(2)
+                .and_then(|c| c.as_array())
+                .and_then(|l| l.first())
+                .and_then(|c| c.as_str())
+                .unwrap_or("Node")
+                .to_string();
+            let relation = cell_str(cells.get(3)).unwrap_or_default();
+            out.push((GraphPathNode { id, name, label }, relation));
+        }
     }
     out
 }

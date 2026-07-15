@@ -246,7 +246,7 @@ async fn path_endpoint_finds_two_hop_path_across_synthetic_graph() {
     // Endpoint resolution (query carries `LIMIT 1`).
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("labels(n)"))
         .and(body_string_contains("node-a"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(resolve_body("node-a", "A", "Artifact")),
@@ -255,7 +255,7 @@ async fn path_endpoint_finds_two_hop_path_across_synthetic_graph() {
         .await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("labels(n)"))
         .and(body_string_contains("node-c"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(resolve_body("node-c", "C", "Symbol")),
@@ -263,10 +263,19 @@ async fn path_endpoint_finds_two_hop_path_across_synthetic_graph() {
         .mount(&server)
         .await;
 
-    // Frontier expansions (query shape `(a)-[r]-(b)`).
+    // Frontier expansions — phase29: two DIRECTED queries per node
+    // (Nexus 2.5 returns zero rows for undirected patterns). The
+    // outgoing pass carries the traversal rows; the incoming pass
+    // returns empty.
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("<-[r]-(b)"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(empty_cypher_body()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("-[r]->(b)"))
         .and(body_string_contains("a._id = 'node-a'"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([[
@@ -280,7 +289,7 @@ async fn path_endpoint_finds_two_hop_path_across_synthetic_graph() {
         .await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("-[r]->(b)"))
         .and(body_string_contains("a._id = 'node-b'"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([
@@ -336,7 +345,7 @@ async fn compare_endpoint_returns_shared_and_divergent_sets() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("labels(n)"))
         .and(body_string_contains("node-x"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(resolve_body("node-x", "X", "Symbol")),
@@ -345,16 +354,23 @@ async fn compare_endpoint_returns_shared_and_divergent_sets() {
         .await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("LIMIT 1"))
+        .and(body_string_contains("labels(n)"))
         .and(body_string_contains("node-y"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(resolve_body("node-y", "Y", "Symbol")),
         )
         .mount(&server)
         .await;
+    // Phase29 — directed frontier queries (see the path test note).
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("<-[r]-(b)"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(empty_cypher_body()))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/cypher"))
+        .and(body_string_contains("-[r]->(b)"))
         .and(body_string_contains("a._id = 'node-x'"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([
@@ -366,7 +382,7 @@ async fn compare_endpoint_returns_shared_and_divergent_sets() {
         .await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .and(body_string_contains("-[r]-(b)"))
+        .and(body_string_contains("-[r]->(b)"))
         .and(body_string_contains("a._id = 'node-y'"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(neighbors_body(serde_json::json!([

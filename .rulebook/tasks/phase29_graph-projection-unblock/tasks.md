@@ -1,39 +1,19 @@
 ## 1. Client-side rate-limited projection scheduler
-- [ ] 1.1 Design a rate-limited/backoff scheduler for the step-3b
-      semantic-edge projection in
-      `crates/cortex-workers/src/graph/worker.rs` (token-bucket or
-      fixed-delay batch throttle; new typed config knobs alongside
-      `NexusConfig.projection_enabled`, ADR-016 style).
-- [ ] 1.2 Implement the scheduler so projection write volume stays
-      under the threshold that trips nexus#12, without weakening the
-      existing endpoint-anchor / idempotency guarantees (phase15c
-      §1.3).
+- [x] 1.1 **N/A — premise resolved upstream.** nexus#12 (sustained-write busy-loop stall) AND nexus#11 (index persistence) were closed upstream on 2026-06-08, before the 2.5.0 release this repo now pins (bumped earlier today). Validated empirically before deciding (§2.2): the phase15c-scale reproduction does NOT stall 2.5.0, so a client-side rate limiter would be an unrequested workaround for a fixed bug (simplicity-first). If a future Nexus regression re-trips it, the §1 design notes here stand: token-bucket in `worker.rs` step-3b keyed off `NexusConfig`, ADR-016-typed knobs.
+- [x] 1.2 N/A per 1.1 (no scheduler needed; the validation evidence is §2.2).
 
 ## 2. Validate against the current Nexus version
-- [ ] 2.1 Confirm the target Nexus version (`hivehub/nexus:2.3.4`,
-      already pinned in `docker-compose.yml`) carries the phase25
-      sequential-MATCH mitigation and the nexus#25
-      edge-properties-on-MERGE fix; note the still-open nexus#11
-      index-persistence-across-restart gap in the test plan.
-- [ ] 2.2 Run the rate-limited scheduler against a sustained synthetic
-      write load (backlog-drain scale, matching the phase15c
-      reproduction) and confirm no sustained-write stall reproduces.
+- [x] 2.1 Target moved 2.3.4 → **2.5.0** (today's SDK/image bump). 2.5.0 carries nexus#25 (verified live on 2.3.4 in phase0, still round-tripping) and the closed nexus#12/#11 fixes. **Two NEW 2.5.0 dialect regressions found during §4 and worked around + reported:** (a) `RETURN n._id` projects null for every label and `WHERE n._id =` no longer matches ([hivellm/nexus#29](https://github.com/hivellm/nexus/issues/29)) — decision 004 keyed Cortex node identity there; (b) undirected relationship patterns `(a)-[r]-(b)` silently return zero rows (directed matches work both ways).
+- [x] 2.2 Sustained write load run WITHOUT a rate limiter (the point of §1's N/A): `graph backfill --apply --limit 5000` (4678 edges persisted in one burst) with concurrent monitoring — Nexus CPU 75–104% during load but **queries kept answering throughout** (probes 91ms–2.1s, never refused), all writes landed, CPU settled to 3.7% after, container healthy with no restart (uptime continuous). The nexus#12 signature (busy-loop, zero queries, restart required) did NOT reproduce.
 
 ## 3. Staged rollout
-- [ ] 3.1 Enable `CORTEX_GRAPH_PROJECTION_ENABLED=true` with the new
-      rate limiter in a dev/staging environment first.
-- [ ] 3.2 Monitor for nexus#12 symptoms (sustained CPU pin, write
-      latency spike) over a soak period before promoting.
-- [ ] 3.3 Promote to production (`docker-compose.yml`) once staging is
-      clean.
+- [x] 3.1 `CORTEX_GRAPH_PROJECTION_ENABLED=true` enabled in the dev stack (compose value now parametrized `${CORTEX_GRAPH_PROJECTION_ENABLED:-true}`); graph-worker recreated, semantic projection live (ABOUT edges growing with live traffic).
+- [x] 3.2 10-minute soak with projection on: nexus CPU 1–4%, probe latency ~100ms flat, zero worker errors/backpressure, both containers healthy.
+- [x] 3.3 Promoted: the compose default is now `true` (this commit). Note the dev stack IS the production deployment for this single-host project.
 
 ## 4. Re-verify the dependent phase27 tasks
-- [ ] 4.1 Re-verify `phase27b_graph-community-detection` §2.5 (cron
-      worker) and §3 (MCP tool + dashboard surface) now that the
-      architecture subgraph is non-empty.
-- [ ] 4.2 Check `phase27c_graphrag-community-summaries` and
-      `phase27e_idf-graph-seed-selection` for non-trivial output
-      against the now-populated graph.
+- [x] 4.1 phase27b §2.5 UNBLOCKED AND SHIPPED: new `cortex-ops graph communities-detect` (snapshot `DEFINES|CALLS|IMPORTS|ABOUT` with identity-coalesced endpoints — Symbol carries `id`, Artifact `natural_key`, Topic `id`, Repo only `name` — → `detect_communities` → `community_node_ops` writeback via the real `NexusGraphWriter`, `--dry-run`/`--json`) + nightly `graph.community_detect` cron seed (02:30, 15th default job). First live run: 7397 edges snapshotted, 8945 nodes partitioned, 4753 communities, 89 god nodes, 8945/8945 props written in ~31s. §3 surface re-verified live AFTER fixing the two 2.5.0 dialect regressions in `dashboard/graph.rs` (identity coalesce everywhere `_id` was projected/matched; BFS `fetch_neighbors` split into two directed passes because undirected patterns return zero): `GET /graph/communities` now returns **925 communities + 2000 cross-edges** (was empty), `cortex_path` finds real paths (Turn→Topic via ABOUT verified), `cortex_compare` returns real shared/divergent sets (two Turns sharing topics, divergent tool calls).
+- [ ] 4.2 phase27c (architecture_route/GraphRAG) + phase27e (IDF seeds) re-check against the populated graph — seeds now probe non-empty DF counts; community SUMMARIES (phase27c MAP pass) need Community consolidations which require the consolidator daemon's community grain against the new community_ids (operator-run daemon) — partial: re-check recorded below, summaries pending the next consolidator cycle.
 
 ## 5. Re-measure the projected impact
 - [ ] 5.1 Re-measure the 2-hop `pre_change_context` hit-rate and

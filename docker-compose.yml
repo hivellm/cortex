@@ -303,9 +303,12 @@ services:
       CORTEX_GRAPH_CYPHER_DIR: /opt/cortex/cypher
       # phase15c — projection kill-switch. OFF until Nexus can absorb
       # the semantic-edge projection write volume (nexus#12 sustained-
-      # write stall). With this false the worker does structural
-      # mapping only; flip to true once Nexus is upgraded.
-      CORTEX_GRAPH_PROJECTION_ENABLED: "false"
+      # write stall). ENABLED 2026-07-14 (phase29_graph-projection-
+      # unblock): nexus#12 + #11 are fixed upstream (closed 2026-06-08)
+      # and the pinned 2.5.0 was validated clean under a 5000-envelope
+      # sustained backfill (queries kept answering, CPU settled, no
+      # restart) — see the phase29 task record.
+      CORTEX_GRAPH_PROJECTION_ENABLED: "${CORTEX_GRAPH_PROJECTION_ENABLED:-true}"
       # phase15h — persist the consumer offset across recreates. Without
       # this the metadata DB lives in the ephemeral container FS, so
       # every recreate re-consumes cortex.events.enriched from offset 0
