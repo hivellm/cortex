@@ -382,19 +382,40 @@ impl SynapConsumer for LiveSynapConsumer {
         // (not a hard error) so the worker idles instead of
         // error-spinning. Mirrors the classifier consumer and the
         // ingestion publisher's room-lifecycle handling.
-        let events: Vec<Event> = match self
-            .handle
-            .streams()
-            .consume(room, Some(offset), Some(max))
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("not found") && msg.contains("Room") {
-                    return Ok(Vec::new());
+        // Phase29b §2.1 — self-heal: on "Room not found", re-declare
+        // the room (idempotent get_or_create) and retry ONCE within
+        // this poll, so a synap restart resumes the pipeline without a
+        // worker restart and the server stops logging an ERROR per
+        // poll. A still-missing room after the re-declare degrades to
+        // the previous empty-batch idle.
+        let mut redeclared = false;
+        let events: Vec<Event> = loop {
+            match self
+                .handle
+                .streams()
+                .consume(room, Some(offset), Some(max))
+                .await
+            {
+                Ok(v) => break v,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("not found") && msg.contains("Room") {
+                        if !redeclared {
+                            redeclared = true;
+                            if self
+                                .handle
+                                .streams()
+                                .get_or_create_room(room, None)
+                                .await
+                                .is_ok()
+                            {
+                                continue;
+                            }
+                        }
+                        return Ok(Vec::new());
+                    }
+                    return Err(anyhow::anyhow!("synap consume: {e}"));
                 }
-                return Err(anyhow::anyhow!("synap consume: {e}"));
             }
         };
 

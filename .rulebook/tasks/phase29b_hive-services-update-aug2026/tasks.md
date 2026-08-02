@@ -7,10 +7,10 @@
 - [x] 1.6 Spec 03 service-map row updated to `hivehub/synap:1.3.0`; CHANGELOG entry added under Changed.
 
 ## 2. Structural: survive synap restarts without room spam
-- [ ] 2.1 Runtime room re-declare: when a consume/publish in `synap_worker::runtime` (and the per-worker consumers) fails with the `Room not found` signal, call `get_or_create_room` once and retry the operation before surfacing the error — bounded (once per room per backoff window) so a genuinely broken room name cannot loop.
-- [ ] 2.2 Unit test: consumer whose first `next_batch` errors `Room not found` → re-declare fires → retry succeeds; a second distinct error does NOT re-declare (bound respected).
+- [x] 2.1 Runtime room re-declare shipped in all four live consumers (classifier/embedder/fulltext/graph `next_batch`): on `Room not found`, idempotent `get_or_create_room` + retry ONCE within the same poll (bounded per poll; a still-missing room degrades to the previous empty-batch idle, other errors surface unchanged). Publishers already had create-and-retry; consumers were the gap.
+- [x] 2.2 `tests/synap_room_selfheal_it.rs` — fake Synap speaking the real SDK wire shape: (a) first consume Room-not-found → declare fires exactly once (wiremock expect(1)) → retried consume delivers the event, all inside one next_batch; (b) still-missing after declare → empty batch (idle), never an error, declare still bounded at one. 2/2 green.
 
 ## 3. Tail (docs + tests — check or waive with tailWaiver)
-- [ ] 3.1 Update or create documentation covering the implementation
-- [ ] 3.2 Write tests covering the new behavior
-- [ ] 3.3 Run tests and confirm they pass
+- [x] 3.1 Docs: proposal carries the full decision record (incl. the deliberate Nexus non-bump and its future-bump marker); spec 03 pin row synced; CHANGELOG entry; self-heal contract documented in the consumers' comments where the next reader needs it
+- [x] 3.2 Tests: §2.2 wiremock ITs (2) — the heal path exercised through the REAL SDK HTTP transport, not a mock trait
+- [x] 3.3 Verified: synap_room_selfheal_it 2/2, graph/fulltext/embedder worker suites green, clippy -D warnings clean on cortex-workers

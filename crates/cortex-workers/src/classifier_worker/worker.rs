@@ -178,22 +178,40 @@ impl SynapConsumer for LiveSynapConsumer {
     async fn next_batch(&self, room: &str, max: usize) -> Result<Vec<ConsumedMessage>> {
         let tracker = self.tracker_for(room);
         let offset = tracker.current();
-        let events: Vec<Event> = match self
-            .handle
-            .streams()
-            .consume(room, Some(offset), Some(max))
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                // Synap returns "Room not found" until the first publisher
-                // touches the room. Treat that as an empty batch so the
-                // worker can come up before bootstrap / live capture.
-                let msg = e.to_string();
-                if msg.contains("not found") || msg.contains("Room") {
-                    return Ok(Vec::new());
+        // Phase29b §2.1 — self-heal: on "Room not found", re-declare
+        // the room (idempotent get_or_create) and retry ONCE within
+        // this poll, so a synap restart resumes the pipeline without a
+        // worker restart and the server stops logging an ERROR per
+        // poll. A still-missing room after the re-declare degrades to
+        // the previous empty-batch idle.
+        let mut redeclared = false;
+        let events: Vec<Event> = loop {
+            match self
+                .handle
+                .streams()
+                .consume(room, Some(offset), Some(max))
+                .await
+            {
+                Ok(v) => break v,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("not found") && msg.contains("Room") {
+                        if !redeclared {
+                            redeclared = true;
+                            if self
+                                .handle
+                                .streams()
+                                .get_or_create_room(room, None)
+                                .await
+                                .is_ok()
+                            {
+                                continue;
+                            }
+                        }
+                        return Ok(Vec::new());
+                    }
+                    return Err(anyhow::anyhow!("synap consume {room}: {e}"));
                 }
-                return Err(anyhow::anyhow!("synap consume {room}: {e}"));
             }
         };
 
