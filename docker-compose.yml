@@ -62,7 +62,7 @@ services:
     restart: unless-stopped
 
   synap:
-    image: hivehub/synap:1.0.0
+    image: hivehub/synap:1.3.0
     container_name: cortex-synap
     networks: [cortex-net]
     ports:
