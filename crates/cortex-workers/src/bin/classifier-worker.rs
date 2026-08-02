@@ -63,6 +63,24 @@ async fn main() -> Result<()> {
         SynapHandle::new(&config.synap_url)
             .with_context(|| format!("synap connect {}", config.synap_url))?,
     );
+    // Phase29 / synap 1.0 — declare every room this worker touches
+    // BEFORE the consume loop starts. Synap 1.0 rejects consumes on a
+    // room that was never created ("Invalid request: Room not found"),
+    // and the poll loop turned that into server-side ERROR spam every
+    // ~200ms whenever no bootstrap run had ever created
+    // `cortex.events.bootstrap` on a fresh stack. `get_or_create_room`
+    // is the SDK's idempotent declare — safe on every startup.
+    for room in [
+        cortex_workers::classifier_worker::worker::STREAM_RAW,
+        cortex_workers::classifier_worker::worker::STREAM_BOOTSTRAP,
+        cortex_workers::classifier_worker::worker::STREAM_ENRICHED,
+    ] {
+        synap
+            .streams()
+            .get_or_create_room(room, None)
+            .await
+            .with_context(|| format!("declare synap room {room}"))?;
+    }
     let consumer = Arc::new(LiveSynapConsumer::new(synap.clone()));
     let publisher = Arc::new(LiveSynapPublisher::new(synap.clone()));
 

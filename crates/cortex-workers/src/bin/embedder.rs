@@ -74,6 +74,21 @@ async fn main() -> Result<()> {
     // Synap handle shared by consumer + publisher so both ride the same
     // underlying TCP connection.
     let synap = Arc::new(SynapHandle::new(&config.synap_url)?);
+    // Phase29 / synap 1.0 — idempotent room declaration before the
+    // consume loop (Synap 1.0 rejects consumes on a never-created room
+    // and the poll loop turns that into server-side ERROR spam on a
+    // fresh stack).
+    for room in [
+        cortex_workers::embedder::worker::STREAM_ENRICHED,
+        cortex_workers::embedder::worker::STREAM_EMBEDDED,
+        cortex_workers::embedder::worker::STREAM_INVALID,
+    ] {
+        synap
+            .streams()
+            .get_or_create_room(room, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("declare synap room {room}: {e}"))?;
+    }
     let consumer = Arc::new(LiveSynapConsumer::new(synap.clone()));
     let publisher = Arc::new(LiveSynapPublisher::new(synap.clone()));
 

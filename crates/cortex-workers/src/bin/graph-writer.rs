@@ -111,6 +111,21 @@ async fn main() -> Result<()> {
         SynapHandle::new(&config.synap_url)
             .with_context(|| format!("failed to connect to Synap at {}", config.synap_url))?,
     );
+    // Phase29 / synap 1.0 — idempotent room declaration before the
+    // consume loop (Synap 1.0 rejects consumes on a never-created room
+    // and the poll loop turns that into server-side ERROR spam on a
+    // fresh stack).
+    for room in [
+        cortex_workers::graph::worker::STREAM_ENRICHED,
+        cortex_workers::graph::worker::STREAM_GRAPHED,
+        cortex_workers::graph::worker::STREAM_INVALID,
+    ] {
+        synap
+            .streams()
+            .get_or_create_room(room, None)
+            .await
+            .with_context(|| format!("declare synap room {room}"))?;
+    }
     // Phase11s §2.3 — open the metadata store so the consumer's
     // offset survives container restarts. `CORTEX_GRAPH_METADATA_DB`
     // overrides the path; legacy default is `${CORTEX_HOME}/metadata.sqlite`.

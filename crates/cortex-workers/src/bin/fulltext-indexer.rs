@@ -114,6 +114,21 @@ async fn main() -> Result<()> {
         SynapHandle::new(&config.synap_url)
             .with_context(|| format!("failed to connect to Synap at {}", config.synap_url))?,
     );
+    // Phase29 / synap 1.0 — idempotent room declaration before the
+    // consume loop (Synap 1.0 rejects consumes on a never-created room
+    // and the poll loop turns that into server-side ERROR spam on a
+    // fresh stack).
+    for room in [
+        cortex_workers::fulltext::worker::STREAM_ENRICHED,
+        cortex_workers::fulltext::worker::STREAM_FULLTEXT_INDEXED,
+        cortex_workers::fulltext::worker::STREAM_INVALID,
+    ] {
+        synap
+            .streams()
+            .get_or_create_room(room, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("declare synap room {room}: {e}"))?;
+    }
     let consumer = Arc::new(LiveSynapConsumer::new(synap.clone()));
     let publisher = Arc::new(LiveSynapPublisher::new(synap));
 
