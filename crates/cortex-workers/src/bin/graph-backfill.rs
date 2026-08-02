@@ -269,7 +269,7 @@ async fn main() -> Result<()> {
                         println!("  node[{i}] ERR {e}");
                         println!(
                             "    cypher head: {}",
-                            &cy.chars().take(400).collect::<String>()
+                            cy.chars().take(400).collect::<String>()
                         );
                     }
                 }
