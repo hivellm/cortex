@@ -33,7 +33,7 @@ Provide a single `docker-compose.yml` (plus a small `bin/cortex-up` wrapper) tha
 |---------------|--------------------------------------|-----------------------------------------------------|---------------------------------------------|--------|
 | `vectorizer`  | `hivehub/vectorizer:3.5.0-fastembed` | `17001:15002` (REST), `17005:15503` (binary RPC)    | `vec-data:/data` (config), `vec-state:/.local/share/vectorizer` (real state — collections/vectors/auth) | `/health` (no compose healthcheck) |
 | `nexus`       | `hivehub/nexus:2.5.0`                | `17002:15474` (REST), `17012:15475` (binary RPC)    | `nexus-data:/app/data`                      | `nexus-server --healthcheck` (exec-form; image is distroless, no shell) |
-| `synap`       | `hivehub/synap:1.0.0`                | `17003:15500` (HTTP), `17013:15501` (WS), `16379:6379` (RESP) | `synap-data:/data`                | `synap-server --health-check` (exec-form; distroless) |
+| `synap`       | `hivehub/synap:1.3.0`                | `17003:15500` (HTTP), `17013:15501` (WS), `16379:6379` (RESP) | `synap-data:/data`                | `synap-server --health-check` (exec-form; distroless) |
 | `meilisearch` | `getmeili/meilisearch:v1.10`         | `17004:7700`                                        | `meili-data:/meili_data`                    | `wget /health` |
 | `cortex-reranker` | `ghcr.io/huggingface/text-embeddings-inference:89-1.8` | — (bridge-only)                   | `tei-data:/data`                            | none |
 
