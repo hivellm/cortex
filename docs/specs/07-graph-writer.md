@@ -108,6 +108,19 @@ Mapping lives in `cortex-workers/src/graph/mapper.rs`; one `fn map(&EnrichedEven
 
 #### Semantic-edge projection (phase15b §3)
 
+> **Live status (phase29_graph-projection-unblock, 2026-07/08):** the
+> projection is **ENABLED in production** (`CORTEX_GRAPH_PROJECTION_ENABLED`
+> defaults to `true` in compose). The ADR-027 gate is lifted: nexus#12/#11
+> closed upstream and the pinned Nexus 2.5.0 was validated clean under a
+> 5000-envelope sustained backfill (no stall, queries answered throughout,
+> no client-side rate limiter needed). Community detection runs nightly over
+> the architecture subgraph (`cortex-ops graph communities-detect`, cron
+> `graph.community_detect`). Known follow-ups measured in phase29 §5:
+> Decision nodes created as bare edge anchors carry NO id/title props, so
+> the `decision_supersedes_chain` retrieval template cannot match them
+> (stamp-on-write + anchor backfill pending); CALLS/IMPORTS remain
+> classifier-replay-gated (phase15c).
+
 The mapper above emits the **structural / identity** edges (`HAS_TURN`, `HAS_TOOL_CALL`, `TOUCHED`, `IN_REPO`, `REMEMBERS`, `DEFINES`, …). Phase15b adds a parallel **semantic-edge projection** pass that closes the "graph lane returns nothing useful" gap by emitting twelve relationship kinds the mapper never produced:
 
 | Edge            | From → To                     | Source                                  |

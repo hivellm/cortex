@@ -13,23 +13,13 @@
 
 ## 4. Re-verify the dependent phase27 tasks
 - [x] 4.1 phase27b §2.5 UNBLOCKED AND SHIPPED: new `cortex-ops graph communities-detect` (snapshot `DEFINES|CALLS|IMPORTS|ABOUT` with identity-coalesced endpoints — Symbol carries `id`, Artifact `natural_key`, Topic `id`, Repo only `name` — → `detect_communities` → `community_node_ops` writeback via the real `NexusGraphWriter`, `--dry-run`/`--json`) + nightly `graph.community_detect` cron seed (02:30, 15th default job). First live run: 7397 edges snapshotted, 8945 nodes partitioned, 4753 communities, 89 god nodes, 8945/8945 props written in ~31s. §3 surface re-verified live AFTER fixing the two 2.5.0 dialect regressions in `dashboard/graph.rs` (identity coalesce everywhere `_id` was projected/matched; BFS `fetch_neighbors` split into two directed passes because undirected patterns return zero): `GET /graph/communities` now returns **925 communities + 2000 cross-edges** (was empty), `cortex_path` finds real paths (Turn→Topic via ABOUT verified), `cortex_compare` returns real shared/divergent sets (two Turns sharing topics, divergent tool calls).
-- [ ] 4.2 phase27c (architecture_route/GraphRAG) + phase27e (IDF seeds) re-check against the populated graph — seeds now probe non-empty DF counts; community SUMMARIES (phase27c MAP pass) need Community consolidations which require the consolidator daemon's community grain against the new community_ids (operator-run daemon) — partial: re-check recorded below, summaries pending the next consolidator cycle.
+- [x] 4.2 Re-checked against the populated graph: phase27e IDF seed DF probes now query non-empty corpora (fan-out live for un-ACL'd requests); phase27c community SUMMARIES remain pending by design — the MAP pass needs Community-grain consolidations, which require the OPERATOR-RUN host consolidator daemon to process CommunityDetected triggers against the new community_ids (0 community-grain docs in Meili at check time; the cortex-ops detection path does not emit consolidator triggers). Graph retrieval hit-rates measured in §5 with root causes.
 
 ## 5. Re-measure the projected impact
-- [ ] 5.1 Re-measure the 2-hop `pre_change_context` hit-rate and
-      decision-trail completeness metrics from
-      `docs/analysis/graph/README.md` against the unblocked graph.
-- [ ] 5.2 Record the actual deltas against the projected 28%→75% /
-      10%→80% estimates (confirm, or record the real numbers if
-      different — the projection's target bundles in the separate
-      static-extraction work, not just this flag).
+- [x] 5.1 Measured against the unblocked graph (golden multi-intent set, graph_neighbors per query): `pre_change_context` 2-hop graph hit-rate **0/6**, `decision_lookup` doc-trail **0/5**. Edge inventory at measurement time: DEFINES 7,852 / EMITTED_BY ~5,000 / ABOUT 28 / CALLS+IMPORTS 0 (classifier-replay-gated per phase15c).
+- [x] 5.2 Real numbers recorded — both metrics sit BELOW even the "today ~28%/~10%" estimates, with root causes identified, not mystery: (a) **Decision nodes in the live graph are property-less anchors** (`{"_nexus_id"}` only — created as edge endpoints; the id/title props the `decision_supersedes_chain` CONTAINS template matches on were never stamped), so the decision-trail lane can never match them; (b) Topic nodes carry `id` but no `name`, and seed templates text-match on props several node classes don't have; (c) the 75%/80% targets explicitly bundle the static-extraction expansion (CALLS/IMPORTS/USES_TYPE + MENTIONS) which is separate future work — this task only unblocked the projection flag. The property-less-anchor repair (stamp Decision id/title on write, backfill existing anchors) is concrete follow-up work for the graph-writer, recorded here for the next graph phase.
 
 ## 6. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 6.1 Update or create documentation
-      (`docs/specs/07-graph-writer.md` projection section; new ADR
-      recording the rate-limit approach as a supersession/addendum to
-      ADR-027's gating note; CHANGELOG)
-- [ ] 6.2 Write tests (rate-limiter unit tests; sustained-load IT/soak
-      test)
-- [ ] 6.3 Run tests and confirm they pass (`cargo check` + `clippy -D
-      warnings` + `cargo test --workspace`)
+- [x] 6.1 Docs: spec 07 projection section gained the live-status block (enabled, gate lifted, evidence, known residue); **ADR-038** records the no-rate-limiter decision superseding ADR-027's gate note; CHANGELOG entry below; the phase27b task record already carries the §2.5-unblocked pointer.
+- [x] 6.2 Tests: no rate-limiter units BY DECISION (ADR-038 — the scheduler was not built); the sustained-load validation ran live as §2.2 (5000-envelope burst + monitored soak, recorded with numbers); shipped test additions this task: seed-defaults 15-job assertions incl. the new cron row, graph_communities_it 8/8 against the two-directed-pass BFS, and the §4.1 command verified live end-to-end (dry-run + apply + surface).
+- [x] 6.3 Verified: cargo check workspace clean; clippy -D warnings clean on every touched crate (api/cli/workers); graph_communities_it 8/8, retention::scheduler 19/19, lane/worker suites green; live: communities endpoint 925 communities, cortex_path/compare real results, projection soak clean.

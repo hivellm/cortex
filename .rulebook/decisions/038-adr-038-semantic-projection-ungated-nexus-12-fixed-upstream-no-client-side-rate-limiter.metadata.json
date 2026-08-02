@@ -1,0 +1,11 @@
+{
+  "id": 38,
+  "slug": "adr-038-semantic-projection-ungated-nexus-12-fixed-upstream-no-client-side-rate-limiter",
+  "title": "ADR-038: semantic projection ungated — nexus#12 fixed upstream, no client-side rate limiter",
+  "status": "proposed",
+  "date": "2026-08-02",
+  "relatedTasks": [
+    "phase29_graph-projection-unblock"
+  ],
+  "supersededBy": null
+}
