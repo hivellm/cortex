@@ -41,6 +41,8 @@ mod digest;
 mod doctor;
 #[path = "cortex-ops/doctor_redaction_coverage.rs"]
 mod doctor_redaction_coverage;
+#[path = "cortex-ops/doctor_registry_sync.rs"]
+mod doctor_registry_sync;
 #[path = "cortex-ops/doctor_synap_workers.rs"]
 mod doctor_synap_workers;
 #[path = "cortex-ops/graph_cmd.rs"]
@@ -773,6 +775,18 @@ enum Command {
         #[arg(long, default_value_t = 50)]
         sample_limit: usize,
         /// Emit JSON instead of the plain-text table.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Phase29 (mcp-surface §2) — compare spec 20's Registry table
+    /// against `ToolRegistry::default_set()`; exits 1 on one-tool
+    /// drift, 2 (critical) at >=2 per spec 20's blocking threshold.
+    DoctorRegistrySync {
+        /// Override the spec path. Defaults to
+        /// `docs/specs/20-mcp-tool-surface.md`.
+        #[arg(long)]
+        spec: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
         #[arg(long)]
         json: bool,
     },
@@ -1922,6 +1936,9 @@ fn run() -> ExitCode {
             synap,
             meili,
         } => doctor::doctor(vectorizer, nexus, synap, meili),
+        Command::DoctorRegistrySync { spec, json } => {
+            doctor_registry_sync::doctor_registry_sync(spec, json)
+        }
         Command::DoctorConfig {
             workspace,
             adapter_toml,

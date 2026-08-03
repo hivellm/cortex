@@ -375,7 +375,7 @@ pub fn rrf_fuse(lanes: Vec<Vec<LaneHit>>, cfg: &FusionConfig) -> Vec<LaneHit> {
         cfg.outcomes_deny.iter().map(String::as_str).collect();
     if !allow.is_empty() || !deny.is_empty() {
         let mut to_drop: Vec<String> = Vec::new();
-        for (doc_id, _score) in scores.iter() {
+        for doc_id in scores.keys() {
             if let Some(hit) = representative.get(doc_id) {
                 let outcome = hit
                     .extras

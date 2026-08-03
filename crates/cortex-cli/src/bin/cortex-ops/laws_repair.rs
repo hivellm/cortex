@@ -252,7 +252,11 @@ async fn fetch_all_docs(
     index: &str,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
     let client = build_http_client(meili_key)?;
-    let url = format!("{}/indexes/{}/search", meili_url.trim_end_matches('/'), index);
+    let url = format!(
+        "{}/indexes/{}/search",
+        meili_url.trim_end_matches('/'),
+        index
+    );
     let mut out: Vec<serde_json::Value> = Vec::new();
     let page = 1000usize;
     let mut offset = 0usize;
@@ -421,7 +425,10 @@ mod tests {
         let body = clean.get("body").and_then(|v| v.as_str()).unwrap();
         assert!(id.starts_with("bootstrap-"), "re-keyed: {id}");
         assert_ne!(title, "01OLDULIDLEGACY0000000000000");
-        assert!(!body.trim_start().starts_with('{'), "body is prose, not JSON: {body}");
+        assert!(
+            !body.trim_start().starts_with('{'),
+            "body is prose, not JSON: {body}"
+        );
         assert!(body.contains("Consult") || body.contains("analysis"));
     }
 
@@ -430,8 +437,16 @@ mod tests {
         let p = serde_json::json!({"law_id":"L","title":"T","body":"some rule body"});
         let a = rebuild_law_doc("e1", "cortex", "a.md", "sha256:1", p.clone());
         let b = rebuild_law_doc("e2", "cortex", "a.md", "sha256:1", p);
-        let ida = a.unwrap().get("id").and_then(|v| v.as_str()).map(String::from);
-        let idb = b.unwrap().get("id").and_then(|v| v.as_str()).map(String::from);
+        let ida = a
+            .unwrap()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let idb = b
+            .unwrap()
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         assert_eq!(ida, idb, "same (repo,path,hash) -> same bootstrap- id");
     }
 }

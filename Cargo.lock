@@ -701,6 +701,7 @@ dependencies = [
  "cortex-build",
  "cortex-config",
  "cortex-core",
+ "cortex-mcp-server",
  "cortex-storage",
  "cortex-workers",
  "cron",

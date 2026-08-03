@@ -135,7 +135,10 @@ pub(super) fn history(
         }
     };
     let mut hist_params: HashMap<String, NexusValue> = HashMap::new();
-    hist_params.insert("entity_id".to_string(), NexusValue::String(entity_id.clone()));
+    hist_params.insert(
+        "entity_id".to_string(),
+        NexusValue::String(entity_id.clone()),
+    );
     let mut clauses: Vec<String> = vec!["t.entity_id = $entity_id".to_string()];
     if let Some(a) = as_of_unix {
         clauses.push(format!("t.recorded_at_unix <= {a}"));
@@ -153,9 +156,12 @@ pub(super) fn history(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime
-        .block_on(async { client.sdk().execute_cypher(&cypher, Some(hist_params)).await })
-    {
+    let rows = match runtime.block_on(async {
+        client
+            .sdk()
+            .execute_cypher(&cypher, Some(hist_params))
+            .await
+    }) {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus history: {e}");
@@ -221,7 +227,7 @@ pub(super) fn supersession(entity_id: String, nexus: Option<String>, json_out: b
          RETURN this.id AS id, head(labels(this)) AS label, \
                 predecessors, \
                 [n IN nodes(s_path) | { id: n.id, kind: head(labels(n)) }] AS successors"
-        .to_string();
+            .to_string();
     let runtime = match build_runtime() {
         Ok(rt) => rt,
         Err(code) => return code,
@@ -405,5 +411,4 @@ mod tests {
             .unwrap();
         assert_eq!(format_unix_day(unix), "2026-04-01");
     }
-
 }

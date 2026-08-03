@@ -1,57 +1,22 @@
 ## 1. Runtime discovery — `cortex_capabilities` tool
-- [ ] 1.1 Extend the `Tool` trait (or add an adjacent static lookup table) in
-      `crates/cortex-mcp-server/src/tools.rs` so `read_or_write` is
-      queryable at runtime for every implementor — today this classification
-      only exists as prose in spec 20's registry table.
-- [ ] 1.2 Implement `CapabilitiesTool` returning `{name, one_line_purpose,
-      read_or_write}` for every tool in `ToolRegistry::default_set()`,
-      deriving `one_line_purpose` from each tool's existing
-      `descriptor()["description"]` (no new prose to author).
-- [ ] 1.3 Register `cortex_capabilities` in `ToolRegistry::default_set()`
-      (becomes tool #38) and add its own row to spec 20's registry table.
+- [x] 1.1 `Tool::read_or_write()` added to the trait (default `"read"`; the four mutating tools override: capture_memory, forget, feedback_record, acl_grant — the task predates acl_grant, also a write).
+- [x] 1.2 `CapabilitiesTool::from_tools` builds `{name, one_line_purpose, read_or_write}` from the registry itself (purpose = first sentence of each tool's own descriptor description — no new prose); appends its own row so the advertised count matches tools/list.
+- [x] 1.3 Registered via `ToolRegistry::push_capabilities()` as the LAST registry step so it can never miss a tool — registry is now **41** (the task text's "#38" predates phase27e path/compare: 38→40→41); spec 20 row added; count assertions updated across tools.rs/server.rs/transport_stdio.rs. Fix-en-route: a sloppy `== 40`→`== 41` batch replace corrupted ForgetTool's HTTP 400 mapping to 410 — caught by the suite, restored, 87/87 lib tests green.
 
 ## 2. `cortex-ops doctor-registry-sync` check
-- [ ] 2.1 Add `crates/cortex-cli/src/bin/cortex-ops/doctor_registry_sync.rs`
-      implementing the check spec 20's "registry drift" requirement already
-      specifies: parse the Registry table (row count + tool names) and
-      compare against `ToolRegistry::default_set()` (count + names),
-      reporting missing/extra tool names on either side.
-- [ ] 2.2 Wire exit-code severity matching the existing doctor convention
-      (0 clean; nonzero on any drift, escalating to critical at the ≥2-tools
-      threshold spec 20 already commits to for blocking PRs).
-- [ ] 2.3 Add the `doctor-registry-sync` subcommand to
-      `crates/cortex-cli/src/bin/cortex-ops.rs`'s CLI dispatch alongside the
-      existing `doctor-config` / `doctor-versions` entries.
+- [x] 2.1 `doctor_registry_sync.rs` shipped: pure `doc_tool_names` markdown-table parser (first-cell backticked `cortex_*` rows only) + `diff_names` both-direction diff + comparison against `ToolRegistry::default_set().names()` (new accessor); cortex-cli gained the cortex-mcp-server dep (no cycle).
+- [x] 2.2 Exit codes: 0 in-sync, 1 = one-tool drift (warn), 2 = ≥2 drift (critical, spec 20's blocking threshold) or unreadable spec. Verified empirically: live run 41/41 → 0; one-row-removed doc → 1; two-rows-removed → 2.
+- [x] 2.3 `DoctorRegistrySync { --spec, --json }` wired into the CLI dispatch with the `#[path]` module convention.
 
 ## 3. CI wiring — fast path only (do not duplicate phase30's scheduling)
-- [ ] 3.1 Add a lightweight, path-scoped GitHub Actions job mirroring
-      `.github/workflows/dashboard-grep-gate.yml` (no docker-compose stack,
-      <2 minute budget) that runs `cortex-ops doctor-registry-sync` on every
-      push/PR touching `crates/cortex-mcp-server/src/tools.rs` or
-      `docs/specs/20-mcp-tool-surface.md`.
-- [ ] 3.2 Note in the workflow's header comment that the nightly
-      long-lived-stack doctor schedule is `phase30_live-e2e-smoke-and-doctor-wiring`'s
-      responsibility — this gate is PR-time only, not a second schedule.
+- [x] 3.1 `.github/workflows/registry-sync-gate.yml` — path-scoped (tools.rs + spec 20), stackless, cargo-cached, runs the doctor on push/PR.
+- [x] 3.2 Header comment explicitly defers the nightly stack schedule to phase30 and forbids adding `schedule:` here.
 
 ## 4. Close the loop on spec 20's existing placeholders
-- [ ] 4.1 Update the "tool surface registry stays in sync" scenario
-      (currently citing "future work — phase10k doctor entry") to reference
-      the implemented `doctor-registry-sync` check by name, and remove the
-      stale phase10k cross-reference (phase10k was the retention daemon
-      task, unrelated to doctor checks).
-- [ ] 4.2 Update the "registry drift is caught before it reaches 30
-      undocumented tools" scenario to name `cortex_capabilities` +
-      `doctor-registry-sync` as the concrete enforcement mechanism.
+- [x] 4.1 Scenario now names `doctor-registry-sync` with its exit semantics; stale phase10k reference gone.
+- [x] 4.2 Requirement text names both mechanisms (doctor = doc half, capabilities = runtime half) + the CI workflow by filename; cardinality example updated to 41. Stale "only WRITE" prose corrected to the four-write reality.
 
 ## 5. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 5.1 Update or create documentation covering the implementation —
-      `docs/specs/20-mcp-tool-surface.md`'s registry table with the new
-      `cortex_capabilities` row, and CHANGELOG.md.
-- [ ] 5.2 Write tests covering the new behavior — unit test for
-      `CapabilitiesTool` (38 entries, every entry has a non-empty purpose
-      and a valid `read`/`write` value); unit or integration test for
-      `doctor-registry-sync` (in-sync case passes; an injected drift fails
-      with the correct missing/extra tool names).
-- [ ] 5.3 Run tests and confirm they pass — including a local run of the
-      new CI gate against a deliberately-drifted doc to confirm it fails
-      loudly.
+- [x] 5.1 Spec 20: header count 41, capabilities row, corrected write prose, both scenarios; CHANGELOG entry.
+- [x] 5.2 Tests: capabilities (41 entries, non-empty purposes, read|write valid, exact write-set assertion), one_line_purpose units, doc-parser + diff units, AND a live spec-vs-registry sync unit test so plain `cargo test` catches drift without CI.
+- [x] 5.3 mcp-server lib 87/87; cortex-cli registry tests 3/3; live doctor run 41/41 exit 0; drift-1 doc exits 1 and drift-2 doc exits 2 with names printed (fails loudly).

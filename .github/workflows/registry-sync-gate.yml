@@ -1,0 +1,45 @@
+name: registry-sync-gate
+
+# Phase29 (mcp-surface-doc-and-discovery §3) — PR-time gate that keeps
+# spec 20's Registry table in lockstep with
+# `ToolRegistry::default_set()`. Path-scoped and stackless (<2 min
+# budget, mirrors dashboard-grep-gate.yml): it only builds cortex-ops
+# and runs `doctor-registry-sync`, which exits 1 on a one-tool drift
+# and 2 (critical) at the ≥2-tool blocking threshold spec 20 commits
+# to.
+#
+# NOTE: this is deliberately PR-time ONLY. The nightly
+# long-lived-stack doctor schedule is
+# `phase30_live-e2e-smoke-and-doctor-wiring`'s responsibility — do not
+# add a `schedule:` block here.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/cortex-mcp-server/src/tools.rs"
+      - "docs/specs/20-mcp-tool-surface.md"
+  pull_request:
+    paths:
+      - "crates/cortex-mcp-server/src/tools.rs"
+      - "docs/specs/20-mcp-tool-surface.md"
+
+jobs:
+  registry-sync:
+    name: doctor-registry-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-registry-sync-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run doctor-registry-sync
+        run: cargo run --release -p cortex-cli --bin cortex-ops -- doctor-registry-sync

@@ -651,7 +651,10 @@ mod tests {
     fn source_anchor_for_falls_back_to_final_component() {
         // A non-.claude dir still scopes the prune to its own tail, so a
         // custom --rules-dir can never delete unrelated laws.
-        assert_eq!(source_anchor_for(Path::new("/tmp/customrules")), "customrules");
+        assert_eq!(
+            source_anchor_for(Path::new("/tmp/customrules")),
+            "customrules"
+        );
     }
 
     #[test]
@@ -674,7 +677,11 @@ mod tests {
         let (docs_b, _) = build_law_docs(&md, &rel, &body).expect("build_b");
 
         assert!(!docs_a.is_empty(), "must produce at least one law doc");
-        assert_eq!(docs_a.len(), docs_b.len(), "same file must yield same doc count");
+        assert_eq!(
+            docs_a.len(),
+            docs_b.len(),
+            "same file must yield same doc count"
+        );
         for (a, b) in docs_a.iter().zip(docs_b.iter()) {
             let id_a = a["id"].as_str().expect("id_a");
             let id_b = b["id"].as_str().expect("id_b");

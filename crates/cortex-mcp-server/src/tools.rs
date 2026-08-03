@@ -239,6 +239,15 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &'static str;
     /// MCP descriptor advertised by `tools/list`.
     fn descriptor(&self) -> Value;
+    /// Phase29 (mcp-surface-doc-and-discovery §1.1) — whether the
+    /// tool mutates Cortex state. Spec 20's registry table carried
+    /// this classification as prose only; making it queryable lets
+    /// `cortex_capabilities` answer discovery questions at runtime.
+    /// Defaults to read-only — the registry is overwhelmingly reads
+    /// and every write tool overrides this explicitly.
+    fn read_or_write(&self) -> &'static str {
+        "read"
+    }
     /// Run the tool. Returns either a structured [`ToolResult`] (the
     /// dispatcher serialises it as a JSON-RPC `result`) or a
     /// [`ToolError`] (the dispatcher renders it as `-32602` /
@@ -302,11 +311,24 @@ impl ToolRegistry {
                 Arc::new(AclGrantTool::new()),
             ],
         }
+        .push_capabilities()
     }
 
     /// Empty registry — used by tests + `validate` mode.
     pub fn new() -> Self {
         Self { tools: Vec::new() }
+    }
+
+    /// Phase29 (mcp-surface-doc-and-discovery §1.2) — append the
+    /// runtime-discovery tool, built FROM the registry so its entries
+    /// can never drift from what is actually registered. Called as the
+    /// last step of [`ToolRegistry::default_set`]; the capabilities
+    /// tool lists itself too (its own entry is appended inside
+    /// [`CapabilitiesTool::from_tools`]).
+    fn push_capabilities(mut self) -> Self {
+        let caps = CapabilitiesTool::from_tools(&self.tools);
+        self.tools.push(Arc::new(caps));
+        self
     }
 
     /// Register a tool.
@@ -322,6 +344,13 @@ impl ToolRegistry {
     /// Look a tool up by name.
     pub fn find(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.iter().find(|t| t.name() == name).cloned()
+    }
+
+    /// Phase29 (mcp-surface §2) — every registered tool name, in
+    /// registration order. Feeds `cortex-ops doctor-registry-sync`'s
+    /// comparison against spec 20's Registry table.
+    pub fn names(&self) -> Vec<&'static str> {
+        self.tools.iter().map(|t| t.name()).collect()
     }
 
     /// Number of registered tools.
@@ -876,6 +905,10 @@ const MAX_CAPTURE_BODY_BYTES: usize = 8 * 1024;
 
 #[async_trait]
 impl Tool for CaptureMemoryTool {
+    fn read_or_write(&self) -> &'static str {
+        "write"
+    }
+
     fn name(&self) -> &'static str {
         "cortex_capture_memory"
     }
@@ -1240,6 +1273,10 @@ impl Default for ForgetTool {
 
 #[async_trait]
 impl Tool for ForgetTool {
+    fn read_or_write(&self) -> &'static str {
+        "write"
+    }
+
     fn name(&self) -> &'static str {
         "cortex_forget"
     }
@@ -2543,6 +2580,10 @@ impl Default for FeedbackRecordTool {
 
 #[async_trait]
 impl Tool for FeedbackRecordTool {
+    fn read_or_write(&self) -> &'static str {
+        "write"
+    }
+
     fn name(&self) -> &'static str {
         "cortex_feedback_record"
     }
@@ -3790,6 +3831,10 @@ impl Default for AclGrantTool {
 
 #[async_trait]
 impl Tool for AclGrantTool {
+    fn read_or_write(&self) -> &'static str {
+        "write"
+    }
+
     fn name(&self) -> &'static str {
         "cortex_acl_grant"
     }
@@ -3851,17 +3896,155 @@ impl Tool for AclGrantTool {
     }
 }
 
+// ── cortex_capabilities (phase29 mcp-surface-doc-and-discovery) ─────────
+
+/// Runtime discovery tool: lists every registered tool's name, a
+/// one-line purpose derived from its own descriptor (no separately
+/// authored prose to drift), and its read/write classification.
+/// Built FROM the registry's tool list at construction
+/// ([`ToolRegistry::default_set`] appends it last), so the entries
+/// cannot disagree with what is actually registered.
+pub struct CapabilitiesTool {
+    entries: Vec<Value>,
+}
+
+/// First sentence (or first line, whichever ends sooner) of a tool
+/// description, trimmed — the "one-line purpose" the discovery
+/// surface advertises.
+fn one_line_purpose(description: &str) -> String {
+    let first_line = description.lines().next().unwrap_or("").trim();
+    match first_line.find(". ") {
+        Some(i) => first_line[..=i].trim().to_string(),
+        None => first_line.to_string(),
+    }
+}
+
+impl CapabilitiesTool {
+    /// Build the entry list from the already-registered tools and
+    /// append the capabilities tool's own row so the advertised count
+    /// matches `tools/list` exactly.
+    pub fn from_tools(tools: &[Arc<dyn Tool>]) -> Self {
+        let mut entries: Vec<Value> = tools
+            .iter()
+            .map(|t| {
+                let desc = t.descriptor();
+                let description = desc
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                json!({
+                    "name": t.name(),
+                    "one_line_purpose": one_line_purpose(description),
+                    "read_or_write": t.read_or_write(),
+                })
+            })
+            .collect();
+        entries.push(json!({
+            "name": "cortex_capabilities",
+            "one_line_purpose": "List every Cortex MCP tool with its one-line purpose and read/write classification.",
+            "read_or_write": "read",
+        }));
+        Self { entries }
+    }
+}
+
+#[async_trait]
+impl Tool for CapabilitiesTool {
+    fn name(&self) -> &'static str {
+        "cortex_capabilities"
+    }
+
+    fn descriptor(&self) -> Value {
+        json!({
+            "name": "cortex_capabilities",
+            "description": "List every Cortex MCP tool with its one-line purpose and read/write classification. Runtime discovery surface mirroring spec 20's registry table — answers 'what can Cortex do' without leaving the session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false,
+            },
+        })
+    }
+
+    async fn call(&self, _ctx: &ToolContext, _args: Value) -> Result<ToolResult, ToolError> {
+        Ok(ToolResult::ok(json!({
+            "tools": self.entries,
+            "total": self.entries.len(),
+        })))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // ── Phase29 mcp-surface — cortex_capabilities ────────────────────
+
+    #[tokio::test]
+    async fn capabilities_lists_every_registered_tool_with_purpose_and_rw() {
+        let reg = ToolRegistry::default_set();
+        let tool = reg.find("cortex_capabilities").expect("registered");
+        let ctx = ToolContext::new("http://127.0.0.1:1".to_string());
+        let result = tool.call(&ctx, json!({})).await.expect("call ok");
+        let text = result.content[0]["text"].as_str().unwrap();
+        let payload: Value = serde_json::from_str(text).unwrap();
+        let tools = payload["tools"].as_array().unwrap();
+        assert_eq!(
+            tools.len(),
+            41,
+            "capabilities must advertise exactly the registry size"
+        );
+        assert_eq!(payload["total"], 41);
+        for t in tools {
+            let name = t["name"].as_str().unwrap_or_default();
+            assert!(!name.is_empty());
+            let purpose = t["one_line_purpose"].as_str().unwrap_or_default();
+            assert!(!purpose.is_empty(), "tool {name} must carry a purpose");
+            let rw = t["read_or_write"].as_str().unwrap_or_default();
+            assert!(
+                rw == "read" || rw == "write",
+                "tool {name} rw must be read|write, got {rw}"
+            );
+        }
+        // The four mutating tools are classified write; everything
+        // else read.
+        let writes: Vec<&str> = tools
+            .iter()
+            .filter(|t| t["read_or_write"] == "write")
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert_eq!(
+            writes,
+            vec![
+                "cortex_capture_memory",
+                "cortex_forget",
+                "cortex_feedback_record",
+                "cortex_acl_grant",
+            ],
+            "write classification set drifted"
+        );
+    }
+
     #[test]
-    fn registry_returns_forty_tools_with_unique_names() {
+    fn one_line_purpose_takes_first_sentence() {
+        assert_eq!(
+            one_line_purpose("Does a thing. Then explains more."),
+            "Does a thing."
+        );
+        assert_eq!(
+            one_line_purpose("Single line no period"),
+            "Single line no period"
+        );
+        assert_eq!(one_line_purpose("First line\nsecond line"), "First line");
+    }
+
+    #[test]
+    fn registry_returns_forty_one_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
         assert_eq!(
             reg.len(),
-            40,
-            "phase27e §2 adds cortex_path + cortex_compare (38 -> 40)"
+            41,
+            "phase29 mcp-surface adds cortex_capabilities (40 -> 41)"
         );
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [

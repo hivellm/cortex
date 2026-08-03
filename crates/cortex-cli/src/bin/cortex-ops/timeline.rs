@@ -86,11 +86,19 @@ pub(super) fn timeline(
 
     // Nexus 2.3.4 (nexus#3 fixed): $param binding works in WHERE clauses.
     let mut params: HashMap<String, NexusValue> = HashMap::new();
-    params.insert("project_id".to_string(), NexusValue::String(project.clone()));
-    params.insert("branch_id".to_string(), NexusValue::String(branch_id.clone()));
+    params.insert(
+        "project_id".to_string(),
+        NexusValue::String(project.clone()),
+    );
+    params.insert(
+        "branch_id".to_string(),
+        NexusValue::String(branch_id.clone()),
+    );
 
-    let mut clauses: Vec<String> =
-        vec!["t.project_id = $project_id".to_string(), "t.branch_id = $branch_id".to_string()];
+    let mut clauses: Vec<String> = vec![
+        "t.project_id = $project_id".to_string(),
+        "t.branch_id = $branch_id".to_string(),
+    ];
     if let Some(k) = kind.as_deref().filter(|s| !s.is_empty()) {
         params.insert("kind".to_string(), NexusValue::String(k.to_string()));
         clauses.push("t.kind = $kind".to_string());

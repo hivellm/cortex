@@ -55,10 +55,7 @@ fn http_post(url: &str, body: &Value) -> Result<Value, String> {
             .await
             .map_err(|e| format!("POST {url}: {e}"))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("read body: {e}"))?;
+        let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
         if !status.is_success() {
             return Err(format!(
                 "{status}: {}",
@@ -85,10 +82,7 @@ fn http_get(url: &str) -> Result<Value, String> {
             .await
             .map_err(|e| format!("GET {url}: {e}"))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("read body: {e}"))?;
+        let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
         if !status.is_success() {
             return Err(format!(
                 "{status}: {}",
@@ -339,10 +333,7 @@ pub(super) fn acl_whoami(api_url: Option<String>, json_out: bool) -> ExitCode {
             .await
             .map_err(|e| format!("GET {url}: {e}"))?;
         let status = resp.status();
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| format!("read body: {e}"))?;
+        let bytes = resp.bytes().await.map_err(|e| format!("read body: {e}"))?;
         if !status.is_success() {
             return Err(format!(
                 "{status}: {}",
@@ -400,9 +391,18 @@ mod tests {
         });
         let out = render_whoami(&v);
         assert!(out.contains("finance-analyst"), "missing id; got: {out}");
-        assert!(out.contains("confidential"), "level 2 should be confidential; got: {out}");
-        assert!(out.contains("(level 2)"), "level number must appear; got: {out}");
-        assert!(out.contains("financial"), "missing financial compartment; got: {out}");
+        assert!(
+            out.contains("confidential"),
+            "level 2 should be confidential; got: {out}"
+        );
+        assert!(
+            out.contains("(level 2)"),
+            "level number must appear; got: {out}"
+        );
+        assert!(
+            out.contains("financial"),
+            "missing financial compartment; got: {out}"
+        );
         assert!(out.contains("hr"), "missing hr compartment; got: {out}");
         assert!(out.contains("finance"), "missing role; got: {out}");
     }
@@ -416,7 +416,10 @@ mod tests {
             "roles": [],
         });
         let out = render_whoami(&v);
-        assert!(out.contains("public"), "level 0 should be public; got: {out}");
+        assert!(
+            out.contains("public"),
+            "level 0 should be public; got: {out}"
+        );
         // Both compartments and roles should print (none).
         let none_count = out.matches("(none)").count();
         assert_eq!(none_count, 2, "expected 2 (none) occurrences; got: {out}");
@@ -431,9 +434,18 @@ mod tests {
             "roles": ["acl_admin"],
         });
         let out = render_whoami(&v);
-        assert!(out.contains("restricted"), "level 3 should be restricted; got: {out}");
-        assert!(out.contains("acl_admin"), "acl_admin role must appear; got: {out}");
-        assert!(out.contains("financial"), "financial compartment must appear; got: {out}");
+        assert!(
+            out.contains("restricted"),
+            "level 3 should be restricted; got: {out}"
+        );
+        assert!(
+            out.contains("acl_admin"),
+            "acl_admin role must appear; got: {out}"
+        );
+        assert!(
+            out.contains("financial"),
+            "financial compartment must appear; got: {out}"
+        );
     }
 
     #[test]
@@ -445,9 +457,18 @@ mod tests {
             "roles": [],
         });
         let out = render_whoami(&v);
-        assert!(out.contains("internal"), "level 1 should be internal; got: {out}");
-        assert!(out.contains("security"), "security compartment must appear; got: {out}");
-        assert!(out.contains("(none)"), "empty roles should print (none); got: {out}");
+        assert!(
+            out.contains("internal"),
+            "level 1 should be internal; got: {out}"
+        );
+        assert!(
+            out.contains("security"),
+            "security compartment must appear; got: {out}"
+        );
+        assert!(
+            out.contains("(none)"),
+            "empty roles should print (none); got: {out}"
+        );
     }
 
     // ── arg validation logic ──────────────────────────────────────────

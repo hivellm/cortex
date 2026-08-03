@@ -216,10 +216,22 @@ mod tests {
 
     #[test]
     fn parse_relative_duration_units() {
-        assert_eq!(parse_relative_duration("90d"), Some(chrono::Duration::days(90)));
-        assert_eq!(parse_relative_duration("4w"), Some(chrono::Duration::weeks(4)));
-        assert_eq!(parse_relative_duration("12h"), Some(chrono::Duration::hours(12)));
-        assert_eq!(parse_relative_duration("0d"), Some(chrono::Duration::days(0)));
+        assert_eq!(
+            parse_relative_duration("90d"),
+            Some(chrono::Duration::days(90))
+        );
+        assert_eq!(
+            parse_relative_duration("4w"),
+            Some(chrono::Duration::weeks(4))
+        );
+        assert_eq!(
+            parse_relative_duration("12h"),
+            Some(chrono::Duration::hours(12))
+        );
+        assert_eq!(
+            parse_relative_duration("0d"),
+            Some(chrono::Duration::days(0))
+        );
     }
 
     #[test]

@@ -48,9 +48,12 @@ pub(super) fn branch_list(project: String, nexus: Option<String>, json: bool) ->
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime
-        .block_on(async { client.sdk().execute_cypher(&cypher, Some(list_params)).await })
-    {
+    let rows = match runtime.block_on(async {
+        client
+            .sdk()
+            .execute_cypher(&cypher, Some(list_params))
+            .await
+    }) {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus cypher: {e}");
@@ -124,9 +127,12 @@ pub(super) fn branch_show(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let rows = match runtime
-        .block_on(async { client.sdk().execute_cypher(&cypher, Some(show_params)).await })
-    {
+    let rows = match runtime.block_on(async {
+        client
+            .sdk()
+            .execute_cypher(&cypher, Some(show_params))
+            .await
+    }) {
         Ok(out) => out.rows,
         Err(e) => {
             eprintln!("ERROR: nexus cypher: {e}");
@@ -284,19 +290,22 @@ pub(super) fn branch_merge(
         Ok(rt) => rt,
         Err(code) => return code,
     };
-    let parent_branch_id = match runtime
-        .block_on(async { client.sdk().execute_cypher(&lookup_cypher, Some(lookup_params)).await })
-    {
-            Ok(out) => out.rows.first().and_then(|row| {
-                row.get("parent_branch_id")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            }),
-            Err(e) => {
-                eprintln!("ERROR: nexus lookup: {e}");
-                return ExitCode::from(2);
-            }
-        };
+    let parent_branch_id = match runtime.block_on(async {
+        client
+            .sdk()
+            .execute_cypher(&lookup_cypher, Some(lookup_params))
+            .await
+    }) {
+        Ok(out) => out.rows.first().and_then(|row| {
+            row.get("parent_branch_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        }),
+        Err(e) => {
+            eprintln!("ERROR: nexus lookup: {e}");
+            return ExitCode::from(2);
+        }
+    };
     let Some(parent_id) = parent_branch_id else {
         eprintln!(
             "ERROR: branch {child_id:?} either does not exist or carries no parent_branch_id (the `main` branch cannot be merged)"

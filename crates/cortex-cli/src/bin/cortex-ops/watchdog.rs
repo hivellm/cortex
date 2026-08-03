@@ -115,8 +115,7 @@ pub(super) fn evaluate(sig: &WatchdogSignals, th: &WatchdogThresholds) -> Watchd
         alarms.push(WatchdogAlarm {
             code: "archive_watcher_blind",
             severity: WatchdogSeverity::Critical,
-            detail: "watcher healthy but files_watched == 0 (mount empty or unmounted)"
-                .to_string(),
+            detail: "watcher healthy but files_watched == 0 (mount empty or unmounted)".to_string(),
         });
     } else if sig.last_flush_ms > 0 {
         let age = age_secs(sig.now_ms, sig.last_flush_ms);
@@ -352,7 +351,7 @@ mod tests {
             now_ms: NOW,
             watcher_reachable: true,
             files_watched: 203,
-            last_flush_ms: NOW - 60_000, // 60 s ago
+            last_flush_ms: NOW - 60_000,          // 60 s ago
             last_sweep_ms: Some(NOW - 3_600_000), // 1 h ago
             last_consolidation_ms: Some(NOW - 3_600_000),
         }

@@ -31,6 +31,7 @@ cortex-core = { path = "../cortex-core" }
 cortex-storage = { path = "../cortex-storage" }
 cortex-workers = { path = "../cortex-workers" }
 cortex-api = { path = "../cortex-api" }
+cortex-mcp-server = { path = "../cortex-mcp-server" }
 cortex-build = { path = "../cortex-build" }
 
 serde = { workspace = true }

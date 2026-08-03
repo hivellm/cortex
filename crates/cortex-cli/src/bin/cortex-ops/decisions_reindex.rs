@@ -183,7 +183,10 @@ async fn run_reindex(
     let files = match collect_decision_files(decisions_dir) {
         Ok(f) => f,
         Err(e) => {
-            report.error = Some(format!("cannot read decisions dir {}: {e}", decisions_dir.display()));
+            report.error = Some(format!(
+                "cannot read decisions dir {}: {e}",
+                decisions_dir.display()
+            ));
             return report;
         }
     };
@@ -260,7 +263,10 @@ async fn run_reindex(
 /// Walk `dir` and return paths of every `*.md` file.
 fn collect_decision_files(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
     if !dir.exists() {
-        return Err(anyhow::anyhow!("directory does not exist: {}", dir.display()));
+        return Err(anyhow::anyhow!(
+            "directory does not exist: {}",
+            dir.display()
+        ));
     }
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)?
         .filter_map(|entry| entry.ok().map(|e| e.path()))
@@ -423,7 +429,10 @@ async fn scan_legacy_docs(
     if !resp.status().is_success() {
         let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("meili search HTTP {status}: {}", text.chars().take(200).collect::<String>()));
+        return Err(anyhow::anyhow!(
+            "meili search HTTP {status}: {}",
+            text.chars().take(200).collect::<String>()
+        ));
     }
     let payload: serde_json::Value = resp.json().await?;
     let hits = payload
@@ -531,12 +540,23 @@ fn print_text(r: &ReindexReport) {
     println!("dry_run:       {}", r.dry_run);
     println!();
     println!("files_built:   {}", r.files_built);
-    println!("docs_upserted: {} {}", r.docs_upserted, if r.dry_run { "(dry-run)" } else { "" });
+    println!(
+        "docs_upserted: {} {}",
+        r.docs_upserted,
+        if r.dry_run { "(dry-run)" } else { "" }
+    );
     println!("files_skipped: {}", r.files_skipped);
     println!("files_error:   {}", r.files_error);
     println!();
-    println!("legacy_found:   {} (non-bootstrap-keyed; incl. {} malformed title==id)", r.legacy_found, r.orphans_found);
-    println!("legacy_pruned:  {} {}", r.legacy_pruned, if r.dry_run { "(dry-run)" } else { "" });
+    println!(
+        "legacy_found:   {} (non-bootstrap-keyed; incl. {} malformed title==id)",
+        r.legacy_found, r.orphans_found
+    );
+    println!(
+        "legacy_pruned:  {} {}",
+        r.legacy_pruned,
+        if r.dry_run { "(dry-run)" } else { "" }
+    );
     if let Some(err) = &r.error {
         println!();
         println!("ERROR: {err}");
@@ -571,10 +591,7 @@ mod tests {
     #[test]
     fn repo_rel_path_extracts_rulebook_prefix() {
         let p = PathBuf::from("/home/user/project/.rulebook/decisions/0042-adopt-meili.md");
-        assert_eq!(
-            repo_rel_path(&p),
-            ".rulebook/decisions/0042-adopt-meili.md"
-        );
+        assert_eq!(repo_rel_path(&p), ".rulebook/decisions/0042-adopt-meili.md");
     }
 
     #[test]
@@ -631,8 +648,7 @@ mod tests {
         let base = dir.path().join(".rulebook").join("decisions");
         std::fs::create_dir_all(&base).expect("mkdir");
         let md = base.join("0007-pick-nexus.md");
-        std::fs::write(&md, "# Pick Nexus\n\nStatus: accepted\n\nDetails.\n")
-            .expect("write");
+        std::fs::write(&md, "# Pick Nexus\n\nStatus: accepted\n\nDetails.\n").expect("write");
 
         let doc = build_decision_doc(&md)
             .expect("build ok")

@@ -1,6 +1,6 @@
 # Spec 20 — Cortex MCP Tool Surface
 
-> Status: phase10j accepted; re-verified against ToolRegistry::default_set() 2026-07 (37 tools). Source of truth for every Cortex MCP
+> Status: phase10j accepted; re-verified against ToolRegistry::default_set() 2026-08 (41 tools). Source of truth for every Cortex MCP
 > tool. Cross-reference for [spec 18](./18-claude-code-plugin.md)
 > (transport / wire protocol) and [spec 11](./11-query-api.md) (the
 > HTTP endpoints the tools wrap).
@@ -25,9 +25,12 @@ Two MCP surfaces, deliberately split:
   via `/v1/ingest`. Memory is bounded; the canonical record lives in
   the synap stream + on-disk archive, not in the daemon's RAM.
 
-Each tool here belongs to one surface. The capture tool
-(`cortex_capture_memory`) is the only WRITE in the Cortex MCP surface;
-the rest are READ.
+Each tool here belongs to one surface. Four tools WRITE
+(`cortex_capture_memory`, `cortex_forget`, `cortex_feedback_record`,
+`cortex_acl_grant`); the rest are READ. Since phase29
+(mcp-surface-doc-and-discovery) the classification is queryable at
+runtime — `Tool::read_or_write()` feeds `cortex_capabilities`, so this
+table's read/write column has a machine-checkable counterpart.
 
 ## Registry
 
@@ -105,6 +108,7 @@ the rest are READ.
 |-----------------------------|-------------------------------|--------------------------------------------------|---------|-------|
 | `cortex_acl_whoami`         | —                             | `GET /v1/acl/whoami`                             | Phase21 §6.4 — resolve effective principal (clearance, compartments, roles) | read  |
 | `cortex_acl_grant`          | `principal_id`                | `POST /v1/acl/grants`                            | Phase21 §6.4 — assign clearance, compartments, or RBAC role to principal | **write** |
+| `cortex_capabilities`       | —                             | (in-process — built from the registry itself)    | Phase29 — runtime discovery: every tool's name, one-line purpose (derived from its own descriptor), and read/write classification | read  |
 
 The MCP server's runtime registry is the binding contract: every name
 listed above MUST be returned by `tools/list`, and every tool MUST
@@ -183,24 +187,30 @@ them.
 - Given a developer adds a new MCP tool
 - When the merge lands
 - Then the registry MUST list the tool
-- And `cortex-ops doctor` SHOULD surface a yellow warning when the
-  registry diverges from the live tool list (future work — phase10k
-  doctor entry).
+- And `cortex-ops doctor-registry-sync` (phase29
+  mcp-surface-doc-and-discovery §2) MUST report the divergence by
+  name — missing/extra on either side — exiting 1 on any drift and 2
+  (critical) at ≥2 tools.
 
 ### Requirement: registry drift is caught before it reaches 30 undocumented tools
 
 The Registry table (this document, ## Registry section) MUST enumerate
 exactly as many tools as `ToolRegistry::default_set().len()` returns at
-runtime. The cardinality check MUST be automated in CI (doc-coherence
-scan) and in the `cortex-ops doctor` diagnostic; a drift ≥2 tools
-MUST block pull requests, preventing silent drift where new tools ship
-without corresponding Registry entries.
+runtime. The concrete enforcement mechanisms (phase29
+mcp-surface-doc-and-discovery) are `cortex-ops doctor-registry-sync`
+(parses this table's rows and compares names + count against a
+generated registry manifest) and `cortex_capabilities` (the runtime
+half — advertises the registry as the agent sees it). The check runs
+in CI on every PR touching the registry or this document
+(`.github/workflows/registry-sync-gate.yml`); a drift ≥2 tools exits
+critical and MUST block pull requests, preventing silent drift where
+new tools ship without corresponding Registry entries.
 
 #### Scenario: registry-runtime cardinality mismatch is caught in CI
 - Given the Registry table documents 7 tools (2024-06 baseline)
 - When a developer ships 30 additional MCP tools without updating the Registry
 - Then CI's doc-coherence check MUST parse the Registry table and count rows
-- And MUST compare the count (7) against `ToolRegistry::default_set().len()` (37)
+- And MUST compare the count (7) against `ToolRegistry::default_set().len()` (41)
 - And MUST fail the pull request with a cardinality error
 - So this incident (silent 6-month drift, 30 undocumented tools, operators
   unaware of 81% of the MCP surface) does not recur.
