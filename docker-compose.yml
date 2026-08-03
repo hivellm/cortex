@@ -579,6 +579,16 @@ services:
     networks: [cortex-net]
     volumes:
       - tei-data:/data
+    # Phase30 §3.1 — the reranker was the one compose backend with no
+    # health coverage anywhere; TEI serves its own /health and the
+    # image carries curl. Generous start_period: first boot downloads
+    # the model and warms CUDA.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 10
+      start_period: 120s
     deploy:
       resources:
         reservations:

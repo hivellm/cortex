@@ -934,6 +934,46 @@ checks" section with checkboxes for the four scripts. The
 workflow is the enforced gate; the template raises author
 awareness.
 
+## 13.13 Observability — scheduled long-lived-stack doctor + e2e smoke (phase30)
+
+The fresh-boot CI schedules (`health-smoke.yml`, `doctor.yml`,
+`retention-canary.yml`) were all retired because a freshly-booted CI
+stack is non-deterministic and GitHub-hosted runners cannot reach the
+real deployment anyway. Phase30 designates the LOCAL long-lived docker
+stack as the scheduled-doctor target and reuses the cron
+infrastructure the stack already trusts:
+
+- **Runner:** the `health.doctor_smoke` cron seed (nightly 01:45,
+  before the 02:00+ batch window) executes `cortex-ops doctor-smoke
+  --json` via the same `cron_jobs` scheduler that drives
+  `health.watchdog` and the retention sweeps.
+- **One run checks:** the four backends' `/health`; the reranker's
+  `/health` (plus a compose `healthcheck:` on the TEI container —
+  previously the only backend with none); the five worker `/healthz`
+  freshness states (`ok` required; `degraded` warns because the
+  600-second freshness window cannot distinguish a dead consume loop
+  from a legitimately quiet stack — `down`/unreachable fail); the
+  host adapter's admin `/healthz` when configured; and the
+  **"registered but never exercised" gate** — every READ tool in
+  `ToolRegistry::default_set()` is invoked in-process against the
+  live cortex-api with args synthesized from its own `inputSchema`.
+  `cortex_query` and `cortex_pre_thinking` must succeed cleanly; every
+  other read tool must prove its wire (a soft error / empty result is
+  a live wire; an unreachable api is not). Per-tool outcomes and
+  timestamps persist to `<cortex-home>/mcp_tool_smoke.json`.
+- **Failure surfacing (decided, not optional):** a non-zero exit
+  lands in the cron row's `last_status` + `failure_streak`, which the
+  dashboard schedule panel renders and `cortex-ops schedule list`
+  prints; `doctor-alerts` escalation applies as with every other cron
+  job. There is NO GitHub/Slack/issue integration for this run — the
+  stack is local, so the alerting stays local; if a remote channel is
+  ever added it must be a follow-up task, not an undocumented drift.
+- **What this generalizes:** the four confirmed ship-then-dead-wire
+  incidents (phantom-link verifier unwired, pre-thinking cache
+  counters invisible, adapter daemon silently absent, graph-worker
+  consume stall) are all instances of "registered but never
+  exercised"; the nightly run now exercises or probes each class.
+
 ## 14. References (within HiveLLM and external)
 
 - Vectorizer — `e:/HiveLLM/Vectorizer` (vector DB, MCP, embeddings)

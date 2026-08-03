@@ -43,6 +43,8 @@ mod doctor;
 mod doctor_redaction_coverage;
 #[path = "cortex-ops/doctor_registry_sync.rs"]
 mod doctor_registry_sync;
+#[path = "cortex-ops/doctor_smoke.rs"]
+mod doctor_smoke;
 #[path = "cortex-ops/doctor_synap_workers.rs"]
 mod doctor_synap_workers;
 #[path = "cortex-ops/graph_cmd.rs"]
@@ -781,6 +783,21 @@ enum Command {
     /// Phase29 (mcp-surface §2) — compare spec 20's Registry table
     /// against `ToolRegistry::default_set()`; exits 1 on one-tool
     /// drift, 2 (critical) at >=2 per spec 20's blocking threshold.
+    /// Phase30 (live-e2e-smoke §1) — long-lived-stack doctor + e2e
+    /// smoke: backend/worker/adapter health, then exercises every
+    /// READ MCP tool in-process against the live cortex-api (the
+    /// "registered but never exercised" gate). Scheduled by the
+    /// `health.doctor_smoke` cron seed; non-zero exit surfaces in
+    /// the cron row failure streak.
+    DoctorSmoke {
+        /// Override the cortex-api base URL. Defaults to
+        /// `CORTEX_API_URL` then `http://127.0.0.1:17000`.
+        #[arg(long)]
+        api_url: Option<String>,
+        /// Emit JSON instead of the plain-text summary.
+        #[arg(long)]
+        json: bool,
+    },
     DoctorRegistrySync {
         /// Override the spec path. Defaults to
         /// `docs/specs/20-mcp-tool-surface.md`.
@@ -1936,6 +1953,7 @@ fn run() -> ExitCode {
             synap,
             meili,
         } => doctor::doctor(vectorizer, nexus, synap, meili),
+        Command::DoctorSmoke { api_url, json } => doctor_smoke::doctor_smoke(api_url, json),
         Command::DoctorRegistrySync { spec, json } => {
             doctor_registry_sync::doctor_registry_sync(spec, json)
         }

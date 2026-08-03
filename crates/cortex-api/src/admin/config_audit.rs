@@ -176,6 +176,11 @@ pub struct AuditOptions {
     /// disables the scan (fixture tests don't ship the workspace
     /// source tree).
     pub cortex_config_audit_root: Option<PathBuf>,
+    /// Phase30 §3.2 — when `true`, check the reranker wiring
+    /// coherence from the PROCESS environment (enabled ⇒ endpoint
+    /// set). Off by default so file-fixture audits stay
+    /// environment-independent.
+    pub check_reranker_wiring: bool,
 }
 
 impl AuditOptions {
@@ -194,6 +199,7 @@ impl AuditOptions {
             scan_live_ports: true,
             scan_duplicate_deps: true,
             cortex_config_audit_root: Some(default_workspace_crates_root()),
+            check_reranker_wiring: true,
         }
     }
 }
@@ -511,6 +517,41 @@ pub fn run_audit_with(paths: &AuditPaths, opts: AuditOptions) -> ConfigAudit {
                     usages.len()
                 ),
             ));
+        }
+    }
+
+    // ---- reranker wiring (phase30 §3.2) -------------------------------
+    // The reranker is a third-party TEI image, so binary version-drift
+    // checks do not apply — the coherence question is purely wiring:
+    // an ENABLED reranker with no endpoint silently degrades every
+    // query to fusion-only order (the phase17 dead-code class).
+    if opts.check_reranker_wiring {
+        let cfg = cortex_config::Config::load().unwrap_or_default();
+        let enabled = cfg.reranker.enabled;
+        let endpoint = cfg
+            .reranker
+            .endpoint
+            .clone()
+            .filter(|s| !s.trim().is_empty());
+        match (enabled, endpoint) {
+            (true, Some(url)) => {
+                audit.push(Finding::ok(
+                    "reranker",
+                    format!("enabled with endpoint {url}"),
+                ));
+            }
+            (true, None) => {
+                audit.push(Finding::warn(
+                    "reranker",
+                    "CORTEX_RERANKER_ENABLED=true but CORTEX_RERANKER_ENDPOINT is unset — every query silently degrades to fusion-only ranking".to_string(),
+                ));
+            }
+            (false, _) => {
+                audit.push(Finding::ok(
+                    "reranker",
+                    "disabled (fusion-only ranking by configuration)".to_string(),
+                ));
+            }
         }
     }
 

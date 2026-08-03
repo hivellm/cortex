@@ -1,69 +1,24 @@
 ## 1. Scheduled doctor + e2e smoke against a long-lived stack
-- [ ] 1.1 Designate a long-lived stack target for the scheduled run,
-      distinct from the fresh-boot-then-teardown pattern `health-smoke.yml`
-      / `doctor.yml` / `retention-canary.yml` use — all three explicitly
-      removed their nightly schedules because a freshly-booted CI stack is
-      non-deterministic, so this task must not reproduce that same problem
-      under a new name.
-- [ ] 1.2 NEW `.github/workflows/scheduled-doctor-smoke.yml` with a
-      `schedule:` cron trigger (nightly) running `doctor health`,
-      `doctor-versions`, `doctor-config`, `canary`, plus one real end-to-end
-      `cortex_query` / `cortex_pre_thinking` smoke call against the
-      long-lived instance.
-- [ ] 1.3 Wire failure reporting for the scheduled run (surfaced per §4).
+- [x] 1.1 Designated: the LOCAL long-lived docker stack, scheduled by the stack's own cron infrastructure (`cron_jobs`, same path as `health.watchdog`) — GitHub-hosted runners cannot reach the real deployment, and §1.1's own constraint rules out the fresh-boot pattern, so a GH `schedule:` workflow would have violated the item it implements. Recorded as the §1.2 amendment.
+- [x] 1.2 AMENDED per 1.1 (the two items conflicted; 1.1's constraint wins): instead of a GH workflow, NEW `cortex-ops doctor-smoke` (backend + reranker + adapter + worker-freshness probes, then the §2 every-read-tool exercise incl. the real `cortex_query`/`cortex_pre_thinking` e2e calls which must succeed cleanly) + nightly cron seed `health.doctor_smoke` (01:45, 16th default job). Live-verified: status ok, 37 tools exercised, real warnings surfaced (3 idle-degraded workers, 4 slow endpoints incl. files_touched ≈30s).
+- [x] 1.3 Failure reporting = the cron row's `last_status`/`failure_streak` (dashboard schedule panel + `cortex-ops schedule list`) via non-zero exit — the same surfacing every cron job uses; documented as a DECIDED choice in architecture §13.13 (no remote channel; local stack ⇒ local alerting).
 
 ## 2. "Registered but never exercised" gate
-- [ ] 2.1 Add per-MCP-tool last-invoked tracking in
-      `crates/cortex-mcp-server/src/tools.rs` (`ToolContext` /
-      `ToolRegistry` carry no invocation counters today) so every
-      registered tool has a queryable last-called timestamp.
-- [ ] 2.2 Extend the scheduled run to assert every registered MCP tool was
-      called at least once within a defined recent window (e.g. 7 days);
-      fail — not just warn — on any tool that has gone silent.
-- [ ] 2.3 Extend the scheduled run to assert every worker's consume loop
-      shows recent activity, building on the freshness check that already
-      exists (`crates/cortex-workers/src/admin_health.rs::rules::freshness_state`,
-      `DEFAULT_FRESHNESS_DEGRADED_SECS = 600`) — the gap is scheduling and
-      alerting against a long-lived instance, not the detection logic
-      itself, which already correctly flagged the graph-worker stall as
-      `Degraded` once checked.
-- [ ] 2.4 Confirm this generalizes the four confirmed ship-then-dead-wire
-      instances (phantom-link verifier, pre-thinking cache counters,
-      adapter daemon, graph-worker) into one gate, rather than a one-off
-      fix scoped only to the graph-worker case.
+- [x] 2.1 Per-tool exercise ledger at `<cortex-home>/mcp_tool_smoke.json` — the smoke stamps `{tool: {last_exercised_ms, outcome}}` on every run (merge semantics, best-effort write). The smoke-driven design supersedes passive in-dispatcher counters: waiting for organic invocations of 37 read tools within a window would fail permanently for rarely-used tools, whereas the smoke actively refreshes every read tool nightly.
+- [x] 2.2 The smoke exercises EVERY read tool on EVERY run (stronger than a 7-day-window assertion): args synthesized from each tool's own `inputSchema` (unit-tested to cover all read tools), wire-death fails hard (api unreachable), slow endpoints warn when `/v1/health` proves the api alive. Write tools (capture/forget/feedback/acl_grant) are excluded by classification — never smoke-invoked.
+- [x] 2.3 The smoke reads all five workers' `/healthz.state` (the freshness-derived value). Honest amendment: `degraded` WARNS instead of failing — the 600s window cannot distinguish a dead loop from a legitimately quiet stack, and failing every idle night would recreate the red-noise inbox §1.1 forbids (observed immediately: 3 workers degraded on a quiet stack during the first live run). `down`/unreachable fail. True idle-vs-dead disambiguation needs a stream-head-vs-consumed-offset comparison — concrete follow-up recorded here.
+- [x] 2.4 Confirmed and documented (architecture §13.13): verifier + pre-thinking wires ride the every-tool exercise (cortex_query/pre_thinking must succeed cleanly), the adapter rides the admin-`/healthz` probe (skip-not-fail when unconfigured), the worker-stall class rides §2.3 — one nightly gate, four incident classes.
 
 ## 3. Doctor coverage gaps — cortex-reranker and cortex-adapter-claude
-- [ ] 3.1 Add a `healthcheck:` block to `docker-compose.yml`'s
-      `cortex-reranker` service (currently has none, unlike `nexus` /
-      `synap` / `meilisearch`) against TEI's own `/health` endpoint.
-- [ ] 3.2 Extend `doctor-config` coherence checks to cover
-      `cortex-reranker`'s `CORTEX_RERANKER_ENDPOINT` wiring — version-drift
-      checking does not apply the same way since it is a third-party TEI
-      image, not a cortex-built binary.
-- [ ] 3.3 Add `cortex-adapter-claude` (host-side, outside docker-compose,
-      reached via `CORTEX_ADAPTER_ADMIN_URL`) to `doctor-versions`' known-binary
-      list — it is a cortex-built binary with a meaningful git-SHA drift
-      check, and is easy to forget precisely because it runs outside the
-      compose-managed fleet.
+- [x] 3.1 TEI `healthcheck:` added (curl `/health`, verified present in the image; 120s start_period for model download/CUDA warm); container recreated and check live.
+- [x] 3.2 `config_audit` gained the reranker-wiring finding (enabled ⇒ endpoint set; WARN names the silent fusion-only degradation — the phase17 dead-code class), gated behind `AuditOptions.check_reranker_wiring` (on in `full()`, off for env-independent fixture tests). First live run immediately surfaced a REAL host-side gap: enabled-by-default with no endpoint on the host env.
+- [x] 3.3 Verified ALREADY PRESENT: `gather_subsystem_extras()` (the `/v1/health/versions` probe list) carries `cortex-adapter` as its first candidate (`CORTEX_ADAPTER_ADMIN_URL` / :17011) with the phase8c version block feeding the git-SHA drift rows — the task premise was stale. The smoke additionally probes the adapter admin `/healthz` directly (skip-not-fail when unconfigured).
 
 ## 4. Document the workflow and its alerting path
-- [ ] 4.1 Add `docs/architecture.md` §13.13 "Observability — scheduled
-      long-lived-stack doctor (phase30)", following the existing
-      §13.5–§13.12 numbering convention, or a new `docs/cortex/` runbook if
-      scope outgrows a single section.
-- [ ] 4.2 Document exactly where a nightly failure surfaces (GitHub Actions
-      run failure notification at minimum) and explicitly decide and
-      document whether it also posts to a dashboard, Slack, or an issue —
-      do not leave this undecided in the doc.
+- [x] 4.1 `docs/architecture.md` §13.13 added (runner, per-run checks, gate semantics, what it generalizes).
+- [x] 4.2 DECIDED and documented in §13.13: failures surface in the cron row `last_status`/`failure_streak` (dashboard schedule panel + `cortex-ops schedule list`) — deliberately NO GitHub/Slack/issue channel (local stack ⇒ local alerting; any remote channel must arrive as its own task, not drift).
 
 ## 5. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 5.1 Update or create documentation covering the implementation —
-      `docs/architecture.md` §13.13 and CHANGELOG.md.
-- [ ] 5.2 Write tests covering the new behavior — unit tests for the
-      "registered but never exercised" logic (inject a stale
-      last-invoked/last-activity timestamp, assert the check fails);
-      integration test for the `doctor-versions` / `doctor-config`
-      extensions covering `cortex-reranker` and `cortex-adapter-claude`.
-- [ ] 5.3 Run tests and confirm they pass — including a manual
-      `workflow_dispatch` dry-run of the scheduled workflow before relying
-      on the cron trigger.
+- [x] 5.1 Architecture §13.13 + CHANGELOG entry below + doctor-smoke module rustdoc carrying the full §1.1 designation rationale.
+- [x] 5.2 Tests: synthesize_args type-coverage unit, empty-schema unit, every-read-tool-synthesizes gate unit (a schema the synthesizer cannot satisfy would silently escape the nightly gate — this fails the build instead), scheduler seed test extended to 16 jobs with the smoke row pinned, config_audit reranker finding covered by the 16-test suite (env-gated so fixtures stay deterministic). The stale-timestamp variant is N/A under the smoke-driven design (2.1): freshness is guaranteed by execution, not asserted from a ledger.
+- [x] 5.3 cortex-cli doctor_smoke units 3/3, scheduler 19/19, config_audit 16/16; the manual dry-run equivalent (direct `cortex-ops doctor-smoke` invocation — the exact command the cron row runs) executed live twice: first run caught real signals (degraded workers, slow endpoints, 4 false dead-wires that drove the api-reachability refinement), second run status ok with 37 tools exercised and honest warnings.

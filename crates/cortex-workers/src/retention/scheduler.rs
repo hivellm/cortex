@@ -349,6 +349,20 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-ops graph communities-detect",
             enabled: true,
         },
+        // Phase30 (live-e2e-smoke §1) — nightly long-lived-stack
+        // doctor + e2e smoke. 01:45 sits before the nightly batch
+        // window (consolidator 02:00, communities 02:30, retention
+        // 03:00+) so the stack's health verdict reflects steady
+        // state, not mid-batch churn. Failures surface in this row's
+        // last_status / failure_streak (dashboard schedule panel) —
+        // the §1.1-designated alternative to the fresh-boot CI
+        // schedules health-smoke/doctor/retention-canary abandoned.
+        DefaultJob {
+            name: "health.doctor_smoke",
+            schedule: "45 1 * * *",
+            command: "cortex-ops doctor-smoke --json",
+            enabled: true,
+        },
         // Phase11p §3.1 — nightly envelope consolidator. Sits at
         // 02:00, one hour before `retention.consolidation_prune`
         // (03:00) so the pruner sweeps over fresh consolidation
@@ -1025,7 +1039,7 @@ mod tests {
     }
 
     #[test]
-    fn seed_defaults_inserts_fifteen_jobs_idempotently() {
+    fn seed_defaults_inserts_sixteen_jobs_idempotently() {
         let s = store();
         // phase11w — count bumped from 10 → 11 with the addition of
         // `retention.tool_call_digest`.
@@ -1033,11 +1047,19 @@ mod tests {
         // 2026-05-20 — 12 → 13 with `retention.sessions_backfill`.
         // phase0 §5 — 13 → 14 with `health.watchdog`.
         // phase29 — 14 → 15 with `graph.community_detect`.
-        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 15);
+        // phase30 — 15 → 16 with `health.doctor_smoke`.
+        assert_eq!(seed_defaults(&s, anchor()).unwrap(), 16);
         // Re-seed: zero new inserts.
         assert_eq!(seed_defaults(&s, anchor()).unwrap(), 0);
         let jobs = s.list_cron_jobs().unwrap();
-        assert_eq!(jobs.len(), 15);
+        assert_eq!(jobs.len(), 16);
+        let smoke = jobs
+            .iter()
+            .find(|j| j.name == "health.doctor_smoke")
+            .expect("health.doctor_smoke must seed");
+        assert!(smoke.enabled, "doctor smoke defaults enabled");
+        assert_eq!(smoke.schedule, "45 1 * * *");
+        assert_eq!(smoke.command, "cortex-ops doctor-smoke --json");
         let communities = jobs
             .iter()
             .find(|j| j.name == "graph.community_detect")
