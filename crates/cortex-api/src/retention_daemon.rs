@@ -299,8 +299,8 @@ mod tests {
         let jobs = store.list_cron_jobs().expect("metadata store readable");
         assert_eq!(
             jobs.len(),
-            14,
-            "default cron rows should be seeded (phase11w bump 10 → 11, phase12b → 12, sessions_backfill → 13, health.watchdog → 14)"
+            16,
+            "default cron rows should be seeded (phase11w bump 10 → 11, phase12b → 12, sessions_backfill → 13, health.watchdog → 14, phase29 graph.community_detect → 15, phase30 health.doctor_smoke → 16)"
         );
         // Stop the loop so the test runtime can shut down cleanly.
         handle.abort();

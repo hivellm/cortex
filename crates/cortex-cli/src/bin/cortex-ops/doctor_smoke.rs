@@ -188,27 +188,34 @@ pub(super) fn doctor_smoke(api_url: Option<String>, json_out: bool) -> ExitCode 
         // §3.1 — the reranker was the one compose backend with no
         // health coverage anywhere. Third-party TEI image → probe its
         // own /health; required only when an endpoint is configured.
+        // ADR-016 §3.6: resolved via the typed Config
+        // (`/reranker/endpoint`, env CORTEX_RERANKER_ENDPOINT) — the
+        // env-audit gate rejects ad-hoc CORTEX_* reads here.
         (
             "cortex-reranker".into(),
             format!(
                 "{}/health",
-                std::env::var("CORTEX_RERANKER_HEALTH_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:17040".into())
+                cfg.reranker
+                    .endpoint
+                    .as_deref()
+                    .map(|e| e.trim_end_matches('/'))
+                    .unwrap_or("http://127.0.0.1:17040")
             ),
-            std::env::var("CORTEX_RERANKER_HEALTH_URL").is_ok(),
+            cfg.reranker.endpoint.is_some(),
         ),
         // §3.3 — the host adapter daemon lives OUTSIDE compose and is
         // exactly the binary that silently died before; probe its
         // admin /healthz. Required only when configured, because a
-        // fresh checkout has no adapter.
+        // fresh checkout has no adapter. ADR-016 §3.6: resolved via
+        // the typed Config (`/adapter/adapter_admin_port`, env
+        // CORTEX_ADAPTER_ADMIN_PORT).
         (
             "cortex-adapter-claude".into(),
             format!(
-                "{}/healthz",
-                std::env::var("CORTEX_ADAPTER_ADMIN_URL")
-                    .unwrap_or_else(|_| "http://127.0.0.1:17011".into())
+                "http://127.0.0.1:{}/healthz",
+                cfg.adapter.adapter_admin_port.unwrap_or(17011)
             ),
-            std::env::var("CORTEX_ADAPTER_ADMIN_URL").is_ok(),
+            cfg.adapter.adapter_admin_port.is_some(),
         ),
     ];
     // §2.3 — worker /healthz endpoints; `state` is the
