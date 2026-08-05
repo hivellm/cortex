@@ -129,3 +129,446 @@ async fn consume_room_still_missing_after_redeclare_degrades_to_empty_batch() {
         .expect("degrades to Ok");
     assert!(batch.is_empty(), "still-missing room reads as idle");
 }
+
+// ── Phase29c — durable-offset stale-ahead self-heal (graph consumer) ─
+
+mod stale_offset {
+    use std::sync::{Arc, Mutex};
+
+    use cortex_storage::MetadataStore;
+    use cortex_workers::graph::worker::{
+        LiveSynapConsumer as GraphConsumer, SynapHandle as GraphHandle,
+    };
+    use cortex_workers::graph::SynapConsumer as GraphSynapConsumer;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn ok_empty_consume() -> serde_json::Value {
+        serde_json::json!({
+            "success": true, "request_id": "x", "error": null,
+            "payload": { "events": [] },
+        })
+    }
+
+    fn ok_stats_head_zero() -> serde_json::Value {
+        // A post-wipe room: one message at offset 0.
+        serde_json::json!({
+            "success": true, "request_id": "x", "error": null,
+            "payload": {
+                "name": "cortex.events.enriched",
+                "message_count": 1, "max_offset": 0,
+                "min_offset": 0, "total_published": 1,
+                "total_consumed": 0, "subscriber_count": 1, "dropped": 0,
+            },
+        })
+    }
+
+    fn ok_consume_offset_zero_event() -> serde_json::Value {
+        let envelope = serde_json::json!({ "event_id": "evt-stale-heal" });
+        let bytes: Vec<u8> = serde_json::to_vec(&envelope).expect("serialize");
+        serde_json::json!({
+            "success": true, "request_id": "x", "error": null,
+            "payload": { "events": [{
+                "offset": 0, "event": "enriched", "data": bytes,
+                "timestamp": 1_700_000_000_000u64,
+            }] },
+        })
+    }
+
+    #[tokio::test]
+    async fn durable_cursor_beyond_room_head_resets_and_resumes() {
+        // The live incident: a synap restart wiped the room back to
+        // offset 0 while the durable SQLite ledger still held a large
+        // pre-wipe offset — the consumer read past the head forever.
+        let server = MockServer::start().await;
+
+        // Poll at the stale cursor → empty.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/command"))
+            .and(body_string_contains("stream.consume"))
+            .and(body_string_contains("\"from_offset\":5000"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_empty_consume()))
+            .mount(&server)
+            .await;
+        // The bounded stats probe reveals the post-wipe head.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/command"))
+            .and(body_string_contains("stream.stats"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats_head_zero()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        // The healed poll from 0 delivers the event.
+        Mock::given(method("POST"))
+            .and(path("/api/v1/command"))
+            .and(body_string_contains("stream.consume"))
+            .and(body_string_contains("\"from_offset\":0"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(ok_consume_offset_zero_event()))
+            .mount(&server)
+            .await;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = dir.path().join("meta.sqlite");
+        {
+            let store = MetadataStore::open(&db).expect("open store");
+            store
+                .consumer_offset_upsert("battery-graph", "cortex.events.enriched", 4999, None)
+                .expect("seed stale offset");
+        }
+        let metadata = Arc::new(Mutex::new(MetadataStore::open(&db).expect("reopen")));
+        let handle = Arc::new(GraphHandle::new(&server.uri()).expect("handle"));
+        let consumer = GraphConsumer::with_persistent_offset(
+            handle,
+            metadata.clone(),
+            "battery-graph",
+            "cortex.events.enriched",
+        )
+        .expect("consumer");
+        assert_eq!(consumer.tracker().current(), 5000, "resumed at stale+1");
+
+        // Poll 1: empty at the stale cursor → self-heal fires (stats
+        // probed once), cursor resets to 0, reset persisted.
+        let batch = consumer
+            .next_batch("cortex.events.enriched", 10)
+            .await
+            .expect("poll 1");
+        assert!(batch.is_empty());
+        assert_eq!(consumer.tracker().current(), 0, "cursor healed to 0");
+        {
+            let guard = metadata.lock().unwrap();
+            let row = guard
+                .consumer_offset_lookup("battery-graph", "cortex.events.enriched")
+                .expect("lookup")
+                .expect("row");
+            assert_eq!(row.last_offset, 0, "reset persisted to the ledger");
+        }
+
+        // Poll 2: consumes the post-wipe event from offset 0.
+        let batch = consumer
+            .next_batch("cortex.events.enriched", 10)
+            .await
+            .expect("poll 2");
+        assert_eq!(batch.len(), 1, "healed consumer resumes delivery");
+        assert_eq!(batch[0].event_id.as_deref(), Some("evt-stale-heal"));
+    }
+
+    // ── Phase29c §port — fulltext consumer (single tracker, in-memory) ──
+
+    mod fulltext_case {
+        use std::sync::Arc;
+
+        use cortex_workers::fulltext::{
+            LiveSynapConsumer as FulltextConsumer, SynapConsumer as FulltextSynapConsumer,
+            SynapHandle as FulltextHandle, STREAM_ENRICHED,
+        };
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn ok_empty_consume() -> serde_json::Value {
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [] },
+            })
+        }
+
+        fn ok_stats_head_zero() -> serde_json::Value {
+            // A post-wipe room: one message at offset 0.
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": {
+                    "name": STREAM_ENRICHED,
+                    "message_count": 1, "max_offset": 0,
+                    "min_offset": 0, "total_published": 1,
+                    "total_consumed": 0, "subscriber_count": 1, "dropped": 0,
+                },
+            })
+        }
+
+        fn ok_consume_offset_zero_event() -> serde_json::Value {
+            let envelope = serde_json::json!({ "event_id": "evt-fulltext-stale-heal" });
+            let bytes: Vec<u8> = serde_json::to_vec(&envelope).expect("serialize");
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [{
+                    "offset": 0, "event": "enriched", "data": bytes,
+                    "timestamp": 1_700_000_000_000u64,
+                }] },
+            })
+        }
+
+        #[tokio::test]
+        async fn in_memory_cursor_beyond_room_head_resets_and_resumes() {
+            // Same live incident as the graph consumer, ported: a synap
+            // restart wipes the room back to offset 0 while the
+            // fulltext consumer's in-memory cursor keeps counting from
+            // where it left off — consume() then reads past the head
+            // forever.
+            let server = MockServer::start().await;
+
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":5000"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_empty_consume()))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.stats"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats_head_zero()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":0"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(ok_consume_offset_zero_event()),
+                )
+                .mount(&server)
+                .await;
+
+            let handle = Arc::new(FulltextHandle::new(&server.uri()).expect("handle"));
+            let consumer = FulltextConsumer::new(handle);
+            consumer.tracker().seed(5000);
+
+            // Poll 1: empty at the stale cursor → self-heal fires
+            // (stats probed once), cursor resets to 0.
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 1");
+            assert!(batch.is_empty(), "stale poll must read empty");
+            assert_eq!(consumer.tracker().current(), 0, "cursor healed to 0");
+
+            // Poll 2: consumes the post-wipe event from offset 0.
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 2");
+            assert_eq!(batch.len(), 1, "healed consumer resumes delivery");
+            assert_eq!(
+                batch[0].event_id.as_deref(),
+                Some("evt-fulltext-stale-heal")
+            );
+        }
+    }
+
+    // ── Phase29c §port — embedder consumer (single tracker, in-memory) ──
+
+    mod embedder_case {
+        use std::sync::Arc;
+
+        use cortex_workers::embedder::{
+            LiveSynapConsumer as EmbedderConsumer, SynapConsumer as EmbedderSynapConsumer,
+            SynapHandle as EmbedderHandle, STREAM_ENRICHED,
+        };
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn ok_empty_consume() -> serde_json::Value {
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [] },
+            })
+        }
+
+        fn ok_stats_head_zero() -> serde_json::Value {
+            // A post-wipe room: one message at offset 0.
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": {
+                    "name": STREAM_ENRICHED,
+                    "message_count": 1, "max_offset": 0,
+                    "min_offset": 0, "total_published": 1,
+                    "total_consumed": 0, "subscriber_count": 1, "dropped": 0,
+                },
+            })
+        }
+
+        fn ok_consume_offset_zero_event() -> serde_json::Value {
+            let envelope = serde_json::json!({ "event_id": "evt-embedder-stale-heal" });
+            let bytes: Vec<u8> = serde_json::to_vec(&envelope).expect("serialize");
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [{
+                    "offset": 0, "event": "enriched", "data": bytes,
+                    "timestamp": 1_700_000_000_000u64,
+                }] },
+            })
+        }
+
+        #[tokio::test]
+        async fn in_memory_cursor_beyond_room_head_resets_and_resumes() {
+            let server = MockServer::start().await;
+
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":5000"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_empty_consume()))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.stats"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats_head_zero()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":0"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(ok_consume_offset_zero_event()),
+                )
+                .mount(&server)
+                .await;
+
+            let handle = Arc::new(EmbedderHandle::new(&server.uri()).expect("handle"));
+            let consumer = EmbedderConsumer::new(handle);
+            consumer.tracker().seed(5000);
+
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 1");
+            assert!(batch.is_empty(), "stale poll must read empty");
+            assert_eq!(consumer.tracker().current(), 0, "cursor healed to 0");
+
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 2");
+            assert_eq!(batch.len(), 1, "healed consumer resumes delivery");
+            assert_eq!(
+                batch[0].event_id.as_deref(),
+                Some("evt-embedder-stale-heal")
+            );
+        }
+    }
+
+    // ── Phase29c §port — classifier consumer (per-room trackers) ────────
+
+    mod classifier_case {
+        use std::sync::Arc;
+
+        use cortex_workers::classifier_worker::{
+            LiveSynapConsumer as ClassifierConsumer, SynapConsumer as ClassifierSynapConsumer,
+            SynapHandle as ClassifierHandle, STREAM_BOOTSTRAP, STREAM_RAW,
+        };
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn ok_empty_consume() -> serde_json::Value {
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [] },
+            })
+        }
+
+        fn ok_stats_head_zero() -> serde_json::Value {
+            // A post-wipe room: one message at offset 0.
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": {
+                    "name": STREAM_RAW,
+                    "message_count": 1, "max_offset": 0,
+                    "min_offset": 0, "total_published": 1,
+                    "total_consumed": 0, "subscriber_count": 1, "dropped": 0,
+                },
+            })
+        }
+
+        fn ok_consume_offset_zero_event() -> serde_json::Value {
+            let envelope = serde_json::json!({ "event_id": "evt-classifier-stale-heal" });
+            let bytes: Vec<u8> = serde_json::to_vec(&envelope).expect("serialize");
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [{
+                    "offset": 0, "event": "raw", "data": bytes,
+                    "timestamp": 1_700_000_000_000u64,
+                }] },
+            })
+        }
+
+        #[tokio::test]
+        async fn raw_room_cursor_beyond_head_resets_without_touching_bootstrap() {
+            // The live incident this ports: room `cortex.events.raw`
+            // showed message_count=1, total_consumed=0 while the
+            // classifier idled — its raw-room cursor had drifted past
+            // the post-restart head. The bootstrap room's independent
+            // tracker must be untouched by the raw room's heal.
+            let server = MockServer::start().await;
+
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":5000"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_empty_consume()))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.stats"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats_head_zero()))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":0"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(ok_consume_offset_zero_event()),
+                )
+                .mount(&server)
+                .await;
+
+            let handle = Arc::new(ClassifierHandle::new(&server.uri()).expect("handle"));
+            let consumer = ClassifierConsumer::new(handle);
+            consumer.tracker_for(STREAM_RAW).seed(5000);
+            // Distinct non-zero value so a later "healed to 0" on the
+            // raw tracker cannot be mistaken for the bootstrap tracker
+            // having been reset too.
+            consumer.tracker_for(STREAM_BOOTSTRAP).seed(42);
+
+            // Poll 1 (raw): empty at the stale cursor → self-heal fires
+            // (stats probed once, scoped to STREAM_RAW), raw cursor
+            // resets to 0.
+            let batch = consumer
+                .next_batch(STREAM_RAW, 10)
+                .await
+                .expect("poll 1 (raw)");
+            assert!(batch.is_empty(), "stale poll must read empty");
+            assert_eq!(
+                consumer.tracker_for(STREAM_RAW).current(),
+                0,
+                "raw cursor healed to 0"
+            );
+            assert_eq!(
+                consumer.tracker_for(STREAM_BOOTSTRAP).current(),
+                42,
+                "bootstrap tracker must be untouched by the raw room's heal"
+            );
+
+            // Poll 2 (raw): consumes the post-wipe event from offset 0.
+            let batch = consumer
+                .next_batch(STREAM_RAW, 10)
+                .await
+                .expect("poll 2 (raw)");
+            assert_eq!(batch.len(), 1, "healed consumer resumes delivery");
+            assert_eq!(
+                batch[0].event_id.as_deref(),
+                Some("evt-classifier-stale-heal")
+            );
+            assert_eq!(
+                consumer.tracker_for(STREAM_BOOTSTRAP).current(),
+                42,
+                "bootstrap tracker still untouched after the raw room resumed"
+            );
+        }
+    }
+}

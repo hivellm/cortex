@@ -13,10 +13,10 @@
 //! after a successful publish so an at-least-once retry is the worst
 //! case.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::classifier::{
     merge_sensitivity, Classifier, ClassifierOutput, ClassifierSource, ClassifierStack,
@@ -123,6 +123,14 @@ impl OffsetTracker {
             }
         }
     }
+
+    /// Phase29c — seed the cursor at `offset`. Used by the
+    /// stale-ahead-offset self-heal to reset a room's in-memory
+    /// cursor to 0 when a synap restart wipes that room back below
+    /// the cursor's current position.
+    pub fn seed(&self, offset: u64) {
+        self.next.store(offset, Ordering::Relaxed);
+    }
 }
 
 /// Synap client handle (one TCP connection shared by consumer + publisher).
@@ -152,7 +160,25 @@ pub struct LiveSynapConsumer {
     handle: Arc<SynapHandle>,
     raw_tracker: Arc<OffsetTracker>,
     bootstrap_tracker: Arc<OffsetTracker>,
+    /// Phase29c — per-room last stale-ahead-offset probe instant,
+    /// bounding the `stream.stats` call to once per
+    /// [`STALE_OFFSET_CHECK_INTERVAL`] PER ROOM while that room's
+    /// polls come back empty. Keyed by room name because this
+    /// consumer drains two independent rooms ([`STREAM_RAW`] +
+    /// [`STREAM_BOOTSTRAP`]) with independent trackers — a stale
+    /// cursor on one room must not gate (or reset) the other.
+    stale_check: Mutex<HashMap<String, Instant>>,
 }
+
+/// Phase29c — how often an idle (empty-poll) per-room cursor is
+/// allowed to probe `stream.stats` for the stale-ahead-offset
+/// condition. A synap restart wipes every room back to offset 0, but
+/// each of this consumer's in-memory cursors keeps counting from
+/// where it left off — without this check `consume()` reads past
+/// that room's head forever and the worker starves silently (found
+/// live: room `cortex.events.raw` message_count=1, total_consumed=0
+/// while the classifier idled).
+pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
     /// Build a new live consumer.
@@ -161,10 +187,16 @@ impl LiveSynapConsumer {
             handle,
             raw_tracker: Arc::new(OffsetTracker::new()),
             bootstrap_tracker: Arc::new(OffsetTracker::new()),
+            stale_check: Mutex::new(HashMap::new()),
         }
     }
 
-    fn tracker_for(&self, room: &str) -> Arc<OffsetTracker> {
+    /// Resolve the per-room offset tracker: [`STREAM_BOOTSTRAP`] gets
+    /// its own cursor, every other room name (in practice
+    /// [`STREAM_RAW`]) shares the raw tracker. Exposed `pub` so
+    /// tests can seed/inspect either room's cursor independently
+    /// (Phase29c stale-ahead-offset self-heal is per-room).
+    pub fn tracker_for(&self, room: &str) -> Arc<OffsetTracker> {
         if room == STREAM_BOOTSTRAP {
             self.bootstrap_tracker.clone()
         } else {
@@ -214,6 +246,53 @@ impl SynapConsumer for LiveSynapConsumer {
                 }
             }
         };
+
+        // Phase29c — stale-ahead-offset self-heal, PER ROOM. A synap
+        // restart wipes every room back to offset 0, but each of
+        // this consumer's two independent in-memory cursors (raw +
+        // bootstrap) keeps counting from where it left off —
+        // consume() then reads past that room's head forever and
+        // the worker starves silently. On an EMPTY poll with a
+        // non-zero cursor, probe `stream.stats` for THIS room
+        // (bounded to once per STALE_OFFSET_CHECK_INTERVAL per room)
+        // and, when the cursor sits beyond that room's head, reset
+        // ONLY this room's tracker to 0 — the other room's cursor is
+        // untouched. Replaying the (small, post-wipe) room is safe
+        // because classification dedupes by `event_id` (the
+        // in-memory `processed` set).
+        if events.is_empty() && offset > 0 {
+            let due = {
+                let mut guard = self
+                    .stale_check
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match guard.get(room) {
+                    Some(t) if t.elapsed() < STALE_OFFSET_CHECK_INTERVAL => false,
+                    _ => {
+                        guard.insert(room.to_string(), Instant::now());
+                        true
+                    }
+                }
+            };
+            if due {
+                if let Ok(stats) = self.handle.streams().stats(room).await {
+                    let head_next = if stats.message_count == 0 {
+                        0
+                    } else {
+                        stats.max_offset.saturating_add(1)
+                    };
+                    if offset > head_next {
+                        tracing::warn!(
+                            room,
+                            stale_offset = offset,
+                            room_head_next = head_next,
+                            "cursor is beyond the room head (synap room was reset); self-healing cursor to 0"
+                        );
+                        tracker.seed(0);
+                    }
+                }
+            }
+        }
 
         Ok(events
             .into_iter()
@@ -1579,17 +1658,18 @@ mod tests {
         // Send exactly `threshold` events for the same repo.
         for i in 0..threshold {
             worker
-                .handle_message(STREAM_RAW, turn_message_with_repo(u64::from(i) + 100, "cortex"))
+                .handle_message(
+                    STREAM_RAW,
+                    turn_message_with_repo(u64::from(i) + 100, "cortex"),
+                )
                 .await
                 .expect("handle turn");
         }
         let calls = pub_.calls.lock().unwrap();
-        let nightly = calls
-            .iter()
-            .find(|(room, body)| {
-                room == crate::consolidator::daemon::TRIGGER_STREAM
-                    && body.get("kind").and_then(|v| v.as_str()) == Some("nightly_topic")
-            });
+        let nightly = calls.iter().find(|(room, body)| {
+            room == crate::consolidator::daemon::TRIGGER_STREAM
+                && body.get("kind").and_then(|v| v.as_str()) == Some("nightly_topic")
+        });
         assert!(
             nightly.is_some(),
             "a nightly_topic trigger must fire after {threshold} events for the same repo"
@@ -1607,18 +1687,19 @@ mod tests {
         // Send one fewer than the threshold.
         for i in 0..(threshold - 1) {
             worker
-                .handle_message(STREAM_RAW, turn_message_with_repo(u64::from(i) + 200, "nexus"))
+                .handle_message(
+                    STREAM_RAW,
+                    turn_message_with_repo(u64::from(i) + 200, "nexus"),
+                )
                 .await
                 .expect("handle turn");
         }
         let calls = pub_.calls.lock().unwrap();
         assert!(
-            calls
-                .iter()
-                .all(|(room, body)| {
-                    !(room == crate::consolidator::daemon::TRIGGER_STREAM
-                        && body.get("kind").and_then(|v| v.as_str()) == Some("nightly_topic"))
-                }),
+            calls.iter().all(|(room, body)| {
+                !(room == crate::consolidator::daemon::TRIGGER_STREAM
+                    && body.get("kind").and_then(|v| v.as_str()) == Some("nightly_topic"))
+            }),
             "nightly_topic must NOT fire before threshold events"
         );
     }

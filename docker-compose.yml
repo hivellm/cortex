@@ -1,6 +1,6 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:3.5.0-fastembed
+    image: hivehub/vectorizer:3.6.0-fastembed
     container_name: cortex-vectorizer
     user: "0:0"
     working_dir: /data
@@ -36,8 +36,16 @@ services:
     restart: unless-stopped
 
   nexus:
-    image: hivehub/nexus:2.5.0
+    image: hivehub/nexus:3.0.0-alpha
     container_name: cortex-nexus
+    # Nexus 3.0 refuses a non-loopback bind with auth disabled (new
+    # deliberate security gate). This stack serves the docker bridge +
+    # localhost only, so the documented open-instance opt-out applies;
+    # enabling NEXUS_AUTH_ENABLED=true (with SDK credential wiring) is
+    # the production-hardening follow-up tracked in
+    # phase29c_hive-services-test-battery.
+    environment:
+      NEXUS_AUTH_REQUIRED_FOR_PUBLIC: "false"
     networks: [cortex-net]
     ports:
       - "${NEXUS_HOST_PORT:-17002}:15474"

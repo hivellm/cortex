@@ -126,6 +126,14 @@ impl OffsetTracker {
             }
         }
     }
+
+    /// Phase29c — seed the cursor at `offset`. Used by the
+    /// stale-ahead-offset self-heal to reset the in-memory cursor
+    /// to 0 when a synap restart wipes the room back below the
+    /// cursor's current position.
+    pub fn seed(&self, offset: u64) {
+        self.next.store(offset, Ordering::Relaxed);
+    }
 }
 
 // ---------- Backpressure -----------------------------------------------
@@ -268,7 +276,20 @@ impl SynapHandle {
 pub struct LiveSynapConsumer {
     handle: Arc<SynapHandle>,
     tracker: Arc<OffsetTracker>,
+    /// Phase29c — last stale-ahead-offset probe instant, bounding
+    /// the `stream.stats` call to once per
+    /// [`STALE_OFFSET_CHECK_INTERVAL`] while polls come back empty.
+    stale_check: Mutex<Option<Instant>>,
 }
+
+/// Phase29c — how often an idle (empty-poll) consumer is allowed to
+/// probe `stream.stats` for the stale-ahead-offset condition. A synap
+/// restart wipes rooms back to offset 0, but this consumer's
+/// in-memory cursor keeps counting from where it left off — without
+/// this check `consume()` reads past the room head forever and the
+/// worker starves silently (found live: room `cortex.events.raw`
+/// message_count=1, total_consumed=0 while a sibling consumer idled).
+pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
     /// Build a new live consumer.
@@ -276,6 +297,7 @@ impl LiveSynapConsumer {
         Self {
             handle,
             tracker: Arc::new(OffsetTracker::new()),
+            stale_check: Mutex::new(None),
         }
     }
 
@@ -331,6 +353,51 @@ impl SynapConsumer for LiveSynapConsumer {
                 }
             }
         };
+
+        // Phase29c — stale-ahead-offset self-heal. A synap restart
+        // wipes rooms back to offset 0, but this consumer's
+        // in-memory cursor keeps counting from where it left off —
+        // consume() then reads past the head forever and the worker
+        // starves silently. On an EMPTY poll with a non-zero cursor,
+        // probe `stream.stats` (bounded to once per
+        // STALE_OFFSET_CHECK_INTERVAL) and, when the cursor sits
+        // beyond the room head, reset it to 0 — replaying the
+        // (small, post-wipe) room is safe because the embed path
+        // dedupes by `event_id` (the in-memory `processed` set) and
+        // Vectorizer dedupes by chunk id.
+        if events.is_empty() && offset > 0 {
+            let due = {
+                let mut guard = self
+                    .stale_check
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match *guard {
+                    Some(t) if t.elapsed() < STALE_OFFSET_CHECK_INTERVAL => false,
+                    _ => {
+                        *guard = Some(Instant::now());
+                        true
+                    }
+                }
+            };
+            if due {
+                if let Ok(stats) = self.handle.streams().stats(room).await {
+                    let head_next = if stats.message_count == 0 {
+                        0
+                    } else {
+                        stats.max_offset.saturating_add(1)
+                    };
+                    if offset > head_next {
+                        tracing::warn!(
+                            room,
+                            stale_offset = offset,
+                            room_head_next = head_next,
+                            "cursor is beyond the room head (synap room was reset); self-healing cursor to 0"
+                        );
+                        self.tracker.seed(0);
+                    }
+                }
+            }
+        }
 
         Ok(events
             .into_iter()

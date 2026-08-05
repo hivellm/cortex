@@ -62,7 +62,7 @@ hdbscan = "0.10"
 criterion = { version = "0.7", default-features = false, features = ["plotters", "cargo_bench_support"] }
 
 synap-sdk = "1.3"
-vectorizer-sdk = "3.5.0"
+vectorizer-sdk = "3.6.0"
 nexus-graph-sdk = "2.5"
 
 # Pin rustls-webpki >= 0.103.13 to close RUSTSEC-2026-0104 (panic in CRL parsing).

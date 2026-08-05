@@ -302,7 +302,18 @@ pub struct LiveSynapConsumer {
     /// `consumer_id = "cortex-graph-{instance_id}"`.
     consumer_id: String,
     stream: String,
+    /// Phase29c — last stale-ahead-offset probe instant, bounding the
+    /// stats call to once per [`STALE_OFFSET_CHECK_INTERVAL`] while
+    /// polls come back empty.
+    stale_check: Mutex<Option<Instant>>,
 }
+
+/// Phase29c — how often an idle (empty-poll) durable consumer is
+/// allowed to probe `stream.stats` for the stale-ahead-offset
+/// condition (a synap restart wipes rooms back to offset 0, but the
+/// durable SQLite ledger still holds the old large offset — the
+/// consumer then reads past the head forever, silently).
+pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
     /// Build a new live consumer with ephemeral offset tracking.
@@ -316,6 +327,7 @@ impl LiveSynapConsumer {
             metadata: None,
             consumer_id: String::new(),
             stream: String::new(),
+            stale_check: Mutex::new(None),
         }
     }
 
@@ -363,6 +375,7 @@ impl LiveSynapConsumer {
             metadata: Some(metadata),
             consumer_id,
             stream,
+            stale_check: Mutex::new(None),
         })
     }
 
@@ -418,6 +431,60 @@ impl SynapConsumer for LiveSynapConsumer {
                 }
             }
         };
+
+        // Phase29c — stale-ahead-offset self-heal. A synap restart
+        // wipes rooms back to offset 0, but this consumer's DURABLE
+        // SQLite ledger still holds the pre-wipe offset — consume()
+        // then reads past the head forever and the worker starves
+        // silently (found live: room max_offset=0/count=1 while the
+        // ledger held thousands). On an EMPTY poll with a non-zero
+        // cursor, probe `stream.stats` (bounded to once per
+        // STALE_OFFSET_CHECK_INTERVAL) and, when the cursor sits
+        // beyond the room head, reset it to 0 and persist the reset —
+        // replaying the (small, post-wipe) room is safe because every
+        // downstream write is idempotent (MERGE + in-memory dedup).
+        if events.is_empty() && offset > 0 {
+            let due = {
+                let mut guard = self
+                    .stale_check
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                match *guard {
+                    Some(t) if t.elapsed() < STALE_OFFSET_CHECK_INTERVAL => false,
+                    _ => {
+                        *guard = Some(Instant::now());
+                        true
+                    }
+                }
+            };
+            if due {
+                if let Ok(stats) = self.handle.streams().stats(room).await {
+                    let head_next = if stats.message_count == 0 {
+                        0
+                    } else {
+                        stats.max_offset.saturating_add(1)
+                    };
+                    if offset > head_next {
+                        tracing::warn!(
+                            room,
+                            stale_offset = offset,
+                            room_head_next = head_next,
+                            "durable offset is beyond the room head (synap room was reset);                              self-healing cursor to 0"
+                        );
+                        self.tracker.seed(0);
+                        if let Some(metadata) = &self.metadata {
+                            if let Ok(guard) = metadata.lock() {
+                                // consumer_offset_upsert has a MAX()
+                                // monotonic guard (correct for acks);
+                                // a rewind needs the force-set API.
+                                let _ =
+                                    guard.consumer_offset_set(&self.consumer_id, &self.stream, 0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(events
             .into_iter()
