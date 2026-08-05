@@ -4,14 +4,16 @@
       "command": "npx",
       "args": [
         "-y",
-        "@hivehub/rulebook@latest",
-        "mcp-server"
+        "--package=@hivehub/rulebook@latest",
+        "rulebook-mcp"
       ]
     },
     "cortex": {
       "type": "stdio",
       "command": "cortex-mcp-server",
-      "args": ["serve"],
+      "args": [
+        "serve"
+      ],
       "env": {
         "CORTEX_API_URL": "http://127.0.0.1:17000",
         "CORTEX_ADAPTER_SOCK": "~/.cortex/adapter-claude.sock"
