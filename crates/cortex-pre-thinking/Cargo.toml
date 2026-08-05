@@ -29,3 +29,6 @@ sha2 = { workspace = true }
 [dev-dependencies]
 cortex-core = { path = "../cortex-core" }
 tempfile = { workspace = true }
+# Phase30 (continuity §1.1) — the cross-session live IT drives the real
+# pipeline against the running cortex-api.
+reqwest = { workspace = true }
