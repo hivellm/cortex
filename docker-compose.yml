@@ -1,6 +1,6 @@
 services:
   vectorizer:
-    image: hivehub/vectorizer:3.6.0-fastembed
+    image: hivehub/vectorizer:3.6.1-fastembed
     container_name: cortex-vectorizer
     user: "0:0"
     working_dir: /data

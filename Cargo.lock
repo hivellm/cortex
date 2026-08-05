@@ -4273,9 +4273,9 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "vectorizer-sdk"
-version = "3.6.0"
+version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6dc1b6aef65c8d76fcb74d648ccd4c5e38b6ed18f4920ee82d3aca2cc51308ff"
+checksum = "ecc17823214eede3480f095fefd8b8544127cd622206037eddf28ceabb74e44c"
 dependencies = [
  "anyhow",
  "async-trait",
