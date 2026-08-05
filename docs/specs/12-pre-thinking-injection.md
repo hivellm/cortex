@@ -189,6 +189,16 @@ Where `grain ∈ {session, topic, decision_trace}` mirrors `ConsolidationPayload
 
 Caps: top **3** consolidations by similarity (configurable via `FormatOptions.consolidations_cap`). The section sits between **Similar past turns** and **Past sessions** in the section order. The section is omitted entirely when the upstream returns no consolidations; the **Past sessions** fallback then runs as before.
 
+##### Retrieval wiring (phase30b — the section was structurally dead until this fix)
+
+From phase11j until phase30b this section could only render from hand-built unit fixtures: `/v1/query` never populated `results.consolidations` in production, so a prior session's distillate never reached a fresh session's bundle. Three independent breaks, each verified against the live stack:
+
+1. **Keyword lane queried an extinct index.** The `pre_change_context` / `similar_problems` plans fanned out to the global `cortex_consolidations` uid while the fulltext writer had moved to per-repo `cortex-<slug>-consolidations` (Meili answered `index_not_found`; `cortex-cortex-consolidations` held 62 live docs). The plans now use the same `repo_scoped` helper as the code / docs / decisions lanes.
+2. **Vector lane queried a collection that does not exist.** `cortex.consolidation.fp32` 404s — consolidations are never embedded into any collection (checked against all 181 live collections). The lane was **removed rather than half-wired**; recall rides on the keyword lane. Embedding consolidations is future-enhancement scope, tracked separately, not a silent half-fix.
+3. **Nothing assembled the wire type.** Every lane hit fell through `snippet_from_hit`, so `ConsolidationRef` had no constructor anywhere in cortex-api. The orchestrator now partitions consolidation-kind hits **out of** the snippet stream (a consolidation never double-lists as both a snippet and a consolidation) and maps them to `ConsolidationRef`: `consolidation_id` / `grain` from the document's nested `ext.consolidation.*` bag (projected into lane extras by the Meili lane — Consolidation never got the top-level flattening Decision/LawViolation have), `ts` from the hit's epoch-ms timestamp, `title` from the consolidator's curated one-liner (degrading to body text when absent), and `outcome` left empty because the spec-08 fulltext builder stamps none today — matching `ConsolidationRef.outcome`'s documented "empty when the dominant outcome could not be inferred" contract.
+
+Assembly cap: **8** rows (`CONSOLIDATIONS_ASSEMBLY_CAP`), deliberately looser than the render cap of 3 so the response carries spares without over-fetching the fused candidate list. Acceptance gate: `crates/cortex-pre-thinking/tests/cross_session_continuity_it.rs` — live-gated, drives the real pipeline against the running stack and asserts a prior session's consolidation surfaces in a fresh session's bundle.
+
 ## Design
 
 ### Pipeline

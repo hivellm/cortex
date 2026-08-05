@@ -706,6 +706,28 @@ impl Orchestrator {
                 .unwrap_or(false);
             has_text || has_why
         });
+        // Phase30b §1.2 — partition consolidation-kind hits out of
+        // the fused list and assemble `ConsolidationRef` rows into
+        // `results.consolidations` instead of letting them fall
+        // through to `snippet_from_hit` like every other lane hit.
+        // Before this, nothing in cortex-api constructed
+        // `ConsolidationRef` — the renderer's "Consolidated context"
+        // section only ever rendered from hand-built unit fixtures,
+        // never from a live `/v1/query` response. Hits are removed
+        // from `fused` (not merely read out of it) so a consolidation
+        // never also double-lists as a snippet.
+        //
+        // ORDER MATTERS — this runs BEFORE `truncate(req.limit)`.
+        // `req.limit` bounds the SNIPPET stream; consolidations carry
+        // their own caps (`CONSOLIDATIONS_ASSEMBLY_CAP` here, 3 in the
+        // renderer). Truncating first drops consolidations whenever
+        // code/docs hits outrank them — which is the common case and
+        // was exactly why the first live run of this fix still
+        // returned an empty `results.consolidations` at `limit: 5`.
+        let consolidation_hits = partition_consolidation_hits(&mut fused);
+        response.results.consolidations =
+            derive_consolidations(&consolidation_hits, CONSOLIDATIONS_ASSEMBLY_CAP);
+
         fused.truncate(req.limit);
 
         if req.include.contains(&IncludeField::Snippets) {
@@ -1468,6 +1490,101 @@ fn is_kind_label(s: &str) -> bool {
     SYMBOL_KIND_LABELS.contains(&lower.as_str())
 }
 
+/// Phase30b §1.2 — cap on `results.consolidations` rows the
+/// orchestrator assembles per response. The pre-thinking formatter
+/// caps its own rendering at `section_caps::CONSOLIDATIONS` (3 as of
+/// this writing) — this cap is intentionally looser than the render
+/// cap so the response carries a few spares without over-fetching
+/// the whole fused candidate list.
+const CONSOLIDATIONS_ASSEMBLY_CAP: usize = 8;
+
+/// True when `hit` originated from the consolidations lane — keyed
+/// off the kind label the keyword lane stamps into `LaneHit.symbol`
+/// before `snippet_from_hit` strips kind labels for the wire
+/// `Snippet.symbol` field. Mirrors `is_kind_label`'s ASCII-case-
+/// insensitive comparison defensively; the live keyword lane always
+/// stamps the lowercase `"consolidation"` label (`doc.kind`, per
+/// `cortex_workers::fulltext::builders::kind_label`).
+fn is_consolidation_hit(hit: &LaneHit) -> bool {
+    hit.symbol
+        .as_deref()
+        .map(|s| s.eq_ignore_ascii_case("consolidation"))
+        .unwrap_or(false)
+}
+
+/// Phase30b §1.2 — drain every consolidation-kind hit out of `fused`
+/// in place, preserving fusion order, so the caller can assemble
+/// `ConsolidationRef` rows without the same hit also reaching
+/// `snippet_from_hit` (no double-listing between `results.snippets`
+/// and `results.consolidations`).
+fn partition_consolidation_hits(fused: &mut Vec<LaneHit>) -> Vec<LaneHit> {
+    let mut kept = Vec::with_capacity(fused.len());
+    let mut consolidations = Vec::new();
+    for hit in fused.drain(..) {
+        if is_consolidation_hit(&hit) {
+            consolidations.push(hit);
+        } else {
+            kept.push(hit);
+        }
+    }
+    *fused = kept;
+    consolidations
+}
+
+/// Phase30b §1.2 — build `ConsolidationRef` rows from consolidation-
+/// kind hits partitioned out of `fused` by
+/// [`partition_consolidation_hits`]. Field sources (per the spec-08
+/// fulltext-worker `Kind::Consolidation` doc builder + the read-side
+/// projection in `crates/cortex-api/src/lanes/meili_lane.rs::project`):
+///
+/// - `consolidation_id` — `extras["consolidation_id"]`, stamped out of
+///   the doc's nested `ext.consolidation.consolidation_id`.
+/// - `grain` — the typed `overlay.consolidation_grain`, parsed from
+///   the same `ext.consolidation.grain` source; falls back to
+///   `"session"` (the most common grain) on the rare row missing it.
+/// - `ts` — the top-level `LaneHit.ts` (epoch ms), already typed.
+/// - `title` — `extras["consolidation_title"]` (the consolidator's
+///   curated one-line title); falls back to the projected body text
+///   when the title extra is absent.
+/// - `outcome` — genuinely absent from the consolidation doc today
+///   (the fulltext builder never stamps one); degrades to `None` per
+///   `ConsolidationRef::outcome`'s documented "empty when the
+///   consolidation could not infer a dominant outcome" contract.
+fn derive_consolidations(hits: &[LaneHit], cap: usize) -> Vec<crate::types::ConsolidationRef> {
+    hits.iter()
+        .filter_map(|h| {
+            let consolidation_id = h
+                .extras
+                .get("consolidation_id")
+                .and_then(|v| v.as_str())?
+                .to_string();
+            let grain = match h.overlay.consolidation_grain {
+                Some(cortex_core::events::ConsolidationGrain::Session) => "session",
+                Some(cortex_core::events::ConsolidationGrain::Topic) => "topic",
+                Some(cortex_core::events::ConsolidationGrain::DecisionTrace) => "decision_trace",
+                Some(cortex_core::events::ConsolidationGrain::Community) => "community",
+                None => "session",
+            }
+            .to_string();
+            let title = h
+                .extras
+                .get("consolidation_title")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| h.text.clone());
+            Some(crate::types::ConsolidationRef {
+                consolidation_id,
+                grain,
+                ts: h.ts,
+                title,
+                outcome: None,
+                score: h.score,
+            })
+        })
+        .take(cap)
+        .collect()
+}
+
 fn snippet_from_hit(rank: usize, hit: &LaneHit) -> Snippet {
     // phase10b §2.1 — strip kind labels from the wire `symbol`
     // field. Decisions get the curated `decision_title` extras
@@ -2215,5 +2332,115 @@ mod tests {
             None,
         );
         assert_eq!(hits[0].doc_id, "high_temporal");
+    }
+
+    // ── Phase30b §1.2 — consolidation assembly ───────────────────────
+    // Before phase30b nothing in cortex-api built a `ConsolidationRef`,
+    // so `results.consolidations` was permanently empty and the
+    // pre-thinking renderer's "Consolidated context" section could only
+    // ever render from hand-built fixtures. These pin the three
+    // invariants the live loop depends on: consolidation hits are
+    // recognised by their kind label, they LEAVE the snippet stream
+    // when partitioned (no double-listing), and their wire fields come
+    // from the `ext.consolidation.*` extras the meili lane projects.
+
+    fn consolidation_hit(doc_id: &str, cons_id: &str, title: &str, ts: i64) -> LaneHit {
+        let mut h = hit_with_extras(doc_id, 1.0, &[]);
+        h.symbol = Some("consolidation".into());
+        h.ts = ts;
+        h.extras.insert(
+            "consolidation_id".into(),
+            serde_json::Value::String(cons_id.into()),
+        );
+        h.extras.insert(
+            "consolidation_title".into(),
+            serde_json::Value::String(title.into()),
+        );
+        h.overlay.consolidation_grain = Some(cortex_core::events::ConsolidationGrain::Session);
+        h
+    }
+
+    #[test]
+    fn consolidation_hits_are_recognised_case_insensitively_by_kind_label() {
+        assert!(is_consolidation_hit(&hit_with(
+            Some("consolidation"),
+            "body"
+        )));
+        // The vector lane stamps PascalCase labels (the phase28 §6.2
+        // case-sensitivity bug class) — both forms must match.
+        assert!(is_consolidation_hit(&hit_with(
+            Some("Consolidation"),
+            "body"
+        )));
+        assert!(!is_consolidation_hit(&hit_with(Some("turn"), "body")));
+        assert!(!is_consolidation_hit(&hit_with(None, "body")));
+    }
+
+    #[test]
+    fn partition_removes_consolidations_from_the_snippet_stream_preserving_order() {
+        let mut fused = vec![
+            hit_with_extras("code-a", 3.0, &[]),
+            consolidation_hit("cons-1", "cons-ses-aaa", "First", 10),
+            hit_with_extras("code-b", 2.0, &[]),
+            consolidation_hit("cons-2", "cons-ses-bbb", "Second", 20),
+        ];
+        let drained = partition_consolidation_hits(&mut fused);
+
+        assert_eq!(drained.len(), 2, "both consolidation hits partitioned");
+        assert_eq!(drained[0].doc_id, "cons-1", "fusion order preserved");
+        assert_eq!(drained[1].doc_id, "cons-2");
+        let kept: Vec<&str> = fused.iter().map(|h| h.doc_id.as_str()).collect();
+        assert_eq!(
+            kept,
+            vec!["code-a", "code-b"],
+            "consolidations must not remain in the snippet stream (no double-listing)"
+        );
+    }
+
+    #[test]
+    fn derive_consolidations_maps_wire_fields_and_honours_the_cap() {
+        let hits = vec![
+            consolidation_hit("c1", "cons-ses-111", "Hook latency fix", 1_782_100_588_131),
+            consolidation_hit("c2", "cons-top-222", "Retrieval quality", 1_782_100_599_000),
+        ];
+        let refs = derive_consolidations(&hits, 8);
+
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].consolidation_id, "cons-ses-111");
+        assert_eq!(refs[0].grain, "session");
+        assert_eq!(refs[0].ts, 1_782_100_588_131, "epoch ms passes through");
+        assert_eq!(refs[0].title, "Hook latency fix");
+        assert!(
+            refs[0].outcome.is_none(),
+            "the fulltext builder stamps no outcome today — documented degrade"
+        );
+
+        assert_eq!(
+            derive_consolidations(&hits, 1).len(),
+            1,
+            "assembly cap bounds the response"
+        );
+    }
+
+    #[test]
+    fn derive_consolidations_skips_rows_without_a_consolidation_id() {
+        // A doc whose `ext.consolidation` bag never made it through
+        // the lane projection cannot produce a referenceable row —
+        // dropping it beats emitting a ref with a synthesised id.
+        let mut orphan = consolidation_hit("c1", "cons-ses-111", "Titled", 1);
+        orphan.extras.remove("consolidation_id");
+        assert!(derive_consolidations(&[orphan], 8).is_empty());
+    }
+
+    #[test]
+    fn derive_consolidations_falls_back_to_body_text_when_title_extra_is_absent() {
+        let mut untitled = consolidation_hit("c1", "cons-ses-111", "ignored", 1);
+        untitled.extras.remove("consolidation_title");
+        let refs = derive_consolidations(&[untitled], 8);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(
+            refs[0].title, "body-c1",
+            "degrades to the projected body rather than an empty title"
+        );
     }
 }

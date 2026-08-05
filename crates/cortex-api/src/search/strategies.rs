@@ -9,9 +9,8 @@
 use serde_json::json;
 
 use cortex_storage::names::{
-    COLLECTION_CONSOLIDATION_FP32, COLLECTION_DECISION_FP32, COLLECTION_TOPIC_CARD_FP32,
-    COLLECTION_TURN_FP32, COLLECTION_TURN_PQ, INDEX_CONSOLIDATIONS, INDEX_DECISIONS, INDEX_LAWS,
-    INDEX_TOPIC_CARDS, INDEX_TURNS,
+    COLLECTION_DECISION_FP32, COLLECTION_TOPIC_CARD_FP32, COLLECTION_TURN_FP32,
+    COLLECTION_TURN_PQ, INDEX_DECISIONS, INDEX_LAWS, INDEX_TOPIC_CARDS, INDEX_TURNS,
 };
 
 use crate::lanes::{GraphRequest, KeywordRequest, VectorRequest};
@@ -108,16 +107,16 @@ pub fn build_plan(req: &QueryRequest) -> Plan {
 }
 
 fn pre_change_context(req: &QueryRequest) -> Plan {
-    // Phase11j §4.1 — fan out to the consolidations lane alongside
-    // the code/docs corpus. Hot tier collection + global Meili index
-    // keep the read path simple (no per-repo consolidation index
-    // exists yet — consolidations live in the global lane the
-    // dashboard reads, scope.repo is honoured via the document
-    // `repo` filter).
+    // Phase30b §1.3 — the consolidations vector lane targeted
+    // `cortex.consolidation.fp32`, a collection that does not exist
+    // in the live Vectorizer (404 against all 181 live collections;
+    // consolidations are never embedded into a dedicated
+    // collection). Removed rather than half-wired; embedding
+    // consolidations is future-enhancement scope, not this fix.
+    // TOPIC_CARD stays — that hot-tier collection is real and live.
     let collections = vec![
         repo_scoped(req, "code"),
         repo_scoped(req, "docs"),
-        COLLECTION_CONSOLIDATION_FP32.to_string(),
         // Phase11r §5.2 — topic cards lead the renderer's context
         // band; fan out to the hot-tier collection so the section
         // surfaces when a relevant card exists. Warm / PQ tier
@@ -139,7 +138,14 @@ fn pre_change_context(req: &QueryRequest) -> Plan {
         repo_scoped(req, "code"),
         repo_scoped(req, "docs"),
         repo_scoped(req, "decisions"),
-        INDEX_CONSOLIDATIONS.to_string(),
+        // Phase30b §1.1 — the global `cortex_consolidations` index is
+        // extinct live (Meili 404s `index_not_found`); consolidations
+        // are written to the per-repo `cortex-<slug>-consolidations`
+        // uid (verified: `cortex-cortex-consolidations` holds 62 docs
+        // live). `INDEX_CONSOLIDATIONS` predates the routing change
+        // that moved writes per-repo (phase11j comment above was
+        // wrong by the time the writer side shipped per-repo names).
+        repo_scoped(req, "consolidations"),
         // Phase11r §5.2 — global topic-cards index handles the
         // literal-phrase recall path (a topic_slug, a quoted ADR
         // id); per-repo scoping rides on the document `repos`
@@ -302,18 +308,12 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             scope: req.scope.clone(),
             acl: None,
         },
-        // Phase11j §4.1 — consolidations beat raw turns at recalling
-        // similar past problems because they distill the lesson
-        // learned. Hot tier only: warm tier holds older Shallow
-        // consolidations whose recall tradeoff is wrong for this
-        // strategy.
-        VectorRequest {
-            collection: COLLECTION_CONSOLIDATION_FP32.to_string(),
-            query: req.query.clone(),
-            k: req.k,
-            scope: req.scope.clone(),
-            acl: None,
-        },
+        // Phase30b §1.3 — the consolidations vector lane targeted
+        // `cortex.consolidation.fp32`, which does not exist in the
+        // live Vectorizer (404 against all 181 live collections;
+        // consolidations are never embedded). Removed rather than
+        // half-wired — the keyword lane below still fans out to the
+        // per-repo consolidations index, so recall stays intact.
         // Phase11r §5.2 — topic cards beat raw consolidations on
         // similar-problems recall because they fold many
         // consolidations into a single living synthesis. Hot tier
@@ -341,11 +341,13 @@ fn similar_problems(req: &QueryRequest) -> Plan {
             scope: req.scope.clone(),
             acl: None,
         },
-        // Phase11j §4.1 — global consolidations index supplies the
-        // literal-phrase recall path (a tool name, an error string)
-        // alongside the vector lane.
+        // Phase30b §1.1 — the global `cortex_consolidations` index is
+        // extinct live (Meili 404s `index_not_found`); consolidations
+        // are written to the per-repo `cortex-<slug>-consolidations`
+        // uid. Supplies the literal-phrase recall path (a tool name,
+        // an error string) now that the vector lane above is gone.
         KeywordRequest {
-            index: INDEX_CONSOLIDATIONS.to_string(),
+            index: repo_scoped(req, "consolidations"),
             query: req.query.clone(),
             limit: req.limit,
             scope: req.scope.clone(),
@@ -554,6 +556,11 @@ fn overlays_from_include(include: &[IncludeField], allowed: &[Overlay]) -> Vec<O
 mod tests {
     use super::*;
     use crate::types::{Intent, QueryRequest, Scope};
+    // Phase30b §1.1/§1.3 — only referenced from test assertions now
+    // that the production plans no longer target either name (the
+    // global keyword index is extinct live; the vector collection
+    // never existed).
+    use cortex_storage::names::{COLLECTION_CONSOLIDATION_FP32, INDEX_CONSOLIDATIONS};
 
     fn req(intent: Intent) -> QueryRequest {
         QueryRequest {
@@ -766,40 +773,57 @@ mod tests {
 
     #[test]
     fn pre_change_context_includes_consolidations_lane() {
-        // Phase11j §4.1 — `pre_change_context` must fan out to the
-        // consolidations vector + keyword stores so the renderer's
-        // `Consolidated context` section has rows to read. Drift
-        // here means consolidations land in storage but never reach
-        // the agent's pre-thinking bundle.
+        // Phase30b §1.1/§1.3 — `pre_change_context` must fan out to
+        // the per-repo consolidations keyword index so the
+        // renderer's `Consolidated context` section has rows to
+        // read. The vector lane's `cortex.consolidation.fp32`
+        // collection does NOT exist live (no consolidation
+        // collection exists at all — consolidations are never
+        // embedded; verified against all 181 live Vectorizer
+        // collections) and stays deliberately absent from the plan
+        // rather than half-wired; the global `cortex_consolidations`
+        // keyword index is likewise extinct live (writes moved
+        // per-repo), so the keyword lane targets the per-repo uid.
         let plan = build_plan(&req(Intent::PreChangeContext));
         let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
         assert!(
-            collections.contains(&COLLECTION_CONSOLIDATION_FP32),
-            "pre_change_context must query cortex.consolidation.fp32: {collections:?}"
+            !collections.contains(&COLLECTION_CONSOLIDATION_FP32),
+            "pre_change_context must NOT query the phantom cortex.consolidation.fp32 collection: {collections:?}"
         );
         let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
         assert!(
-            indexes.contains(&INDEX_CONSOLIDATIONS),
-            "pre_change_context must query cortex_consolidations: {indexes:?}"
+            indexes.iter().any(|i| i.ends_with("-consolidations")),
+            "pre_change_context must query the per-repo cortex-<slug>-consolidations index: {indexes:?}"
+        );
+        assert!(
+            !indexes.contains(&INDEX_CONSOLIDATIONS),
+            "pre_change_context must NOT query the extinct global cortex_consolidations index: {indexes:?}"
         );
     }
 
     #[test]
     fn similar_problems_includes_consolidations_lane() {
-        // Phase11j §4.1 — `similar_problems` benefits even more
+        // Phase30b §1.1/§1.3 — `similar_problems` benefits even more
         // from the consolidations lane than `pre_change_context`
         // because consolidations distill the lesson learned from
-        // past sessions into a single recall-tuned row.
+        // past sessions into a single recall-tuned row. Same
+        // rationale as above: no vector collection exists for
+        // consolidations live, so only the per-repo keyword index is
+        // fanned out to.
         let plan = build_plan(&req(Intent::SimilarProblems));
         let collections: Vec<&str> = plan.vectors.iter().map(|v| v.collection.as_str()).collect();
         assert!(
-            collections.contains(&COLLECTION_CONSOLIDATION_FP32),
-            "similar_problems must query cortex.consolidation.fp32: {collections:?}"
+            !collections.contains(&COLLECTION_CONSOLIDATION_FP32),
+            "similar_problems must NOT query the phantom cortex.consolidation.fp32 collection: {collections:?}"
         );
         let indexes: Vec<&str> = plan.keywords.iter().map(|k| k.index.as_str()).collect();
         assert!(
-            indexes.contains(&INDEX_CONSOLIDATIONS),
-            "similar_problems must query cortex_consolidations: {indexes:?}"
+            indexes.iter().any(|i| i.ends_with("-consolidations")),
+            "similar_problems must query the per-repo cortex-<slug>-consolidations index: {indexes:?}"
+        );
+        assert!(
+            !indexes.contains(&INDEX_CONSOLIDATIONS),
+            "similar_problems must NOT query the extinct global cortex_consolidations index: {indexes:?}"
         );
     }
 

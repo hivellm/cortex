@@ -604,6 +604,39 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
         }
     }
 
+    // Phase30b §1.2 — stamp the consolidation lane-projection keys
+    // into extras. Unlike `decision_id` / `turn_id` / `law_id`,
+    // `consolidation_id` and `grain` are nested under the document's
+    // shared `ext.consolidation.*` extension bag (spec-08 §Document
+    // schema; see `cortex_workers::fulltext::builders::apply_extensions`
+    // — Consolidation/TopicCard never got a top-level projection like
+    // Decision/LawViolation did) rather than flattened to the top
+    // level, so `LANE_EXTRAS_KEYS` never reaches them; pull the
+    // nested object out of `extras_raw["ext"]["consolidation"]`
+    // explicitly. `consolidation_title` mirrors the `decision_title`
+    // degrade above — without it `ConsolidationRef.title` would fall
+    // back to the summary/body text instead of the consolidator's
+    // curated one-line title.
+    if doc.kind.as_deref() == Some("consolidation") {
+        let cons_ext = doc
+            .extras_raw
+            .get("ext")
+            .and_then(|v| v.get("consolidation"));
+        if let Some(id) = cons_ext
+            .and_then(|c| c.get("consolidation_id"))
+            .and_then(|v| v.as_str())
+        {
+            extras
+                .entry("consolidation_id".to_string())
+                .or_insert_with(|| serde_json::Value::String(id.to_string()));
+        }
+        if let Some(title) = doc.title.as_deref().filter(|s| !s.is_empty()) {
+            extras
+                .entry("consolidation_title".to_string())
+                .or_insert_with(|| serde_json::Value::String(title.to_string()));
+        }
+    }
+
     // phase10d — `repo` is canonical lowercase across every
     // Cortex surface. Lane projection always lowercases so a
     // pre-phase10d corpus indexed under capitalized repos
@@ -658,6 +691,24 @@ fn project(doc: MeiliDoc, req: &KeywordRequest) -> LaneHit {
             .get("violation_id")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        // Phase30b §1.2 — same nested `ext.consolidation.grain`
+        // source as the `consolidation_id` / `consolidation_title`
+        // extras above; parsed through the typed
+        // `ConsolidationGrain` enum (snake_case wire form) so
+        // `derive_consolidations` reads a typed value rather than a
+        // raw string.
+        consolidation_grain: doc
+            .extras_raw
+            .get("ext")
+            .and_then(|v| v.get("consolidation"))
+            .and_then(|c| c.get("grain"))
+            .and_then(|v| v.as_str())
+            .and_then(|s| {
+                serde_json::from_value::<cortex_core::events::ConsolidationGrain>(
+                    serde_json::Value::String(s.to_string()),
+                )
+                .ok()
+            }),
         severity: doc.severity.clone(),
         source: crate::lanes::LaneSource::Keyword,
         ..crate::lanes::Overlay::default()
