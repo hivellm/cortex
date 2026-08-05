@@ -91,7 +91,7 @@ do not produce a published event:
 | `SubagentStop`      | `agent_call`     | —                                 | payload `{agent_type, description, prompt?, model?, team_name?, child_event_ids?, result?, duration_ms?, outcome}` |
 | `Stop`              | `turn`           | —                                 | payload `{user_message: "", assistant_message, tokens?, tool_call_event_ids?}`. Captures the reply-side of the turn — `assistant_message` is extracted from the JSONL at `payload.transcript_path` (last `assistant` entry's joined `text` content blocks). Both `Turn` envelopes share the same `turn_id` under `context.extras.claude_code` so downstream readers fold them. Failure to read / parse the transcript still publishes the envelope with `assistant_message: null` so the boundary timestamp is preserved. |
 | `PreToolUse`        | _drop_           | blocking law-check                | The matching `PostToolUse` carries the canonical record.            |
-| `SessionStart`      | _drop_           | —                                 | The first `turn` opens the session.                                 |
+| `SessionStart`      | _drop_           | active-work surfacing             | The first `turn` opens the session. Phase30 (continuity §1.3): the sync path calls `GET /v1/dashboard/active-work?repo=<slug>` (repo slug derived from `cwd`, same derivation as pre-thinking scope) and returns a compact "active work" Markdown block (≤8 rows: task id, status, next unchecked item) as `additionalContext`, so a fresh session sees in-flight Rulebook tasks without calling `cortex_active_work`. Fail-open: any error/timeout/zero-rows → empty response. |
 | `Notification`      | _drop_           | —                                 | No canonical kind; recorded only in adapter-side metrics.           |
 
 All published envelopes set `tool = "claude-code"`, `schema_version = "1"`, `stream = "live"`, `model = env CLAUDE_MODEL` when present, and a `context` block with `platform`, `cwd`, `repo` (best-effort resolution from `cwd`), and an `extras.claude_code` sub-object carrying the adapter-side correlation IDs (`turn_id`, `tool_call_id`, `tool_use_id`, `orphan`) so the indexing layer can reconstruct turn / tool-call lineage without polluting the canonical envelope.
@@ -233,7 +233,7 @@ silently stops firing after that version. `install.rs` now emits:
   { "matcher": "*", "hooks": [{ "type": "command", "command": "cortex-hook PreToolUse" }], "owner": "cortex" }
 ],
 "SessionStart": [
-  { "hooks": [{ "type": "command", "command": "cortex-hook SessionStart --fire-forget" }], "owner": "cortex" }
+  { "hooks": [{ "type": "command", "command": "cortex-hook SessionStart" }], "owner": "cortex" }
 ]
 ```
 
@@ -254,8 +254,13 @@ in-place to the array form — acting as an automatic migration.
 | `PostToolUse`     | `cortex-hook PostToolUse --fire-forget`           | publish-only   |
 | `SubagentStop`    | `cortex-hook SubagentStop --fire-forget`          | publish-only   |
 | `Stop`            | `cortex-hook Stop --fire-forget`                  | publish-only   |
-| `SessionStart`    | `cortex-hook SessionStart --fire-forget`          | publish-only   |
+| `SessionStart`    | `cortex-hook SessionStart`                        | synchronous    |
 | `Notification`    | `cortex-hook Notification --fire-forget`          | publish-only   |
+
+`SessionStart` moved from publish-only to synchronous in phase30
+(continuity §1.3): it now returns the active-work `additionalContext`
+block, which a fire-forget shim would drop unread. Re-running
+`cortex-adapter-claude-code install` migrates the settings entry.
 
 Synchronous hooks block on a one-line response from the daemon
 because Claude Code consumes the reply (`additionalContext` for

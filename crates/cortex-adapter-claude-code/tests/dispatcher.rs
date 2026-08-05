@@ -329,6 +329,166 @@ async fn redaction_strips_secrets_before_publish() {
     assert!(!evt.redactions.is_empty());
 }
 
+// ── SessionStart active-work surfacing (phase30 §1.3) ───────────────────────
+
+#[tokio::test]
+async fn session_start_surfaces_active_work_from_mock_api() {
+    let mock_server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/v1/dashboard/active-work"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "active_tasks": [
+                {
+                    "id": "phase30_continuity-loop-verification",
+                    "phase": "phase30",
+                    "status": "in-progress",
+                    "next_unchecked_item": "1.3 Wire cortex_active_work into SessionStart"
+                },
+                {
+                    "id": "phase29d_synap-wipe-equality-gap",
+                    "phase": "phase29d",
+                    "status": "pending",
+                    "next_unchecked_item": "1.2 Cortex-side interim mitigation"
+                }
+            ],
+            "in_progress_count": 1,
+            "blocked_count": 0,
+            "recent_archives": []
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let cfg = AdapterSection {
+        api_endpoint: mock_server.uri(),
+        ..Default::default()
+    };
+    let (dispatcher, publisher) = build_dispatcher(cfg);
+    let resp = dispatch_inline(frame("SessionStart", json!({})), dispatcher).await;
+    let hook = resp
+        .hook_specific_output
+        .expect("SessionStart with active tasks must carry hookSpecificOutput");
+    // Phase30 §1.3 — the reply must self-identify as SessionStart, not
+    // borrow the UserPromptSubmit literal, or Claude Code won't route
+    // the additionalContext to the right hook.
+    assert_eq!(hook.hook_event_name, "SessionStart");
+    let md = &hook.additional_context;
+    assert!(
+        md.contains("phase30_continuity-loop-verification"),
+        "missing first task id: {md}"
+    );
+    assert!(
+        md.contains("phase29d_synap-wipe-equality-gap"),
+        "missing second task id: {md}"
+    );
+    assert!(
+        md.contains("next: 1.3 Wire cortex_active_work into SessionStart"),
+        "missing first next-fragment: {md}"
+    );
+    assert!(
+        md.contains("next: 1.2 Cortex-side interim mitigation"),
+        "missing second next-fragment: {md}"
+    );
+    // SessionStart stays sync-only (spec 04) — no canonical event.
+    assert_eq!(publisher.count().await, 0);
+}
+
+#[tokio::test]
+async fn session_start_fails_open_on_unreachable_api() {
+    let cfg = AdapterSection {
+        api_endpoint: "http://127.0.0.1:1".into(),
+        ..Default::default()
+    };
+    let (dispatcher, publisher) = build_dispatcher(cfg);
+    let resp = dispatch_inline(frame("SessionStart", json!({})), dispatcher).await;
+    assert!(
+        resp.hook_specific_output.is_none(),
+        "fail-open must not carry hookSpecificOutput"
+    );
+    assert!(resp.permission_decision.is_none());
+    assert_eq!(publisher.count().await, 0);
+}
+
+#[tokio::test]
+async fn session_start_returns_empty_when_no_active_tasks() {
+    let mock_server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/v1/dashboard/active-work"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "active_tasks": [],
+            "in_progress_count": 0,
+            "blocked_count": 0,
+            "recent_archives": []
+        })))
+        .mount(&mock_server)
+        .await;
+    let cfg = AdapterSection {
+        api_endpoint: mock_server.uri(),
+        ..Default::default()
+    };
+    let (dispatcher, publisher) = build_dispatcher(cfg);
+    let resp = dispatch_inline(frame("SessionStart", json!({})), dispatcher).await;
+    assert!(
+        resp.hook_specific_output.is_none(),
+        "zero active_tasks must short-circuit to an empty response"
+    );
+    assert_eq!(publisher.count().await, 0);
+}
+
+#[tokio::test]
+async fn session_start_caps_rendered_rows_at_eight() {
+    let mock_server = wiremock::MockServer::start().await;
+    // Zero-padded row ids so no id is a prefix of another — keeps the
+    // presence/absence assertions below unambiguous.
+    let tasks: Vec<Value> = (0..12)
+        .map(|i| {
+            json!({
+                "id": format!("phase-row-{i:02}"),
+                "status": "pending",
+                "next_unchecked_item": format!("{i}.1 work item")
+            })
+        })
+        .collect();
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/v1/dashboard/active-work"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "active_tasks": tasks,
+            "in_progress_count": 0,
+            "blocked_count": 0,
+            "recent_archives": []
+        })))
+        .mount(&mock_server)
+        .await;
+    let cfg = AdapterSection {
+        api_endpoint: mock_server.uri(),
+        ..Default::default()
+    };
+    let (dispatcher, _publisher) = build_dispatcher(cfg);
+    let resp = dispatch_inline(frame("SessionStart", json!({})), dispatcher).await;
+    let hook = resp
+        .hook_specific_output
+        .expect("hookSpecificOutput present");
+    let md = &hook.additional_context;
+    let rendered_rows = md.lines().filter(|l| l.starts_with("- phase-row-")).count();
+    assert_eq!(
+        rendered_rows, 8,
+        "row cap must trim to 8 regardless of the daemon returning more: {md}"
+    );
+    for i in 0..8 {
+        assert!(
+            md.contains(&format!("phase-row-{i:02}")),
+            "row {i} within the cap must render: {md}"
+        );
+    }
+    for i in 8..12 {
+        assert!(
+            !md.contains(&format!("phase-row-{i:02}")),
+            "row {i} beyond the cap must be trimmed: {md}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 #[tokio::test]
 async fn hook_response_serializes_to_protocol_shape() {
     use cortex_adapter_claude_code::HookResponse;

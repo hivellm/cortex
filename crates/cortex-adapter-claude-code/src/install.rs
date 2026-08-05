@@ -35,7 +35,9 @@ pub struct HookShim {
     /// `--fire-forget` so the bin disconnects without waiting for a
     /// daemon response. Set for hooks that do not consume
     /// `additionalContext` or `permissionDecision`: PostToolUse,
-    /// SubagentStop, Stop, SessionStart, Notification.
+    /// SubagentStop, Stop, Notification. SessionStart left this set
+    /// when it was response-less; phase30 (continuity §1.3) made it
+    /// return the active-work `additionalContext`, so it now waits.
     pub fire_forget: bool,
 }
 
@@ -46,7 +48,10 @@ pub const HOOK_SHIMS: &[HookShim] = &[
         sh_filename: "cortex-session-start.sh",
         ps1_filename: "cortex-session-start.ps1",
         sh_source: include_str!("../hooks/cortex-session-start.sh"),
-        fire_forget: true,
+        // Phase30 (continuity §1.3) — SessionStart now surfaces the
+        // active-work block as `additionalContext`; the shim must read
+        // the daemon's response for it to reach the session.
+        fire_forget: false,
     },
     HookShim {
         hook_name: "UserPromptSubmit",
@@ -550,7 +555,10 @@ mod tests {
 
         // Phase 15g: each entry is an array; the command lives at [0]["hooks"][0]["command"].
         // Synchronous hooks: command exactly `cortex-hook <Event>`.
-        for hook in ["UserPromptSubmit", "PreToolUse"] {
+        // SessionStart joined this set in phase30 (continuity §1.3) —
+        // it now returns the active-work `additionalContext`, which a
+        // fire-forget shim would drop unread.
+        for hook in ["UserPromptSubmit", "PreToolUse", "SessionStart"] {
             let cmd = hooks[hook][0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(
                 cmd,
@@ -559,13 +567,7 @@ mod tests {
             );
         }
         // Fire-and-forget hooks: command ends with `--fire-forget`.
-        for hook in [
-            "SessionStart",
-            "PostToolUse",
-            "Stop",
-            "SubagentStop",
-            "Notification",
-        ] {
+        for hook in ["PostToolUse", "Stop", "SubagentStop", "Notification"] {
             let cmd = hooks[hook][0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(
                 cmd,

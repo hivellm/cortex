@@ -1,6 +1,6 @@
 //! Synchronous hook paths.
 //!
-//! Spec 10 §Synchronous paths: two hooks block on `cortex-api`:
+//! Spec 10 §Synchronous paths: hooks that block on `cortex-api`:
 //!
 //! - `UserPromptSubmit` drives `cortex_pre_thinking::pipeline::run`,
 //!   which POSTs a real `cortex_api::QueryRequest` to `/v1/query`,
@@ -9,8 +9,12 @@
 //!   `additionalContext`.
 //! - `PreToolUse` calls `/v1/laws/check`; critical violations route
 //!   to `permissionDecision: deny`.
+//! - `SessionStart` (phase30 §1.3) calls `GET
+//!   /v1/dashboard/active-work` so a fresh session can surface
+//!   in-flight Rulebook tasks without the agent calling
+//!   `cortex_active_work` explicitly.
 //!
-//! Both fail-open on timeout / error: the session continues
+//! All three fail-open on timeout / error: the session continues
 //! unchanged.
 
 use std::collections::HashMap;
@@ -18,6 +22,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use cortex_api::active_work::{ActiveTaskRow, ActiveWorkReport};
 use cortex_api::{QueryRequest, QueryResponse};
 use cortex_pre_thinking::pipeline::{
     run as pre_thinking_run, ClosureQueryFn, PreThinkingBudget, PreThinkingInput,
@@ -131,6 +136,32 @@ pub struct LawCheckResult {
     /// Per-violation list captured for the async event.
     pub violations: Vec<Violation>,
     /// `true` when the call timed out / errored and we fail-opened.
+    pub fail_open: bool,
+}
+
+/// Phase30 (continuity §1.3) — fixed short timeout for the
+/// active-work sync call. Not config-driven (unlike `pre_thinking` /
+/// `laws`, which expose `timeout_ms` knobs in `adapter.toml`):
+/// `SessionStart` already fails open on any hiccup and there is no
+/// operator-facing tuning need yet. Sized to the same order of
+/// magnitude as `default_laws_timeout` (300 ms) since both gate a
+/// session-boundary hook that must never stall Claude Code.
+const ACTIVE_WORK_TIMEOUT_MS: u64 = 300;
+
+/// Result of the active-work sync call (phase30 §1.3). `SessionStart`
+/// consumes `tasks` to render the "active work" Markdown block.
+#[derive(Debug, Clone, Default)]
+pub struct ActiveWorkOutcome {
+    /// Active-task rows from `.rulebook/tasks/`, verbatim from the
+    /// daemon's `/v1/dashboard/active-work` response (already sorted
+    /// by phase and with `next_unchecked_item` pre-truncated to 256
+    /// bytes server-side — see `cortex_api::active_work`).
+    pub tasks: Vec<ActiveTaskRow>,
+    /// `true` when the call timed out, errored, or returned a
+    /// non-2xx status and we fail-opened to an empty task list. The
+    /// caller can't (and doesn't need to) distinguish "call failed"
+    /// from "genuinely nothing in flight" — either way `SessionStart`
+    /// renders nothing rather than blocking or failing the session.
     pub fail_open: bool,
 }
 
@@ -388,6 +419,45 @@ impl SyncClient {
             fail_open: false,
         }
     }
+
+    /// Run the active-work sync call (phase30 §1.3). Fail-open on any
+    /// timeout / transport error / non-2xx: `SessionStart` must never
+    /// block or fail a session over a `.rulebook/` snapshot going
+    /// stale. `repo` scopes the daemon's response to one workspace
+    /// slug; `None` (or an empty slug) requests the unfiltered
+    /// snapshot.
+    pub async fn active_work(&self, repo: Option<&str>) -> ActiveWorkOutcome {
+        let started = Instant::now();
+        let url = format!("{}/v1/dashboard/active-work", self.api_endpoint);
+        let mut req = self.client.get(&url);
+        if let Some(slug) = repo.filter(|s| !s.is_empty()) {
+            req = req.query(&[("repo", slug)]);
+        }
+        let timeout = Duration::from_millis(ACTIVE_WORK_TIMEOUT_MS);
+        let resp = tokio::time::timeout(timeout, req.send()).await;
+        let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        self.metrics
+            .observe_sync_latency("SessionStart", latency_ms);
+        let body: Option<ActiveWorkReport> = match resp {
+            Err(_elapsed) => {
+                self.metrics.incr_sync_timeout("SessionStart");
+                None
+            }
+            Ok(Err(_e)) => None,
+            Ok(Ok(resp)) if !resp.status().is_success() => None,
+            Ok(Ok(resp)) => resp.json::<ActiveWorkReport>().await.ok(),
+        };
+        match body {
+            Some(report) => ActiveWorkOutcome {
+                tasks: report.active_tasks,
+                fail_open: false,
+            },
+            None => ActiveWorkOutcome {
+                tasks: Vec::new(),
+                fail_open: true,
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -542,12 +612,27 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
         let client = SyncClient::new(&cfg, metrics);
         let (hit0, miss0) = client.prethink_metrics().cache_counters();
-        let r1 = client.pre_thinking("same prompt", "s", None, Some("/r")).await;
-        let r2 = client.pre_thinking("same prompt", "s", None, Some("/r")).await;
+        let r1 = client
+            .pre_thinking("same prompt", "s", None, Some("/r"))
+            .await;
+        let r2 = client
+            .pre_thinking("same prompt", "s", None, Some("/r"))
+            .await;
         assert!(!r1.cache_hit, "first call is a cache miss");
-        assert!(r2.cache_hit, "second identical call within TTL is a cache hit");
+        assert!(
+            r2.cache_hit,
+            "second identical call within TTL is a cache hit"
+        );
         let (hit1, miss1) = client.prethink_metrics().cache_counters();
-        assert_eq!(miss1 - miss0, 1, "one miss recorded via the health-surfaced handle");
-        assert_eq!(hit1 - hit0, 1, "one hit recorded via the health-surfaced handle");
+        assert_eq!(
+            miss1 - miss0,
+            1,
+            "one miss recorded via the health-surfaced handle"
+        );
+        assert_eq!(
+            hit1 - hit0,
+            1,
+            "one hit recorded via the health-surfaced handle"
+        );
     }
 }

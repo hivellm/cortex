@@ -6,8 +6,10 @@
 //! protocol-defined JSON shape. Any internal error short-circuits to
 //! an empty `{}` reply so the session never breaks.
 
+use std::path::Path;
 use std::sync::Arc;
 
+use cortex_api::active_work::ActiveTaskRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -67,6 +69,27 @@ impl HookResponse {
         Self {
             hook_specific_output: Some(HookSpecificOutput {
                 hook_event_name: "UserPromptSubmit".into(),
+                additional_context: bundle,
+            }),
+            permission_decision: None,
+            permission_decision_reason: None,
+        }
+    }
+
+    /// Build a `SessionStart` response from a Markdown bundle
+    /// (phase30 §1.3). Mirrors [`HookResponse::additional_context`]
+    /// but stamps `hookEventName: "SessionStart"` — Claude Code uses
+    /// that field to route the `additionalContext` payload, so
+    /// reusing the `UserPromptSubmit` literal here would silently
+    /// drop the active-work block. An empty bundle short-circuits to
+    /// [`HookResponse::empty`], same as the UserPromptSubmit path.
+    pub fn session_start_context(bundle: String) -> Self {
+        if bundle.is_empty() {
+            return Self::empty();
+        }
+        Self {
+            hook_specific_output: Some(HookSpecificOutput {
+                hook_event_name: "SessionStart".into(),
                 additional_context: bundle,
             }),
             permission_decision: None,
@@ -255,6 +278,23 @@ impl Dispatcher {
                 }
                 HookResponse::empty()
             }
+            HookKind::SessionStart => {
+                // Phase30 (continuity §1.3) — derive the repo slug
+                // the same way the pre-thinking pipeline does (walk
+                // ancestors for `.git`, honour a `cortex.toml`
+                // override) so the SessionStart snapshot and the
+                // per-prompt query scope to the same workspace. The
+                // dashboard's own scan lower-cases the slug (see
+                // `cortex_api::active_work::scan`), so mirror that
+                // here rather than trusting `repo_from_cwd`'s casing.
+                let repo = frame
+                    .cwd
+                    .as_deref()
+                    .and_then(|cwd| cortex_pre_thinking::repo_from_cwd(Path::new(cwd)))
+                    .map(|r| r.to_ascii_lowercase());
+                let outcome = self.sync.active_work(repo.as_deref()).await;
+                HookResponse::session_start_context(render_active_work(&outcome.tasks))
+            }
             _ => HookResponse::empty(),
         }
     }
@@ -262,4 +302,48 @@ impl Dispatcher {
 
 fn read_string_field(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(|v| v.as_str()).map(String::from)
+}
+
+/// Phase30 (continuity §1.3) — hard cap on the number of active-task
+/// rows rendered into the `SessionStart` Markdown block. The daemon's
+/// `/v1/dashboard/active-work` endpoint (and the `cortex_active_work`
+/// MCP wrapper) may carry far more rows; `SessionStart` only has
+/// budget for a short "what's already in flight" reminder, not the
+/// full operator dashboard.
+const ACTIVE_WORK_ROW_CAP: usize = 8;
+
+/// Render the `SessionStart` "active work" block. Deterministic:
+/// preserves the daemon's own ordering (phase, then id — see
+/// `cortex_api::active_work::sort_key`) and truncates to
+/// [`ACTIVE_WORK_ROW_CAP`] rows. Returns an empty string when `tasks`
+/// is empty so [`HookResponse::session_start_context`] short-circuits
+/// to `HookResponse::empty()`.
+fn render_active_work(tasks: &[ActiveTaskRow]) -> String {
+    if tasks.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Cortex — active work (rulebook)\n");
+    for task in tasks.iter().take(ACTIVE_WORK_ROW_CAP) {
+        out.push_str("- ");
+        out.push_str(&task.id);
+        out.push_str(" [");
+        out.push_str(&task.status);
+        out.push(']');
+        match task.next_unchecked_item.as_deref() {
+            Some(item) if !item.is_empty() => {
+                out.push_str(" → next: ");
+                out.push_str(item);
+            }
+            _ => out.push_str(" → next: (no unchecked items)"),
+        }
+        if task.status == "blocked" {
+            if let Some(reason) = task.blocked_reason.as_deref() {
+                out.push_str(" (blocked: ");
+                out.push_str(reason);
+                out.push(')');
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
