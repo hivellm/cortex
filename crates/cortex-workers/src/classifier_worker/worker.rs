@@ -162,12 +162,31 @@ pub struct LiveSynapConsumer {
     bootstrap_tracker: Arc<OffsetTracker>,
     /// Phase29c — per-room last stale-ahead-offset probe instant,
     /// bounding the `stream.stats` call to once per
-    /// [`STALE_OFFSET_CHECK_INTERVAL`] PER ROOM while that room's
-    /// polls come back empty. Keyed by room name because this
+    /// [`Self::stale_check_interval`] (default
+    /// [`STALE_OFFSET_CHECK_INTERVAL`]) PER ROOM. Phase29d promotes
+    /// the probe from "only on empty polls" to "on any poll", so this
+    /// gate now bounds both trigger paths to at most one stats call
+    /// per interval per room. Keyed by room name because this
     /// consumer drains two independent rooms ([`STREAM_RAW`] +
     /// [`STREAM_BOOTSTRAP`]) with independent trackers — a stale
     /// cursor on one room must not gate (or reset) the other.
     stale_check: Mutex<HashMap<String, Instant>>,
+    /// Phase29d — per-room remembered `total_published` from the most
+    /// recent probe. `total_published` resets to a small number on a
+    /// synap wipe, so a probed value dropping below the remembered
+    /// baseline for THAT room is direct evidence of a wipe even when
+    /// the cursor never exceeds the post-wipe head (the phase29c
+    /// blind spot: cursor == head_next, or a lagging cursor that
+    /// happens to land inside the new generation's valid offset
+    /// range). Keyed by room name, same isolation rationale as
+    /// `stale_check`.
+    last_seen_published: Mutex<HashMap<String, u64>>,
+    /// Phase29d — probe interval, defaulting to
+    /// [`STALE_OFFSET_CHECK_INTERVAL`]. Overridable via
+    /// [`Self::with_stale_check_interval`] — a test/tuning hook so
+    /// integration tests can exercise two probes without a real 60s
+    /// wait.
+    stale_check_interval: Duration,
 }
 
 /// Phase29c — how often an idle (empty-poll) per-room cursor is
@@ -178,6 +197,10 @@ pub struct LiveSynapConsumer {
 /// that room's head forever and the worker starves silently (found
 /// live: room `cortex.events.raw` message_count=1, total_consumed=0
 /// while the classifier idled).
+///
+/// Phase29d — this is now also the default bound for the
+/// published-decrease probe, which fires on ANY poll (not just empty
+/// ones); see [`LiveSynapConsumer::with_stale_check_interval`].
 pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
@@ -188,6 +211,8 @@ impl LiveSynapConsumer {
             raw_tracker: Arc::new(OffsetTracker::new()),
             bootstrap_tracker: Arc::new(OffsetTracker::new()),
             stale_check: Mutex::new(HashMap::new()),
+            last_seen_published: Mutex::new(HashMap::new()),
+            stale_check_interval: STALE_OFFSET_CHECK_INTERVAL,
         }
     }
 
@@ -202,6 +227,15 @@ impl LiveSynapConsumer {
         } else {
             self.raw_tracker.clone()
         }
+    }
+
+    /// Phase29d — override the stale-check probe interval. Production
+    /// callers keep the [`STALE_OFFSET_CHECK_INTERVAL`] default;
+    /// integration tests use a near-zero interval to exercise
+    /// consecutive probes without a real 60s wait.
+    pub fn with_stale_check_interval(mut self, interval: Duration) -> Self {
+        self.stale_check_interval = interval;
+        self
     }
 }
 
@@ -247,27 +281,36 @@ impl SynapConsumer for LiveSynapConsumer {
             }
         };
 
-        // Phase29c — stale-ahead-offset self-heal, PER ROOM. A synap
-        // restart wipes every room back to offset 0, but each of
-        // this consumer's two independent in-memory cursors (raw +
+        // Phase29c/§29d — wipe self-heal, PER ROOM. A synap restart
+        // wipes every room back to offset 0, but each of this
+        // consumer's two independent in-memory cursors (raw +
         // bootstrap) keeps counting from where it left off —
-        // consume() then reads past that room's head forever and
-        // the worker starves silently. On an EMPTY poll with a
-        // non-zero cursor, probe `stream.stats` for THIS room
-        // (bounded to once per STALE_OFFSET_CHECK_INTERVAL per room)
-        // and, when the cursor sits beyond that room's head, reset
-        // ONLY this room's tracker to 0 — the other room's cursor is
-        // untouched. Replaying the (small, post-wipe) room is safe
-        // because classification dedupes by `event_id` (the
-        // in-memory `processed` set).
-        if events.is_empty() && offset > 0 {
+        // consume() then reads past that room's (or a NEW
+        // generation's) head forever and the worker starves or
+        // silently skips events. Whenever the cursor is past genesis,
+        // probe `stream.stats` for THIS room (bounded to once per
+        // `stale_check_interval` per room, on ANY poll — phase29d
+        // promoted this from "only on empty polls" so a LAGGING
+        // consumer whose stale cursor happens to land inside the new
+        // generation's valid offset range still gets checked) and
+        // heal ONLY this room's tracker on either signal:
+        //   1. cursor beyond the room head (phase29c — the common
+        //      case; misses the exact cursor == head_next coincidence).
+        //   2. `total_published` dropped below the remembered
+        //      baseline for this room (phase29d — `total_published`
+        //      resets on a wipe, so a decrease is direct wipe
+        //      evidence even when check 1 does not fire).
+        // The OTHER room's cursor is untouched either way. Replaying
+        // the (small, post-wipe) room is safe because classification
+        // dedupes by `event_id` (the in-memory `processed` set).
+        if offset > 0 {
             let due = {
                 let mut guard = self
                     .stale_check
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 match guard.get(room) {
-                    Some(t) if t.elapsed() < STALE_OFFSET_CHECK_INTERVAL => false,
+                    Some(t) if t.elapsed() < self.stale_check_interval => false,
                     _ => {
                         guard.insert(room.to_string(), Instant::now());
                         true
@@ -281,14 +324,33 @@ impl SynapConsumer for LiveSynapConsumer {
                     } else {
                         stats.max_offset.saturating_add(1)
                     };
-                    if offset > head_next {
+                    let published = stats.total_published;
+                    let remembered = {
+                        let guard = self
+                            .last_seen_published
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        guard.get(room).copied()
+                    };
+                    // The cursor is always a valid lower bound on the
+                    // current generation's published count, keeping
+                    // the baseline fresh even when probes are sparse.
+                    let baseline = remembered.unwrap_or(0).max(offset);
+                    if offset > head_next || published < baseline {
                         tracing::warn!(
                             room,
                             stale_offset = offset,
                             room_head_next = head_next,
-                            "cursor is beyond the room head (synap room was reset); self-healing cursor to 0"
+                            probed_published = published,
+                            baseline,
+                            "room appears wiped (cursor beyond head or published count decreased); self-healing cursor to 0"
                         );
                         tracker.seed(0);
+                        if let Ok(mut guard) = self.last_seen_published.lock() {
+                            guard.insert(room.to_string(), published);
+                        }
+                    } else if let Ok(mut guard) = self.last_seen_published.lock() {
+                        guard.insert(room.to_string(), remembered.unwrap_or(0).max(published));
                     }
                 }
             }

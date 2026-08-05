@@ -571,4 +571,293 @@ mod stale_offset {
             );
         }
     }
+
+    // ── Phase29d — published-decrease wipe detection (equality gap +
+    // lagging-consumer blind spots the phase29c `>` check misses).
+    // Ported once against the fulltext consumer per the proposal —
+    // the heal is identical byte-for-byte across all four consumers,
+    // already proven by the phase29c per-consumer duplication above.
+
+    mod published_decrease {
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        use cortex_workers::fulltext::{
+            LiveSynapConsumer as FulltextConsumer, SynapConsumer as FulltextSynapConsumer,
+            SynapHandle as FulltextHandle, STREAM_ENRICHED,
+        };
+        use wiremock::matchers::{body_string_contains, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        fn ok_empty_consume() -> serde_json::Value {
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [] },
+            })
+        }
+
+        fn ok_stats(
+            message_count: u64,
+            max_offset: u64,
+            total_published: u64,
+        ) -> serde_json::Value {
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": {
+                    "name": STREAM_ENRICHED,
+                    "message_count": message_count, "max_offset": max_offset,
+                    "min_offset": 0, "total_published": total_published,
+                    "total_consumed": 0, "subscriber_count": 1, "dropped": 0,
+                },
+            })
+        }
+
+        fn ok_consume_one_event_at(offset: u64, event_id: &str) -> serde_json::Value {
+            let envelope = serde_json::json!({ "event_id": event_id });
+            let bytes: Vec<u8> = serde_json::to_vec(&envelope).expect("serialize");
+            serde_json::json!({
+                "success": true, "request_id": "x", "error": null,
+                "payload": { "events": [{
+                    "offset": offset, "event": "enriched", "data": bytes,
+                    "timestamp": 1_700_000_000_000u64,
+                }] },
+            })
+        }
+
+        /// The residual hole this proposal documents (synap#257 — see
+        /// `.rulebook/tasks/phase29d_synap-wipe-equality-gap/proposal.md`):
+        /// `stream.stats` carries no room-generation discriminator, so
+        /// a wipe that happens to refill the room to EXACTLY the
+        /// stale cursor's value is indistinguishable from "healthy,
+        /// caught up" — neither the phase29c `cursor > head_next`
+        /// check nor the phase29d published-decrease check can fire.
+        /// The second half of this test shows the fix's actual power:
+        /// once a PRIOR probe remembered a higher `total_published`,
+        /// a later decrease against THAT baseline still heals even
+        /// though `cursor > head_next` is false on every poll.
+        #[tokio::test]
+        async fn equality_at_stale_check_documents_residual_gap_then_decrease_heals_via_remembered_baseline(
+        ) {
+            // ---- Scenario A: cursor == post-wipe head_next on the
+            // very first probe (no remembered baseline yet) — the
+            // documented residual gap. No heal fires.
+            {
+                let server = MockServer::start().await;
+
+                Mock::given(method("POST"))
+                    .and(path("/api/v1/command"))
+                    .and(body_string_contains("stream.consume"))
+                    .and(body_string_contains("\"from_offset\":1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(ok_empty_consume()))
+                    .mount(&server)
+                    .await;
+                Mock::given(method("POST"))
+                    .and(path("/api/v1/command"))
+                    .and(body_string_contains("stream.stats"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(1, 0, 1)))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+
+                let handle = Arc::new(FulltextHandle::new(&server.uri()).expect("handle"));
+                let consumer = FulltextConsumer::new(handle);
+                consumer.tracker().seed(1);
+
+                let batch = consumer
+                    .next_batch(STREAM_ENRICHED, 10)
+                    .await
+                    .expect("poll 1");
+                assert!(
+                    batch.is_empty(),
+                    "post-wipe room has nothing at offset 1 yet"
+                );
+                assert_eq!(
+                    consumer.tracker().current(),
+                    1,
+                    "documented residual hole: cursor == head_next == baseline never heals"
+                );
+            }
+
+            // ---- Scenario B: a PRIOR probe remembered published=5;
+            // the CURRENT probe reports published=1 — the decrease
+            // against the remembered baseline heals even though
+            // `cursor(1) > head_next(1)` is false on every poll.
+            {
+                let server = MockServer::start().await;
+
+                Mock::given(method("POST"))
+                    .and(path("/api/v1/command"))
+                    .and(body_string_contains("stream.consume"))
+                    .and(body_string_contains("\"from_offset\":1"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(ok_empty_consume()))
+                    .mount(&server)
+                    .await;
+                // Probe #1 remembers a HIGHER published count.
+                Mock::given(method("POST"))
+                    .and(path("/api/v1/command"))
+                    .and(body_string_contains("stream.stats"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(1, 0, 5)))
+                    .up_to_n_times(1)
+                    .mount(&server)
+                    .await;
+                // Probe #2 sees the decrease.
+                Mock::given(method("POST"))
+                    .and(path("/api/v1/command"))
+                    .and(body_string_contains("stream.stats"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(1, 0, 1)))
+                    .mount(&server)
+                    .await;
+                Mock::given(method("POST"))
+                    .and(path("/api/v1/command"))
+                    .and(body_string_contains("stream.consume"))
+                    .and(body_string_contains("\"from_offset\":0"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(ok_consume_one_event_at(0, "evt-decrease-heal")),
+                    )
+                    .mount(&server)
+                    .await;
+
+                let handle = Arc::new(FulltextHandle::new(&server.uri()).expect("handle"));
+                // Phase29d test hook: a real 60s wait between probes
+                // is not viable in a unit-speed IT, so the interval is
+                // collapsed to zero — the due-check still runs, it
+                // just never blocks the second probe.
+                let consumer =
+                    FulltextConsumer::new(handle).with_stale_check_interval(Duration::ZERO);
+                consumer.tracker().seed(1);
+
+                // Poll 1: empty; probe #1 remembers published=5 (>=
+                // baseline 1) — no heal yet.
+                let batch = consumer
+                    .next_batch(STREAM_ENRICHED, 10)
+                    .await
+                    .expect("poll 1");
+                assert!(batch.is_empty());
+                assert_eq!(
+                    consumer.tracker().current(),
+                    1,
+                    "no heal yet — published(5) >= baseline(1)"
+                );
+
+                // Poll 2: empty again; probe #2 sees published=1 <
+                // remembered baseline 5 → heal.
+                let batch = consumer
+                    .next_batch(STREAM_ENRICHED, 10)
+                    .await
+                    .expect("poll 2");
+                assert!(batch.is_empty());
+                assert_eq!(
+                    consumer.tracker().current(),
+                    0,
+                    "decrease against the remembered baseline healed the cursor to 0"
+                );
+
+                // Poll 3: resumes from 0 and delivers the post-wipe event.
+                let batch = consumer
+                    .next_batch(STREAM_ENRICHED, 10)
+                    .await
+                    .expect("poll 3");
+                assert_eq!(batch.len(), 1, "healed consumer resumes delivery");
+                assert_eq!(batch[0].event_id.as_deref(), Some("evt-decrease-heal"));
+            }
+        }
+
+        /// The other phase29c blind spot: a synap wipe while the
+        /// consumer LAGS. The refilled room's head can be AHEAD of
+        /// the stale cursor, so `consume(from_offset=cursor)` returns
+        /// events from the NEW generation at overlapping offsets —
+        /// the poll is never empty, so the phase29c empty-poll fast
+        /// path never fires and the cross-generation skip is silent.
+        /// Phase29d's promoted "probe on ANY poll" trigger closes
+        /// this: the published-decrease check still runs on a
+        /// non-empty poll.
+        #[tokio::test]
+        async fn lagging_consumer_nonempty_poll_still_probes_and_heals_on_published_decrease() {
+            let server = MockServer::start().await;
+
+            // The cursor never advances in this test (no ack call),
+            // so both polls request the same stale offset.
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":2"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(ok_consume_one_event_at(2, "evt-lag-old-gen")),
+                )
+                .mount(&server)
+                .await;
+            // Probe #1: well ahead, no decrease yet — just remembers
+            // published=6.
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.stats"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(6, 5, 6)))
+                .up_to_n_times(1)
+                .mount(&server)
+                .await;
+            // Probe #2: published dropped to 3 (< remembered 6) → heal.
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.stats"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(3, 2, 3)))
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/command"))
+                .and(body_string_contains("stream.consume"))
+                .and(body_string_contains("\"from_offset\":0"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(ok_consume_one_event_at(0, "evt-lag-heal")),
+                )
+                .mount(&server)
+                .await;
+
+            let handle = Arc::new(FulltextHandle::new(&server.uri()).expect("handle"));
+            let consumer = FulltextConsumer::new(handle).with_stale_check_interval(Duration::ZERO);
+            consumer.tracker().seed(2);
+
+            // Poll 1: non-empty (one stale-generation event at offset
+            // 2), but the promoted ANY-poll probe still fires.
+            // published(6) >= baseline(max(0,2)=2) → no heal yet;
+            // remembered updates to 6.
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 1");
+            assert_eq!(batch.len(), 1, "non-empty poll must still be delivered");
+            assert_eq!(batch[0].event_id.as_deref(), Some("evt-lag-old-gen"));
+            assert_eq!(consumer.tracker().current(), 2, "no heal yet on poll 1");
+
+            // Poll 2: consume STILL returns the stale-offset event
+            // (masking the wipe locally) — but probe #2 sees
+            // published=3 < remembered baseline 6 → the decrease
+            // heals the cursor to 0 regardless of what this poll's
+            // consume result looked like.
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 2");
+            assert_eq!(
+                batch.len(),
+                1,
+                "poll 2 is still non-empty; the wipe is invisible locally"
+            );
+            assert_eq!(
+                consumer.tracker().current(),
+                0,
+                "published-decrease healed the cursor to 0 despite the non-empty poll"
+            );
+
+            // Poll 3: resumes from 0 and delivers the real post-wipe event.
+            let batch = consumer
+                .next_batch(STREAM_ENRICHED, 10)
+                .await
+                .expect("poll 3");
+            assert_eq!(batch.len(), 1);
+            assert_eq!(batch[0].event_id.as_deref(), Some("evt-lag-heal"));
+        }
+    }
 }

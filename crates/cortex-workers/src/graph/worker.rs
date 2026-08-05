@@ -303,9 +303,26 @@ pub struct LiveSynapConsumer {
     consumer_id: String,
     stream: String,
     /// Phase29c — last stale-ahead-offset probe instant, bounding the
-    /// stats call to once per [`STALE_OFFSET_CHECK_INTERVAL`] while
-    /// polls come back empty.
+    /// stats call to once per [`Self::stale_check_interval`] (default
+    /// [`STALE_OFFSET_CHECK_INTERVAL`]). Phase29d promotes the probe
+    /// from "only on empty polls" to "on any poll", so this gate now
+    /// bounds both trigger paths to at most one stats call per
+    /// interval.
     stale_check: Mutex<Option<Instant>>,
+    /// Phase29d — remembered `total_published` from the most recent
+    /// probe. `total_published` resets to a small number on a synap
+    /// wipe, so a probed value dropping below the remembered baseline
+    /// is direct evidence of a wipe even when the cursor never
+    /// exceeds the post-wipe head (the phase29c blind spot: cursor
+    /// == head_next, or a lagging cursor that happens to land inside
+    /// the new generation's valid offset range).
+    last_seen_published: Mutex<Option<u64>>,
+    /// Phase29d — probe interval, defaulting to
+    /// [`STALE_OFFSET_CHECK_INTERVAL`]. Overridable via
+    /// [`Self::with_stale_check_interval`] — a test/tuning hook so
+    /// integration tests can exercise two probes without a real 60s
+    /// wait.
+    stale_check_interval: Duration,
 }
 
 /// Phase29c — how often an idle (empty-poll) durable consumer is
@@ -313,6 +330,10 @@ pub struct LiveSynapConsumer {
 /// condition (a synap restart wipes rooms back to offset 0, but the
 /// durable SQLite ledger still holds the old large offset — the
 /// consumer then reads past the head forever, silently).
+///
+/// Phase29d — this is now also the default bound for the
+/// published-decrease probe, which fires on ANY poll (not just empty
+/// ones); see [`LiveSynapConsumer::with_stale_check_interval`].
 pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
@@ -328,6 +349,8 @@ impl LiveSynapConsumer {
             consumer_id: String::new(),
             stream: String::new(),
             stale_check: Mutex::new(None),
+            last_seen_published: Mutex::new(None),
+            stale_check_interval: STALE_OFFSET_CHECK_INTERVAL,
         }
     }
 
@@ -376,12 +399,23 @@ impl LiveSynapConsumer {
             consumer_id,
             stream,
             stale_check: Mutex::new(None),
+            last_seen_published: Mutex::new(None),
+            stale_check_interval: STALE_OFFSET_CHECK_INTERVAL,
         })
     }
 
     /// Expose the offset tracker (useful for metrics / tests).
     pub fn tracker(&self) -> Arc<OffsetTracker> {
         self.tracker.clone()
+    }
+
+    /// Phase29d — override the stale-check probe interval. Production
+    /// callers keep the [`STALE_OFFSET_CHECK_INTERVAL`] default;
+    /// integration tests use a near-zero interval to exercise
+    /// consecutive probes without a real 60s wait.
+    pub fn with_stale_check_interval(mut self, interval: Duration) -> Self {
+        self.stale_check_interval = interval;
+        self
     }
 }
 
@@ -432,25 +466,34 @@ impl SynapConsumer for LiveSynapConsumer {
             }
         };
 
-        // Phase29c — stale-ahead-offset self-heal. A synap restart
-        // wipes rooms back to offset 0, but this consumer's DURABLE
-        // SQLite ledger still holds the pre-wipe offset — consume()
-        // then reads past the head forever and the worker starves
-        // silently (found live: room max_offset=0/count=1 while the
-        // ledger held thousands). On an EMPTY poll with a non-zero
-        // cursor, probe `stream.stats` (bounded to once per
-        // STALE_OFFSET_CHECK_INTERVAL) and, when the cursor sits
-        // beyond the room head, reset it to 0 and persist the reset —
-        // replaying the (small, post-wipe) room is safe because every
+        // Phase29c/§29d — wipe self-heal. A synap restart wipes rooms
+        // back to offset 0, but this consumer's DURABLE SQLite ledger
+        // still holds the pre-wipe offset — consume() then reads
+        // past the (or a NEW generation's) head forever and the
+        // worker starves or silently skips events (found live: room
+        // max_offset=0/count=1 while the ledger held thousands).
+        // Whenever the cursor is past genesis, probe `stream.stats`
+        // (bounded to once per `stale_check_interval`, on ANY poll —
+        // phase29d promoted this from "only on empty polls" so a
+        // LAGGING consumer whose stale cursor happens to land inside
+        // the new generation's valid offset range still gets checked)
+        // and heal on either signal:
+        //   1. cursor beyond the room head (phase29c — the common
+        //      case; misses the exact cursor == head_next coincidence).
+        //   2. `total_published` dropped below the remembered
+        //      baseline (phase29d — `total_published` resets on a
+        //      wipe, so a decrease is direct wipe evidence even when
+        //      check 1 does not fire).
+        // Replaying the (small, post-wipe) room is safe because every
         // downstream write is idempotent (MERGE + in-memory dedup).
-        if events.is_empty() && offset > 0 {
+        if offset > 0 {
             let due = {
                 let mut guard = self
                     .stale_check
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 match *guard {
-                    Some(t) if t.elapsed() < STALE_OFFSET_CHECK_INTERVAL => false,
+                    Some(t) if t.elapsed() < self.stale_check_interval => false,
                     _ => {
                         *guard = Some(Instant::now());
                         true
@@ -464,12 +507,26 @@ impl SynapConsumer for LiveSynapConsumer {
                     } else {
                         stats.max_offset.saturating_add(1)
                     };
-                    if offset > head_next {
+                    let published = stats.total_published;
+                    let remembered = {
+                        let guard = self
+                            .last_seen_published
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        *guard
+                    };
+                    // The cursor is always a valid lower bound on the
+                    // current generation's published count, keeping
+                    // the baseline fresh even when probes are sparse.
+                    let baseline = remembered.unwrap_or(0).max(offset);
+                    if offset > head_next || published < baseline {
                         tracing::warn!(
                             room,
                             stale_offset = offset,
                             room_head_next = head_next,
-                            "durable offset is beyond the room head (synap room was reset);                              self-healing cursor to 0"
+                            probed_published = published,
+                            baseline,
+                            "durable offset appears wiped (cursor beyond head or published count decreased); self-healing cursor to 0"
                         );
                         self.tracker.seed(0);
                         if let Some(metadata) = &self.metadata {
@@ -481,6 +538,11 @@ impl SynapConsumer for LiveSynapConsumer {
                                     guard.consumer_offset_set(&self.consumer_id, &self.stream, 0);
                             }
                         }
+                        if let Ok(mut guard) = self.last_seen_published.lock() {
+                            *guard = Some(published);
+                        }
+                    } else if let Ok(mut guard) = self.last_seen_published.lock() {
+                        *guard = Some(remembered.unwrap_or(0).max(published));
                     }
                 }
             }

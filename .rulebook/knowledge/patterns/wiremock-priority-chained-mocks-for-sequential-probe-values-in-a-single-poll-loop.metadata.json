@@ -1,0 +1,20 @@
+{
+  "id": "wiremock-priority-chained-mocks-for-sequential-probe-values-in-a-single-poll-loop",
+  "type": "pattern",
+  "title": "wiremock priority-chained mocks to simulate a sequence of probe values across polls",
+  "category": "testing",
+  "description": "When a test needs the SAME endpoint to answer differently across successive calls (e.g. a `stream.stats` probe that must first report a HIGHER `total_published` then a LOWER one to exercise a decrease-detection heal), `wiremock` 0.6 resolves ties between equal-priority mocks by MOUNT ORDER: the first-mounted matching mock wins until its `up_to_n_times(N)` quota is exhausted, then the next-mounted matching mock takes over. Mount the \"first answer\" with `.up_to_n_times(1)` and the \"later answer\" unbounded, both using the exact same matcher (`body_string_contains(\"stream.stats\")`). No custom fake-server state machine is needed.",
+  "example": "Mock::given(method(\"POST\")).and(path(\"/api/v1/command\"))\n    .and(body_string_contains(\"stream.stats\"))\n    .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(5)))\n    .up_to_n_times(1)\n    .mount(&server).await;\nMock::given(method(\"POST\")).and(path(\"/api/v1/command\"))\n    .and(body_string_contains(\"stream.stats\"))\n    .respond_with(ResponseTemplate::new(200).set_body_json(ok_stats(1)))\n    .mount(&server).await;\n// poll 1 sees published=5 (remembers baseline), poll 2 sees published=1 (decrease -> heal)",
+  "whenToUse": "Integration tests against a wiremock::MockServer where the code under test polls the SAME endpoint repeatedly across a loop-driven consumer and the test needs to assert behavior that only differs on the Nth call (sequential probe values, retry-then-succeed, degrade-then-recover).",
+  "whenNotToUse": "When the differing calls carry a distinguishable request body (e.g. a different from_offset value) - in that case a plain, unbounded body_string_contains match per distinct body value is simpler and needs no up_to_n_times bookkeeping.",
+  "createdAt": "2026-08-05T00:00:00.000Z",
+  "tags": [
+    "wiremock",
+    "integration-test",
+    "synap",
+    "cortex-workers",
+    "stream.stats",
+    "mock-sequencing"
+  ],
+  "source": "manual"
+}
