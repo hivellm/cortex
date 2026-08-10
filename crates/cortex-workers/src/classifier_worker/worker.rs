@@ -171,16 +171,17 @@ pub struct LiveSynapConsumer {
     /// [`STREAM_BOOTSTRAP`]) with independent trackers — a stale
     /// cursor on one room must not gate (or reset) the other.
     stale_check: Mutex<HashMap<String, Instant>>,
-    /// Phase29d — per-room remembered `total_published` from the most
-    /// recent probe. `total_published` resets to a small number on a
-    /// synap wipe, so a probed value dropping below the remembered
-    /// baseline for THAT room is direct evidence of a wipe even when
-    /// the cursor never exceeds the post-wipe head (the phase29c
-    /// blind spot: cursor == head_next, or a lagging cursor that
-    /// happens to land inside the new generation's valid offset
-    /// range). Keyed by room name, same isolation rationale as
-    /// `stale_check`.
-    last_seen_published: Mutex<HashMap<String, u64>>,
+    /// Phase29d §1.3 — per-room remembered `stream.stats().generation`
+    /// from the most recent probe. `generation` strictly increases
+    /// across every room (re)creation, including server restarts
+    /// (synap 1.3.1+, synap#257), so it is the definitive room-wipe
+    /// discriminator for THAT room — unlike offset/count heuristics
+    /// it also catches the exact cursor == head_next coincidence the
+    /// phase29c/29d interim published-decrease heuristic could not
+    /// see. Keyed by room name, same isolation rationale as
+    /// `stale_check`: a wipe on one room must not touch the other's
+    /// remembered generation.
+    last_seen_generation: Mutex<HashMap<String, u64>>,
     /// Phase29d — probe interval, defaulting to
     /// [`STALE_OFFSET_CHECK_INTERVAL`]. Overridable via
     /// [`Self::with_stale_check_interval`] — a test/tuning hook so
@@ -199,8 +200,8 @@ pub struct LiveSynapConsumer {
 /// while the classifier idled).
 ///
 /// Phase29d — this is now also the default bound for the
-/// published-decrease probe, which fires on ANY poll (not just empty
-/// ones); see [`LiveSynapConsumer::with_stale_check_interval`].
+/// room-generation probe (§1.3), which fires on ANY poll (not just
+/// empty ones); see [`LiveSynapConsumer::with_stale_check_interval`].
 pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
@@ -211,7 +212,7 @@ impl LiveSynapConsumer {
             raw_tracker: Arc::new(OffsetTracker::new()),
             bootstrap_tracker: Arc::new(OffsetTracker::new()),
             stale_check: Mutex::new(HashMap::new()),
-            last_seen_published: Mutex::new(HashMap::new()),
+            last_seen_generation: Mutex::new(HashMap::new()),
             stale_check_interval: STALE_OFFSET_CHECK_INTERVAL,
         }
     }
@@ -281,8 +282,8 @@ impl SynapConsumer for LiveSynapConsumer {
             }
         };
 
-        // Phase29c/§29d — wipe self-heal, PER ROOM. A synap restart
-        // wipes every room back to offset 0, but each of this
+        // Phase29c/§29d/§1.3 — wipe self-heal, PER ROOM. A synap
+        // restart wipes every room back to offset 0, but each of this
         // consumer's two independent in-memory cursors (raw +
         // bootstrap) keeps counting from where it left off —
         // consume() then reads past that room's (or a NEW
@@ -293,16 +294,24 @@ impl SynapConsumer for LiveSynapConsumer {
         // promoted this from "only on empty polls" so a LAGGING
         // consumer whose stale cursor happens to land inside the new
         // generation's valid offset range still gets checked) and
-        // heal ONLY this room's tracker on either signal:
-        //   1. cursor beyond the room head (phase29c — the common
-        //      case; misses the exact cursor == head_next coincidence).
-        //   2. `total_published` dropped below the remembered
-        //      baseline for this room (phase29d — `total_published`
-        //      resets on a wipe, so a decrease is direct wipe
-        //      evidence even when check 1 does not fire).
-        // The OTHER room's cursor is untouched either way. Replaying
-        // the (small, post-wipe) room is safe because classification
-        // dedupes by `event_id` (the in-memory `processed` set).
+        // heal ONLY this room's tracker.
+        //
+        // Phase29d §1.3 — synap 1.3.1 (synap#257) ships `generation`,
+        // a strictly-increasing room-incarnation id that changes on
+        // every (re)creation including server restarts. That is now
+        // the PRIMARY wipe signal for THIS room — a generation CHANGE
+        // is definitive wipe evidence even in the exact cursor ==
+        // head_next coincidence the phase29c/29d interim
+        // published-decrease heuristic could not see. `generation ==
+        // 0` means the server predates 1.3.1 (the field is absent,
+        // defaulting via serde); the legacy `cursor > head_next`
+        // comparison is kept ONLY as a fallback for that case — it is
+        // strictly weaker (it cannot see the equality coincidence)
+        // and never reintroduces the deleted published-decrease
+        // bookkeeping. The OTHER room's cursor and remembered
+        // generation are untouched either way. Replaying the (small,
+        // post-wipe) room is safe because classification dedupes by
+        // `event_id` (the in-memory `processed` set).
         if offset > 0 {
             let due = {
                 let mut guard = self
@@ -319,38 +328,59 @@ impl SynapConsumer for LiveSynapConsumer {
             };
             if due {
                 if let Ok(stats) = self.handle.streams().stats(room).await {
-                    let head_next = if stats.message_count == 0 {
-                        0
-                    } else {
-                        stats.max_offset.saturating_add(1)
-                    };
-                    let published = stats.total_published;
-                    let remembered = {
-                        let guard = self
-                            .last_seen_published
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        guard.get(room).copied()
-                    };
-                    // The cursor is always a valid lower bound on the
-                    // current generation's published count, keeping
-                    // the baseline fresh even when probes are sparse.
-                    let baseline = remembered.unwrap_or(0).max(offset);
-                    if offset > head_next || published < baseline {
-                        tracing::warn!(
-                            room,
-                            stale_offset = offset,
-                            room_head_next = head_next,
-                            probed_published = published,
-                            baseline,
-                            "room appears wiped (cursor beyond head or published count decreased); self-healing cursor to 0"
-                        );
-                        tracker.seed(0);
-                        if let Ok(mut guard) = self.last_seen_published.lock() {
-                            guard.insert(room.to_string(), published);
+                    let gen = stats.generation;
+                    if gen != 0 {
+                        let remembered = {
+                            let guard = self
+                                .last_seen_generation
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            guard.get(room).copied()
+                        };
+                        match remembered {
+                            None => {
+                                // First observation says nothing about
+                                // a wipe by itself — just record the
+                                // baseline generation for this room.
+                                if let Ok(mut guard) = self.last_seen_generation.lock() {
+                                    guard.insert(room.to_string(), gen);
+                                }
+                            }
+                            Some(prev) if prev != gen => {
+                                tracing::warn!(
+                                    room,
+                                    stale_offset = offset,
+                                    prev_generation = prev,
+                                    new_generation = gen,
+                                    "room generation changed since last probe (synap wipe); self-healing cursor to 0"
+                                );
+                                tracker.seed(0);
+                                if let Ok(mut guard) = self.last_seen_generation.lock() {
+                                    guard.insert(room.to_string(), gen);
+                                }
+                            }
+                            Some(_) => {
+                                // Same incarnation as the last probe
+                                // for this room — no heal needed.
+                            }
                         }
-                    } else if let Ok(mut guard) = self.last_seen_published.lock() {
-                        guard.insert(room.to_string(), remembered.unwrap_or(0).max(published));
+                    } else {
+                        // Fallback for pre-1.3.1 servers only (see the
+                        // block comment above `if offset > 0`).
+                        let head_next = if stats.message_count == 0 {
+                            0
+                        } else {
+                            stats.max_offset.saturating_add(1)
+                        };
+                        if offset > head_next {
+                            tracing::warn!(
+                                room,
+                                stale_offset = offset,
+                                room_head_next = head_next,
+                                "room appears wiped (cursor beyond head; pre-1.3.1 fallback); self-healing cursor to 0"
+                            );
+                            tracker.seed(0);
+                        }
                     }
                 }
             }

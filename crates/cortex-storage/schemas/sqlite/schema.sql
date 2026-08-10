@@ -202,12 +202,20 @@ CREATE INDEX IF NOT EXISTS bootstrap_seen_hash ON bootstrap_seen (repo, content_
 -- dropping the rebuild window. Composite primary key lets multiple
 -- workers (`cortex-graph-workerN`, `cortex-fulltext-workerN`)
 -- share the same ledger without colliding.
+-- Phase29d §1.3 — `room_generation` is the synap 1.3.1 (synap#257)
+-- room-incarnation id observed when this offset was written. It MUST
+-- be persisted next to the offset: a durable cursor survives a worker
+-- restart, so an in-memory-only generation baseline would be unknown
+-- on the first probe after boot and the consumer could never tell a
+-- healthy cursor from one pointing into a wiped room's dead offset
+-- space. 0 = unknown (never probed, or a pre-1.3.1 server).
 CREATE TABLE IF NOT EXISTS consumer_offsets (
-    consumer_id     TEXT NOT NULL,
-    stream          TEXT NOT NULL,
-    last_offset     INTEGER NOT NULL,
-    last_event_id   TEXT,
-    updated_at      TEXT NOT NULL,
+    consumer_id      TEXT NOT NULL,
+    stream           TEXT NOT NULL,
+    last_offset      INTEGER NOT NULL,
+    last_event_id    TEXT,
+    updated_at       TEXT NOT NULL,
+    room_generation  INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (consumer_id, stream)
 );
 

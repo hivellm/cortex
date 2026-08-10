@@ -94,6 +94,24 @@ impl MetadataStore {
                 [],
             )?;
         }
+        // Phase29d §1.3 — `consumer_offsets.room_generation` (synap
+        // 1.3.1 room incarnation) on databases created before the
+        // column existed. Same additive `pragma_table_info` probe as
+        // above; DEFAULT 0 reads as "unknown", which every consumer
+        // already treats as "no baseline to compare against".
+        let has_room_generation: bool = conn
+            .prepare(
+                "SELECT 1 FROM pragma_table_info('consumer_offsets') WHERE name = 'room_generation'",
+            )?
+            .query_row([], |_| Ok(true))
+            .optional()?
+            .unwrap_or(false);
+        if !has_room_generation {
+            conn.execute(
+                "ALTER TABLE consumer_offsets ADD COLUMN room_generation INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+        }
         // Record or assert schema version.
         let existing: Option<u32> = conn
             .query_row("SELECT version FROM meta WHERE key = 'schema'", [], |r| {
@@ -965,7 +983,7 @@ impl MetadataStore {
         let row = self
             .conn
             .query_row(
-                "SELECT last_offset, last_event_id, updated_at FROM consumer_offsets
+                "SELECT last_offset, last_event_id, updated_at, room_generation FROM consumer_offsets
                  WHERE consumer_id = ?1 AND stream = ?2",
                 params![consumer_id, stream],
                 |r| {
@@ -973,6 +991,7 @@ impl MetadataStore {
                         last_offset: r.get::<_, i64>(0)?.max(0) as u64,
                         last_event_id: r.get::<_, Option<String>>(1)?,
                         updated_at: r.get(2)?,
+                        room_generation: r.get::<_, i64>(3)?.max(0) as u64,
                     })
                 },
             )
@@ -1031,6 +1050,38 @@ impl MetadataStore {
                last_event_id  = NULL,
                updated_at     = excluded.updated_at",
             params![consumer_id, stream, stored, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// Phase29d §1.3 — persist the synap room incarnation
+    /// (`stream.stats().generation`, synap#257) the consumer's cursor
+    /// belongs to.
+    ///
+    /// A durable cursor outlives the process, so the generation
+    /// baseline has to outlive it too: an in-memory-only baseline is
+    /// `None` on the first probe after a restart, and a first
+    /// observation can never prove a wipe by itself — the consumer
+    /// would adopt the new room's generation while still pointing at
+    /// the old incarnation's offset space and starve silently. Writing
+    /// the generation here lets the next boot compare against a real
+    /// baseline. Creates the row when absent so the very first probe
+    /// records a baseline even before any batch has flushed.
+    pub fn consumer_offset_generation_set(
+        &self,
+        consumer_id: &str,
+        stream: &str,
+        generation: u64,
+    ) -> Result<(), MetadataError> {
+        let updated_at = Utc::now().to_rfc3339();
+        let stored = generation.min(i64::MAX as u64) as i64;
+        self.conn.execute(
+            "INSERT INTO consumer_offsets (consumer_id, stream, last_offset, last_event_id, updated_at, room_generation)
+             VALUES (?1, ?2, 0, NULL, ?3, ?4)
+             ON CONFLICT(consumer_id, stream) DO UPDATE SET
+               room_generation = excluded.room_generation,
+               updated_at      = excluded.updated_at",
+            params![consumer_id, stream, updated_at, stored],
         )?;
         Ok(())
     }
@@ -1758,6 +1809,14 @@ pub struct ConsumerOffsetRow {
     pub last_event_id: Option<String>,
     /// RFC-3339 timestamp of the last advance.
     pub updated_at: String,
+    /// Phase29d §1.3 — the synap room incarnation
+    /// (`stream.stats().generation`) this cursor belongs to. `0` means
+    /// unknown: the row predates the column, no probe has run yet, or
+    /// the server is older than synap 1.3.1. A consumer that finds a
+    /// generation here compares it against the live room on its first
+    /// probe after boot, which is the only way a DURABLE cursor can
+    /// detect that its offset space belongs to a wiped incarnation.
+    pub room_generation: u64,
 }
 
 /// Phase10c — one row from `bootstrap_seen`. The walker reads

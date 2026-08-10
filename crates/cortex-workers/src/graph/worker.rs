@@ -309,14 +309,15 @@ pub struct LiveSynapConsumer {
     /// bounds both trigger paths to at most one stats call per
     /// interval.
     stale_check: Mutex<Option<Instant>>,
-    /// Phase29d — remembered `total_published` from the most recent
-    /// probe. `total_published` resets to a small number on a synap
-    /// wipe, so a probed value dropping below the remembered baseline
-    /// is direct evidence of a wipe even when the cursor never
-    /// exceeds the post-wipe head (the phase29c blind spot: cursor
-    /// == head_next, or a lagging cursor that happens to land inside
-    /// the new generation's valid offset range).
-    last_seen_published: Mutex<Option<u64>>,
+    /// Phase29d §1.3 — remembered `stream.stats().generation` from
+    /// the most recent probe. `generation` strictly increases across
+    /// every room (re)creation, including server restarts (synap
+    /// 1.3.1+, synap#257), so it is the definitive room-wipe
+    /// discriminator — unlike offset/count heuristics it also catches
+    /// the exact cursor == head_next coincidence the phase29c/29d
+    /// interim published-decrease heuristic could not see. `None`
+    /// until a probe has observed a non-zero generation.
+    last_seen_generation: Mutex<Option<u64>>,
     /// Phase29d — probe interval, defaulting to
     /// [`STALE_OFFSET_CHECK_INTERVAL`]. Overridable via
     /// [`Self::with_stale_check_interval`] — a test/tuning hook so
@@ -332,8 +333,8 @@ pub struct LiveSynapConsumer {
 /// consumer then reads past the head forever, silently).
 ///
 /// Phase29d — this is now also the default bound for the
-/// published-decrease probe, which fires on ANY poll (not just empty
-/// ones); see [`LiveSynapConsumer::with_stale_check_interval`].
+/// room-generation probe (§1.3), which fires on ANY poll (not just
+/// empty ones); see [`LiveSynapConsumer::with_stale_check_interval`].
 pub const STALE_OFFSET_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 impl LiveSynapConsumer {
@@ -349,7 +350,7 @@ impl LiveSynapConsumer {
             consumer_id: String::new(),
             stream: String::new(),
             stale_check: Mutex::new(None),
-            last_seen_published: Mutex::new(None),
+            last_seen_generation: Mutex::new(None),
             stale_check_interval: STALE_OFFSET_CHECK_INTERVAL,
         }
     }
@@ -379,16 +380,31 @@ impl LiveSynapConsumer {
                 .consumer_offset_lookup(&consumer_id, &stream)
                 .map_err(|e| anyhow::anyhow!("consumer_offset_lookup: {e}"))?
         };
+        // Phase29d §1.3 — the generation baseline is restored from the
+        // ledger alongside the offset. THIS consumer is the only one
+        // whose cursor outlives the process, so an in-memory-only
+        // baseline would be `None` on the first probe after boot; a
+        // first observation cannot prove a wipe by itself, so the
+        // consumer would adopt the live generation while still
+        // pointing into the previous incarnation's dead offset space
+        // and starve in silence (observed live: `resume_at=1` against
+        // a wiped room whose head was also 1 — an exact tie no
+        // count-based check can see).
+        let mut boot_generation = None;
         if let Some(row) = seed {
             // The ledger stores the LAST processed offset; resume
             // from `last_offset + 1` so we don't reprocess it.
             let resume_at = row.last_offset.saturating_add(1);
             tracker.seed(resume_at);
+            if row.room_generation != 0 {
+                boot_generation = Some(row.room_generation);
+            }
             tracing::info!(
                 consumer_id = %consumer_id,
                 stream = %stream,
                 resume_at,
                 last_event_id = ?row.last_event_id,
+                room_generation = row.room_generation,
                 "graph consumer resuming from persisted offset"
             );
         }
@@ -399,9 +415,49 @@ impl LiveSynapConsumer {
             consumer_id,
             stream,
             stale_check: Mutex::new(None),
-            last_seen_published: Mutex::new(None),
+            last_seen_generation: Mutex::new(boot_generation),
             stale_check_interval: STALE_OFFSET_CHECK_INTERVAL,
         })
+    }
+
+    /// Phase29d §1.3 — write the observed room incarnation into the
+    /// durable ledger next to the cursor. Best-effort: a ledger write
+    /// failure must never break the poll loop, and the in-memory
+    /// baseline still guards the rest of this process's lifetime.
+    fn persist_generation(&self, generation: u64) {
+        let Some(metadata) = &self.metadata else {
+            return;
+        };
+        // Mirror the flush path's error handling rather than swallowing
+        // with `let _ =`: a silent no-op here is invisible until the
+        // NEXT boot resumes with a stale baseline, which is precisely
+        // the failure mode this column exists to prevent (observed
+        // live: the heal fired and the pipeline recovered, but the
+        // ledger kept the pre-wipe generation with no trace of why).
+        match metadata.lock() {
+            Ok(guard) => {
+                if let Err(e) = guard.consumer_offset_generation_set(
+                    &self.consumer_id,
+                    &self.stream,
+                    generation,
+                ) {
+                    tracing::warn!(
+                        consumer_id = %self.consumer_id,
+                        stream = %self.stream,
+                        generation,
+                        error = %e,
+                        "failed to persist room generation; the in-memory baseline still \
+                         guards this process, but the next boot will resume without one"
+                    );
+                }
+            }
+            Err(_) => tracing::warn!(
+                consumer_id = %self.consumer_id,
+                stream = %self.stream,
+                generation,
+                "metadata mutex poisoned; room generation not persisted"
+            ),
+        }
     }
 
     /// Expose the offset tracker (useful for metrics / tests).
@@ -466,24 +522,30 @@ impl SynapConsumer for LiveSynapConsumer {
             }
         };
 
-        // Phase29c/§29d — wipe self-heal. A synap restart wipes rooms
-        // back to offset 0, but this consumer's DURABLE SQLite ledger
-        // still holds the pre-wipe offset — consume() then reads
-        // past the (or a NEW generation's) head forever and the
+        // Phase29c/§29d/§1.3 — wipe self-heal. A synap restart wipes
+        // rooms back to offset 0, but this consumer's DURABLE SQLite
+        // ledger still holds the pre-wipe offset — consume() then
+        // reads past the (or a NEW generation's) head forever and the
         // worker starves or silently skips events (found live: room
         // max_offset=0/count=1 while the ledger held thousands).
         // Whenever the cursor is past genesis, probe `stream.stats`
         // (bounded to once per `stale_check_interval`, on ANY poll —
         // phase29d promoted this from "only on empty polls" so a
         // LAGGING consumer whose stale cursor happens to land inside
-        // the new generation's valid offset range still gets checked)
-        // and heal on either signal:
-        //   1. cursor beyond the room head (phase29c — the common
-        //      case; misses the exact cursor == head_next coincidence).
-        //   2. `total_published` dropped below the remembered
-        //      baseline (phase29d — `total_published` resets on a
-        //      wipe, so a decrease is direct wipe evidence even when
-        //      check 1 does not fire).
+        // the new generation's valid offset range still gets checked).
+        //
+        // Phase29d §1.3 — synap 1.3.1 (synap#257) ships `generation`,
+        // a strictly-increasing room-incarnation id that changes on
+        // every (re)creation including server restarts. That is now
+        // the PRIMARY wipe signal — a generation CHANGE is definitive
+        // wipe evidence even in the exact cursor == head_next
+        // coincidence the phase29c/29d interim published-decrease
+        // heuristic could not see. `generation == 0` means the server
+        // predates 1.3.1 (the field is absent, defaulting via serde);
+        // the legacy `cursor > head_next` comparison is kept ONLY as
+        // a fallback for that case — it is strictly weaker (it cannot
+        // see the equality coincidence) and never reintroduces the
+        // deleted published-decrease bookkeeping.
         // Replaying the (small, post-wipe) room is safe because every
         // downstream write is idempotent (MERGE + in-memory dedup).
         if offset > 0 {
@@ -502,47 +564,87 @@ impl SynapConsumer for LiveSynapConsumer {
             };
             if due {
                 if let Ok(stats) = self.handle.streams().stats(room).await {
-                    let head_next = if stats.message_count == 0 {
-                        0
-                    } else {
-                        stats.max_offset.saturating_add(1)
-                    };
-                    let published = stats.total_published;
-                    let remembered = {
-                        let guard = self
-                            .last_seen_published
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        *guard
-                    };
-                    // The cursor is always a valid lower bound on the
-                    // current generation's published count, keeping
-                    // the baseline fresh even when probes are sparse.
-                    let baseline = remembered.unwrap_or(0).max(offset);
-                    if offset > head_next || published < baseline {
-                        tracing::warn!(
-                            room,
-                            stale_offset = offset,
-                            room_head_next = head_next,
-                            probed_published = published,
-                            baseline,
-                            "durable offset appears wiped (cursor beyond head or published count decreased); self-healing cursor to 0"
-                        );
-                        self.tracker.seed(0);
-                        if let Some(metadata) = &self.metadata {
-                            if let Ok(guard) = metadata.lock() {
-                                // consumer_offset_upsert has a MAX()
-                                // monotonic guard (correct for acks);
-                                // a rewind needs the force-set API.
-                                let _ =
-                                    guard.consumer_offset_set(&self.consumer_id, &self.stream, 0);
+                    let gen = stats.generation;
+                    if gen != 0 {
+                        let remembered = {
+                            let guard = self
+                                .last_seen_generation
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            *guard
+                        };
+                        match remembered {
+                            None => {
+                                // First observation says nothing about
+                                // a wipe by itself — just record the
+                                // baseline generation. Phase29d §1.3:
+                                // persist it too, so the NEXT boot has
+                                // a real baseline to compare the
+                                // durable cursor against.
+                                if let Ok(mut guard) = self.last_seen_generation.lock() {
+                                    *guard = Some(gen);
+                                }
+                                self.persist_generation(gen);
+                            }
+                            Some(prev) if prev != gen => {
+                                tracing::warn!(
+                                    room,
+                                    stale_offset = offset,
+                                    prev_generation = prev,
+                                    new_generation = gen,
+                                    "room generation changed since last probe (synap wipe); self-healing cursor to 0"
+                                );
+                                self.tracker.seed(0);
+                                if let Some(metadata) = &self.metadata {
+                                    if let Ok(guard) = metadata.lock() {
+                                        // consumer_offset_upsert has a
+                                        // MAX() monotonic guard
+                                        // (correct for acks); a
+                                        // rewind needs the force-set
+                                        // API.
+                                        let _ = guard.consumer_offset_set(
+                                            &self.consumer_id,
+                                            &self.stream,
+                                            0,
+                                        );
+                                    }
+                                }
+                                if let Ok(mut guard) = self.last_seen_generation.lock() {
+                                    *guard = Some(gen);
+                                }
+                                self.persist_generation(gen);
+                            }
+                            Some(_) => {
+                                // Same incarnation as the last probe —
+                                // no heal needed.
                             }
                         }
-                        if let Ok(mut guard) = self.last_seen_published.lock() {
-                            *guard = Some(published);
+                    } else {
+                        // Fallback for pre-1.3.1 servers only (see the
+                        // block comment above `if offset > 0`).
+                        let head_next = if stats.message_count == 0 {
+                            0
+                        } else {
+                            stats.max_offset.saturating_add(1)
+                        };
+                        if offset > head_next {
+                            tracing::warn!(
+                                room,
+                                stale_offset = offset,
+                                room_head_next = head_next,
+                                "durable offset appears wiped (cursor beyond head; pre-1.3.1 fallback); self-healing cursor to 0"
+                            );
+                            self.tracker.seed(0);
+                            if let Some(metadata) = &self.metadata {
+                                if let Ok(guard) = metadata.lock() {
+                                    let _ = guard.consumer_offset_set(
+                                        &self.consumer_id,
+                                        &self.stream,
+                                        0,
+                                    );
+                                }
+                            }
                         }
-                    } else if let Ok(mut guard) = self.last_seen_published.lock() {
-                        *guard = Some(remembered.unwrap_or(0).max(published));
                     }
                 }
             }
