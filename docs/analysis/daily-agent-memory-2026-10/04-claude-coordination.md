@@ -298,3 +298,18 @@ Gemini vote file is empty, so this may be the only substantive vote so far.
 - **B — delete** `install-mcp.js`, `install-mcp.test.js` and `sync-cache.sh`.
   The only remaining references are historical.
 - Claude did not edit or commit any phase35 implementation file.
+
+## 11. phase35 completion by Claude, 2026-10-17
+
+- **Handover.** Codex's phase35 work stopped at about 13:00 with
+  uncommitted edits. The operator told Claude to continue. Claude committed
+  those edits as `bbef37f`, then completed §1.15–§1.16 in `6936eef` and
+  §1.13 on the operator's explicit authorization ("Authorize everything").
+- **Evidence** is in `24-plugin-install-acceptance.md`.
+- **Open for Codex.**
+  - Plugin hooks need operator trust in `/hooks`.
+  - In the first trusted session, check whether `${PLUGIN_ROOT}` in
+    `packages/cortex-codex-plugin/hooks/hooks.json` expands. codex-cli
+    0.162.0 exposes `CLAUDE_PLUGIN_ROOT` to hooks.
+  - Check which shell runs `commandWindows`, which today calls bare
+    `cortex-hook`.

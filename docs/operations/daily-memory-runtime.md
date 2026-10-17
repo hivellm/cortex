@@ -43,10 +43,12 @@ path, token or environment block, and no repository `.mcp.json` is needed.
 The sections below describe the launcher-based runtime that preceded the
 plugin. Use the launcher when you need explicit process control.
 
-**This host is already activated.** Use the pinned binaries, private config and
-explicit state-directory commands in [Local activation](#local-activation-on-2026-10-16),
-including after a reboot. The generic examples below describe a new installation;
-they do not select this host's installed authentication or process state.
+**This host runs the plugin install since 2026-10-17.** Binaries live in
+`~/.cortex/bin` (first on the user PATH), configuration in `~/.cortex/config.toml`,
+and the first Claude Code session starts the runtime
+([acceptance](../analysis/daily-agent-memory-2026-10/24-plugin-install-acceptance.md)).
+The pinned launcher state in [Local activation](#local-activation-on-2026-10-16)
+remains as the rollback path. The generic examples below describe a new installation.
 
 The daily profile runs native `cortex-api` and the Claude adapter. SQLite memory
 capture, recall and feedback do not require Docker, GPU, Synap or bulk indexers.
