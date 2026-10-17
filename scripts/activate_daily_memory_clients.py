@@ -89,7 +89,7 @@ def patch_hooks(data, hook, pipe):
 
 
 def plan(args):
-    home, repo, binary = args.home.resolve(), args.repo.resolve(), args.bin_dir.resolve()
+    home, binary = args.home.resolve(), args.bin_dir.resolve()
     runtime = args.runtime_config.resolve()
     if not runtime.is_file():
         raise ValueError(f"Runtime config missing: {runtime}")
@@ -104,7 +104,11 @@ def plan(args):
     env = {"CORTEX_API_URL": args.api_url, "CORTEX_RUNTIME_PROFILE": "daily",
            "CORTEX_CONFIG_FILE": runtime.as_posix(), "CORTEX_ADAPTER_PIPE": args.pipe,
            "CORTEX_ADAPTER_SOCK": args.pipe}
-    paths = [(home / ".claude.json", "mcp"), (repo / ".mcp.json", "mcp"),
+    # Only machine-local client files: the pinned binary and runtime config
+    # paths are absolute and host-specific, so the versioned repository
+    # .mcp.json never carries the Cortex entry. Claude Code reads the
+    # user-scope entry from ~/.claude.json in every project, this one included.
+    paths = [(home / ".claude.json", "mcp"),
              (home / ".claude/settings.json", "hooks"),
              (home / ".codex/config.toml", "toml"),
              (home / ".kimi-code/mcp.json", "mcp")]
@@ -176,7 +180,6 @@ def apply(changes, expected):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", type=Path, default=Path("C:/Users/Bolado"))
-    parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--runtime-config", type=Path, required=True)
     parser.add_argument("--api-url", default="http://127.0.0.1:17000")

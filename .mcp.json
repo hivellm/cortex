@@ -7,20 +7,6 @@
         "--package=@hivehub/rulebook@7.5.0",
         "rulebook-mcp"
       ]
-    },
-    "cortex": {
-      "type": "stdio",
-      "command": "E:/HiveLLM/Cortex/.cortex-state/daily-runtime/bin/cortex-mcp-server.exe",
-      "args": [
-        "serve"
-      ],
-      "env": {
-        "CORTEX_API_URL": "http://127.0.0.1:17000",
-        "CORTEX_ADAPTER_SOCK": "\\\\.\\pipe\\cortex-adapter-claude",
-        "CORTEX_RUNTIME_PROFILE": "daily",
-        "CORTEX_CONFIG_FILE": "E:/HiveLLM/Cortex/.cortex-state/daily-runtime/runtime.toml",
-        "CORTEX_ADAPTER_PIPE": "\\\\.\\pipe\\cortex-adapter-claude"
-      }
     }
   }
 }

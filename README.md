@@ -209,18 +209,26 @@ Default host ports (override via `.env`):
 
 ## 🔧 MCP Integration
 
-`.mcp.json` for a project that uses Cortex:
+Cortex is registered at **user scope** (`~/.claude.json`, `~/.codex/config.toml`),
+not in a repository `.mcp.json`. The entry points at a pinned binary and a
+private runtime config, both host-specific absolute paths, so it must never be
+committed. `scripts/activate_daily_memory_clients.py` writes it after a dry-run
+review (see the [daily runtime guide](docs/operations/daily-memory-runtime.md)).
+Its shape:
 
 ```json
 {
   "mcpServers": {
     "cortex": {
       "type": "stdio",
-      "command": "cortex-mcp-server",
+      "command": "<bin-dir>/cortex-mcp-server.exe",
       "args": ["serve"],
       "env": {
         "CORTEX_API_URL": "http://127.0.0.1:17000",
-        "CORTEX_ADAPTER_SOCK": "~/.cortex/adapter-claude.sock"
+        "CORTEX_RUNTIME_PROFILE": "daily",
+        "CORTEX_CONFIG_FILE": "<state-dir>/runtime.toml",
+        "CORTEX_ADAPTER_PIPE": "\\\\.\\pipe\\cortex-adapter-claude",
+        "CORTEX_ADAPTER_SOCK": "\\\\.\\pipe\\cortex-adapter-claude"
       }
     }
   }
