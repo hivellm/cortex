@@ -1,12 +1,28 @@
 {
   "name": "cortex",
-  "description": "Cortex retrieval, pre-thinking context, law check, and audit surfaces for Claude Code sessions. Adds three MCP tools (cortex_query, cortex_pre_thinking, cortex_status), three skills, three sub-agents, and six slash commands backed by the local Cortex daemon.",
-  "version": "0.1.0",
+  "displayName": "Cortex",
+  "description": "Cortex daily memory for Claude Code. Hands each lifecycle event to the installed cortex-hook binary, which starts the local Cortex runtime on demand and returns saved memory context, and adds the daily Cortex MCP tools. Requires the Cortex binaries (cortex-hook, cortex-mcp-server, cortex-api, cortex-adapter-claude) installed with `cortex-ops install-binaries` and a user configuration written by `cortex-ops setup`. No telemetry; nothing leaves this machine.",
+  "version": "0.2.0",
   "author": {
     "name": "HiveLLM",
     "email": "hello@hivellm.org"
   },
   "homepage": "https://github.com/hivellm/cortex",
   "repository": "https://github.com/hivellm/cortex",
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "keywords": ["memory", "mcp", "hooks", "context"],
+  "userConfig": {
+    "bin_dir": {
+      "type": "string",
+      "title": "Cortex binary directory",
+      "description": "Absolute path of the directory holding cortex-hook, only needed when it is neither on PATH nor in ~/.cortex/bin. A relative path is ignored.",
+      "default": ""
+    },
+    "api_url": {
+      "type": "string",
+      "title": "Cortex API URL",
+      "description": "Base URL of the local Cortex API. Leave empty to use dashboard.api_url from ~/.cortex/config.toml (http://127.0.0.1:17000 by default).",
+      "default": ""
+    }
+  }
 }

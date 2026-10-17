@@ -463,3 +463,39 @@ async fn native_stdin_timeout_and_packaged_missing_binary_return_empty_success()
         json!({})
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn packaged_plugin_skips_events_that_legacy_settings_hooks_deliver() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let settings = home.join(".claude");
+    std::fs::create_dir_all(&settings).unwrap();
+    std::fs::write(
+        settings.join("settings.json"),
+        json!({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "cortex-hook UserPromptSubmit"}]}]}})
+            .to_string(),
+    )
+    .unwrap();
+    let reply = json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "plugin path"}});
+    let (endpoint, mut captured, task) = peer(root.path(), Some(reply.clone())).await;
+    let payload = json!({"session_id": "dup-session", "prompt": "hi"}).to_string();
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", true, 1500);
+    command
+        .env("CLAUDE_CONFIG_DIR", &settings)
+        .env("CLAUDE_PLUGIN_ROOT", home.join("plugin root"));
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, json!({}));
+    assert!(
+        captured.try_recv().is_err(),
+        "legacy-delivered event reached the daemon twice"
+    );
+
+    std::fs::write(settings.join("settings.json"), "{}").unwrap();
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", true, 1500);
+    command
+        .env("CLAUDE_CONFIG_DIR", &settings)
+        .env("CLAUDE_PLUGIN_ROOT", home.join("plugin root"));
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, reply);
+    assert_eq!(captured.await.unwrap()["hook"], "UserPromptSubmit");
+    task.abort();
+}

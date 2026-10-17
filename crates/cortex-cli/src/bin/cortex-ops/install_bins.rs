@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use cortex_adapter_claude_code::legacy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -250,7 +251,15 @@ pub(super) fn doctor_install(
         eprintln!("doctor-install: no Cortex home; set CORTEX_HOME or pass --bin-dir");
         return ExitCode::FAILURE;
     };
-    let findings = diagnose(&bin_dir, &path_dirs(), build.as_deref());
+    let mut findings = diagnose(&bin_dir, &path_dirs(), build.as_deref());
+    let home = std::env::var_os("USERPROFILE")
+        .filter(|v| !v.is_empty())
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
+    let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+    if let Some(settings) = legacy::settings_path(claude_dir.as_deref(), home.as_deref()) {
+        findings.extend(double_install(&settings));
+    }
     if json {
         match serde_json::to_string_pretty(&findings) {
             Ok(text) => println!("{text}"),
@@ -272,6 +281,22 @@ pub(super) fn doctor_install(
     } else {
         ExitCode::from(2)
     }
+}
+
+fn double_install(settings_path: &Path) -> Option<Finding> {
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(settings_path).ok()?).ok()?;
+    let events = legacy::legacy_events(&settings);
+    (legacy::plugin_enabled(&settings) && !events.is_empty()).then(|| Finding {
+        binary: "claude-settings",
+        status: "double_install",
+        resolved: Some(settings_path.to_path_buf()),
+        detail: format!(
+            "plugin {} is enabled and settings hooks still deliver: {}",
+            legacy::PLUGIN_ID,
+            events.into_iter().collect::<Vec<_>>().join(", ")
+        ),
+    })
 }
 
 #[cfg(test)]
@@ -366,5 +391,28 @@ mod tests {
         let hook = tampered.iter().find(|f| f.binary == "cortex-hook").unwrap();
         assert_eq!(hook.status, "stale");
         assert_eq!(hook.detail, "differs from install manifest");
+    }
+
+    #[test]
+    fn double_install_is_reported_only_with_plugin_and_legacy_hooks() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.json");
+        let hook = serde_json::json!({"command": "cortex-hook Stop"});
+        let write = |plugin: bool, hooks: bool| {
+            let mut settings = serde_json::json!({"enabledPlugins": {legacy::PLUGIN_ID: plugin}});
+            if hooks {
+                settings["hooks"] = serde_json::json!({"Stop": [{"hooks": [hook.clone()]}]});
+            }
+            std::fs::write(&path, settings.to_string()).unwrap();
+        };
+        write(true, true);
+        let finding = double_install(&path).unwrap();
+        assert_eq!(finding.status, "double_install");
+        assert!(finding.detail.ends_with("Stop"));
+        write(false, true);
+        assert!(double_install(&path).is_none());
+        write(true, false);
+        assert!(double_install(&path).is_none());
+        assert!(double_install(&root.path().join("absent.json")).is_none());
     }
 }

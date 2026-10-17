@@ -704,6 +704,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "cortex-adapter-claude-code",
  "cortex-api",
  "cortex-build",
  "cortex-config",

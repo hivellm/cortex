@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" SessionStart",
+            "commandWindows": "cortex-hook SessionStart"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" UserPromptSubmit",
+            "commandWindows": "cortex-hook UserPromptSubmit"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" PreToolUse",
+            "commandWindows": "cortex-hook PreToolUse"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" PostToolUse",
+            "commandWindows": "cortex-hook PostToolUse --fire-forget"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" Stop",
+            "commandWindows": "cortex-hook Stop --fire-forget"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,40 @@
+#!/bin/sh
+# Cortex Codex plugin hook launcher. Usage: cortex-hook-launcher <Event>
+#
+# Hands one Codex lifecycle event to the installed cortex-hook binary, which
+# owns bounded I/O, on-demand runtime start and the once-per-session notice.
+# Without a binary it drains stdin, prints an empty JSON reply and exits 0.
+event="${1:-}"
+
+case "$event" in
+    SessionStart | UserPromptSubmit | PreToolUse) flag="" ;;
+    PostToolUse | Stop) flag="--fire-forget" ;;
+    *)
+        cat >/dev/null
+        printf '{}\n'
+        exit 0
+        ;;
+esac
+
+bin=""
+if command -v cortex-hook >/dev/null 2>&1; then
+    bin=$(command -v cortex-hook)
+else
+    for candidate in "${HOME:-}/.cortex/bin/cortex-hook" "${HOME:-}/.cortex/bin/cortex-hook.exe" \
+        "${HOME:-}/.cargo/bin/cortex-hook"; do
+        if [ -f "$candidate" ]; then
+            bin="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$bin" ]; then
+    cat >/dev/null
+    printf '{}\n'
+    exit 0
+fi
+
+CORTEX_HOOK_ORIGIN=codex-plugin
+export CORTEX_HOOK_ORIGIN
+# shellcheck disable=SC2086
+exec "$bin" "$event" $flag

@@ -155,6 +155,26 @@ fn main() {
     }
     args.pipe = args.pipe.or(cfg.adapter.adapter_pipe);
     args.sock = args.sock.or(cfg.adapter.adapter_sock);
+    if std::env::var("CORTEX_HOOK_ORIGIN").as_deref() == Ok("plugin") {
+        let event = args.event.clone();
+        let delivered_by_settings = blocking_until(io_deadline, move || {
+            cortex_adapter_claude_code::legacy::settings_path(
+                std::env::var_os("CLAUDE_CONFIG_DIR")
+                    .map(PathBuf::from)
+                    .as_deref(),
+                home_dir().as_deref(),
+            )
+            .is_some_and(|path| {
+                cortex_adapter_claude_code::legacy::read_legacy_events(&path).contains(&event)
+            })
+        });
+        // Unknown (budget spent) also skips: legacy hooks may deliver it.
+        if delivered_by_settings != Some(false) {
+            let _ = blocking_until(io_deadline, || read_bounded(std::io::stdin().lock()));
+            println!("{{}}");
+            return;
+        }
+    }
     let event = args.event.clone();
     let frame = match blocking_until(io_deadline, move || {
         let input = read_bounded(std::io::stdin().lock()).ok()?;

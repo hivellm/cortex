@@ -1,0 +1,20 @@
+{
+  "name": "hivellm-cortex",
+  "owner": {
+    "name": "HiveLLM",
+    "email": "hello@hivellm.org"
+  },
+  "metadata": {
+    "description": "Cortex daily memory for Claude Code: lifecycle capture, local memory context and the daily MCP tools, backed by the Cortex binaries on this machine."
+  },
+  "plugins": [
+    {
+      "name": "cortex",
+      "source": "./packages/cortex-claude-plugin",
+      "description": "Cortex daily memory: captures Claude Code lifecycle events through the installed cortex-hook, starts the local runtime on demand, and adds the daily Cortex MCP tools. No paths, tokens or environment blocks in any client file.",
+      "version": "0.2.0",
+      "repository": "https://github.com/hivellm/cortex",
+      "homepage": "https://github.com/hivellm/cortex"
+    }
+  ]
+}

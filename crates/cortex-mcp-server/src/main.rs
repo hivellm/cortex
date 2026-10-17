@@ -25,7 +25,8 @@ struct Cli {
 
     /// Override the Cortex API URL. Defaults to `$CORTEX_API_URL` or
     /// `http://127.0.0.1:17000` (the workspace's canonical
-    /// `CORTEX_API_PORT`).
+    /// `CORTEX_API_PORT`). An empty value is ignored, so a plugin can pass
+    /// an unset user option through unchanged.
     #[arg(long, global = true)]
     api_url: Option<String>,
 }
@@ -45,6 +46,7 @@ enum Cmd {
 
 fn tool_context(cli_override: Option<String>, config: cortex_config::Config) -> ToolContext {
     let api_url = cli_override
+        .filter(|url| !url.is_empty())
         .or(config.dashboard.api_url)
         .unwrap_or_else(|| cortex_mcp_server::DEFAULT_API_URL.to_string());
     let context = ToolContext::new(api_url);
@@ -110,6 +112,16 @@ mod tests {
         let context = tool_context(Some("http://127.0.0.1:17002".into()), config);
         assert_eq!(context.api_url, "http://127.0.0.1:17002");
         assert_eq!(context.api_key.as_deref(), Some("synthetic-token"));
+    }
+
+    #[test]
+    fn empty_cli_url_defers_to_configuration() {
+        let mut config = cortex_config::Config::default();
+        config.dashboard.api_url = Some("http://127.0.0.1:17003".into());
+        assert_eq!(
+            tool_context(Some(String::new()), config).api_url,
+            "http://127.0.0.1:17003"
+        );
     }
 
     #[test]

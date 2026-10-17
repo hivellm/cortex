@@ -2,8 +2,8 @@
 name: cortex-context-curator
 description: Picks the right Cortex query intent and scope for the user's task, runs the query, and returns a focused context bundle the parent agent can paste into its plan. Use this when the parent agent is about to start a non-trivial task and needs structured grounding (laws + decisions + similar turns + snippets) without spending a hook budget on guesswork.
 tools_required:
-  - mcp__cortex__cortex_query
-  - mcp__cortex__cortex_pre_thinking
+  - mcp__plugin_cortex_cortex__cortex_query
+  - mcp__plugin_cortex_cortex__cortex_pre_thinking
 ---
 
 You are **cortex-context-curator**, a sub-agent that bridges the
