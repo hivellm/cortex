@@ -1007,6 +1007,15 @@ pub struct AdapterConfig {
     /// socket/pipe binding. Env: `CORTEX_ADAPTER_HTTP_BIND`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub http_bind: Option<String>,
+    /// Phase35 — whether `cortex-hook` may start the daily runtime when the
+    /// default endpoint is absent. `None` means enabled. Env:
+    /// `CORTEX_HOOK_AUTOSTART` (`0`/`1` accepted by the hook).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_autostart: Option<bool>,
+    /// Phase35 — who launched `cortex-hook`; `plugin` enables the legacy
+    /// settings duplicate guard. Env: `CORTEX_HOOK_ORIGIN`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_origin: Option<String>,
 }
 
 // -------------------------------------------------------------

@@ -176,7 +176,9 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_GRAPH_TRANSPORT", "/nexus/transport"),
     ("CORTEX_GRAPH_WORKERS", "/nexus/workers"),
     ("CORTEX_HOME", "/ingestion/home"),
+    ("CORTEX_HOOK_AUTOSTART", "/adapter/hook_autostart"),
     ("CORTEX_HOOK_FORCE_FALLBACK", "/adapter/hook_force_fallback"),
+    ("CORTEX_HOOK_ORIGIN", "/adapter/hook_origin"),
     (
         "CORTEX_INDEX_LOW_SIGNAL_TOOL_CALLS",
         "/meili/index_low_signal_tool_calls",

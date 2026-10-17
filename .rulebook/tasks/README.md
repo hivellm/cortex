@@ -91,5 +91,5 @@
 
 | Status | Task | Progress | Description |
 |--------|------|----------|-------------|
-| 🔄 | phase35_self-contained-plugin-install | 0/19 | self contained plugin install |
+| 🔄 | phase35_self-contained-plugin-install | 13/19 | self contained plugin install |
 

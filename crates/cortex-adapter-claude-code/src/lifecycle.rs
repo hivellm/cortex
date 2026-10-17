@@ -46,17 +46,18 @@ pub enum StartDecision {
 /// Whether a hook should try to start the runtime after a failed exchange:
 /// only synchronous events, only for the default endpoint (an explicit pipe or
 /// socket names a runtime this hook does not own), only when the endpoint is
-/// absent rather than slow, and never when `CORTEX_HOOK_AUTOSTART` is `0`.
+/// absent rather than slow, and never when autostart is disabled
+/// (`adapter.hook_autostart = false`, env `CORTEX_HOOK_AUTOSTART=0`).
 #[must_use]
 pub fn should_autostart(
     event: &str,
     explicit_endpoint: bool,
-    autostart_env: Option<&str>,
+    autostart_enabled: bool,
     error: ErrorKind,
 ) -> bool {
     matches!(event, "SessionStart" | "UserPromptSubmit" | "PreToolUse")
         && !explicit_endpoint
-        && autostart_env != Some("0")
+        && autostart_enabled
         && matches!(error, ErrorKind::NotFound | ErrorKind::ConnectionRefused)
 }
 
@@ -295,37 +296,37 @@ mod tests {
     #[test]
     fn autostart_only_for_absent_default_endpoint_on_synchronous_events() {
         for event in ["SessionStart", "UserPromptSubmit", "PreToolUse"] {
-            assert!(should_autostart(event, false, None, ErrorKind::NotFound));
+            assert!(should_autostart(event, false, true, ErrorKind::NotFound));
             assert!(should_autostart(
                 event,
                 false,
-                Some("1"),
+                true,
                 ErrorKind::ConnectionRefused
             ));
         }
-        assert!(!should_autostart("Stop", false, None, ErrorKind::NotFound));
+        assert!(!should_autostart("Stop", false, true, ErrorKind::NotFound));
         assert!(!should_autostart(
             "SessionStart",
             true,
-            None,
+            true,
             ErrorKind::NotFound
         ));
         assert!(!should_autostart(
             "SessionStart",
             false,
-            Some("0"),
+            false,
             ErrorKind::NotFound
         ));
         assert!(!should_autostart(
             "SessionStart",
             false,
-            None,
+            true,
             ErrorKind::TimedOut
         ));
         assert!(!should_autostart(
             "SessionStart",
             false,
-            None,
+            true,
             ErrorKind::InvalidData
         ));
     }

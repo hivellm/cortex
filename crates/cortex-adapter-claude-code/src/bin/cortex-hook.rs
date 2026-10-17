@@ -153,9 +153,11 @@ fn main() {
         println!("{{}}");
         return;
     }
+    let autostart_enabled = cfg.adapter.hook_autostart.unwrap_or(true);
+    let plugin_origin = cfg.adapter.hook_origin.as_deref() == Some("plugin");
     args.pipe = args.pipe.or(cfg.adapter.adapter_pipe);
     args.sock = args.sock.or(cfg.adapter.adapter_sock);
-    if std::env::var("CORTEX_HOOK_ORIGIN").as_deref() == Ok("plugin") {
+    if plugin_origin {
         let event = args.event.clone();
         let delivered_by_settings = blocking_until(io_deadline, move || {
             cortex_adapter_claude_code::legacy::settings_path(
@@ -229,7 +231,7 @@ fn main() {
             if should_autostart(
                 &args.event,
                 explicit_endpoint(&args),
-                std::env::var("CORTEX_HOOK_AUTOSTART").ok().as_deref(),
+                autostart_enabled,
                 kind,
             ) =>
         {
@@ -296,10 +298,11 @@ fn load_hook_config() -> io::Result<cortex_config::Config> {
     cortex_config::Config::load_from(&path, |name| {
         let value = std::env::var(name).ok()?;
         // Legacy hook scripts use 0/1, while typed configuration uses bools.
-        Some(if name == "CORTEX_ADAPTER_DISABLE" && value == "0" {
-            "false".into()
-        } else {
-            value
+        let boolean = matches!(name, "CORTEX_ADAPTER_DISABLE" | "CORTEX_HOOK_AUTOSTART");
+        Some(match value.as_str() {
+            "0" if boolean => "false".into(),
+            "1" if boolean => "true".into(),
+            _ => value,
         })
     })
     .map_err(|_| invalid_data("invalid hook configuration"))
