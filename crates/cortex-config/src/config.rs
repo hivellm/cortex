@@ -7,7 +7,7 @@ use crate::runtime::{RuntimeConfig, RuntimeProfile};
 use crate::sub::{
     AccessControlConfig, AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig,
     ClassifierConfig, ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig,
-    DoctorConfig, EmbedderConfig, IngestionConfig, McpConfig, MeiliConfig, NexusConfig,
+    DoctorConfig, EmbedderConfig, IngestionConfig, LawsConfig, McpConfig, MeiliConfig, NexusConfig,
     PreThinkingConfig, RerankerConfig, RetentionConfig, RulebookConfig, TemporalConfig,
     VerifyConfig,
 };
@@ -105,6 +105,11 @@ pub struct Config {
     /// Default OFF for backward compatibility (ADR-1.3).
     #[serde(default)]
     pub access_control: AccessControlConfig,
+    /// Phase31 §1.1 — spec-13 governance law registry. Empty by
+    /// default: no directory configured means no laws, and the
+    /// evaluator answers every check with zero violations.
+    #[serde(default)]
+    pub laws: LawsConfig,
 }
 
 fn default_schema_version() -> String {
@@ -138,6 +143,7 @@ impl Default for Config {
             reranker: RerankerConfig::default(),
             verify: VerifyConfig::default(),
             access_control: AccessControlConfig::default(),
+            laws: LawsConfig::default(),
         }
     }
 }

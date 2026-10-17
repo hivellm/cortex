@@ -183,6 +183,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ),
     ("CORTEX_INGESTION_BIND", "/ingestion/bind"),
     ("CORTEX_INGESTION_URL", "/ingestion/ingestion_url"),
+    // Phase31 §1.1 — governance law registry (spec 13). Directory of
+    // `.yml` law definitions loaded at cortex-api boot; unset or
+    // missing yields an empty registry, never a boot failure.
+    ("CORTEX_LAWS_DIR", "/laws/dir"),
     ("CORTEX_MCP_TOOL_TIMEOUT_MS", "/mcp/default_timeout_ms"),
     ("CORTEX_MEILI_REFRESH_SECS", "/dashboard/meili_refresh_secs"),
     ("CORTEX_METADATA_DB", "/ingestion/metadata_db"),

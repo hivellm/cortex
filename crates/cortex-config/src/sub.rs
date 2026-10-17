@@ -1541,3 +1541,52 @@ mod tests_reranker_config {
         assert_eq!(cfg.timeout_ms, 500);
     }
 }
+
+// ── Phase31 §1.1 — governance law registry ───────────────────────────────────
+
+/// Phase31 §1.1 — spec-13 law-engine knobs.
+///
+/// The registry is loaded once at cortex-api boot from [`Self::dir`].
+/// An unset or non-existent directory yields an EMPTY registry rather
+/// than a boot failure — governance is an overlay, and a deployment
+/// that ships no laws must still serve queries. `LawRegistry::load`
+/// already returns `Ok` for a missing directory; this config only
+/// decides where to look.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LawsConfig {
+    /// Directory of `.yml` law definitions, loaded recursively.
+    /// `None` (the default) means "no laws" — the evaluator answers
+    /// every check with an empty violation list.
+    /// Env: `CORTEX_LAWS_DIR`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
+}
+
+#[cfg(test)]
+mod tests_laws_config {
+    use super::*;
+
+    #[test]
+    fn default_is_lawless_not_a_missing_path() {
+        // The absence of a configured directory must be representable
+        // without inventing a path that would then 404 at boot.
+        let cfg = LawsConfig::default();
+        assert!(cfg.dir.is_none());
+    }
+
+    #[test]
+    fn toml_round_trips() {
+        let cfg = LawsConfig {
+            dir: Some("/etc/cortex/laws".into()),
+        };
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: LawsConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn empty_toml_keeps_the_default() {
+        let cfg: LawsConfig = toml::from_str("").expect("parse");
+        assert!(cfg.dir.is_none());
+    }
+}
