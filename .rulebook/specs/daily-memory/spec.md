@@ -223,6 +223,13 @@ Then it requires the expected process identity, listener ownership and daily hea
 And unrelated processes and all existing volumes remain untouched
 And no OS schedule is created.
 
+#### Scenario: Hook-started runtime after a reboot
+Given no Cortex process is running and the hook uses the default adapter endpoint
+When a synchronous Claude Code or Codex hook finds the endpoint absent
+Then cortex-hook starts the sibling daily runtime detached under a spawn lock and backoff
+And the hook exits 0 within its budget, showing a notice only when the start fails
+And no Run key, scheduled task, Startup entry or service is registered.
+
 ### Requirement: Behavioral acceptance and independent review
 The system SHALL pass seeded exact-recall, correction, restart, scope, distractor,
 outage, resource and actual-delivery acceptance. Required integration jobs MUST

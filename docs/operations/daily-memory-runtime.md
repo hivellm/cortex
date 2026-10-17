@@ -1,5 +1,48 @@
 # Daily-memory runtime on Windows
 
+## Self-contained install (phase35)
+
+Cortex installs as a Claude Code or Codex plugin. No client file holds a Cortex
+path, token or environment block, and no repository `.mcp.json` is needed.
+
+1. **Binaries.** Build in release mode, then copy the four daily binaries into
+   `~/.cortex/bin` and add that directory to `PATH`:
+   `cortex-ops install-binaries --from target/release`, then the same command with
+   `--apply`. The installer verifies SHA-256, moves a running executable aside
+   before replacing it, and writes `install-manifest.json`.
+   `cortex-ops doctor-install` reports missing, shadowed or stale binaries, and a
+   double install.
+2. **Configuration.** `cortex-ops setup --from <runtime.toml>`, then the same
+   command with `--apply`. It writes `~/.cortex/config.toml` and moves
+   `dashboard.api_token` into `~/.cortex/api-token`, which is readable only by
+   the user (`icacls` on Windows, mode 0600 elsewhere). Every changed file is
+   backed up first. Binaries select one runtime file: `CORTEX_CONFIG_FILE`,
+   otherwise `<CORTEX_HOME or ~/.cortex>/config.toml`, otherwise `./cortex.toml`.
+   The MCP server and adapter read the token file when no token is configured.
+3. **Plugin.** Run `claude plugin marketplace add <repo>`, then
+   `claude plugin install cortex@hivellm-cortex`. For Codex, run
+   `codex plugin marketplace add <repo>`, install `cortex`, and trust its hooks
+   in `/hooks`.
+4. **Lifecycle.** The first synchronous hook that finds the adapter pipe absent
+   starts `cortex-api` and `cortex-adapter-claude daemon` from the directory
+   holding `cortex-hook`. A spawn lock and a 60 s backoff coordinate concurrent
+   hooks; logs and state live in `~/.cortex/lifecycle/`. The hook shows a notice
+   only when the start fails, once per session. Nothing is registered with the
+   OS, so after a reboot the first session brings the runtime back (ADR 040).
+   Set `CORTEX_HOOK_AUTOSTART=0` to keep starting manual. Hooks that pass an
+   explicit `--pipe` never start a runtime.
+5. **Migration.** After the plugin is installed and enabled, run
+   `python scripts/activate_daily_memory_clients.py --write-manifest m.json`,
+   review the plan, then run it with `--apply --expected-manifest m.json`. This
+   removes the old Cortex hooks and MCP entries from `~/.claude/settings.json`,
+   `~/.claude.json`, `~/.codex/config.toml` and `~/.codex/hooks.json`, plus a
+   `hivellm-cortex` marketplace registration whose directory no longer exists.
+   It writes verified backups and a record under `~/.cortex/migrations/`, which
+   `--rollback <record>` restores byte-for-byte. No other file is touched.
+
+The sections below describe the launcher-based runtime that preceded the
+plugin. Use the launcher when you need explicit process control.
+
 **This host is already activated.** Use the pinned binaries, private config and
 explicit state-directory commands in [Local activation](#local-activation-on-2026-10-16),
 including after a reboot. The generic examples below describe a new installation;

@@ -317,11 +317,13 @@ cortex-adapters status
 
 > **Spec 18 supersedes the standalone hook install path for users who install the Cortex Claude Code plugin.** The plugin's `hooks/hooks.json` registers the same shim catalogue at plugin-install time, so a fresh laptop only needs `claude plugin install cortex@hivellm-cortex` (plus `cargo install --path crates/cortex-adapter-claude-code` for the daemon binary) followed by `cortex-adapter-claude install --no-hooks` to bootstrap the daemon. The standalone `cortex-adapter-claude install` (without `--no-hooks`) remains the canonical path for non-plugin contexts (CI, headless, custom installs).
 
+> **Phase35 self-contained install.** The repository-root marketplace (`.claude-plugin/marketplace.json`) publishes `packages/cortex-claude-plugin`. Its hooks run the same canonical `cortex-*.sh` scripts, which find `cortex-hook` through an absolute override, `PATH` or `~/.cortex/bin`. Binaries come from `cortex-ops install-binaries`, and configuration and credential from `cortex-ops setup` under `~/.cortex`. No daemon service or OS autostart is installed: `cortex-hook` starts the runtime on demand (ADR 040). When legacy settings hooks remain, the plugin path skips the events they already deliver (`CORTEX_HOOK_ORIGIN=plugin`), and `cortex-ops doctor-install` reports the double install.
+
 ### Failure modes
 
 | Failure                                     | Handling                                                                   |
 |---------------------------------------------|----------------------------------------------------------------------------|
-| Daemon not running when a hook fires         | Hook prints `{}` to stdout and exits 0; event lost; Claude Code continues |
+| Daemon not running when a hook fires         | Phase35: a synchronous hook on the default endpoint starts the daily runtime (spawn lock, 10 s grace, 60 s backoff) and retries within its budget; otherwise it prints `{}` and exits 0. A notice appears only when the start fails, once per session |
 | `cortex-core` unreachable                    | Publisher retries; overflow WAL catches drops; adapter stays healthy       |
 | `cortex-api` unreachable (sync path)         | Empty `additionalContext`; allow on law check; async event still queued    |
 | Hook budget exceeded (>300 ms for laws)       | Fail-open; async follow-up                                                  |

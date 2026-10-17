@@ -1,153 +1,91 @@
-# Cortex — Claude Code plugin
+# Cortex: Claude Code plugin
 
-Brings the Cortex retrieval + governance stack into Claude Code sessions.
-Adds three MCP tools, three skills, three sub-agents, and six slash commands
-backed by the local Cortex daemon (`cortex-api` + `cortex-adapter-claude`).
+Daily Cortex memory for Claude Code. The plugin bundles the lifecycle hooks, a
+plugin-scoped MCP server and the skills, so no client file needs a Cortex path,
+token or environment block.
 
 ## What you get
 
-| Surface | Use it for |
+| Surface | What it does |
 |---|---|
-| `cortex_query` (MCP tool) | Hybrid retrieval (vector + keyword + graph) over everything Cortex captured. |
-| `cortex_pre_thinking` (MCP tool) | Refresh the system-prompt context bundle: laws + decisions + similar turns + snippets. |
-| `cortex_status` (MCP tool) | Daemon health: pid, queue depth, recent publisher errors, overflow WAL bytes. |
-| `cortex-context` (skill) | "Pull fresh context for what I'm about to do" — invokes pre-thinking. |
-| `cortex-audit` (skill) | "Audit turn `<id>`" — fetches the audit envelope. |
-| `cortex-laws` (skill) | "What laws apply here?" — surfaces active laws in scope. |
-| `cortex-historian` (sub-agent) | Decision-lookup specialist. Pull supersession chains + dates. |
-| `cortex-lawkeeper` (sub-agent) | Compliance auditor. Checks an action against active laws. |
-| `cortex-context-curator` (sub-agent) | Picks intent + scope + returns a focused bundle. |
-| `/cortex-status` | Daemon health. |
-| `/cortex-query <q>` | Free-text search across Cortex. |
-| `/cortex-laws` | Active laws in scope. |
-| `/cortex-decisions <topic>` | Decision lookup. |
-| `/cortex-pre-thinking` | Manually trigger a pre-thinking bundle (debug). |
-| `/cortex-audit <turn_id>` | Audit envelope for a past turn. |
-| Hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `Notification`) | Push every Claude Code session event into the local `cortex-adapter-claude` daemon for indexing. |
+| Hooks (`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStop`, `Notification`) | Hand each event to the installed `cortex-hook`. The hook starts the local runtime when it is not running and returns saved memory context to the session. |
+| MCP server `cortex` | Runs `cortex-mcp-server serve` from `PATH` with the daily tool surface: `cortex_memory_read`, `cortex_capture_memory`, `cortex_pre_thinking`, `cortex_query`, `cortex_status`, `cortex_audit`, `cortex_active_work`, `cortex_feedback_signals`, `cortex_feedback_record`, `cortex_acl_whoami`, `cortex_acl_grant`, `cortex_capabilities`. |
+| Skills | `cortex-memory` (save or recall decisions), `cortex-context`, `cortex-audit`, `cortex-laws`. |
+| Agents and commands | `cortex-historian`, `cortex-lawkeeper`, `cortex-context-curator`; `/cortex-status`, `/cortex-query`, `/cortex-laws`, `/cortex-decisions`, `/cortex-pre-thinking`, `/cortex-audit`. All of them use `cortex_query`, `cortex_pre_thinking` or `cortex_status`, which the daily runtime serves. |
 
 ## Install
 
-### Prerequisites
+1. Build and install the binaries into `~/.cortex/bin`, then put that directory
+   on `PATH`:
 
-- `cortex-api` running on `http://127.0.0.1:17000` (the default).
-- `cortex-mcp-server` and `cortex-adapter-claude` on `PATH`. From this repo:
-  ```bash
-  cargo install --path crates/cortex-mcp-server
-  cargo install --path crates/cortex-adapter-claude-code
-  ```
-  Or grab release artifacts and drop them in `~/.local/bin` / `%USERPROFILE%\.cargo\bin`.
-- The capture daemon socket: `cortex-adapter-claude install --no-hooks` once, then run the daemon (`cortex-adapter-claude daemon`).
-  - `--no-hooks` is important: the plugin's `hooks/hooks.json` already registers the same shim catalogue, and running both paths without it would fire each event twice. The flag keeps `~/.claude/settings.json` byte-identical to its pre-install state.
-- `bash` on `PATH` so the plugin's hook shims (`cortex-*.sh`) execute. On Windows the Claude Code harness already provides Git Bash.
-- On Windows: `pwsh` 7+ on `PATH`. The `.sh` shim detects `$OSTYPE` (`msys*` / `cygwin*` / `win32*`) and re-execs the sibling `.ps1` via `pwsh` because the daemon binds a Windows named pipe (`\\.\pipe\cortex-adapter-claude`) that Git Bash's `nc` / `socat` can't reach.
+   ```powershell
+   cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops
+   target\release\cortex-ops install-binaries --from target\release          # dry run
+   target\release\cortex-ops install-binaries --from target\release --apply
+   ```
 
-### As a marketplace (recommended)
+2. Write the user configuration and credential under `~/.cortex`. Run it as a
+   dry run first; `--from` migrates an existing runtime TOML and moves its
+   `dashboard.api_token` into `~/.cortex/api-token`:
 
-```text
-/plugin marketplace add hivellm/cortex
-/plugin install cortex@hivellm-cortex
-```
+   ```powershell
+   cortex-ops setup --from .cortex-state\daily-runtime\runtime.toml
+   cortex-ops setup --from .cortex-state\daily-runtime\runtime.toml --apply
+   ```
 
-### Local development
+3. Add the marketplace and install the plugin:
 
-```bash
-claude --plugin-dir ./packages/cortex-claude-plugin
-```
+   ```text
+   claude plugin marketplace add <path-or-git-url-of-this-repository>
+   claude plugin install cortex@hivellm-cortex
+   ```
 
-### Local marketplace (development) — re-syncing assets after edits
+   The marketplace lives at the repository root, in `.claude-plugin/marketplace.json`. To pin a
+   release, add the marketplace at a tag (`https://github.com/hivellm/cortex.git#v<version>`).
+   The plugin source is a path inside that checkout, so the tag pins it too.
 
-The marketplace JSON's `plugins[].source` field is **relative to the
-marketplace root** (the directory holding `.claude-plugin/`). For this
-plugin the source is `"./"` so Claude Code copies the entire plugin
-tree (hooks/, skills/, agents/, commands/, .claude-plugin/, .mcp.json,
-README.md) into
-`~/.claude/plugins/cache/hivellm-cortex/cortex/0.1.0/` on install.
+4. Start a new session. The first `SessionStart` starts the runtime when it
+   is not already running. Nothing is registered with the OS.
 
-After editing the plugin assets in the source tree, force the cache
-to refresh by running
+`cortex-ops doctor-install` reports a binary that is missing from `PATH`,
+shadowed by another `PATH` entry, or stale. It also reports a double install,
+where the plugin is enabled while legacy Cortex hooks remain in
+`~/.claude/settings.json`.
 
-```bash
-bash packages/cortex-claude-plugin/scripts/sync-cache.sh
-```
+## Options
 
-The script copies the source dir into the cache without needing a
-full `claude plugin uninstall && install` cycle. Then restart Claude
-Code so the loader picks up the new files. The `hooks.json` descriptor
-lives **inside** `hooks/` per the official Claude Code plugin
-convention (verified against the `hookify` and
-`claude-net-marketplace` reference plugins).
-
-### Migrating from the spec-10 standalone install
-
-If you previously ran `cortex-adapter-claude install` (without `--no-hooks`) and are now switching to the plugin path:
-
-```bash
-cortex-adapter-claude uninstall          # restores ~/.claude/settings.json byte-identical to pre-install
-claude plugin install cortex@hivellm-cortex
-cortex-adapter-claude install --no-hooks # bring the daemon back up; leaves settings.json alone
-```
-
-The plugin's `hooks/hooks.json` is now the single source of hook firing.
-
-## Configuration
-
-The plugin's `.mcp.json` carries two env vars the MCP server reads:
-
-| Var | Default | Purpose |
+| Option | Default | Meaning |
 |---|---|---|
-| `CORTEX_API_URL` | `http://127.0.0.1:17000` | `cortex-api` base URL |
-| `CORTEX_ADAPTER_SOCK` | `~/.cortex/adapter-claude.sock` | Adapter UDS for `cortex_status` |
+| `bin_dir` | empty | Absolute directory holding `cortex-hook`, needed only when it is neither on `PATH` nor in `~/.cortex/bin`. A relative value is ignored, so a checkout cannot supply the binary. |
+| `api_url` | empty | Cortex API URL. When empty, `dashboard.api_url` from `~/.cortex/config.toml` applies. |
 
-Override per-machine by editing `.mcp.json` in your local plugin install.
+## How the hooks behave
 
-## Verifying the install
+- Each `hooks/cortex-*.sh` script finds `cortex-hook` in this order: the
+  absolute override (`CORTEX_HOOK_BIN`, then the `bin_dir` option), `PATH`,
+  `~/.cortex/bin`, and finally the legacy `~/.cortex` location. Without a binary
+  the script prints `{}` and exits 0.
+- `SessionStart`, `UserPromptSubmit` and `PreToolUse` wait for the reply. The
+  other events are sent fire-and-forget.
+- When the runtime is not running, `cortex-hook` starts it and retries within
+  its 1.5 s budget. A notice appears only when the start fails, at most once per
+  session. `CORTEX_HOOK_AUTOSTART=0` turns automatic start off.
+- If legacy Cortex hooks are still present in `~/.claude/settings.json`, the
+  plugin skips those events so each one is captured once. Remove the legacy
+  entries with `scripts/activate_daily_memory_clients.py`, which runs as a dry
+  run unless you pass `--apply` and keeps backups for `--rollback`.
+
+The same scripts are installed by `cortex-adapter-claude install`. A drift test
+keeps the two copies byte-identical.
+
+## Verifying the package
 
 ```bash
 cortex-mcp-server validate ./packages/cortex-claude-plugin
 ```
 
-Exits 0 on a clean tree. Non-zero if any required asset is missing or
-malformed (a missing skill `SKILL.md`, a corrupt agent frontmatter, a
-broken `.mcp.json`).
-
-## Layout
-
-```
-packages/cortex-claude-plugin/
-├── .claude-plugin/
-│   ├── plugin.json
-│   └── marketplace.json
-├── README.md
-├── .mcp.json
-├── skills/
-│   ├── cortex-context/SKILL.md
-│   ├── cortex-audit/SKILL.md
-│   └── cortex-laws/SKILL.md
-├── agents/
-│   ├── cortex-historian.md
-│   ├── cortex-lawkeeper.md
-│   └── cortex-context-curator.md
-├── commands/
-│   ├── cortex-status.md
-│   ├── cortex-query.md
-│   ├── cortex-laws.md
-│   ├── cortex-decisions.md
-│   ├── cortex-pre-thinking.md
-│   └── cortex-audit.md
-└── hooks/
-    ├── hooks.json
-    ├── cortex-session-start.{sh,ps1}
-    ├── cortex-user-prompt.{sh,ps1}
-    ├── cortex-pre-tool.{sh,ps1}
-    ├── cortex-post-tool.{sh,ps1}
-    ├── cortex-stop.{sh,ps1}
-    ├── cortex-subagent-stop.{sh,ps1}
-    └── cortex-notification.{sh,ps1}
-```
-
 ## See also
 
-- Spec 18 — full design: `docs/specs/18-claude-code-plugin.md`
-- Spec 10 — capture-side hooks adapter
-- Spec 11 — query API (the MCP tool's backend)
-- Spec 12 — pre-thinking pipeline
+- `docs/operations/daily-memory-runtime.md`: runtime, install and migration.
+- `.rulebook/decisions/040-*`: why the runtime is app-managed, with no OS autostart.
+- `packages/cortex-codex-plugin/`: the Codex counterpart.

@@ -1,0 +1,11 @@
+{
+  "id": 40,
+  "slug": "app-managed-daily-runtime-lifecycle-started-by-cortex-hook-no-os-autostart",
+  "title": "App-managed daily runtime lifecycle: started by cortex-hook, no OS autostart",
+  "status": "accepted",
+  "date": "2026-10-17",
+  "relatedTasks": [
+    "phase35_self-contained-plugin-install"
+  ],
+  "supersededBy": null
+}

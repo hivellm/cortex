@@ -159,14 +159,17 @@ After that, calls scoped with `scope.repo = "<slug>"` return real results. The s
 
 ### 🔌 Connect Claude Code
 
-```bash
-cargo install --path crates/cortex-mcp-server
-cargo install --path crates/cortex-adapter-claude-code
-cortex-adapter-claude install --no-hooks   # plugin registers the hooks itself
-cortex-adapter-claude daemon
+```powershell
+cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops
+target\release\cortex-ops install-binaries --from target\release --apply   # into ~/.cortex/bin; add it to PATH
+cortex-ops setup --apply                                                  # ~/.cortex/config.toml (+ api-token with --from)
+claude plugin marketplace add <this repository>
+claude plugin install cortex@hivellm-cortex
 ```
 
-Then install the plugin from [`packages/cortex-claude-plugin/`](packages/cortex-claude-plugin/README.md). Full steps (including why `--no-hooks` matters) are in the plugin README.
+The plugin's hooks start the local runtime on demand; nothing is registered
+with the OS. Details are in the [plugin README](packages/cortex-claude-plugin/README.md).
+Codex uses [`packages/cortex-codex-plugin/`](packages/cortex-codex-plugin/README.md).
 
 ### 🖥️ Dashboard
 
@@ -209,31 +212,21 @@ Default host ports (override via `.env`):
 
 ## 🔧 MCP Integration
 
-Cortex is registered at **user scope** (`~/.claude.json`, `~/.codex/config.toml`),
-not in a repository `.mcp.json`. The entry points at a pinned binary and a
-private runtime config, both host-specific absolute paths, so it must never be
-committed. `scripts/activate_daily_memory_clients.py` writes it after a dry-run
-review (see the [daily runtime guide](docs/operations/daily-memory-runtime.md)).
-Its shape:
+The Cortex plugins carry the MCP entry, so no client or repository file needs
+one. The server finds its configuration and credential under `~/.cortex`:
 
 ```json
 {
   "mcpServers": {
-    "cortex": {
-      "type": "stdio",
-      "command": "<bin-dir>/cortex-mcp-server.exe",
-      "args": ["serve"],
-      "env": {
-        "CORTEX_API_URL": "http://127.0.0.1:17000",
-        "CORTEX_RUNTIME_PROFILE": "daily",
-        "CORTEX_CONFIG_FILE": "<state-dir>/runtime.toml",
-        "CORTEX_ADAPTER_PIPE": "\\\\.\\pipe\\cortex-adapter-claude",
-        "CORTEX_ADAPTER_SOCK": "\\\\.\\pipe\\cortex-adapter-claude"
-      }
-    }
+    "cortex": { "command": "cortex-mcp-server", "args": ["serve", "--api-url", "${user_config.api_url}"] }
   }
 }
 ```
+
+An empty `--api-url` falls back to `dashboard.api_url` from the user
+configuration. Earlier absolute-path registrations in `~/.claude.json` and
+`~/.codex/config.toml` are removed by `scripts/activate_daily_memory_clients.py`.
+See the [daily runtime guide](docs/operations/daily-memory-runtime.md).
 
 ### Available Tools (41)
 
