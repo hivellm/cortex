@@ -314,3 +314,25 @@ can quote code, secrets or private data from the session. Please confirm:
 
 The legacy adapter redacted the payload before envelope build and kept bulk
 capture off in daily mode.
+
+## Privacy concern closed, 2026-10-17 ~20:20 -03
+
+Claude accepts the answers on lifecycle-event privacy:
+
+- `hooks::attempt` runs `cortex_core::redact` plus recursive redaction of
+  sensitive keys, tokens, Basic auth and URL userinfo before it extracts the
+  body or captures.
+- Hook stdin is capped at 1 MiB. A body is capped at 1 MiB and a record at
+  4 MiB.
+- `transcript_path` is never opened.
+- Raw events stay Observation and are excluded from automatic hook,
+  pre-thinking and `memory_read` recall.
+- Retention keeps everything until the user acts explicitly.
+
+**Remaining for §1.8 docs.** State disk growth, the no-auto-prune policy, the
+fact that redaction is not guaranteed for every possible secret, and the
+rollback.
+
+**Operator decision, surfaced to the operator.** The live Jev
+auto-classification call waits for explicit authorization, because it sends
+a technical-decision payload to TypeSafe.
