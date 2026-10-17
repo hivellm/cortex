@@ -22,8 +22,8 @@ ADR-016 closes all three: one typed `Config` struct, one TOML schema, one env ta
 
 - New `crates/cortex-config/` workspace member with `Config` top-level struct + 16 typed sub-structs covering every operator-facing knob.
 - 75 `KNOWN_ENV_NAMES` entries mapping each `CORTEX_*` env var to a `serde_json::Pointer` against the typed struct tree.
-- 3 entry points: `Config::load()` (cwd `cortex.toml` + process env), `Config::load_from(path, env_lookup)` (hermetic — tests bind `env_lookup` to a `HashMap` snapshot), `Config::load_with_cli(path, env_lookup, overrides)` (binaries thread clap-derived JSON overlay).
-- Resolution precedence (highest wins): CLI flag → env var → `cortex.toml` → built-in `Default`.
+- 3 entry points: `Config::load()` (discovered runtime file + process env), `Config::load_from(path, env_lookup)` (hermetic — tests bind `env_lookup` to a `HashMap` snapshot), `Config::load_with_cli(path, env_lookup, overrides)` (binaries thread clap-derived JSON overlay).
+- Resolution precedence (highest wins): CLI flag, env var, selected runtime TOML, built-in `Default`. File selection prefers `CORTEX_CONFIG_FILE`, then user `config.toml`, then `./cortex.toml`.
 - `cortex_config::audit()` workspace walker + matching `cortex-ops doctor-config-audit` subcommand surface any remaining ad-hoc reads.
 - `/v1/health/config` integrates the audit result alongside the pre-existing operator-config audit (phase8d).
 - Schema evolution: top-level `schema_version: "v1"` discriminator; future `v2` ships as a serde-tag-dispatched fork with a `migrate_v1_to_v2` transformer. `Config::validate()` rejects any non-`v1` value with `ConfigError::UnsupportedSchemaVersion`.
@@ -62,6 +62,29 @@ crates/cortex-config/
 4. **CLI overrides** — only when the caller uses `Config::load_with_cli`. Binaries build a clap-derived JSON object and pass it as the final overlay.
 
 The deep-merge `merge_json()` is the standard "object merge key-wise; scalars and arrays at higher precedence clobber lower" idiom used by figment/config-rs — without the dep weight.
+
+### Runtime file discovery (phase35)
+
+`Config::load()` selects exactly one file. A nonempty `CORTEX_CONFIG_FILE`
+selects that path. Otherwise an existing `<Cortex home>/config.toml` wins over
+`./cortex.toml`. `CORTEX_HOME` selects the home directory; without it, Windows
+uses nonempty `USERPROFILE` (then `HOME`) plus `.cortex`, and other platforms
+use `HOME` plus `.cortex`. Empty selectors are unset. The exported
+`cortex_home()` resolves this directory without creating it.
+
+Selected files are not merged: fields absent from user configuration use
+defaults, not values from an arbitrary current repository. Explicit-file
+`load_from` and `load_with_cli` stay independent of ambient file discovery.
+A missing explicit file retains the legacy defaults-plus-env behavior; a
+missing user file falls back to `./cortex.toml`. Read/parse errors in a selected
+file are surfaced instead of silently selecting another file. Normal absolute
+home paths work from any cwd; explicit relative overrides retain their usual
+cwd-relative meaning.
+
+Repository bootstrap still reads `<repo>/cortex.toml` through its separate
+`CortexToml` parser. Runtime discovery does not alter repository IDs, bootstrap
+options, applicability scope, or the existing `CORTEX_HOME` ingestion-path
+environment mapping.
 
 ### Env-name → typed-field mapping
 

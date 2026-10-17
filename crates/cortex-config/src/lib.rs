@@ -11,13 +11,23 @@
 //! Each field resolves in priority order (highest wins):
 //!
 //! 1. CLI flag (binaries that thread one through pass it to
-//!    [`ConfigBuilder::with_overrides`]).
+//!    [`Config::load_with_cli`]).
 //! 2. Environment variable — every field carries its legacy
 //!    `CORTEX_*` name as a serde alias so existing operator
 //!    scripts keep working byte-for-byte.
-//! 3. `cortex.toml` at the workspace root or any path passed
-//!    explicitly to [`Config::load_from`].
-//! 4. Built-in `Default` (every field documents its default).
+//! 3. Nonempty `CORTEX_CONFIG_FILE` selects the runtime TOML file.
+//! 4. Otherwise, an existing user `~/.cortex/config.toml` (directory
+//!    overridden by `CORTEX_HOME`). Windows uses `USERPROFILE`, falling back
+//!    to `HOME`; other platforms use `HOME`. Empty values are unset.
+//! 5. Otherwise, `./cortex.toml` relative to the current working directory.
+//! 6. Built-in `Default` (every field documents its default).
+//!
+//! Discovery selects one file; it never merges repo values into a selected
+//! user or explicit config. Missing explicit files use defaults plus env;
+//! unreadable or malformed selected files return errors. [`Config::load_from`]
+//! and [`Config::load_with_cli`] read only their explicit file path, keeping
+//! tests and repo-specific callers isolated from user configuration. Repository
+//! bootstrap `[cortex]` configuration uses its separate parser unchanged.
 //!
 //! ## Schema evolution
 //!
@@ -49,7 +59,7 @@ mod sub;
 pub use audit::{audit, EnvVarUsage};
 pub use config::{Config, ConfigError, SCHEMA_VERSION};
 pub use env_map::{env_name_for, KNOWN_ENV_NAMES};
-pub use load::default_toml_path;
+pub use load::{cortex_home, default_toml_path};
 pub use runtime::{RuntimeConfig, RuntimeProfile};
 
 /// Read the adapter emergency stop before loading potentially unavailable TOML.

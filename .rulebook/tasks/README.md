@@ -87,3 +87,9 @@
 |--------|------|----------|-------------|
 | ⬚ | phase34_daily-memory-recovery | 0/22 | daily memory recovery |
 
+## phase35
+
+| Status | Task | Progress | Description |
+|--------|------|----------|-------------|
+| 🔄 | phase35_self-contained-plugin-install | 0/19 | self contained plugin install |
+

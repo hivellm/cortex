@@ -1,4 +1,4 @@
-//! ADR-016 load path — CLI > env > `cortex.toml` > default.
+//! Runtime load path — CLI > env > selected TOML > defaults.
 //!
 //! Each layer produces a `serde_json::Value` (object). Higher
 //! layers merge-on-top of lower ones via [`merge_json`] (deep
@@ -7,6 +7,7 @@
 //! deserialised so every field's own `#[serde(default)]` fires
 //! for absent paths.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -15,15 +16,15 @@ use crate::config::{Config, ConfigError};
 use crate::env_map::KNOWN_ENV_NAMES;
 
 impl Config {
-    /// Resolve the runtime configuration from the standard
-    /// sources in priority order:
+    /// Resolve runtime configuration from environment variables over one
+    /// selected TOML file over built-in defaults.
     ///
-    /// 1. `cortex.toml` at `<cwd>/cortex.toml` (skipped silently
-    ///    if absent).
-    /// 2. Every `CORTEX_*` env var listed in
-    ///    [`crate::env_map::KNOWN_ENV_NAMES`] (overrides toml).
-    /// 3. Built-in [`Config::default`] for any field still
-    ///    unset.
+    /// [`default_toml_path`] selects `CORTEX_CONFIG_FILE`, otherwise an
+    /// existing user config (`CORTEX_HOME/config.toml` or
+    /// `~/.cortex/config.toml`), otherwise `./cortex.toml`. Files are selected,
+    /// never merged together: absent fields use defaults, not repo values.
+    /// An explicitly selected missing file also uses defaults plus env;
+    /// malformed or unreadable selected files return an error.
     ///
     /// CLI overrides are NOT applied here — binaries that thread
     /// flags through call [`Config::load_with_cli`] instead.
@@ -31,41 +32,23 @@ impl Config {
         Self::load_from(&default_toml_path(), |name| std::env::var(name).ok())
     }
 
-    /// Like [`Self::load`] but reads the TOML from `toml_path`
-    /// and resolves env values via `env_lookup` (production
-    /// binds it to `std::env::var(name).ok()`; tests bind it to
-    /// a `HashMap` snapshot for hermetic round-trip testing).
+    /// Read only `toml_path`, overlay `env_lookup`, then validate.
+    /// No user/repo discovery or `CORTEX_CONFIG_FILE` lookup occurs here.
+    /// A missing file uses defaults plus env; other read and parse errors
+    /// propagate. Tests can inject a `HashMap` snapshot for hermetic loading.
     pub fn load_from<F>(toml_path: &Path, env_lookup: F) -> Result<Self, ConfigError>
     where
         F: Fn(&str) -> Option<String>,
     {
-        // Layer 1: defaults serialised as a JSON object.
-        let mut merged: Value = serde_json::to_value(Config::default())?;
-
-        // Layer 2: cortex.toml on top (when the file exists).
-        if toml_path.exists() {
-            let raw = std::fs::read_to_string(toml_path)?;
-            let toml_value: toml::Value = toml::from_str(&raw)?;
-            let toml_as_json: Value = serde_json::to_value(toml_value)?;
-            merge_json(&mut merged, toml_as_json);
-        }
-
-        // Layer 3: env overlay on top of toml.
-        let env_overlay = env_overlay(&env_lookup)?;
-        if !env_overlay.is_null() {
-            merge_json(&mut merged, env_overlay);
-        }
-
-        let cfg: Config = serde_json::from_value(merged)?;
-        cfg.validate()?;
-        Ok(cfg)
+        Self::load_with_cli(toml_path, env_lookup, Value::Null)
     }
 
     /// Resolve the config and apply the binary's CLI overrides
     /// last. `overrides` is a JSON object whose shape mirrors
     /// [`Config`] — binaries build it from `clap` flags and
     /// pass it here. Absent keys leave the resolved value
-    /// untouched.
+    /// untouched. Like [`Self::load_from`], this reads only `toml_path`;
+    /// callers wanting discovery can pass [`default_toml_path`].
     pub fn load_with_cli<F>(
         toml_path: &Path,
         env_lookup: F,
@@ -75,10 +58,13 @@ impl Config {
         F: Fn(&str) -> Option<String>,
     {
         let mut merged: Value = serde_json::to_value(Config::default())?;
-        if toml_path.exists() {
-            let raw = std::fs::read_to_string(toml_path)?;
-            let toml_value: toml::Value = toml::from_str(&raw)?;
-            merge_json(&mut merged, serde_json::to_value(toml_value)?);
+        match std::fs::read_to_string(toml_path) {
+            Ok(raw) => {
+                let toml_value: toml::Value = toml::from_str(&raw)?;
+                merge_json(&mut merged, serde_json::to_value(toml_value)?);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         let env_overlay = env_overlay(&env_lookup)?;
         if !env_overlay.is_null() {
@@ -93,14 +79,57 @@ impl Config {
     }
 }
 
-/// Production helper: resolve `cortex.toml` relative to the
-/// caller's `$CARGO_MANIFEST_DIR` (binaries) or fall back to the
-/// current working directory.
+/// Select one runtime TOML file: nonempty `CORTEX_CONFIG_FILE`, otherwise
+/// an existing [`cortex_home`]`/config.toml`, otherwise `./cortex.toml`.
+/// Explicit paths win even when missing; a missing user config falls back
+/// to the repo file. Probe errors retain the user path so loading surfaces
+/// the error. Selected files never merge with lower-priority files.
+#[must_use]
 pub fn default_toml_path() -> PathBuf {
-    if let Ok(p) = std::env::var("CORTEX_CONFIG_FILE") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
+    default_toml_path_with(&|name| std::env::var_os(name), |path| {
+        path.try_exists().unwrap_or(true)
+    })
+}
+
+/// Resolve the user runtime directory without creating it.
+/// Nonempty `CORTEX_HOME` wins; otherwise use `~/.cortex`. On Windows,
+/// `USERPROFILE` is preferred over `HOME`; other platforms use `HOME`.
+/// Empty values are unset. Returns `None` if no home is available.
+/// Paths supplied by environment variables are used verbatim, including
+/// relative overrides; normal absolute home paths work independently of cwd.
+#[must_use]
+pub fn cortex_home() -> Option<PathBuf> {
+    cortex_home_with(&|name| std::env::var_os(name), cfg!(windows))
+}
+
+fn cortex_home_with<F>(env_lookup: &F, windows: bool) -> Option<PathBuf>
+where
+    F: Fn(&str) -> Option<OsString>,
+{
+    let nonempty = |name| env_lookup(name).filter(|value| !value.is_empty());
+    nonempty("CORTEX_HOME").map(PathBuf::from).or_else(|| {
+        let home = if windows {
+            nonempty("USERPROFILE").or_else(|| nonempty("HOME"))
+        } else {
+            nonempty("HOME")
+        };
+        home.map(|home| PathBuf::from(home).join(".cortex"))
+    })
+}
+
+fn default_toml_path_with<F, E>(env_lookup: &F, exists: E) -> PathBuf
+where
+    F: Fn(&str) -> Option<OsString>,
+    E: Fn(&Path) -> bool,
+{
+    if let Some(path) = env_lookup("CORTEX_CONFIG_FILE").filter(|value| !value.is_empty()) {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = cortex_home_with(env_lookup, cfg!(windows))
+        .map(|home| home.join("config.toml"))
+        .filter(|path| exists(path))
+    {
+        return path;
     }
     PathBuf::from("cortex.toml")
 }
@@ -207,6 +236,267 @@ mod tests {
 
     fn env_from(map: HashMap<&'static str, &'static str>) -> impl Fn(&str) -> Option<String> {
         move |name: &str| map.get(name).map(|v| v.to_string())
+    }
+
+    fn path_env(values: &[(&str, OsString)]) -> impl Fn(&str) -> Option<OsString> {
+        let map: HashMap<String, OsString> = values
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect();
+        move |name| map.get(name).cloned()
+    }
+
+    fn write_config(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    // Resolve relative paths against an injected cwd, never changing process env/cwd.
+    fn discovered_config(
+        cwd: &Path,
+        env: impl Fn(&str) -> Option<OsString>,
+        overrides: Value,
+    ) -> Result<Config, ConfigError> {
+        let selected =
+            default_toml_path_with(&env, |path| cwd.join(path).try_exists().unwrap_or(true));
+        Config::load_with_cli(
+            &cwd.join(selected),
+            |name| env(name).and_then(|value| value.into_string().ok()),
+            overrides,
+        )
+    }
+
+    #[test]
+    fn discovery_precedence_selects_one_file_then_env_then_cli() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let home = dir.path().join("user");
+        let explicit = dir.path().join("explicit.toml");
+        write_config(
+            &repo.join("cortex.toml"),
+            "[retention]\nbatch_size = 10\n[meili]\nmeili_api_key = 'repo-secret'\n",
+        );
+        write_config(&home.join("config.toml"), "[retention]\nbatch_size = 20\n");
+        write_config(&explicit, "[retention]\nbatch_size = 30\n");
+
+        for (include_explicit, include_env, include_cli, expected) in [
+            (false, false, false, 20),
+            (true, false, false, 30),
+            (true, true, false, 40),
+            (true, true, true, 50),
+        ] {
+            let mut values = vec![("CORTEX_HOME", home.as_os_str().to_owned())];
+            if include_explicit {
+                values.push(("CORTEX_CONFIG_FILE", explicit.as_os_str().to_owned()));
+            }
+            if include_env {
+                values.push(("CORTEX_RETENTION_BATCH_SIZE", "40".into()));
+            }
+            let overrides = if include_cli {
+                serde_json::json!({"retention": {"batch_size": 50}})
+            } else {
+                Value::Null
+            };
+            let cfg = discovered_config(&repo, path_env(&values), overrides).unwrap();
+            assert_eq!(cfg.retention.batch_size, expected);
+            assert_eq!(
+                cfg.meili.meili_api_key,
+                Config::default().meili.meili_api_key
+            );
+        }
+    }
+
+    #[test]
+    fn user_config_is_independent_of_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("user");
+        write_config(&home.join("config.toml"), "[retention]\nbatch_size = 25\n");
+        for name in ["repo-a", "repo-b"] {
+            let repo = dir.path().join(name);
+            write_config(&repo.join("cortex.toml"), "invalid = [");
+            let cfg = discovered_config(
+                &repo,
+                path_env(&[("CORTEX_HOME", home.as_os_str().to_owned())]),
+                Value::Null,
+            )
+            .unwrap();
+            assert_eq!(cfg.retention.batch_size, 25);
+        }
+    }
+
+    #[test]
+    fn missing_user_config_falls_back_to_repo_then_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let home = dir.path().join("missing-user");
+        write_config(&repo.join("cortex.toml"), "[retention]\nbatch_size = 15\n");
+        let values = [("CORTEX_HOME", home.as_os_str().to_owned())];
+        assert_eq!(
+            discovered_config(&repo, path_env(&values), Value::Null)
+                .unwrap()
+                .retention
+                .batch_size,
+            15
+        );
+        let mut expected = Config::default();
+        expected.ingestion.home = Some(home.to_string_lossy().into_owned());
+        assert_eq!(
+            discovered_config(&dir.path().join("no-repo"), path_env(&values), Value::Null).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn missing_explicit_file_does_not_fall_through_to_other_files() {
+        let dir = tempfile::tempdir().unwrap();
+        write_config(&dir.path().join("cortex.toml"), "invalid = [");
+        write_config(&dir.path().join("user/config.toml"), "invalid = [");
+        let cfg = discovered_config(
+            dir.path(),
+            path_env(&[
+                ("CORTEX_HOME", dir.path().join("user").into_os_string()),
+                ("CORTEX_CONFIG_FILE", "missing-explicit.toml".into()),
+                ("CORTEX_RETENTION_BATCH_SIZE", "77".into()),
+            ]),
+            Value::Null,
+        )
+        .unwrap();
+        assert_eq!(cfg.retention.batch_size, 77);
+    }
+
+    #[test]
+    fn selected_user_parse_and_read_errors_do_not_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("user");
+        let config = home.join("config.toml");
+        write_config(
+            &dir.path().join("cortex.toml"),
+            "[retention]\nbatch_size = 15\n",
+        );
+        write_config(&config, "invalid = [");
+        let values = [("CORTEX_HOME", home.as_os_str().to_owned())];
+        assert!(matches!(
+            discovered_config(dir.path(), path_env(&values), Value::Null),
+            Err(ConfigError::Toml(_))
+        ));
+        // Invalid UTF-8 produces a portable read error without changing ACLs.
+        std::fs::write(&config, [0xff]).unwrap();
+        assert!(matches!(
+            discovered_config(dir.path(), path_env(&values), Value::Null),
+            Err(ConfigError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn selected_directory_returns_read_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("user");
+        std::fs::create_dir_all(home.join("config.toml")).unwrap();
+        assert!(matches!(
+            discovered_config(
+                dir.path(),
+                path_env(&[("CORTEX_HOME", home.into_os_string())]),
+                Value::Null
+            ),
+            Err(ConfigError::Io(_))
+        ));
+    }
+
+    #[test]
+    fn explicit_loaders_ignore_discovery_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let supplied = dir.path().join("supplied.toml");
+        write_config(&supplied, "[retention]\nbatch_size = 13\n");
+        let values = [
+            ("CORTEX_HOME", dir.path().join("user").into_os_string()),
+            (
+                "CORTEX_CONFIG_FILE",
+                dir.path().join("bad.toml").into_os_string(),
+            ),
+        ];
+        write_config(&dir.path().join("bad.toml"), "invalid = [");
+        write_config(&dir.path().join("user/config.toml"), "invalid = [");
+        let env = path_env(&values);
+        let lookup = |name: &str| env(name).and_then(|value| value.into_string().ok());
+        assert_eq!(
+            Config::load_from(&supplied, lookup)
+                .unwrap()
+                .retention
+                .batch_size,
+            13
+        );
+        assert_eq!(
+            Config::load_with_cli(&supplied, lookup, Value::Null)
+                .unwrap()
+                .retention
+                .batch_size,
+            13
+        );
+    }
+
+    #[test]
+    fn cortex_home_respects_platform_precedence_and_empty_values() {
+        let values = [
+            ("CORTEX_HOME", "override".into()),
+            ("USERPROFILE", "profile".into()),
+            ("HOME", "home".into()),
+        ];
+        for windows in [true, false] {
+            assert_eq!(
+                cortex_home_with(&path_env(&values), windows),
+                Some(PathBuf::from("override"))
+            );
+        }
+        let values = [
+            ("CORTEX_HOME", "".into()),
+            ("USERPROFILE", "profile".into()),
+            ("HOME", "home".into()),
+        ];
+        assert_eq!(
+            cortex_home_with(&path_env(&values), true),
+            Some(PathBuf::from("profile/.cortex"))
+        );
+        assert_eq!(
+            cortex_home_with(&path_env(&values), false),
+            Some(PathBuf::from("home/.cortex"))
+        );
+        assert_eq!(
+            cortex_home_with(
+                &path_env(&[("USERPROFILE", "".into()), ("HOME", "home".into())]),
+                true
+            ),
+            Some(PathBuf::from("home/.cortex"))
+        );
+        for windows in [true, false] {
+            assert_eq!(cortex_home_with(&path_env(&[]), windows), None);
+            assert_eq!(
+                cortex_home_with(&path_env(&[("HOME", "".into())]), windows),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn empty_discovery_values_are_unset_and_home_config_is_selected() {
+        let env = path_env(&[
+            ("CORTEX_CONFIG_FILE", "".into()),
+            ("CORTEX_HOME", "".into()),
+            ("USERPROFILE", "profile".into()),
+            ("HOME", "home".into()),
+        ]);
+        let expected = if cfg!(windows) { "profile" } else { "home" };
+        assert_eq!(
+            default_toml_path_with(&env, |_| true),
+            PathBuf::from(expected).join(".cortex/config.toml")
+        );
+        assert_eq!(
+            default_toml_path_with(&env, |_| false),
+            PathBuf::from("cortex.toml")
+        );
+        assert_eq!(
+            default_toml_path_with(&path_env(&[]), |_| panic!("no home to probe")),
+            PathBuf::from("cortex.toml")
+        );
     }
 
     #[test]
