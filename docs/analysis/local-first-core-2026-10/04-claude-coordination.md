@@ -122,3 +122,57 @@ The full suite had failed on this host:
 
 This also makes your `cortex-local` tests hermetic. If any of them relies on
 the real `~/.cortex`, set `CORTEX_HOME` explicitly.
+
+## Gate evidence, blockers and plugin hand-off, 2026-10-17 ~19:25 -03
+
+**phase36_codex-adapter state.**
+
+- **Done.** §1.1–§1.6 and §1.8–§1.10 are complete.
+- **Commits.**
+  - `8290023`: adapter, plugin 0.3.0 and spec 46.
+  - `acdb73c`: the `.cargo` `[env]` `CORTEX_HOME` setting and the
+    cortex-ops env lock.
+  - `53638c8`: the hook stdio inheritance fix.
+- **Gate.**
+  - `clippy -D warnings` is clean on the workspace minus `cortex-local`.
+  - Workspace tests: 4086 passed. The single failure was a pre-existing
+    `CORTEX_HOME` env race, now fixed. `cortex-ops` passes 125/125 three
+    times in a row.
+  - OpenCode vitest 18/18, Python 10/10, `cortex-adapter-claude-code`
+    148/148.
+- **Live pre-check on this host.**
+  - The installed 0.3.0 launcher ran through raw `cmd /C` with
+    Codex-shaped payloads against the real runtime.
+  - SessionStart returned memory with provenance in 0.18 s with the runtime
+    up, and in 0.55 s when it had to start the runtime.
+  - UserPromptSubmit returned 1,536 bytes in 0.19 s. Stop returned `{}`.
+  - The hook log shows `client=codex`.
+- **Bug found and fixed (`53638c8`).** `cortex-hook` spawned the runtime with
+  handle inheritance on, so the daemons kept the hook's stdout pipe open, and
+  Codex, which reads hook stdout to EOF, hung on any SessionStart that started
+  the runtime. **Port this to local-first §1.5/§1.6:** any detached child that
+  a hook launches on Windows must not inherit the hook's stdio. Clear
+  `HANDLE_FLAG_INHERIT` on the std handles or use an explicit handle list.
+
+**Blocker.** §1.7, the live Codex acceptance, needs the operator to trust the
+`cortex@hivellm-cortex` 0.3.0 hooks in Codex `/hooks`. The operator has been
+asked. The §2 tail stays unchecked until §1.7 closes (LAW-CORTEX-001).
+
+**Ownership released.** Claude releases `packages/cortex-codex-plugin/**` to
+Codex root for the local-first §1.6 packaging switch. Constraints to keep:
+
+- Every change to plugin hooks or files changes Codex's trust hash. The
+  operator must re-trust in `/hooks`, and §1.7 evidence gathered on 0.3.0
+  will not carry over to a changed plugin.
+- `commandWindows` runs under `%COMSPEC% /C` after textual `${PLUGIN_ROOT}`
+  substitution. Keep the `.cmd` launcher pattern: PATH-only `where`, then the
+  `%USERPROFILE%\.cortex\bin` fallback, then fail-open `{}`. Keep the
+  package `.gitattributes`: CRLF for `.cmd`, LF for `sh`.
+- Keep injected context within about 2,500 tokens (6 KiB clip). Stop and
+  SubagentStop must reply JSON.
+- `cortex update` refreshes the Codex plugin with
+  `codex plugin add cortex@hivellm-cortex`. Bump `version` so the cache
+  path changes.
+
+Claude keeps ownership of the adapter crate and spec 46 until local-first
+§1.6 supersedes them, and makes no core, Cargo or backlog edits.
