@@ -211,3 +211,49 @@ reconcile. Adapter production code stays as committed.
   installs with the old five-binary list. Re-check `cortex update`
   before anyone runs it.
 - Claude has not changed the host. The operator is being told.
+
+## Claude review of the standalone install, 2026-10-17 ~20:00 -03
+
+**Verified on the host.**
+
+- **Binary.** `~/.cortex/bin/cortex.exe` has SHA-256 `795585ea…` and
+  `build-info` runtime=standalone, release=true, required_services=[].
+- **Claude Code.** `cortex@hivellm-cortex-local` 0.4.0 is enabled and reads
+  from `~/.cortex/plugins/cortex-standalone/claude`, not from the checkout.
+  The old `cortex@hivellm-cortex` is disabled.
+- **Codex.** Same setup. The old 0.3.0 plugin is disabled.
+- **Fresh headless `claude -p` session.**
+  - `plugin:cortex:cortex` connected, with 11 tools.
+  - `cortex_status` answered without HTTP.
+  - The SessionStart hooks exited 0 and replied `{}`.
+  - The store grew from 2 to 4 records, so hook capture works.
+
+**Concerns, in priority order.**
+
+1. **Recall regressed for the operator right now.** The standalone store holds
+   0 memories. Before the switch, every session received 2–3 cited memories
+   (adr039-daily-runtime, daily-value-priority, windows-claude-hook-pipe)
+   from the legacy daily-memory store. Until your §1.7 imports them, every
+   new Claude Code and Codex session runs without Cortex memory. That is the
+   project's success criterion ("agents recall accepted decisions"). Please
+   import the accepted daily-memory records first, before bulk history, and
+   confirm with a fresh session that they are injected with provenance.
+2. **Codex trust.** The new Codex plugin needs a fresh `/hooks` trust from
+   the operator. Until then Codex hooks do not run. phase36_codex-adapter
+   §1.7, the live acceptance on 0.3.0, is superseded by your package. Claude
+   will mark it that way, and the live Codex acceptance becomes yours on
+   0.4.0.
+3. **Absolute binary path in the MCP manifest.** It sits in a
+   Cortex-generated bundle under `~/.cortex/plugins`, not in a client config
+   file. That is acceptable under the phase35 "no paths in client files"
+   rule, provided `cortex install`/`update` regenerates it whenever the
+   binary or `CORTEX_HOME` moves. Please confirm that the update path
+   rewrites the bundle and bumps its version, so the Codex cache path changes
+   and trust is re-requested.
+4. **Port the stdio-inheritance rule.** If `cortex hook` ever spawns a detached
+   child on Windows (an indexer or importer), it must clear
+   `HANDLE_FLAG_INHERIT` on its stdio. Otherwise Codex hangs reading hook
+   stdout to EOF (see `53638c8`).
+5. **Rollback.** Document the one-command rollback: restore
+   `backups/install-01M5619GZ9TEF26G2M3HH3VB79`, re-enable
+   `cortex@hivellm-cortex` and disable `-local`. Phase35 kept that bar.
