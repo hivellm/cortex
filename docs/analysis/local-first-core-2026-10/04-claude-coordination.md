@@ -257,3 +257,60 @@ reconcile. Adapter production code stays as committed.
 5. **Rollback.** Document the one-command rollback: restore
    `backups/install-01M5619GZ9TEF26G2M3HH3VB79`, re-enable
    `cortex@hivellm-cortex` and disable `-local`. Phase35 kept that bar.
+
+## Fresh-session recall acceptance (standalone 0.4.0), 2026-10-17 ~20:10 -03
+
+**Method.** Two headless `claude -p` sessions ran from `E:\HiveLLM\Cortex`
+with the same question. It asked for two facts that exist only in imported
+Cortex lessons, not in CLAUDE.md, rules or the native MEMORY.md index:
+(a) the `--pipe` syntax for Git Bash-launched hooks on Windows, and (b) why
+daily hooks must use release binaries. Each answer had to cite the Cortex
+memory id or say "sem fonte".
+
+- **No tool path.** File, shell, web, agent and ToolSearch tools were denied,
+  and so were the Cortex MCP read tools (`memory_read`, `search`, `query`,
+  `pre_thinking`, `get`). `--max-turns 1`. Both sessions made zero tool
+  calls, so any fact in an answer came from context injected at session
+  start or prompt submit.
+- **A (treatment).** Normal user settings, so `cortex@hivellm-cortex-local`
+  0.4.0 is enabled.
+- **B (control).** `--setting-sources project,local`, so no user plugins and
+  no Cortex.
+
+**Prepared context.** Your measurement: the installed SessionStart returns
+2867 UTF-8 bytes with 5 citations. Claude did not re-measure the bytes. The
+stream-json for these runs does not expose the prompt-time hook output.
+
+**Observed use.**
+
+- **A answered both items from Cortex memory and cited them.**
+  - (a) `--pipe "//./pipe/cortex-adapter-claude"`, because quoted backslash
+    syntax loses one leading slash. Source:
+    `daily-936845dd1b42…@1` "Windows Claude hook pipe quoting".
+  - (b) opt-level=0 dev binaries exhausted the authenticated delivery
+    deadline: 4/12 sequential hooks had no memory. Release passed 40/40 with
+    the 550/600 ms bounds unchanged. Also verify the installed SHA-256 and
+    the delivered memory, not only health. Source:
+    `daily-d0c451984329…@1` "Deploy release binaries for bounded daily
+    memory".
+  - The specifics (4/12, 40/40, 550/600 ms, the slash-loss reason) appear
+    only in those memories.
+- **B answered "sem fonte" for both** and stated that no Cortex memory
+  arrived.
+- **Conclusion.** Recall is restored. The model used two imported lessons
+  with correct provenance to answer a question it cannot answer without
+  them. This is observed use, not only a prepared delivery.
+
+**New concern: privacy of captured lifecycle events.** The standalone store
+keeps `claude-code Stop` events with the full `last_assistant_message` as
+the body. The payload also carries `transcript_path`, `session_id`,
+`prompt_id` and `permission_mode` (see `cortex recent`). Assistant replies
+can quote code, secrets or private data from the session. Please confirm:
+
+- `cortex_core::redact` (or an equivalent) runs before the canonical
+  Markdown/NDJSON write;
+- events have a size cap and a retention rule;
+- events stay out of model-visible recall by default.
+
+The legacy adapter redacted the payload before envelope build and kept bulk
+capture off in daily mode.
