@@ -1,6 +1,13 @@
-# Cortex
+# 🧠 Cortex
 
-> **Status:** Active development · 43 specs (13+ core specs shipped) in [docs/specs/](docs/specs/) · architecture in [docs/architecture.md](docs/architecture.md) · current state & roadmap in [docs/analysis/cortex-platform-2026-07/](docs/analysis/cortex-platform-2026-07/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust Edition](https://img.shields.io/badge/edition-2021-blue.svg)](https://doc.rust-lang.org/edition-guide/rust-2021/index.html)
+[![Version](https://img.shields.io/badge/version-0.1.0--alpha-blue.svg)](CHANGELOG.md)
+[![Tests](https://img.shields.io/badge/tests-3700%2B-brightgreen.svg)](crates/)
+[![Status](https://img.shields.io/badge/status-alpha-yellow.svg)](docs/specs/00-index.md)
+
+> **Governed, queryable memory for AI coding agents**
 
 Cortex stores explicit decisions and verified lessons so coding agents can use them in later sessions. The daily profile keeps capture, cited recall and feedback in local SQLite, without mandatory Docker, GPU or bulk indexers. An optional full stack indexes code, documents and archived interactions.
 
@@ -14,178 +21,280 @@ For routine agent work, start with the [daily runtime guide](docs/operations/dai
 - Native agent memory files are preserved. Daily mode disables bulk publishing, archive replay and scheduled maintenance.
 - [Behavioral acceptance](docs/analysis/daily-agent-memory-2026-10/11-cross-model-acceptance.md) verifies a Claude correction recalled and used by Codex after restart. [Resource measurements](docs/analysis/daily-agent-memory-2026-10/10-resource-acceptance.md) state the host, samples and limits.
 
+## 🎯 Overview
 
-## What Cortex is (and isn't)
+Daily memory preserves explicitly captured decisions and lessons. The optional full profile adds the broader event and content pipeline:
 
-**Is:** an orchestrator that composes existing HiveLLM services (**Vectorizer**, **Nexus**, **Synap**, **Rulebook**) plus external pieces (**Meilisearch**, **Claude Haiku** via Claude Code CLI) into a capture → classify → retrieve → govern loop.
+- **📥 Capture** - Hooks in Claude Code / OpenCode publish every session event (prompts, tool calls, decisions) to a local ingestion bus
+- **🏷️ Classify** - Claude Haiku (via Claude Code CLI) enriches events with kind, topics, severity, and PII risk
+- **🔎 Index** - Code and docs go to Vectorizer (dense + BM25), events to Meilisearch (full-text), relations to Nexus (graph)
+- **🔀 Retrieve** - One hybrid query API (vector + keyword + graph) fused with Reciprocal Rank Fusion and an optional cross-encoder reranker
+- **💉 Pre-thinking** - Bounded local memory reaches verified Claude hooks or explicit MCP reads; optional search can add supporting context
+- **⚖️ Govern** - Laws with detectors, violations tracking, audit envelopes, and access control (principals + RBAC)
+- **📊 Observe** - Desktop dashboard (Electron + React) over the whole substrate
 
-**Isn't:** a new vector DB, graph DB, search engine, or coding agent. Cortex informs agents; it does not generate code.
+**What Cortex isn't:** a new vector DB, graph DB, search engine, or coding agent. It composes existing HiveLLM services (**Vectorizer**, **Nexus**, **Synap**, **Rulebook**) plus **Meilisearch** and **Claude Haiku** into a capture → classify → retrieve → govern loop. Cortex informs agents; it does not generate code.
 
-## Architecture at a glance
+## ✨ Key Features
+
+### 📥 Capture & Ingestion
+- **Claude Code adapter** - hook shim + long-lived local daemon (`cortex-adapter-claude`), shipped as a [Claude Code plugin](packages/cortex-claude-plugin/README.md) ([spec 10](docs/specs/10-claude-code-adapter.md), [spec 18](docs/specs/18-claude-code-plugin.md))
+- **OpenCode adapter** - same envelope contract through the `EnvelopeProducer` trait ([spec 23](docs/specs/23-opencode-adapter.md), [spec 24](docs/specs/24-producer-trait.md))
+- **Bootstrap CLI** - one-shot + incremental backfill of existing repos (code, docs, analyses, knowledge, learnings) ([spec 09](docs/specs/09-bootstrap-cli.md))
+- **Synap event bus** - durable streams between ingestion and workers, with room-generation-aware self-healing consumers
+
+### 🏷️ Processing Pipeline
+- **Classifier worker** - Haiku-backed enrichment with static fallbacks ([spec 05](docs/specs/05-classifier.md))
+- **Embedder worker** - Tree-sitter symbol-level code chunks + doc sections, stable content-independent vector ids ([spec 06](docs/specs/06-embedder.md))
+- **Graph worker** - sessions, turns, tool calls, artifacts, decisions, laws, and violations projected into Nexus; community detection (Louvain + Leiden) ([spec 07](docs/specs/07-graph-writer.md), [spec 45](docs/specs/45-graph-communities.md))
+- **Full-text worker** - per-repo Meilisearch indexes with typo tolerance and faceted filters ([spec 08](docs/specs/08-fulltext-indexer.md))
+- **Consolidator** - distills sessions into consolidations that carry context across sessions ([spec 27](docs/specs/27-consolidation.md))
+
+### 🔀 Retrieval
+- **Hybrid query API** - `POST /v1/query` fuses vector, keyword, and graph lanes with RRF ([spec 11](docs/specs/11-query-api.md))
+- **Reranker** - Text Embeddings Inference cross-encoder on GPU ([spec 37](docs/specs/37-retrieval-rerank.md))
+- **Phantom-link verifier** - drops hits that point at symbols/files that do not exist ([spec 28](docs/specs/28-phantom-link-verifier.md))
+- **Bitemporal history** - branches, timelines, supersession chains ([spec 30](docs/specs/30-bitemporal-schema.md), [spec 32](docs/specs/32-branches.md), [spec 33](docs/specs/33-timeline-api.md))
+- **Eval gate** - golden-set regression suites for retrieval, consolidation, classification, and access control ([spec 29](docs/specs/29-eval.md))
+
+### ⚖️ Governance & Security
+- **Laws DSL** - YAML law registry + evaluator; blocking and observational laws ([spec 13](docs/specs/13-laws-dsl.md), [spec 14](docs/specs/14-governance-engine.md))
+- **Access control** - principals, RBAC, Bell-LaPadula-style clearance predicates enforced on every lane ([spec 41](docs/specs/41-principal-and-rbac.md), [spec 42](docs/specs/42-access-enforcement.md), [spec 43](docs/specs/43-acl-admin-api.md))
+- **Retention + forget** - retention sweeps and an explicit `cortex_forget` path ([spec 19](docs/specs/19-retention.md))
+- **Audit envelopes** - every turn's retrieval and decisions are auditable after the fact
+
+### 🤖 Agent Integration
+- **MCP server** - 12 stdio tools in daily mode; 42 in the optional full profile ([spec 20](docs/specs/20-mcp-tool-surface.md))
+- **Claude Code plugin** - MCP tools + skills + sub-agents + slash commands + capture hooks in one install
+- **Runtime discovery** - `cortex_capabilities` lists every registered tool and whether it reads or writes
+
+## 🏗️ Architecture
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
 │  AI Tools / IDEs                                                      │
-│  Claude Code · OpenCode · Cursor · Gemini · Codex · Copilot · Windsurf │
+│  Claude Code · OpenCode · Cursor · Gemini · Codex · Copilot           │
 └───────────────────────────────────────────────────────────────────────┘
                        ▲                       ▲
                        │ capture (hooks)       │ retrieve (MCP / HTTP)
                        ▼                       │
 ┌───────────────────────────────────────────────────────────────────────┐
 │                          C O R T E X                                  │
-│  Ingestion → Processing → Retrieval + Governance + Dashboard          │
+│  Ingestion → Classify → Embed / Index / Graph → Query API             │
+│  + Pre-thinking + Governance + Consolidation + Dashboard              │
 └───────────────────────────────────────────────────────────────────────┘
                               ▼
 ┌───────────────────────────────────────────────────────────────────────┐
 │  HiveLLM Data Services                                                │
-│  Vectorizer · Nexus · Synap · Meilisearch · Haiku (CLI)               │
+│  Vectorizer · Nexus · Synap · Meilisearch · TEI reranker · Haiku (CLI)│
 └───────────────────────────────────────────────────────────────────────┘
 ```
 
-Full architecture doc: [`docs/architecture.md`](docs/architecture.md).
+Full architecture: [`docs/architecture.md`](docs/architecture.md) · spec index and dependency order: [`docs/specs/00-index.md`](docs/specs/00-index.md).
 
-## Key capabilities
-
-| Layer            | What it does                                                                                     | Spec                                                               |
-|------------------|--------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| **Capture**      | Hooks in Claude Code / OpenCode / Cursor / Codex / Gemini publish events (prompts, tool calls, decisions). | [10](docs/specs/10-claude-code-adapter.md), [17](docs/specs/17-additional-adapters.md), [20](docs/specs/23-opencode-adapter.md) |
-| **Classify**     | Claude Haiku (via CLI or SDK) enriches events with topics, severity, PII risk.                    | [05](docs/specs/05-classifier.md)                                  |
-| **Embed**        | Symbol-level code chunks (Tree-sitter) + doc sections go to Vectorizer (BM25 + dense).           | [06](docs/specs/06-embedder.md)                                    |
-| **Link**         | Nexus stores the graph of sessions, turns, tool calls, artifacts, decisions, laws, violations.    | [07](docs/specs/07-graph-writer.md)                                |
-| **Full-text**    | Meilisearch indexes every enriched event with typo-tolerance and faceted filters.                 | [08](docs/specs/08-fulltext-indexer.md)                            |
-| **Retrieve**     | Hybrid query API (vector + keyword + graph), fused with Reciprocal Rank Fusion. P50 < 50 ms.     | [11](docs/specs/11-query-api.md)                                   |
-| **Pre-thinking** | Adapter injects a compact context bundle (decisions, laws, similar turns, snippets) into every prompt. | [12](docs/specs/12-pre-thinking-injection.md)                 |
-| **Govern**       | Laws with sandboxed detectors (Deno); blocking + observational; punishment ladder; trust scores.  | [13](docs/specs/13-laws-dsl.md), [14](docs/specs/14-governance-engine.md) |
-| **Analyze**      | Deep Analysis: structured multi-agent debate → audited Decision.                                  | [15](docs/specs/15-deep-analysis.md)                               |
-| **Observe**      | React + TS dashboard: live timeline, memory, decisions, laws, analyses, tool analytics, graph.    | [16](docs/specs/16-dashboard.md)                                   |
-| **Bootstrap**    | One-shot + incremental CLI that backfills the ~17 existing HiveLLM repos before live capture.     | [09](docs/specs/09-bootstrap-cli.md)                               |
-
-## Repository layout
+### Workspace layout
 
 ```
-Cortex/
-├─ docs/
-│  ├─ architecture.md          # the big picture (read first)
-│  └─ specs/                   # 17 discrete, implementable unit specs
-│     ├─ 00-index.md
-│     └─ NN-*.md
-├─ AGENTS.md                   # team-shared rules (generated by @hivellm/rulebook)
-├─ AGENTS.override.md          # project-specific overrides (stable)
-├─ CLAUDE.md                   # imports AGENTS.md + critical rules
-├─ .claude/                    # agents, skills, hooks, rules, settings
-├─ .rulebook/                  # specs, decisions, knowledge, tasks, memory
-└─ README.md                   # you are here
+crates/
+├── cortex-core/                 # Event schema, canonical JSON, ULID, content hash, validator
+├── cortex-config/               # Typed config — single source of truth for every CORTEX_* knob
+├── cortex-storage/              # Namespaces, schema bootstrap, metadata + CAS stores
+├── cortex-workers/              # ingestion, classifier, embedder, fulltext, graph, consolidator, retention, …
+├── cortex-api/                  # Hybrid query API + dashboard JSON + retention scheduler
+├── cortex-pre-thinking/         # Query bundles → compact Markdown blocks for system prompts
+├── cortex-laws/                 # Laws DSL v1 — registry + evaluator
+├── cortex-mcp-server/           # stdio MCP bridge to cortex-api / pre-thinking
+├── cortex-adapter-claude-code/  # Claude Code hook shim + capture daemon
+├── cortex-adapter-opencode/     # OpenCode adapter
+├── cortex-cli/                  # cortex-bootstrap · cortex-ops (doctor) · cortex-relevance-eval
+├── cortex-eval/                 # Golden-set eval harness (regression gate)
+├── cortex-health/               # Shared health-report types + aggregator
+└── cortex-build/                # Build-time version stamp (git sha, build ts, dirty flag)
+gui/                             # Desktop dashboard — Electron + Vite + React + TypeScript
+packages/
+├── cortex-claude-plugin/        # Claude Code plugin (MCP, skills, agents, commands, hooks)
+└── cortex-opencode-plugin/      # OpenCode plugin
+bin/                             # cortex-up / down / reset / logs / doctor (sh + ps1)
+docs/                            # architecture, specs, analyses, runbooks
 ```
 
-Code (`cortex-core`, `cortex-workers`, `cortex-api`, `cortex-classifier`, `cortex-laws`, `cortex-adapters`, `cortex-dashboard`, `cortex-cli`) arrives as each spec is implemented — see [Roadmap](#roadmap).
+## 🚀 Quick Start
 
-## Getting started
+Use the [daily runtime guide](docs/operations/daily-memory-runtime.md) for local agent memory. The prerequisites and Compose setup below apply to the optional full stack.
 
-For routine agent memory, use the [daily runtime guide](docs/operations/daily-memory-runtime.md). The prerequisites and indexing workflow below apply to the optional full stack.
+### 📦 Full-stack prerequisites
 
-### Prerequisites (local dev)
+- **Rust** 1.80+ (stable) — core services and CLIs
+- **Docker + Compose** — local data-services stack ([spec 03](docs/specs/03-local-stack.md))
+- **Node.js 20+ + pnpm** — dashboard and plugins
+- **Claude Code CLI** — default classifier backend
+- **NVIDIA GPU** (optional) — for the TEI reranker container
 
-- **Rust** (stable toolchain) — for the core services.
-- **Node.js** 20+ — for the dashboard and detector sandbox tooling.
-- **Docker + Compose** — for the local data-services stack (Vectorizer, Nexus, Synap, Meilisearch). See [`docs/specs/03-local-stack.md`](docs/specs/03-local-stack.md).
-- **Claude Code CLI** — classifier default backend (SDK path is an optional alternative).
+### 🐳 Start the local stack
 
-### Read-first
-
-1. [`docs/architecture.md`](docs/architecture.md) — vision, goals, ecosystem context.
-2. [`docs/specs/00-index.md`](docs/specs/00-index.md) — spec index + dependency order.
-3. [`AGENTS.md`](AGENTS.md) — rules for contributors and AI agents working in this repo.
-
-The optional Compose stack includes Cortex API, ingestion, classifiers, embedders, graph/fulltext/reranker workers and data services. Daily memory uses the smaller native runtime described above; a configured Compose stack does not imply those services are running. Most core specs (01–18) are implemented and shipped. See [`docs/specs/00-index.md`](docs/specs/00-index.md) for the per-spec status and [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/) for known current issues (e.g., graph-worker degradation since 2026-06-27, pending active fix).
-
-### First-time indexing (per repo)
-
-The daemon answers `/v1/query`, `cortex_pre_thinking`, and the
-dashboard against repos that have been bootstrapped at least once. A
-brand-new repo returns empty hits with
-`notice = { code: "repo_not_indexed", … }` and `cortex_status` lists
-the indexed slugs under `daemon.indexed_repos`, so callers can detect
-the gap before issuing the next query.
-
-To bootstrap a repo:
-
-```sh
-# canonical entry point: spec-09 bootstrap CLI
-cargo run -p cortex-bootstrap -- --repo /path/to/repo
+```bash
+cp .env.example .env     # edit secrets before real use
+make up                  # Linux/macOS — docker compose up + first-time init
+# or
+bin/cortex-up.ps1        # Windows
 ```
 
-Subsequent calls scoped to that repo (`scope.repo = "<slug>"`) drop
-the notice and start returning real results. The slug is the value
-`cortex-storage`'s `slug_for_repo` produces — lowercase ASCII; the
-same form `daemon.indexed_repos` reports.
+This brings up 12 services: Vectorizer, Nexus, Synap, Meilisearch, the TEI reranker, and the Cortex ingestion, classifier, embedder, full-text, graph, API, and Claude-archive services.
 
-### Build hygiene (keep `target/` small)
-
-Cargo never garbage-collects build artifacts, so `target/` grows without
-bound (it once passed **500 GB** here). The repo already limits this:
-`[profile.dev].debug = "line-tables-only"` and `[profile.release].strip`
-keep debuginfo and symbols in check. For the rest, sweep periodically —
-this removes only artifacts you are not actively building, so the next
-build stays incremental:
-
-```sh
-cargo install cargo-sweep      # once
-scripts/sweep-target.sh        # remove artifacts unused for 14 days
-scripts/sweep-target.sh --dry-run
-cargo clean                    # full reclaim (forces a fresh rebuild)
+```bash
+make doctor              # liveness probe against every backend
+make logs S=cortex-api   # tail one service
+make down                # stop (volumes preserved)
 ```
 
-Automate it (daily Task Scheduler job on Windows, cron elsewhere) and set
-`CARGO_INCREMENTAL=0` in CI. Full guide:
-[`docs/rust-target-hygiene.md`](docs/rust-target-hygiene.md).
+### 📚 Index a repo (first time)
 
-## Roadmap
+Cortex answers `/v1/query`, `cortex_pre_thinking`, and the dashboard only for repos that were bootstrapped at least once. A repo that wasn't returns empty hits with `notice = { code: "repo_not_indexed", … }`, and `cortex_status` lists indexed slugs under `daemon.indexed_repos`.
 
-Five phases, mapped to the spec list:
+```bash
+cargo run -p cortex-cli --bin cortex-bootstrap -- /path/to/repo
+```
 
-- **Phase 0 — Foundations** (2 weeks)
-  Event schema, storage layout, docker-compose local stack, `cortex-core` skeleton, single-repo bootstrap proof of concept (Vectorizer).
-  _Specs: [01](docs/specs/01-event-schema.md), [02](docs/specs/02-storage-layout.md), [03](docs/specs/03-local-stack.md), [04](docs/specs/04-cortex-core.md)._
+After that, calls scoped with `scope.repo = "<slug>"` return real results. The slug is lowercase ASCII — the same form `daemon.indexed_repos` reports.
 
-- **Phase 1 — Bootstrap + Claude Code adapter + basic retrieval** (4 weeks)
-  Haiku classifier, embedder, graph writer, full-text indexer, bootstrap CLI for all 17 repos, Claude Code hooks, hybrid query API, pre-thinking injection.
-  _Specs: [05](docs/specs/05-classifier.md), [06](docs/specs/06-embedder.md), [07](docs/specs/07-graph-writer.md), [08](docs/specs/08-fulltext-indexer.md), [09](docs/specs/09-bootstrap-cli.md), [10](docs/specs/10-claude-code-adapter.md), [11](docs/specs/11-query-api.md), [12](docs/specs/12-pre-thinking-injection.md)._
+### 🔌 Connect Claude Code
 
-- **Phase 2 — Governance** (4 weeks)
-  Laws DSL + detector sandbox, enforcement engine, trust score, dashboard v1.
-  _Specs: [13](docs/specs/13-laws-dsl.md), [14](docs/specs/14-governance-engine.md), [16](docs/specs/16-dashboard.md)._
+```bash
+cargo install --path crates/cortex-mcp-server
+cargo install --path crates/cortex-adapter-claude-code
+cortex-adapter-claude install --no-hooks   # plugin registers the hooks itself
+cortex-adapter-claude daemon
+```
 
-- **Phase 3 — Deep Analysis + multi-adapter** (open)
-  Analysis workflow, Cursor/Codex/Gemini adapters, retrieval-quality evaluation.
-  _Specs: [15](docs/specs/15-deep-analysis.md), [17](docs/specs/17-additional-adapters.md)._
+Then install the plugin from [`packages/cortex-claude-plugin/`](packages/cortex-claude-plugin/README.md). Full steps (including why `--no-hooks` matters) are in the plugin README.
 
-- **Phase 4+ — Hardening + HivehubCloud integration** (open)
-  Multi-tenant, distributed deployment, trust-score feed into cloud routing.
+### 🖥️ Dashboard
 
-Exact timelines are aspirational; each spec has its own acceptance criteria and dependency list.
+```bash
+cd gui
+pnpm install
+pnpm dev                 # Vite renderer + Electron, talks to cortex-api over HTTP
+```
 
-**Current delivery status:** The five-phase sketch above is the original plan from April 2026. Actual delivery has now progressed through Phase 0 and Phases 1–27+ (spanning bootstrap, ACL/governance groundwork, bitemporal/branching support, GraphRAG foundations, and live-ops hardening). For the current, accurate roadmap and the full list of phases in progress, see [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/). Per-spec implementation status is tracked in [`docs/specs/00-index.md`](docs/specs/00-index.md).
+### 🛠️ Build from source
 
-## Contributing
+```bash
+git clone https://github.com/hivellm/cortex.git
+cd cortex
 
-This project is governed by [@hivellm/rulebook](https://github.com/hivellm/rulebook). Before making changes:
+make check               # cargo check --workspace
+make clippy              # cargo clippy --workspace --all-targets -- -D warnings
+make test                # cargo test --workspace
+make build
+```
 
-1. Read [`AGENTS.md`](AGENTS.md) and [`AGENTS.override.md`](AGENTS.override.md). These contain project-specific conventions that override generic guidance.
-2. Use the Rulebook MCP tools (`mcp__rulebook__*`) for task management — never `mkdir` tasks manually.
-3. Pick the **first unchecked item from the lowest-numbered phase/spec**. No cherry-picking.
-4. Run diagnostics (type-check, lint) **before** tests. Zero warnings; tests must pass 100%; coverage ≥95%.
-5. Commits use conventional commits (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`) and stay in English.
-6. Capture patterns, anti-patterns, and decisions through `rulebook_knowledge_add`, `rulebook_learn_capture`, `rulebook_decision_create` at the end of each task.
+> **Keeping `target/` bounded.** Cargo never garbage-collects build artifacts — `target/` once passed **500 GB** here. The workspace already pins `[profile.dev] debug = "line-tables-only"` and `[profile.release] strip`; on a developer box run `scripts/sweep-target.sh` periodically (needs `cargo install cargo-sweep`) to drop stale artifacts without losing the incremental hot set. Full guide: [`docs/rust-target-hygiene.md`](docs/rust-target-hygiene.md).
 
-## References
+### 🌐 Access Points
 
-- **Vectorizer** — https://github.com/hivellm/vectorizer — vector DB, MCP, embeddings.
-- **Nexus** — https://github.com/hivellm/nexus — graph DB, Cypher, KNN.
-- **Synap** — https://github.com/hivellm/synap — KV, streams, pub/sub.
-- **Rulebook** — https://github.com/hivellm/rulebook — rules, memory, MCP for task management.
-- **Meilisearch** — https://www.meilisearch.com — full-text search.
-- **Claude Haiku** — https://www.anthropic.com/claude/haiku — classification backend via Claude Code CLI.
+Default host ports (override via `.env`):
 
-## License
+| Service | Host port | Notes |
+|---|---|---|
+| **cortex-api** | `17000` | `/v1/query`, `/v1/health`, dashboard JSON |
+| **Vectorizer** (REST) | `17001` | container `15002` |
+| **Vectorizer** (RPC) | `17005` | `vectorizer://`, container `15503` |
+| **Nexus** | `17002` | container `15474` |
+| **Synap** | `17003` | container `15500` |
+| **Meilisearch** | `17004` | container `7700` |
+| **cortex-ingestion** | `17010` | envelope intake |
+| **cortex-adapter-claude** | `17011` | host-side daemon `/healthz` |
+| **classifier / embedder / fulltext / graph** | `17021` – `17024` | per-worker health + admin |
+| **cortex-claude-archive** | `17030` | |
 
-Licensed under the [Apache License, Version 2.0](LICENSE).
+## 🔧 MCP Integration
+
+`.mcp.json` for a project that uses Cortex:
+
+```json
+{
+  "mcpServers": {
+    "cortex": {
+      "type": "stdio",
+      "command": "cortex-mcp-server",
+      "args": ["serve"],
+      "env": {
+        "CORTEX_API_URL": "http://127.0.0.1:17000",
+        "CORTEX_ADAPTER_SOCK": "~/.cortex/adapter-claude.sock"
+      }
+    }
+  }
+}
+```
+
+### Available Tools (41)
+
+**Retrieval (6)**
+`cortex_query` · `cortex_pre_thinking` · `cortex_keyword_search` · `cortex_vector_search` · `cortex_topic_search` · `cortex_query_explain`
+
+**Sessions & activity (8)**
+`cortex_session_replay` · `cortex_session_timeline` · `cortex_similar_sessions` · `cortex_active_work` · `cortex_events_by_kind` · `cortex_tool_calls` · `cortex_files_touched` · `cortex_timeline`
+
+**Consolidations (7)**
+`cortex_consolidation_get` · `cortex_consolidations_recent` · `cortex_consolidations_by_entity` · `cortex_consolidations_search` · `cortex_consolidation_lineage` · `cortex_consolidations_diff` · `cortex_consolidation_costs`
+
+**Graph (4)**
+`cortex_graph_query` · `cortex_graph_communities` · `cortex_path` · `cortex_compare`
+
+**Decisions & history (6)**
+`cortex_decision_search` · `cortex_decision_chain` · `cortex_history` · `cortex_supersession` · `cortex_branch_list` · `cortex_branch_show`
+
+**Governance & feedback (4)**
+`cortex_law_violations` · `cortex_audit` · `cortex_feedback_signals` · `cortex_feedback_record`
+
+**Memory & access control (4)**
+`cortex_capture_memory` · `cortex_forget` · `cortex_acl_whoami` · `cortex_acl_grant`
+
+**Health & discovery (2)**
+`cortex_status` · `cortex_capabilities`
+
+## 🎯 Use Cases
+
+- **Pre-change context** - before editing a file, pull the decisions, laws, and past sessions that touched it
+- **Decision lookup** - "why did we pick X over Y?" with the full supersession chain
+- **Cross-session continuity** - a fresh session inherits the distilled context of the previous one
+- **Rule compliance** - check an action against active laws; track violations over time
+- **Session forensics** - replay what an agent did, which tools it called, and which files it changed
+
+## 🛠️ Technology Stack
+
+- **Core:** Rust (tokio, axum, rusqlite, tree-sitter)
+- **Data services:** [Vectorizer](https://github.com/hivellm/vectorizer) (vectors) · [Nexus](https://github.com/hivellm/nexus) (graph) · [Synap](https://github.com/hivellm/synap) (event streams) · [Meilisearch](https://www.meilisearch.com) (full-text)
+- **Models:** [Claude Haiku](https://www.anthropic.com/claude/haiku) via Claude Code CLI (classification) · Hugging Face TEI (reranking)
+- **Dashboard:** Electron + Vite + React + TypeScript + TanStack Query
+- **Governance:** [@hivehub/rulebook](https://github.com/hivellm/rulebook) (tasks, rules, memory)
+
+## 📚 Documentation
+
+- [Architecture](docs/architecture.md) — vision, goals, ecosystem context (read first)
+- [Spec index](docs/specs/00-index.md) — 44 specs with per-spec status and dependency order
+- [PRD](docs/prd.md) · [Roadmap](docs/roadmap.md) · [Dependency DAG](docs/dag.md)
+- [Local stack](docs/specs/03-local-stack.md) — compose topology and pinned service versions
+- [MCP tool surface](docs/specs/20-mcp-tool-surface.md)
+- [Claude Code plugin](packages/cortex-claude-plugin/README.md)
+- [Dashboard](gui/README.md) · [GUI contract](docs/specs/38-gui-contract.md)
+- [Operations](docs/operations/) · [Runbooks](docs/runbooks/) · [Observability](docs/observability/) · [Metrics](docs/metrics.md)
+- [Analyses](docs/analysis/) — audits, live verifications, platform reviews
+- [CHANGELOG](CHANGELOG.md)
+
+## 📍 Status
+
+**0.1.0-alpha, active development.** Spec 01–18 core is implemented and running against the live stack; later phases added consolidation, bitemporal history and branches, access control, retrieval evaluation, reranking, and graph communities. Per-spec status lives in [`docs/specs/00-index.md`](docs/specs/00-index.md); the current roadmap and known issues are in [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/).
+
+## 📄 License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+## 🤝 Contributing
+
+This project is governed by [@hivehub/rulebook](https://github.com/hivellm/rulebook). Before changing anything, read [`AGENTS.md`](AGENTS.md) and [`AGENTS.override.md`](AGENTS.override.md) — the override file holds project laws (strict task order, backlog chaining) that win over generic guidance.
+
+- Track work through the Rulebook MCP (`rulebook_task`); never create task folders by hand
+- Work checklists top-to-bottom — first unchecked item in the lowest-numbered section
+- Type-check → lint (`clippy -D warnings`) → tests, all green, before every commit
+- Conventional commits in English (`feat`, `fix`, `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`)
