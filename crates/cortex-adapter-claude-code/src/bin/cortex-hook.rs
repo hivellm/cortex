@@ -613,6 +613,10 @@ fn detached_spawn(command: &mut std::process::Command) -> io::Result<std::proces
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    // std spawns with handle inheritance on, so the long-lived runtime would
+    // also inherit this hook's own stdio pipes and the client (Codex reads
+    // hook stdout to EOF) would wait for the runtime to exit.
+    disinherit_std_handles();
     // Leave the client's job object when allowed so closing the session does
     // not kill the runtime; jobs that forbid breakaway reject the flag.
     command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
@@ -620,6 +624,33 @@ fn detached_spawn(command: &mut std::process::Command) -> io::Result<std::proces
         command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
         command.spawn()
     })
+}
+
+/// Clear `HANDLE_FLAG_INHERIT` on this process's stdin, stdout and stderr.
+/// The hook keeps using them; only children stop inheriting them.
+#[cfg(windows)]
+fn disinherit_std_handles() {
+    use std::os::windows::io::AsRawHandle;
+    const HANDLE_FLAG_INHERIT: u32 = 0x0000_0001;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetHandleInformation(handle: *mut std::ffi::c_void, mask: u32, flags: u32) -> i32;
+    }
+    for handle in [
+        io::stdin().as_raw_handle(),
+        io::stdout().as_raw_handle(),
+        io::stderr().as_raw_handle(),
+    ] {
+        if handle.is_null() {
+            continue;
+        }
+        // SAFETY: `handle` is this process's own standard handle as returned
+        // by std; SetHandleInformation only changes its inherit flag and
+        // fails harmlessly (ignored) for invalid or pseudo handles.
+        unsafe {
+            SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0);
+        }
+    }
 }
 
 #[cfg(unix)]
