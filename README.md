@@ -21,6 +21,86 @@ For routine agent work, start with the [daily runtime guide](docs/operations/dai
 - Native agent memory files are preserved. Daily mode disables bulk publishing, archive replay and scheduled maintenance.
 - [Behavioral acceptance](docs/analysis/daily-agent-memory-2026-10/11-cross-model-acceptance.md) verifies a Claude correction recalled and used by Codex after restart. [Resource measurements](docs/analysis/daily-agent-memory-2026-10/10-resource-acceptance.md) state the host, samples and limits.
 
+## 📦 Installation
+
+Cortex installs as a plugin for Claude Code or Codex. The plugin carries the hooks and the MCP entry, so no client file holds a Cortex path, token or environment block. Nothing is registered with the OS: the first session starts the local runtime ([ADR 040](.rulebook/decisions/040-app-managed-daily-runtime-lifecycle-started-by-cortex-hook-no-os-autostart.md)).
+
+You need Rust 1.80+ and the Claude Code or Codex CLI. On Windows the hooks run under Git Bash, which Claude Code already requires.
+
+### 1. Build and install the binaries
+
+```bash
+cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops
+target/release/cortex-ops install-binaries --from target/release          # dry run: lists what would change
+target/release/cortex-ops install-binaries --from target/release --apply  # copies into ~/.cortex/bin
+```
+
+The installer verifies SHA-256 and moves a running executable aside before replacing it. Next, put `~/.cortex/bin` **first** on your PATH. Older copies elsewhere on PATH, such as `cargo install` binaries in `~/.cargo/bin`, would otherwise run first, and the hooks would use an outdated `cortex-hook`.
+
+```powershell
+# Windows (PowerShell), then open a new terminal
+$p = [Environment]::GetEnvironmentVariable('Path', 'User')
+[Environment]::SetEnvironmentVariable('Path', "$env:USERPROFILE\.cortex\bin;$p", 'User')
+```
+
+```bash
+# Linux / macOS: add to your shell profile
+export PATH="$HOME/.cortex/bin:$PATH"
+```
+
+`target/release/cortex-ops doctor-install --build target/release` should then report all four binaries as `ok`. It flags missing, shadowed or stale binaries.
+
+### 2. Configure
+
+```bash
+target/release/cortex-ops setup           # dry run
+target/release/cortex-ops setup --apply   # writes ~/.cortex/config.toml
+```
+
+The file selects the daily profile. To migrate an existing runtime file, pass `--from <runtime.toml>`. Its `dashboard.api_token` moves to `~/.cortex/api-token`, which only your user can read. Changed files are backed up first, and running setup again changes nothing. `CORTEX_HOME` moves the whole directory.
+
+### 3. Install the plugin
+
+**Claude Code**
+
+```bash
+claude plugin marketplace add <path or git URL of this repository>
+claude plugin install cortex@hivellm-cortex
+```
+
+The plugin has two optional settings, `bin_dir` (an absolute directory holding `cortex-hook`) and `api_url`. Set them with `/plugin configure cortex@hivellm-cortex`, or leave them empty to use `~/.cortex`.
+
+**Codex**
+
+```bash
+codex plugin marketplace add <path or git URL of this repository>
+codex plugin add cortex@hivellm-cortex
+```
+
+Then open `/hooks` in Codex and trust the Cortex hooks. Codex runs plugin hooks only after you do. Codex hook delivery is not yet verified on Windows; the MCP tools work either way.
+
+### 4. Verify
+
+Start a new Claude Code session. Its first hook starts `cortex-api` and `cortex-adapter-claude`, with logs in `~/.cortex/lifecycle/`. You see a notice only if that start fails. Ask the agent to call `cortex_status`; it should report `runtime_profile: daily` with the API reachable.
+
+### Upgrading from the absolute-path setup
+
+Earlier installs wrote Cortex hooks and MCP entries into `~/.claude/settings.json`, `~/.claude.json` and `~/.codex/`. After the plugin is installed, remove them:
+
+```bash
+python scripts/activate_daily_memory_clients.py --write-manifest m.json            # dry run: review the plan
+python scripts/activate_daily_memory_clients.py --apply --expected-manifest m.json
+```
+
+Verified backups and a rollback record go to `~/.cortex/migrations/`, and `--rollback <record>` restores the files byte for byte. Until you migrate, the plugin skips events the old hooks already deliver, and `doctor-install` reports the double install.
+
+### Options and removal
+
+- `CORTEX_HOOK_AUTOSTART=0` keeps starting the runtime manual. Hooks that pass an explicit `--pipe` never start one.
+- To remove Cortex, run `claude plugin uninstall cortex@hivellm-cortex` (or `codex plugin remove cortex@hivellm-cortex`) and take `~/.cortex/bin` off PATH. Your data in `~/.cortex` stays.
+
+The [daily runtime guide](docs/operations/daily-memory-runtime.md) covers the runtime in depth, and the [plugin README](packages/cortex-claude-plugin/README.md) covers the plugin contents.
+
 ## 🎯 Overview
 
 Daily memory preserves explicitly captured decisions and lessons. The optional full profile adds the broader event and content pipeline:
@@ -120,7 +200,7 @@ docs/                            # architecture, specs, analyses, runbooks
 
 ## 🚀 Quick Start
 
-Use the [daily runtime guide](docs/operations/daily-memory-runtime.md) for local agent memory. The prerequisites and Compose setup below apply to the optional full stack.
+For local agent memory, follow [Installation](#-installation). The prerequisites and Compose setup below apply to the optional full stack.
 
 ### 📦 Full-stack prerequisites
 
@@ -157,19 +237,9 @@ cargo run -p cortex-cli --bin cortex-bootstrap -- /path/to/repo
 
 After that, calls scoped with `scope.repo = "<slug>"` return real results. The slug is lowercase ASCII — the same form `daemon.indexed_repos` reports.
 
-### 🔌 Connect Claude Code
+### 🔌 Connect Claude Code or Codex
 
-```powershell
-cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops
-target\release\cortex-ops install-binaries --from target\release --apply   # into ~/.cortex/bin; add it to PATH
-cortex-ops setup --apply                                                  # ~/.cortex/config.toml (+ api-token with --from)
-claude plugin marketplace add <this repository>
-claude plugin install cortex@hivellm-cortex
-```
-
-The plugin's hooks start the local runtime on demand; nothing is registered
-with the OS. Details are in the [plugin README](packages/cortex-claude-plugin/README.md).
-Codex uses [`packages/cortex-codex-plugin/`](packages/cortex-codex-plugin/README.md).
+Follow [Installation](#-installation). The same plugin install works with the full stack.
 
 ### 🖥️ Dashboard
 
