@@ -1,0 +1,8 @@
+# Processes cargo launches (`cargo test`, `cargo run`) must not pick up an
+# operator's installed `~/.cortex/config.toml` through config discovery
+# (phase35): tests then saw the live daily profile and ACL settings. An empty
+# Cortex home under target/ restores checkout behaviour (`./cortex.toml`, else
+# defaults). An explicit CORTEX_HOME still wins; installed binaries are
+# unaffected.
+[env]
+CORTEX_HOME = { value = "target/cortex-home-unset", relative = true }

@@ -8,7 +8,7 @@
 - [ ] 1.7 ⏸ blocked: needs the operator to trust the Cortex plugin hooks in Codex `/hooks` — Live acceptance in Codex on this host (operator-gated: the operator trusts the Cortex hooks in Codex `/hooks`): a fresh Codex session receives Cortex memory with provenance on SessionStart/UserPromptSubmit, Stop/PostToolUse hooks run without errors, the MCP tool `cortex_memory_read` works once approved; record evidence
 - [x] 1.8 Update or create documentation covering the implementation (README Codex install/trust steps, plugin READMEs, ops guide, CHANGELOG) — README (Codex trust/re-trust, client `codex`, Windows launcher, MCP approval snippet), plugin README (0.3.0), ops guide step 3, CHANGELOG Added bullet, spec 46
 - [x] 1.9 Write tests covering the new behavior — delivered under §1.6
-- [ ] 1.10 Run tests and confirm they pass (fmt, clippy -D warnings, full workspace suite, python and launcher suites)
+- [x] 1.10 Run tests and confirm they pass (fmt, clippy -D warnings, full workspace suite, python and launcher suites) — clippy -D warnings clean (workspace minus the in-progress cortex-local); 4086 workspace tests + OpenCode vitest 18/18 + python 10/10; fixed on the way: tests read the operator's installed ~/.cortex/config.toml (new `.cargo/config.toml` [env] CORTEX_HOME for cargo-run processes) and a cross-module CORTEX_HOME env race in cortex-ops tests (shared lock)
 
 ## 2. Tail (docs + tests — check or waive with tailWaiver)
 - [ ] 2.1 Update or create documentation covering the implementation

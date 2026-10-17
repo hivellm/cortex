@@ -87,6 +87,10 @@ mod rollup;
 mod schedule_cmd;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
+
+/// Serialises unit tests in different modules that set `CORTEX_HOME`.
+#[cfg(test)]
+static CORTEX_HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[path = "cortex-ops/temporal_digest.rs"]
 mod temporal_digest;
 #[path = "cortex-ops/timeline.rs"]

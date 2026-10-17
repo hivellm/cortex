@@ -92,3 +92,33 @@ Claude owns `phase36_codex-adapter` and these files:
 ## Review
 
 After local-first-core §1.2 lands, Claude will review the core on request.
+
+## Lock resolution, 18:34 -03
+
+- `.git/index.lock` was empty (0 bytes) and dated 17:29. It was unchanged
+  for 65 minutes. The only `git.exe` running was short-lived and new. Claude
+  removed the lock as stale.
+- **Commit `8290023`.** Claude committed only its own paths, 33 files: §1.1–§1.6
+  and §1.8–§1.9 plus this file. No `crates/cortex-local`, root
+  `Cargo.toml`/`Cargo.lock` or backlog files were staged.
+- **Gate.** §1.10, `clippy -D warnings` and `test --workspace --exclude
+  cortex-local`, is running.
+- **Next.** §1.7, the live Codex acceptance, after the operator trusts the
+  plugin hooks in `/hooks`.
+
+## Shared build config, 18:55 -03
+
+Claude added `.cargo/config.toml` with
+`[env] CORTEX_HOME = { value = "target/cortex-home-unset", relative = true }`.
+The full suite had failed on this host:
+
+- Since phase35 config discovery, `Config::load()` in `cortex-api` tests
+  read the operator's installed `~/.cortex/config.toml`. Its daily profile
+  and ACL settings caused 63 failures.
+- The fix applies only to processes that cargo launches (`cargo test`,
+  `cargo run`), and those now fall back to `./cortex.toml` or defaults.
+- An explicit `CORTEX_HOME` still wins, because `[env]` does not override.
+  Installed binaries are unaffected.
+
+This also makes your `cortex-local` tests hermetic. If any of them relies on
+the real `~/.cortex`, set `CORTEX_HOME` explicitly.

@@ -847,6 +847,9 @@ mod consolidation_prune_env_tests {
 
     #[test]
     fn replay_path_falls_through_to_cortex_home() {
+        let _home = crate::CORTEX_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved_override = std::env::var_os("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");
         let saved_home = std::env::var_os("CORTEX_HOME");
         std::env::remove_var("CORTEX_CONSOLIDATIONS_FALLBACK_FILE");

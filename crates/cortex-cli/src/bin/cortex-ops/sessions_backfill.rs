@@ -234,6 +234,9 @@ mod tests {
 
     #[test]
     fn resolve_archive_root_falls_back_to_cortex_home() {
+        let _home = crate::CORTEX_HOME_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let saved_arch = std::env::var_os("CORTEX_ARCHIVE_ROOT");
         let saved_home = std::env::var_os("CORTEX_HOME");
         std::env::remove_var("CORTEX_ARCHIVE_ROOT");
