@@ -22,11 +22,12 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
+use cortex_core::{Context, Envelope, Kind, Stream};
 use cortex_storage::{archive_filename, archive_partition};
 use serde_json::Value;
 use thiserror::Error;
@@ -50,6 +51,9 @@ pub enum EmitError {
     /// JSON serialisation failure.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
+    /// Canonical payload hashing failed before any archive bytes were written.
+    #[error("canonical payload: {0}")]
+    Canonical(#[from] cortex_core::CanonicalJsonError),
     /// Internal bug (poisoned mutex, etc.).
     #[error("internal: {0}")]
     Internal(String),
@@ -97,7 +101,7 @@ impl Emitter for StdoutEmitter {
             .inner
             .lock()
             .map_err(|_| EmitError::Internal("stdout mutex poisoned".into()))?;
-        let line = serde_json::to_string(&envelope_to_value(envelope))?;
+        let line = serde_json::to_string(&envelope_to_value(envelope)?)?;
         let mut stdout = std::io::stdout().lock();
         stdout.write_all(line.as_bytes())?;
         stdout.write_all(b"\n")?;
@@ -112,6 +116,7 @@ impl Emitter for StdoutEmitter {
 
 /// Archive sink. Writes zstd-compressed NDJSON to one hourly file
 /// per partition under `<root>/events/year=…/…/<tag>-NNNNN.parquet`.
+/// Each emit appends one complete, synced frame; at most 32 handles are cached.
 /// The file format matches what cortex-ingestion's
 /// `NdJsonZstdArchive` writes and what cortex-api's
 /// `archive_loader` reads.
@@ -124,16 +129,17 @@ pub struct ArchiveEmitter {
     /// but the constructor leaves it overridable so tests can
     /// segregate fixture output.
     stream_tag: String,
-    /// `(stream_tag, hour_bucket) → open writer`.
+    /// `(stream_tag, hour_bucket) → open file`, bounded across old partitions.
     open: Mutex<HashMap<(String, String), ArchiveFile>>,
 }
 
+const MAX_OPEN_ARCHIVE_FILES: usize = 32;
+
 struct ArchiveFile {
-    /// Path the encoder is writing to. Held for diagnostic logs
-    /// when the encoder errors mid-write.
+    /// Path retained with the handle for diagnostics and tests.
     #[allow(dead_code)]
     path: PathBuf,
-    encoder: zstd::stream::write::AutoFinishEncoder<'static, BufWriter<File>>,
+    file: File,
 }
 
 impl ArchiveEmitter {
@@ -168,18 +174,38 @@ impl ArchiveEmitter {
         }
         let dir = archive_partition(&self.root, ts);
         std::fs::create_dir_all(&dir)?;
-        let sequence = next_free_sequence(&dir, &self.stream_tag)?;
-        let filename = archive_filename(&self.stream_tag, sequence);
-        let path = dir.join(&filename);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let encoder = zstd::Encoder::new(BufWriter::new(file), self.level)?.auto_finish();
-        open.insert(key, ArchiveFile { path, encoder });
+        let mut sequence = next_free_sequence(&dir, &self.stream_tag)?;
+        let (path, file) = loop {
+            let path = dir.join(archive_filename(&self.stream_tag, sequence));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => break (path, file),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    sequence = sequence
+                        .checked_add(1)
+                        .ok_or_else(|| std::io::Error::other("archive sequence exhausted"))?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if open.len() >= MAX_OPEN_ARCHIVE_FILES {
+            // Each prior emit already synced a completed frame, so eviction
+            // cannot strand encoder state or discard buffered envelopes.
+            if let Some(oldest) = open.keys().min_by(|a, b| a.1.cmp(&b.1)).cloned() {
+                open.remove(&oldest);
+            }
+        }
+        open.insert(key, ArchiveFile { path, file });
         Ok(())
     }
 }
 
 impl Emitter for ArchiveEmitter {
     fn emit(&self, envelope: &MappedEnvelope) -> Result<(), EmitError> {
+        let mut line = serde_json::to_vec(&envelope_to_value(envelope)?)?;
+        line.push(b'\n');
+        // encode_all returns only after the frame has finished. No Drop-time
+        // finalization can hide codec errors or leave an hour-long frame open.
+        let frame = zstd::encode_all(line.as_slice(), self.level)?;
         let bucket = format!("{}", envelope.occurred_at.format("%Y%m%d%H"));
         let key = (self.stream_tag.clone(), bucket.clone());
         let mut open = self
@@ -190,9 +216,16 @@ impl Emitter for ArchiveEmitter {
         let entry = open
             .get_mut(&key)
             .ok_or_else(|| EmitError::Internal("ensure_open did not insert".into()))?;
-        let line = serde_json::to_vec(&envelope_to_value(envelope))?;
-        entry.encoder.write_all(&line)?;
-        entry.encoder.write_all(b"\n")?;
+        let result = entry
+            .file
+            .write_all(&frame)
+            .and_then(|()| entry.file.flush())
+            .and_then(|()| entry.file.sync_data());
+        if let Err(error) = result {
+            // Never append again after an unacknowledged/possibly partial tail.
+            open.remove(&key);
+            return Err(error.into());
+        }
         Ok(())
     }
 
@@ -201,13 +234,11 @@ impl Emitter for ArchiveEmitter {
             .open
             .lock()
             .map_err(|_| EmitError::Internal("archive mutex poisoned".into()))?;
-        // Drop every open file → the AutoFinishEncoder Drop impl
-        // closes the zstd stream cleanly. Subsequent emits open a
-        // fresh sequence number per the next_free_sequence rule.
-        let drained: Vec<_> = open.drain().collect();
-        for (_, entry) in drained {
-            // entry's Drop runs the encoder finish.
-            drop(entry);
+        // Preserve flush's existing close-and-rotate behavior, but surface
+        // synchronization errors rather than relying on AutoFinish Drop.
+        for (_, mut entry) in open.drain() {
+            entry.file.flush()?;
+            entry.file.sync_data()?;
         }
         Ok(())
     }
@@ -236,49 +267,67 @@ fn next_free_sequence(dir: &Path, stream_tag: &str) -> Result<u32, EmitError> {
             }
         }
     }
-    Ok(highest.map(|h| h + 1).unwrap_or(0))
+    match highest {
+        Some(highest) => highest
+            .checked_add(1)
+            .ok_or_else(|| std::io::Error::other("archive sequence exhausted").into()),
+        None => Ok(0),
+    }
 }
 
-/// Serialise a [`MappedEnvelope`] into the wire-format
-/// `cortex-api::archive_loader` expects. The shape mirrors
-/// `cortex_core::events::Envelope` so a future migration to the
-/// fully-typed envelope is field-renames only.
-pub fn envelope_to_value(envelope: &MappedEnvelope) -> Value {
-    let kind_tag = match envelope.kind {
-        EnvelopeKind::Turn => "turn",
-        EnvelopeKind::ToolCall => "tool_call",
-        EnvelopeKind::AgentCall => "agent_call",
+/// Serialize through the canonical envelope type consumed by archive indexing.
+/// Source IDs and payloads stay intact. The importer cannot establish a missing
+/// repository, original platform, or tool outcome from its own filesystem.
+pub fn envelope_to_value(envelope: &MappedEnvelope) -> Result<Value, EmitError> {
+    let kind = match envelope.kind {
+        EnvelopeKind::Turn => Kind::Turn,
+        EnvelopeKind::ToolCall => Kind::ToolCall,
+        EnvelopeKind::AgentCall => Kind::AgentCall,
     };
-    let mut context = serde_json::Map::new();
-    if let Some(repo) = &envelope.repo_slug {
-        context.insert("repo".into(), Value::String(repo.clone()));
-    }
-    if let Some(cwd) = &envelope.cwd {
-        context.insert("cwd".into(), Value::String(cwd.clone()));
-    }
-    if let Some(branch) = &envelope.git_branch {
-        context.insert("branch".into(), Value::String(branch.clone()));
-    }
-    serde_json::json!({
-        "event_id": envelope.event_id,
-        "schema_version": "1",
-        "occurred_at": envelope.occurred_at.to_rfc3339(),
-        "stream": "Bootstrap",
-        "tool": "claude-code",
-        "model": envelope.model,
-        "kind": kind_tag,
-        "session_id": envelope.session_id,
-        "context": Value::Object(context),
-        "payload": envelope.payload,
-        "parent_event_id": envelope.parent_event_id,
-    })
+    let platform = match std::env::consts::OS {
+        "windows" => "win32",
+        "macos" => "darwin",
+        other => other,
+    };
+    Ok(serde_json::to_value(Envelope {
+        event_id: envelope.event_id.clone(),
+        schema_version: "1".into(),
+        occurred_at: envelope.occurred_at.to_rfc3339(),
+        ingested_at: None,
+        session_id: envelope.session_id.clone(),
+        stream: Stream::Bootstrap,
+        tool: "claude-code".into(),
+        model: envelope.model.clone(),
+        kind,
+        context: Context {
+            repo: envelope.repo_slug.clone(),
+            branch: envelope.git_branch.clone(),
+            commit: None,
+            cwd: envelope.cwd.clone(),
+            user: None,
+            platform: platform.into(),
+            ide: None,
+            extras: std::collections::BTreeMap::from([(
+                "claude_archive".into(),
+                serde_json::json!({"platform_origin":"import_host", "source_platform":"unknown"}),
+            )]),
+        },
+        payload: envelope.payload.clone(),
+        redactions: Vec::new(),
+        content_hash: cortex_core::content_hash(&envelope.payload)?.to_string(),
+        parent_event_id: envelope.parent_event_id.clone(),
+        class_level: None,
+        class_compartments: None,
+    })?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ingestion::archive::read_archive_file;
     use chrono::TimeZone;
     use serde_json::json;
+    use std::io::Read;
     use tempfile::tempdir;
 
     fn fixture(kind: EnvelopeKind, ts: &str) -> MappedEnvelope {
@@ -300,25 +349,106 @@ mod tests {
 
     #[test]
     fn envelope_to_value_emits_canonical_shape() {
-        let v = envelope_to_value(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z"));
+        let v = envelope_to_value(&fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z")).unwrap();
         assert_eq!(v["kind"], json!("turn"));
         assert_eq!(v["tool"], json!("claude-code"));
-        assert_eq!(v["stream"], json!("Bootstrap"));
+        assert_eq!(v["stream"], json!("bootstrap"));
         assert_eq!(v["session_id"], json!("sess"));
         assert_eq!(v["context"]["repo"], json!("cortex"));
         assert_eq!(v["model"], json!("claude-opus-4-7"));
+        let parsed: Envelope = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed.stream, Stream::Bootstrap);
+        assert_eq!(
+            parsed.context.extras["claude_archive"]["platform_origin"],
+            "import_host"
+        );
+        assert_eq!(
+            parsed.content_hash,
+            cortex_core::content_hash(&parsed.payload)
+                .unwrap()
+                .to_string()
+        );
     }
 
     #[test]
     fn tool_call_kind_maps_to_tool_call_tag() {
-        let v = envelope_to_value(&fixture(EnvelopeKind::ToolCall, "2026-04-20T17:48:02Z"));
+        let v =
+            envelope_to_value(&fixture(EnvelopeKind::ToolCall, "2026-04-20T17:48:02Z")).unwrap();
         assert_eq!(v["kind"], json!("tool_call"));
     }
 
     #[test]
     fn agent_call_kind_maps_to_agent_call_tag() {
-        let v = envelope_to_value(&fixture(EnvelopeKind::AgentCall, "2026-04-20T17:48:02Z"));
+        let v =
+            envelope_to_value(&fixture(EnvelopeKind::AgentCall, "2026-04-20T17:48:02Z")).unwrap();
         assert_eq!(v["kind"], json!("agent_call"));
+    }
+
+    #[test]
+    fn unknown_source_repository_and_outcome_are_not_inferred() {
+        let mut mapped = fixture(EnvelopeKind::ToolCall, "2026-04-20T17:48:02Z");
+        mapped.repo_slug = None;
+        mapped.cwd = Some("E:/other-project/app".into());
+        mapped.payload = json!({"tool_name":"Bash", "input":{"command":"true"}});
+        let value = envelope_to_value(&mapped).unwrap();
+        let parsed: Envelope = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(parsed.context.repo, None);
+        assert_eq!(parsed.context.cwd, mapped.cwd);
+        assert_eq!(parsed.event_id, mapped.event_id);
+        assert_eq!(parsed.payload, mapped.payload);
+        assert!(value["payload"].get("outcome").is_none());
+    }
+
+    #[test]
+    fn emitted_turn_is_projected_by_incremental_index_before_and_after_restart() {
+        use cortex_storage::archive_index::ArchiveIndex;
+
+        fn project(envelope: &Envelope) -> Option<Value> {
+            let turn: cortex_core::Turn = serde_json::from_value(envelope.payload.clone()).ok()?;
+            Some(
+                json!({"id":envelope.event_id, "repo":envelope.context.repo, "text":turn.user_message}),
+            )
+        }
+
+        fn settle(index: &mut ArchiveIndex) -> Vec<Value> {
+            for _ in 0..64 {
+                let report = index.poll(project).unwrap();
+                assert!(report.errors.is_empty(), "{report:?}");
+                if report.discovery_complete
+                    && report.pending_files == 0
+                    && !report.historical_backfill
+                {
+                    return index.snapshot().unwrap();
+                }
+            }
+            panic!("incremental archive did not settle");
+        }
+
+        let directory = tempdir().unwrap();
+        let archive = directory.path().join("archive");
+        let metadata = directory.path().join("metadata.sqlite");
+        let emitter = ArchiveEmitter::new(&archive, 1);
+        let first = fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z");
+        emitter.emit(&first).unwrap();
+        let mut index = ArchiveIndex::open(&archive, &metadata).unwrap();
+        let initial = settle(&mut index);
+        assert_eq!(
+            initial,
+            vec![json!({"id":first.event_id, "repo":"cortex", "text":"hi"})]
+        );
+        drop(index);
+
+        let mut second = first.clone();
+        second.event_id = "01SECOND".into();
+        second.payload["user_message"] = json!("after restart");
+        emitter.emit(&second).unwrap();
+        let mut restarted = ArchiveIndex::open(&archive, &metadata).unwrap();
+        let resumed = settle(&mut restarted);
+        assert_eq!(resumed.len(), 2);
+        assert!(resumed.iter().any(|value| value["id"] == first.event_id));
+        assert!(resumed
+            .iter()
+            .any(|value| value["id"] == second.event_id && value["text"] == "after restart"));
     }
 
     #[test]
@@ -435,5 +565,152 @@ mod tests {
         let ts = Utc.with_ymd_and_hms(2026, 4, 20, 17, 48, 2).unwrap();
         let bucket = format!("{}", ts.format("%Y%m%d%H"));
         assert_eq!(bucket, "2026042017");
+    }
+
+    #[test]
+    fn emit_finishes_each_frame_before_flush_or_drop() {
+        let dir = tempdir().unwrap();
+        let emitter = ArchiveEmitter::new(dir.path(), 1);
+        let mut first = fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z");
+        first.event_id = "first".into();
+        emitter.emit(&first).unwrap();
+        let path = emitter
+            .open
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .path
+            .clone();
+        assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        let mut second = fixture(EnvelopeKind::ToolCall, "2026-04-20T17:49:02Z");
+        second.event_id = "second".into();
+        emitter.emit(&second).unwrap();
+        assert_eq!(emitter.open.lock().unwrap().len(), 1);
+        assert_eq!(read_archive_file(&path).unwrap().len(), 2);
+
+        let bytes = std::fs::read(&path).unwrap();
+        let mut decoder = zstd::stream::read::Decoder::with_buffer(bytes.as_slice())
+            .unwrap()
+            .single_frame();
+        let mut first_frame = String::new();
+        decoder.read_to_string(&mut first_frame).unwrap();
+        let remaining = decoder.finish();
+        assert!(!remaining.is_empty(), "second envelope needs its own frame");
+        assert_eq!(
+            serde_json::from_str::<Value>(first_frame.trim()).unwrap()["event_id"],
+            "first"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&zstd::decode_all(remaining).unwrap()).unwrap()
+                ["event_id"],
+            "second"
+        );
+    }
+
+    #[test]
+    fn old_hour_eviction_bounds_handles_without_losing_frames() {
+        let dir = tempdir().unwrap();
+        let emitter = ArchiveEmitter::new(dir.path(), 1);
+        let first = fixture(EnvelopeKind::Turn, "2026-04-20T00:00:00Z");
+        let mut paths = Vec::new();
+        for index in 0..MAX_OPEN_ARCHIVE_FILES + 3 {
+            let mut envelope = first.clone();
+            envelope.occurred_at += chrono::Duration::hours(index as i64);
+            emitter.emit(&envelope).unwrap();
+            let key = (
+                STREAM_TAG.to_string(),
+                envelope.occurred_at.format("%Y%m%d%H").to_string(),
+            );
+            let open = emitter.open.lock().unwrap();
+            assert!(open.len() <= MAX_OPEN_ARCHIVE_FILES);
+            paths.push(open.get(&key).unwrap().path.clone());
+        }
+        let first_key = (STREAM_TAG.to_string(), "2026042000".to_string());
+        assert!(!emitter.open.lock().unwrap().contains_key(&first_key));
+        emitter.emit(&first).unwrap();
+        let reopened = emitter
+            .open
+            .lock()
+            .unwrap()
+            .get(&first_key)
+            .unwrap()
+            .path
+            .clone();
+        assert_ne!(reopened, paths[0]);
+        paths.push(reopened);
+        for path in paths {
+            assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        }
+        assert_eq!(emitter.open.lock().unwrap().len(), MAX_OPEN_ARCHIVE_FILES);
+    }
+
+    #[test]
+    fn failed_emit_retires_file_instead_of_appending_after_unknown_tail() {
+        let dir = tempdir().unwrap();
+        let emitter = ArchiveEmitter::new(dir.path(), 1);
+        let envelope = fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z");
+        emitter.emit(&envelope).unwrap();
+        let path = {
+            let mut open = emitter.open.lock().unwrap();
+            let entry = open.values_mut().next().unwrap();
+            entry.file = File::open(&entry.path).unwrap();
+            entry.path.clone()
+        };
+        assert!(matches!(emitter.emit(&envelope), Err(EmitError::Io(_))));
+        assert!(emitter.open.lock().unwrap().is_empty());
+        emitter.emit(&envelope).unwrap();
+        let reopened = emitter
+            .open
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .path
+            .clone();
+        assert_ne!(reopened, path);
+        assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        assert_eq!(read_archive_file(&reopened).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn existing_corrupt_tail_is_preserved_and_new_emit_uses_fresh_sequence() {
+        let dir = tempdir().unwrap();
+        let envelope = fixture(EnvelopeKind::Turn, "2026-04-20T17:48:02Z");
+        let partition = archive_partition(dir.path(), envelope.occurred_at);
+        std::fs::create_dir_all(&partition).unwrap();
+        let corrupt = partition.join(archive_filename(STREAM_TAG, 0));
+        std::fs::write(&corrupt, b"unknown old tail").unwrap();
+        let emitter = ArchiveEmitter::new(dir.path(), 1);
+        emitter.emit(&envelope).unwrap();
+        let path = emitter
+            .open
+            .lock()
+            .unwrap()
+            .values()
+            .next()
+            .unwrap()
+            .path
+            .clone();
+        assert_ne!(path, corrupt);
+        assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        assert_eq!(std::fs::read(&corrupt).unwrap(), b"unknown old tail");
+    }
+
+    #[test]
+    fn sequence_exhaustion_returns_error_instead_of_wrapping() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path()
+                .join(format!("{STREAM_TAG}-{}.parquet", u32::MAX)),
+            b"",
+        )
+        .unwrap();
+        assert!(matches!(
+            next_free_sequence(dir.path(), STREAM_TAG),
+            Err(EmitError::Io(_))
+        ));
     }
 }

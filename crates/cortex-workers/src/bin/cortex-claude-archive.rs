@@ -221,6 +221,20 @@ fn run_estimate(args: EstimateArgs) -> Result<()> {
 }
 
 fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
+    let emitter: Box<dyn Emitter> = match args.sink {
+        SinkChoice::Stdout => Box::new(StdoutEmitter::new()),
+        SinkChoice::Archive => {
+            let root = match args.archive_root.clone() {
+                Some(p) => p,
+                None => default_archive_root()?,
+            };
+            Box::new(ArchiveEmitter::new(root, 3))
+        }
+    };
+    run_bootstrap_with_emitter(args, emitter)
+}
+
+fn run_bootstrap_with_emitter(args: BootstrapArgs, emitter: Box<dyn Emitter>) -> Result<()> {
     let cfg = args.common.resolve()?;
     let entries = walk(&cfg);
     let entries: Vec<WalkEntry> = entries
@@ -237,17 +251,6 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| cfg.root.join(".cortex-claude-archive.checkpoint.json"));
     let mut checkpoint = CheckpointStore::load(&checkpoint_path).context("loading checkpoint")?;
-
-    let emitter: Box<dyn Emitter> = match args.sink {
-        SinkChoice::Stdout => Box::new(StdoutEmitter::new()),
-        SinkChoice::Archive => {
-            let root = match args.archive_root {
-                Some(p) => p,
-                None => default_archive_root()?,
-            };
-            Box::new(ArchiveEmitter::new(root, 3))
-        }
-    };
 
     let bar = ProgressBar::new(entries.len() as u64);
     bar.set_style(
@@ -300,14 +303,13 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         // is set. The phase11i §1 v1 checkpoint lives at file
         // granularity; future versions track byte offset for
         // partially-processed files.
-        if args.resume {
-            if checkpoint
+        if args.resume
+            && checkpoint
                 .get(&entry.project_dir, &session_filename)
                 .is_some()
-            {
-                bar.inc(1);
-                continue;
-            }
+        {
+            bar.inc(1);
+            continue;
         }
 
         let (records, read_stats) = match read_records(&entry.path) {
@@ -328,10 +330,12 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         log_map_stats(&entry.path, &map_stats);
 
         let mut last_uuid = None;
+        let mut complete = true;
         for env in &envelopes {
             match emitter.emit(env) {
                 Ok(()) => {
                     envelopes_emitted.fetch_add(1, Ordering::Relaxed);
+                    last_uuid = Some(env.event_id.clone());
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -340,15 +344,20 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
                         "emit failed; counted as dropped",
                     );
                     envelopes_dropped.fetch_add(1, Ordering::Relaxed);
+                    complete = false;
+                    break;
                 }
             }
-            last_uuid = Some(env.event_id.clone());
         }
         records_consumed.fetch_add(map_stats.records_consumed, Ordering::Relaxed);
 
         // Stamp checkpoint after every file so a crash mid-run
         // never re-emits more than one file's worth of work.
-        if let Some(uuid) = last_uuid {
+        if !complete {
+            // A previous complete-file cursor must not conceal a failed rerun.
+            // Resume retries this file; logical event IDs deduplicate its prefix.
+            checkpoint.remove(&entry.project_dir, &session_filename);
+        } else if let Some(uuid) = last_uuid {
             let cp = cortex_workers::claude_archive::Checkpoint {
                 session_id: envelopes
                     .last()
@@ -388,6 +397,11 @@ fn run_bootstrap(args: BootstrapArgs) -> Result<()> {
         records_consumed.load(Ordering::Relaxed)
     );
     println!("checkpoint        : {}", checkpoint_path.display());
+    if envelopes_dropped.load(Ordering::Relaxed) > 0 {
+        return Err(anyhow!(
+            "bootstrap emission failed; incomplete files remain eligible for --resume"
+        ));
+    }
     Ok(())
 }
 
@@ -479,4 +493,112 @@ fn default_archive_root() -> Result<PathBuf> {
     Err(anyhow!(
         "could not resolve a default --archive-root; set CORTEX_ARCHIVE_ROOT / USERPROFILE / HOME or pass --archive-root explicitly"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cortex_workers::claude_archive::emitter::EmitError;
+    use cortex_workers::claude_archive::mapper::MappedEnvelope;
+
+    #[test]
+    fn bootstrap_resume_recovers_failed_file_without_new_source_append() {
+        struct FailSecondEmit {
+            archive: ArchiveEmitter,
+            calls: AtomicUsize,
+        }
+        impl Emitter for FailSecondEmit {
+            fn emit(&self, envelope: &MappedEnvelope) -> Result<(), EmitError> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                    return Err(std::io::Error::other("transient archive write failure").into());
+                }
+                self.archive.emit(envelope)
+            }
+
+            fn flush(&self) -> Result<(), EmitError> {
+                self.archive.flush()
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source");
+        let project = source.join("projects/retry-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let records = (1..=3)
+            .map(|number| {
+                serde_json::json!({
+                    "type":"user", "uuid":format!("u{number}"), "sessionId":"retry-session",
+                    "timestamp":format!("2026-04-20T17:48:0{number}Z"),
+                    "message":{"role":"user", "content":format!("message {number}")}
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(project.join("retry-session.jsonl"), format!("{records}\n")).unwrap();
+        let archive = directory.path().join("archive");
+        let checkpoint_path = directory.path().join("checkpoint.json");
+        let args = |resume| BootstrapArgs {
+            common: CommonRootArgs {
+                root: Some(source.clone()),
+                projects_only: true,
+                sidecars: false,
+                codex: false,
+            },
+            sink: SinkChoice::Archive,
+            archive_root: Some(archive.clone()),
+            resume,
+            checkpoint: Some(checkpoint_path.clone()),
+            skip: Vec::new(),
+        };
+        let failed = run_bootstrap_with_emitter(
+            args(false),
+            Box::new(FailSecondEmit {
+                archive: ArchiveEmitter::new(&archive, 1),
+                calls: AtomicUsize::new(0),
+            }),
+        );
+        assert!(failed.unwrap_err().to_string().contains("emission failed"));
+        assert!(CheckpointStore::load(&checkpoint_path).unwrap().is_empty());
+
+        // Real archive writes succeeded for the prefix. Resume must still read
+        // this unchanged file and recover every failed/unattempted identity.
+        run_bootstrap(args(true)).unwrap();
+        let checkpoint = CheckpointStore::load(&checkpoint_path).unwrap();
+        assert_eq!(
+            checkpoint
+                .get("retry-project", "retry-session.jsonl")
+                .unwrap()
+                .last_record_uuid,
+            "u3"
+        );
+        let mut index = cortex_storage::archive_index::ArchiveIndex::open(
+            &archive,
+            &directory.path().join("metadata.sqlite"),
+        )
+        .unwrap();
+        let mut settled = false;
+        for _ in 0..64 {
+            let report = index
+                .poll(|envelope| {
+                    Some(serde_json::json!({"id":envelope.event_id, "payload":envelope.payload}))
+                })
+                .unwrap();
+            assert!(report.errors.is_empty(), "{report:?}");
+            if report.discovery_complete && report.pending_files == 0 && !report.historical_backfill
+            {
+                settled = true;
+                break;
+            }
+        }
+        assert!(settled);
+        let mut ids = index
+            .snapshot()
+            .unwrap()
+            .into_iter()
+            .map(|value| value["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["u1", "u2", "u3"]);
+    }
 }

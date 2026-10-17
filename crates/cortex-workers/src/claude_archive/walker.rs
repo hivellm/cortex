@@ -250,16 +250,7 @@ fn codex_root_for(claude_root: &Path) -> PathBuf {
     // does not live under a parent (rare; tests pass `/tmp/foo`),
     // fall back to the literal sibling rename.
     let parent = claude_root.parent().unwrap_or(Path::new("/"));
-    let basename = claude_root
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or(".claude");
-    let codex_basename = if basename == ".claude" {
-        ".codex"
-    } else {
-        ".codex"
-    };
-    parent.join(codex_basename)
+    parent.join(".codex")
 }
 
 #[cfg(test)]

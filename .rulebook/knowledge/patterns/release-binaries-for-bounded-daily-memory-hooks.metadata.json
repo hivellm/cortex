@@ -1,0 +1,10 @@
+{
+  "id": "release-binaries-for-bounded-daily-memory-hooks",
+  "type": "pattern",
+  "title": "Release binaries for bounded daily memory hooks",
+  "category": "performance",
+  "description": "analysis:daily-agent-memory-2026-10 F-045: Deploy optimized release binaries for daily Cortex memory. Development opt-level=0 exhausted authenticated hook budgets; same-source release passed 40/40 sequential hooks with unchanged Argon2 and 550/600 ms limits. Verify installed SHA256 and actual model recall; never infer delivery from health or raise deadlines to hide a slow build. See analysis 23.",
+  "createdAt": "2026-10-17T14:42:55.422Z",
+  "tags": [],
+  "source": "manual"
+}

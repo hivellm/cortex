@@ -1332,9 +1332,13 @@ async fn ingest_endpoint_rejects_oversized_body_with_413() {
 }
 
 #[tokio::test]
-async fn ingest_endpoint_rejects_uppercase_repo() {
+async fn ingest_endpoint_preserves_exact_uppercase_repo() {
     let (svc, _, _, _, _) = build_test_service();
-    let app = build_router(svc);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("metadata.sqlite");
+    let mut cfg = cortex_config::Config::default();
+    cfg.ingestion.metadata_db = Some(path.to_string_lossy().into_owned());
+    let app = cortex_api::http::build_router_with_auth_and_cfg(svc, None, None, Arc::new(cfg));
     let payload = json!({
         "kind": "memory",
         "body": "hi",
@@ -1351,9 +1355,16 @@ async fn ingest_endpoint_rejects_uppercase_repo() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(resp.status(), StatusCode::ACCEPTED);
     let body = read_json(resp).await;
-    assert_eq!(body["error"], "repo_not_lowercase");
+    let store = cortex_storage::MetadataStore::open(&path).unwrap();
+    assert!(store
+        .daily_memory(
+            &cortex_storage::daily_memory::MemoryScope::Repository("Cortex".into()),
+            body["memory_id"].as_str().unwrap(),
+        )
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]
@@ -1361,7 +1372,7 @@ async fn ingest_endpoint_rejects_unsupported_kind() {
     let (svc, _, _, _, _) = build_test_service();
     let app = build_router(svc);
     let payload = json!({
-        "kind": "decision",
+        "kind": "tool_call",
         "body": "hi",
         "repo": "cortex",
     });
@@ -1382,15 +1393,14 @@ async fn ingest_endpoint_rejects_unsupported_kind() {
 }
 
 #[tokio::test]
-async fn ingest_endpoint_returns_503_when_ingestion_unreachable() {
-    // Force the proxy to point at a dead port so the validation
-    // passes but the upstream POST fails. CORTEX_INGESTION_URL is
-    // process-global; the test sets it for the duration and unsets
-    // afterwards. Tests in this file run in the same process — keep
-    // the env var scope tight to avoid leaking into siblings.
-    std::env::set_var("CORTEX_INGESTION_URL", "http://127.0.0.1:1");
+async fn ingest_endpoint_returns_503_when_durable_storage_unconfigured() {
     let (svc, _, _, _, _) = build_test_service();
-    let app = build_router(svc);
+    let app = cortex_api::http::build_router_with_auth_and_cfg(
+        svc,
+        None,
+        None,
+        Arc::new(cortex_config::Config::default()),
+    );
     let payload = json!({
         "kind": "memory",
         "body": "hi",
@@ -1407,13 +1417,12 @@ async fn ingest_endpoint_returns_503_when_ingestion_unreachable() {
         )
         .await
         .unwrap();
-    std::env::remove_var("CORTEX_INGESTION_URL");
     let status = resp.status();
     let body = read_json(resp).await;
     assert_eq!(
         status,
         StatusCode::SERVICE_UNAVAILABLE,
-        "expected 503 ingestion_unreachable, got {status:?} body={body}",
+        "expected 503 daily_memory_unavailable, got {status:?} body={body}",
     );
-    assert_eq!(body["error"], "ingestion_unreachable");
+    assert_eq!(body["error"], "daily_memory_unavailable");
 }

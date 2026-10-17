@@ -1,28 +1,22 @@
-//! Archive → in-memory keyword lane bootstrap.
+//! Explicit whole-archive diagnostic/backfill helpers.
 //!
 //! `cortex-ingestion` writes one zstd-compressed NDJSON file per
 //! hour per stream tag under `<archive_root>/events/year=YYYY/month=MM/day=DD/hour=HH/raw-NNNNN.parquet`
 //! (the `.parquet` suffix is a historical naming choice; the bytes
 //! are zstd-compressed line-delimited JSON, *not* Apache Parquet).
 //!
-//! Until the spec-06 / spec-07 / spec-08 indexer pipeline is wired
-//! to live Vectorizer / Meilisearch / Nexus, this loader gives
-//! `cortex-api` something to query against: at boot time, scan the
-//! archive root, parse every canonical envelope, and seed the
-//! [`MemoryKeywordLane`] so `/v1/query` returns the user's actual
-//! captured prompts and tool calls.
-//!
-//! This is a deliberately small module — pragma covering the
-//! "captured events are queryable" gap. Live indexers replace it
-//! when they ship.
+//! These full-scan helpers remain for explicit diagnostics and compatibility.
+//! The daemon uses [`super::archive_incremental`] only when opted in, and never
+//! schedules these helpers as a recurring refresh. Both share the projection.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use cortex_core::events::{
-    AgentCall, ConsolidationPayload, Envelope, Kind, ToolCall, TopicCardPayload, Turn,
+    ConsolidationPayload, Envelope, Kind, ToolCallOutput, TopicCardPayload, Turn,
 };
+use serde::Deserialize;
 use thiserror::Error;
 
 use crate::lanes::{LaneHit, MemoryKeywordLane};
@@ -231,9 +225,27 @@ fn read_one_file(
     Ok(())
 }
 
+// Historical imports can observe a call without its eventual outcome. Read
+// only the fields displayed here, preserving absent outcome as unknown.
+#[derive(Deserialize)]
+struct ArchiveToolCall {
+    tool_name: String,
+    input: serde_json::Value,
+    output: Option<ToolCallOutput>,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ArchiveAgentCall {
+    agent_type: String,
+    description: String,
+    prompt: Option<String>,
+    duration_ms: Option<u64>,
+}
+
 /// Map a canonical envelope to a [`LaneHit`]. Returns `None` for
 /// kinds that don't carry queryable text.
-fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
+pub(crate) fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
     // Captured for the Turn branch below — extras stamping needs
     // both halves separately so the dashboard's conversation
     // pairing can distinguish the user/Stop envelopes by turn_id.
@@ -287,7 +299,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
             (text, Some("turn".to_string()))
         }
         Kind::ToolCall => {
-            let tc: ToolCall = serde_json::from_value(env.payload.clone()).ok()?;
+            let tc: ArchiveToolCall = serde_json::from_value(env.payload.clone()).ok()?;
             duration_ms_payload = tc.duration_ms;
             let mut buf = format!("[{}] {}", tc.tool_name, summarize_value(&tc.input, 320));
             if let Some(ref out) = tc.output {
@@ -302,7 +314,7 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
             (buf, Some(format!("tool_call:{}", tc.tool_name)))
         }
         Kind::AgentCall => {
-            let ac: AgentCall = serde_json::from_value(env.payload.clone()).ok()?;
+            let ac: ArchiveAgentCall = serde_json::from_value(env.payload.clone()).ok()?;
             duration_ms_payload = ac.duration_ms;
             let text = format!(
                 "[agent:{}] {}",
@@ -377,6 +389,15 @@ fn envelope_to_hit(env: &Envelope) -> Option<LaneHit> {
     // `lane_label()` (extras["source"] → "keyword") tags the hit
     // honestly when the MemoryKeywordLane fallback is active.
     let mut extras = std::collections::BTreeMap::new();
+    if let Some(level) = env.class_level {
+        extras.insert("class_level".to_string(), serde_json::json!(level));
+    }
+    if let Some(compartments) = &env.class_compartments {
+        extras.insert(
+            "class_compartments".to_string(),
+            serde_json::json!(compartments),
+        );
+    }
     extras.insert(
         "session_id".to_string(),
         serde_json::Value::String(env.session_id.clone()),
@@ -528,7 +549,7 @@ fn clip(s: &str, max: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cortex_core::events::{Context, Stream};
+    use cortex_core::events::{Context, Stream, ToolCall};
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -583,6 +604,71 @@ mod tests {
             class_level: None,
             class_compartments: None,
         }
+    }
+
+    #[test]
+    fn imported_calls_without_outcome_survive_mapper_emitter_and_projection() {
+        use cortex_workers::claude_archive::{
+            envelope_to_value, map_session, read_records, ArchiveEmitter, Emitter,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.jsonl");
+        let user = json!({
+            "type":"user", "uuid":"user-1", "sessionId":"session-1",
+            "timestamp":"2026-10-16T12:00:00Z",
+            "message":{"role":"user", "content":"inspect source"}
+        });
+        let assistant = json!({
+            "type":"assistant", "uuid":"assistant-1", "parentUuid":"user-1",
+            "sessionId":"session-1", "timestamp":"2026-10-16T12:00:01Z",
+            "message":{"role":"assistant", "content":[
+                {"type":"text", "text":"Inspecting source"},
+                {"type":"tool_use", "id":"tool-1", "name":"Read", "input":{"path":"src/lib.rs"}},
+                {"type":"tool_use", "id":"agent-1", "name":"Agent", "input":{
+                    "subagent_type":"reviewer", "description":"Review source", "prompt":"Check source"
+                }}
+            ]}
+        });
+        std::fs::write(&source, format!("{user}\n{assistant}\n")).unwrap();
+        let (records, _) = read_records(&source).unwrap();
+        let (mapped, _) = map_session(&records, None).unwrap();
+        assert_eq!(mapped.len(), 3);
+        let root = directory.path().join("archive");
+        let emitter = ArchiveEmitter::new(&root, 1);
+        for item in &mapped {
+            let value = envelope_to_value(item).unwrap();
+            assert!(value["payload"].get("outcome").is_none());
+            let mut envelope: Envelope = serde_json::from_value(value).unwrap();
+            envelope.context.repo = Some("Exact/Repo".into());
+            envelope.class_level = Some(2);
+            envelope.class_compartments = Some(vec!["financial".into()]);
+            let hit = envelope_to_hit(&envelope).expect("observed call does not require outcome");
+            assert_eq!(hit.repo.as_deref(), Some("Exact/Repo"));
+            assert_eq!(hit.extras["class_level"], json!(2));
+            assert_eq!(hit.extras["class_compartments"], json!(["financial"]));
+            emitter.emit(item).unwrap();
+        }
+        emitter.flush().unwrap();
+        let (report, hits) = load_lane_hits(&root);
+        assert_eq!(report.envelopes_parsed, 3);
+        assert_eq!(hits.len(), 3);
+        let tool = hits
+            .iter()
+            .find(|hit| hit.doc_id == "archive|tool-1")
+            .unwrap();
+        assert!(tool.text.contains("src/lib.rs"));
+        assert_eq!(tool.symbol.as_deref(), Some("tool_call:Read"));
+        let agent = hits
+            .iter()
+            .find(|hit| hit.doc_id == "archive|agent-1")
+            .unwrap();
+        assert!(agent.text.contains("Review source"));
+        assert_eq!(agent.symbol.as_deref(), Some("agent_call:reviewer"));
+        assert!(
+            hits.iter().all(|hit| hit.repo.is_none()),
+            "unknown source identity must stay unknown"
+        );
     }
 
     #[test]

@@ -216,7 +216,54 @@ pub fn seed_defaults(metadata: &MetadataStore, now: DateTime<Utc>) -> Result<u32
     }
     // Pass 2 — reconcile drift on rows that already existed.
     reconcile_default_drift(metadata, &defaults)?;
+    // Pass 3 — phase34 §1.2: force retired jobs off on every seed.
+    retire_automatic_legacy_jobs(metadata)?;
     Ok(inserted)
+}
+
+/// phase34 §1.2 — jobs the scheduler must never fire automatically.
+///
+/// `retention.memory_consolidate` rewrites native agent memory files
+/// (`cortex-ops memory-consolidate --apply`). Daily memory recovery
+/// (ADR-039) retires it from the automatic path on fresh AND existing
+/// installs. The row stays seeded (dashboard slot, run history) but
+/// disabled; the explicit `cortex-ops memory-consolidate` CLI and
+/// `schedule run-now` remain operator-initiated paths.
+pub const AUTO_RUN_RETIRED_JOBS: &[&str] = &["retention.memory_consolidate"];
+
+/// phase34 §1.2 — disable every [`AUTO_RUN_RETIRED_JOBS`] row that is
+/// still enabled. Touches ONLY `enabled`: schedule, command, run
+/// history, `failure_streak` and `last_warning_at` are preserved, so
+/// the operator's original configuration and outcomes stay visible.
+/// Unlike [`reconcile_default_drift`] this ignores the
+/// operator-disabled heuristic — failure / warning markers never
+/// keep a retired job enabled. Idempotent; returns the names it
+/// actually flipped.
+pub fn retire_automatic_legacy_jobs(
+    metadata: &MetadataStore,
+) -> Result<Vec<String>, MetadataError> {
+    let mut retired = Vec::new();
+    for name in AUTO_RUN_RETIRED_JOBS {
+        let Some(row) = metadata.get_cron_job(name)? else {
+            continue;
+        };
+        if !row.enabled {
+            continue;
+        }
+        tracing::warn!(
+            name = %row.name,
+            schedule = %row.schedule,
+            command = %row.command,
+            last_run_at = ?row.last_run_at,
+            last_status = ?row.last_status,
+            failure_streak = row.failure_streak,
+            "scheduler: disabled retired automatic job (native memory rewrite); \
+             schedule and run history preserved"
+        );
+        metadata.set_cron_job_enabled(name, false)?;
+        retired.push(row.name);
+    }
+    Ok(retired)
 }
 
 /// phase11v §3.1 — walk the existing rows and update `enabled` /
@@ -242,6 +289,11 @@ fn reconcile_default_drift(
         let Some(row) = by_name.get(d.name) else {
             continue;
         };
+        // Retired jobs keep their original command; only
+        // `retire_automatic_legacy_jobs` touches them.
+        if AUTO_RUN_RETIRED_JOBS.contains(&d.name) {
+            continue;
+        }
         let operator_disabled = row.failure_streak > 0 || row.last_warning_at.is_some();
         if operator_disabled {
             continue;
@@ -322,19 +374,17 @@ fn default_jobs() -> Vec<DefaultJob> {
             command: "cortex-ops metadata-reap",
             enabled: true,
         },
-        // Phase11p §3.2 — flipped from `enabled: false` to `enabled:
-        // true` so the auto-memory consolidator (Claude Code memory
-        // dir; phase9h, fully implemented in
-        // `crates/cortex-cli/src/ops/memory_consolidate.rs`)
-        // actually fires on the nightly slot. The pre-phase11p
-        // default kept this job dormant which left the user
-        // observing unbounded memory growth despite the
-        // implementation having shipped.
+        // Phase11p §3.2 enabled the auto-memory consolidator (Claude
+        // Code memory dir; `crates/cortex-cli/src/ops/memory_consolidate.rs`).
+        // phase34 §1.2 (ADR-039) retires it from automatic runs: it
+        // rewrites native agent memory files. Seeded disabled and
+        // listed in `AUTO_RUN_RETIRED_JOBS`, so existing enabled rows
+        // are forced off and `tick` never fires it.
         DefaultJob {
             name: "retention.memory_consolidate",
             schedule: "0 7 * * 0",
             command: "cortex-ops memory-consolidate --apply",
-            enabled: true,
+            enabled: false,
         },
         // Phase29 (graph-projection-unblock §4.1, unblocking phase27b
         // §2.5) — nightly community detection over the architecture
@@ -697,7 +747,7 @@ pub async fn tick(
     now: DateTime<Utc>,
 ) -> Result<TickReport, MetadataError> {
     apply_phase9k_schema(metadata.conn())?;
-    let due = metadata.select_due_cron_jobs(now)?;
+    let due = select_auto_runnable_jobs(metadata, now)?;
     let mut report = TickReport {
         due: due.len() as u32,
         ..TickReport::default()
@@ -713,6 +763,24 @@ pub async fn tick(
         }
     }
     Ok(report)
+}
+
+/// phase34 §1.2 — due rows an automatic tick may fire. Forces any
+/// re-enabled [`AUTO_RUN_RETIRED_JOBS`] row off first (manual
+/// `schedule enable`, failed boot seed), then filters retired names
+/// out so a racing re-enable still cannot launch them. Every
+/// automatic tick loop must select through this helper; explicit
+/// [`run_now`] stays an operator-initiated path.
+pub fn select_auto_runnable_jobs(
+    metadata: &MetadataStore,
+    now: DateTime<Utc>,
+) -> Result<Vec<CronJob>, MetadataError> {
+    retire_automatic_legacy_jobs(metadata)?;
+    Ok(metadata
+        .select_due_cron_jobs(now)?
+        .into_iter()
+        .filter(|j| !AUTO_RUN_RETIRED_JOBS.contains(&j.name.as_str()))
+        .collect())
 }
 
 /// Counters returned by [`tick`].
@@ -928,21 +996,243 @@ mod tests {
         s.conn()
             .execute(
                 "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at)
-                      VALUES ('retention.memory_consolidate', '0 7 * * 0',
-                              'cortex-ops memory-consolidate --apply', 0,
-                              '2026-05-10T06:00:00+00:00')",
+                      VALUES ('retention.sweep', '0 3 * * *',
+                              'cortex-ops retention-sweep', 0,
+                              '2026-05-10T03:00:00+00:00')",
                 [],
             )
             .unwrap();
         seed_defaults(&s, anchor()).unwrap();
         let row = s
-            .get_cron_job("retention.memory_consolidate")
+            .get_cron_job("retention.sweep")
             .unwrap()
             .expect("row present");
         assert!(
             row.enabled,
             "phase11v §3.1 — drifted default must reconcile to enabled=1"
         );
+    }
+
+    const MEMORY_JOB: &str = "retention.memory_consolidate";
+
+    /// Pre-phase34 install: row enabled by the phase11p default with
+    /// an operator-tuned schedule and a failing run history.
+    fn insert_legacy_enabled_memory_job(s: &MetadataStore, next_run_at: &str) {
+        apply_phase9k_schema(s.conn()).unwrap();
+        s.conn()
+            .execute(
+                "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at,
+                                        last_run_at, last_status, last_error,
+                                        failure_streak, last_warning_at)
+                      VALUES (?1, '15 4 * * 6', 'cortex-ops memory-consolidate --apply',
+                              1, ?2, '2026-04-25T04:15:00+00:00', 'failed',
+                              'classifier budget exhausted', 3,
+                              '2026-04-25T04:15:05+00:00')",
+                rusqlite::params![MEMORY_JOB, next_run_at],
+            )
+            .unwrap();
+    }
+
+    /// Every column except `enabled` must survive the retirement.
+    fn assert_legacy_history_preserved(row: &CronJob, next_run_at: &str) {
+        assert_eq!(row.schedule, "15 4 * * 6", "operator schedule preserved");
+        assert_eq!(row.command, "cortex-ops memory-consolidate --apply");
+        assert_eq!(row.next_run_at.as_deref(), Some(next_run_at));
+        assert_eq!(
+            row.last_run_at.as_deref(),
+            Some("2026-04-25T04:15:00+00:00")
+        );
+        assert_eq!(row.last_status.as_deref(), Some("failed"));
+        assert_eq!(
+            row.last_error.as_deref(),
+            Some("classifier budget exhausted")
+        );
+        assert_eq!(row.failure_streak, 3);
+        assert_eq!(
+            row.last_warning_at.as_deref(),
+            Some("2026-04-25T04:15:05+00:00")
+        );
+    }
+
+    /// phase34 §1.2 — fresh installs seed the native-memory rewrite
+    /// job disabled; the row exists so dashboards keep the slot.
+    #[test]
+    fn seed_defaults_fresh_install_seeds_memory_consolidate_disabled() {
+        let s = store();
+        seed_defaults(&s, anchor()).unwrap();
+        let row = s.get_cron_job(MEMORY_JOB).unwrap().expect("row seeded");
+        assert!(!row.enabled, "fresh install must not auto-rewrite memory");
+        assert_eq!(row.schedule, "0 7 * * 0");
+        assert_eq!(row.command, "cortex-ops memory-consolidate --apply");
+    }
+
+    /// phase34 §1.2 — an existing enabled row carrying failure /
+    /// warning markers is still disabled (the operator-disabled
+    /// heuristic must not shield it), stays disabled across repeated
+    /// reseeding, and keeps schedule, command and run history.
+    #[test]
+    fn seed_defaults_disables_existing_enabled_memory_consolidate_with_markers() {
+        let s = store();
+        let next = "2026-05-02T04:15:00+00:00";
+        insert_legacy_enabled_memory_job(&s, next);
+        for _ in 0..3 {
+            seed_defaults(&s, anchor()).unwrap();
+            let row = s.get_cron_job(MEMORY_JOB).unwrap().expect("row present");
+            assert!(!row.enabled, "retired job must stay disabled after reseed");
+            assert_legacy_history_preserved(&row, next);
+        }
+    }
+
+    #[test]
+    fn retire_automatic_legacy_jobs_reports_only_actual_flips() {
+        let s = store();
+        insert_legacy_enabled_memory_job(&s, "2026-05-02T04:15:00+00:00");
+        assert_eq!(
+            retire_automatic_legacy_jobs(&s).unwrap(),
+            vec![MEMORY_JOB.to_string()]
+        );
+        assert!(retire_automatic_legacy_jobs(&s).unwrap().is_empty());
+    }
+
+    /// phase34 §1.2 — a retired row that is enabled and due when the
+    /// tick runs (boot seed failed, or an operator ran `schedule
+    /// enable`) must not spawn. The row is forced off and its run
+    /// history is untouched.
+    #[tokio::test]
+    async fn tick_never_runs_retired_memory_consolidate_even_if_enabled_and_due() {
+        let s = store();
+        let past = (anchor() - Duration::seconds(5)).to_rfc3339();
+        insert_legacy_enabled_memory_job(&s, &past);
+        s.upsert_cron_job_if_absent(
+            "retention.sweep",
+            "0 3 * * *",
+            "cortex-ops retention-sweep",
+            true,
+            &past,
+        )
+        .unwrap();
+        let runner = MemoryRunner::new();
+        let scheduler = Scheduler::new();
+        let report = tick(&scheduler, &runner, &s, anchor()).await.unwrap();
+        assert_eq!(report.due, 1, "only the non-retired job is due");
+        assert_eq!(
+            runner.spawned().await,
+            vec!["cortex-ops retention-sweep".to_string()]
+        );
+        let row = s.get_cron_job(MEMORY_JOB).unwrap().expect("row present");
+        assert!(!row.enabled);
+        assert_legacy_history_preserved(&row, &past);
+    }
+
+    /// phase34 §1.2 — `schedule enable` after the upgrade seed does
+    /// not bring the automatic run back: the next tick re-disables
+    /// the row without spawning it.
+    #[tokio::test]
+    async fn tick_redisables_memory_consolidate_after_manual_reenable() {
+        let s = store();
+        seed_defaults(&s, anchor()).unwrap();
+        let past = (anchor() - Duration::seconds(5)).to_rfc3339();
+        s.set_cron_job_schedule(MEMORY_JOB, "0 7 * * 0", &past)
+            .unwrap();
+        assert_eq!(s.set_cron_job_enabled(MEMORY_JOB, true).unwrap(), 1);
+        let runner = MemoryRunner::new();
+        let scheduler = Scheduler::new();
+        tick(&scheduler, &runner, &s, anchor()).await.unwrap();
+        assert!(
+            !runner
+                .spawned()
+                .await
+                .iter()
+                .any(|c| c.contains("memory-consolidate")),
+            "re-enabled retired job must not auto-run"
+        );
+        let row = s.get_cron_job(MEMORY_JOB).unwrap().unwrap();
+        assert!(!row.enabled);
+        assert!(row.last_run_at.is_none(), "no run recorded");
+    }
+
+    /// phase34 §1.2 — retirement covers automatic ticks only;
+    /// `schedule run-now` on the disabled row stays an explicit
+    /// operator action and runs the original command.
+    #[tokio::test]
+    async fn run_now_remains_explicit_path_for_retired_job() {
+        let s = store();
+        seed_defaults(&s, anchor()).unwrap();
+        let runner = MemoryRunner::new();
+        let scheduler = Scheduler::new();
+        let outcome = run_now(&scheduler, &runner, &s, MEMORY_JOB, anchor())
+            .await
+            .unwrap();
+        assert_eq!(outcome.status, "success");
+        assert_eq!(
+            runner.spawned().await,
+            vec!["cortex-ops memory-consolidate --apply".to_string()]
+        );
+        assert!(
+            !s.get_cron_job(MEMORY_JOB).unwrap().unwrap().enabled,
+            "explicit run must not re-enable the automatic job"
+        );
+    }
+
+    #[test]
+    fn select_auto_runnable_jobs_excludes_retired_names() {
+        let s = store();
+        let past = (anchor() - Duration::seconds(5)).to_rfc3339();
+        insert_legacy_enabled_memory_job(&s, &past);
+        let due = select_auto_runnable_jobs(&s, anchor()).unwrap();
+        assert!(due.iter().all(|j| j.name != MEMORY_JOB));
+        assert!(!s.get_cron_job(MEMORY_JOB).unwrap().unwrap().enabled);
+    }
+
+    /// phase34 spec "Existing enabled consolidation job" — file-backed
+    /// DB, upgrade seed, restart (reopen + reseed), then a due tick:
+    /// the job stays disabled, nothing spawns, and native memory files
+    /// keep their exact bytes.
+    #[tokio::test]
+    async fn file_backed_upgrade_keeps_memory_job_disabled_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("metadata.db");
+        let memory_dir = dir.path().join("memory");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        let files = [
+            ("MEMORY.md", "- [a](a.md) — hook\n"),
+            ("a.md", "---\nname: a\n---\nfact\n"),
+        ];
+        for (name, body) in files {
+            std::fs::write(memory_dir.join(name), body).unwrap();
+        }
+        let past = (anchor() - Duration::seconds(5)).to_rfc3339();
+        {
+            let s = MetadataStore::open(&db).unwrap();
+            insert_legacy_enabled_memory_job(&s, &past);
+            seed_defaults(&s, anchor()).unwrap();
+        }
+        let s = MetadataStore::open(&db).unwrap();
+        seed_defaults(&s, anchor()).unwrap();
+        let row = s.get_cron_job(MEMORY_JOB).unwrap().expect("row present");
+        assert!(!row.enabled, "disabled state must persist across restart");
+        assert_legacy_history_preserved(&row, &past);
+
+        let runner = MemoryRunner::new();
+        let scheduler = Scheduler::new();
+        tick(&scheduler, &runner, &s, anchor() + Duration::days(30))
+            .await
+            .unwrap();
+        assert!(
+            !runner
+                .spawned()
+                .await
+                .iter()
+                .any(|c| c.contains("memory-consolidate")),
+            "tick must never spawn memory-consolidate"
+        );
+        for (name, body) in files {
+            assert_eq!(
+                std::fs::read_to_string(memory_dir.join(name)).unwrap(),
+                body,
+                "native memory file {name} must be unchanged"
+            );
+        }
     }
 
     /// phase12c §1.3 — pre-flip `tool_call_digest` rows must
@@ -1020,15 +1310,15 @@ mod tests {
         s.conn()
             .execute(
                 "INSERT INTO cron_jobs (name, schedule, command, enabled, next_run_at, failure_streak)
-                      VALUES ('retention.memory_consolidate', '0 7 * * 0',
-                              'cortex-ops memory-consolidate --apply', 0,
-                              '2026-05-10T06:00:00+00:00', 2)",
+                      VALUES ('retention.sweep', '0 3 * * *',
+                              'cortex-ops retention-sweep', 0,
+                              '2026-05-10T03:00:00+00:00', 2)",
                 [],
             )
             .unwrap();
         seed_defaults(&s, anchor()).unwrap();
         let row = s
-            .get_cron_job("retention.memory_consolidate")
+            .get_cron_job("retention.sweep")
             .unwrap()
             .expect("row present");
         assert!(
@@ -1086,8 +1376,8 @@ mod tests {
             .find(|j| j.name == "retention.memory_consolidate")
             .unwrap();
         assert!(
-            consolidate.enabled,
-            "phase11p §3.2 — memory_consolidate defaults enabled"
+            !consolidate.enabled,
+            "phase34 §1.2 — memory_consolidate defaults disabled"
         );
         let sweep = jobs.iter().find(|j| j.name == "retention.sweep").unwrap();
         assert!(sweep.enabled);

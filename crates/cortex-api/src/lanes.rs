@@ -12,6 +12,7 @@
 //! Sibling modules (one per backend or shared concern) live in
 //! `crates/cortex-api/src/lanes/*.rs`.
 
+pub mod archive_incremental;
 pub mod archive_loader;
 #[cfg(test)]
 mod lane_contract;
@@ -629,6 +630,12 @@ pub struct MemoryKeywordLane {
     pub delay: Option<Duration>,
     /// Hard-fail flag.
     pub fail: bool,
+    /// Serializes archive snapshot publication with explicit forget operations.
+    pub(crate) archive_update: Mutex<()>,
+    /// Optional archive processing status, independent of daily memory.
+    pub archive_status: Mutex<archive_incremental::ArchiveLoaderStatus>,
+    /// Changes whenever the optional archive snapshot changes or is forgotten.
+    pub archive_revision: std::sync::atomic::AtomicU64,
 }
 
 impl MemoryKeywordLane {
@@ -689,7 +696,11 @@ impl KeywordLane for MemoryKeywordLane {
             .hits
             .lock()
             .ok()
-            .and_then(|g| g.get(&req.index).cloned())
+            .map(|g| {
+                g.get(&req.index)
+                    .cloned()
+                    .unwrap_or_else(|| archive_incremental::scoped_archive_hits(&g, req))
+            })
             .unwrap_or_default();
         Ok(hits)
     }

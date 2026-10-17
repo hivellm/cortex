@@ -148,6 +148,7 @@ fn ingestion_section_round_trips_every_field() {
         [ingestion]
         bind = "0.0.0.0:17020"
         archive_root = "/srv/cortex/archive"
+        archive_incremental_enabled = true
         synap_url = "http://ingest-synap:9005"
         archive_zstd_level = 5
         metadata_db = "/srv/cortex/metadata.sqlite"
@@ -160,6 +161,7 @@ fn ingestion_section_round_trips_every_field() {
     let path = write_fixture(dir.path(), toml);
     let cfg = Config::load_from(&path, |_| None).expect("load");
     assert_eq!(cfg.ingestion.bind, "0.0.0.0:17020");
+    assert!(cfg.ingestion.archive_incremental_enabled);
     assert_eq!(
         cfg.ingestion.archive_root.as_deref(),
         Some("/srv/cortex/archive")

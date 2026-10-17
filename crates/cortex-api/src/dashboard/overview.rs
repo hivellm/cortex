@@ -69,6 +69,14 @@ pub struct SeriesBlock {
 }
 
 pub(super) async fn overview(State(state): State<DashboardState>) -> Response {
+    let subsystems = crate::health::gather_subsystem_extras().await;
+    overview_response(state, subsystems.get("cortex-adapter"))
+}
+
+fn overview_response(
+    state: DashboardState,
+    adapter_health: Option<&cortex_health::SubsystemStatus>,
+) -> Response {
     let snapshot = collect_lane_hits(&state.lane);
 
     let mut by_kind: std::collections::BTreeMap<&'static str, u64> =
@@ -125,9 +133,7 @@ pub(super) async fn overview(State(state): State<DashboardState>) -> Response {
     // per-probe timeout; concurrent fan-out so a down subsystem doesn't
     // stack latency. Defaults to 0 when the adapter is unreachable or
     // has no pre-thinking samples yet.
-    let pre_thinking_assembly_p95_ms = crate::health::gather_subsystem_extras()
-        .await
-        .get("cortex-adapter")
+    let pre_thinking_assembly_p95_ms = adapter_health
         .and_then(|s| s.extras.get("pre_thinking_latency_ms"))
         .and_then(|v| v.get("p95"))
         .and_then(|v| v.as_u64())
@@ -154,7 +160,6 @@ pub(super) async fn overview(State(state): State<DashboardState>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::extract::State;
     use axum::http::StatusCode;
     use serde_json::Value;
     use std::sync::Arc;
@@ -223,7 +228,7 @@ mod tests {
             turn_hit("again", "Cortex", 200),
             tool_call_hit("Edit", "stuff", "Vectorizer", 150),
         ]);
-        let resp = overview(State(state)).await;
+        let resp = overview_response(state, None);
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
@@ -251,7 +256,7 @@ mod tests {
             turn_hit("a", "Cortex", now - 30_000),
             tool_call_hit("Edit", "x", "Cortex", now - 60_000),
         ]);
-        let resp = overview(State(state)).await;
+        let resp = overview_response(state, None);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
             .unwrap();
@@ -269,8 +274,8 @@ mod tests {
         );
         assert_eq!(parsed["classifier_cost_unavailable_until_spec05"], true);
         // phase26f §3.1 — the real bundle-assembly p95 field is always
-        // present; it defaults to 0 here because the adapter `/healthz`
-        // is unreachable in the test (connection refused → instant).
+        // present; an absent adapter health snapshot defaults to 0 without
+        // probing any installed runtime or relying on a closed local port.
         assert_eq!(parsed["pre_thinking_assembly_p95_ms"].as_u64(), Some(0));
         assert!(series["pre_thinking_p95_ms"]
             .as_array()
@@ -310,7 +315,7 @@ mod tests {
             });
         }
         let state = make_state(hits);
-        let resp = overview(State(state)).await;
+        let resp = overview_response(state, None);
         let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
             .await
             .unwrap();
@@ -326,5 +331,22 @@ mod tests {
             (90..=100).contains(&v),
             "P95 of 10..100 step 10 should be in [90, 100], got {v}"
         );
+    }
+
+    #[tokio::test]
+    async fn overview_uses_adapter_assembly_p95_instead_of_probe_latency() {
+        let mut adapter = cortex_health::SubsystemStatus::ok("cortex-adapter", "test", "");
+        adapter.latency_ms = 9999;
+        adapter.extras.insert(
+            "pre_thinking_latency_ms".to_string(),
+            serde_json::json!({"p95": 809}),
+        );
+        let resp = overview_response(make_state(vec![]), Some(&adapter));
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["pre_thinking_assembly_p95_ms"].as_u64(), Some(809));
     }
 }

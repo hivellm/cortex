@@ -22,13 +22,15 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
 regex = { workspace = true }
+reqwest = { workspace = true }
+toml = { workspace = true }
 # Phase14g — sha2 powers the rewriter cache key
 # (SHA256(query + intent)) used by the cascade.
 sha2 = { workspace = true }
 
 [dev-dependencies]
 cortex-core = { path = "../cortex-core" }
+cortex-config = { path = "../cortex-config" }
+axum = { workspace = true }
+zstd = { workspace = true }
 tempfile = { workspace = true }
-# Phase30 (continuity §1.1) — the cross-session live IT drives the real
-# pipeline against the running cortex-api.
-reqwest = { workspace = true }

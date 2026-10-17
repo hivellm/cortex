@@ -145,7 +145,11 @@ pub fn select_seeds(
     });
     let max_idf = scored.first().map(|s| s.idf).unwrap_or(0.0);
     let gate = max_idf * top_gate;
-    scored.into_iter().filter(|s| s.idf >= gate).take(MAX_SEEDS).collect()
+    scored
+        .into_iter()
+        .filter(|s| s.idf >= gate)
+        .take(MAX_SEEDS)
+        .collect()
 }
 
 #[cfg(test)]
@@ -212,7 +216,10 @@ mod tests {
         let rare = idf(total, 1);
         let common = idf(total, 500);
         let universal = idf(total, 1_000);
-        assert!(rare > common, "rarer token must score higher: {rare} vs {common}");
+        assert!(
+            rare > common,
+            "rarer token must score higher: {rare} vs {common}"
+        );
         assert!(common > universal, "{common} vs {universal}");
     }
 
@@ -240,12 +247,20 @@ mod tests {
         };
         let seeds = select_seeds(&tokens, &df, total, DEFAULT_TOP_GATE);
         let picked: Vec<&str> = seeds.iter().map(|s| s.token.as_str()).collect();
-        assert_eq!(picked, vec!["foobarservice"], "common token must be gated out: {picked:?}");
+        assert_eq!(
+            picked,
+            vec!["foobarservice"],
+            "common token must be gated out: {picked:?}"
+        );
     }
 
     #[test]
     fn select_seeds_keeps_all_when_scores_are_close() {
-        let tokens = vec!["alpha".to_string(), "bravo".to_string(), "charlie".to_string()];
+        let tokens = vec![
+            "alpha".to_string(),
+            "bravo".to_string(),
+            "charlie".to_string(),
+        ];
         let total = 1_000u64;
         // All three tokens have nearly identical (rare) document
         // frequency — none should be gated out.
@@ -258,7 +273,11 @@ mod tests {
             }
         };
         let seeds = select_seeds(&tokens, &df, total, DEFAULT_TOP_GATE);
-        assert_eq!(seeds.len(), 3, "close scores must all clear the gate: {seeds:?}");
+        assert_eq!(
+            seeds.len(),
+            3,
+            "close scores must all clear the gate: {seeds:?}"
+        );
     }
 
     #[test]
@@ -280,7 +299,11 @@ mod tests {
 
     #[test]
     fn select_seeds_is_deterministic_across_calls() {
-        let tokens = vec!["bravo".to_string(), "alpha".to_string(), "charlie".to_string()];
+        let tokens = vec![
+            "bravo".to_string(),
+            "alpha".to_string(),
+            "charlie".to_string(),
+        ];
         let total = 1_000u64;
         let df = |t: &str| -> u64 {
             match t {

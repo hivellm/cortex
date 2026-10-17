@@ -129,7 +129,11 @@ fn restricted_corpus() -> Vec<LaneHit> {
         classified_hit("public-pii", 0, &["customer_pii"]),
         classified_hit("internal-financial", 1, &["financial"]),
         classified_hit("confidential-hr", 2, &["hr"]),
-        classified_hit("restricted-all", 3, &["financial", "hr", "legal", "security"]),
+        classified_hit(
+            "restricted-all",
+            3,
+            &["financial", "hr", "legal", "security"],
+        ),
     ]
 }
 
@@ -160,9 +164,8 @@ fn adversarial_probe_post_fusion_wedge_returns_zero_hits() {
         .enable_all()
         .build()
         .unwrap();
-    let (resp, _) = rt.block_on(async {
-        orch.run_with_principal(&base_request(), &principal).await
-    });
+    let (resp, _) =
+        rt.block_on(async { orch.run_with_principal(&base_request(), &principal).await });
 
     let hits: Vec<_> = resp
         .results
@@ -203,9 +206,8 @@ fn adversarial_probe_corpus_is_non_empty_when_ac_disabled() {
         .enable_all()
         .build()
         .unwrap();
-    let (resp, _) = rt.block_on(async {
-        orch.run_with_principal(&base_request(), &principal).await
-    });
+    let (resp, _) =
+        rt.block_on(async { orch.run_with_principal(&base_request(), &principal).await });
 
     // When AC is disabled, run_with_principal early-returns run() — all
     // hits pass through. The corpus has 11 classified facts so the
@@ -239,7 +241,15 @@ fn adversarial_probe_can_read_denies_every_classified_fact() {
         (0, vec!["customer_pii".into()]),
         (1, vec!["financial".into()]),
         (2, vec!["hr".into()]),
-        (3, vec!["financial".into(), "hr".into(), "legal".into(), "security".into()]),
+        (
+            3,
+            vec![
+                "financial".into(),
+                "hr".into(),
+                "legal".into(),
+                "security".into(),
+            ],
+        ),
     ];
 
     let mut leaks: Vec<(u8, &[String])> = vec![];

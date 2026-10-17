@@ -1737,7 +1737,10 @@ mod tests {
         )
         .expect("emit");
         assert_eq!(evt.class_level, Some(2));
-        assert_eq!(evt.class_compartments.as_deref(), Some(["financial".to_string()].as_slice()));
+        assert_eq!(
+            evt.class_compartments.as_deref(),
+            Some(["financial".to_string()].as_slice())
+        );
     }
 
     #[test]

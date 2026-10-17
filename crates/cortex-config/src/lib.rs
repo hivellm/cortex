@@ -43,12 +43,25 @@ mod audit;
 mod config;
 mod env_map;
 mod load;
+mod runtime;
 mod sub;
 
 pub use audit::{audit, EnvVarUsage};
 pub use config::{Config, ConfigError, SCHEMA_VERSION};
 pub use env_map::{env_name_for, KNOWN_ENV_NAMES};
 pub use load::default_toml_path;
+pub use runtime::{RuntimeConfig, RuntimeProfile};
+
+/// Read the adapter emergency stop before loading potentially unavailable TOML.
+/// This narrow bootstrap path performs no filesystem access; normal settings
+/// still resolve through [`Config::load`].
+pub fn adapter_disabled_by_environment() -> bool {
+    matches!(
+        std::env::var("CORTEX_ADAPTER_DISABLE").as_deref(),
+        Ok("1" | "true")
+    )
+}
+
 pub use sub::{
     AccessControlConfig, AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig,
     ClassifierConfig, ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig,

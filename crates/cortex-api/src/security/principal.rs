@@ -140,8 +140,14 @@ mod tests {
     #[test]
     fn principal_cannot_read_above_clearance() {
         let p = principal(1, vec![], vec![]);
-        assert!(!can_read(&p, 2, &[]), "internal(1) cannot read confidential(2)");
-        assert!(!can_read(&p, 3, &[]), "internal(1) cannot read restricted(3)");
+        assert!(
+            !can_read(&p, 2, &[]),
+            "internal(1) cannot read confidential(2)"
+        );
+        assert!(
+            !can_read(&p, 3, &[]),
+            "internal(1) cannot read restricted(3)"
+        );
     }
 
     #[test]
@@ -149,8 +155,14 @@ mod tests {
         let p = principal(2, vec![], vec![]);
         assert!(can_read(&p, 0, &[]), "confidential(2) reads public(0)");
         assert!(can_read(&p, 1, &[]), "confidential(2) reads internal(1)");
-        assert!(can_read(&p, 2, &[]), "confidential(2) reads confidential(2)");
-        assert!(!can_read(&p, 3, &[]), "confidential(2) cannot read restricted(3)");
+        assert!(
+            can_read(&p, 2, &[]),
+            "confidential(2) reads confidential(2)"
+        );
+        assert!(
+            !can_read(&p, 3, &[]),
+            "confidential(2) cannot read restricted(3)"
+        );
     }
 
     // ---- compartment gate (need-to-know) ----
@@ -172,14 +184,20 @@ mod tests {
     #[test]
     fn empty_fact_compartments_only_level_gate_applies() {
         let p = principal(2, vec![], vec![]);
-        assert!(can_read(&p, 2, &[]), "no fact compartments → only level matters");
+        assert!(
+            can_read(&p, 2, &[]),
+            "no fact compartments → only level matters"
+        );
     }
 
     #[test]
     fn extra_principal_grants_do_not_interfere() {
         let p = principal(3, vec!["financial", "hr", "security"], vec![]);
         let comps = vec!["financial".into()];
-        assert!(can_read(&p, 3, &comps), "extra grants are fine; required grant present");
+        assert!(
+            can_read(&p, 3, &comps),
+            "extra grants are fine; required grant present"
+        );
     }
 
     // ---- acl_admin bypass ----
@@ -198,8 +216,14 @@ mod tests {
     fn acl_admin_still_obeys_level_gate() {
         // Even acl_admin cannot read above their clearance level.
         let p = principal(2, vec![], vec!["acl_admin"]);
-        assert!(!can_read(&p, 3, &[]), "acl_admin with clearance=2 cannot read restricted(3)");
-        assert!(can_read(&p, 2, &[]), "acl_admin with clearance=2 reads confidential(2)");
+        assert!(
+            !can_read(&p, 3, &[]),
+            "acl_admin with clearance=2 cannot read restricted(3)"
+        );
+        assert!(
+            can_read(&p, 2, &[]),
+            "acl_admin with clearance=2 reads confidential(2)"
+        );
     }
 
     #[test]
@@ -207,7 +231,10 @@ mod tests {
         let p = Principal::super_admin("ops");
         for level in 0..=3u8 {
             let comps: Vec<String> = vec!["financial".into(), "security".into()];
-            assert!(can_read(&p, level, &comps), "super_admin reads level={level}");
+            assert!(
+                can_read(&p, level, &comps),
+                "super_admin reads level={level}"
+            );
         }
     }
 
@@ -217,7 +244,10 @@ mod tests {
     fn public_only_principal_denied_any_compartment_fact() {
         let p = Principal::public_only("anon");
         assert!(!can_read(&p, 1, &[]), "public_only cannot read internal");
-        assert!(!can_read(&p, 0, &["financial".into()]), "public_only denied compartment fact");
+        assert!(
+            !can_read(&p, 0, &["financial".into()]),
+            "public_only denied compartment fact"
+        );
     }
 
     #[test]

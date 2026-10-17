@@ -37,10 +37,19 @@ pub struct MetadataStore {
 impl MetadataStore {
     /// Open or create the database at `path`, applying migrations.
     pub fn open(path: &Path) -> Result<Self, MetadataError> {
+        Self::open_with_busy_timeout(path, std::time::Duration::from_secs(5))
+    }
+
+    /// Open with a caller-selected lock wait, including configuration/migrations.
+    pub fn open_with_busy_timeout(
+        path: &Path,
+        busy_timeout: std::time::Duration,
+    ) -> Result<Self, MetadataError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        conn.busy_timeout(busy_timeout)?;
         Self::configure(&conn)?;
         Self::migrate(&conn)?;
         Ok(MetadataStore { conn })
@@ -79,6 +88,8 @@ impl MetadataStore {
         // Phase23b — graph indexed-commit fingerprint: one row per repo_id,
         // tracks the last HEAD SHA seen by the incremental graph indexer.
         apply_phase23b_schema(conn)?;
+        // Phase34 — explicit local memories require transactional FTS5 support.
+        crate::daily_memory::apply_schema(conn)?;
         // Phase9a — idempotent column-add for `retention_sweeps.status`.
         // Existing pre-phase9a databases lack the column; the
         // `CREATE TABLE IF NOT EXISTS` above is a no-op for them, so

@@ -50,6 +50,13 @@ async fn wait_until_listening(addr: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http_post_hook_lands_through_the_dispatcher() {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    std::fs::write(
+        repo.path().join("cortex.toml"),
+        "[cortex]\nid='HTTP/Test'\n",
+    )
+    .unwrap();
     // Pick a free port up-front so the test never races on a
     // hard-coded one. `bind 0` returns an OS-assigned port; we
     // immediately drop the listener and reuse the address — there is
@@ -79,7 +86,7 @@ async fn http_post_hook_lands_through_the_dispatcher() {
     let frame = json!({
         "hook": "UserPromptSubmit",
         "session_id": "opencode-session-1",
-        "cwd": "/repos/cortex",
+        "cwd": repo.path(),
         "payload": { "prompt": "explain dispatcher" }
     });
     let resp = client

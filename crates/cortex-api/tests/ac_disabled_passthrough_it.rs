@@ -118,7 +118,9 @@ async fn disabled_ac_passes_all_hits_to_low_clearance_principal() {
         roles: vec![],
     };
 
-    let (resp, _) = orch.run_with_principal(&base_request(), &public_principal).await;
+    let (resp, _) = orch
+        .run_with_principal(&base_request(), &public_principal)
+        .await;
     let paths: Vec<&str> = resp
         .results
         .snippets
@@ -181,7 +183,9 @@ async fn enabling_ac_restores_filtering_for_low_clearance_principal() {
         roles: vec![],
     };
 
-    let (resp, _) = orch.run_with_principal(&base_request(), &clearance_one).await;
+    let (resp, _) = orch
+        .run_with_principal(&base_request(), &clearance_one)
+        .await;
     let paths: Vec<&str> = resp
         .results
         .snippets

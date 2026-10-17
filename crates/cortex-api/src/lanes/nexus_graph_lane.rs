@@ -333,12 +333,11 @@ fn cypher_with_acl(
         Some(a) => a,
         None => return base.to_string(),
     };
-    let fragment =
-        cortex_workers::acl::filter::nexus_acl_where_for_alias(
-            acl.clearance_level,
-            &acl.compartment_grants,
-            alias,
-        );
+    let fragment = cortex_workers::acl::filter::nexus_acl_where_for_alias(
+        acl.clearance_level,
+        &acl.compartment_grants,
+        alias,
+    );
     // Insert before ` RETURN ` to extend the existing WHERE clause.
     // Every template has exactly one RETURN; if the pattern is absent
     // the base Cypher is returned unchanged (safe degradation).
@@ -386,29 +385,28 @@ impl GraphLane for NexusGraphLane {
         // nodes outside the principal's clearance (a Bell-LaPadula
         // inference channel). The hit query itself remains
         // ACL-decorated either way via `cypher_with_acl`.
-        let seeds: Vec<SeedTerm> = if req.acl.is_none()
-            && SEED_FAN_OUT_TEMPLATES.contains(&req.template.as_str())
-        {
-            let tokens = graph_seeds::tokenize(&raw_query);
-            if tokens.is_empty() {
-                Vec::new()
-            } else {
-                let total_nodes = self.total_node_count().await;
-                let mut df_map: HashMap<String, u64> = HashMap::with_capacity(tokens.len());
-                for t in &tokens {
-                    let df = self.doc_freq(&req.template, t).await;
-                    df_map.insert(t.clone(), df);
+        let seeds: Vec<SeedTerm> =
+            if req.acl.is_none() && SEED_FAN_OUT_TEMPLATES.contains(&req.template.as_str()) {
+                let tokens = graph_seeds::tokenize(&raw_query);
+                if tokens.is_empty() {
+                    Vec::new()
+                } else {
+                    let total_nodes = self.total_node_count().await;
+                    let mut df_map: HashMap<String, u64> = HashMap::with_capacity(tokens.len());
+                    for t in &tokens {
+                        let df = self.doc_freq(&req.template, t).await;
+                        df_map.insert(t.clone(), df);
+                    }
+                    graph_seeds::select_seeds(
+                        &tokens,
+                        &|t: &str| *df_map.get(t).unwrap_or(&0),
+                        total_nodes,
+                        graph_seeds::DEFAULT_TOP_GATE,
+                    )
                 }
-                graph_seeds::select_seeds(
-                    &tokens,
-                    &|t: &str| *df_map.get(t).unwrap_or(&0),
-                    total_nodes,
-                    graph_seeds::DEFAULT_TOP_GATE,
-                )
-            }
-        } else {
-            Vec::new()
-        };
+            } else {
+                Vec::new()
+            };
         let seed_tokens: Vec<String> = seeds.into_iter().map(|s| s.token).collect();
 
         // Fallback: when zero seeds survive (empty / all-stopword
@@ -753,11 +751,16 @@ mod tests {
         // one is multiplied by 0.7 so it contributes less to the
         // fused native-score term.
         let extracted = serde_json::json!([
-            "S1", "src/lib.rs", "TOUCHED", 1_i64, "src/lib.rs", "extracted", 1.0
+            "S1",
+            "src/lib.rs",
+            "TOUCHED",
+            1_i64,
+            "src/lib.rs",
+            "extracted",
+            1.0
         ]);
-        let inferred = serde_json::json!([
-            "S2", "about", "RELATES_TO", 1_i64, "about", "inferred", 0.7
-        ]);
+        let inferred =
+            serde_json::json!(["S2", "about", "RELATES_TO", 1_i64, "about", "inferred", 0.7]);
         let he = project_row(&extracted, "edge_artifact_touched_neighbours", &[]).unwrap();
         let hi = project_row(&inferred, "edge_artifact_touched_neighbours", &[]).unwrap();
         assert!((he.score - 1.0).abs() < 1e-9, "extracted keeps full score");
@@ -803,7 +806,9 @@ mod tests {
         let hit = project_row(&row, "cross_project_ref", &[]).unwrap();
         assert!((hit.score - 0.4).abs() < 1e-9, "ambiguous ×0.4");
         assert_eq!(
-            hit.extras.get("version_constraint").and_then(|v| v.as_str()),
+            hit.extras
+                .get("version_constraint")
+                .and_then(|v| v.as_str()),
             Some("^2.1")
         );
         assert_eq!(
@@ -857,9 +862,15 @@ mod tests {
 
     #[test]
     fn primary_node_alias_maps_each_template() {
-        assert_eq!(primary_node_alias("edge_artifact_touched_neighbours"), Some("a"));
+        assert_eq!(
+            primary_node_alias("edge_artifact_touched_neighbours"),
+            Some("a")
+        );
         assert_eq!(primary_node_alias("decision_supersedes_chain"), Some("d"));
-        assert_eq!(primary_node_alias("turn_analysis_decision_chain"), Some("an"));
+        assert_eq!(
+            primary_node_alias("turn_analysis_decision_chain"),
+            Some("an")
+        );
         assert_eq!(primary_node_alias("law_violations_last_30d"), Some("v"));
         // Structural template — no content-node ACL filter.
         assert_eq!(primary_node_alias("cross_project_ref"), None);
@@ -972,22 +983,42 @@ mod tests {
     #[test]
     fn source_path_bonus_applies_matches_label_case_insensitively() {
         let seeds = vec!["foobarservice".to_string()];
-        assert!(source_path_bonus_applies("src/FooBarService.rs", "irrelevant", &seeds));
-        assert!(source_path_bonus_applies("irrelevant", "src/FooBarService.rs", &seeds));
-        assert!(!source_path_bonus_applies("unrelated", "also unrelated", &seeds));
+        assert!(source_path_bonus_applies(
+            "src/FooBarService.rs",
+            "irrelevant",
+            &seeds
+        ));
+        assert!(source_path_bonus_applies(
+            "irrelevant",
+            "src/FooBarService.rs",
+            &seeds
+        ));
+        assert!(!source_path_bonus_applies(
+            "unrelated",
+            "also unrelated",
+            &seeds
+        ));
     }
 
     #[test]
     fn source_path_bonus_applies_false_when_no_seed_tokens() {
         // The raw-query fallback path carries no seed tokens — the
         // bonus must never apply there.
-        assert!(!source_path_bonus_applies("src/FooBarService.rs", "src/FooBarService.rs", &[]));
+        assert!(!source_path_bonus_applies(
+            "src/FooBarService.rs",
+            "src/FooBarService.rs",
+            &[]
+        ));
     }
 
     #[test]
     fn source_path_bonus_applies_requires_a_matching_token() {
         let seeds = vec!["render".to_string(), "merge".to_string()];
-        assert!(!source_path_bonus_applies("src/handler.rs", "src/handler.rs", &seeds));
+        assert!(!source_path_bonus_applies(
+            "src/handler.rs",
+            "src/handler.rs",
+            &seeds
+        ));
     }
 
     // ── Phase27e §1.3 — project_row source-path bonus wiring ─────────
@@ -995,7 +1026,11 @@ mod tests {
     #[test]
     fn project_row_applies_source_path_bonus_when_label_matches_seed_token() {
         let row = serde_json::json!([
-            "S1", "src/foo_bar_service.rs", "TOUCHED", 1_i64, "src/foo_bar_service.rs"
+            "S1",
+            "src/foo_bar_service.rs",
+            "TOUCHED",
+            1_i64,
+            "src/foo_bar_service.rs"
         ]);
         let seeds = vec!["foo_bar_service".to_string()];
         let boosted = project_row(&row, "edge_artifact_touched_neighbours", &seeds).unwrap();
@@ -1012,7 +1047,11 @@ mod tests {
     #[test]
     fn project_row_no_bonus_when_seed_token_does_not_match_label() {
         let row = serde_json::json!([
-            "S1", "src/foo_bar_service.rs", "TOUCHED", 1_i64, "src/foo_bar_service.rs"
+            "S1",
+            "src/foo_bar_service.rs",
+            "TOUCHED",
+            1_i64,
+            "src/foo_bar_service.rs"
         ]);
         let seeds = vec!["unrelated_token".to_string()];
         let hit = project_row(&row, "edge_artifact_touched_neighbours", &seeds).unwrap();
@@ -1065,7 +1104,11 @@ mod tests {
         let passes = vec![vec![row.clone()], vec![row]];
         let seeds = vec!["alpha".to_string(), "bravo".to_string()];
         let hits = merge_rows("decision_supersedes_chain", &seeds, &passes);
-        assert_eq!(hits.len(), 1, "duplicate edge across seed passes must dedup: {hits:?}");
+        assert_eq!(
+            hits.len(),
+            1,
+            "duplicate edge across seed passes must dedup: {hits:?}"
+        );
     }
 
     #[test]
@@ -1074,11 +1117,21 @@ mod tests {
         // value → `merge_rows` receives exactly one pass, no bonus
         // applies (seed_tokens empty), matching the pre-phase27e
         // single-pass behaviour byte-for-byte.
-        let passes = vec![vec![decision_row("DEC-0042", "DEC-0001", "Adopt RRF fusion")]];
+        let passes = vec![vec![decision_row(
+            "DEC-0042",
+            "DEC-0001",
+            "Adopt RRF fusion",
+        )]];
         let hits = merge_rows("decision_supersedes_chain", &[], &passes);
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].doc_id, "graph|decision_supersedes_chain|DEC-0042|DEC-0001");
-        assert!((hits[0].score - 1.0).abs() < 1e-9, "no bonus without seed tokens");
+        assert_eq!(
+            hits[0].doc_id,
+            "graph|decision_supersedes_chain|DEC-0042|DEC-0001"
+        );
+        assert!(
+            (hits[0].score - 1.0).abs() < 1e-9,
+            "no bonus without seed tokens"
+        );
     }
 
     #[test]
@@ -1087,12 +1140,22 @@ mod tests {
             .map(|i| vec![decision_row(&format!("DEC-{i:04}"), "DEC-0000", "label")])
             .collect();
         let hits = merge_rows("decision_supersedes_chain", &[], &passes);
-        assert_eq!(hits.len(), 50, "merged result must cap at the template's LIMIT 50");
+        assert_eq!(
+            hits.len(),
+            50,
+            "merged result must cap at the template's LIMIT 50"
+        );
     }
 
     #[test]
     fn merge_rows_drops_invalid_rows_without_panicking() {
-        let passes = vec![vec![serde_json::json!(["", "DEC-0001", "SUPERSEDES", 1_i64, "label"])]];
+        let passes = vec![vec![serde_json::json!([
+            "",
+            "DEC-0001",
+            "SUPERSEDES",
+            1_i64,
+            "label"
+        ])]];
         let hits = merge_rows("decision_supersedes_chain", &[], &passes);
         assert!(hits.is_empty());
     }

@@ -338,9 +338,9 @@ fn build_hook_entry(shim: &HookShim, layout: &Layout, bin_available: bool) -> Va
     // legacy `.sh` shim directly (`bash <abs-path>`). The shell shim
     // costs more per invocation than the bin but keeps Cortex working
     // for operators who haven't run `cargo install --path .` yet.
-    // Fire-and-forget can't be expressed cleanly through the shell
-    // shim — it always reads the daemon's reply — so the fallback
-    // gives up that win in exchange for compatibility.
+    // Session/context shims delegate to the same native transport. Without
+    // that binary they explicitly fail open, rather than emulating unbounded
+    // JSON forwarding with nc/socat.
     let command = if bin_available {
         if shim.fire_forget {
             format!("cortex-hook {} --fire-forget", shim.hook_name)
@@ -349,7 +349,10 @@ fn build_hook_entry(shim: &HookShim, layout: &Layout, bin_available: bool) -> Va
         }
     } else {
         let sh_path = layout.hooks_dir.join(shim.sh_filename);
-        format!("bash {}", sh_path.display())
+        let path = sh_path.to_string_lossy().replace('\\', "/");
+        // Claude Code runs this through a shell. Single quotes preserve
+        // spaces and shell metacharacters in the operator's home directory.
+        format!("bash '{}'", path.replace('\'', "'\\''"))
     };
     // Phase 15g — emit the array/matcher form that Claude Code (≥2026-06-06)
     // requires. Pre/PostToolUse carry `matcher: "*"` because they filter by
@@ -421,6 +424,46 @@ fn is_cortex_entry(entry: &Value, _shim: &HookShim) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_context_shims_match_installed_sources_and_wait_for_native_response() {
+        for (event, source) in [
+            (
+                "SessionStart",
+                include_str!(
+                    "../../../packages/cortex-claude-plugin/hooks/cortex-session-start.sh"
+                ),
+            ),
+            (
+                "UserPromptSubmit",
+                include_str!("../../../packages/cortex-claude-plugin/hooks/cortex-user-prompt.sh"),
+            ),
+        ] {
+            let shim = HOOK_SHIMS
+                .iter()
+                .find(|shim| shim.hook_name == event)
+                .unwrap();
+            assert!(!shim.fire_forget);
+            assert_eq!(
+                shim.sh_source, source,
+                "packaged and installed {event} shims drifted"
+            );
+            assert!(source.contains("SYNCHRONOUS=1"));
+            assert!(source.contains("exec \"$BIN\" \"$EVENT\""));
+            assert!(!source.contains("exec \"$BIN\" \"$EVENT\" --fire-forget"));
+            assert!(!source.contains("nc -U") || !source.contains("INPUT="));
+        }
+    }
+
+    #[test]
+    fn fallback_command_quotes_home_spaces_and_shell_metacharacters() {
+        let layout = Layout::from_home(Path::new("/tmp/operator's $data home"));
+        let entry = build_hook_entry(&HOOK_SHIMS[0], &layout, false);
+        assert_eq!(
+            entry[0]["hooks"][0]["command"],
+            "bash '/tmp/operator'\\''s $data home/.claude/hooks/cortex-session-start.sh'"
+        );
+    }
 
     /// Serialises every test that observes or mutates the process-
     /// global `PATH`. `cortex_hook_on_path()` reads `PATH` so any

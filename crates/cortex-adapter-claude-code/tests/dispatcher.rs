@@ -1,7 +1,7 @@
 //! Integration tests for the dispatcher + sync paths + publisher flow
 //! that drive spec-10's acceptance criteria.
 
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use cortex_adapter_claude_code::{
     dispatch_inline, AdapterSection, ClaudeCodeExtras, Dispatcher, MemoryPublisher, Metrics,
@@ -30,12 +30,160 @@ fn build_dispatcher(cfg: AdapterSection) -> (Arc<Dispatcher>, Arc<MemoryPublishe
 }
 
 fn frame(hook: &str, payload: Value) -> Value {
+    static REPO: LazyLock<tempfile::TempDir> = LazyLock::new(|| {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir(directory.path().join(".git")).unwrap();
+        std::fs::write(
+            directory.path().join("cortex.toml"),
+            "[cortex]\nid = 'Vectorizer'\n",
+        )
+        .unwrap();
+        directory
+    });
     json!({
         "hook": hook,
         "session_id": "test-session",
-        "cwd": "/repos/Vectorizer",
+        "cwd": REPO.path(),
         "payload": payload,
     })
+}
+
+#[tokio::test]
+async fn disabled_bulk_capture_keeps_memory_turns_without_tool_or_event_correlation() {
+    let cfg = AdapterSection {
+        pre_thinking: cortex_adapter_claude_code::PreThinkingSection {
+            enabled: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let metrics = Arc::new(Metrics::new());
+    let sessions = Arc::new(SessionManager::new());
+    let publisher = Arc::new(cortex_adapter_claude_code::DisabledPublisher);
+    let dispatcher = Arc::new(
+        Dispatcher::new(
+            sessions.clone(),
+            publisher,
+            Arc::new(SyncClient::new(&cfg, metrics.clone())),
+            12345,
+        )
+        .with_metrics(metrics.clone()),
+    );
+    let session_id = sessions.resolve_or_synthesize(Some("test-session"), 12345);
+    dispatch_inline(
+        frame("UserPromptSubmit", json!({"prompt":"retain turn identity"})),
+        dispatcher.clone(),
+    )
+    .await;
+    let first_turn = sessions.current_turn(&session_id).unwrap();
+    for hook in ["PreToolUse", "PostToolUse", "SubagentStop"] {
+        dispatch_inline(
+            frame(hook, json!({"tool_use_id":"bulk-tool", "tool_name":"Bash"})),
+            dispatcher.clone(),
+        )
+        .await;
+    }
+    let state = sessions.ensure(&session_id);
+    assert_eq!(state.current_turn.as_deref(), Some(first_turn.as_str()));
+    assert!(state.current_turn_event_id.is_none());
+    assert!(state.tool_calls.is_empty());
+    assert!(metrics.envelopes_built_snapshot().is_empty());
+    dispatch_inline(frame("Stop", json!({})), dispatcher.clone()).await;
+    assert!(sessions.current_turn(&session_id).is_none());
+    dispatch_inline(
+        frame("UserPromptSubmit", json!({"prompt":"next turn"})),
+        dispatcher,
+    )
+    .await;
+    assert_ne!(sessions.current_turn(&session_id).unwrap(), first_turn);
+}
+
+#[tokio::test]
+async fn unknown_hook_cwd_never_uses_daemon_repository_for_memory_or_tasks() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/memory/query"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "context": "[memory daemon-only v1 event public-source]\nDo not inject daemon context.\n",
+            "memories": [{"scope":{"repository":"Cortex"},"id":"daemon-only","version":1,"event_id":"public-source"}],
+            "revision": 1, "global_revision": null,
+            "delivery_id": "daemon-only-delivery", "stage": "prepared"
+        })))
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    let cfg = AdapterSection {
+        api_endpoint: upstream.uri(),
+        ..Default::default()
+    };
+    let sync = SyncClient::new(&cfg, Arc::new(Metrics::new()));
+    let (dispatcher, _) = build_dispatcher(cfg);
+    for cwd in [
+        None,
+        Some(""),
+        Some(" \t"),
+        Some("."),
+        Some("relative/project"),
+        Some("C:relative\\project"),
+    ] {
+        for local_only in [false, true] {
+            let output = if local_only {
+                sync.session_start_memory("unknown-origin", cwd).await
+            } else {
+                sync.pre_thinking("public sample", "unknown-origin", None, cwd)
+                    .await
+            };
+            assert_eq!(output.memory_outcome, "scope_unresolved");
+            assert!(output.fail_open);
+            assert!(output.bundle.is_empty());
+        }
+        for event in ["SessionStart", "UserPromptSubmit"] {
+            let mut frame = json!({
+                "hook": event, "session_id": "unknown-origin",
+                "payload": {"prompt":"public sample"}
+            });
+            if let Some(cwd) = cwd {
+                frame["cwd"] = json!(cwd);
+            }
+            let response = dispatch_inline(frame, dispatcher.clone()).await;
+            assert!(response.hook_specific_output.is_none());
+            assert!(response
+                .system_message
+                .as_deref()
+                .unwrap()
+                .contains("local memory is unavailable"));
+        }
+    }
+    // Also proves no optional query or active-work request adopted daemon CWD.
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn missing_explicit_repository_identity_surfaces_memory_warning_on_session_start() {
+    let directory = tempfile::tempdir().unwrap();
+    std::fs::create_dir(directory.path().join(".git")).unwrap();
+    let cfg = AdapterSection {
+        api_endpoint: "http://127.0.0.1:1".into(),
+        ..Default::default()
+    };
+    let (dispatcher, _) = build_dispatcher(cfg);
+    let response = dispatch_inline(
+        json!({
+            "hook": "SessionStart", "session_id": "identity-required",
+            "cwd": directory.path(), "payload": {}
+        }),
+        dispatcher,
+    )
+    .await;
+    assert!(response.hook_specific_output.is_none());
+    assert!(response
+        .system_message
+        .as_deref()
+        .unwrap()
+        .contains("local memory is unavailable"));
 }
 
 #[tokio::test]
@@ -56,20 +204,12 @@ async fn user_prompt_returns_empty_additional_context_on_unreachable_api() {
         dispatcher,
     )
     .await;
-    // Phase14e — fail-open bundles now carry the
-    // `<!-- cortex: timeout reason=… -->` sentinel so the model
-    // can distinguish outage from "no context matched". The
-    // additionalContext field surfaces it verbatim; the
-    // permission decision is still untouched on UserPromptSubmit.
-    let hook = resp
-        .hook_specific_output
-        .expect("fail-open carries hookSpecificOutput with sentinel");
-    assert!(
-        hook.additional_context
-            .contains("<!-- cortex: timeout reason="),
-        "additionalContext missing fail-open sentinel: {:?}",
-        hook.additional_context
-    );
+    assert!(resp.hook_specific_output.is_none());
+    assert!(resp
+        .system_message
+        .as_deref()
+        .unwrap()
+        .contains("local memory is unavailable"));
     assert!(resp.permission_decision.is_none());
     // UserPromptSubmit is publishable as a canonical `turn` event.
     assert_eq!(publisher.count().await, 1);
@@ -107,7 +247,7 @@ async fn pre_tool_use_allows_when_law_check_unreachable() {
 }
 
 #[tokio::test]
-async fn pre_tool_use_denies_on_critical_violation_from_mock_api() {
+async fn pre_tool_use_does_not_call_removed_governance_route() {
     let mock_server = wiremock::MockServer::start().await;
     wiremock::Mock::given(wiremock::matchers::method("POST"))
         .and(wiremock::matchers::path("/v1/laws/check"))
@@ -144,12 +284,8 @@ async fn pre_tool_use_denies_on_critical_violation_from_mock_api() {
         dispatcher,
     )
     .await;
-    assert_eq!(resp.permission_decision.as_deref(), Some("deny"));
-    let reason = resp.permission_decision_reason.unwrap_or_default();
-    assert!(reason.contains("LAW-007"));
-    assert!(reason.contains("no --no-verify"));
-    // PreToolUse is sync-only; the deny is recorded by the law-check
-    // path, not by an envelope event.
+    assert!(resp.permission_decision.is_none());
+    assert!(mock_server.received_requests().await.unwrap().is_empty());
     assert_eq!(publisher.count().await, 0);
 }
 

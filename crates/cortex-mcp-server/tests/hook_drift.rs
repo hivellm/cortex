@@ -84,7 +84,7 @@ fn plugin_hook_shims_match_adapter_canonical_sources() {
 /// CI red.
 ///
 /// The asserts here are intentionally minimal: any rewrite of the
-/// lookup ladder must still include these four anchor strings. A
+/// lookup ladder must still include the lookup anchors and quoted exec. A
 /// future refactor that replaces the `bash` shim with a different
 /// dispatch mechanism updates the anchors here in the same commit
 /// — the lookup contract is what protects Windows capture, not the
@@ -97,9 +97,9 @@ fn hook_shims_carry_cortex_hook_bin_preference_branch() {
         root.join("crates/cortex-adapter-claude-code/hooks"),
     ];
 
-    // Every shim MUST contain these four anchors so a regression
-    // that drops the BIN branch (the 14977d4 incident) fails CI on
-    // the first PR push.
+    // Every shim MUST contain these lookup anchors and a quoted native exec.
+    // A regression dropping the BIN branch (the 14977d4 incident) must fail CI
+    // on the first PR push.
     const REQUIRED_ANCHORS: &[&str] = &[
         // 1. Env-override hook for operator-supplied paths.
         "CORTEX_HOOK_BIN",
@@ -107,9 +107,6 @@ fn hook_shims_carry_cortex_hook_bin_preference_branch() {
         "command -v cortex-hook",
         // 3. Fallback to ~/.cortex/ install location (Windows .exe + Unix).
         ".cortex/cortex-hook",
-        // 4. `exec` of the resolved BIN so the shim hands off
-        //    instead of returning the empty `{}` fallback.
-        "exec \"${BIN}\"",
     ];
 
     for dir in &dirs {
@@ -140,6 +137,22 @@ fn hook_shims_carry_cortex_hook_bin_preference_branch() {
                     path.display(),
                     anchor
                 );
+            }
+            assert!(
+                body.contains("exec \"${BIN}\"") || body.contains("exec \"$BIN\""),
+                "hook shim {} must exec the quoted native BIN",
+                path.display()
+            );
+            if matches!(
+                name.as_str(),
+                "cortex-session-start.sh" | "cortex-user-prompt.sh"
+            ) {
+                assert!(body.contains("exec \"$BIN\" \"$EVENT\""));
+                assert!(body.contains("SYNCHRONOUS=1"));
+                assert!(body
+                    .lines()
+                    .filter(|line| !line.trim_start().starts_with('#'))
+                    .all(|line| !line.contains("--fire-forget")));
             }
         }
     }

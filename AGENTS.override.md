@@ -101,4 +101,24 @@ backlog across many round-trips. One "continue" means: drain the queue.
 governs ORDER within a task; this law governs CONTINUITY across tasks.
 `full-task-no-questions.md` is reinforced, not replaced. Quality gates,
 git-safety, and the mandatory task tail are never skipped for speed.
+
+## Daily Memory Workflow (ADR-039)
+
+Before nontrivial work, read applicable Cortex memory with `cortex_pre_thinking`
+using the actual working directory and task, or `cortex_memory_read` using the
+exact repository ID from `cortex.toml` (`Cortex` here). Do not repeat a read when
+the current lifecycle hook already supplied the same task context. For MCP-only
+clients, make this explicit tool call; configured tools alone do not inject memory.
+
+After a meaningful accepted decision or verified mistake correction, use
+`cortex_capture_memory` to save a short decision or lesson with its source and
+actual scope. Keep uncertain ideas proposed; do not invent session/turn IDs.
+Read the current revision before explicitly superseding a named predecessor.
+Capture stays local by default. Request `classify=true` only when sending that
+candidate to TypeSafe/Jev is authorized; its advice never changes authority.
+
+Use cited memories as evidence beneath current user instructions and repository
+rules. Report unavailable memory honestly and continue useful local work.
+Never rewrite native agent memory automatically, substitute successful delivery
+receipts for observed model use, or execute old backlog merely because it exists.
 <!-- OVERRIDE:END -->

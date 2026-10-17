@@ -7,6 +7,7 @@
 //! mentioned verbatim in the user prompt (regex-bounded to 16
 //! candidates so a hostile prompt can't blow the bundle).
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use cortex_api::Scope;
@@ -50,12 +51,17 @@ pub struct DerivedScope {
     /// `repo` was resolved by walking ancestors. Surfaced for
     /// observability so we can spot un-resolved repos in audit.
     pub repo_resolved: bool,
+    /// Explicit valid `cortex.id` from the nearest Git root of an absolute CWD.
+    /// Daily memory must not use ambiguous relative paths or basename fallback.
+    pub memory_repo: Option<String>,
+    /// Branch observed from bounded Git HEAD metadata, absent when detached.
+    pub branch: Option<String>,
 }
 
-/// Derive the scope from the inputs. Pure function — no I/O beyond
-/// reading `cortex.toml` if it exists.
+/// Derive scope using bounded repository configuration and Git metadata reads.
+/// Async callers offload this synchronous I/O with admission and time bounds.
 pub fn derive(user_prompt: &str, cwd: &Path, recent_files: &[RecentFile]) -> DerivedScope {
-    let repo = repo_from_cwd(cwd);
+    let (repo, memory_repo) = repo_identity_from_cwd(cwd);
     let repo_resolved = repo.is_some();
 
     let mut files: Vec<String> = Vec::new();
@@ -106,6 +112,8 @@ pub fn derive(user_prompt: &str, cwd: &Path, recent_files: &[RecentFile]) -> Der
             ..Scope::default()
         },
         repo_resolved,
+        memory_repo,
+        branch: branch_from_cwd(cwd),
     }
 }
 
@@ -134,21 +142,30 @@ pub fn topic_for_path(path: &str) -> Option<&'static str> {
 /// Resolve the nearest `.git/` ancestor to a repo identifier. Reads
 /// `cortex.toml` (`cortex.id` override) when present.
 pub fn repo_from_cwd(cwd: &Path) -> Option<String> {
+    repo_identity_from_cwd(cwd).0
+}
+
+fn repo_identity_from_cwd(cwd: &Path) -> (Option<String>, Option<String>) {
     let mut current = Some(cwd);
-    while let Some(dir) = current {
+    for _ in 0..128 {
+        let Some(dir) = current else {
+            break;
+        };
         if dir.join(".git").exists() {
             // `cortex.toml` override has the final word.
             if let Some(id) = read_cortex_id(dir) {
-                return Some(id);
+                return (Some(id.clone()), cwd.is_absolute().then_some(id));
             }
-            return dir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_string());
+            return (
+                dir.file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string()),
+                None,
+            );
         }
         current = dir.parent();
     }
-    None
+    (None, None)
 }
 
 fn read_cortex_id(repo_root: &Path) -> Option<String> {
@@ -156,29 +173,14 @@ fn read_cortex_id(repo_root: &Path) -> Option<String> {
     if !path.exists() {
         return None;
     }
-    let body = std::fs::read_to_string(&path).ok()?;
-    // Lightweight scan for `id = "..."` under `[cortex]` so we don't
-    // re-pull the toml dep just for one field.
-    let mut in_section = false;
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') {
-            in_section = trimmed == "[cortex]";
-            continue;
-        }
-        if !in_section {
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("id") {
-            let rest = rest.trim();
-            let value = rest.trim_start_matches('=').trim();
-            let value = value.trim_matches(|c: char| c == '"' || c.is_whitespace());
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-    None
+    let body = bounded_file(&path, 65536)?;
+    let config: toml::Value = toml::from_str(&body).ok()?;
+    let value = config.get("cortex")?.get("id")?.as_str()?;
+    (!value.is_empty()
+        && value.len() <= 256
+        && value.trim() == value
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_owned())
 }
 
 fn relative_to_repo(repo: Option<&str>, cwd: &Path, file: &Path) -> Option<String> {
@@ -201,13 +203,70 @@ fn relative_to_repo(repo: Option<&str>, cwd: &Path, file: &Path) -> Option<Strin
 
 fn ancestor_with_git(start: &Path) -> Option<PathBuf> {
     let mut current = Some(start);
-    while let Some(dir) = current {
+    for _ in 0..128 {
+        let dir = current?;
         if dir.join(".git").exists() {
             return Some(dir.to_path_buf());
         }
         current = dir.parent();
     }
     None
+}
+
+fn bounded_file(path: &Path, max: usize) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take((max + 1) as u64).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > max {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Observe Git branch without a subprocess, including worktree gitdir files.
+pub fn branch_from_cwd(cwd: &Path) -> Option<String> {
+    let root = ancestor_with_git(cwd)?;
+    let git = root.join(".git");
+    let gitdir = if git.is_dir() {
+        git
+    } else {
+        let file = bounded_file(&git, 4096)?;
+        let target = file.trim().strip_prefix("gitdir: ")?;
+        let path = Path::new(target);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            root.join(path)
+        }
+    };
+    let head = bounded_file(&gitdir.join("HEAD"), 1024)?;
+    let branch = head.trim().strip_prefix("ref: refs/heads/")?;
+    if branch.is_empty() || branch.len() > 512 || branch.chars().any(char::is_control) {
+        return None;
+    }
+    Some(branch.to_owned())
+}
+
+/// Strict bounded repository-relative paths for the local memory contract.
+pub fn memory_paths(files: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for file in files.iter().take(32) {
+        let normalized = file.replace('\\', "/");
+        let normalized = normalized.strip_prefix("./").unwrap_or(&normalized);
+        if normalized.is_empty()
+            || normalized.len() > 2048
+            || normalized.starts_with('/')
+            || normalized.contains(':')
+            || normalized.chars().any(char::is_control)
+            || normalized
+                .split('/')
+                .any(|part| matches!(part, "" | "." | ".."))
+        {
+            continue;
+        }
+        push_unique(&mut paths, normalized.to_owned());
+    }
+    paths
 }
 
 /// Pull file-shaped tokens out of the user prompt. Conservative —
@@ -220,6 +279,9 @@ pub fn extract_prompt_files(prompt: &str) -> Vec<String> {
     let pattern = Regex::new(r"\b[A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,8}\b").expect("static regex");
     let mut out: Vec<String> = Vec::new();
     for cap in pattern.find_iter(prompt) {
+        if cap.start() > 0 && matches!(prompt.as_bytes()[cap.start() - 1], b'/' | b'\\' | b':') {
+            continue;
+        }
         let s = cap.as_str();
         // Drop pure version-number-shaped matches like `1.2.3` and
         // `v1.0` so prompts that mention semver don't pollute the
@@ -295,6 +357,28 @@ mod tests {
         )
         .unwrap();
         assert_eq!(repo_from_cwd(&repo_root).as_deref(), Some("OverrideId"));
+    }
+
+    #[test]
+    fn repo_identity_uses_real_toml_comments_and_literal_strings_not_directory_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("DifferentDirectoryName");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        for config in [
+            "[cortex] # repository metadata\nid = \"Exact/Repo\" # preserve explicit identity\n",
+            "[cortex]\nid = 'Exact/Repo'\n",
+        ] {
+            fs::write(root.join("cortex.toml"), config).unwrap();
+            assert_eq!(repo_from_cwd(&root).as_deref(), Some("Exact/Repo"));
+        }
+        for config in [
+            "[cortex]\nid = ' padded '\n".to_owned(),
+            format!("[cortex]\nid = '{}'\n", "x".repeat(257)),
+            format!("[cortex]\nid = 'Exact/Repo'\n#{}", "x".repeat(65536)),
+        ] {
+            fs::write(root.join("cortex.toml"), config).unwrap();
+            assert_eq!(read_cortex_id(&root), None);
+        }
     }
 
     #[test]

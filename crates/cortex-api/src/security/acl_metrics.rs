@@ -185,7 +185,10 @@ mod tests {
         m.record(1_000, "grant", "alice", 0, "granted", "doc-1");
         m.record(1_000, "grant", "alice", 0, "granted", "doc-2");
         let top = m.top_denied_principals(10);
-        assert!(top.is_empty(), "grants must not increment denied_by_principal");
+        assert!(
+            top.is_empty(),
+            "grants must not increment denied_by_principal"
+        );
     }
 
     #[test]

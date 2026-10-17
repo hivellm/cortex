@@ -13,7 +13,10 @@
 //! transport.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+
+mod daily_memory;
+pub use daily_memory::MemoryReadTool;
 
 use async_trait::async_trait;
 use cortex_api::{
@@ -87,6 +90,8 @@ pub struct ToolContext {
     /// on every upstream request so cortex-api can resolve the caller's principal
     /// from the RBAC binding and apply the Bell-LaPadula lattice filter.
     pub api_key: Option<String>,
+    /// Observed MCP initialization label; client-reported, never authentication.
+    pub client_name: Arc<RwLock<Option<String>>>,
 }
 
 impl ToolContext {
@@ -104,6 +109,7 @@ impl ToolContext {
             tool_timeout_default: std::time::Duration::from_millis(MCP_TOOL_TIMEOUT_MS),
             tool_timeouts: std::collections::BTreeMap::new(),
             api_key: None,
+            client_name: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -112,6 +118,23 @@ impl ToolContext {
     pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
         self.api_key = Some(key.into());
         self
+    }
+
+    /// Record a bounded initialization name without inventing agent/session identity.
+    pub(crate) fn record_client_name(&self, name: Option<&str>) {
+        let name = name.filter(|name| {
+            !name.is_empty()
+                && name.trim() == *name
+                && name.len() <= 256
+                && !name.chars().any(char::is_control)
+        });
+        if let Ok(mut current) = self.client_name.write() {
+            *current = name.map(str::to_owned);
+        }
+    }
+
+    fn observed_client_name(&self) -> Option<String> {
+        self.client_name.read().ok().and_then(|name| name.clone())
     }
 
     /// Phase14i §2.3 — resolve the timeout for `tool_name`. Falls
@@ -153,6 +176,7 @@ impl ToolContext {
             tool_timeout_default: std::time::Duration::from_millis(MCP_TOOL_TIMEOUT_MS),
             tool_timeouts: std::collections::BTreeMap::new(),
             api_key: None,
+            client_name: Arc::new(RwLock::new(None)),
         }
     }
 }
@@ -261,19 +285,22 @@ pub struct ToolRegistry {
 }
 
 impl ToolRegistry {
-    /// Build a registry with the six Cortex tools wired up. The
-    /// retrieval/health trio (`cortex_query`, `cortex_pre_thinking`,
-    /// `cortex_status`) plus the phase10j audit/capture/replay trio
-    /// (`cortex_audit`, `cortex_capture_memory`,
-    /// `cortex_session_replay`).
+    /// Build the Cortex tool registry, including durable local memory capture/read.
     pub fn default_set() -> Self {
-        Self {
+        Self::for_profile(cortex_config::RuntimeProfile::Full)
+    }
+
+    /// Build one registry for discovery and dispatch under the resolved profile.
+    /// Full preserves the complete surface; daily exposes only local-loop tools.
+    pub fn for_profile(profile: cortex_config::RuntimeProfile) -> Self {
+        let mut registry = Self {
             tools: vec![
                 Arc::new(QueryTool::new()),
                 Arc::new(PreThinkingTool::new()),
                 Arc::new(StatusTool::new()),
                 Arc::new(AuditTool::new()),
                 Arc::new(CaptureMemoryTool::new()),
+                Arc::new(MemoryReadTool::new()),
                 Arc::new(SessionReplayTool::new()),
                 Arc::new(ForgetTool::new()),
                 Arc::new(KeywordSearchTool::new()),
@@ -310,8 +337,28 @@ impl ToolRegistry {
                 Arc::new(AclWhoamiTool::new()),
                 Arc::new(AclGrantTool::new()),
             ],
+        };
+        if profile == cortex_config::RuntimeProfile::Daily {
+            registry.tools.retain(|tool| {
+                matches!(
+                    tool.name(),
+                    "cortex_query"
+                        | "cortex_pre_thinking"
+                        | "cortex_status"
+                        | "cortex_audit"
+                        | "cortex_capture_memory"
+                        | "cortex_memory_read"
+                        | "cortex_active_work"
+                        | "cortex_feedback_signals"
+                        | "cortex_feedback_record"
+                        | "cortex_acl_whoami"
+                        | "cortex_acl_grant"
+                )
+            });
         }
-        .push_capabilities()
+        // Discovery must be built after filtering, from precisely the same
+        // tools that tools/list advertises and tools/call can dispatch.
+        registry.push_capabilities()
     }
 
     /// Empty registry — used by tests + `validate` mode.
@@ -541,7 +588,7 @@ impl Tool for PreThinkingTool {
     fn descriptor(&self) -> Value {
         json!({
             "name": "cortex_pre_thinking",
-            "description": "Run the spec-12 pre-thinking pipeline against the configured cortex-api and return the deterministic Markdown bundle.",
+            "description": "Read scoped daily decisions and lessons before optional search, returning cited context within a 600 ms total deadline. Use memory_delivery_id for feedback on prepared daily memory.",
             "inputSchema": {
                 "type": "object",
                 "required": ["user_prompt", "cwd"],
@@ -577,20 +624,27 @@ impl Tool for PreThinkingTool {
             .map_err(|e| ToolError::invalid_input(format!("pre_thinking args: {e}")))?;
 
         let cwd = PathBuf::from(&parsed.cwd);
-        let session_id = parsed.session_id.unwrap_or_else(|| "session".into());
-        let turn_id = parsed.turn_id.unwrap_or_else(|| "turn".into());
+        let session_id = parsed.session_id.unwrap_or_default();
+        let turn_id = parsed.turn_id.unwrap_or_default();
         let budget = PreThinkingBudget {
             bundle_bytes: parsed.budget_bytes.unwrap_or(32 * 1024),
-            time_ms: parsed.budget_ms.unwrap_or(600),
+            time_ms: parsed.budget_ms.unwrap_or(600).min(600),
         };
 
         let api_url = ctx.api_url.clone();
         let http = ctx.http.clone();
+        let api_key = ctx.api_key.clone();
         let query_fn = Arc::new(ClosureQueryFn(move |req: QueryRequest| {
             let api_url = api_url.clone();
             let http = http.clone();
-            async move { post_query(&http, &api_url, req).await }
+            let api_key = api_key.clone();
+            async move { post_query(&http, &api_url, api_key.as_deref(), req).await }
         }));
+        let memory_fn = Arc::new(cortex_pre_thinking::HttpDailyMemory::new(
+            ctx.http.clone(),
+            ctx.api_url.clone(),
+            ctx.api_key.clone(),
+        ));
 
         let input = PreThinkingInput {
             session_id: &session_id,
@@ -602,8 +656,13 @@ impl Tool for PreThinkingTool {
             principal: None,
         };
 
-        let out: PreThinkingOutput =
-            cortex_pre_thinking::pipeline::run(&input, query_fn, ctx.pt_metrics.clone()).await;
+        let out: PreThinkingOutput = cortex_pre_thinking::pipeline::run_with_memory(
+            &input,
+            query_fn,
+            memory_fn,
+            ctx.pt_metrics.clone(),
+        )
+        .await;
 
         // When the upstream `QueryResponse` carried a structural
         // notice (the `repo_not_indexed` path added for issue
@@ -621,6 +680,11 @@ impl Tool for PreThinkingTool {
                         "fail_open": out.fail_open,
                         "latency_ms": out.latency_ms,
                         "hint": n.hint,
+                        "memory_delivery_id": out.memory_delivery_id,
+                        "memory_revision": out.memory_revision,
+                        "memory_global_revision": out.memory_global_revision,
+                        "memory_cache_hit": out.memory_cache_hit,
+                        "memory_outcome": out.memory_outcome,
                     }),
                 ));
             }
@@ -631,6 +695,11 @@ impl Tool for PreThinkingTool {
                     "intent": out.intent.label(),
                     "fail_open": out.fail_open,
                     "latency_ms": out.latency_ms,
+                    "memory_delivery_id": out.memory_delivery_id,
+                    "memory_revision": out.memory_revision,
+                    "memory_global_revision": out.memory_global_revision,
+                    "memory_cache_hit": out.memory_cache_hit,
+                    "memory_outcome": out.memory_outcome,
                 }),
             ));
         }
@@ -642,6 +711,11 @@ impl Tool for PreThinkingTool {
             "steps_applied": out.steps_applied,
             "latency_ms": out.latency_ms,
             "fail_open": out.fail_open,
+            "memory_delivery_id": out.memory_delivery_id,
+            "memory_revision": out.memory_revision,
+            "memory_global_revision": out.memory_global_revision,
+            "memory_cache_hit": out.memory_cache_hit,
+            "memory_outcome": out.memory_outcome,
         });
         if let Some(n) = out.notice {
             payload["notice"] = json!({
@@ -657,20 +731,29 @@ impl Tool for PreThinkingTool {
 async fn post_query(
     http: &reqwest::Client,
     api_url: &str,
+    api_key: Option<&str>,
     req: QueryRequest,
 ) -> Option<QueryResponse> {
     let url = format!("{}/v1/query", api_url.trim_end_matches('/'));
-    let resp = http
+    let mut request = http
         .post(&url)
         .header(cortex_api::CALLER_HEADER, CALLER)
-        .json(&req)
-        .send()
-        .await
-        .ok()?;
+        .json(&req);
+    if let Some(key) = api_key {
+        request = request.bearer_auth(key);
+    }
+    let mut resp = request.send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
-    resp.json::<QueryResponse>().await.ok()
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.ok()? {
+        if body.len().saturating_add(chunk.len()) > 256 * 1024 {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).ok()
 }
 
 // ---------------------------------------------------------------------
@@ -702,7 +785,7 @@ impl Tool for StatusTool {
     fn descriptor(&self) -> Value {
         json!({
             "name": "cortex_status",
-            "description": "Cortex daemon health snapshot: pid, queue depth, recent publisher errors, overflow WAL bytes.",
+            "description": "Cortex runtime status: API reachability, resolved profile, local memory readiness and optional capability/archive state. Readiness does not prove a model consumed context.",
             "inputSchema": { "type": "object", "properties": {} }
         })
     }
@@ -869,9 +952,8 @@ impl Tool for AuditTool {
 // cortex_capture_memory (phase10j)
 // ---------------------------------------------------------------------
 
-/// Phase10j tool — POSTs `<api_url>/v1/ingest` with a canonical
-/// `kind=memory|knowledge|learning` envelope so the live retrieval
-/// lane sees the body on the next pre-thinking call.
+/// Capture explicit decisions/lessons durably through `<api_url>/v1/ingest`.
+/// Existing memory/knowledge/learning clients retain their required fields.
 pub struct CaptureMemoryTool;
 
 impl CaptureMemoryTool {
@@ -892,10 +974,53 @@ struct CaptureArgs {
     kind: String,
     body: String,
     repo: String,
+    #[serde(default)]
+    classify: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     topic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     severity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    memory_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    retry_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_revision: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supersedes: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pinned: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sources: Option<Vec<CaptureSource>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    global: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct CaptureSource {
+    event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reference: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
 }
 
 /// MCP-side ceiling for the body. Mirrors
@@ -916,15 +1041,15 @@ impl Tool for CaptureMemoryTool {
     fn descriptor(&self) -> Value {
         json!({
             "name": "cortex_capture_memory",
-            "description": "Capture an in-session fact (memory / knowledge / learning) into the live Cortex retrieval lane via /v1/ingest. The captured body becomes queryable on the next cortex_query free-text search.",
+            "description": "Capture an explicit decision or lesson locally and durably via /v1/ingest, immediately available through cortex_memory_read. External TypeSafe classification requires explicit classify=true and sends only this candidate. Optional indexing has separate completion state; labels never grant authority.",
             "inputSchema": {
                 "type": "object",
                 "required": ["kind", "body", "repo"],
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["memory", "knowledge", "learning"],
-                        "description": "Operator-curated kind. Use `memory` for ad-hoc session facts, `knowledge` for reusable patterns / anti-patterns, `learning` for implementation insights."
+                        "enum": ["memory", "knowledge", "learning", "decision"],
+                        "description": "Use decision for explicit decisions/corrections; memory, knowledge and learning retain legacy lesson capture compatibility."
                     },
                     "body": {
                         "type": "string",
@@ -932,8 +1057,9 @@ impl Tool for CaptureMemoryTool {
                     },
                     "repo": {
                         "type": "string",
-                        "description": "Repo slug (lowercase per phase10d). Required so the live freshness lane can attribute the envelope back to the correct project."
+                        "description": "Exact repository identity, preserved without case folding. Nonempty, trimmed and at most 256 bytes."
                     },
+                    "classify": { "type": "boolean", "default": false, "description": "Explicit opt-in to external TypeSafe candidate-only classification after durable local commit. Sends only this candidate, never other stored memories; omit or false makes no provider call, even with configured credentials. Advisory only; never rewrites captured memory." },
                     "topic": {
                         "type": "string",
                         "description": "Optional topic from the canonical taxonomy (e.g. `retrieval`, `auth`, `migration`)."
@@ -942,14 +1068,40 @@ impl Tool for CaptureMemoryTool {
                         "type": "string",
                         "enum": ["info", "notable"],
                         "description": "Optional severity hint. Defaults to `info` server-side."
-                    }
+                    },
+                    "title": { "type": "string", "maxLength": 512 },
+                    "memory_id": { "type": "string", "description": "Optional create-only stable ID within effective scope." },
+                    "status": { "type": "string", "enum": ["proposed", "accepted", "deprecated"] },
+                    "agent": { "type": "string", "description": "Client-reported label, overridden by observed MCP clientInfo.name when available. Never authentication." },
+                    "session_id": { "type": "string", "description": "Observed source session only; omit when unknown." },
+                    "turn_id": { "type": "string", "description": "Observed source turn only; omit when unknown." },
+                    "retry_key": { "type": "string", "description": "Stable retry identity; caller namespace is resolved server-side." },
+                    "expected_revision": { "type": "integer", "minimum": 0 },
+                    "supersedes": { "type": "string", "description": "Explicit accepted predecessor; requires accepted successor and matching expected_revision." },
+                    "branch": { "type": "string" },
+                    "path": { "type": "string", "description": "Repository-relative file or directory, using / separators." },
+                    "pinned": { "type": "boolean", "default": false, "description": "Explicit applicability throughout effective scope." },
+                    "sources": {
+                        "type": "array", "maxItems": 16,
+                        "items": {
+                            "type": "object", "required": ["event_id"],
+                            "properties": {
+                                "event_id": { "type": "string" },
+                                "kind": { "type": "string" },
+                                "reference": { "type": "string" },
+                                "content_hash": { "type": "string" },
+                                "revision": { "type": "string" }
+                            }
+                        }
+                    },
+                    "global": { "type": "boolean", "default": false, "description": "Explicit global request; subject to API authorization." }
                 }
             }
         })
     }
 
     async fn call(&self, ctx: &ToolContext, args: Value) -> Result<ToolResult, ToolError> {
-        let parsed: CaptureArgs = serde_json::from_value(args)
+        let mut parsed: CaptureArgs = serde_json::from_value(args)
             .map_err(|e| ToolError::invalid_input(format!("capture args: {e}")))?;
         if parsed.body.is_empty() {
             return Err(ToolError::invalid_input("body must not be empty"));
@@ -965,57 +1117,30 @@ impl Tool for CaptureMemoryTool {
             ));
         }
         let kind = parsed.kind.to_ascii_lowercase();
-        if !matches!(kind.as_str(), "memory" | "knowledge" | "learning") {
+        if !matches!(
+            kind.as_str(),
+            "memory" | "knowledge" | "learning" | "decision"
+        ) {
             return Err(ToolError::invalid_input(format!(
-                "unsupported kind `{}` (expected memory / knowledge / learning)",
+                "unsupported kind `{}` (expected memory / knowledge / learning / decision)",
                 parsed.kind
             )));
         }
-        let repo = parsed.repo.trim();
-        if repo.is_empty() {
-            return Err(ToolError::invalid_input("repo must not be empty"));
-        }
-        if repo != repo.to_ascii_lowercase() {
-            return Err(ToolError::invalid_input(format!(
-                "repo `{}` must be lowercase per phase10d",
-                repo
-            )));
+        if parsed.repo.is_empty()
+            || parsed.repo.trim() != parsed.repo
+            || parsed.repo.len() > 256
+            || parsed.repo.chars().any(char::is_control)
+        {
+            return Err(ToolError::invalid_input(
+                "repo must be nonempty, trimmed, at most 256 bytes and contain no control characters",
+            ));
         }
 
-        let url = format!("{}/v1/ingest", ctx.api_url.trim_end_matches('/'));
-        let body = serde_json::to_value(&parsed).unwrap_or(Value::Null);
-        let resp = match ctx
-            .http
-            .post(&url)
-            .header(cortex_api::CALLER_HEADER, CALLER)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                return Ok(ToolResult::soft_error(
-                    reasons::API_UNREACHABLE,
-                    &format!("cortex-api unreachable at {url}: {e}"),
-                    json!({ "url": url }),
-                ));
-            }
-        };
-        let status = resp.status();
-        let upstream_body: Value = resp.json().await.unwrap_or(Value::Null);
-        if status.is_success() {
-            return Ok(ToolResult::ok(upstream_body));
-        }
-        let reason = upstream_body
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or(reasons::API_HTTP_ERROR)
-            .to_string();
-        Ok(ToolResult::soft_error(
-            &reason,
-            &format!("cortex-api returned {status} for /v1/ingest"),
-            json!({ "status": status.as_u16(), "body": upstream_body }),
-        ))
+        parsed.kind = kind;
+        parsed.agent = ctx.observed_client_name().or(parsed.agent);
+        let body = serde_json::to_value(&parsed)
+            .map_err(|e| ToolError::invalid_input(format!("capture args: {e}")))?;
+        daily_memory::post_memory(ctx, "/v1/ingest", &body).await
     }
 }
 
@@ -2598,7 +2723,7 @@ impl Tool for FeedbackRecordTool {
                 "properties": {
                     "query_id": {
                         "type": "string",
-                        "description": "ULID echoed by the bundle the model just consumed (`cortex_query` / `cortex_pre_thinking` response carries it as `query_id`)."
+                        "description": "For daily-memory feedback, use memory_delivery_id from cortex_pre_thinking or delivery_id from cortex_memory_read. For optional search, use its query_id. Prepared receipts alone do not establish model consumption."
                     },
                     "helpful": {
                         "type": "boolean",
@@ -3991,10 +4116,10 @@ mod tests {
         let tools = payload["tools"].as_array().unwrap();
         assert_eq!(
             tools.len(),
-            41,
+            42,
             "capabilities must advertise exactly the registry size"
         );
-        assert_eq!(payload["total"], 41);
+        assert_eq!(payload["total"], 42);
         for t in tools {
             let name = t["name"].as_str().unwrap_or_default();
             assert!(!name.is_empty());
@@ -4039,13 +4164,9 @@ mod tests {
     }
 
     #[test]
-    fn registry_returns_forty_one_tools_with_unique_names() {
+    fn registry_returns_forty_two_tools_with_unique_names() {
         let reg = ToolRegistry::default_set();
-        assert_eq!(
-            reg.len(),
-            41,
-            "phase29 mcp-surface adds cortex_capabilities (40 -> 41)"
-        );
+        assert_eq!(reg.len(), 42, "daily memory adds cortex_memory_read");
         let names: Vec<&str> = reg.tools.iter().map(|t| t.name()).collect();
         for expected in [
             "cortex_query",
@@ -4053,6 +4174,7 @@ mod tests {
             "cortex_status",
             "cortex_audit",
             "cortex_capture_memory",
+            "cortex_memory_read",
             "cortex_session_replay",
             "cortex_forget",
             "cortex_keyword_search",
@@ -4457,7 +4579,7 @@ mod tests {
         let kinds = d["inputSchema"]["properties"]["kind"]["enum"]
             .as_array()
             .unwrap();
-        for k in ["memory", "knowledge", "learning"] {
+        for k in ["memory", "knowledge", "learning", "decision"] {
             assert!(
                 kinds.iter().any(|v| v == k),
                 "kind enum must include {k}; got {kinds:?}"
@@ -4502,7 +4624,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn capture_memory_rejects_uppercase_repo() {
+    async fn capture_memory_rejects_untrimmed_repo() {
         let tool = CaptureMemoryTool::new();
         let ctx = ToolContext::new("http://127.0.0.1:1");
         let err = tool
@@ -4511,11 +4633,11 @@ mod tests {
                 json!({
                     "kind": "memory",
                     "body": "x",
-                    "repo": "Cortex",
+                    "repo": " Cortex",
                 }),
             )
             .await
-            .expect_err("uppercase repo must be invalid_input");
+            .expect_err("untrimmed repo must be invalid_input");
         assert_eq!(err.reason, reasons::INVALID_INPUT);
     }
 
@@ -4527,13 +4649,13 @@ mod tests {
             .call(
                 &ctx,
                 json!({
-                    "kind": "decision",
+                    "kind": "tool_call",
                     "body": "x",
                     "repo": "cortex",
                 }),
             )
             .await
-            .expect_err("decision is not in the curated set");
+            .expect_err("raw tool traffic is not an explicit memory capture kind");
         assert_eq!(err.reason, reasons::INVALID_INPUT);
     }
 

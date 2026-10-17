@@ -328,8 +328,7 @@ impl ClassificationConfig {
                 let better = match &best {
                     None => true,
                     Some((best_len, best_ord, _)) => {
-                        pat_len > *best_len
-                            || (pat_len == *best_len && ordinal > *best_ord)
+                        pat_len > *best_len || (pat_len == *best_len && ordinal > *best_ord)
                     }
                 };
                 if better {
@@ -464,7 +463,11 @@ rules = [
         assert_eq!(rules[0].level, "confidential");
         assert_eq!(rules[0].compartments, vec!["financial"]);
         assert_eq!(rules[1].compartments, vec!["hr", "customer_pii"]);
-        assert_eq!(rules[2].compartments.len(), 0, "no compartments defaults to empty vec");
+        assert_eq!(
+            rules[2].compartments.len(),
+            0,
+            "no compartments defaults to empty vec"
+        );
         assert!(cfg.cortex.classification.validate().is_ok());
     }
 
@@ -477,7 +480,11 @@ rules = [
 ]
 "#;
         let cfg: CortexToml = toml::from_str(body).expect("parse");
-        let err = cfg.cortex.classification.validate().expect_err("should fail");
+        let err = cfg
+            .cortex
+            .classification
+            .validate()
+            .expect_err("should fail");
         assert_eq!(err.rule_index, 0);
         assert_eq!(err.label, "top-secret");
         assert!(err.to_string().contains("top-secret"));
@@ -559,7 +566,11 @@ rules = [
 ]
 "#;
         let cfg: CortexToml = toml::from_str(body).expect("parse");
-        let err = cfg.cortex.classification.validate().expect_err("should fail");
+        let err = cfg
+            .cortex
+            .classification
+            .validate()
+            .expect_err("should fail");
         assert_eq!(err.rule_index, 2);
     }
 }

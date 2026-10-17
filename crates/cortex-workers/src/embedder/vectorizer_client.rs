@@ -1283,8 +1283,8 @@ impl VectorizerClient for MemoryVectorizerClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::chunker::{ChunkMetadata, ChunkSource};
+    use super::*;
     use crate::classifier::Severity;
     use cortex_core::events::Kind;
 
@@ -1354,7 +1354,10 @@ mod tests {
             .upsert_chunks("col", &[chunk_v2])
             .await
             .expect("upsert ok");
-        assert_eq!(r2.written, 1, "changed content must count as written (replace)");
+        assert_eq!(
+            r2.written, 1,
+            "changed content must count as written (replace)"
+        );
         // stored_count must still be 1 — REPLACE, not additive.
         assert_eq!(
             client.stored_count_for("col"),

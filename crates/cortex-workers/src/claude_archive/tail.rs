@@ -276,8 +276,10 @@ impl TailWatcher {
     /// files_seen)` so the caller can update the shared state.
     pub fn tick_once(&mut self) -> Result<TickReport> {
         let entries = walk(&self.cfg);
-        let mut report = TickReport::default();
-        report.files_seen = entries.len();
+        let mut report = TickReport {
+            files_seen: entries.len(),
+            ..TickReport::default()
+        };
 
         for entry in entries {
             // Sidecars round-trip through the §1.5 follow-up
@@ -294,12 +296,13 @@ impl TailWatcher {
             };
             let mtime_ms = file_mtime_ms(&stat);
             let len = stat.len();
-            let cursor = self.cursors.entry(entry.path.clone()).or_default();
-            if cursor.last_mtime_ms == mtime_ms && cursor.last_len == len {
+            if self
+                .cursors
+                .get(&entry.path)
+                .is_some_and(|cursor| cursor.last_mtime_ms == mtime_ms && cursor.last_len == len)
+            {
                 continue;
             }
-            cursor.last_mtime_ms = mtime_ms;
-            cursor.last_len = len;
 
             // Re-read the whole file. Cheap because changed sessions
             // are rare and the dedupe set short-circuits emit.
@@ -328,12 +331,16 @@ impl TailWatcher {
                 );
             }
             let (envelopes, _map_stats) = map_session(&records, None)?;
+            let mut complete = true;
             for env in &envelopes {
-                if !self.emitted_ids.insert(env.event_id.clone()) {
+                if self.emitted_ids.contains(&env.event_id) {
                     continue;
                 }
                 match self.emitter.emit(env) {
-                    Ok(()) => report.emitted += 1,
+                    Ok(()) => {
+                        self.emitted_ids.insert(env.event_id.clone());
+                        report.emitted += 1;
+                    }
                     Err(err) => {
                         tracing::warn!(
                             path = %entry.path.display(),
@@ -341,9 +348,26 @@ impl TailWatcher {
                             "emit failed; counted as dropped",
                         );
                         report.dropped += 1;
+                        report
+                            .errors
+                            .push(format!("{}: emit: {err}", entry.path.display()));
+                        complete = false;
+                        break;
                     }
                 }
             }
+            if complete {
+                self.cursors.insert(
+                    entry.path,
+                    FileCursor {
+                        last_mtime_ms: mtime_ms,
+                        last_len: len,
+                    },
+                );
+            }
+            // A failed emit leaves the source eligible next tick even without
+            // an append. Successful prefix IDs suppress duplicate retries;
+            // no separate pending-envelope queue retains payloads in memory.
         }
         if let Err(err) = self.emitter.flush() {
             report.errors.push(format!("flush: {err}"));
@@ -553,7 +577,80 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
+    use std::sync::atomic::AtomicUsize;
     use tower::ServiceExt;
+
+    #[test]
+    fn failed_emit_retries_unchanged_source_without_repeating_successful_prefix() {
+        struct FailSecondEmit {
+            calls: Arc<AtomicUsize>,
+            ids: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+        impl Emitter for FailSecondEmit {
+            fn emit(
+                &self,
+                envelope: &super::super::mapper::MappedEnvelope,
+            ) -> Result<(), super::super::emitter::EmitError> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+                    return Err(std::io::Error::other("transient archive write failure").into());
+                }
+                self.ids.lock().unwrap().push(envelope.event_id.clone());
+                Ok(())
+            }
+
+            fn flush(&self) -> Result<(), super::super::emitter::EmitError> {
+                Ok(())
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("projects/retry-project");
+        std::fs::create_dir_all(&project).unwrap();
+        let session = project.join("retry-session.jsonl");
+        let records = (1..=3)
+            .map(|number| {
+                serde_json::json!({
+                    "type":"user", "uuid":format!("u{number}"), "sessionId":"retry-session",
+                    "timestamp":format!("2026-04-20T17:48:0{number}Z"),
+                    "message":{"role":"user", "content":format!("message {number}")}
+                })
+                .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&session, format!("{records}\n")).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut watcher = TailWatcher::new(
+            WalkConfig {
+                root: temp.path().to_path_buf(),
+                projects_only: true,
+                sidecars: false,
+                codex: false,
+            },
+            Box::new(FailSecondEmit {
+                calls: calls.clone(),
+                ids: ids.clone(),
+            }),
+            Arc::new(TailState::new(0)),
+        );
+        let failed = watcher.tick_once().unwrap();
+        assert_eq!((failed.emitted, failed.dropped), (1, 1));
+        assert_eq!(failed.errors.len(), 1);
+        assert!(!watcher.cursors.contains_key(&session));
+        assert_eq!(watcher.emitted_ids.len(), 1);
+
+        // Do not append or touch the source: its failed batch must stay pending.
+        let recovered = watcher.tick_once().unwrap();
+        assert_eq!((recovered.emitted, recovered.dropped), (2, 0));
+        assert!(recovered.errors.is_empty());
+        assert!(watcher.cursors.contains_key(&session));
+        assert_eq!(*ids.lock().unwrap(), vec!["u1", "u2", "u3"]);
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        let unchanged = watcher.tick_once().unwrap();
+        assert_eq!((unchanged.emitted, unchanged.dropped), (0, 0));
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
 
     #[tokio::test]
     async fn record_tick_computes_per_second_rate_against_previous_sample() {

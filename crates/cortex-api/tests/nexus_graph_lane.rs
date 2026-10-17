@@ -248,9 +248,7 @@ async fn acl_context_injects_where_clause_into_cypher_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(nexus_ok_body()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(nexus_ok_body()))
         .mount(&server)
         .await;
 
@@ -313,9 +311,7 @@ async fn acl_wildcard_grant_emits_level_only_fragment() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(nexus_ok_body()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(nexus_ok_body()))
         .mount(&server)
         .await;
 
@@ -367,9 +363,7 @@ async fn no_acl_context_sends_unmodified_cypher() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/cypher"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(nexus_ok_body()),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(nexus_ok_body()))
         .mount(&server)
         .await;
 

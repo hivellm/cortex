@@ -8,7 +8,7 @@
 //! standing up a server.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -16,6 +16,10 @@ use cortex_api::{Intent, Notice, Principal, QueryRequest, QueryResponse};
 
 use crate::breaker::{Breaker, BreakerState, FailReason};
 use crate::budget::{clip_to_budget, ClippedBundle, TrimStep};
+use crate::daily_memory::{
+    project_query, prompt_excerpt, DailyMemoryContext, DailyMemoryFn, DailyMemoryRequest,
+    MEMORY_BYTES, MEMORY_PREFIX, MEMORY_SUFFIX,
+};
 use crate::intent_select::select as select_intent;
 use crate::metrics::Metrics;
 use crate::scope::{derive as derive_scope, RecentFile};
@@ -113,6 +117,16 @@ pub struct PreThinkingOutput {
     /// `None` for legacy callers using [`run`] without a shared
     /// breaker.
     pub breaker_state: Option<BreakerState>,
+    /// Durable local memory preparation ID, independent of full-stack query_id.
+    pub memory_delivery_id: Option<String>,
+    /// Observed server cache status; cache hits still have a fresh receipt.
+    pub memory_cache_hit: bool,
+    /// Repository revision for the exact local context prepared.
+    pub memory_revision: Option<u64>,
+    /// Authorized global revision, absent for ordinary prompts.
+    pub memory_global_revision: Option<u64>,
+    /// Local outcome: disabled, prepared, empty, unavailable, timeout or unresolved.
+    pub memory_outcome: &'static str,
 }
 
 /// Phase14e sentinel embedded in the bundle on every fail-open
@@ -160,10 +174,110 @@ pub async fn run_with_breaker<Q: QueryFn>(
     metrics: Arc<Metrics>,
     breaker: Arc<Breaker>,
 ) -> PreThinkingOutput {
+    run_inner(input, query_fn, None, metrics, breaker).await
+}
+
+/// Run local memory before optional retrieval with one 600-ms maximum deadline.
+pub async fn run_with_memory<Q: QueryFn>(
+    input: &PreThinkingInput<'_>,
+    query_fn: Arc<Q>,
+    memory_fn: Arc<dyn DailyMemoryFn>,
+    metrics: Arc<Metrics>,
+) -> PreThinkingOutput {
+    run_inner(
+        input,
+        query_fn,
+        Some(memory_fn),
+        metrics,
+        Arc::new(Breaker::new()),
+    )
+    .await
+}
+
+/// Preserve local memory even while the optional retrieval breaker is open.
+pub async fn run_with_breaker_and_memory<Q: QueryFn>(
+    input: &PreThinkingInput<'_>,
+    query_fn: Arc<Q>,
+    memory_fn: Arc<dyn DailyMemoryFn>,
+    metrics: Arc<Metrics>,
+    breaker: Arc<Breaker>,
+) -> PreThinkingOutput {
+    run_inner(input, query_fn, Some(memory_fn), metrics, breaker).await
+}
+
+/// Read only scoped local memory, including pinned advice on an empty prompt.
+/// Session lifecycle hooks have no task query and must not search bulk history.
+pub async fn run_memory_only(
+    input: &PreThinkingInput<'_>,
+    memory_fn: Arc<dyn DailyMemoryFn>,
+    metrics: Arc<Metrics>,
+) -> PreThinkingOutput {
     let started = Instant::now();
-    let derived = derive_scope(input.user_prompt, input.cwd, input.recent_files);
-    let intent = select_intent(input.user_prompt);
+    let entered = tokio::time::Instant::now();
+    let deadline = entered + Duration::from_millis(u64::from(input.budget.time_ms.clamp(1, 600)));
+    let derived = derive_bounded(input, deadline.min(entered + Duration::from_millis(100))).await;
+    let memory = read_memory(input, derived.as_ref(), Some(memory_fn), deadline).await;
+    memory.finish(
+        PreThinkingOutput {
+            intent: select_intent(prompt_excerpt(input.user_prompt)),
+            latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            ..empty_memory_output()
+        },
+        input.budget.bundle_bytes as usize,
+        &metrics,
+    )
+}
+
+async fn run_inner<Q: QueryFn>(
+    input: &PreThinkingInput<'_>,
+    query_fn: Arc<Q>,
+    memory_fn: Option<Arc<dyn DailyMemoryFn>>,
+    metrics: Arc<Metrics>,
+    breaker: Arc<Breaker>,
+) -> PreThinkingOutput {
+    let started = Instant::now();
+    // Integrated clients have structured outcomes and operator warnings. Keep
+    // legacy sentinels only for callers without the local-memory contract.
+    let has_memory = memory_fn.is_some();
+    let failure_bundle = |reason| {
+        if has_memory {
+            String::new()
+        } else {
+            fail_open_sentinel(reason, None)
+        }
+    };
+    let entered = tokio::time::Instant::now();
+    let deadline = entered + Duration::from_millis(u64::from(input.budget.time_ms.clamp(1, 600)));
+    let scope_deadline = deadline.min(entered + Duration::from_millis(100));
+    // 100 ms is a retrieval target, not an authentication deadline. Give local
+    // memory priority while retaining 50 ms for optional work on normal budgets.
+    let local_deadline = if input.budget.time_ms > 100 {
+        deadline - Duration::from_millis(50)
+    } else {
+        deadline
+    };
+    let derived = derive_bounded(input, scope_deadline).await;
+    let intent = select_intent(prompt_excerpt(input.user_prompt));
     metrics.incr_calls(intent.label());
+    let memory = read_memory(input, derived.as_ref(), memory_fn, local_deadline).await;
+    // Failed scope I/O is not permission to issue an unscoped optional query.
+    // A completed derivation with no repository retains legacy behavior;
+    // local memory already skips that explicitly unresolved scope.
+    let Some(derived) = derived else {
+        metrics.incr_fail_open("scope_timeout");
+        return memory.finish(
+            PreThinkingOutput {
+                bundle: failure_bundle(FailReason::Timeout),
+                intent,
+                fail_open: true,
+                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                breaker_state: Some(breaker.state()),
+                ..empty_memory_output()
+            },
+            input.budget.bundle_bytes as usize,
+            &metrics,
+        );
+    };
 
     // Breaker guard — Open ⇒ instant fail-open. The
     // `breaker_open` reason carries no query_id (no upstream call
@@ -179,23 +293,28 @@ pub async fn run_with_breaker<Q: QueryFn>(
                 reason = "breaker_open",
                 "pre-thinking fail-open short-circuited by breaker"
             );
-            return PreThinkingOutput {
-                bundle: fail_open_sentinel(FailReason::BreakerOpen, None),
-                intent,
-                query_id: None,
-                steps_applied: Vec::new(),
-                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                fail_open: true,
-                notice: None,
-                breaker_state: Some(BreakerState::Open),
-            };
+            return memory.finish(
+                PreThinkingOutput {
+                    bundle: failure_bundle(FailReason::BreakerOpen),
+                    intent,
+                    query_id: None,
+                    steps_applied: Vec::new(),
+                    latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    fail_open: true,
+                    notice: None,
+                    breaker_state: Some(BreakerState::Open),
+                    ..empty_memory_output()
+                },
+                input.budget.bundle_bytes as usize,
+                &metrics,
+            );
         }
     };
 
     let req = QueryRequest {
         intent,
         scope: derived.scope.clone(),
-        query: input.user_prompt.to_string(),
+        query: prompt_excerpt(input.user_prompt).to_owned(),
         limit: 20,
         k: 50,
         include: vec![
@@ -204,7 +323,13 @@ pub async fn run_with_breaker<Q: QueryFn>(
             cortex_api::IncludeField::Violations,
             cortex_api::IncludeField::SimilarTurns,
         ],
-        budget_ms: input.budget.time_ms.max(1) as u64,
+        budget_ms: u64::try_from(
+            deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .as_millis(),
+        )
+        .unwrap_or(600)
+        .max(1),
         // Pre-thinking does its own downstream byte clipping via
         // `cortex_pre_thinking::budget::clip_to_budget`, so we let
         // the API-side clipper run with its default cap (32 KiB) —
@@ -212,7 +337,7 @@ pub async fn run_with_breaker<Q: QueryFn>(
         // further if `bundle_bytes` is smaller.
         budget_bytes: None,
         as_of: None,
-        branch: None,
+        branch: derived.branch.clone(),
         projects: None,
         include_history: None,
         include_future: None,
@@ -220,8 +345,7 @@ pub async fn run_with_breaker<Q: QueryFn>(
         principal: None,
     };
 
-    let total_budget = Duration::from_millis(input.budget.time_ms.max(1) as u64);
-    let (resp_opt, reason) = match tokio::time::timeout(total_budget, query_fn.query(req)).await {
+    let (resp_opt, reason) = match tokio::time::timeout_at(deadline, query_fn.query(req)).await {
         Ok(opt @ Some(_)) => (opt, None),
         Ok(None) => (None, Some(FailReason::Internal)),
         Err(_) => {
@@ -229,7 +353,7 @@ pub async fn run_with_breaker<Q: QueryFn>(
             (None, Some(FailReason::Timeout))
         }
     };
-    let mut response = match resp_opt {
+    let response = match resp_opt {
         Some(r) => {
             // Successful upstream response — half-open probes
             // close the breaker; closed-state successes are no-ops.
@@ -248,40 +372,50 @@ pub async fn run_with_breaker<Q: QueryFn>(
                 new_state = ?new_state,
                 "pre-thinking fail-open dispatched"
             );
-            return PreThinkingOutput {
-                bundle: fail_open_sentinel(r, None),
-                intent,
-                query_id: None,
-                steps_applied: Vec::new(),
-                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                fail_open: true,
-                notice: None,
-                breaker_state: Some(breaker.state()),
-            };
+            return memory.finish(
+                PreThinkingOutput {
+                    bundle: failure_bundle(r),
+                    intent,
+                    query_id: None,
+                    steps_applied: Vec::new(),
+                    latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    fail_open: true,
+                    notice: None,
+                    breaker_state: Some(breaker.state()),
+                    ..empty_memory_output()
+                },
+                input.budget.bundle_bytes as usize,
+                &metrics,
+            );
         }
     };
-    // Phase21 §5.6 — bundle-level ACL filter: drop snippets the principal
-    // may not read before the formatter assembles the system-prompt bundle.
-    if let Some(ref p) = input.principal {
-        crate::bundle::filter_snippets_by_acl(&mut response.results.snippets, Some(p));
-    }
-
     let notice = response.notice.clone();
-
-    let clipped: ClippedBundle = clip_to_budget(
-        intent.label(),
-        &response,
-        input.budget.bundle_bytes as usize,
-    );
-
-    if clipped.bundle.is_empty() {
-        metrics.incr_empty_bundle();
-    } else {
-        metrics.observe_bundle_bytes(clipped.bytes as u32);
-        // Phase14f §4.1 — per-intent histogram sample so the
-        // dashboard can render p50/p95/p99 per intent.
-        metrics.observe_bundle_bytes_per_intent(intent.label(), clipped.bytes as u32);
-    }
+    let query_id = response.query_id.clone();
+    let Some(clipped) = format_bounded(
+        response,
+        intent,
+        input.principal.clone(),
+        (input.budget.bundle_bytes as usize).saturating_sub(memory.bytes()),
+        deadline,
+    )
+    .await
+    else {
+        metrics.incr_fail_open("format_timeout");
+        return memory.finish(
+            PreThinkingOutput {
+                bundle: failure_bundle(FailReason::Timeout),
+                intent,
+                query_id: Some(query_id),
+                latency_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                fail_open: true,
+                notice,
+                breaker_state: Some(breaker.state()),
+                ..empty_memory_output()
+            },
+            input.budget.bundle_bytes as usize,
+            &metrics,
+        );
+    };
     for step in &clipped.steps {
         metrics.incr_truncation_step(*step);
     }
@@ -293,13 +427,12 @@ pub async fn run_with_breaker<Q: QueryFn>(
     }
 
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    metrics.observe_latency_ms(latency_ms);
 
     tracing::info!(
         session_id = %input.session_id,
         turn_id = %input.turn_id,
         intent = %intent.label(),
-        query_id = %response.query_id,
+        query_id = %query_id,
         bundle_bytes = clipped.bytes,
         sections = response_section_summary(&clipped.section_counts),
         steps = ?clipped.steps,
@@ -307,16 +440,217 @@ pub async fn run_with_breaker<Q: QueryFn>(
         "pre-thinking bundle assembled"
     );
 
+    memory.finish(
+        PreThinkingOutput {
+            bundle: clipped.bundle,
+            intent,
+            query_id: Some(query_id),
+            steps_applied: clipped.steps,
+            latency_ms,
+            fail_open: false,
+            notice,
+            breaker_state: Some(breaker.state()),
+            ..empty_memory_output()
+        },
+        input.budget.bundle_bytes as usize,
+        &metrics,
+    )
+}
+
+fn empty_memory_output() -> PreThinkingOutput {
     PreThinkingOutput {
-        bundle: clipped.bundle,
-        intent,
-        query_id: Some(response.query_id),
-        steps_applied: clipped.steps,
-        latency_ms,
+        bundle: String::new(),
+        intent: Intent::PreChangeContext,
+        query_id: None,
+        steps_applied: Vec::new(),
+        latency_ms: 0,
         fail_open: false,
-        notice,
-        breaker_state: Some(breaker.state()),
+        notice: None,
+        breaker_state: None,
+        memory_delivery_id: None,
+        memory_cache_hit: false,
+        memory_revision: None,
+        memory_global_revision: None,
+        memory_outcome: "disabled",
     }
+}
+
+struct LocalMemory {
+    response: Option<DailyMemoryContext>,
+    outcome: &'static str,
+}
+
+impl LocalMemory {
+    fn bytes(&self) -> usize {
+        self.response
+            .as_ref()
+            .filter(|response| !response.context.is_empty())
+            .map_or(0, |response| {
+                MEMORY_PREFIX.len() + response.context.len() + MEMORY_SUFFIX.len()
+            })
+    }
+
+    fn finish(
+        self,
+        mut output: PreThinkingOutput,
+        cap: usize,
+        metrics: &Metrics,
+    ) -> PreThinkingOutput {
+        output.memory_outcome = self.outcome;
+        if !matches!(
+            self.outcome,
+            "disabled" | "prepared" | "empty" | "scope_unresolved"
+        ) {
+            output.fail_open = true;
+            metrics.incr_fail_open(&format!("memory_{}", self.outcome));
+        }
+        if let Some(response) = self.response {
+            if response.cache_hit {
+                metrics.incr_cache_hit();
+            } else {
+                metrics.incr_cache_miss();
+            }
+            if !response.context.is_empty() {
+                metrics.observe_section_count(
+                    "daily_memory",
+                    u32::try_from(response.memories.len()).unwrap_or(5),
+                );
+            }
+            let prefix = if response.context.is_empty() {
+                String::new()
+            } else {
+                format!("{MEMORY_PREFIX}{}{MEMORY_SUFFIX}", response.context)
+            };
+            if output.bundle.len() > cap.saturating_sub(prefix.len()) {
+                output.bundle.clear();
+            }
+            output.bundle.insert_str(0, &prefix);
+            output.memory_delivery_id = Some(response.delivery_id);
+            output.memory_cache_hit = response.cache_hit;
+            output.memory_revision = Some(response.revision);
+            output.memory_global_revision = response.global_revision;
+        } else if output.bundle.len() > cap {
+            output.bundle.clear();
+        }
+        metrics.observe_latency_ms(output.latency_ms);
+        if output.bundle.is_empty() {
+            metrics.incr_empty_bundle();
+        } else {
+            let bytes = u32::try_from(output.bundle.len()).unwrap_or(u32::MAX);
+            metrics.observe_bundle_bytes(bytes);
+            metrics.observe_bundle_bytes_per_intent(output.intent.label(), bytes);
+        }
+        output
+    }
+}
+
+async fn read_memory(
+    input: &PreThinkingInput<'_>,
+    derived: Option<&crate::scope::DerivedScope>,
+    reader: Option<Arc<dyn DailyMemoryFn>>,
+    deadline: tokio::time::Instant,
+) -> LocalMemory {
+    let result = |outcome| LocalMemory {
+        response: None,
+        outcome,
+    };
+    let Some(reader) = reader else {
+        return result("disabled");
+    };
+    let Some(derived) = derived else {
+        return result("scope_timeout");
+    };
+    let Some(repo) = derived.scope.repo.as_ref().filter(|repo| {
+        !repo.is_empty()
+            && repo.trim() == *repo
+            && repo.len() <= 256
+            && !repo.chars().any(char::is_control)
+    }) else {
+        return result("scope_unresolved");
+    };
+    if derived.memory_repo.as_ref() != Some(repo) {
+        return result("scope_identity_required");
+    }
+    let budget = MEMORY_BYTES
+        .min(input.budget.bundle_bytes as usize)
+        .saturating_sub(MEMORY_PREFIX.len() + MEMORY_SUFFIX.len());
+    if budget == 0 {
+        return result("budget_exceeded");
+    }
+    let request = DailyMemoryRequest {
+        repo: repo.clone(),
+        query: project_query(input.user_prompt),
+        branch: derived.branch.clone(),
+        paths: crate::scope::memory_paths(&derived.scope.files),
+        include_global: false,
+        limit: 5,
+        budget_bytes: budget,
+    };
+    match tokio::time::timeout_at(deadline, reader.read(request.clone())).await {
+        Err(_) => result("timeout"),
+        Ok(None) => result("unavailable"),
+        Ok(Some(response)) if !response.valid_for(&request) => result("invalid_response"),
+        Ok(Some(response)) => LocalMemory {
+            outcome: if response.context.is_empty() {
+                "empty"
+            } else {
+                "prepared"
+            },
+            response: Some(response),
+        },
+    }
+}
+
+async fn derive_bounded(
+    input: &PreThinkingInput<'_>,
+    deadline: tokio::time::Instant,
+) -> Option<crate::scope::DerivedScope> {
+    static SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
+        LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+    let permit = tokio::time::timeout_at(deadline, SLOTS.clone().acquire_owned())
+        .await
+        .ok()?
+        .ok()?;
+    let cwd = input.cwd.to_path_buf();
+    let prompt = prompt_excerpt(input.user_prompt).to_owned();
+    let recent: Vec<_> = input.recent_files.iter().take(32).cloned().collect();
+    // Permit lives inside blocking work, even if its awaiting prompt times out.
+    let work = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        derive_scope(&prompt, &cwd, &recent)
+    });
+    tokio::time::timeout_at(deadline, work).await.ok()?.ok()
+}
+
+async fn format_bounded(
+    mut response: QueryResponse,
+    intent: Intent,
+    principal: Option<Principal>,
+    cap: usize,
+    deadline: tokio::time::Instant,
+) -> Option<ClippedBundle> {
+    static SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
+        LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+    let permit = tokio::time::timeout_at(deadline, SLOTS.clone().acquire_owned())
+        .await
+        .ok()?
+        .ok()?;
+    let work = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if let Some(principal) = principal.as_ref() {
+            crate::bundle::filter_snippets_by_acl(&mut response.results.snippets, Some(principal));
+        }
+        let mut clipped = clip_to_budget(intent.label(), &response, cap);
+        // Legacy laws are indivisible; drop optional context as a whole if its
+        // minimum complete rendering cannot fit alongside prepared local memory.
+        if clipped.bundle.len() > cap {
+            clipped.bundle.clear();
+            clipped.bytes = 0;
+            clipped.section_counts.clear();
+        }
+        clipped
+    });
+    tokio::time::timeout_at(deadline, work).await.ok()?.ok()
 }
 
 /// Phase18 §6.2 — build a compact one-line summary of every rendered

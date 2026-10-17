@@ -118,10 +118,7 @@ async fn handle_acl_role_create(
         return json_err(
             StatusCode::BAD_REQUEST,
             "invalid_clearance",
-            format!(
-                "clearance_level must be 0–3; got {}",
-                body.clearance_level
-            ),
+            format!("clearance_level must be 0–3; got {}", body.clearance_level),
         );
     }
     let binding = RoleBinding {
@@ -279,10 +276,7 @@ async fn handle_acl_classify_rule_list(_state: State<ApiState>) -> Response {
 /// Returns `{ id, clearance_level, compartment_grants, roles }`.
 /// When no principal store is configured, the backward-compat super-admin
 /// pass-through is returned.
-async fn handle_acl_whoami(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-) -> Response {
+async fn handle_acl_whoami(State(state): State<ApiState>, headers: HeaderMap) -> Response {
     let principal = state.service.resolve_principal(&headers);
     let body = serde_json::to_value(&principal).unwrap_or_else(|_| json!({}));
     Json(body).into_response()

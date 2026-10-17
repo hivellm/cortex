@@ -38,6 +38,7 @@
 // -- buckets ----------------------------------------------------------------
 pub mod active_work;
 pub mod admin;
+pub mod daily_memory;
 pub mod dashboard;
 pub mod decision_chain;
 pub mod feedback;
@@ -45,6 +46,7 @@ pub mod health;
 pub mod ingest;
 pub mod lanes;
 pub mod mcp;
+mod memory_advice;
 pub mod search;
 pub mod security;
 pub mod similar_sessions;
@@ -52,6 +54,7 @@ pub mod similar_sessions;
 // -- root modules -----------------------------------------------------------
 pub mod http;
 pub mod retention_daemon;
+mod runtime;
 pub mod service;
 pub mod storage;
 #[cfg(feature = "ts-export")]
@@ -127,12 +130,6 @@ pub use security::redaction;
 // continue to resolve). -----------------------------------------------------
 pub use acl::{AclDecision, AclStore};
 pub use acl_metrics::AclMetrics;
-pub use principal::{can_read, Principal, PrincipalRef};
-pub use principal_resolver::{
-    deny_on_missing_principal, has_explicit_auth, resolve_request_principal,
-    ENV_DENY_ON_MISSING_PRINCIPAL,
-};
-pub use principal_store::{PrincipalStore, RoleBinding};
 pub use archive_loader::{
     load_into_keyword_lane, load_lane_hits, LoadError, LoadReport, DEFAULT_INDEX,
 };
@@ -166,6 +163,12 @@ pub use meili_lane::MeiliKeywordLane;
 pub use meili_loader::{load_meili_into_keyword_lane, MeiliLoadError, MeiliLoadReport};
 pub use nexus_graph_lane::NexusGraphLane;
 pub use orchestrator::Orchestrator;
+pub use principal::{can_read, Principal, PrincipalRef};
+pub use principal_resolver::{
+    deny_on_missing_principal, has_explicit_auth, resolve_request_principal,
+    ENV_DENY_ON_MISSING_PRINCIPAL,
+};
+pub use principal_store::{PrincipalStore, RoleBinding};
 pub use rate_limit::{RateConfig, RateDecision, RateLimiter};
 pub use redaction::redact_response;
 pub use relevance_config::{

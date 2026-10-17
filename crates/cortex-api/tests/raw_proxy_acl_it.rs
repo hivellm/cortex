@@ -89,7 +89,10 @@ async fn keyword_proxy_injects_acl_filter_for_non_admin() {
     .await;
 
     let _lock = ENV_MX.lock().await;
-    std::env::set_var("CORTEX_FULLTEXT_MEILI_URL", format!("http://127.0.0.1:{port}"));
+    std::env::set_var(
+        "CORTEX_FULLTEXT_MEILI_URL",
+        format!("http://127.0.0.1:{port}"),
+    );
 
     let svc = min_service(PrincipalStore::deny_by_default());
     let app = build_router(svc);
@@ -110,10 +113,17 @@ async fn keyword_proxy_injects_acl_filter_for_non_admin() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "handler must reach Meili and return 200");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "handler must reach Meili and return 200"
+    );
 
     let reqs = captured.lock().unwrap();
-    assert!(!reqs.is_empty(), "mock Meili must have received at least one request");
+    assert!(
+        !reqs.is_empty(),
+        "mock Meili must have received at least one request"
+    );
     // The last request should be the search (not a login call).
     let search_body = reqs.last().unwrap();
     let filter = search_body["filter"]
@@ -189,9 +199,14 @@ async fn vector_proxy_drops_classified_hits_for_non_admin() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     let body = read_json(resp).await;
-    let hits = body["hits"].as_array().expect("response must have `hits` array");
+    let hits = body["hits"]
+        .as_array()
+        .expect("response must have `hits` array");
     let ids: Vec<&str> = hits.iter().filter_map(|h| h["id"].as_str()).collect();
-    assert!(ids.contains(&"public-doc"), "public hit must pass through; ids={ids:?}");
+    assert!(
+        ids.contains(&"public-doc"),
+        "public hit must pass through; ids={ids:?}"
+    );
     assert!(
         !ids.contains(&"restricted-doc"),
         "restricted hit MUST NOT leak to a public-only principal; ids={ids:?}"

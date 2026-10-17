@@ -231,7 +231,7 @@ pub fn map_session(
         }
     }
 
-    out.sort_by(|a, b| a.occurred_at.cmp(&b.occurred_at));
+    out.sort_by_key(|a| a.occurred_at);
     Ok((out, stats))
 }
 

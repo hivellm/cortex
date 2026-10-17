@@ -1,156 +1,259 @@
-//! Phase30 (continuity-loop-verification §1.1) — cross-session
-//! continuity: a consolidation produced by a PRIOR session must
-//! surface in a FRESH session's pre-thinking bundle when the new
-//! session asks about the same topic.
+//! Cross-session continuity through the real pipeline and loopback query API.
 //!
-//! Live-gated: runs the real `pipeline::run` against the running
-//! cortex-api (`CORTEX_API_URL`, default `http://127.0.0.1:17000`)
-//! and SKIPS (early `return`) when the stack is down, mirroring the
-//! adapter's live-IT convention. The "prior session" is the live
-//! corpus itself: the newest consolidation from
-//! `/v1/consolidations/recent` — every consolidation is, by
-//! construction, the distillate of a past session, so asserting it
-//! reappears in a fresh-session bundle IS the §1.1 loop.
+//! A synthetic prior-session turn and its pre-existing consolidation are
+//! archived, then projected by the production archive loader. A fresh session
+//! must receive that exact consolidation through real HTTP, query assembly,
+//! and bundle formatting within the production 600 ms budget. Only retrieval
+//! backends are in-memory; no running daemon, provider, or shared corpus is used.
+//! This tests optional consolidation continuity, not LLM synthesis or the
+//! separate durable daily-memory delivery protocol.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cortex_api::{QueryRequest, QueryResponse};
+use cortex_api::{
+    build_router_with_auth_and_cfg, load_lane_hits, MemoryGraphLane, MemoryKeywordLane,
+    MemoryVectorLane, Orchestrator, QueryRequest, QueryResponse, QueryService,
+};
+use cortex_core::events::{
+    ConsolidationDepth, ConsolidationGrain, ConsolidationPayload, ConsolidationScope, Envelope,
+    TimeSpan,
+};
 use cortex_pre_thinking::metrics::Metrics;
 use cortex_pre_thinking::pipeline::{run, ClosureQueryFn, PreThinkingBudget, PreThinkingInput};
+use serde_json::{json, Value};
 
-fn api_url() -> String {
-    std::env::var("CORTEX_API_URL").unwrap_or_else(|_| "http://127.0.0.1:17000".into())
-}
+const REPO: &str = "continuity-fixture";
+const PRIOR_SESSION: &str = "01K00000000000000000000001";
+const FRESH_SESSION: &str = "01K00000000000000000000002";
+const SOURCE_EVENT: &str = "01K00000000000000000000003";
+const CONS_EVENT: &str = "01K00000000000000000000004";
+const CONS_ID: &str = "cons-ses-2a417d3c7c87fe945e513b57";
+const TITLE: &str = "Use compare-and-swap for concurrent correction writes";
 
-fn http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .build()
-        .expect("reqwest client")
-}
-
-/// `true` when the live cortex-api answers `/v1/health`.
-async fn stack_up(client: &reqwest::Client, base: &str) -> bool {
-    matches!(
-        client.get(format!("{base}/v1/health")).send().await,
-        Ok(r) if r.status().is_success()
-    )
+fn envelope(event_id: &str, kind: &str, payload: Value) -> Envelope {
+    serde_json::from_value(json!({
+        "event_id": event_id,
+        "schema_version": "1",
+        "occurred_at": "2026-10-15T12:00:00.000Z",
+        "session_id": PRIOR_SESSION,
+        "stream": "live",
+        "tool": "claude-code",
+        "kind": kind,
+        "context": {"repo": REPO, "platform": "win32"},
+        "content_hash": cortex_core::content_hash(&payload).unwrap().to_string(),
+        "payload": payload
+    }))
+    .expect("synthetic prior-session envelope must deserialize")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prior_session_consolidation_surfaces_in_fresh_session_bundle() {
-    let base = api_url();
-    let client = http();
-    if !stack_up(&client, &base).await {
-        eprintln!("skip: cortex-api not reachable at {base}");
-        return;
-    }
+    let fixture = tempfile::tempdir().unwrap();
+    let repo = fixture.path().join("checkout");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(
+        repo.join("cortex.toml"),
+        format!("[cortex]\nid = \"{REPO}\"\n"),
+    )
+    .unwrap();
 
-    // The prior session's distillate: newest consolidation on record.
-    let recent: serde_json::Value = client
-        .get(format!(
-            "{base}/v1/consolidations/recent?repo=cortex&limit=1"
-        ))
-        .send()
-        .await
-        .expect("GET consolidations/recent")
-        .json()
-        .await
-        .expect("recent json");
-    let Some(hit) = recent["hits"].as_array().and_then(|h| h.first()) else {
-        eprintln!("skip: no consolidations in the live corpus — loop unverifiable");
-        return;
+    let source = envelope(
+        SOURCE_EVENT,
+        "turn",
+        json!({
+            "user_message": "How should concurrent correction writes be guarded?",
+            "assistant_message": TITLE
+        }),
+    );
+    let source_ts = chrono::DateTime::parse_from_rfc3339(&source.occurred_at)
+        .unwrap()
+        .timestamp_millis();
+    let payload = ConsolidationPayload {
+        consolidation_id: CONS_ID.into(),
+        grain: ConsolidationGrain::Session,
+        scope: ConsolidationScope::SessionId(source.session_id.clone()),
+        title: TITLE.into(),
+        summary_markdown: format!(
+            "{TITLE}. The prior session concluded that concurrent corrections must compare \
+             the stored version before committing. Reject a stale writer instead of silently \
+             overwriting another correction, and preserve the original source event for review."
+        ),
+        takeaways: vec![TITLE.into()],
+        source_event_ids: vec![source.event_id.clone()],
+        source_event_count: 1,
+        model: "synthetic-fixture".into(),
+        depth: ConsolidationDepth::Shallow,
+        outcome_distribution: BTreeMap::new(),
+        temporal_span: TimeSpan {
+            start_ms: source_ts,
+            end_ms: source_ts,
+            duration_ms: 0,
+        },
+        repos: vec![REPO.into()],
+        tags: Vec::new(),
     };
-    let cons_id = hit["id"].as_str().expect("consolidation id").to_string();
-    let cons_title = hit["title"]
-        .as_str()
-        .expect("consolidation title")
-        .to_string();
+    cortex_core::validate::validate_consolidation_payload(&payload).unwrap();
+    assert_eq!(
+        payload.source_event_ids.as_slice(),
+        std::slice::from_ref(&source.event_id)
+    );
+    assert_eq!(
+        payload.scope,
+        ConsolidationScope::SessionId(PRIOR_SESSION.into())
+    );
+    assert_ne!(source.session_id, FRESH_SESSION);
+    let consolidation = envelope(
+        CONS_EVENT,
+        "consolidation",
+        serde_json::to_value(&payload).unwrap(),
+    );
 
-    // Fresh session, same repo, asking about the prior session's topic.
-    let query_client = client.clone();
-    let query_base = base.clone();
+    // Persist both fixtures before starting the fresh session. Loading must
+    // fail the test if either event disappears or cannot be projected.
+    let archive = fixture.path().join("archive");
+    std::fs::create_dir(&archive).unwrap();
+    let file = std::fs::File::create(archive.join("raw-00000.parquet")).unwrap();
+    let mut writer = zstd::stream::write::Encoder::new(file, 1).unwrap();
+    for event in [&source, &consolidation] {
+        serde_json::to_writer(&mut writer, event).unwrap();
+        writer.write_all(b"\n").unwrap();
+    }
+    writer.finish().unwrap();
+    let (report, hits) = load_lane_hits(&archive);
+    assert_eq!(report.files_visited, 1);
+    assert_eq!(report.envelopes_parsed, 2);
+    assert_eq!(report.hits_seeded, 2);
+    assert_eq!(report.lines_dropped, 0);
+    assert!(report.corrupted_files.is_empty());
+    let cons_hit = hits
+        .iter()
+        .find(|hit| hit.symbol.as_deref() == Some("consolidation"))
+        .expect("archived prior-session consolidation must be indexed")
+        .clone();
+    assert_eq!(cons_hit.doc_id, format!("archive|{CONS_EVENT}"));
+    assert_eq!(cons_hit.extras["session_id"], PRIOR_SESSION);
+    assert_eq!(cons_hit.extras["consolidation_id"], CONS_ID);
+    assert_eq!(cons_hit.extras["title"], TITLE);
+    assert_eq!(cons_hit.extras["source_event_count"], 1);
+    assert_eq!(cons_hit.extras["body_markdown"], payload.summary_markdown);
+    // Archive projection carries `title`, whereas the Meili projection uses
+    // `consolidation_title`. The query API's archive fallback title is the
+    // complete projected text. Pin it to this source rather than substituting
+    // Meili metadata or accepting any consolidation in the response.
+    assert!(payload.summary_markdown.len() <= 320);
+    let projected_title = format!("[{}] {}", payload.title, payload.summary_markdown);
+    assert_eq!(cons_hit.text, projected_title);
+    let turn_hit = hits
+        .iter()
+        .find(|hit| hit.symbol.as_deref() == Some("turn"))
+        .expect("exact source turn must be indexed")
+        .clone();
+    assert_eq!(turn_hit.doc_id, format!("archive|{SOURCE_EVENT}"));
+    assert_eq!(turn_hit.extras["session_id"], PRIOR_SESSION);
+
+    let keyword = Arc::new(MemoryKeywordLane::new());
+    keyword.seed(&format!("cortex-{REPO}-consolidations"), vec![cons_hit]);
+    keyword.seed(&format!("cortex-{REPO}-turns"), vec![turn_hit]);
+    let service = QueryService::with_memory_defaults(Orchestrator::new(
+        Arc::new(MemoryVectorLane::new()),
+        keyword,
+        Arc::new(MemoryGraphLane::new()),
+    ));
+    // Explicit defaults keep this fixture independent of user configuration.
+    let app = build_router_with_auth_and_cfg(
+        Arc::new(service),
+        None,
+        None,
+        Arc::new(cortex_config::Config::default()),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/v1/query", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(600))
+        .build()
+        .unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let captured = observed.clone();
     let query_fn = Arc::new(ClosureQueryFn(move |req: QueryRequest| {
-        let client = query_client.clone();
-        let base = query_base.clone();
+        let client = client.clone();
+        let endpoint = endpoint.clone();
+        let captured = captured.clone();
         async move {
-            let resp = client
-                .post(format!("{base}/v1/query"))
+            let response = client
+                .post(endpoint)
                 .json(&req)
                 .send()
                 .await
-                .ok()?;
-            resp.json::<QueryResponse>().await.ok()
+                .expect("hermetic query API must be reachable")
+                .error_for_status()
+                .expect("hermetic query API must accept fresh-session query")
+                .json::<QueryResponse>()
+                .await
+                .expect("real API query response must deserialize");
+            captured.lock().unwrap().push((req, response.clone()));
+            Some(response)
         }
     }));
-
-    let session_id = format!(
-        "it-continuity-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_millis()
-    );
     let prompt = format!(
-        "I'm about to rework this area — what did previous sessions \
-         conclude about {cons_title}?"
+        "I'm about to change correction writes. What did previous sessions conclude about {TITLE}?"
     );
     let input = PreThinkingInput {
-        session_id: &session_id,
+        session_id: FRESH_SESSION,
         turn_id: "turn-1",
         user_prompt: &prompt,
-        cwd: Path::new(env!("CARGO_MANIFEST_DIR")),
+        cwd: &repo,
         recent_files: &[],
-        // Spec-12's 600ms production budget trips fail-open on live
-        // round-trips (~700ms+ observed); this IT verifies CONTINUITY,
-        // not latency, so it gets a generous wall-clock.
         budget: PreThinkingBudget {
             bundle_bytes: 32 * 1024,
-            time_ms: 20_000,
+            time_ms: 600,
         },
         principal: None,
     };
-
     let out = run(&input, query_fn, Arc::new(Metrics::new())).await;
+    server.abort();
+    let _ = server.await;
 
     assert!(
         !out.fail_open,
-        "pipeline took the fail-open path (api unreachable mid-test?)"
-    );
-
-    // THE LOOP: a fresh session's bundle carries consolidated context
-    // distilled by earlier sessions. The "Consolidated context"
-    // section renders if and only if `/v1/query` populated
-    // `results.consolidations` — which was structurally impossible
-    // before phase30b, so this section's presence IS the loop.
-    //
-    // Deliberately NOT asserted: that `{cons_title}` specifically wins
-    // retrieval. Which of the corpus's consolidations ranks first for
-    // a given prompt is a RELEVANCE property of live BM25 over a
-    // shared corpus, not a continuity-wiring property — measured live,
-    // even an exact-title query surfaces a different (still valid)
-    // consolidation. Pinning one document here would make this test a
-    // flaky ranking assertion wearing a wiring test's name. Ranking
-    // quality has its own gate (the cortex-eval retrieval suites).
-    // Note also that `/v1/consolidations/recent` reports the event
-    // ULID while a rendered row carries the `cons-<grain>-…` id — the
-    // two identifier spaces do not overlap, so an id-equality check
-    // could never pass regardless of ranking.
-    assert!(
-        out.bundle.contains("## Consolidated context ("),
-        "fresh session's bundle must carry a Consolidated context \
-         section built from prior sessions (corpus has ≥1 \
-         consolidation, e.g. {cons_id} / {cons_title:?}); got bundle:\n{}",
+        "fresh session lost continuity: {}",
         out.bundle
     );
-    // Rows are `N. <grain>/<consolidation_id> · …` — assert the id
-    // space is the consolidator's, proving the row came from a real
-    // assembled `ConsolidationRef` and not from stray text.
     assert!(
-        out.bundle.contains("/cons-"),
-        "the section's rows must carry real `cons-<grain>-…` ids; got bundle:\n{}",
+        out.latency_ms <= 600,
+        "production deadline exceeded: {} ms",
+        out.latency_ms
+    );
+    let observed = observed.lock().unwrap();
+    assert_eq!(
+        observed.len(),
+        1,
+        "fresh turn must query the real API exactly once"
+    );
+    let (request, response) = &observed[0];
+    assert_eq!(request.scope.repo.as_deref(), Some(REPO));
+    assert_eq!(request.query, prompt);
+    assert!(request.budget_ms <= 600);
+    assert_eq!(response.results.consolidations.len(), 1);
+    let delivered = &response.results.consolidations[0];
+    assert_eq!(delivered.consolidation_id, payload.consolidation_id);
+    assert_eq!(delivered.title, projected_title);
+    assert_eq!(delivered.grain, "session");
+    assert_eq!(delivered.ts, source_ts);
+    assert_eq!(out.query_id.as_deref(), Some(response.query_id.as_str()));
+    assert!(
+        out.bundle.contains("## Consolidated context (1)"),
+        "{}",
         out.bundle
     );
+    assert!(
+        out.bundle.contains(&format!("session/{CONS_ID}")),
+        "{}",
+        out.bundle
+    );
+    assert!(out.bundle.contains(TITLE), "{}", out.bundle);
 }

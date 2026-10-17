@@ -4,23 +4,32 @@
 //! identical between transports.
 
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use axum::http::HeaderMap;
+use sha2::{Digest, Sha256};
+use tokio::sync::Semaphore;
 
 use crate::acl::{AclDecision, AclStore};
 use crate::audit::{build_envelope_with_rewrite_context, AuditPublisher, MemoryAuditPublisher};
 use crate::audit_store::AuditStore;
-use crate::cache::{cache_key, Cache, InMemoryCache};
+use crate::cache::{Cache, InMemoryCache};
 use crate::lanes::MemoryKeywordLane;
 use crate::orchestrator::Orchestrator;
 use crate::principal::Principal;
-use crate::principal_resolver::resolve_request_principal;
+use crate::principal_resolver::{resolve_request_principal, trust_principal_header_enabled};
 use crate::principal_store::PrincipalStore;
 use crate::query_rewrite::RewrittenQuery;
 use crate::rate_limit::{RateConfig, RateDecision, RateLimiter};
 use crate::redaction::redact_response;
 use crate::storage::api_keys::ApiKeyStore;
 use crate::types::{Notice, QueryRequest, QueryResponse, Scope};
+
+// Keep timed-out password work bounded; the worker retains its permit until it
+// finishes, even when an outer pre-thinking timeout cancels the request.
+static PRINCIPAL_WORKERS: Semaphore = Semaphore::const_new(4);
+const PRINCIPAL_ADMISSION_TIMEOUT: Duration = Duration::from_millis(100);
+const PRINCIPAL_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Phase4j header — explicit repo override for direct
 /// `/v1/query` callers (MCP tools, dashboard search, GUI).
@@ -278,6 +287,7 @@ pub enum ServiceOutcome {
 }
 
 /// Top-level service handle.
+#[derive(Clone)]
 pub struct QueryService {
     /// Orchestrator wired to the lane clients.
     pub orchestrator: Orchestrator,
@@ -432,8 +442,15 @@ impl QueryService {
     pub async fn handle(&self, caller: &str, req: QueryRequest) -> ServiceOutcome {
         // No headers available — use pass-through principal (backward compat).
         let principal = self.resolve_principal(&HeaderMap::new());
-        self.handle_resolved(caller, req, ScopeResolution::Explicit, None, principal)
-            .await
+        self.handle_resolved(
+            caller,
+            req,
+            ScopeResolution::Explicit,
+            None,
+            principal,
+            false,
+        )
+        .await
     }
 
     /// Phase6a entry point. Resolves the scope from `headers`
@@ -455,12 +472,96 @@ impl QueryService {
             .and_then(|v| v.to_str().ok())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        // Phase21 §4.4 — resolve the caller's principal from the API key
-        // and the role-binding store. Falls back to pass-through when AC
-        // is not configured (principal_store is None).
-        let principal = self.resolve_principal(headers);
-        self.handle_resolved(caller, req, resolution, intent_trigger, principal)
+        let Ok((principal, authenticated)) = self.resolve_principal_bounded(headers).await else {
+            return ServiceOutcome::Denied;
+        };
+        self.handle_resolved(
+            caller,
+            req,
+            resolution,
+            intent_trigger,
+            principal,
+            authenticated,
+        )
+        .await
+    }
+
+    /// Credential verification can hash many API keys. Never run it on a Tokio
+    /// executor thread, or hold an unbounded queue of cancelled hash workers.
+    async fn resolve_principal_bounded(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(Principal, bool), ()> {
+        let permit = tokio::time::timeout(PRINCIPAL_ADMISSION_TIMEOUT, PRINCIPAL_WORKERS.acquire())
             .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?;
+        let headers = headers.clone();
+        let principal_store = self.principal_store.clone();
+        let api_key_store = self.api_key_store.clone();
+        let trust_header = trust_principal_header_enabled();
+        let worker = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            // Verify before taking the policy lock. Resolve exactly once; an
+            // invalid supplied credential must not become anonymous access.
+            let credential = if let Some(store) = api_key_store.as_ref() {
+                if let Some(header) = headers.get(axum::http::header::AUTHORIZATION) {
+                    let token = header
+                        .to_str()
+                        .map_err(|_| ())?
+                        .strip_prefix("Bearer ")
+                        .filter(|s| !s.is_empty())
+                        .ok_or(())?;
+                    Some(store.verify_with_role(token).map_err(|_| ())?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let ps = principal_store
+                .as_ref()
+                .map(|store| store.read().map_err(|_| ()))
+                .transpose()?;
+            let trusted_id = trust_header
+                .then(|| {
+                    headers
+                        .get("x-cortex-principal")
+                        .and_then(|v| v.to_str().ok())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                })
+                .flatten();
+            if let Some(id) = trusted_id {
+                return Ok((
+                    ps.as_ref()
+                        .map(|s| s.resolve(id, &[]))
+                        .unwrap_or_else(|| Principal::super_admin(id)),
+                    true,
+                ));
+            }
+            if let Some((id, role)) = credential {
+                let roles = role.into_iter().collect::<Vec<_>>();
+                return Ok((
+                    ps.as_ref()
+                        .map(|s| s.resolve(&id, &roles))
+                        .unwrap_or_else(|| Principal::super_admin(id)),
+                    true,
+                ));
+            }
+            let mut principal = ps
+                .as_ref()
+                .map(|s| s.default_principal().clone())
+                .unwrap_or_else(|| Principal::super_admin("system"));
+            if principal.id == "default" {
+                principal.id = "anonymous".to_string();
+            }
+            Ok((principal, false))
+        });
+        tokio::time::timeout(PRINCIPAL_RESOLUTION_TIMEOUT, worker)
+            .await
+            .map_err(|_| ())?
+            .map_err(|_| ())?
     }
 
     /// Phase21 §4.4 — resolve the caller's `Principal` from the
@@ -483,23 +584,42 @@ impl QueryService {
         resolution: ScopeResolution,
         intent_trigger: Option<String>,
         principal: Principal,
+        authenticated: bool,
     ) -> ServiceOutcome {
         if req.query.trim().is_empty() {
             return ServiceOutcome::EmptyQuery;
         }
-        match self.acl.decide(caller, req.scope.repo.as_deref()) {
+        let authority = if authenticated {
+            principal.id.as_str()
+        } else {
+            caller
+        };
+        match self.acl.decide(authority, req.scope.repo.as_deref()) {
             AclDecision::Deny => return ServiceOutcome::Denied,
             AclDecision::Unknown | AclDecision::Allow => {}
         }
-        match self.rate_limiter.admit(caller) {
+        match self.rate_limiter.admit(authority) {
             RateDecision::Limit { retry_after } => {
                 return ServiceOutcome::RateLimited(retry_after);
             }
             RateDecision::Admit { .. } => {}
         }
 
-        let key = cache_key(&req);
+        // The public legacy cache_key remains request-only. Service entries
+        // include every response-shaping field, effective grants and live AC
+        // posture so cached privileged/other-branch results cannot cross over.
+        let access_control = self.orchestrator.current_access_control();
+        let archive_revision = self.indexed_repos.as_ref().map_or(0, |lane| {
+            lane.archive_revision
+                .load(std::sync::atomic::Ordering::Acquire)
+        });
+        let key_bytes = serde_json::to_vec(&(&req, &principal, &access_control, archive_revision))
+            .expect("query cache inputs are serializable");
+        let key = format!("{:x}", Sha256::digest(key_bytes));
         if let Some(mut hit) = self.cache.get(&key).await {
+            if self.orchestrator.current_access_control() != access_control {
+                return ServiceOutcome::Denied;
+            }
             // Sync hit envelope's intent + cache state with the
             // request — the cached entry was stamped with whatever
             // the previous caller saw.
@@ -545,7 +665,8 @@ impl QueryService {
             compartments = ?principal.compartment_grants,
             "query executing under resolved principal"
         );
-        let (mut response, rewritten) = self.orchestrator.run_with_principal(&req, &principal).await;
+        let (mut response, rewritten) =
+            self.orchestrator.run_with_principal(&req, &principal).await;
         redact_response(&mut response);
         // Stamp ACL + scope echo before caching so the audit layer
         // sees the canonical view. The echoed `repo` carries the
@@ -582,7 +703,9 @@ impl QueryService {
         if crate::budget::report_is_meaningful(&report) {
             response.clipped = Some(report);
         }
-        self.cache.put(&key, response.clone()).await;
+        if self.orchestrator.current_access_control() == access_control {
+            self.cache.put(&key, response.clone()).await;
+        }
         let fusion_snapshot = self.orchestrator.current_fusion();
         let envelope = build_envelope_with_rewrite_context(
             caller,
@@ -732,8 +855,11 @@ mod tests {
     #[test]
     fn resolve_scope_cwd_basename_handles_trailing_separator() {
         let mut r = req("x");
-        resolve_scope(&mut r, &headers_with(HEADER_CORTEX_CWD, "/home/user/Cortex/"))
-            .expect("cwd lane must succeed");
+        resolve_scope(
+            &mut r,
+            &headers_with(HEADER_CORTEX_CWD, "/home/user/Cortex/"),
+        )
+        .expect("cwd lane must succeed");
         assert_eq!(r.scope.repo.as_deref(), Some("cortex"));
     }
 

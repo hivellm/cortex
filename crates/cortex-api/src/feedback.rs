@@ -4,15 +4,12 @@
 //! prior pre-thinking bundle keyed on the `query_id` the bundle
 //! carried. The endpoint UPSERTs into `pre_thinking_feedback` so
 //! a re-post overwrites the prior row (idempotent — phase14f §1.3).
-//! Unknown `query_id` is rejected with HTTP 404 so the operator
-//! catches typos before the row pollutes the table.
+//! Daily-memory query IDs resolve to persistent prepared receipts and require
+//! matching caller/scope authorization. Other legacy query IDs remain accepted.
 //!
 //! Validation policy:
-//! - `query_id` must match the ULID-shape regex Cortex uses
-//!   elsewhere (`^[0-9A-HJ-KM-NP-TV-Z]{26}$` Crockford-safe), OR
-//!   any non-empty string — the audit-table cross-check happens
-//!   on the lookup side once the audit log is wired (phase14f
-//!   follow-up). Today the endpoint accepts any non-empty id.
+//! - `query_id` must be nonempty and at most 256 bytes. Legacy audit IDs
+//!   are not retroactively required to have a daily-memory receipt.
 //! - `helpful` is required.
 //! - `rating` ∈ [1, 5] when present.
 //! - `files_cited` deduplicated + serialised as a JSON string so
@@ -21,7 +18,7 @@
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::Utc;
@@ -114,10 +111,30 @@ async fn handle(
     state: FeedbackState,
     req: FeedbackRequest,
 ) -> Result<FeedbackResponse, FeedbackError> {
+    let files_json = validate_feedback(&req)?;
+    let store = state.metadata.lock().await;
+    record_feedback(&store, &req, &files_json)
+}
+
+fn validate_feedback(req: &FeedbackRequest) -> Result<String, FeedbackError> {
     if req.query_id.trim().is_empty() {
         return Err(FeedbackError(
             StatusCode::BAD_REQUEST,
             "query_id must be non-empty".into(),
+        ));
+    }
+    if req.query_id.len() > 256
+        || req.intent.as_ref().is_some_and(|value| value.len() > 128)
+        || req
+            .free_text
+            .as_ref()
+            .is_some_and(|value| value.len() > 8192)
+        || req.files_cited.len() > 32
+        || req.files_cited.iter().any(|value| value.len() > 1024)
+    {
+        return Err(FeedbackError(
+            StatusCode::BAD_REQUEST,
+            "feedback exceeds field limits".into(),
         ));
     }
     if let Some(r) = req.rating {
@@ -139,23 +156,46 @@ async fn handle(
     let mut files = req.files_cited.clone();
     files.sort();
     files.dedup();
-    let files_json = serde_json::to_string(&files).map_err(|e| {
+    serde_json::to_string(&files).map_err(|e| {
         FeedbackError(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("serialise files_cited: {e}"),
         )
+    })
+}
+
+fn record_feedback(
+    store: &MetadataStore,
+    req: &FeedbackRequest,
+    files_json: &str,
+) -> Result<FeedbackResponse, FeedbackError> {
+    // File-backed handlers use independent connections. Reserve the writer
+    // before checking existence so the receipt reports the actual UPSERT branch.
+    let tx = rusqlite::Transaction::new_unchecked(
+        store.conn(),
+        rusqlite::TransactionBehavior::Immediate,
+    )
+    .map_err(|_| {
+        FeedbackError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "feedback transaction unavailable".into(),
+        )
     })?;
-    let store = state.metadata.lock().await;
     let prior_existed = store
         .pre_thinking_feedback(&req.query_id)
         .map(|r| r.is_some())
-        .unwrap_or(false);
+        .map_err(|_| {
+            FeedbackError(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "feedback lookup failed".into(),
+            )
+        })?;
     store
         .upsert_pre_thinking_feedback(
             &req.query_id,
             req.intent.as_deref(),
             req.helpful,
-            &files_json,
+            files_json,
             req.rating,
             req.free_text.as_deref(),
             req.implicit_score,
@@ -167,10 +207,73 @@ async fn handle(
                 format!("metadata upsert: {e}"),
             )
         })?;
+    tx.commit().map_err(|_| {
+        FeedbackError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "feedback transaction commit failed".into(),
+        )
+    })?;
     Ok(FeedbackResponse {
-        query_id: req.query_id,
+        query_id: req.query_id.clone(),
         upserted: !prior_existed,
     })
+}
+
+/// File-backed feedback; daily receipts require their resolved caller and scope.
+pub async fn durable_feedback_handler(
+    State(state): State<crate::http::ApiState>,
+    headers: HeaderMap,
+    Json(req): Json<FeedbackRequest>,
+) -> Response {
+    let files_json = match validate_feedback(&req) {
+        Ok(files) => files,
+        Err(error) => return error.into_response(),
+    };
+    let identity = match crate::daily_memory::resolve_identity(&state, &headers).await {
+        Ok(identity) => identity,
+        Err(error) => return error,
+    };
+    let caller = match crate::daily_memory::check_access(&state, &identity, None, false) {
+        Ok(caller) => caller,
+        Err(error) => return error,
+    };
+    let Some(database) = &state.daily_memory else {
+        return FeedbackError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "daily_memory_unavailable".into(),
+        )
+        .into_response();
+    };
+    let query_id = req.query_id.clone();
+    let receipt = match database
+        .run(move |store| store.daily_memory_delivery_by_id(&query_id))
+        .await
+    {
+        Ok(receipt) => receipt,
+        Err(error) => return error,
+    };
+    if let Some(receipt) = receipt {
+        if receipt.request.caller != caller {
+            return FeedbackError(StatusCode::FORBIDDEN, "feedback_caller_forbidden".into())
+                .into_response();
+        }
+        if let Err(error) = crate::daily_memory::check_access(
+            &state,
+            &identity,
+            Some(&receipt.request.repo),
+            receipt.request.global_revision.is_some(),
+        ) {
+            return error;
+        }
+    }
+    match database
+        .run(move |store| Ok(record_feedback(store, &req, &files_json)))
+        .await
+    {
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(Err(error)) => error.into_response(),
+        Err(error) => error,
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -275,14 +378,53 @@ pub async fn feedback_list_handler(
     State(state): State<FeedbackState>,
     Json(req): Json<FeedbackListRequest>,
 ) -> Response {
+    let store = state.metadata.lock().await;
+    match read_feedback(&store, &req) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => error.into_response(),
+    }
+}
+
+/// File-backed feedback history; access-controlled unscoped history requires admin.
+pub async fn durable_feedback_list_handler(
+    State(state): State<crate::http::ApiState>,
+    headers: HeaderMap,
+    Json(req): Json<FeedbackListRequest>,
+) -> Response {
+    if let Err(error) =
+        crate::daily_memory::authorize(&state, &headers, None, state.cfg.access_control.enabled)
+            .await
+    {
+        return error;
+    }
+    let Some(database) = &state.daily_memory else {
+        return FeedbackError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "daily_memory_unavailable".into(),
+        )
+        .into_response();
+    };
+    match database
+        .run(move |store| Ok(read_feedback(store, &req)))
+        .await
+    {
+        Ok(Ok(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(Err(error)) => error.into_response(),
+        Err(error) => error,
+    }
+}
+
+fn read_feedback(
+    store: &MetadataStore,
+    req: &FeedbackListRequest,
+) -> Result<FeedbackListResponse, FeedbackError> {
     if let Some(repo) = req.repo.as_deref().map(str::trim) {
         if !repo.is_empty() {
-            return FeedbackError(
+            return Err(FeedbackError(
                 StatusCode::BAD_REQUEST,
                 "`repo` filter is not supported — `pre_thinking_feedback` table has no repo column"
                     .into(),
-            )
-            .into_response();
+            ));
         }
     }
     let since = match req
@@ -294,11 +436,10 @@ pub async fn feedback_list_handler(
         Some(s) => match parse_rfc3339(s) {
             Some(dt) => Some(dt),
             None => {
-                return FeedbackError(
+                return Err(FeedbackError(
                     StatusCode::BAD_REQUEST,
                     format!("`{s}` is not a valid RFC3339 timestamp"),
-                )
-                .into_response();
+                ));
             }
         },
         None => None,
@@ -312,11 +453,10 @@ pub async fn feedback_list_handler(
         Some(s) => match parse_rfc3339(s) {
             Some(dt) => Some(dt),
             None => {
-                return FeedbackError(
+                return Err(FeedbackError(
                     StatusCode::BAD_REQUEST,
                     format!("`{s}` is not a valid RFC3339 timestamp"),
-                )
-                .into_response();
+                ));
             }
         },
         None => None,
@@ -328,15 +468,13 @@ pub async fn feedback_list_handler(
         .filter(|s| !s.is_empty());
     let limit = clamp_list_limit(req.limit);
 
-    let store = state.metadata.lock().await;
     let raw = match store.list_pre_thinking_feedback(req.helpful, intent, since, until, limit) {
         Ok(r) => r,
         Err(e) => {
-            return FeedbackError(
+            return Err(FeedbackError(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("metadata list: {e}"),
-            )
-            .into_response();
+            ));
         }
     };
     let rows: Vec<FeedbackRow> = raw
@@ -368,7 +506,7 @@ pub async fn feedback_list_handler(
         )
         .collect();
     let total = rows.len() as u32;
-    (StatusCode::OK, Json(FeedbackListResponse { rows, total })).into_response()
+    Ok(FeedbackListResponse { rows, total })
 }
 
 #[cfg(test)]
@@ -377,6 +515,78 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
+
+    #[test]
+    fn concurrent_file_backed_feedback_reports_exactly_one_insert() {
+        use std::cell::Cell;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        static WAITING: AtomicUsize = AtomicUsize::new(0);
+        thread_local! {
+            static REPORTED: Cell<bool> = const { Cell::new(false) };
+        }
+        fn wait_for_writer(attempt: i32) -> bool {
+            REPORTED.with(|reported| {
+                if !reported.replace(true) {
+                    WAITING.fetch_add(1, Ordering::SeqCst);
+                }
+            });
+            std::thread::sleep(Duration::from_millis(1));
+            attempt < 5000
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("feedback.sqlite");
+        let blocker = MetadataStore::open(&path).unwrap();
+        let stores = [
+            MetadataStore::open(&path).unwrap(),
+            MetadataStore::open(&path).unwrap(),
+        ];
+        let hold = rusqlite::Transaction::new_unchecked(
+            blocker.conn(),
+            rusqlite::TransactionBehavior::Immediate,
+        )
+        .unwrap();
+        WAITING.store(0, Ordering::SeqCst);
+        let workers: Vec<_> = stores
+            .into_iter()
+            .map(|store| {
+                std::thread::spawn(move || {
+                    store.conn().busy_handler(Some(wait_for_writer)).unwrap();
+                    let request: FeedbackRequest = serde_json::from_value(serde_json::json!({
+                        "query_id":"concurrent-feedback", "helpful":true
+                    }))
+                    .unwrap();
+                    record_feedback(&store, &request, "[]").unwrap()
+                })
+            })
+            .collect();
+        // Both old implementations reach UPSERT after observing no row; the
+        // fixed implementation instead waits before its existence SELECT.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while WAITING.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let both_waited = WAITING.load(Ordering::SeqCst) == 2;
+        hold.commit().unwrap();
+        let receipts: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert!(
+            both_waited,
+            "both independent connections must contend on the held writer"
+        );
+        assert_eq!(
+            receipts.iter().filter(|receipt| receipt.upserted).count(),
+            1
+        );
+        assert!(blocker
+            .pre_thinking_feedback("concurrent-feedback")
+            .unwrap()
+            .is_some());
+    }
 
     async fn router() -> (axum::Router, Arc<Mutex<MetadataStore>>) {
         let store = MetadataStore::open_in_memory().unwrap();

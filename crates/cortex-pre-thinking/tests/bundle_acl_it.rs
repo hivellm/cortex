@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use cortex_api::Principal;
 use cortex_api::{
     BudgetReport, DebugInfo, Intent, LaneTimings, QueryRequest, QueryResponse, ResultsBag, Scope,
     Snippet,
@@ -16,7 +17,6 @@ use cortex_pre_thinking::{
     breaker::Breaker, pipeline::run_with_breaker, Metrics, PreThinkingBudget, PreThinkingInput,
     QueryFn,
 };
-use cortex_api::Principal;
 
 struct CannedQuery(QueryResponse);
 
@@ -74,10 +74,7 @@ fn response_with(snippets: Vec<Snippet>) -> QueryResponse {
     }
 }
 
-fn input<'a>(
-    cwd: &'a std::path::Path,
-    principal: Option<Principal>,
-) -> PreThinkingInput<'a> {
+fn input<'a>(cwd: &'a std::path::Path, principal: Option<Principal>) -> PreThinkingInput<'a> {
     PreThinkingInput {
         session_id: "s",
         turn_id: "t",

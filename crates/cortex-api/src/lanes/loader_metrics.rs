@@ -22,6 +22,16 @@ use std::sync::Mutex;
 /// Combined registry for archive_loader + meili_loader.
 #[derive(Debug, Default)]
 pub struct LoaderMetrics {
+    /// Actual compressed bytes read by incremental archive polls.
+    pub archive_bytes_read: AtomicU64,
+    /// Actual bytes decoded by incremental archive polls, including restart replay.
+    pub archive_bytes_decoded: AtomicU64,
+    /// Known files still requiring work; discovery can reveal more.
+    pub archive_pending_files: AtomicU64,
+    /// Known open or interrupted frames.
+    pub archive_partial_files: AtomicU64,
+    /// Whether a complete bounded discovery pass has finished.
+    pub archive_discovery_complete: AtomicU64,
     /// `cortex_archive_loader_last_refresh_ts_ms` — Unix-epoch ms of
     /// the most recent successful archive scan. `0` until the boot
     /// pass completes.
@@ -42,6 +52,22 @@ pub struct LoaderMetrics {
 }
 
 impl LoaderMetrics {
+    /// Record real incremental work rather than repeatedly counting full history.
+    pub fn record_archive_incremental_poll(
+        &self,
+        report: &cortex_storage::archive_index::ArchivePollReport,
+    ) {
+        self.archive_bytes_read
+            .fetch_add(report.bytes_read as u64, Ordering::Relaxed);
+        self.archive_bytes_decoded
+            .fetch_add(report.bytes_decoded as u64, Ordering::Relaxed);
+        self.archive_pending_files
+            .store(report.pending_files, Ordering::Relaxed);
+        self.archive_partial_files
+            .store(report.partial_files, Ordering::Relaxed);
+        self.archive_discovery_complete
+            .store(u64::from(report.discovery_complete), Ordering::Relaxed);
+    }
     /// Fresh registry with all counters at zero.
     pub fn new() -> Self {
         Self::default()
@@ -108,6 +134,36 @@ impl LoaderMetrics {
     /// aggregator stay aligned.
     pub fn render_prom(&self) -> String {
         let mut out = String::new();
+        for (name, kind, value) in [
+            (
+                "bytes_read_total",
+                "counter",
+                self.archive_bytes_read.load(Ordering::Relaxed),
+            ),
+            (
+                "bytes_decoded_total",
+                "counter",
+                self.archive_bytes_decoded.load(Ordering::Relaxed),
+            ),
+            (
+                "pending_files",
+                "gauge",
+                self.archive_pending_files.load(Ordering::Relaxed),
+            ),
+            (
+                "partial_files",
+                "gauge",
+                self.archive_partial_files.load(Ordering::Relaxed),
+            ),
+            (
+                "discovery_complete",
+                "gauge",
+                self.archive_discovery_complete.load(Ordering::Relaxed),
+            ),
+        ] {
+            let _ = writeln!(out, "# TYPE cortex_archive_loader_{name} {kind}");
+            let _ = writeln!(out, "cortex_archive_loader_{name} {value}");
+        }
         out.push_str("# TYPE cortex_archive_loader_last_refresh_ts_ms gauge\n");
         let _ = writeln!(
             out,

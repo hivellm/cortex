@@ -41,8 +41,7 @@ fn hit_classified(id: &str, level: u8, compartments: &[&str]) -> LaneHit {
     let mut extras = std::collections::BTreeMap::new();
     extras.insert("class_level".to_string(), json!(level));
     if !compartments.is_empty() {
-        let comps: Vec<serde_json::Value> =
-            compartments.iter().map(|c| json!(c)).collect();
+        let comps: Vec<serde_json::Value> = compartments.iter().map(|c| json!(c)).collect();
         extras.insert("class_compartments".to_string(), json!(comps));
     }
     LaneHit {
@@ -196,5 +195,9 @@ async fn no_acl_context_passes_all_hits_through() {
         .iter()
         .map(|s| s.path.as_deref().unwrap_or(""))
         .collect();
-    assert_eq!(ids.len(), 2, "both hits must pass when ACL is absent; got: {ids:?}");
+    assert_eq!(
+        ids.len(),
+        2,
+        "both hits must pass when ACL is absent; got: {ids:?}"
+    );
 }

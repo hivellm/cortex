@@ -205,7 +205,10 @@ fn access_decision_envelopes_fire_with_required_fields() {
     let kinds: Vec<Option<&str>> = events.iter().map(|e| e.kind.as_deref()).collect();
 
     // 3 per-hit envelopes + 1 summary.
-    let per_hit_count = kinds.iter().filter(|k| **k == Some("access_decision")).count();
+    let per_hit_count = kinds
+        .iter()
+        .filter(|k| **k == Some("access_decision"))
+        .count();
     assert_eq!(
         per_hit_count, 3,
         "one access_decision per fused hit (3 hits in), got {kinds:?}"

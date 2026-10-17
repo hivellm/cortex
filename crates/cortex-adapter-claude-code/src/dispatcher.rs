@@ -7,11 +7,12 @@
 //! an empty `{}` reply so the session never breaks.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use cortex_api::active_work::ActiveTaskRow;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::events::{build_event, HookFrame, HookKind};
 use crate::metrics::Metrics;
@@ -42,6 +43,9 @@ pub struct HookSpecificOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct HookResponse {
+    /// Operator warning; the native shim deduplicates this by actual session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
     /// `hookSpecificOutput.additionalContext` (UserPromptSubmit only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_specific_output: Option<HookSpecificOutput>,
@@ -73,6 +77,7 @@ impl HookResponse {
             }),
             permission_decision: None,
             permission_decision_reason: None,
+            system_message: None,
         }
     }
 
@@ -94,6 +99,7 @@ impl HookResponse {
             }),
             permission_decision: None,
             permission_decision_reason: None,
+            system_message: None,
         }
     }
 
@@ -103,7 +109,25 @@ impl HookResponse {
             hook_specific_output: None,
             permission_decision: Some("deny".into()),
             permission_decision_reason: Some(reason.into()),
+            system_message: None,
         }
+    }
+
+    fn with_memory_outcome(mut self, outcome: &str) -> Self {
+        if matches!(
+            outcome,
+            "unavailable"
+                | "timeout"
+                | "invalid_response"
+                | "scope_timeout"
+                | "scope_identity_required"
+                | "scope_unresolved"
+        ) {
+            self.system_message = Some(
+                "Cortex: local memory is unavailable. This prompt continues without saved Cortex memory.".into(),
+            );
+        }
+        self
     }
 }
 
@@ -204,25 +228,30 @@ impl Dispatcher {
         let session_id = self
             .sessions
             .resolve_or_synthesize(resolved_hint.as_deref(), self.pid);
-        self.sessions.ensure(&session_id);
-
-        // build_event sees the same effective hint via the same
-        // SessionManager cache, so the envelope's session_id matches
-        // the one we computed here.
-        let mut frame_for_build = frame.clone();
-        if frame_for_build
-            .session_id
-            .as_deref()
-            .map(|s| s.is_empty())
-            .unwrap_or(true)
-        {
-            frame_for_build.session_id = resolved_hint;
-        }
-
-        // build_event updates correlation tables (open turn / open tool
-        // call) and returns Some(envelope) only for the publishable
-        // hooks (UserPromptSubmit, PostToolUse, SubagentStop).
-        let envelope = build_event(kind, &frame_for_build, &self.sessions, self.pid);
+        let envelope = if self.publisher.enabled() {
+            // The effective hint must match the identity used by sync memory.
+            let mut frame_for_build = frame.clone();
+            if frame_for_build
+                .session_id
+                .as_deref()
+                .map(|s| s.is_empty())
+                .unwrap_or(true)
+            {
+                frame_for_build.session_id = resolved_hint;
+            }
+            build_event(kind, &frame_for_build, &self.sessions, self.pid)
+        } else {
+            // Memory deliveries still carry turn identity. Skip bulk payload
+            // cloning/redaction, transcript reads, and tool/event correlation.
+            match kind {
+                HookKind::UserPromptSubmit => {
+                    self.sessions.open_turn(&session_id);
+                }
+                HookKind::Stop => self.sessions.close_turn(&session_id),
+                _ => {}
+            }
+            None
+        };
         let turn_id = self.sessions.current_turn(&session_id);
 
         let response = self
@@ -265,39 +294,50 @@ impl Dispatcher {
                     .pre_thinking(&prompt, session_id, turn_id, frame.cwd.as_deref())
                     .await;
                 HookResponse::additional_context(result.bundle)
+                    .with_memory_outcome(result.memory_outcome)
             }
             HookKind::PreToolUse => {
-                let tool_name = read_string_field(&frame.payload, "tool_name").unwrap_or_default();
-                let input = frame.payload.get("input").cloned().unwrap_or(json!({}));
-                let result = self
-                    .sync
-                    .law_check(&tool_name, &input, session_id, turn_id)
-                    .await;
-                if result.deny {
-                    return HookResponse::deny(result.reason);
-                }
+                // The legacy /v1/laws/check route is not implemented. Keep
+                // correlation, without a request or an implied policy decision.
                 HookResponse::empty()
             }
             HookKind::SessionStart => {
-                // Phase30 (continuity §1.3) — derive the repo slug
-                // the same way the pre-thinking pipeline does (walk
-                // ancestors for `.git`, honour a `cortex.toml`
-                // override) so the SessionStart snapshot and the
-                // per-prompt query scope to the same workspace. The
-                // dashboard's own scan lower-cases the slug (see
-                // `cortex_api::active_work::scan`), so mirror that
-                // here rather than trusting `repo_from_cwd`'s casing.
-                let repo = frame
-                    .cwd
-                    .as_deref()
-                    .and_then(|cwd| cortex_pre_thinking::repo_from_cwd(Path::new(cwd)))
-                    .map(|r| r.to_ascii_lowercase());
-                let outcome = self.sync.active_work(repo.as_deref()).await;
-                HookResponse::session_start_context(render_active_work(&outcome.tasks))
+                let local = self
+                    .sync
+                    .session_start_memory(session_id, frame.cwd.as_deref());
+                let work = async {
+                    let repo = task_repo(frame.cwd.as_deref()).await;
+                    self.sync.active_work(repo.as_deref()).await
+                };
+                let (memory, work) = tokio::join!(local, work);
+                let mut bundle = memory.bundle;
+                bundle.push_str(&render_active_work(
+                    &work.tasks,
+                    self.sync.bundle_budget().saturating_sub(bundle.len()),
+                ));
+                HookResponse::session_start_context(bundle)
+                    .with_memory_outcome(memory.memory_outcome)
             }
             _ => HookResponse::empty(),
         }
     }
+}
+
+async fn task_repo(cwd: Option<&str>) -> Option<String> {
+    static SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
+        LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
+    let cwd = cwd.filter(|cwd| Path::new(cwd).is_absolute())?.to_owned();
+    tokio::time::timeout(Duration::from_millis(100), async {
+        let permit = SLOTS.clone().acquire_owned().await.ok()?;
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            cortex_pre_thinking::repo_from_cwd(Path::new(&cwd)).map(|r| r.to_ascii_lowercase())
+        })
+        .await
+        .ok()?
+    })
+    .await
+    .ok()?
 }
 
 fn read_string_field(value: &Value, key: &str) -> Option<String> {
@@ -318,12 +358,17 @@ const ACTIVE_WORK_ROW_CAP: usize = 8;
 /// [`ACTIVE_WORK_ROW_CAP`] rows. Returns an empty string when `tasks`
 /// is empty so [`HookResponse::session_start_context`] short-circuits
 /// to `HookResponse::empty()`.
-fn render_active_work(tasks: &[ActiveTaskRow]) -> String {
+fn render_active_work(tasks: &[ActiveTaskRow], budget: usize) -> String {
     if tasks.is_empty() {
         return String::new();
     }
     let mut out = String::from("## Cortex — active work (rulebook)\n");
+    let cap = budget.min(4096);
+    if out.len() > cap {
+        return String::new();
+    }
     for task in tasks.iter().take(ACTIVE_WORK_ROW_CAP) {
+        let start = out.len();
         out.push_str("- ");
         out.push_str(&task.id);
         out.push_str(" [");
@@ -344,6 +389,10 @@ fn render_active_work(tasks: &[ActiveTaskRow]) -> String {
             }
         }
         out.push('\n');
+        if out.len() > cap {
+            out.truncate(start);
+            break;
+        }
     }
     out
 }

@@ -1,0 +1,11 @@
+{
+  "id": 39,
+  "slug": "daily-agent-memory-recovery-durable-explicit-memory-and-candidate-only-jev",
+  "title": "Daily agent memory recovery: durable explicit memory and candidate-only Jev",
+  "status": "accepted",
+  "date": "2026-10-16",
+  "relatedTasks": [
+    "phase34_daily-agent-memory-recovery"
+  ],
+  "supersededBy": null
+}

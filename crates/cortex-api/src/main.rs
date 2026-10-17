@@ -171,6 +171,7 @@ async fn main() -> Result<()> {
     let cfg = std::sync::Arc::new(
         cortex_config::Config::load().map_err(|e| anyhow::anyhow!("config load: {e}"))?,
     );
+    tracing::info!(profile = ?cfg.runtime.profile, "runtime profile resolved");
 
     let vector_memory = Arc::new(MemoryVectorLane::new());
     let keyword_memory = Arc::new(MemoryKeywordLane::new());
@@ -193,7 +194,10 @@ async fn main() -> Result<()> {
     // server unreachable, build error) keeps cold-stack dev working;
     // failures log WARN with the URL + reason so misconfigurations
     // are spotted at boot.
-    let vector: StdArc<dyn VectorLane> = if let Some(vectorizer_url) = cfg
+    let vector: StdArc<dyn VectorLane> = if cfg.is_daily() {
+        tracing::info!("daily runtime: vector lane disabled without probing configured endpoints");
+        vector_memory.clone()
+    } else if let Some(vectorizer_url) = cfg
         .embedder
         .vectorizer_url
         .clone()
@@ -356,7 +360,12 @@ async fn main() -> Result<()> {
     // fall back to the in-memory lane so cold-stack dev keeps
     // working without a Meili dependency. Failure logs WARN with
     // the URL + reason so the operator can spot the misconfiguration.
-    let keyword: StdArc<dyn KeywordLane> = if let Some(meili_url) = cfg.meili.meili_url.clone() {
+    let keyword: StdArc<dyn KeywordLane> = if cfg.is_daily() {
+        tracing::info!(
+            "daily runtime: live Meili lane disabled without probing configured endpoints"
+        );
+        keyword_memory.clone()
+    } else if let Some(meili_url) = cfg.meili.meili_url.clone() {
         let api_key = cfg.meili.meili_api_key.clone();
         match MeiliKeywordLane::new(&meili_url, api_key) {
             Ok(live) => match live.probe().await {
@@ -390,52 +399,16 @@ async fn main() -> Result<()> {
         keyword_memory.clone()
     };
 
-    // Pragmatic boot-time seed + periodic re-scan: when
-    // CORTEX_ARCHIVE_ROOT is set, walk the cortex-ingestion archive
-    // and pre-populate the keyword lane with every captured turn /
-    // tool_call / agent_call envelope. The same scan re-runs on the
-    // CORTEX_ARCHIVE_REFRESH_SECS interval (default 30 s) so a
-    // freshly-captured prompt becomes queryable without a daemon
-    // restart. Closes the "captured events are queryable" gap until
-    // the live spec-06 / spec-07 / spec-08 indexers ship.
-    if let Some(root) = cfg.ingestion.archive_root.clone() {
-        let archive_root = PathBuf::from(&root);
-        let initial = cortex_api::archive_loader::load_into_keyword_lane_with_metrics(
-            &archive_root,
-            &keyword_memory,
-            Some(loader_metrics.as_ref()),
-        );
-        tracing::info!(
-            archive_root = %root,
-            files_visited = initial.files_visited,
-            envelopes_parsed = initial.envelopes_parsed,
-            hits_seeded = initial.hits_seeded,
-            lines_dropped = initial.lines_dropped,
-            "archive loader: keyword lane seeded (boot)"
-        );
-
-        let refresh_secs = cfg.dashboard.archive_refresh_secs.max(1);
-        let lane = keyword_memory.clone();
-        let metrics_for_loop = loader_metrics.clone();
-        tokio::spawn(async move {
-            let interval = Duration::from_secs(refresh_secs);
-            loop {
-                tokio::time::sleep(interval).await;
-                let report = cortex_api::archive_loader::load_into_keyword_lane_with_metrics(
-                    &archive_root,
-                    &lane,
-                    Some(metrics_for_loop.as_ref()),
-                );
-                tracing::debug!(
-                    archive_root = %archive_root.display(),
-                    files_visited = report.files_visited,
-                    hits_seeded = report.hits_seeded,
-                    lines_dropped = report.lines_dropped,
-                    "archive loader: keyword lane refreshed"
-                );
-            }
-        });
-    }
+    // Archive decoding is an explicit opt-in with durable bounded progress.
+    // Daily-memory availability never depends on archive size or corruption.
+    cortex_api::lanes::archive_incremental::start(
+        cfg.ingestion.archive_incremental_enabled,
+        cfg.ingestion.archive_root.as_ref().map(PathBuf::from),
+        resolve_metadata_db_path(&cfg),
+        keyword_memory.clone(),
+        loader_metrics.clone(),
+        Duration::from_secs(cfg.dashboard.archive_refresh_secs.max(1)),
+    );
 
     // Pragmatic boot-time seed + periodic re-scan for non-Turn /
     // ToolCall / AgentCall envelopes. The cortex-ingestion archive
@@ -446,7 +419,7 @@ async fn main() -> Result<()> {
     // /v1/dashboard/decisions, /violations, /memory and /analyses
     // endpoints stop returning empty. Skips silently when the env
     // var is absent — cold-stack dev keeps working.
-    if let Some(meili_url) = cfg.meili.meili_url.clone() {
+    if let Some(meili_url) = cfg.meili.meili_url.clone().filter(|_| !cfg.is_daily()) {
         let meili_api_key = cfg.meili.meili_api_key.clone();
         match cortex_api::meili_loader::load_meili_into_keyword_lane_with_metrics(
             &meili_url,
@@ -615,7 +588,7 @@ async fn main() -> Result<()> {
     // (default `1`) so cold-stack tests can opt out without unsetting the
     // root env vars.
     let dashboard_bus = cortex_api::dashboard_watcher::DashboardEventBus::new();
-    let watch_enabled = cfg.dashboard.watch;
+    let watch_enabled = !cfg.is_daily() && cfg.dashboard.watch;
     let mut watcher_handles: Vec<cortex_api::dashboard_watcher::WatcherHandle> = Vec::new();
     if watch_enabled {
         for root in &rulebook_roots {
@@ -638,7 +611,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        tracing::info!("dashboard watcher: disabled by CORTEX_DASHBOARD_WATCH=false");
+        tracing::info!("dashboard watcher: disabled by runtime profile or dashboard.watch");
     }
 
     // Phase11n §2.5 — SQLite tail loop for `.rulebook/memory/memory.db`.
@@ -646,7 +619,7 @@ async fn main() -> Result<()> {
     // mtime jitter; this loop polls the database read-only at the same
     // 250 ms cadence and emits one `MemoryAppended` per genuinely-new
     // row. Gated by `CORTEX_DASHBOARD_MEMORY_TAIL` (default `1`).
-    let memory_tail_enabled = cfg.dashboard.memory_tail;
+    let memory_tail_enabled = !cfg.is_daily() && cfg.dashboard.memory_tail;
     let mut memory_tail_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     if watch_enabled && memory_tail_enabled {
         let run_flag =
@@ -666,7 +639,9 @@ async fn main() -> Result<()> {
             memory_tail_handles.push(handle);
         }
     } else if !memory_tail_enabled {
-        tracing::info!("dashboard memory tail: disabled by CORTEX_DASHBOARD_MEMORY_TAIL=false");
+        tracing::info!(
+            "dashboard memory tail: disabled by runtime profile or dashboard.memory_tail"
+        );
     }
     // Keep watchers alive for the daemon lifetime. Leaking is the right
     // shape here — the process owns them until it exits, and any other
@@ -740,7 +715,7 @@ async fn main() -> Result<()> {
         config_path = %relevance_path.display(),
         "fusion config resolved (relevance.toml + CORTEX_RRF_ALPHA / CORTEX_RRF_K)"
     );
-    let rewriter = resolve_query_rewriter_from_env();
+    let rewriter = resolve_query_rewriter(&cfg);
     let mut orchestrator = Orchestrator::new(vector, keyword.clone(), graph)
         .with_fusion(fusion)
         .with_rewriter(rewriter)
@@ -759,7 +734,7 @@ async fn main() -> Result<()> {
     // boot, so `orchestrator.reranker` stayed `None` and the step was
     // always skipped (the fused top-K — which already contains the correct
     // doc, recall@5=1.0 — was never re-scored).
-    if cfg.reranker.enabled {
+    if !cfg.is_daily() && cfg.reranker.enabled {
         match cfg
             .reranker
             .endpoint
@@ -816,7 +791,9 @@ async fn main() -> Result<()> {
             }
         }
     }
-    spawn_relevance_reload_task(orchestrator.clone(), relevance_path.clone());
+    if !cfg.is_daily() {
+        spawn_relevance_reload_task(orchestrator.clone(), relevance_path.clone());
+    }
     // Phase11e §6 — coverage snapshot handle, shared between the
     // boot-time audit (which writes the result here) and `/v1/status`
     // (which reads it). Empty until the audit completes; subsequent
@@ -838,8 +815,9 @@ async fn main() -> Result<()> {
     // `law_violation` envelopes on sustained drops. The watcher
     // owns its own aggregator history (independent from the HTTP
     // endpoint's) so the polling cadence stays predictable.
-    let silent_drop_cfg = cortex_api::silent_drop::SilentDropConfig::default();
-    if silent_drop_cfg.enabled {
+    let silent_drop_cfg =
+        (!cfg.is_daily()).then(cortex_api::silent_drop::SilentDropConfig::default);
+    if let Some(silent_drop_cfg) = silent_drop_cfg.filter(|config| config.enabled) {
         let watcher_lane = keyword_memory.clone();
         let interval = std::time::Duration::from_secs(silent_drop_cfg.poll_interval_secs.max(5));
         let watcher_aggregator =
@@ -866,7 +844,7 @@ async fn main() -> Result<()> {
             }
         });
     } else {
-        tracing::info!("silent-drop watcher disabled by config");
+        tracing::info!("silent-drop watcher disabled by runtime profile or config");
     }
 
     // Phase10k — always-on retention scheduler. Spawns a 30-s tick
@@ -881,10 +859,16 @@ async fn main() -> Result<()> {
     // metadata file isn't reachable (same precondition as the
     // dashboard ribbon) or when the operator opted out via
     // `CORTEX_RETENTION_DAEMON=disabled`.
-    cortex_api::retention_daemon::spawn(
-        metadata_path.clone(),
-        cortex_api::retention_daemon::SpawnOptions::default(),
-    );
+    if !cfg.is_daily() {
+        cortex_api::retention_daemon::spawn(
+            metadata_path.clone(),
+            cortex_api::retention_daemon::SpawnOptions::default(),
+        );
+    } else {
+        tracing::info!(
+            "daily runtime: retention scheduler disabled; existing jobs and data preserved"
+        );
+    }
 
     // Phase8f — opt-in synthetic canary runner. When
     // `CORTEX_CANARY_ENABLED=1`, fire a fake hook frame through the
@@ -893,7 +877,7 @@ async fn main() -> Result<()> {
     // On failure, emit a `law_violation` envelope via the same
     // path phase8e uses. Off by default — operators flip the env
     // var when they want quiet-hours regression coverage.
-    if cfg.canary.enabled {
+    if !cfg.is_daily() && cfg.canary.enabled {
         let canary_cfg = cortex_api::canary::CanaryConfig {
             enabled: true,
             interval_secs: cfg.canary.interval_secs.max(10),
@@ -912,7 +896,7 @@ async fn main() -> Result<()> {
             metadata_path.clone(),
         ));
     } else {
-        tracing::info!("canary runner disabled (set CORTEX_CANARY_ENABLED=true to enable)");
+        tracing::info!("canary runner disabled by runtime profile or canary.enabled");
     }
 
     // Phase11e — boot-time collection / index inventory diff. Logs
@@ -961,11 +945,14 @@ async fn main() -> Result<()> {
 
     tracing::info!(bind = %cli.bind, "cortex-api starting");
     let listener = tokio::net::TcpListener::bind(cli.bind).await?;
-    let app = cortex_api::build_router_with_auth_and_cfg(
+    let mut route_cfg = (*cfg).clone();
+    route_cfg.ingestion.metadata_db = Some(metadata_path.to_string_lossy().into_owned());
+    let app = cortex_api::http::build_router_with_memory_advice(
         service,
         Some(dashboard_state),
         api_keys_store,
-        cfg.clone(),
+        Arc::new(route_cfg),
+        true,
     );
     axum::serve(listener, app).await?;
     Ok(())
@@ -989,6 +976,9 @@ async fn audit_coverage_at_boot(
     keyword_memory: &Arc<cortex_api::MemoryKeywordLane>,
     cfg: &cortex_config::Config,
 ) -> Option<cortex_api::coverage::CoverageResponse> {
+    if cfg.is_daily() {
+        return None;
+    }
     use std::collections::BTreeSet;
     use std::time::Duration;
 
@@ -1180,6 +1170,9 @@ fn home_dir() -> PathBuf {
 /// or when the URL is unreachable — the dashboard graph endpoint
 /// then degrades to the synthetic-from-lane fallback.
 async fn build_nexus_client(cfg: &cortex_config::Config) -> Option<Arc<nexus_sdk::NexusClient>> {
+    if cfg.is_daily() {
+        return None;
+    }
     let url = cfg
         .nexus
         .nexus_url
@@ -1352,9 +1345,14 @@ fn spawn_relevance_reload_task(_orchestrator: Orchestrator, _path: PathBuf) {
 ///   behaviour (prompt copied verbatim to every lane).
 ///
 /// Unknown values log a `WARN` and fall back to `noun_phrase`.
-fn resolve_query_rewriter_from_env() -> Arc<dyn cortex_api::query_rewrite::QueryRewriter> {
+fn resolve_query_rewriter(
+    cfg: &cortex_config::Config,
+) -> Arc<dyn cortex_api::query_rewrite::QueryRewriter> {
     use cortex_api::query_rewrite::{NounPhraseRewriter, PassthroughRewriter, SonnetRewriter};
-    let cfg = cortex_config::Config::load().unwrap_or_default();
+    if cfg.is_daily() {
+        tracing::info!("daily runtime: deterministic noun-phrase query rewriter");
+        return Arc::new(NounPhraseRewriter::new());
+    }
     let raw = cfg
         .dashboard
         .query_rewriter
@@ -1379,8 +1377,92 @@ fn resolve_query_rewriter_from_env() -> Arc<dyn cortex_api::query_rewrite::Query
     );
     match strategy {
         "noun_phrase" => Arc::new(NounPhraseRewriter::new()),
-        "sonnet" => Arc::new(SonnetRewriter::from_env()),
+        "sonnet" => Arc::new(SonnetRewriter::new(resolve_sonnet_config(cfg))),
         "passthrough" => Arc::new(PassthroughRewriter),
         _ => unreachable!("strategy normalised above"),
+    }
+}
+
+fn resolve_sonnet_config(
+    cfg: &cortex_config::Config,
+) -> cortex_api::query_rewrite::SonnetRewriterConfig {
+    cortex_api::query_rewrite::SonnetRewriterConfig {
+        claude_bin: std::env::var("CLAUDE_CODE_BIN")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "claude".to_string()),
+        model: cfg
+            .dashboard
+            .rewriter_model
+            .clone()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "claude-sonnet-4-6".to_string()),
+        timeout: Duration::from_millis(
+            cfg.dashboard
+                .rewriter_timeout_ms
+                .filter(|value| *value >= 100)
+                .unwrap_or(1500),
+        ),
+        cache_ttl: Duration::from_secs(24 * 60 * 60),
+        cache_capacity: 4096,
+    }
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+    use cortex_api::types::Intent;
+    use cortex_config::{Config, RuntimeProfile};
+
+    #[tokio::test]
+    async fn daily_rewriter_ignores_configured_sonnet_and_remains_offline() {
+        let mut cfg = Config::default();
+        cfg.runtime.profile = RuntimeProfile::Daily;
+        cfg.dashboard.query_rewriter = Some("sonnet".to_string());
+        cfg.dashboard.rewriter_model = Some("must-not-run".to_string());
+        let rewritten = resolve_query_rewriter(&cfg)
+            .rewrite(
+                "How does src/auth.rs handle token_expiry?",
+                Intent::FreeSearch,
+            )
+            .await
+            .unwrap();
+        assert_eq!(rewritten.strategy, "noun_phrase");
+        assert!(rewritten.keyword_query.contains("src/auth.rs"));
+        assert!(rewritten.keyword_query.contains("token_expiry"));
+        assert_eq!(cfg.dashboard.query_rewriter.as_deref(), Some("sonnet"));
+    }
+
+    #[tokio::test]
+    async fn full_rewriter_honors_passed_snapshot_and_sonnet_options() {
+        let mut cfg = Config::default();
+        cfg.dashboard.query_rewriter = Some("passthrough".to_string());
+        cfg.dashboard.rewriter_model = Some("snapshot-model".to_string());
+        cfg.dashboard.rewriter_timeout_ms = Some(731);
+        let rewritten = resolve_query_rewriter(&cfg)
+            .rewrite("How does auth work?", Intent::FreeSearch)
+            .await
+            .unwrap();
+        assert_eq!(rewritten.strategy, "passthrough");
+        assert_eq!(rewritten.keyword_query, "How does auth work?");
+        let sonnet = resolve_sonnet_config(&cfg);
+        assert_eq!(sonnet.model, "snapshot-model");
+        assert_eq!(sonnet.timeout, Duration::from_millis(731));
+    }
+
+    #[tokio::test]
+    async fn daily_backend_factories_skip_even_invalid_full_stack_configuration() {
+        let mut cfg = Config::default();
+        cfg.runtime.profile = RuntimeProfile::Daily;
+        cfg.nexus.nexus_url = Some("not a URL".to_string());
+        cfg.embedder.vectorizer_url = Some("not a URL".to_string());
+        cfg.meili.meili_url = Some("not a URL".to_string());
+        assert!(build_nexus_client(&cfg).await.is_none());
+        assert!(
+            audit_coverage_at_boot(&Arc::new(MemoryKeywordLane::new()), &cfg)
+                .await
+                .is_none()
+        );
+        assert_eq!(cfg.nexus.nexus_url.as_deref(), Some("not a URL"));
     }
 }

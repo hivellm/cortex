@@ -33,10 +33,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
         "CORTEX_ACCESS_CONTROL_DENY_ON_MISSING_PRINCIPAL",
         "/access_control/deny_on_missing_principal",
     ),
-    (
-        "CORTEX_ACCESS_CONTROL_ENABLED",
-        "/access_control/enabled",
-    ),
+    ("CORTEX_ACCESS_CONTROL_ENABLED", "/access_control/enabled"),
     ("CORTEX_ADAPTER_ADMIN_PORT", "/adapter/adapter_admin_port"),
     ("CORTEX_ADAPTER_DISABLE", "/adapter/adapter_disable"),
     ("CORTEX_ADAPTER_HTTP_BIND", "/adapter/http_bind"),
@@ -51,6 +48,10 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_API_SYNAP_URL", "/dashboard/synap_url"),
     ("CORTEX_API_TOKEN", "/dashboard/api_token"),
     ("CORTEX_API_URL", "/dashboard/api_url"),
+    (
+        "CORTEX_ARCHIVE_INCREMENTAL_ENABLED",
+        "/ingestion/archive_incremental_enabled",
+    ),
     (
         "CORTEX_ARCHIVE_REFRESH_SECS",
         "/dashboard/archive_refresh_secs",
@@ -220,6 +221,7 @@ pub const KNOWN_ENV_NAMES: &[(&str, &str)] = &[
     ("CORTEX_RRF_K", "/dashboard/rrf_k"),
     ("CORTEX_RULEBOOK_ROOT", "/rulebook/root"),
     ("CORTEX_RULEBOOK_ROOTS", "/rulebook/roots"),
+    ("CORTEX_RUNTIME_PROFILE", "/runtime/profile"),
     ("CORTEX_SYNAP_URL", "/ingestion/synap_url"),
     // Phase18 §3.4 — temporal classifier knobs (sorted alphabetically
     // among `CORTEX_T*` keys; the binary-search assertion in

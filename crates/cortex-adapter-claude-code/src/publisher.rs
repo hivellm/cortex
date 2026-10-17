@@ -23,6 +23,11 @@ use cortex_core::events::Envelope;
 /// Publisher trait so tests use a recording fake.
 #[async_trait]
 pub trait Publisher: Send + Sync {
+    /// Whether hook envelopes should be built and published at all.
+    fn enabled(&self) -> bool {
+        true
+    }
+
     /// Push an event onto the publisher. Returns the queue depth
     /// after enqueue. Implementations may drop oldest under pressure.
     async fn publish(&self, event: Envelope) -> usize;
@@ -35,11 +40,35 @@ pub trait Publisher: Send + Sync {
     fn queue_depth(&self) -> usize;
 }
 
+/// Disabled bulk capture: no queue, HTTP client, retry task, or WAL.
+#[derive(Default)]
+pub struct DisabledPublisher;
+
+#[async_trait]
+impl Publisher for DisabledPublisher {
+    fn enabled(&self) -> bool {
+        false
+    }
+
+    async fn publish(&self, _event: Envelope) -> usize {
+        0
+    }
+
+    async fn flush(&self) -> usize {
+        0
+    }
+
+    fn queue_depth(&self) -> usize {
+        0
+    }
+}
+
 /// Live HTTP publisher.
 pub struct HttpPublisher {
     client: Client,
     endpoint: String,
     queue: Arc<tokio::sync::Mutex<std::collections::VecDeque<Envelope>>>,
+    flush_lock: tokio::sync::Mutex<()>,
     queue_bounded: usize,
     batch_size: usize,
     max_retry: u32,
@@ -77,6 +106,7 @@ impl HttpPublisher {
             client,
             endpoint: endpoint.into(),
             queue: Arc::new(tokio::sync::Mutex::new(std::collections::VecDeque::new())),
+            flush_lock: tokio::sync::Mutex::new(()),
             queue_bounded: queue_bounded.max(1),
             batch_size: 32,
             max_retry: 3,
@@ -139,17 +169,7 @@ impl HttpPublisher {
         q.push_back(event);
     }
 
-    async fn flush_locked(&self, q: &mut std::collections::VecDeque<Envelope>) -> usize {
-        if q.is_empty() {
-            return 0;
-        }
-        let take = q.len().min(self.batch_size);
-        let mut batch: Vec<Envelope> = Vec::with_capacity(take);
-        for _ in 0..take {
-            if let Some(e) = q.pop_front() {
-                batch.push(e);
-            }
-        }
+    async fn flush_batch(&self, batch: Vec<Envelope>) -> usize {
         let n = batch.len();
         match self.post_batch(&batch).await {
             Ok(report) => {
@@ -372,14 +392,20 @@ impl Publisher for HttpPublisher {
     }
 
     async fn flush(&self) -> usize {
+        // Serialize send/retry order without making prompt-side enqueue wait
+        // for the ingestion service. At most one bounded batch is in flight.
+        let _flush = self.flush_lock.lock().await;
         let mut total = 0usize;
         loop {
-            let mut q = self.queue.lock().await;
-            let n = self.flush_locked(&mut q).await;
-            if n == 0 {
+            let batch = {
+                let mut queue = self.queue.lock().await;
+                let count = queue.len().min(self.batch_size);
+                queue.drain(..count).collect::<Vec<_>>()
+            };
+            if batch.is_empty() {
                 break;
             }
-            total += n;
+            total += self.flush_batch(batch).await;
         }
         total
     }
@@ -447,4 +473,222 @@ pub fn spawn_flusher(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{build_event, HookFrame, HookKind};
+    use crate::session::SessionManager;
+
+    fn event(prompt: &str) -> Envelope {
+        build_event(
+            HookKind::UserPromptSubmit,
+            &HookFrame {
+                hook: "UserPromptSubmit".into(),
+                session_id: Some("publisher-fixture".into()),
+                cwd: None,
+                payload: json!({"prompt":prompt}),
+            },
+            &SessionManager::new(),
+            1,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn disabled_publisher_retains_no_events_or_queue() {
+        let publisher = DisabledPublisher;
+        assert!(!publisher.enabled());
+        for _ in 0..16 {
+            assert_eq!(publisher.publish(event("ignored bulk payload")).await, 0);
+        }
+        assert_eq!(publisher.flush().await, 0);
+        assert_eq!(publisher.queue_depth(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn stalled_http_flush_does_not_block_enqueue_and_concurrent_flushes_keep_fifo() {
+        use axum::{http::StatusCode, routing::post, Json, Router};
+        use tokio::sync::Semaphore;
+
+        let directory = tempfile::tempdir().unwrap();
+        let entered = Arc::new(Semaphore::new(0));
+        let release = Arc::new(Semaphore::new(0));
+        let received = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
+        let app = Router::new().route(
+            "/v1/events/batch",
+            post({
+                let entered = entered.clone();
+                let release = release.clone();
+                let received = received.clone();
+                move |Json(body): Json<Value>| {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    let received = received.clone();
+                    async move {
+                        let ids = body["events"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|event| event["event_id"].as_str().unwrap().to_owned())
+                            .collect::<Vec<_>>();
+                        let count = ids.len();
+                        received.lock().unwrap().push(ids);
+                        entered.add_permits(1);
+                        release.acquire().await.unwrap().forget();
+                        (
+                            StatusCode::ACCEPTED,
+                            Json(json!({"accepted":count,"rejected":0,"errors":[]})),
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
+        let wal = Arc::new(OverflowWal::open(directory.path().join("overflow.wal")).unwrap());
+        let publisher = Arc::new(HttpPublisher::new(
+            endpoint,
+            2,
+            Duration::from_secs(5),
+            wal.clone(),
+            Arc::new(Metrics::new()),
+        ));
+        let first = event("first");
+        let second = event("second");
+        let third = event("third");
+        let expected = [
+            first.event_id.clone(),
+            second.event_id.clone(),
+            third.event_id.clone(),
+        ];
+        publisher.publish(first).await;
+        let first_flush = tokio::spawn({
+            let publisher = publisher.clone();
+            async move { publisher.flush().await }
+        });
+        tokio::time::timeout(Duration::from_secs(3), entered.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+
+        // The backend has received the first batch but deliberately withholds
+        // its response. Prompt publication must still finish well below 600 ms.
+        let depth = tokio::time::timeout(Duration::from_millis(250), async {
+            publisher.publish(second).await;
+            publisher.publish(third).await
+        })
+        .await
+        .expect("prompt enqueue waited on an ingestion HTTP response");
+        assert_eq!(depth, 2);
+        assert_eq!(publisher.queue_depth(), 2);
+        let second_flush = tokio::spawn({
+            let publisher = publisher.clone();
+            async move { publisher.flush().await }
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_millis(30), entered.acquire())
+                .await
+                .is_err(),
+            "another flush overtook the pending first batch"
+        );
+        release.add_permits(1);
+        tokio::time::timeout(Duration::from_secs(3), entered.acquire())
+            .await
+            .unwrap()
+            .unwrap()
+            .forget();
+        assert_eq!(
+            *received.lock().unwrap(),
+            vec![
+                vec![expected[0].clone()],
+                vec![expected[1].clone(), expected[2].clone()]
+            ]
+        );
+        release.add_permits(1);
+        let (first_count, second_count) = tokio::time::timeout(Duration::from_secs(3), async {
+            (first_flush.await.unwrap(), second_flush.await.unwrap())
+        })
+        .await
+        .unwrap();
+        assert_eq!(first_count + second_count, 3);
+        assert_eq!(publisher.queue_depth(), 0);
+        assert_eq!(wal.size_bytes(), 0);
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn failed_detached_batch_remains_replayable_and_overflow_keeps_oldest_event() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let directory = tempfile::tempdir().unwrap();
+        let upstream = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/batch"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let wal = Arc::new(OverflowWal::open(directory.path().join("overflow.wal")).unwrap());
+        let mut publisher = HttpPublisher::new(
+            upstream.uri(),
+            2,
+            Duration::from_secs(2),
+            wal.clone(),
+            Arc::new(Metrics::new()),
+        );
+        publisher.max_retry = 1;
+        let first = event("overflow oldest");
+        let second = event("failed batch first");
+        let third = event("failed batch second");
+        let expected = [
+            first.event_id.clone(),
+            second.event_id.clone(),
+            third.event_id.clone(),
+        ];
+        publisher.publish(first).await;
+        publisher.publish(second).await;
+        assert_eq!(publisher.publish(third).await, 2);
+        assert!(
+            wal.size_bytes() > 0,
+            "overflow must persist the oldest event"
+        );
+        assert_eq!(publisher.flush().await, 2);
+        assert_eq!(publisher.queue_depth(), 0);
+        upstream.verify().await;
+        upstream.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/events/batch"))
+            .respond_with(ResponseTemplate::new(202).set_body_json(json!({
+                "accepted":3,"rejected":0,"errors":[]
+            })))
+            .expect(1)
+            .mount(&upstream)
+            .await;
+        let replay = HttpPublisher::new(
+            upstream.uri(),
+            3,
+            Duration::from_secs(2),
+            wal.clone(),
+            Arc::new(Metrics::new()),
+        );
+        assert_eq!(replay.replay_wal().await, 3);
+        assert_eq!(replay.flush().await, 3);
+        let requests = upstream.received_requests().await.unwrap();
+        let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+        let ids = body["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["event_id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(wal.size_bytes(), 0);
+        upstream.verify().await;
+    }
 }

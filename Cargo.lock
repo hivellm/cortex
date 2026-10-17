@@ -605,6 +605,7 @@ dependencies = [
  "cortex-core",
  "cortex-health",
  "cortex-pre-thinking",
+ "cortex-storage",
  "criterion",
  "once_cell",
  "reqwest 0.12.28",
@@ -813,12 +814,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "clap",
  "cortex-api",
  "cortex-build",
  "cortex-config",
  "cortex-pre-thinking",
+ "cortex-storage",
  "jsonschema",
  "reqwest 0.12.28",
  "serde",
@@ -837,8 +840,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "chrono",
  "cortex-api",
+ "cortex-config",
  "cortex-core",
  "regex",
  "reqwest 0.12.28",
@@ -848,7 +853,9 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -859,6 +866,7 @@ dependencies = [
  "chrono",
  "cortex-core",
  "once_cell",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

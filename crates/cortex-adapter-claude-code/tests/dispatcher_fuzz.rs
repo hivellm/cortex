@@ -58,7 +58,7 @@ impl Lcg {
     }
 }
 
-fn random_value(rng: &mut Lcg, depth: u8) -> Value {
+fn random_value(rng: &mut Lcg, depth: u8, cwd: &std::path::Path) -> Value {
     if depth >= 3 {
         return match rng.next() % 4 {
             0 => Value::Null,
@@ -79,14 +79,14 @@ fn random_value(rng: &mut Lcg, depth: u8) -> Value {
         }
         6 => {
             let n = (rng.next() % 5) as usize;
-            let arr: Vec<Value> = (0..n).map(|_| random_value(rng, depth + 1)).collect();
+            let arr: Vec<Value> = (0..n).map(|_| random_value(rng, depth + 1, cwd)).collect();
             Value::Array(arr)
         }
         7 => {
             let n = (rng.next() % 5) as usize;
             let mut m = serde_json::Map::new();
             for i in 0..n {
-                m.insert(format!("k{i}"), random_value(rng, depth + 1));
+                m.insert(format!("k{i}"), random_value(rng, depth + 1, cwd));
             }
             Value::Object(m)
         }
@@ -107,8 +107,8 @@ fn random_value(rng: &mut Lcg, depth: u8) -> Value {
             json!({
                 "hook": hook,
                 "session_id": format!("sess-{}", rng.next() % 100),
-                "cwd": format!("/tmp/path-{}", rng.next() % 10),
-                "payload": random_value(rng, depth + 1),
+                "cwd": cwd.join(format!("path-{}", rng.next() % 10)),
+                "payload": random_value(rng, depth + 1, cwd),
             })
         }
     }
@@ -116,11 +116,18 @@ fn random_value(rng: &mut Lcg, depth: u8) -> Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn dispatcher_survives_100_random_hook_payloads() {
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    std::fs::write(
+        repo.path().join("cortex.toml"),
+        "[cortex]\nid='Fuzz/Test'\n",
+    )
+    .unwrap();
     let dispatcher = build_dispatcher();
     let mut rng = Lcg::new(0x14_5eed_deca_u64);
     let mut handled = 0usize;
     for _ in 0..100 {
-        let value = random_value(&mut rng, 0);
+        let value = random_value(&mut rng, 0, repo.path());
         // Either the random value is already a frame-shaped
         // object or we wrap it as the payload of a frame so the
         // dispatcher sees something that looks-ish like a hook
@@ -139,7 +146,7 @@ async fn dispatcher_survives_100_random_hook_payloads() {
             json!({
                 "hook": hook,
                 "session_id": format!("sess-{}", rng.next() % 100),
-                "cwd": format!("/tmp/path-{}", rng.next() % 10),
+                "cwd": repo.path().join(format!("path-{}", rng.next() % 10)),
                 "payload": value,
             })
         };

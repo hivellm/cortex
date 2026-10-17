@@ -134,7 +134,13 @@ impl Server {
         }
     }
 
-    fn handle_initialize(&self, id: Value, _params: Value) -> Response {
+    fn handle_initialize(&self, id: Value, params: Value) -> Response {
+        self.ctx.record_client_name(
+            params
+                .get("clientInfo")
+                .and_then(|info| info.get("name"))
+                .and_then(Value::as_str),
+        );
         let info = ServerInfo::default();
         Response::success(
             id,
@@ -265,17 +271,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_returns_forty_one_descriptors() {
+    async fn tools_list_returns_forty_two_descriptors() {
         let s = make_server();
         let req = br#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let raw = s.handle_frame(req).await.expect("response");
         let v: Value = serde_json::from_slice(&raw).unwrap();
         let arr = v["result"]["tools"].as_array().expect("tools array");
-        assert_eq!(
-            arr.len(),
-            41,
-            "phase29 mcp-surface adds cortex_capabilities (40 -> 41)"
-        );
+        assert_eq!(arr.len(), 42, "daily memory adds cortex_memory_read");
         let names: Vec<&str> = arr.iter().map(|t| t["name"].as_str().unwrap()).collect();
         for expected in [
             "cortex_query",
@@ -283,6 +285,7 @@ mod tests {
             "cortex_status",
             "cortex_audit",
             "cortex_capture_memory",
+            "cortex_memory_read",
             "cortex_session_replay",
             "cortex_forget",
             "cortex_active_work",

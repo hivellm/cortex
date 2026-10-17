@@ -3,7 +3,7 @@
 //!
 //! - `serve`: stdio JSON-RPC bridge.
 //! - `validate <plugin-dir>`: lint the plugin asset tree.
-//! - `print-tool-descriptors`: dump the three MCP descriptors as
+//! - `print-tool-descriptors`: dump the configured profile's MCP descriptors as
 //!   formatted JSON for debugging.
 
 use std::path::PathBuf;
@@ -39,18 +39,19 @@ enum Cmd {
         /// Path to the plugin directory.
         plugin_dir: PathBuf,
     },
-    /// Print the three MCP tool descriptors as pretty JSON.
+    /// Print the configured profile's MCP tool descriptors as pretty JSON.
     PrintToolDescriptors,
 }
 
-fn resolve_api_url(cli_override: Option<String>) -> String {
-    cli_override
-        .or_else(|| {
-            cortex_config::Config::load()
-                .ok()
-                .and_then(|c| c.dashboard.api_url)
-        })
-        .unwrap_or_else(|| cortex_mcp_server::DEFAULT_API_URL.to_string())
+fn tool_context(cli_override: Option<String>, config: cortex_config::Config) -> ToolContext {
+    let api_url = cli_override
+        .or(config.dashboard.api_url)
+        .unwrap_or_else(|| cortex_mcp_server::DEFAULT_API_URL.to_string());
+    let context = ToolContext::new(api_url);
+    match config.dashboard.api_token.filter(|token| !token.is_empty()) {
+        Some(token) => context.with_api_key(token),
+        None => context,
+    }
 }
 
 #[tokio::main]
@@ -60,9 +61,12 @@ async fn main() -> std::io::Result<()> {
 
     match cli.cmd {
         Cmd::Serve => {
-            let api_url = resolve_api_url(cli.api_url);
-            tracing::info!(api_url = %api_url, "cortex-mcp-server starting on stdio");
-            let server = Arc::new(Server::new(ToolContext::new(api_url)));
+            let config = cortex_config::Config::load().map_err(std::io::Error::other)?;
+            let profile = config.runtime.profile;
+            let registry = ToolRegistry::for_profile(profile);
+            let context = tool_context(cli.api_url, config);
+            tracing::info!(api_url = %context.api_url, runtime_profile = ?profile, tools = registry.len(), "cortex-mcp-server starting on stdio");
+            let server = Arc::new(Server::with_registry(context, registry));
             cortex_mcp_server::transport_stdio::run(server).await
         }
         Cmd::Validate { plugin_dir } => {
@@ -71,7 +75,8 @@ async fn main() -> std::io::Result<()> {
             std::process::exit(code);
         }
         Cmd::PrintToolDescriptors => {
-            let registry = ToolRegistry::default_set();
+            let config = cortex_config::Config::load().map_err(std::io::Error::other)?;
+            let registry = ToolRegistry::for_profile(config.runtime.profile);
             let pretty = serde_json::to_string_pretty(&registry.descriptors())
                 .expect("serialise descriptors");
             println!("{pretty}");
@@ -91,4 +96,30 @@ fn init_tracing() {
         )
         .json()
         .try_init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_context_forwards_configured_token_and_preserves_url_override() {
+        let mut config = cortex_config::Config::default();
+        config.dashboard.api_url = Some("http://127.0.0.1:17001".into());
+        config.dashboard.api_token = Some("synthetic-token".into());
+        let context = tool_context(Some("http://127.0.0.1:17002".into()), config);
+        assert_eq!(context.api_url, "http://127.0.0.1:17002");
+        assert_eq!(context.api_key.as_deref(), Some("synthetic-token"));
+    }
+
+    #[test]
+    fn absent_or_empty_configured_token_keeps_anonymous_transport() {
+        for token in [None, Some(String::new())] {
+            let mut config = cortex_config::Config::default();
+            config.dashboard.api_token = token;
+            let context = tool_context(None, config);
+            assert_eq!(context.api_url, cortex_mcp_server::DEFAULT_API_URL);
+            assert!(context.api_key.is_none());
+        }
+    }
 }

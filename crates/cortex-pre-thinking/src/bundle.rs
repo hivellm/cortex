@@ -31,9 +31,7 @@ pub fn filter_snippets_by_acl(snippets: &mut Vec<Snippet>, principal: Option<&Pr
         None => return,
     };
 
-    snippets.retain(|s| {
-        can_read(acl, s.class_level.unwrap_or(0), &s.class_compartments)
-    });
+    snippets.retain(|s| can_read(acl, s.class_level.unwrap_or(0), &s.class_compartments));
 }
 
 #[cfg(test)]

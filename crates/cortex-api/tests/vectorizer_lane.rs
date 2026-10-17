@@ -362,7 +362,11 @@ async fn acl_filter_drops_hit_above_principal_clearance() {
         compartment_grants: vec![],
     });
     let hits = lane.search(&req).await.unwrap();
-    assert_eq!(hits.len(), 1, "restricted hit must be dropped by ACL filter");
+    assert_eq!(
+        hits.len(),
+        1,
+        "restricted hit must be dropped by ACL filter"
+    );
     assert_eq!(hits[0].text, "public doc");
 }
 
@@ -388,7 +392,11 @@ async fn no_acl_context_passes_all_hits_through() {
     let lane = VectorizerLane::new(server.uri(), None).unwrap();
     let req = vec_request("no-acl"); // acl: None
     let hits = lane.search(&req).await.unwrap();
-    assert_eq!(hits.len(), 1, "without ACL context, restricted hit passes through");
+    assert_eq!(
+        hits.len(),
+        1,
+        "without ACL context, restricted hit passes through"
+    );
 }
 
 /// Compartment check: a hit with `class_compartments = ["hr"]` is dropped
@@ -431,7 +439,11 @@ async fn acl_filter_drops_hit_missing_required_compartment() {
         compartment_grants: vec!["financial".to_string()],
     });
     let hits = lane.search(&req).await.unwrap();
-    assert_eq!(hits.len(), 1, "hr hit must be dropped; financial hit must pass");
+    assert_eq!(
+        hits.len(),
+        1,
+        "hr hit must be dropped; financial hit must pass"
+    );
     assert_eq!(hits[0].text, "financial doc");
 }
 

@@ -15,6 +15,7 @@
 pub mod breaker;
 pub mod budget;
 pub mod bundle;
+pub mod daily_memory;
 pub mod formatter;
 pub mod health_source;
 pub mod implicit_feedback;
@@ -26,11 +27,13 @@ pub mod scope;
 
 pub use budget::{clip_to_budget, ClippedBundle, TrimStep};
 pub use bundle::filter_snippets_by_acl;
+pub use daily_memory::{DailyMemoryContext, DailyMemoryFn, DailyMemoryRequest, HttpDailyMemory};
 pub use formatter::{clip_utf8, format_bundle, section_caps, FormatOptions, SnippetTrim};
 pub use intent_select::{select as select_intent, select_with, Rule, DEFAULT_RULES};
 pub use metrics::Metrics;
 pub use pipeline::{
-    run, ClosureQueryFn, PreThinkingBudget, PreThinkingInput, PreThinkingOutput, QueryFn,
+    run, run_with_breaker_and_memory, run_with_memory, ClosureQueryFn, PreThinkingBudget,
+    PreThinkingInput, PreThinkingOutput, QueryFn,
 };
 pub use scope::{
     derive as derive_scope, extract_prompt_files, repo_from_cwd, DerivedScope, FileStatus,

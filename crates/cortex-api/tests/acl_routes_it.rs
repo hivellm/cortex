@@ -16,8 +16,8 @@
 use std::sync::{Arc, RwLock};
 
 use axum::body::to_bytes;
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use cortex_api::{
     build_router, AclStore, AuditStore, InMemoryCache, MemoryAuditPublisher, MemoryGraphLane,
     MemoryKeywordLane, MemoryVectorLane, Orchestrator, PrincipalStore, QueryService, RateConfig,
@@ -108,8 +108,14 @@ async fn whoami_deny_by_default_returns_public_only() {
         0,
         "deny-by-default returns clearance_level=0; body={body}"
     );
-    let comps = body["compartment_grants"].as_array().cloned().unwrap_or_default();
-    assert!(comps.is_empty(), "deny-by-default: no compartments; body={body}");
+    let comps = body["compartment_grants"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        comps.is_empty(),
+        "deny-by-default: no compartments; body={body}"
+    );
 }
 
 /// Phase21 §6.2 — GET /v1/acl/roles returns all bindings sorted by name.
@@ -222,8 +228,12 @@ async fn role_create_and_list_for_acl_admin() {
     let list_resp = router.oneshot(get("/v1/acl/roles")).await.unwrap();
     assert_eq!(list_resp.status(), StatusCode::OK);
     let list_body = json_body(list_resp).await;
-    let roles = list_body["roles"].as_array().expect("roles must be an array");
-    let found = roles.iter().any(|r| r["name"].as_str() == Some("security-eng"));
+    let roles = list_body["roles"]
+        .as_array()
+        .expect("roles must be an array");
+    let found = roles
+        .iter()
+        .any(|r| r["name"].as_str() == Some("security-eng"));
     assert!(
         found,
         "'security-eng' must appear in the role list after creation; body={list_body}"

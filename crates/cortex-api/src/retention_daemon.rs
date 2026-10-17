@@ -9,15 +9,14 @@
 //! This module owns the daemon-side wiring. On boot the cortex-api
 //! main:
 //!
-//! 1. Calls [`spawn`] with the shared `MetadataStore`.
-//! 2. The spawn helper seeds the eight default cron rows (idempotent
-//!    — operators who disabled a row keep their setting across
-//!    restarts), then launches a `tokio::time::interval` loop that
-//!    invokes [`cortex_workers::retention::scheduler::tick`] every
+//! 1. Calls [`spawn`] with the metadata database path.
+//! 2. The spawn helper calls [`seed_defaults`], then starts its own
+//!    `tokio::time::interval` loop driving [`run_one_tick`] every
 //!    [`DEFAULT_TICK_INTERVAL_SECS`] seconds.
-//! 3. The runner is [`ProcessRunner`], so each due row spawns the
-//!    matching `cortex-ops <subcommand>` and inherits PATH from the
-//!    daemon. Output is captured + persisted to the `cron_jobs` row.
+//! 3. Each tick uses the scheduler's shared [`select_auto_runnable_jobs`]
+//!    policy to disable and exclude retired automatic jobs, even if
+//!    boot seeding failed. [`ProcessRunner`] executes eligible commands
+//!    with the daemon's PATH; outcomes persist to `cron_jobs`.
 //!
 //! Operators can opt the daemon out via
 //! `CORTEX_RETENTION_DAEMON=disabled`. Useful for CI, single-shot
@@ -33,8 +32,8 @@ use std::time::Duration as StdDuration;
 use chrono::{DateTime, Utc};
 use cortex_storage::{CronJob, MetadataStore};
 use cortex_workers::retention::scheduler::{
-    next_after, seed_defaults, ProcessRunner, RunOutcome, Runner, Scheduler, TickReport,
-    DEFAULT_TICK_INTERVAL_SECS,
+    next_after, seed_defaults, select_auto_runnable_jobs, ProcessRunner, RunOutcome, Runner,
+    Scheduler, TickReport, DEFAULT_TICK_INTERVAL_SECS,
 };
 
 /// Env var honoured at boot: `disabled` (case-insensitive) keeps
@@ -75,11 +74,11 @@ impl Default for SpawnOptions {
 ///
 /// 1. `rusqlite::Connection` carries `RefCell` interior state, so
 ///    it is `Send` but not `Sync`. Holding a `tokio::sync::Mutex`
-///    guard across the `tick(...).await` boundary requires the
+///    guard across the runner's await boundary requires the
 ///    inner type to be `Sync` (the guard derefs to `&T` which the
 ///    future state machine shares between yields).
 /// 2. SQLite WAL handles cross-connection concurrency natively. A
-///    fresh connection per 30-s tick is ~1 ms of overhead and lets
+///    fresh connection per tick lets
 ///    the dashboard, the daemon, and the operator-driven CLI all
 ///    drive the same on-disk DB without fighting over a single
 ///    in-process handle.
@@ -91,8 +90,8 @@ pub fn spawn(metadata_path: PathBuf, opts: SpawnOptions) -> Option<tokio::task::
         return None;
     }
 
-    // Seed the default rows once on boot. Idempotent — re-seeding
-    // after a restart never overwrites operator-tuned schedules.
+    // Seed defaults and apply reconciliation/retirement on boot. Tick-time
+    // selection independently enforces the automatic-job safety policy.
     seed_with_fresh_connection(&metadata_path);
 
     Some(spawn_loop(metadata_path, opts))
@@ -142,7 +141,7 @@ fn spawn_loop(metadata_path: PathBuf, opts: SpawnOptions) -> tokio::task::JoinHa
 }
 
 /// One scheduler tick driven by [`spawn_loop`]. Cannot reuse the
-/// `cortex-retention::scheduler::tick` helper because that one
+/// `cortex_workers::retention::scheduler::tick` helper because that one
 /// holds `&MetadataStore` across the `runner.run().await` boundary,
 /// and `MetadataStore` carries a `RefCell` (rusqlite internals)
 /// that makes it `Send + !Sync`. The loop here drops the
@@ -210,8 +209,10 @@ async fn run_one_tick(metadata_path: &Path, scheduler: &Scheduler, runner: &dyn 
 fn list_due(metadata_path: &Path, now: DateTime<Utc>) -> Result<Vec<CronJob>, anyhow::Error> {
     let store = MetadataStore::open(metadata_path)?;
     cortex_storage::apply_phase9k_schema(store.conn())?;
-    let due = store.select_due_cron_jobs(now)?;
-    Ok(due)
+    // This daemon executes commands directly rather than through scheduler::tick.
+    // Apply the same safety policy even if startup seeding failed or an old row
+    // remains enabled. Selection also filters concurrent re-enables.
+    Ok(select_auto_runnable_jobs(&store, now)?)
 }
 
 fn persist_outcome(
@@ -359,5 +360,106 @@ mod tests {
         assert_eq!(job.last_status.as_deref(), Some("success"));
         let next = job.next_run_at.expect("next_run_at advanced");
         assert!(next > Utc::now().to_rfc3339() || next.starts_with("2"));
+    }
+
+    #[tokio::test]
+    async fn run_one_tick_blocks_legacy_memory_rewrite_without_seeding() {
+        use cortex_workers::retention::scheduler::MemoryRunner;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.sqlite");
+        let mut before = {
+            let store = MetadataStore::open(&path).unwrap();
+            cortex_storage::apply_phase9k_schema(store.conn()).unwrap();
+            let past = (Utc::now() - chrono::Duration::seconds(120)).to_rfc3339();
+            for (name, command) in [
+                (
+                    "retention.memory_consolidate",
+                    "cortex-ops memory-consolidate --apply",
+                ),
+                ("retention.sweep", "cortex-ops retention-sweep"),
+            ] {
+                store
+                    .upsert_cron_job_if_absent(name, "0 3 * * *", command, true, &past)
+                    .unwrap();
+            }
+            // These legacy history fields bypass ordinary default reconciliation.
+            store
+                .conn()
+                .execute(
+                    "UPDATE cron_jobs SET failure_streak = 2, last_warning_at = ?1,
+                            last_status = 'failed', last_error = 'previous failure'
+                      WHERE name = 'retention.memory_consolidate'",
+                    [&past],
+                )
+                .unwrap();
+            store
+                .get_cron_job("retention.memory_consolidate")
+                .unwrap()
+                .unwrap()
+        };
+
+        let runner = MemoryRunner::new();
+        run_one_tick(&path, &Scheduler::new(), &runner).await;
+
+        assert_eq!(runner.spawned().await, ["cortex-ops retention-sweep"]);
+        let store = MetadataStore::open(&path).unwrap();
+        before.enabled = false;
+        assert_eq!(
+            store
+                .get_cron_job("retention.memory_consolidate")
+                .unwrap()
+                .unwrap(),
+            before,
+            "safety retirement must only disable the row and preserve its history"
+        );
+        assert_eq!(
+            store
+                .get_cron_job("retention.sweep")
+                .unwrap()
+                .unwrap()
+                .last_status
+                .as_deref(),
+            Some("success")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_one_tick_blocks_memory_rewrite_reenabled_after_seeding() {
+        use cortex_workers::retention::scheduler::MemoryRunner;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.sqlite");
+        {
+            let store = MetadataStore::open(&path).unwrap();
+            let now = Utc::now();
+            seed_defaults(&store, now).unwrap();
+            store
+                .set_cron_job_enabled("retention.memory_consolidate", true)
+                .unwrap();
+            store
+                .set_cron_job_schedule(
+                    "retention.memory_consolidate",
+                    "0 7 * * 0",
+                    &(now - chrono::Duration::seconds(120)).to_rfc3339(),
+                )
+                .unwrap();
+        }
+
+        let runner = MemoryRunner::new();
+        let scheduler = Scheduler::new();
+        // Each tick reopens the database, as after a process restart.
+        run_one_tick(&path, &scheduler, &runner).await;
+        run_one_tick(&path, &scheduler, &runner).await;
+
+        assert!(runner.spawned().await.is_empty());
+        let store = MetadataStore::open(&path).unwrap();
+        let job = store
+            .get_cron_job("retention.memory_consolidate")
+            .unwrap()
+            .unwrap();
+        assert!(!job.enabled);
+        assert!(job.last_run_at.is_none());
+        assert!(job.last_status.is_none());
     }
 }

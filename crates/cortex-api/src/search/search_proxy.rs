@@ -285,7 +285,7 @@ pub async fn handle_keyword_search(
     // active. No-op when `access_control.enabled = false` (ADR-1.3).
     if state.cfg.access_control.enabled
         && state.service.principal_store.is_some()
-        && crate::principal_resolver::deny_on_missing_principal()
+        && state.cfg.access_control.deny_on_missing_principal
         && !crate::principal_resolver::has_explicit_auth(&headers)
     {
         return json_err(
@@ -469,7 +469,7 @@ pub async fn handle_vector_search(
     // active. No-op when `access_control.enabled = false` (ADR-1.3).
     if state.cfg.access_control.enabled
         && state.service.principal_store.is_some()
-        && crate::principal_resolver::deny_on_missing_principal()
+        && state.cfg.access_control.deny_on_missing_principal
         && !crate::principal_resolver::has_explicit_auth(&headers)
     {
         return json_err(
@@ -670,7 +670,7 @@ pub async fn handle_graph_query(
     // active. No-op when `access_control.enabled = false` (ADR-1.3).
     if state.cfg.access_control.enabled
         && state.service.principal_store.is_some()
-        && crate::principal_resolver::deny_on_missing_principal()
+        && state.cfg.access_control.deny_on_missing_principal
         && !crate::principal_resolver::has_explicit_auth(&headers)
     {
         return json_err(

@@ -29,7 +29,7 @@ const entry = {
   command: "cortex-mcp-server",
   args: ["serve"],
   env: {
-    CORTEX_API_URL: process.env.CORTEX_API_URL || "http://127.0.0.1:15011",
+    CORTEX_API_URL: process.env.CORTEX_API_URL || "http://127.0.0.1:17000",
     CORTEX_ADAPTER_SOCK:
       process.env.CORTEX_ADAPTER_SOCK || "~/.cortex/adapter-claude.sock",
   },

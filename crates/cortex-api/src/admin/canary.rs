@@ -471,7 +471,10 @@ fn build_failure_alert_envelope(
     outcome: &CanaryOutcome,
     now: &str,
 ) -> serde_json::Value {
-    let message = format!("canary tick failed for hook '{hook}': {}", outcome.describe());
+    let message = format!(
+        "canary tick failed for hook '{hook}': {}",
+        outcome.describe()
+    );
     let content_hash = format!("sha256:{}", sha256_hex(message.as_bytes()));
     serde_json::json!({
         "event_id": ulid::Ulid::new().to_string(),

@@ -3,11 +3,11 @@
 //! Verifies that `/v1/query` and the three raw search routes return
 //! `403 forbidden_classified` when:
 //! - a `PrincipalStore` is active (AC enabled), and
-//! - `CORTEX_ACCESS_CONTROL_DENY_ON_MISSING_PRINCIPAL=1` is set, and
+//! - resolved `access_control.deny_on_missing_principal` is true, and
 //! - the caller carries no explicit auth credential.
 //!
-//! When the gate env var is unset or when the principal_store is None
-//! (backward-compat), requests proceed normally.
+//! Configuration governs the gate even without an environment override.
+//! Untrusted principal headers are never an authentication credential.
 
 use std::sync::{Arc, RwLock};
 
@@ -219,7 +219,10 @@ async fn keyword_proxy_denies_unauthenticated_when_gate_active() {
         "keyword proxy must 403 unauthenticated calls when gate is active"
     );
     let body = json_body(resp).await;
-    assert_eq!(body["reason"].as_str().unwrap_or(""), "forbidden_classified");
+    assert_eq!(
+        body["reason"].as_str().unwrap_or(""),
+        "forbidden_classified"
+    );
 }
 
 /// Phase21 §6.3 — graph search proxy with AC + gate + no auth → 403.
@@ -246,5 +249,101 @@ async fn graph_proxy_denies_unauthenticated_when_gate_active() {
         "graph proxy must 403 unauthenticated calls when gate is active"
     );
     let body = json_body(resp).await;
-    assert_eq!(body["reason"].as_str().unwrap_or(""), "forbidden_classified");
+    assert_eq!(
+        body["reason"].as_str().unwrap_or(""),
+        "forbidden_classified"
+    );
+}
+
+/// Typed config remains authoritative without any legacy environment gate.
+#[tokio::test]
+async fn configured_gate_rejects_missing_and_untrusted_credentials_without_env_override() {
+    let _lock = env_lock().await;
+    std::env::remove_var(ENV_DENY_ON_MISSING_PRINCIPAL);
+    std::env::remove_var(cortex_api::principal_resolver::ENV_TRUST_PRINCIPAL_HEADER);
+    let app = make_router_with_ac(make_service_with_ac());
+    for (route, body) in [
+        (
+            "/v1/query",
+            serde_json::json!({"query":"anything","intent":"free_search","scope":{"repo":"repo"}}),
+        ),
+        (
+            "/v1/search/keyword",
+            serde_json::json!({"index":"cortex_consolidations","q":"anything"}),
+        ),
+        (
+            "/v1/search/vector",
+            serde_json::json!({"collection":"cortex-code","query_vector":[0.1]}),
+        ),
+        (
+            "/v1/search/graph",
+            serde_json::json!({"node_id":"node-1","mode":"neighbors"}),
+        ),
+    ] {
+        for forged_header in [false, true] {
+            let mut req = post_json(route, &body);
+            if forged_header {
+                req.headers_mut()
+                    .insert("x-cortex-principal", "administrator".parse().unwrap());
+            }
+            let response = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "route={route}, forged_header={forged_header}"
+            );
+            assert_eq!(json_body(response).await["reason"], "forbidden_classified");
+        }
+    }
+}
+
+#[tokio::test]
+async fn configured_gate_false_allows_anonymous_even_when_legacy_env_denies() {
+    let _lock = env_lock().await;
+    std::env::set_var(ENV_DENY_ON_MISSING_PRINCIPAL, "1");
+    let cfg = Arc::new(Config {
+        access_control: AccessControlConfig {
+            enabled: true,
+            deny_on_missing_principal: false,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let app = build_router_with_auth_and_cfg(make_service_with_ac(), None, None, cfg);
+    let response = app
+        .oneshot(post_json(
+            "/v1/query",
+            &serde_json::json!({"query":"anything","intent":"free_search","scope":{"repo":"repo"}}),
+        ))
+        .await
+        .unwrap();
+    std::env::remove_var(ENV_DENY_ON_MISSING_PRINCIPAL);
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn configured_gate_accepts_verified_bearer_without_env_override() {
+    let _lock = env_lock().await;
+    std::env::remove_var(ENV_DENY_ON_MISSING_PRINCIPAL);
+    std::env::remove_var(cortex_api::principal_resolver::ENV_TRUST_PRINCIPAL_HEADER);
+    let keys = Arc::new(cortex_api::storage::api_keys::ApiKeyStore::open_in_memory().unwrap());
+    let key = keys.issue("api", "valid-query-caller").unwrap();
+    let cfg = Arc::new(Config {
+        access_control: AccessControlConfig {
+            enabled: true,
+            deny_on_missing_principal: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let app = build_router_with_auth_and_cfg(make_service_with_ac(), None, Some(keys), cfg);
+    let mut req = post_json(
+        "/v1/query",
+        &serde_json::json!({"query":"anything","intent":"free_search","scope":{"repo":"repo"}}),
+    );
+    req.headers_mut().insert(
+        "authorization",
+        format!("Bearer {}", key.cleartext).parse().unwrap(),
+    );
+    assert_eq!(app.oneshot(req).await.unwrap().status(), StatusCode::OK);
 }

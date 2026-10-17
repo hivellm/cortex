@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cortex_adapter_claude_code::{
     install_with as install_layout_with, load_config, serve, spawn_flusher,
-    uninstall as uninstall_layout, Dispatcher, HttpPublisher, InstallOptions, IpcBinding, Layout,
-    Metrics, OverflowWal, SessionManager, SyncClient,
+    uninstall as uninstall_layout, AdapterSection, DisabledPublisher, Dispatcher, HttpPublisher,
+    InstallOptions, IpcBinding, Layout, Metrics, OverflowWal, Publisher, SessionManager,
+    SyncClient,
 };
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -125,21 +126,25 @@ async fn run_daemon(
     let cfg = load_config(&cfg_path)
         .with_context(|| format!("load adapter config from {}", cfg_path.display()))?;
     let adapter = cfg.adapter;
+    let typed_cfg = cortex_config::Config::load().context("load Cortex runtime configuration")?;
 
     let metrics = Arc::new(Metrics::new());
     let wal_path = home_dir().join(".cortex").join("overflow.wal");
-    let wal = Arc::new(OverflowWal::open(&wal_path).context("open overflow wal")?);
-    let publisher = Arc::new(HttpPublisher::new(
-        adapter.endpoint.clone(),
-        adapter.queue_bounded,
-        Duration::from_millis(adapter.timeout_ms),
-        wal.clone(),
-        metrics.clone(),
-    ));
-    let _replayed = publisher.replay_wal().await;
+    let daily = typed_cfg.is_daily();
+    let publisher = runtime_publisher(daily, &adapter, &wal_path, metrics.clone()).await?;
+    let bulk_capture = publisher.enabled();
 
-    let sync = Arc::new(SyncClient::new(&adapter, metrics.clone()));
-    // phase26e §2.1 — grab the BundleCache metrics handle before `sync`
+    let mut sync_client = SyncClient::new(&adapter, metrics.clone());
+    if let Some(token) = typed_cfg
+        .dashboard
+        .api_token
+        .clone()
+        .filter(|token| !token.is_empty())
+    {
+        sync_client = sync_client.with_api_key(token);
+    }
+    let sync = Arc::new(sync_client);
+    // Grab the revision-checked memory cache metrics handle before `sync`
     // is moved into the Dispatcher, so the /healthz closure below can
     // surface the live cache hit/miss counters.
     let prethink_metrics_for_health = sync.prethink_metrics();
@@ -150,11 +155,13 @@ async fn run_daemon(
     );
 
     let shutdown = Arc::new(tokio::sync::Notify::new());
-    let _flusher = spawn_flusher(
-        publisher.clone(),
-        Duration::from_millis(200),
-        shutdown.clone(),
-    );
+    let _flusher = bulk_capture.then(|| {
+        spawn_flusher(
+            publisher.clone(),
+            Duration::from_millis(200),
+            shutdown.clone(),
+        )
+    });
 
     let binding = match bind_override {
         Some(s) if s.starts_with(r"\\.\pipe\") => IpcBinding::NamedPipe(s.to_string()),
@@ -202,9 +209,9 @@ async fn run_daemon(
     // crash in the IPC path doesn't break health probes (and vice
     // versa). Port comes from CORTEX_ADAPTER_ADMIN_PORT (default
     // 17011 — published in cortex_health::DEFAULT_ADAPTER_ADMIN_PORT).
-    let admin_port = cortex_config::Config::load()
-        .ok()
-        .and_then(|c| c.adapter.adapter_admin_port)
+    let admin_port = typed_cfg
+        .adapter
+        .adapter_admin_port
         .unwrap_or(cortex_health::DEFAULT_ADAPTER_ADMIN_PORT);
     let metrics_for_health = metrics.clone();
     let started_at = chrono::Utc::now().to_rfc3339();
@@ -225,6 +232,30 @@ async fn run_daemon(
         // Phase8c — `version` block lets the cortex-api drift
         // aggregator detect "running binary != source HEAD".
         extras.insert("version".into(), version_block.clone());
+        extras.insert(
+            "runtime_profile".into(),
+            serde_json::json!(if daily { "daily" } else { "full" }),
+        );
+        extras.insert(
+            "bulk_capture_enabled".into(),
+            serde_json::json!(bulk_capture),
+        );
+        extras.insert(
+            "publisher_status".into(),
+            serde_json::json!(if bulk_capture {
+                "enabled"
+            } else {
+                "disabled_by_profile"
+            }),
+        );
+        extras.insert(
+            "wal_status".into(),
+            serde_json::json!(if bulk_capture {
+                "enabled"
+            } else {
+                "untouched_by_profile"
+            }),
+        );
         let queue_depth = metrics_for_health.publisher_queue_depth();
         let wal_bytes = metrics_for_health.wal_bytes();
         let last_publish_ok_ts_ms = metrics_for_health.last_publish_ok_ts_ms();
@@ -382,6 +413,8 @@ async fn run_daemon(
         }
     });
     tracing::info!(
+        runtime_profile = if daily { "daily" } else { "full" },
+        bulk_capture,
         admin_port,
         "cortex-adapter admin /healthz listening on http://0.0.0.0:{admin_port}/healthz"
     );
@@ -399,7 +432,6 @@ async fn run_daemon(
     // `CORTEX_ADAPTER_HTTP_BIND`). The OpenCode TS plugin posts
     // here; the primary socket / named pipe keeps serving the
     // Claude Code hook shims.
-    let typed_cfg = cortex_config::Config::load().unwrap_or_default();
     if typed_cfg.adapter.http_bind.is_some() {
         let http_binding = IpcBinding::default_http();
         let http_dispatcher = dispatcher.clone();
@@ -412,6 +444,29 @@ async fn run_daemon(
     }
 
     serve(binding, dispatcher, shutdown).await
+}
+
+async fn runtime_publisher(
+    daily: bool,
+    adapter: &AdapterSection,
+    wal_path: &std::path::Path,
+    metrics: Arc<Metrics>,
+) -> Result<Arc<dyn Publisher>> {
+    // Branch before any WAL open/replay: daily must leave existing backlog
+    // untouched and must start even when the bulk archive path is unavailable.
+    if daily {
+        return Ok(Arc::new(DisabledPublisher));
+    }
+    let wal = Arc::new(OverflowWal::open(wal_path).context("open overflow wal")?);
+    let publisher = Arc::new(HttpPublisher::new(
+        adapter.endpoint.clone(),
+        adapter.queue_bounded,
+        Duration::from_millis(adapter.timeout_ms),
+        wal,
+        metrics,
+    ));
+    publisher.replay_wal().await;
+    Ok(publisher)
 }
 
 fn default_layout() -> Layout {
@@ -433,4 +488,38 @@ fn init_tracing(verbose: bool) {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("{level},cortex_adapter_claude_code={level}")));
     fmt().with_env_filter(filter).with_target(true).init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn daily_publisher_leaves_existing_wal_untouched_and_ignores_unavailable_path() {
+        let directory = tempfile::tempdir().unwrap();
+        let wal_path = directory.path().join("overflow.wal");
+        let backlog = b"existing backlog must not be drained or rewritten\n";
+        std::fs::write(&wal_path, backlog).unwrap();
+        let adapter = AdapterSection::default();
+        let metrics = Arc::new(Metrics::new());
+        let publisher = runtime_publisher(true, &adapter, &wal_path, metrics.clone())
+            .await
+            .unwrap();
+        assert!(!publisher.enabled());
+        assert_eq!(publisher.queue_depth(), 0);
+        assert_eq!(publisher.flush().await, 0);
+        assert_eq!(std::fs::read(&wal_path).unwrap(), backlog);
+
+        // A regular file cannot serve as the WAL's parent directory. Daily
+        // startup must not depend on that path, or even attempt to create it.
+        let impossible = wal_path.join("must-not-open.wal");
+        let publisher = runtime_publisher(true, &adapter, &impossible, metrics.clone())
+            .await
+            .unwrap();
+        assert!(!publisher.enabled());
+        assert_eq!(std::fs::read(&wal_path).unwrap(), backlog);
+        assert!(runtime_publisher(false, &adapter, &impossible, metrics)
+            .await
+            .is_err());
+    }
 }

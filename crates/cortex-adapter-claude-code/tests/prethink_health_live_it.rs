@@ -1,35 +1,13 @@
-//! Phase26f §4.1 — live confirmation of the phase26e §2/§3 pre-thinking
-//! observability surface.
+//! Pre-thinking observability through real loopback HTTP listeners.
 //!
-//! phase26e §2.1/§3 shipped two `/healthz` extras fields
-//! (`pre_thinking_cache_hit_total` / `pre_thinking_cache_miss_total` and
-//! `pre_thinking_latency_ms{count,p50,p95,p99}`) and pinned them with a
-//! unit test that reads `SyncClient::prethink_metrics()` directly
-//! (`sync_paths::tests::prethink_metrics_surfaces_cache_hit_after_repeat_query`).
-//! That test never goes over the wire — it calls the metrics handle
-//! in-process. This suite closes the gap: it boots the exact
-//! production wiring (`SyncClient` → `BundleCache` →
-//! `cortex_pre_thinking::pipeline::run` → `PreThinkingMetrics`) behind a
-//! real HTTP `/healthz` listener built from the same
-//! `cortex_health::server::router` the daemon mounts in
-//! `main.rs::run_daemon`, then confirms both tasks.md §4.1 claims via a
-//! real HTTP `GET /healthz`:
+//! The production `SyncClient` and pre-thinking pipeline feed the same
+//! `cortex_health::server::router` used by the daemon. Memory cache counters
+//! reflect validated server responses, with a fresh prepared receipt on each
+//! prompt; unavailable or invalid responses must not count as hits or misses.
+//! A separate burst checks the latency histogram under normal session load.
 //!
-//! - `pre_thinking_cache_hit_total` increments by exactly one after a
-//!   repeated identical query lands within the 60 s bundle-cache TTL.
-//! - `pre_thinking_latency_ms.p95` stays under 200 ms across a burst of
-//!   distinct queries (normal session load).
-//!
-//! Redeploying the actual long-lived host adapter daemon and pointing
-//! real Claude Code hook traffic at it is an operator action (tasks.md
-//! §4.1's own precondition) that this sub-agent must not trigger
-//! unilaterally — doing so would restart the process currently relaying
-//! hooks for whatever session is attached to it. What this suite
-//! provides instead is a repeatable, automated confirmation harness an
-//! operator re-runs (`cargo test -p cortex-adapter-claude-code --test
-//! prethink_health_live_it`) against the exact production code path
-//! immediately after redeploying, rather than hand-curling `/healthz`
-//! and eyeballing counters.
+//! Upstream APIs are mocked. This hermetic harness does not establish that an
+//! installed daemon or Claude Code hook is running this version.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,9 +24,8 @@ const LOAD_QUERY_COUNT: usize = 50;
 
 /// A structurally valid `cortex_api::QueryResponse` body — same fixture
 /// shape used by `tests/dispatcher.rs::user_prompt_returns_bundle_when_api_responds`.
-/// Mounted at `/v1/query` so the pipeline takes the success path and
-/// records a `cortex.prethink.latency_ms` sample (the fail-open path
-/// used by the other adapter tests never calls `observe_latency_ms`).
+/// Mounted at `/v1/query` so optional retrieval succeeds independently of
+/// local memory availability. Both success and fail-open paths record latency.
 fn mock_query_response_body() -> Value {
     json!({
         "intent": "pre_change_context",
@@ -174,8 +151,21 @@ async fn get_healthz(bind: &str) -> Value {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn healthz_cache_hit_total_increments_on_repeated_query_within_ttl() {
+async fn healthz_cache_counters_follow_only_valid_server_memory_responses() {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, ResponseTemplate,
+    };
+
     let mock_server = mock_query_server().await;
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    std::fs::write(repo.path().join(".git/HEAD"), "ref: refs/heads/current\n").unwrap();
+    std::fs::write(
+        repo.path().join("cortex.toml"),
+        "[cortex]\nid = \"Exact/Repo\"\n",
+    )
+    .unwrap();
     let sync = build_sync_client(mock_server.uri());
     let bind = boot_healthz(sync.clone()).await;
 
@@ -184,43 +174,153 @@ async fn healthz_cache_hit_total_increments_on_repeated_query_within_ttl() {
         .as_u64()
         .expect("pre_thinking_cache_hit_total present on /healthz extras");
 
-    let r1 = sync
-        .pre_thinking(
-            "confirm cache hit live",
-            "sess-live-it",
-            None,
-            Some("/repo"),
-        )
-        .await;
-    let r2 = sync
-        .pre_thinking(
-            "confirm cache hit live",
-            "sess-live-it",
-            None,
-            Some("/repo"),
-        )
-        .await;
-    assert!(!r1.cache_hit, "first call is a cache miss");
-    assert!(
-        r2.cache_hit,
-        "second identical call within the 60s TTL is a cache hit"
-    );
-
-    let after = get_healthz(&bind).await;
-    let hit_after = after["extras"]["pre_thinking_cache_hit_total"]
+    let miss_before = before["extras"]["pre_thinking_cache_miss_total"]
         .as_u64()
-        .expect("pre_thinking_cache_hit_total present on /healthz extras");
+        .expect("pre_thinking_cache_miss_total present on /healthz extras");
+
+    let prepared = |delivery_id: &str, cache_hit: bool| {
+        json!({
+            "context": "[memory ADR-42 v1 event source-event]\nDurable correction.\n",
+            "memories": [{
+                "id": "ADR-42", "version": 1, "event_id": "source-event",
+                "scope": {"repository": "Exact/Repo"}
+            }],
+            "revision": 9, "global_revision": null,
+            "delivery_id": delivery_id, "stage": "prepared", "cache_hit": cache_hit
+        })
+    };
+    let miss = prepared("prepared-first", false);
+    let hit = prepared("prepared-second", true);
+    assert_ne!(miss["delivery_id"], hit["delivery_id"]);
+    assert_eq!(miss["revision"], hit["revision"]);
+
+    let mut invalid_stage = prepared("prepared-invalid-stage", true);
+    invalid_stage["stage"] = json!("consumed");
+    let invalid_receipt = prepared("", true);
+    let mut invalid_scope = prepared("prepared-invalid-scope", true);
+    invalid_scope["memories"][0]["scope"]["repository"] = json!("Other/Repo");
+    let mut invalid_revision = prepared("prepared-invalid-revision", true);
+    invalid_revision["revision"] = json!("9");
+
+    let cases = [
+        (
+            "miss",
+            ResponseTemplate::new(200).set_body_json(miss),
+            true,
+            false,
+        ),
+        (
+            "hit",
+            ResponseTemplate::new(200).set_body_json(hit),
+            true,
+            true,
+        ),
+        (
+            "invalid stage",
+            ResponseTemplate::new(200).set_body_json(invalid_stage),
+            false,
+            false,
+        ),
+        (
+            "invalid receipt",
+            ResponseTemplate::new(200).set_body_json(invalid_receipt),
+            false,
+            false,
+        ),
+        (
+            "invalid scope",
+            ResponseTemplate::new(200).set_body_json(invalid_scope),
+            false,
+            false,
+        ),
+        (
+            "invalid revision",
+            ResponseTemplate::new(200).set_body_json(invalid_revision),
+            false,
+            false,
+        ),
+        ("outage", ResponseTemplate::new(503), false, false),
+    ];
+    let mut hits = 0;
+    let mut misses = 0;
+    for (name, response, valid, cache_hit) in cases {
+        let _guard = Mock::given(method("POST"))
+            .and(path("/v1/memory/query"))
+            .respond_with(response)
+            .expect(1)
+            .mount_as_scoped(&mock_server)
+            .await;
+        let result = sync
+            .pre_thinking(
+                "confirm cache hit live",
+                "sess-live-it",
+                None,
+                repo.path().to_str(),
+            )
+            .await;
+        assert_eq!(result.cache_hit, cache_hit, "{name}");
+        assert_eq!(
+            result.bundle.contains("Durable correction."),
+            valid,
+            "{name}"
+        );
+        if valid {
+            if cache_hit {
+                hits += 1;
+            } else {
+                misses += 1;
+            }
+        }
+        let after = get_healthz(&bind).await;
+        assert_eq!(
+            after["extras"]["pre_thinking_cache_hit_total"]
+                .as_u64()
+                .unwrap()
+                - hit_before,
+            hits,
+            "{name}: only a validated server hit increments hits"
+        );
+        assert_eq!(
+            after["extras"]["pre_thinking_cache_miss_total"]
+                .as_u64()
+                .unwrap()
+                - miss_before,
+            misses,
+            "{name}: unavailable or invalid responses do not increment misses"
+        );
+    }
+
+    let requests = mock_server.received_requests().await.unwrap();
+    let memory_requests: Vec<_> = requests
+        .iter()
+        .filter(|request| request.url.path() == "/v1/memory/query")
+        .collect();
     assert_eq!(
-        hit_after - hit_before,
-        1,
-        "repeated identical query within the TTL must land exactly one \
-         cache hit on the live /healthz surface"
+        memory_requests.len(),
+        7,
+        "every identical prompt must reach the local API for fresh authorization and receipt"
     );
+    for request in memory_requests {
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["repo"], "Exact/Repo");
+        assert_eq!(body["branch"], "current");
+        assert_eq!(body["include_global"], false);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn healthz_latency_p95_stays_under_200ms_under_normal_session_load() {
     let mock_server = mock_query_server().await;
+    // `/repo` is drive-root-relative on Windows and correctly rejected by
+    // the hook origin guard. Exercise a real absolute repository instead.
+    let repo = tempfile::tempdir().unwrap();
+    std::fs::create_dir(repo.path().join(".git")).unwrap();
+    std::fs::write(
+        repo.path().join("cortex.toml"),
+        "[cortex]\nid = \"Latency/Repo\"\n",
+    )
+    .unwrap();
+    assert!(repo.path().is_absolute());
     let sync = build_sync_client(mock_server.uri());
     let bind = boot_healthz(sync.clone()).await;
 
@@ -229,11 +329,20 @@ async fn healthz_latency_p95_stays_under_200ms_under_normal_session_load() {
             &format!("distinct session query {i}"),
             "sess-load-it",
             None,
-            Some("/repo"),
+            repo.path().to_str(),
         )
         .await;
     }
 
+    let requests = mock_server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path() == "/v1/query")
+            .count(),
+        LOAD_QUERY_COUNT,
+        "normal session load must exercise optional HTTP retrieval"
+    );
     let snap = get_healthz(&bind).await;
     let latency = &snap["extras"]["pre_thinking_latency_ms"];
     let count = latency["count"]
@@ -244,8 +353,7 @@ async fn healthz_latency_p95_stays_under_200ms_under_normal_session_load() {
         .expect("pre_thinking_latency_ms.p95 present on /healthz extras");
     assert_eq!(
         count, LOAD_QUERY_COUNT as u64,
-        "every distinct query is a cache miss and records one bundle-assembly \
-         latency sample"
+        "every distinct query records one pre-thinking latency sample"
     );
     assert!(
         p95 < 200,

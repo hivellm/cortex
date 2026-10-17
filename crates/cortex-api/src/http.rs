@@ -39,6 +39,8 @@ pub struct ApiState {
     /// in via the `_with_cfg` builder variants so the API and the
     /// dashboard agree on the same resolution.
     pub cfg: Arc<cortex_config::Config>,
+    /// File-backed daily memory. Missing configuration is an explicit outage.
+    pub daily_memory: Option<crate::daily_memory::DailyMemoryState>,
 }
 
 /// `/v1/status` response body — consumed by the spec-18
@@ -73,6 +75,12 @@ pub struct StatusBody {
     /// recorded; the full diff is at `/v1/health/coverage`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<CoverageBackendSummaries>,
+    /// Bounded optional archival processing; separate from explicit daily memory.
+    pub archive: crate::lanes::archive_incremental::ArchiveLoaderStatus,
+    /// Resolved runtime policy; it never changes authorization or stored data.
+    pub runtime_profile: cortex_config::RuntimeProfile,
+    /// Observed local readiness and explicitly optional capabilities.
+    pub capabilities: serde_json::Value,
 }
 
 /// Compact per-backend coverage summary embedded in `/v1/status`.
@@ -147,17 +155,70 @@ pub fn build_router_with_auth_and_cfg(
     api_key_store: Option<Arc<crate::storage::api_keys::ApiKeyStore>>,
     cfg: Arc<cortex_config::Config>,
 ) -> Router {
+    build_router_with_memory_advice(service, dashboard, api_key_store, cfg, false)
+}
+
+/// Production opt-in for optional post-capture advice. The ordinary builder stays offline.
+pub fn build_router_with_memory_advice(
+    service: Arc<QueryService>,
+    dashboard: Option<crate::dashboard::DashboardState>,
+    api_key_store: Option<Arc<crate::storage::api_keys::ApiKeyStore>>,
+    cfg: Arc<cortex_config::Config>,
+    enable_advice: bool,
+) -> Router {
+    let mut wired_service = (*service).clone();
+    if let Some(keys) = &api_key_store {
+        wired_service.api_key_store = Some(keys.clone());
+    }
+    if wired_service.principal_store.is_none() {
+        let principals = if cfg.access_control.enabled {
+            crate::PrincipalStore::deny_by_default()
+        } else {
+            crate::PrincipalStore::pass_through()
+        };
+        wired_service.principal_store = Some(Arc::new(std::sync::RwLock::new(principals)));
+    }
+    let service = Arc::new(wired_service);
+    let daily_memory = cfg
+        .ingestion
+        .metadata_db
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            cfg.ingestion
+                .home
+                .as_ref()
+                .map(|home| std::path::PathBuf::from(home).join("metadata.sqlite"))
+        })
+        .map(|path| {
+            let local = crate::daily_memory::DailyMemoryState::new(path);
+            if enable_advice {
+                local.with_advice_from_env()
+            } else {
+                local
+            }
+        });
     let state = ApiState {
         service,
         started_at: Arc::new(Instant::now()),
         nexus: dashboard.as_ref().and_then(|d| d.nexus.clone()),
         cfg,
+        daily_memory,
     };
     let mut router = Router::new()
         .route("/v1/query", post(handle_query))
         .route("/v1/status", get(handle_status))
         .route("/v1/audit/{query_id}", get(handle_audit))
         .route("/v1/ingest", post(crate::ingest_proxy::handle_ingest))
+        .route("/v1/memory/query", post(crate::daily_memory::handle_query))
+        .route(
+            "/v1/pre-thinking/feedback",
+            post(crate::feedback::durable_feedback_handler),
+        )
+        .route(
+            "/v1/feedback/list",
+            post(crate::feedback::durable_feedback_list_handler),
+        )
         .route("/healthz", get(handle_healthz))
         .route("/v1/health", get(handle_v1_health))
         .route("/v1/health/coverage", get(handle_health_coverage))
@@ -270,7 +331,7 @@ pub fn build_router_with_auth_and_cfg(
         )
         .with_state(state.clone());
     // Phase21 §6.2 — ACL admin routes (/v1/acl/*).
-    router = router.merge(crate::acl_routes::build_acl_router(state));
+    router = router.merge(crate::acl_routes::build_acl_router(state.clone()));
     // phase13g §2.3 — similar-sessions route. Lives on its own
     // sub-router because the handler reads from
     // `SimilarSessionsState` (a `dyn ConsolidationSearchSource`)
@@ -300,21 +361,6 @@ pub fn build_router_with_auth_and_cfg(
     router = router.merge(crate::health::pre_thinking::build_router(
         crate::health::pre_thinking::PreThinkingHealthState::default(),
     ));
-    // phase14f — feedback ingest endpoint. Default state carries
-    // an in-memory MetadataStore so the route is mountable
-    // standalone in tests; main.rs threads the shared metadata
-    // handle when wiring the full router.
-    {
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        let metadata = Arc::new(Mutex::new(
-            cortex_storage::MetadataStore::open_in_memory()
-                .expect("phase14f: open in-memory metadata for default feedback state"),
-        ));
-        router = router.merge(crate::feedback::build_router(
-            crate::feedback::FeedbackState { metadata },
-        ));
-    }
     if let Some(dash) = dashboard {
         // Phase8b — mount /v1/health/freshness + /v1/health/divergence
         // alongside the dashboard routes. Both endpoints share the
@@ -325,7 +371,11 @@ pub fn build_router_with_auth_and_cfg(
         let health_state = crate::health::HealthState {
             aggregator: Arc::new(crate::health::HealthAggregatorState::new()),
             loader_metrics: dash.loader_metrics.clone(),
-            head_sha: crate::health::HeadSha::resolve_now().map(Arc::new),
+            head_sha: if state.cfg.is_daily() {
+                None
+            } else {
+                crate::health::HeadSha::resolve_now().map(Arc::new)
+            },
         };
         let health_router = Router::new()
             .route(
@@ -390,19 +440,26 @@ pub fn build_router_with_auth_and_cfg(
     // Access-Control-Allow-Origin. Without this, the GUI in the Vite
     // dev server (5173) hits `net::ERR_FAILED` on every health poll
     // even though the dashboard sub-router already had CORS.
+    if state.cfg.is_daily() {
+        router = router.layer(axum::middleware::from_fn(crate::runtime::daily_routes));
+    }
     router = router.layer(crate::auth::dashboard_cors_layer());
     router
 }
 
-async fn handle_healthz(State(state): State<ApiState>) -> Response {
-    use cortex_health::{HealthState, SubsystemStatus};
-    let started_at = chrono::Utc::now()
+fn started_at(state: &ApiState) -> String {
+    chrono::Utc::now()
         .checked_sub_signed(chrono::Duration::milliseconds(
             i64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(0),
         ))
         .map(|t| t.to_rfc3339())
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let mut status = SubsystemStatus::ok("cortex-api", env!("CARGO_PKG_VERSION"), started_at);
+        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339())
+}
+
+async fn handle_healthz(State(state): State<ApiState>) -> Response {
+    use cortex_health::{HealthState, SubsystemStatus};
+    let mut status =
+        SubsystemStatus::ok("cortex-api", env!("CARGO_PKG_VERSION"), started_at(&state));
     // Phase8c — version block (git_sha + build_ts + git_dirty) so
     // the drift aggregator can flag stale running binaries.
     let version_block =
@@ -431,7 +488,17 @@ async fn handle_healthz(State(state): State<ApiState>) -> Response {
     // unavailable. The lane is the canonical source for repo
     // coverage; without it the query path returns degraded results
     // but the daemon itself is still answering.
-    if state.service.indexed_repos.is_none() {
+    if state.cfg.is_daily() {
+        let capabilities = crate::runtime::capabilities(&state).await;
+        if capabilities["daily_memory"]["state"] != "ready" {
+            status.state = HealthState::Down;
+            status.last_error = Some("daily_memory_unavailable".into());
+        }
+        status
+            .extras
+            .insert("runtime_profile".into(), serde_json::json!("daily"));
+        status.extras.insert("capabilities".into(), capabilities);
+    } else if state.service.indexed_repos.is_none() {
         status.state = HealthState::Degraded;
         status.last_error =
             Some("keyword-lane snapshot not wired (no indexed_repos source)".into());
@@ -446,6 +513,25 @@ async fn handle_healthz(State(state): State<ApiState>) -> Response {
 async fn handle_v1_health(State(state): State<ApiState>) -> Response {
     use cortex_health::client::{aggregate, build_client, AggregatorConfig, ProbeTarget};
     use cortex_health::SubsystemStatus;
+
+    if state.cfg.is_daily() {
+        let capabilities = crate::runtime::capabilities(&state).await;
+        let mut local =
+            SubsystemStatus::ok("cortex-api", env!("CARGO_PKG_VERSION"), started_at(&state));
+        if capabilities["daily_memory"]["state"] != "ready" {
+            local.state = cortex_health::HealthState::Down;
+            local.last_error = Some("daily_memory_unavailable".into());
+        }
+        local
+            .extras
+            .insert("runtime_profile".into(), serde_json::json!("daily"));
+        local.extras.insert("capabilities".into(), capabilities);
+        return (
+            StatusCode::OK,
+            Json(cortex_health::HealthReport::aggregate(vec![local])),
+        )
+            .into_response();
+    }
 
     // Discover probe targets from env. Empty values fall back to
     // the localhost defaults so the operator gets a useful report
@@ -747,6 +833,17 @@ async fn handle_status(State(state): State<ApiState>) -> Response {
         uptime_ms: u64::try_from(state.started_at.elapsed().as_millis()).unwrap_or(u64::MAX),
         indexed_repos,
         coverage,
+        archive: state.service.indexed_repos.as_ref().map_or_else(
+            crate::lanes::archive_incremental::ArchiveLoaderStatus::default,
+            |lane| {
+                lane.archive_status
+                    .lock()
+                    .map(|s| s.clone())
+                    .unwrap_or_default()
+            },
+        ),
+        runtime_profile: state.cfg.runtime.profile,
+        capabilities: crate::runtime::capabilities(&state).await,
     };
     (StatusCode::OK, Json(body)).into_response()
 }
@@ -787,7 +884,7 @@ async fn handle_query(
     // unauthenticated callers still reach all data (backward-compat ADR-1.3).
     if state.cfg.access_control.enabled
         && state.service.principal_store.is_some()
-        && crate::principal_resolver::deny_on_missing_principal()
+        && state.cfg.access_control.deny_on_missing_principal
         && !crate::principal_resolver::has_explicit_auth(&headers)
     {
         return (
@@ -1026,7 +1123,35 @@ async fn handle_admin_forget(
     .await;
 
     match outcome {
-        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+        Ok(resp) => {
+            if !resp.dry_run {
+                if let Some(memory) = &state.daily_memory {
+                    let metadata_path = memory.database_path();
+                    let event_id = req.event_id.clone();
+                    let lane = state.service.indexed_repos.clone();
+                    let forgotten = tokio::task::spawn_blocking(move || {
+                        crate::lanes::archive_incremental::forget_projection(
+                            &metadata_path,
+                            &event_id,
+                            lane.as_deref(),
+                        )
+                    })
+                    .await;
+                    if !matches!(forgotten, Ok(Ok(()))) {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(serde_json::json!({
+                                "reason": "archive_projection_forget_failed",
+                                "message": "Backend purge completed but local archive suppression failed; retry the same forget request.",
+                            })),
+                        )
+                            .into_response();
+                    }
+                }
+                state.service.cache.clear().await;
+            }
+            (StatusCode::OK, Json(resp)).into_response()
+        }
         Err(err) => {
             let (code, body) = crate::admin_forget::forget_error_response(&err);
             let status = StatusCode::from_u16(code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);

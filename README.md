@@ -2,19 +2,18 @@
 
 > **Status:** Active development · 43 specs (13+ core specs shipped) in [docs/specs/](docs/specs/) · architecture in [docs/architecture.md](docs/architecture.md) · current state & roadmap in [docs/analysis/cortex-platform-2026-07/](docs/analysis/cortex-platform-2026-07/)
 
-**Cortex is the cognitive substrate of the HiveLLM ecosystem** — a single, queryable, governed memory of every meaningful interaction an AI agent has with our codebases.
+Cortex stores explicit decisions and verified lessons so coding agents can use them in later sessions. The daily profile keeps capture, cited recall and feedback in local SQLite, without mandatory Docker, GPU or bulk indexers. An optional full stack indexes code, documents and archived interactions.
 
-Today, when an LLM (Claude, Cursor, Gemini, Codex, Copilot) works on one of our projects, three things are lost the moment the session ends:
+## Daily Memory
 
-1. **What happened** — the conversation, tool calls, agent invocations, rationale.
-2. **What was decided** — and why one path was chosen over another.
-3. **What was learned** — patterns that worked, dead ends, recurring bugs, conventions that emerged.
+For routine agent work, start with the [daily runtime guide](docs/operations/daily-memory-runtime.md). Capture an accepted decision or verified lesson with `cortex_capture_memory`; recover applicable context with `cortex_memory_read` or `cortex_pre_thinking`. Corrections explicitly supersede an earlier decision using the observed revision.
 
-Each new session starts blind. The model falls back to its weights and a few `CLAUDE.md` files. We've been losing institutional knowledge at every `/clear`.
+- Claude Code supports verified lifecycle delivery through its local adapter. Codex uses verified MCP reads; other harnesses have [documented capability limits](docs/analysis/daily-agent-memory-2026-10/09-client-contracts.md).
+- Context carries source IDs and includes at most five memories within 1,536 bytes. Superseded, proposed and out-of-scope records stay out of ordinary advice.
+- Capture remains local by default. Optional `classify=true` requests bounded Jev advice for an authorized candidate; classification never changes its status, scope or authority.
+- Native agent memory files are preserved. Daily mode disables bulk publishing, archive replay and scheduled maintenance.
+- [Behavioral acceptance](docs/analysis/daily-agent-memory-2026-10/11-cross-model-acceptance.md) verifies a Claude correction recalled and used by Codex after restart. [Resource measurements](docs/analysis/daily-agent-memory-2026-10/10-resource-acceptance.md) state the host, samples and limits.
 
-**Cortex changes the contract.** Every interaction is captured, classified, embedded, related, and made retrievable. Before any model proposes a change, it consults Cortex. Decisions are formalized and audited. Laws govern behavior, violations are tracked. A dashboard makes the whole substrate observable.
-
-The end state: an AI workflow that is **analytical rather than purely generative** — grounded in our own history, not just the model's training data.
 
 ## What Cortex is (and isn't)
 
@@ -82,6 +81,8 @@ Code (`cortex-core`, `cortex-workers`, `cortex-api`, `cortex-classifier`, `corte
 
 ## Getting started
 
+For routine agent memory, use the [daily runtime guide](docs/operations/daily-memory-runtime.md). The prerequisites and indexing workflow below apply to the optional full stack.
+
 ### Prerequisites (local dev)
 
 - **Rust** (stable toolchain) — for the core services.
@@ -95,7 +96,7 @@ Code (`cortex-core`, `cortex-workers`, `cortex-api`, `cortex-classifier`, `corte
 2. [`docs/specs/00-index.md`](docs/specs/00-index.md) — spec index + dependency order.
 3. [`AGENTS.md`](AGENTS.md) — rules for contributors and AI agents working in this repo.
 
-The local stack is now live via docker-compose with 12 services running (Cortex API, ingestion, classifiers, embedders, graph/fulltext/reranker workers, data services). Most core specs (01–18) are implemented and shipped. See [`docs/specs/00-index.md`](docs/specs/00-index.md) for the per-spec status and [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/) for known current issues (e.g., graph-worker degradation since 2026-06-27, pending active fix).
+The optional Compose stack includes Cortex API, ingestion, classifiers, embedders, graph/fulltext/reranker workers and data services. Daily memory uses the smaller native runtime described above; a configured Compose stack does not imply those services are running. Most core specs (01–18) are implemented and shipped. See [`docs/specs/00-index.md`](docs/specs/00-index.md) for the per-spec status and [`docs/analysis/cortex-platform-2026-07/`](docs/analysis/cortex-platform-2026-07/) for known current issues (e.g., graph-worker degradation since 2026-06-27, pending active fix).
 
 ### First-time indexing (per repo)
 

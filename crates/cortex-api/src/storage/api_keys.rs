@@ -2,9 +2,9 @@
 //!
 //! Stores Argon2id digests of every dashboard API key issued via
 //! the `cortex-api admin issue-api-key` subcommand. Cleartext keys
-//! are printed once at issue time; only the digest persists.
+//! are printed once at issue time; only digests persist.
 //!
-//! Schema (v2 — phase21 §4.3 adds `role`):
+//! Schema (v3 — adds a durable lookup digest for high-entropy keys):
 //!
 //! ```sql
 //! CREATE TABLE api_keys (
@@ -15,21 +15,22 @@
 //!   created_at    INTEGER NOT NULL,           -- epoch ms
 //!   last_used_at  INTEGER,                    -- epoch ms; NULL until first use
 //!   revoked_at    INTEGER,                    -- epoch ms; NULL while active
-//!   role          TEXT                        -- RBAC role label; NULL → default principal
+//!   role          TEXT,                       -- RBAC role label; NULL → default principal
+//!   lookup_sha256 TEXT                        -- NULL for unmigrated legacy keys
 //! );
 //! ```
 //!
-//! The `role` column is additive: existing databases have it absent → the
-//! `open`/`open_in_memory` paths run `ALTER TABLE … ADD COLUMN` (ignored
-//! if the column already exists). Keys without a role resolve to the
-//! configured default principal in the `PrincipalStore`.
+//! Schema additions are nullable: `open`/`open_in_memory` inspect existing
+//! columns and add missing `role` and `lookup_sha256` columns. Keys without
+//! a role resolve to the configured default principal in `PrincipalStore`.
 //!
 //! Keys are 32 random bytes drawn from `OsRng`, encoded with
 //! Crockford base32 (lower case, no padding) and prefixed
-//! `cortex_dash_`. `verify` compares a candidate cleartext against
-//! every active row by walking the small (expected single-digit)
-//! key set; constant-time compare is used inside Argon2id so an
-//! attacker can't time which row matched.
+//! `cortex_dash_`. SHA-256 selects a new key's row before Argon2id verifies
+//! it. This avoids hashing unrelated credentials on a cold request. The lookup
+//! digest is safe for these random 256-bit tokens and never grants authority
+//! without Argon2 verification. Legacy rows are scanned only on lookup miss,
+//! then gain a lookup digest after successful verification.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -40,7 +41,8 @@ use chrono::Utc;
 use data_encoding::BASE32_NOPAD;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use ulid::Ulid;
 
@@ -94,8 +96,8 @@ pub struct ApiKeyRecord {
 
 /// In-process handle around a single SQLite connection guarded by
 /// a mutex. Cheap to clone — the inner `Arc<Mutex<Connection>>` is
-/// shared across the daemon. Read + write paths are short so the
-/// global lock does not become a contention hot-spot in practice.
+/// shared across the daemon. Password hashing runs outside this lock; only
+/// row selection and the final authority transaction hold it.
 #[derive(Clone)]
 pub struct ApiKeyStore {
     conn: Arc<Mutex<Connection>>,
@@ -112,12 +114,30 @@ const SCHEMA_DDL: &str = "CREATE TABLE IF NOT EXISTS api_keys (
 );
 CREATE INDEX IF NOT EXISTS api_keys_scope_idx ON api_keys(scope);";
 
-fn apply_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(SCHEMA_DDL)?;
-    // v2: add role column — silently skip if it already exists
-    // (ALTER TABLE ADD COLUMN is idempotent via error suppression in SQLite < 3.37.0)
-    let _ = conn.execute("ALTER TABLE api_keys ADD COLUMN role TEXT", []);
-    Ok(())
+fn apply_migrations(conn: &mut Connection) -> Result<(), rusqlite::Error> {
+    // Serialize inspection and ALTER across independent daemon connections.
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(SCHEMA_DDL)?;
+    let mut stmt = tx.prepare("PRAGMA table_info(api_keys)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(stmt);
+    if !columns.iter().any(|column| column == "role") {
+        tx.execute("ALTER TABLE api_keys ADD COLUMN role TEXT", [])?;
+    }
+    if !columns.iter().any(|column| column == "lookup_sha256") {
+        tx.execute("ALTER TABLE api_keys ADD COLUMN lookup_sha256 TEXT", [])?;
+    }
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS api_keys_lookup_sha256_idx
+        ON api_keys(lookup_sha256) WHERE lookup_sha256 IS NOT NULL;",
+    )?;
+    tx.commit()
+}
+
+fn lookup_digest(candidate: &str) -> String {
+    format!("{:x}", Sha256::digest(candidate.as_bytes()))
 }
 
 impl ApiKeyStore {
@@ -126,9 +146,9 @@ impl ApiKeyStore {
     /// already exist; callers (typically `main.rs` boot path) are
     /// responsible for creating it.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, ApiKeyError> {
-        let conn = Connection::open(path.as_ref())?;
+        let mut conn = Connection::open(path.as_ref())?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        apply_migrations(&conn)?;
+        apply_migrations(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -137,8 +157,8 @@ impl ApiKeyStore {
     /// Open an in-memory store. Used by ITs and the smoke tests in
     /// this module — boots without touching the filesystem.
     pub fn open_in_memory() -> Result<Self, ApiKeyError> {
-        let conn = Connection::open_in_memory()?;
-        apply_migrations(&conn)?;
+        let mut conn = Connection::open_in_memory()?;
+        apply_migrations(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -171,9 +191,9 @@ impl ApiKeyStore {
         let created_at_ms = Utc::now().timestamp_millis();
         let conn = self.conn.lock().expect("api_keys mutex poisoned");
         conn.execute(
-            "INSERT INTO api_keys (id, scope, label, hash, created_at, last_used_at, revoked_at, role)
-             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6)",
-            params![&id, scope, label, &hash, created_at_ms, role],
+            "INSERT INTO api_keys (id, scope, label, hash, created_at, last_used_at, revoked_at, role, lookup_sha256)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, ?7)",
+            params![&id, scope, label, &hash, created_at_ms, role, lookup_digest(&cleartext)],
         )?;
         Ok(IssuedKey {
             id,
@@ -256,7 +276,7 @@ impl ApiKeyStore {
         Ok(())
     }
 
-    /// Verify a candidate cleartext key against every active row.
+    /// Select by durable lookup digest, then verify the candidate with Argon2.
     /// Returns the matching record's id on success and bumps
     /// `last_used_at`. Returns `Err(NotFound)` when no row matches
     /// (the middleware translates this to 401).
@@ -272,6 +292,8 @@ impl ApiKeyStore {
     /// The `role` is `None` when the key has no binding — the caller
     /// should resolve using the `PrincipalStore` default principal.
     /// Used by the auth middleware added in phase21 §4.4.
+    /// Legacy keys without a lookup digest require an initial Argon2 scan;
+    /// successful verification backfills their digest for subsequent calls.
     pub fn verify_with_role(
         &self,
         candidate: &str,
@@ -279,21 +301,30 @@ impl ApiKeyStore {
         if !candidate.starts_with(KEY_PREFIX) {
             return Err(ApiKeyError::NotFound);
         }
-        let conn = self.conn.lock().expect("api_keys mutex poisoned");
-        let mut stmt =
-            conn.prepare("SELECT id, hash, revoked_at, role FROM api_keys")?;
-        let rows: Vec<(String, String, Option<i64>, Option<String>)> = stmt
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(stmt);
-        for (id, hash, revoked_at, role) in rows {
+        let digest = lookup_digest(candidate);
+        let rows = {
+            let conn = self.conn.lock().expect("api_keys mutex poisoned");
+            let mut stmt =
+                conn.prepare("SELECT id, hash FROM api_keys WHERE lookup_sha256 = ?1")?;
+            let mut rows = stmt
+                .query_map(params![&digest], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            // Do not mix legacy rows into the indexed path: even thousands of
+            // old keys must not slow a newly-issued credential's first call.
+            if rows.is_empty() {
+                let mut legacy =
+                    conn.prepare("SELECT id, hash FROM api_keys WHERE lookup_sha256 IS NULL")?;
+                rows = legacy
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<Result<Vec<_>, _>>()?;
+            }
+            rows
+        };
+        for (id, hash) in rows {
             let parsed = match PasswordHash::new(&hash) {
                 Ok(p) => p,
                 Err(_) => continue, // skip malformed rows
@@ -302,14 +333,34 @@ impl ApiKeyStore {
                 .verify_password(candidate.as_bytes(), &parsed)
                 .is_ok()
             {
+                // Hashing deliberately releases the connection lock. Re-read
+                // current authority after it completes so role edits/revokes
+                // during expensive verification apply to this request too.
+                let mut conn = self.conn.lock().expect("api_keys mutex poisoned");
+                let tx = conn.transaction()?;
+                let current: Option<(String, Option<i64>, Option<String>)> = tx
+                    .query_row(
+                        "SELECT hash, revoked_at, role FROM api_keys WHERE id = ?1",
+                        params![&id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )
+                    .optional()?;
+                let Some((current_hash, revoked_at, role)) = current else {
+                    return Err(ApiKeyError::NotFound);
+                };
+                if current_hash != hash {
+                    return Err(ApiKeyError::NotFound);
+                }
                 if revoked_at.is_some() {
                     return Err(ApiKeyError::Revoked);
                 }
                 let now = Utc::now().timestamp_millis();
-                conn.execute(
-                    "UPDATE api_keys SET last_used_at = ?1 WHERE id = ?2",
-                    params![now, &id],
+                tx.execute(
+                    "UPDATE api_keys SET last_used_at = ?1,
+                     lookup_sha256 = COALESCE(lookup_sha256, ?3) WHERE id = ?2",
+                    params![now, &id, &digest],
                 )?;
+                tx.commit()?;
                 return Ok((id, role));
             }
         }
@@ -478,7 +529,9 @@ mod tests {
     #[test]
     fn assign_role_not_found_returns_not_found() {
         let store = ApiKeyStore::open_in_memory().unwrap();
-        let err = store.assign_role("00000000000000000000000000", Some("r")).unwrap_err();
+        let err = store
+            .assign_role("00000000000000000000000000", Some("r"))
+            .unwrap_err();
         assert!(matches!(err, ApiKeyError::NotFound));
     }
 
@@ -491,5 +544,168 @@ mod tests {
         store.revoke(&issued.id).unwrap();
         let err = store.verify_with_role(&issued.cleartext).unwrap_err();
         assert!(matches!(err, ApiKeyError::Revoked));
+    }
+
+    #[test]
+    fn durable_lookup_survives_restart_and_uses_fresh_authority_from_second_connection() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("api-keys.sqlite");
+        let store = ApiKeyStore::open(&path).unwrap();
+        let legacy_decoy = store.issue("api", "legacy-decoy").unwrap();
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE api_keys SET lookup_sha256 = NULL WHERE id = ?1",
+                params![&legacy_decoy.id],
+            )
+            .unwrap();
+        store.issue("api", "new-decoy-one").unwrap();
+        store.issue("api", "new-decoy-two").unwrap();
+        let issued = store
+            .issue_with_role("api", "target", Some("reader"))
+            .unwrap();
+        drop(store);
+
+        // First verification after reopening is cold: there is no in-memory
+        // verification cache, and unrelated legacy hashes must not be scanned.
+        let restarted = ApiKeyStore::open(&path).unwrap();
+        assert_eq!(
+            restarted.verify_with_role(&issued.cleartext).unwrap(),
+            (issued.id.clone(), Some("reader".into()))
+        );
+        let other = ApiKeyStore::open(&path).unwrap();
+        other.assign_role(&issued.id, Some("analyst")).unwrap();
+        assert_eq!(
+            restarted.verify_with_role(&issued.cleartext).unwrap(),
+            (issued.id.clone(), Some("analyst".into()))
+        );
+        other.assign_role(&issued.id, None).unwrap();
+        assert_eq!(
+            restarted.verify_with_role(&issued.cleartext).unwrap(),
+            (issued.id.clone(), None)
+        );
+        other.revoke(&issued.id).unwrap();
+        assert!(matches!(
+            restarted.verify(&issued.cleartext),
+            Err(ApiKeyError::Revoked)
+        ));
+    }
+
+    #[test]
+    fn old_schema_migrates_and_successful_legacy_verification_backfills_lookup() {
+        let source = ApiKeyStore::open_in_memory().unwrap();
+        let issued = source.issue("api", "legacy").unwrap();
+        let hash: String = source
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT hash FROM api_keys WHERE id = ?1",
+                params![&issued.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.sqlite");
+        {
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(SCHEMA_DDL).unwrap();
+            old.execute(
+                "INSERT INTO api_keys(id, scope, label, hash, created_at)
+                VALUES (?1, 'api', 'legacy', ?2, 0)",
+                params![&issued.id, hash],
+            )
+            .unwrap();
+        }
+        let upgraded = ApiKeyStore::open(&path).unwrap();
+        let before: Option<String> = upgraded
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT lookup_sha256 FROM api_keys WHERE id = ?1",
+                params![&issued.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(before.is_none());
+        assert_eq!(upgraded.verify(&issued.cleartext).unwrap(), issued.id);
+        let after: String = upgraded
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT lookup_sha256 FROM api_keys WHERE id = ?1",
+                params![&issued.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, lookup_digest(&issued.cleartext));
+        drop(upgraded);
+        let restarted = ApiKeyStore::open(&path).unwrap();
+        let other = ApiKeyStore::open(&path).unwrap();
+        other.assign_role(&issued.id, Some("reader")).unwrap();
+        assert_eq!(
+            restarted.verify_with_role(&issued.cleartext).unwrap().1,
+            Some("reader".into())
+        );
+        other.revoke(&issued.id).unwrap();
+        assert!(matches!(
+            restarted.verify(&issued.cleartext),
+            Err(ApiKeyError::Revoked)
+        ));
+    }
+
+    #[test]
+    fn lookup_digest_alone_never_authenticates_a_wrong_credential() {
+        let store = ApiKeyStore::open_in_memory().unwrap();
+        let issued = store
+            .issue_with_role("api", "privileged", Some("acl_admin"))
+            .unwrap();
+        let wrong = format!("{KEY_PREFIX}{}", "a".repeat(52));
+        // Even corrupted lookup metadata selecting a privileged row cannot
+        // replace the final Argon2 proof of the actual credential.
+        store
+            .conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE api_keys SET lookup_sha256 = ?1 WHERE id = ?2",
+                params![lookup_digest(&wrong), &issued.id],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.verify_with_role(&wrong),
+            Err(ApiKeyError::NotFound)
+        ));
+        assert!(store.list().unwrap()[0].last_used_at_ms.is_none());
+    }
+
+    #[test]
+    fn concurrent_legacy_schema_migrations_both_succeed() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy-concurrent.sqlite");
+        {
+            let legacy = Connection::open(&path).unwrap();
+            legacy.pragma_update(None, "journal_mode", "WAL").unwrap();
+            legacy.execute_batch(SCHEMA_DDL).unwrap();
+        }
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let workers: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    let store = ApiKeyStore::open(path)?;
+                    store.list()
+                })
+            })
+            .collect();
+        for worker in workers {
+            assert!(worker.join().unwrap().unwrap().is_empty());
+        }
     }
 }

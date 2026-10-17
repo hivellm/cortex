@@ -39,3 +39,5 @@ reqwest = { workspace = true }
 tempfile = { workspace = true }
 wiremock = "0.6"
 jsonschema = { workspace = true }
+axum = { workspace = true }
+cortex-storage = { path = "../cortex-storage" }

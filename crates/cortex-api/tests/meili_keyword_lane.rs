@@ -293,7 +293,11 @@ async fn acl_context_injects_level_and_compartment_filter_into_meili_body() {
         compartment_grants: vec!["financial".to_string(), "hr".to_string()],
     });
     let hits = lane.search(&req).await.unwrap();
-    assert_eq!(hits.len(), 1, "mock only matches when ACL filter is injected");
+    assert_eq!(
+        hits.len(),
+        1,
+        "mock only matches when ACL filter is injected"
+    );
     assert_eq!(hits[0].text, "classified internal doc");
 }
 
@@ -332,7 +336,9 @@ async fn no_acl_context_produces_no_acl_filter() {
     // ACL filter and assert it was NEVER called (0 invocations).
     Mock::given(method("POST"))
         .and(path("/indexes/cortex-cortex-code/search"))
-        .and(body_partial_json(json!({ "filter": "(class_level IS EMPTY OR class_level <= 3)" })))
+        .and(body_partial_json(
+            json!({ "filter": "(class_level IS EMPTY OR class_level <= 3)" }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "hits": [] })))
         .expect(0) // must NOT be called
         .mount(&server)

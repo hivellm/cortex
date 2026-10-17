@@ -17,98 +17,22 @@
 //! All three fail-open on timeout / error: the session continues
 //! unchanged.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cortex_api::active_work::{ActiveTaskRow, ActiveWorkReport};
 use cortex_api::{QueryRequest, QueryResponse};
 use cortex_pre_thinking::pipeline::{
-    run as pre_thinking_run, ClosureQueryFn, PreThinkingBudget, PreThinkingInput,
+    run_with_memory as pre_thinking_run, ClosureQueryFn, PreThinkingBudget, PreThinkingInput,
 };
 use cortex_pre_thinking::Metrics as PreThinkingMetrics;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::config::AdapterSection;
 use crate::metrics::Metrics;
-
-// ── Bundle cache ─────────────────────────────────────────────────────────────
-// phase26c §2.2 — In-process LRU bundle cache keyed on
-// sha256(prompt + NUL + cwd). TTL = 60 s, max = 256 entries.
-// Keeps identical pre-thinking queries within a session fast.
-
-const BUNDLE_CACHE_TTL: Duration = Duration::from_secs(60);
-const BUNDLE_CACHE_MAX: usize = 256;
-
-#[derive(Clone)]
-struct CachedBundle {
-    bundle: String,
-    fail_open: bool,
-    inserted_at: Instant,
-}
-
-struct BundleCache {
-    inner: Mutex<HashMap<[u8; 32], CachedBundle>>,
-    metrics: Arc<PreThinkingMetrics>,
-}
-
-impl BundleCache {
-    fn new(metrics: Arc<PreThinkingMetrics>) -> Self {
-        Self {
-            inner: Mutex::new(HashMap::new()),
-            metrics,
-        }
-    }
-
-    fn cache_key(prompt: &str, cwd: &str) -> [u8; 32] {
-        let mut h = Sha256::new();
-        h.update(prompt.as_bytes());
-        h.update(b"\0");
-        h.update(cwd.as_bytes());
-        h.finalize().into()
-    }
-
-    fn get(&self, key: &[u8; 32]) -> Option<CachedBundle> {
-        let inner = self.inner.lock().ok()?;
-        let entry = inner.get(key)?;
-        if entry.inserted_at.elapsed() > BUNDLE_CACHE_TTL {
-            return None;
-        }
-        self.metrics.incr_cache_hit();
-        Some(entry.clone())
-    }
-
-    fn insert(&self, key: [u8; 32], bundle: String, fail_open: bool) {
-        self.metrics.incr_cache_miss();
-        let mut inner = match self.inner.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
-        if inner.len() >= BUNDLE_CACHE_MAX {
-            // Evict the oldest entry.
-            if let Some(oldest) = inner
-                .iter()
-                .min_by_key(|(_, v)| v.inserted_at)
-                .map(|(k, _)| *k)
-            {
-                inner.remove(&oldest);
-            }
-        }
-        inner.insert(
-            key,
-            CachedBundle {
-                bundle,
-                fail_open,
-                inserted_at: Instant::now(),
-            },
-        );
-    }
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
 /// Result of the pre-thinking sync path.
 #[derive(Debug, Clone, Default)]
@@ -120,9 +44,11 @@ pub struct PreThinkingResult {
     /// `true` when the call was throttled by `enabled = false` or
     /// timed out and we returned the empty bundle.
     pub fail_open: bool,
-    /// phase26c §2.2 — `true` when the bundle was served from the
-    /// in-process LRU cache (< 10 ms response time).
+    /// Whether the API reused revision-checked memory content. Its delivery
+    /// receipt and authorization are checked afresh for this prompt.
     pub cache_hit: bool,
+    /// Local retrieval outcome, independent from optional archive availability.
+    pub memory_outcome: &'static str,
 }
 
 /// Result of the law-check sync path.
@@ -204,10 +130,8 @@ pub struct SyncClient {
     laws_timeout: Duration,
     laws_block_on_critical: bool,
     metrics: Arc<Metrics>,
-    /// phase26c §2.2 — in-process bundle cache. Shared across all
-    /// `pre_thinking()` calls on this client so a second identical
-    /// query within the TTL is served from memory.
-    bundle_cache: Arc<BundleCache>,
+    /// Transport credential, separate from prompt metadata and printable config.
+    api_key: Option<String>,
     /// Shared pre-thinking metrics — accumulated across calls so
     /// the health source can read cache hit/miss counters.
     prethink_metrics: Arc<PreThinkingMetrics>,
@@ -218,22 +142,28 @@ impl SyncClient {
     pub fn new(cfg: &AdapterSection, metrics: Arc<Metrics>) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_millis(cfg.timeout_ms))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("reqwest client builder"); // SAFETY: Client::builder().build() only fails on TLS init failure; panicking at process boot when TLS is unusable is the correct behaviour and grandfathered by the phase14i §3.2 gate.
         let prethink_metrics = Arc::new(PreThinkingMetrics::new());
-        let bundle_cache = Arc::new(BundleCache::new(prethink_metrics.clone()));
         Self {
             client,
             api_endpoint: cfg.api_endpoint.trim_end_matches('/').to_string(),
-            pre_thinking_timeout: Duration::from_millis(cfg.pre_thinking.timeout_ms),
+            pre_thinking_timeout: Duration::from_millis(cfg.pre_thinking.timeout_ms.min(600)),
             pre_thinking_enabled: cfg.pre_thinking.enabled,
-            pre_thinking_max_bytes: cfg.pre_thinking.max_bundle_kb * 1024,
+            pre_thinking_max_bytes: cfg.pre_thinking.max_bundle_kb.saturating_mul(1024),
             laws_timeout: Duration::from_millis(cfg.laws.timeout_ms),
             laws_block_on_critical: cfg.laws.block_on_critical,
             metrics,
-            bundle_cache,
+            api_key: None,
             prethink_metrics,
         }
+    }
+
+    /// Configure authenticated API access without deriving identity from agent labels.
+    pub fn with_api_key(mut self, key: impl Into<String>) -> Self {
+        self.api_key = Some(key.into());
+        self
     }
 
     /// Expose the shared pre-thinking metrics handle so the health
@@ -241,6 +171,11 @@ impl SyncClient {
     /// cache bumps.
     pub fn prethink_metrics(&self) -> Arc<PreThinkingMetrics> {
         self.prethink_metrics.clone()
+    }
+
+    /// Total configured context cap, shared by memory and lifecycle metadata.
+    pub fn bundle_budget(&self) -> usize {
+        usize::try_from(self.pre_thinking_max_bytes).unwrap_or(usize::MAX)
     }
 
     /// Run the pre-thinking sync call. Always returns a value —
@@ -255,41 +190,68 @@ impl SyncClient {
         turn_id: Option<&str>,
         cwd: Option<&str>,
     ) -> PreThinkingResult {
+        self.context(prompt, session_id, turn_id, cwd, false).await
+    }
+
+    /// Session start has no task query: retrieve only explicitly pinned advice.
+    pub async fn session_start_memory(
+        &self,
+        session_id: &str,
+        cwd: Option<&str>,
+    ) -> PreThinkingResult {
+        self.context("", session_id, None, cwd, true).await
+    }
+
+    async fn context(
+        &self,
+        prompt: &str,
+        session_id: &str,
+        turn_id: Option<&str>,
+        cwd: Option<&str>,
+        local_only: bool,
+    ) -> PreThinkingResult {
         if !self.pre_thinking_enabled {
             return PreThinkingResult {
                 bundle: String::new(),
                 fail_open: true,
                 cache_hit: false,
+                memory_outcome: "disabled",
             };
         }
+        // Hook origin must be observed and absolute. Relative paths would be
+        // resolved against the daemon rather than the emitting client's CWD.
+        let Some(cwd_str) = cwd.filter(|cwd| Path::new(cwd).is_absolute()) else {
+            return PreThinkingResult {
+                bundle: String::new(),
+                fail_open: true,
+                cache_hit: false,
+                memory_outcome: "scope_unresolved",
+            };
+        };
         let timeout = self.pre_thinking_timeout;
         let max_bytes = self.pre_thinking_max_bytes;
         let url = format!("{}/v1/query", self.api_endpoint.trim_end_matches('/'));
         let http = self.client.clone();
         let metrics = self.metrics.clone();
-
-        // Phase6d — re-derive the intent trigger keyword off the
-        // prompt so the audit envelope can record `intent_trigger`.
-        // The pipeline's own `select_intent` call drops the trigger,
-        // so we duplicate the (pure-function) match here. Empty
-        // string means "no rule fired"; the service treats that as
-        // an absent header and the audit envelope stamps
-        // `intent_trigger: null`.
-        let intent_trigger = cortex_pre_thinking::intent_select::select_matched(prompt)
-            .trigger
-            .unwrap_or("")
-            .to_string();
+        let api_key = self.api_key.clone();
 
         let query_fn = Arc::new(ClosureQueryFn(move |req: QueryRequest| {
             let url = url.clone();
             let http = http.clone();
             let metrics = metrics.clone();
-            let trigger = intent_trigger.clone();
+            let api_key = api_key.clone();
             async move {
+                // Match the pipeline's bounded query inside its shared deadline.
+                let trigger = cortex_pre_thinking::intent_select::select_matched(&req.query)
+                    .trigger
+                    .unwrap_or("");
                 let send_started = Instant::now();
                 let mut http_req = http.post(&url);
+                if let Some(key) = api_key {
+                    http_req = http_req.bearer_auth(key);
+                }
                 if !trigger.is_empty() {
-                    http_req = http_req.header("x-cortex-intent-trigger", &trigger);
+                    http_req = http_req.header("x-cortex-intent-trigger", trigger);
                 }
                 let resp = tokio::time::timeout(timeout, http_req.json(&req).send()).await;
                 let latency_ms =
@@ -302,25 +264,21 @@ impl SyncClient {
                     }
                     Ok(Err(_e)) => None,
                     Ok(Ok(resp)) if !resp.status().is_success() => None,
-                    Ok(Ok(resp)) => resp.json::<QueryResponse>().await.ok(),
+                    Ok(Ok(mut resp)) => {
+                        let mut body = Vec::new();
+                        while let Some(chunk) = resp.chunk().await.ok()? {
+                            if body.len().saturating_add(chunk.len()) > 256 * 1024 {
+                                return None;
+                            }
+                            body.extend_from_slice(&chunk);
+                        }
+                        serde_json::from_slice::<QueryResponse>(&body).ok()
+                    }
                 }
             }
         }));
 
-        let cwd_str = cwd.unwrap_or(".");
         let cwd_path = Path::new(cwd_str);
-
-        // phase26c §2.2 — check bundle cache before the full pipeline.
-        let cache_key = BundleCache::cache_key(prompt, cwd_str);
-        if let Some(cached) = self.bundle_cache.get(&cache_key) {
-            let bundle_bytes = u32::try_from(cached.bundle.len()).unwrap_or(u32::MAX);
-            self.metrics.observe_bundle_bytes(bundle_bytes);
-            return PreThinkingResult {
-                bundle: cached.bundle,
-                fail_open: cached.fail_open,
-                cache_hit: true,
-            };
-        }
 
         let budget_bytes = u32::try_from(max_bytes).unwrap_or(u32::MAX);
         let budget_ms = u32::try_from(timeout.as_millis()).unwrap_or(u32::MAX);
@@ -337,18 +295,29 @@ impl SyncClient {
             principal: None,
         };
 
-        let output = pre_thinking_run(&input, query_fn, self.prethink_metrics.clone()).await;
+        let memory_fn = Arc::new(cortex_pre_thinking::HttpDailyMemory::new(
+            self.client.clone(),
+            self.api_endpoint.clone(),
+            self.api_key.clone(),
+        ));
+        let output = if local_only {
+            cortex_pre_thinking::pipeline::run_memory_only(
+                &input,
+                memory_fn,
+                self.prethink_metrics.clone(),
+            )
+            .await
+        } else {
+            pre_thinking_run(&input, query_fn, memory_fn, self.prethink_metrics.clone()).await
+        };
         let bundle_bytes = u32::try_from(output.bundle.len()).unwrap_or(u32::MAX);
         self.metrics.observe_bundle_bytes(bundle_bytes);
-
-        // Populate the cache for the next identical query.
-        self.bundle_cache
-            .insert(cache_key, output.bundle.clone(), output.fail_open);
 
         PreThinkingResult {
             bundle: output.bundle,
             fail_open: output.fail_open,
-            cache_hit: false,
+            cache_hit: output.memory_cache_hit,
+            memory_outcome: output.memory_outcome,
         }
     }
 
@@ -428,13 +397,30 @@ impl SyncClient {
     /// snapshot.
     pub async fn active_work(&self, repo: Option<&str>) -> ActiveWorkOutcome {
         let started = Instant::now();
+        let Some(repo) = repo.filter(|repo| !repo.is_empty()) else {
+            return ActiveWorkOutcome::default();
+        };
         let url = format!("{}/v1/dashboard/active-work", self.api_endpoint);
-        let mut req = self.client.get(&url);
-        if let Some(slug) = repo.filter(|s| !s.is_empty()) {
-            req = req.query(&[("repo", slug)]);
+        let mut req = self.client.get(&url).query(&[("repo", repo)]);
+        if let Some(token) = &self.api_key {
+            req = req.bearer_auth(token);
         }
         let timeout = Duration::from_millis(ACTIVE_WORK_TIMEOUT_MS);
-        let resp = tokio::time::timeout(timeout, req.send()).await;
+        let resp = tokio::time::timeout(timeout, async {
+            let mut response = req.send().await.ok()?;
+            if !response.status().is_success() {
+                return None;
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response.chunk().await.ok()? {
+                if bytes.len().saturating_add(chunk.len()) > 64 * 1024 {
+                    return None;
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            serde_json::from_slice::<ActiveWorkReport>(&bytes).ok()
+        })
+        .await;
         let latency_ms = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
         self.metrics
             .observe_sync_latency("SessionStart", latency_ms);
@@ -443,9 +429,7 @@ impl SyncClient {
                 self.metrics.incr_sync_timeout("SessionStart");
                 None
             }
-            Ok(Err(_e)) => None,
-            Ok(Ok(resp)) if !resp.status().is_success() => None,
-            Ok(Ok(resp)) => resp.json::<ActiveWorkReport>().await.ok(),
+            Ok(body) => body,
         };
         match body {
             Some(report) => ActiveWorkOutcome {
@@ -466,69 +450,70 @@ mod tests {
     use crate::config::AdapterSection;
     use serde_json::json;
 
-    // ── BundleCache unit tests (phase26c §4.2) ──────────────────────────────
-
-    #[test]
-    fn bundle_cache_miss_counter_increments_on_insert() {
-        let m = Arc::new(PreThinkingMetrics::new());
-        let cache = BundleCache::new(m.clone());
-        let key = BundleCache::cache_key("hello", "/repo");
-        cache.insert(key, "bundle".to_string(), false);
-        let (_, miss) = m.cache_counters();
-        assert_eq!(miss, 1);
+    fn explicit_test_repo() -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        std::fs::write(
+            repo.path().join("cortex.toml"),
+            "[cortex]\nid='Sync/Test'\n",
+        )
+        .unwrap();
+        repo
     }
 
-    #[test]
-    fn bundle_cache_hit_counter_increments_on_get() {
-        let m = Arc::new(PreThinkingMetrics::new());
-        let cache = BundleCache::new(m.clone());
-        let key = BundleCache::cache_key("hello", "/repo");
-        cache.insert(key, "bundle_text".to_string(), false);
-        let entry = cache.get(&key);
-        assert!(entry.is_some());
-        assert_eq!(entry.unwrap().bundle, "bundle_text");
-        let (hit, _) = m.cache_counters();
-        assert_eq!(hit, 1);
+    #[tokio::test]
+    async fn active_work_authenticates_exact_repo_and_skips_unresolved_scope() {
+        use wiremock::matchers::{header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/dashboard/active-work"))
+            .and(query_param("repo", "exact-repo"))
+            .and(header("authorization", "Bearer synthetic-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "active_tasks":[{"id":"phase34","status":"in-progress"}],
+                "in_progress_count":1,"blocked_count":0,"recent_archives":[]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = SyncClient::new(
+            &AdapterSection {
+                api_endpoint: server.uri(),
+                ..Default::default()
+            },
+            Arc::new(Metrics::new()),
+        )
+        .with_api_key("synthetic-token");
+        assert!(client.active_work(None).await.tasks.is_empty());
+        assert!(client.active_work(Some("")).await.tasks.is_empty());
+        let result = client.active_work(Some("exact-repo")).await;
+        assert!(!result.fail_open);
+        assert_eq!(result.tasks[0].id, "phase34");
+        server.verify().await;
     }
 
-    #[test]
-    fn bundle_cache_different_prompts_produce_different_keys() {
-        let k1 = BundleCache::cache_key("prompt A", "/repo");
-        let k2 = BundleCache::cache_key("prompt B", "/repo");
-        let k3 = BundleCache::cache_key("prompt A", "/other");
-        assert_ne!(k1, k2);
-        assert_ne!(k1, k3);
+    #[tokio::test]
+    async fn active_work_rejects_oversized_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/v1/dashboard/active-work"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "active_tasks":[{"id":"phase34","status":"blocked","blocked_reason":"x".repeat(64*1024)}],
+                "in_progress_count":0,"blocked_count":1,"recent_archives":[]
+            }))).mount(&server).await;
+        let client = SyncClient::new(
+            &AdapterSection {
+                api_endpoint: server.uri(),
+                ..Default::default()
+            },
+            Arc::new(Metrics::new()),
+        );
+        let result = client.active_work(Some("exact-repo")).await;
+        assert!(result.fail_open);
+        assert!(result.tasks.is_empty());
     }
-
-    #[test]
-    fn bundle_cache_same_inputs_produce_same_key() {
-        let k1 = BundleCache::cache_key("same", "/repo");
-        let k2 = BundleCache::cache_key("same", "/repo");
-        assert_eq!(k1, k2);
-    }
-
-    #[test]
-    fn bundle_cache_evicts_oldest_at_max_capacity() {
-        let m = Arc::new(PreThinkingMetrics::new());
-        let cache = BundleCache::new(m.clone());
-        for i in 0..BUNDLE_CACHE_MAX {
-            let key = BundleCache::cache_key(&format!("prompt_{i}"), "/repo");
-            cache.insert(key, format!("bundle_{i}"), false);
-        }
-        {
-            let inner = cache.inner.lock().unwrap();
-            assert_eq!(inner.len(), BUNDLE_CACHE_MAX);
-        }
-        // One more entry should evict the oldest and keep the cap.
-        let overflow_key = BundleCache::cache_key("overflow", "/repo");
-        cache.insert(overflow_key, "overflow_bundle".to_string(), false);
-        {
-            let inner = cache.inner.lock().unwrap();
-            assert_eq!(inner.len(), BUNDLE_CACHE_MAX);
-        }
-    }
-
-    // ────────────────────────────────────────────────────────────────────────
 
     #[tokio::test]
     async fn pre_thinking_disabled_returns_empty_fail_open() {
@@ -569,6 +554,7 @@ mod tests {
 
     #[tokio::test]
     async fn unreachable_api_endpoint_fails_open_for_pre_thinking() {
+        let repo = explicit_test_repo();
         let cfg = AdapterSection {
             api_endpoint: "http://127.0.0.1:1".into(),
             pre_thinking: crate::config::PreThinkingSection {
@@ -580,59 +566,146 @@ mod tests {
         let metrics = Arc::new(Metrics::new());
         let client = SyncClient::new(&cfg, metrics);
         let r = client
-            .pre_thinking("hello", "sess", None, Some("/repo"))
+            .pre_thinking("hello", "sess", None, repo.path().to_str())
             .await;
         assert!(r.fail_open);
-        // Phase14e — fail-open bundles carry an HTML-comment
-        // sentinel instead of being empty, so the model can
-        // distinguish outage from "no results matched". The
-        // marker `<!-- cortex: timeout reason=…` is the contract.
+        assert!(r.bundle.is_empty());
+        // Windows may time out connecting to a closed port before reporting
+        // refusal. Both are transport failures, unlike an unresolved CWD.
         assert!(
-            r.bundle.starts_with("<!-- cortex: timeout reason="),
-            "fail-open bundle missing sentinel: {:?}",
-            r.bundle
+            matches!(r.memory_outcome, "unavailable" | "timeout"),
+            "unexpected outcome: {}",
+            r.memory_outcome
         );
     }
 
     #[tokio::test]
-    async fn prethink_metrics_surfaces_cache_hit_after_repeat_query() {
-        // phase26e §2.1 — the daemon /healthz closure reads
-        // `sync.prethink_metrics().cache_counters()`. Prove that handle
-        // reflects live cache activity: a repeated identical query within
-        // the TTL is a hit, and both the miss and the hit are visible
-        // through the same handle the health surface uses.
+    async fn unavailable_memory_and_query_are_never_replayed_from_adapter_cache() {
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let repo = explicit_test_repo();
+        for route in ["/v1/memory/query", "/v1/query"] {
+            Mock::given(method("POST"))
+                .and(path(route))
+                .respond_with(ResponseTemplate::new(503))
+                .expect(2)
+                .mount(&server)
+                .await;
+        }
         let cfg = AdapterSection {
-            api_endpoint: "http://127.0.0.1:1".into(),
+            api_endpoint: server.uri(),
             pre_thinking: crate::config::PreThinkingSection {
                 timeout_ms: 50,
                 ..Default::default()
             },
             ..Default::default()
         };
-        let metrics = Arc::new(Metrics::new());
-        let client = SyncClient::new(&cfg, metrics);
-        let (hit0, miss0) = client.prethink_metrics().cache_counters();
-        let r1 = client
-            .pre_thinking("same prompt", "s", None, Some("/r"))
+        let client = SyncClient::new(&cfg, Arc::new(Metrics::new()));
+        for _ in 0..2 {
+            let result = client
+                .pre_thinking("same prompt", "s", None, repo.path().to_str())
+                .await;
+            assert!(result.fail_open);
+            assert!(!result.cache_hit);
+            assert!(result.bundle.is_empty());
+            assert_eq!(result.memory_outcome, "unavailable");
+        }
+        assert_eq!(client.prethink_metrics().cache_counters(), (0, 0));
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn fresh_scoped_memory_survives_optional_outage_and_auth_denial_drops_old_context() {
+        use wiremock::{
+            matchers::{header, method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir(repo.path().join(".git")).unwrap();
+        std::fs::write(repo.path().join(".git/HEAD"), "ref: refs/heads/current\n").unwrap();
+        std::fs::write(
+            repo.path().join("cortex.toml"),
+            "[cortex]\nid = \"Exact/Repo\"\n",
+        )
+        .unwrap();
+        let cfg = AdapterSection {
+            api_endpoint: server.uri(),
+            ..Default::default()
+        };
+        let client =
+            SyncClient::new(&cfg, Arc::new(Metrics::new())).with_api_key("synthetic-token");
+        for (revision, id) in [(1, "original"), (2, "corrected")] {
+            server.reset().await;
+            Mock::given(method("POST")).and(path("/v1/memory/query"))
+                .and(header("authorization","Bearer synthetic-token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "context":format!("[memory \"{id}\" v1 event evt-{id} scope=repo:Exact/Repo]\nUse transaction {id}.\n"),
+                    "memories":[{"scope":{"repository":"Exact/Repo"},"id":id,"version":1,"event_id":format!("evt-{id}")}],
+                    "revision":revision,"global_revision":null,"delivery_id":format!("delivery-{revision}"),
+                    "stage":"prepared","cache_hit":false
+                }))).expect(1).mount(&server).await;
+            Mock::given(method("POST"))
+                .and(path("/v1/query"))
+                .and(header("authorization", "Bearer synthetic-token"))
+                .respond_with(ResponseTemplate::new(503))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let result = client
+                .pre_thinking(
+                    "Use transaction",
+                    "observed-session",
+                    None,
+                    repo.path().to_str(),
+                )
+                .await;
+            assert!(
+                result.bundle.contains(id),
+                "local memory lost: {}",
+                result.bundle
+            );
+            assert!(result.fail_open);
+            assert!(!result.cache_hit);
+            if revision == 2 {
+                assert!(!result.bundle.contains("original"));
+            }
+            let requests = server.received_requests().await.unwrap();
+            let request = requests
+                .iter()
+                .find(|req| req.url.path() == "/v1/memory/query")
+                .unwrap();
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["repo"], "Exact/Repo");
+            assert_eq!(body["branch"], "current");
+            assert_eq!(body["include_global"], false);
+            server.verify().await;
+        }
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/memory/query"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
             .await;
-        let r2 = client
-            .pre_thinking("same prompt", "s", None, Some("/r"))
+        Mock::given(method("POST"))
+            .and(path("/v1/query"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&server)
             .await;
-        assert!(!r1.cache_hit, "first call is a cache miss");
-        assert!(
-            r2.cache_hit,
-            "second identical call within TTL is a cache hit"
-        );
-        let (hit1, miss1) = client.prethink_metrics().cache_counters();
-        assert_eq!(
-            miss1 - miss0,
-            1,
-            "one miss recorded via the health-surfaced handle"
-        );
-        assert_eq!(
-            hit1 - hit0,
-            1,
-            "one hit recorded via the health-surfaced handle"
-        );
+        let result = client
+            .pre_thinking(
+                "Use transaction",
+                "observed-session",
+                None,
+                repo.path().to_str(),
+            )
+            .await;
+        assert!(!result.bundle.contains("original"));
+        assert!(!result.bundle.contains("corrected"));
+        assert!(!result.cache_hit);
     }
 }

@@ -132,16 +132,13 @@ async fn prune_seeds_100_events_and_demotes_correctly() {
             // Place the event's vector in the matching collection.
             {
                 let mut stored = vec_client.dedup_keys_per_collection.lock().unwrap();
-                stored
-                    .entry((*src_collection).into())
-                    .or_default()
-                    .insert(
-                        event_id.clone(),
-                        cortex_workers::embedder::vectorizer_client::StoredVec {
-                            dedup_key: event_id.clone(),
-                            server_id: format!("srv-{event_id}"),
-                        },
-                    );
+                stored.entry((*src_collection).into()).or_default().insert(
+                    event_id.clone(),
+                    cortex_workers::embedder::vectorizer_client::StoredVec {
+                        dedup_key: event_id.clone(),
+                        server_id: format!("srv-{event_id}"),
+                    },
+                );
             }
 
             // Group every 5 source events into one consolidation

@@ -460,6 +460,11 @@ pub struct IngestionConfig {
     /// Env: `CORTEX_ARCHIVE_ROOT` (also `CORTEX_HOME` + "/archive").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archive_root: Option<String>,
+    /// Opt into bounded historical archive backfill and incremental tailing.
+    /// Disabled by default; daily memory never needs archive decoding.
+    /// Env: `CORTEX_ARCHIVE_INCREMENTAL_ENABLED`.
+    #[serde(default)]
+    pub archive_incremental_enabled: bool,
     /// Synap publisher URL.
     /// Env: `CORTEX_SYNAP_URL` (also `CORTEX_INGESTION_SYNAP_URL`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -510,6 +515,7 @@ impl Default for IngestionConfig {
         Self {
             bind: default_ingestion_bind(),
             archive_root: None,
+            archive_incremental_enabled: false,
             synap_url: None,
             archive_zstd_level: default_zstd(),
             metadata_db: None,
@@ -1411,7 +1417,10 @@ mod tests_access_control_config {
     #[test]
     fn defaults_match_adr_1_3() {
         let cfg = AccessControlConfig::default();
-        assert!(!cfg.enabled, "AC must default OFF (ADR-1.3 backward compat)");
+        assert!(
+            !cfg.enabled,
+            "AC must default OFF (ADR-1.3 backward compat)"
+        );
         assert_eq!(cfg.default_level, 1, "default level is internal (1)");
         assert!(
             cfg.deny_on_missing_principal,

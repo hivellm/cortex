@@ -23,7 +23,9 @@
 
 use std::sync::Arc;
 
-use cortex_api::lanes::{LaneHit, LaneSource, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Overlay};
+use cortex_api::lanes::{
+    LaneHit, LaneSource, MemoryGraphLane, MemoryKeywordLane, MemoryVectorLane, Overlay,
+};
 use cortex_api::orchestrator::Orchestrator;
 use cortex_api::types::{IncludeField, Intent, QueryRequest, Scope};
 

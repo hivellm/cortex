@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::runtime::{RuntimeConfig, RuntimeProfile};
 use crate::sub::{
     AccessControlConfig, AdapterConfig, AnalyzerConfig, AutoMemoryConfig, CanaryConfig,
     ClassifierConfig, ClaudeArchiveConfig, ConsolidatorConfig, CrossProjectConfig, DashboardConfig,
@@ -29,6 +30,9 @@ pub struct Config {
     /// Schema discriminator. Defaults to [`SCHEMA_VERSION`].
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
+    /// Process profile; daily mode skips optional bulk components.
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
     /// Retention sweep knobs.
     #[serde(default)]
     pub retention: RetentionConfig,
@@ -111,6 +115,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION.to_string(),
+            runtime: RuntimeConfig::default(),
             retention: RetentionConfig::default(),
             embedder: EmbedderConfig::default(),
             meili: MeiliConfig::default(),
@@ -158,6 +163,11 @@ pub enum ConfigError {
 }
 
 impl Config {
+    /// Whether component factories should select the lightweight daily runtime.
+    pub fn is_daily(&self) -> bool {
+        self.runtime.profile == RuntimeProfile::Daily
+    }
+
     /// Sanity-check the resolved config. Currently only validates
     /// the schema version; future fields (e.g. mutually exclusive
     /// auth combos) hang here.

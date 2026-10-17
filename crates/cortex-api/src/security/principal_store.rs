@@ -164,7 +164,10 @@ mod tests {
             [
                 ("viewer".to_string(), binding(0, vec![])),
                 ("analyst".to_string(), binding(1, vec!["financial"])),
-                ("hr_specialist".to_string(), binding(2, vec!["hr", "financial"])),
+                (
+                    "hr_specialist".to_string(),
+                    binding(2, vec!["hr", "financial"]),
+                ),
                 ("security_eng".to_string(), binding(3, vec!["security"])),
                 ("acl_admin".to_string(), binding(3, vec![])),
             ],
@@ -213,10 +216,7 @@ mod tests {
     #[test]
     fn multi_role_unions_compartments() {
         let s = store();
-        let p = s.resolve(
-            "u3",
-            &["analyst".to_string(), "hr_specialist".to_string()],
-        );
+        let p = s.resolve("u3", &["analyst".to_string(), "hr_specialist".to_string()]);
         assert_eq!(p.clearance_level, 2);
         // Union of {financial} + {hr, financial} = {financial, hr}
         let mut grants = p.compartment_grants.clone();

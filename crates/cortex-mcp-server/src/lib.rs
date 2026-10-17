@@ -32,9 +32,9 @@ pub use tools::{
     ConsolidationCostsTool, ConsolidationGetTool, ConsolidationLineageTool,
     ConsolidationsByEntityTool, ConsolidationsDiffTool, ConsolidationsRecentTool,
     ConsolidationsSearchTool, DecisionSearchTool, EventsByKindTool, FeedbackSignalsTool,
-    FilesTouchedTool, ForgetTool, LawViolationsTool, PreThinkingTool, QueryExplainTool, QueryTool,
-    SessionTimelineTool, StatusTool, Tool, ToolCallsTool, ToolContext, ToolError, ToolRegistry,
-    ToolResult, TopicSearchTool, MCP_TOOL_TIMEOUT_MS,
+    FilesTouchedTool, ForgetTool, LawViolationsTool, MemoryReadTool, PreThinkingTool,
+    QueryExplainTool, QueryTool, SessionTimelineTool, StatusTool, Tool, ToolCallsTool, ToolContext,
+    ToolError, ToolRegistry, ToolResult, TopicSearchTool, MCP_TOOL_TIMEOUT_MS,
 };
 pub use validate::{validate_plugin, ValidationReport};
 

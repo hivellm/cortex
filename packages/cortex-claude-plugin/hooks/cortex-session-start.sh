@@ -1,39 +1,26 @@
 #!/usr/bin/env bash
-# cortex-session-start — SessionStart shim. Spec 10.
+# Native transport owns bounded JSON I/O, session identity and outage notices.
+# No native binary: continue the prompt with an empty response. Legacy nc/socat
+# forwarding cannot guarantee the same bounds or once-per-session policy.
 set -u
 
-if [ "${CORTEX_ADAPTER_DISABLE:-0}" = "1" ]; then echo "{}"; exit 0; fi
+if [ "${CORTEX_ADAPTER_DISABLE:-0}" = "1" ]; then printf '{}\n'; exit 0; fi
 
 EVENT="SessionStart"
-SYNCHRONOUS=0
-
+SYNCHRONOUS=1
 BIN="${CORTEX_HOOK_BIN:-}"
-if [ -z "${BIN}" ] && command -v cortex-hook >/dev/null 2>&1; then
+if [ -z "$BIN" ] && command -v cortex-hook >/dev/null 2>&1; then
     BIN="cortex-hook"
 fi
-if [ -z "${BIN}" ]; then
-    for cand in "$HOME/.cortex/cortex-hook" "$HOME/.cortex/cortex-hook.exe"; do
+if [ -z "$BIN" ]; then
+    for cand in "${HOME:-}/.cortex/cortex-hook" "${HOME:-}/.cortex/cortex-hook.exe"; do
         if [ -x "$cand" ]; then BIN="$cand"; break; fi
     done
 fi
-if [ -n "${BIN}" ]; then
-    if [ "${SYNCHRONOUS}" = "1" ]; then
-        exec "${BIN}" "${EVENT}"
-    else
-        exec "${BIN}" "${EVENT}" --fire-forget
-    fi
+if [ -n "$BIN" ] && { [ -x "$BIN" ] || command -v "$BIN" >/dev/null 2>&1; }; then
+    # SessionStart must return the daemon's actual additionalContext.
+    # Do not append --fire-forget, including on resumed sessions.
+    exec "$BIN" "$EVENT"
 fi
-
-SOCK="${CORTEX_ADAPTER_SOCK:-$HOME/.cortex/adapter-claude.sock}"
-INPUT="$(cat || true)"
-PAYLOAD=$(printf '{"hook":"%s","session_id":"%s","cwd":"%s","payload":%s}' \
-    "${EVENT}" "${CLAUDE_SESSION_ID:-}" "$PWD" "${INPUT:-{}}")
-if command -v nc >/dev/null 2>&1 && [ -S "$SOCK" ]; then
-    RESPONSE=$(printf '%s\n' "$PAYLOAD" | nc -U -w1 "$SOCK" 2>/dev/null || true)
-elif command -v socat >/dev/null 2>&1 && [ -S "$SOCK" ]; then
-    RESPONSE=$(printf '%s\n' "$PAYLOAD" | socat - "UNIX-CONNECT:$SOCK" 2>/dev/null || true)
-else
-    RESPONSE=""
-fi
-printf '%s\n' "${RESPONSE:-{}}"
+printf '{}\n'
 exit 0

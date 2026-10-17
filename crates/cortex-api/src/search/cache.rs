@@ -24,6 +24,9 @@ pub const SCHEMA_VERSION: &str = "v1";
 /// Default TTL — spec 11 §Caching.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(600);
 
+/// Bounds retained responses when archive revisions generate new cache keys.
+const MAX_ENTRIES: usize = 1024;
+
 /// Cache trait.
 #[async_trait]
 pub trait Cache: Send + Sync {
@@ -39,9 +42,8 @@ pub trait Cache: Send + Sync {
     async fn clear(&self);
 }
 
-/// In-memory cache with TTL. Uses a write-lock on insert / evict and
-/// a read-lock on lookup, so the hot path is wait-free under read
-/// contention.
+/// In-memory cache with TTL and at most 1024 responses. Inserts prune expired
+/// responses, then evict the oldest insertion when full. Lookups use a read-lock.
 pub struct InMemoryCache {
     inner: RwLock<HashMap<String, Entry>>,
     ttl: Duration,
@@ -90,6 +92,20 @@ impl Cache for InMemoryCache {
     async fn put(&self, key: &str, value: QueryResponse) {
         let repo = value.scope_resolved.repo.clone();
         let mut g = self.inner.write().await;
+        g.retain(|_, entry| self.fresh(entry));
+        if g.len() >= MAX_ENTRIES && !g.contains_key(key) {
+            let oldest = g
+                .iter()
+                .min_by(|(left_key, left), (right_key, right)| {
+                    left.inserted
+                        .cmp(&right.inserted)
+                        .then_with(|| left_key.cmp(right_key))
+                })
+                .map(|(key, _)| key.clone());
+            if let Some(oldest) = oldest {
+                g.remove(&oldest);
+            }
+        }
         g.insert(
             key.to_string(),
             Entry {
@@ -185,6 +201,60 @@ mod tests {
         assert!(cache.get(&key).await.is_some());
         tokio::time::sleep(Duration::from_millis(40)).await;
         assert!(cache.get(&key).await.is_none(), "entry expired");
+    }
+
+    #[tokio::test]
+    async fn revision_churn_evicts_oldest_response_and_keeps_recent_responses() {
+        let cache = InMemoryCache::new();
+        let request = req(Intent::PreChangeContext, "archive revision", Some("Cortex"));
+        for revision in 0..MAX_ENTRIES {
+            cache
+                .put(&format!("revision-{revision}"), empty_response(&request))
+                .await;
+        }
+        cache
+            .inner
+            .write()
+            .await
+            .get_mut("revision-0")
+            .unwrap()
+            .inserted = Instant::now() - Duration::from_secs(1);
+
+        // Updating an existing response at capacity must not evict another key.
+        cache.put("revision-1", empty_response(&request)).await;
+        assert!(cache.get("revision-0").await.is_some());
+        cache.put("newest-revision", empty_response(&request)).await;
+
+        assert_eq!(cache.inner.read().await.len(), MAX_ENTRIES);
+        assert!(cache.get("revision-0").await.is_none());
+        assert!(cache.get("revision-1").await.is_some());
+        assert!(cache.get("newest-revision").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn inserting_fresh_response_reclaims_expired_response_storage() {
+        let cache = InMemoryCache::with_ttl(Duration::from_secs(1));
+        let request = req(Intent::PreChangeContext, "archive revision", None);
+        cache
+            .put("expired-revision", empty_response(&request))
+            .await;
+        cache
+            .inner
+            .write()
+            .await
+            .get_mut("expired-revision")
+            .unwrap()
+            .inserted = Instant::now() - Duration::from_secs(2);
+        assert!(cache.get("expired-revision").await.is_none());
+
+        cache.put("fresh-revision", empty_response(&request)).await;
+
+        assert_eq!(cache.inner.read().await.len(), 1);
+        assert!(!cache.inner.read().await.contains_key("expired-revision"));
+        assert_eq!(
+            cache.get("fresh-revision").await.unwrap().budget.cache,
+            "hit"
+        );
     }
 
     #[tokio::test]

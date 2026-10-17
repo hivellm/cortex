@@ -71,8 +71,10 @@ pub fn resolve_request_principal(
         if let Some(candidate) = extract_bearer_token(headers) {
             match store.verify_with_role(&candidate) {
                 Ok((key_id, role)) => {
-                    let roles: Vec<String> =
-                        role.as_deref().map(|r| vec![r.to_string()]).unwrap_or_default();
+                    let roles: Vec<String> = role
+                        .as_deref()
+                        .map(|r| vec![r.to_string()])
+                        .unwrap_or_default();
                     let p = principal_store.resolve(&key_id, &roles);
                     tracing::debug!(
                         key_id = %key_id,
@@ -132,13 +134,7 @@ pub fn has_explicit_auth(headers: &HeaderMap) -> bool {
     if extract_bearer_token(headers).is_some() {
         return true;
     }
-    // The principal-override header is only trusted when the env gate is on,
-    // but even without the gate we consider its presence as "explicit auth"
-    // so callers on internal networks are not spuriously rejected.
-    if extract_principal_header(headers).is_some() {
-        return true;
-    }
-    false
+    trust_principal_header_enabled() && extract_principal_header(headers).is_some()
 }
 
 /// Extract the Bearer token from the `Authorization` header.
@@ -180,10 +176,13 @@ mod tests {
     fn store_with_analyst() -> (ApiKeyStore, PrincipalStore) {
         let aks = ApiKeyStore::open_in_memory().unwrap();
         let ps = PrincipalStore::new(
-            [("analyst".to_string(), RoleBinding {
-                clearance_level: 1,
-                compartments: vec!["financial".to_string()],
-            })],
+            [(
+                "analyst".to_string(),
+                RoleBinding {
+                    clearance_level: 1,
+                    compartments: vec!["financial".to_string()],
+                },
+            )],
             Principal::public_only("default"),
         );
         (aks, ps)
@@ -253,7 +252,8 @@ mod tests {
     #[test]
     fn invalid_api_key_falls_back_to_default() {
         let (aks, ps) = store_with_analyst();
-        let headers = headers_with_bearer("cortex_dash_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        let headers =
+            headers_with_bearer("cortex_dash_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let p = resolve_request_principal(&headers, Some(&aks), &ps);
         assert_eq!(p.clearance_level, 0);
         assert_eq!(p.id, "anonymous");
@@ -295,13 +295,19 @@ mod tests {
     #[test]
     fn extract_bearer_returns_token_after_bearer_prefix() {
         let headers = headers_with_bearer("mytoken123");
-        assert_eq!(extract_bearer_token(&headers).as_deref(), Some("mytoken123"));
+        assert_eq!(
+            extract_bearer_token(&headers).as_deref(),
+            Some("mytoken123")
+        );
     }
 
     #[test]
     fn extract_bearer_returns_none_for_empty_token() {
         let mut m = HeaderMap::new();
-        m.insert(axum::http::header::AUTHORIZATION, HeaderValue::from_static("Bearer "));
+        m.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer "),
+        );
         assert!(extract_bearer_token(&m).is_none());
     }
 }

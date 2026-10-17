@@ -15,9 +15,7 @@
 use std::path::PathBuf;
 
 use cortex_eval::suite::{
-    consolidation::{
-        load_csv as load_consolidation, ENTITY_RECALL_FLOOR, FACT_RECALL_FLOOR,
-    },
+    consolidation::{load_csv as load_consolidation, ENTITY_RECALL_FLOOR, FACT_RECALL_FLOOR},
     retrieval::{load_csv as load_retrieval, MRR_AT_10_FLOOR, RECALL_AT_5_FLOOR},
 };
 
@@ -168,8 +166,8 @@ async fn live_retrieval_suite_meets_reranked_gates() {
     if std::env::var("CORTEX_EVAL_IT").is_err() {
         return;
     }
-    let api_url = std::env::var("CORTEX_API_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:17000".into());
+    let api_url =
+        std::env::var("CORTEX_API_URL").unwrap_or_else(|_| "http://127.0.0.1:17000".into());
     let golden_path = manifest_dir().join("tests/golden/retrieval.csv");
     let rows = load_retrieval(&golden_path).expect("load retrieval golden csv");
 

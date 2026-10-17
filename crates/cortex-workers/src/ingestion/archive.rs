@@ -1,6 +1,6 @@
 //! Durable archive writer.
 //!
-//! Writes one zstd-compressed NDJSON file per hour per stream tag under
+//! Writes zstd-compressed NDJSON files grouped by hour and stream tag under
 //! the partition layout declared in `cortex_storage::archive` — so spec 02
 //! owns the *where*, and this module owns the *how*. Format: one event per
 //! line; each line is the full envelope as JSON plus an `_archived_at`
@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use cortex_storage::{archive_filename, archive_partition};
 use serde_json::Value;
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -35,8 +35,7 @@ pub enum ArchiveError {
 /// Abstract archive writer used by the HTTP router.
 pub trait ArchiveWriter: Send + Sync + 'static {
     /// Persist a single event envelope. Must not return until the bytes
-    /// are guaranteed durable (flushed + fsynced in production; flushed
-    /// in dev).
+    /// are guaranteed durable (complete frame, flushed and synced to disk).
     ///
     /// ADR-012 — returns the partition path the envelope was written
     /// to so the ingestion router can stamp `event_identity.archive_partition`
@@ -47,16 +46,19 @@ pub trait ArchiveWriter: Send + Sync + 'static {
 }
 
 /// Zstd-compressed NDJSON archive. Rotates hourly per stream tag.
+/// Each successful write ends a complete independently compressed frame.
 pub struct NdJsonZstdArchive {
     root: PathBuf,
     level: i32,
-    /// `(stream_tag, hour_bucket) -> open writer`.
+    /// `(stream_tag, hour_bucket) -> open file`, bounded across old partitions.
     open: Mutex<std::collections::HashMap<(String, String), ArchiveFile>>,
 }
 
+const MAX_OPEN_ARCHIVE_FILES: usize = 32;
+
 struct ArchiveFile {
     path: PathBuf,
-    encoder: zstd::stream::write::AutoFinishEncoder<'static, BufWriter<File>>,
+    file: File,
 }
 
 impl NdJsonZstdArchive {
@@ -69,12 +71,13 @@ impl NdJsonZstdArchive {
         }
     }
 
-    fn ensure_open(&self, stream_tag: &str, ts: DateTime<Utc>) -> Result<(), ArchiveError> {
+    fn ensure_open(
+        &self,
+        stream_tag: &str,
+        ts: DateTime<Utc>,
+        open: &mut std::collections::HashMap<(String, String), ArchiveFile>,
+    ) -> Result<(), ArchiveError> {
         let bucket = format!("{}", ts.format("%Y%m%d%H"));
-        let mut open = self
-            .open
-            .lock()
-            .map_err(|_| ArchiveError::Internal("archive mutex poisoned".into()))?;
         let key = (stream_tag.to_string(), bucket);
         if open.contains_key(&key) {
             return Ok(());
@@ -89,17 +92,29 @@ impl NdJsonZstdArchive {
         // truncate the recovered set at the boundary — silent data
         // loss until the operator manually rotated the file.
         //
-        // Pick the next free sequence number so a fresh process
-        // always opens a clean file. Graceful shutdown still flushes
-        // the encoder cleanly into whatever sequence is currently
-        // open; only an abrupt termination strands the file, and
-        // the next run side-steps it instead of corrupting it.
-        let sequence = next_free_sequence(&dir, stream_tag)?;
-        let filename = archive_filename(stream_tag, sequence);
-        let path = dir.join(&filename);
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        let encoder = zstd::Encoder::new(BufWriter::new(file), self.level)?.auto_finish();
-        open.insert(key, ArchiveFile { path, encoder });
+        // A new handle never reopens an old tail, including after eviction or
+        // an I/O failure. create_new also arbitrates independent processes.
+        let mut sequence = next_free_sequence(&dir, stream_tag)?;
+        let (path, file) = loop {
+            let path = dir.join(archive_filename(stream_tag, sequence));
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => break (path, file),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    sequence = sequence
+                        .checked_add(1)
+                        .ok_or_else(|| std::io::Error::other("archive sequence exhausted"))?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        if open.len() >= MAX_OPEN_ARCHIVE_FILES {
+            // Every cached file already contains only durable completed
+            // frames, so closing an old hour has no buffered work to lose.
+            if let Some(oldest) = open.keys().min_by(|a, b| a.1.cmp(&b.1)).cloned() {
+                open.remove(&oldest);
+            }
+        }
+        open.insert(key, ArchiveFile { path, file });
         Ok(())
     }
 
@@ -109,8 +124,17 @@ impl NdJsonZstdArchive {
             .open
             .lock()
             .map_err(|_| ArchiveError::Internal("archive mutex poisoned".into()))?;
-        for af in open.values_mut() {
-            af.encoder.flush()?;
+        let keys: Vec<_> = open.keys().cloned().collect();
+        for key in keys {
+            let result = open
+                .get_mut(&key)
+                .ok_or_else(|| ArchiveError::Internal("archive file disappeared".into()))?
+                .file
+                .sync_data();
+            if let Err(error) = result {
+                open.remove(&key);
+                return Err(error.into());
+            }
         }
         Ok(())
     }
@@ -177,8 +201,6 @@ impl ArchiveWriter for NdJsonZstdArchive {
             .map(|dt| dt.with_timezone(&Utc))
             .unwrap_or_else(Utc::now);
 
-        self.ensure_open(stream_tag, occurred_at)?;
-
         let mut owned = envelope.clone();
         if let Value::Object(map) = &mut owned {
             map.insert(
@@ -186,7 +208,11 @@ impl ArchiveWriter for NdJsonZstdArchive {
                 Value::String(Utc::now().to_rfc3339()),
             );
         }
-        let line = serde_json::to_string(&owned)?;
+        let mut line = serde_json::to_vec(&owned)?;
+        line.push(b'\n');
+        // Finish compression before touching the file: no encoder lives
+        // across calls, and codec/finalization errors are returned explicitly.
+        let frame = zstd::encode_all(line.as_slice(), self.level)?;
 
         let bucket = format!("{}", occurred_at.format("%Y%m%d%H"));
         let key = (stream_tag.to_string(), bucket);
@@ -194,12 +220,21 @@ impl ArchiveWriter for NdJsonZstdArchive {
             .open
             .lock()
             .map_err(|_| ArchiveError::Internal("archive mutex poisoned".into()))?;
+        self.ensure_open(stream_tag, occurred_at, &mut open)?;
         let af = open
             .get_mut(&key)
             .ok_or_else(|| ArchiveError::Internal("archive file disappeared".into()))?;
-        af.encoder.write_all(line.as_bytes())?;
-        af.encoder.write_all(b"\n")?;
-        af.encoder.flush()?;
+        let result = af
+            .file
+            .write_all(&frame)
+            .and_then(|()| af.file.flush())
+            .and_then(|()| af.file.sync_data());
+        if let Err(error) = result {
+            // A partial write has an unknown tail. Keep its bytes for
+            // recovery, but never append another frame to that file.
+            open.remove(&key);
+            return Err(error.into());
+        }
         // ADR-012 — surface the partition path so the router can
         // stamp `event_identity.archive_partition` on the upsert.
         Ok(af.path.clone())
@@ -253,6 +288,8 @@ pub fn read_archive_file(path: &Path) -> Result<Vec<Value>, ArchiveError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use std::io::Read;
     use tempfile::TempDir;
 
     fn touch(dir: &Path, name: &str) {
@@ -320,7 +357,9 @@ mod tests {
         let preexisting = dir.join("raw-00000.parquet");
         std::fs::write(&preexisting, b"\xDEAD_TAIL_BYTES").unwrap();
 
-        archive.ensure_open("raw", ts).unwrap();
+        archive
+            .write("raw", &serde_json::json!({"occurred_at": ts.to_rfc3339()}))
+            .unwrap();
         let opened = archive.open_paths();
         assert_eq!(opened.len(), 1);
         let chosen = &opened[0];
@@ -339,5 +378,143 @@ mod tests {
         // The pre-existing corrupt sibling stays on disk untouched
         // — operators decide what to do with it.
         assert!(preexisting.exists());
+    }
+
+    #[test]
+    fn successful_writes_finish_each_frame_before_flush_or_drop() {
+        let tmp = TempDir::new().unwrap();
+        let archive = NdJsonZstdArchive::new(tmp.path().to_path_buf(), 1);
+        let first = json!({"event_id":"first", "occurred_at":"2026-04-28T22:00:00Z"});
+        let second = json!({"event_id":"second", "occurred_at":"2026-04-28T22:01:00Z"});
+        let path = archive.write("raw", &first).unwrap();
+        let rows = read_archive_file(&path).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["event_id"], "first");
+        assert!(rows[0]["_archived_at"].is_string());
+
+        assert_eq!(archive.write("raw", &second).unwrap(), path);
+        assert_eq!(read_archive_file(&path).unwrap().len(), 2);
+        let bytes = std::fs::read(&path).unwrap();
+        let mut decoder = zstd::stream::read::Decoder::with_buffer(bytes.as_slice())
+            .unwrap()
+            .single_frame();
+        let mut first_frame = String::new();
+        decoder.read_to_string(&mut first_frame).unwrap();
+        let remaining = decoder.finish();
+        assert!(!remaining.is_empty(), "second envelope needs its own frame");
+        assert_eq!(
+            serde_json::from_str::<Value>(first_frame.trim()).unwrap()["event_id"],
+            "first"
+        );
+        let second_frame = zstd::decode_all(remaining).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&second_frame).unwrap()["event_id"],
+            "second"
+        );
+        archive.flush().unwrap();
+        assert_eq!(archive.open_paths(), vec![path.clone()]);
+        assert_eq!(archive.write("raw", &second).unwrap(), path);
+    }
+
+    #[test]
+    fn old_hour_eviction_bounds_handles_and_reopens_clean_sequence() {
+        let tmp = TempDir::new().unwrap();
+        let archive = NdJsonZstdArchive::new(tmp.path().to_path_buf(), 1);
+        let start = DateTime::parse_from_rfc3339("2026-04-28T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut paths = Vec::new();
+        for index in 0..MAX_OPEN_ARCHIVE_FILES + 3 {
+            let ts = start + chrono::Duration::hours(index as i64);
+            paths.push(
+                archive
+                    .write(
+                        "raw",
+                        &json!({"event_id":index, "occurred_at":ts.to_rfc3339()}),
+                    )
+                    .unwrap(),
+            );
+            assert!(archive.open_paths().len() <= MAX_OPEN_ARCHIVE_FILES);
+        }
+        assert_eq!(archive.open_paths().len(), MAX_OPEN_ARCHIVE_FILES);
+        assert!(!archive.open_paths().contains(&paths[0]));
+        let reopened = archive
+            .write(
+                "raw",
+                &json!({"event_id":"reopened", "occurred_at":start.to_rfc3339()}),
+            )
+            .unwrap();
+        assert_ne!(reopened, paths[0]);
+        paths.push(reopened);
+        for path in paths {
+            assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        }
+        assert_eq!(archive.open_paths().len(), MAX_OPEN_ARCHIVE_FILES);
+    }
+
+    #[test]
+    fn failed_write_retires_handle_and_preserves_previous_complete_frames() {
+        let tmp = TempDir::new().unwrap();
+        let archive = NdJsonZstdArchive::new(tmp.path().to_path_buf(), 1);
+        let first = json!({"event_id":"first", "occurred_at":"2026-04-28T22:00:00Z"});
+        let path = archive.write("raw", &first).unwrap();
+        {
+            let mut open = archive.open.lock().unwrap();
+            let entry = open.values_mut().next().unwrap();
+            entry.file = File::open(&path).unwrap();
+        }
+        assert!(matches!(
+            archive.write("raw", &first),
+            Err(ArchiveError::Io(_))
+        ));
+        assert!(archive.open_paths().is_empty());
+        let reopened = archive.write("raw", &first).unwrap();
+        assert_ne!(reopened, path);
+        assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        assert_eq!(read_archive_file(&reopened).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn independent_writers_never_share_a_new_file() {
+        let tmp = TempDir::new().unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let threads: Vec<_> = (0..2)
+            .map(|index| {
+                let root = tmp.path().to_path_buf();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let archive = NdJsonZstdArchive::new(root, 1);
+                    barrier.wait();
+                    archive
+                        .write(
+                            "raw",
+                            &json!({"event_id":index, "occurred_at":"2026-04-28T22:00:00Z"}),
+                        )
+                        .unwrap()
+                })
+            })
+            .collect();
+        let paths: Vec<_> = threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect();
+        assert_ne!(paths[0], paths[1]);
+        for path in paths {
+            assert_eq!(read_archive_file(&path).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn archive_directory_error_is_returned_without_open_handle() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("not-a-directory");
+        std::fs::write(&root, b"preserve").unwrap();
+        let archive = NdJsonZstdArchive::new(root.clone(), 1);
+        assert!(matches!(
+            archive.write("raw", &json!({})),
+            Err(ArchiveError::Io(_))
+        ));
+        assert!(archive.open_paths().is_empty());
+        assert_eq!(std::fs::read(root).unwrap(), b"preserve");
     }
 }

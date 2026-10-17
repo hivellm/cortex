@@ -1,294 +1,191 @@
-//! Phase10j — `POST /v1/ingest` proxy.
-//!
-//! Wraps the small subset of `cortex-ingestion`'s `POST /v1/events`
-//! the agent capture flow needs (memory / knowledge / learning kinds)
-//! behind a stable URL on `cortex-api`. Rationale: the MCP server
-//! already knows where to find `cortex-api` via its `api_url`; making
-//! the agent learn a second URL for ingestion would mean every host
-//! has two configs to keep in sync.
-//!
-//! The proxy:
-//! 1. Accepts `{ kind, body, repo, topic?, severity? }`.
-//! 2. Validates `body` is non-empty and ≤ `MAX_BODY_BYTES`.
-//! 3. Builds a canonical envelope (spec-04) with `event_id`,
-//!    `kind`, `payload.body`, `context.repo`, optional
-//!    `context.topic`, optional `severity`.
-//! 4. Forwards it to `cortex-ingestion` via `POST /v1/events`. The
-//!    upstream URL comes from `CORTEX_INGESTION_URL`
-//!    (defaults to `http://127.0.0.1:17010`).
-//! 5. Returns `{ event_id, content_hash, indexed_at }` synchronously.
-//!
-//! When `cortex-ingestion` is unreachable, the proxy returns 503 so
-//! the agent can fall back to local capture (`rulebook_memory_save`)
-//! without blocking on network failures.
+//! Local durable capture behind the legacy `POST /v1/ingest` surface.
+use crate::{
+    daily_memory::{authorize, unavailable},
+    http::ApiState,
+};
+use axum::{
+    extract::{Json, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+};
+use cortex_core::events::Kind;
+use cortex_storage::daily_memory::{
+    MemoryCapture, MemoryCategory, MemoryOrigin, MemoryRetryKey, MemoryScope, MemorySource,
+    MemoryStatus, OriginAttribution,
+};
+use serde::Deserialize;
+use serde_json::json;
 
-use axum::extract::{Json, State};
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
-
-use crate::http::ApiState;
-
-/// Spec — capture body is capped at 8 KiB. Larger bodies belong in
-/// the file-backed knowledge / decision stores, not the live lane.
-pub const MAX_BODY_BYTES: usize = 8 * 1024;
-
-/// Default upstream URL for `cortex-ingestion`. Overridable via
-/// the `CORTEX_INGESTION_URL` env var for non-default deployments.
+/// Maximum explicit captured body size.
+pub const MAX_BODY_BYTES: usize = 8192;
+/// Legacy endpoint constant; local capture does not contact it.
 pub const DEFAULT_INGESTION_URL: &str = "http://127.0.0.1:17010";
 
-/// Inbound request shape — the three kinds the operator-curated
-/// surface exposes plus the minimum metadata the freshness lane
-/// needs to attribute the envelope back to a repo.
+/// Legacy capture shape plus additive typed local-memory metadata.
 #[derive(Debug, Clone, Deserialize)]
 pub struct IngestRequest {
-    /// Event kind. Restricted to operator-curated kinds; the live
-    /// adapter pipelines (Stop hook, classifier worker) write to
-    /// `cortex-ingestion` directly with `kind=turn` / `tool_call` /
-    /// `agent_call`.
+    /// Legacy evidence kind or typed decision.
     pub kind: String,
-    /// Free-form body text. Capped at [`MAX_BODY_BYTES`].
+    /// Exact user-authored content.
     pub body: String,
-    /// Repo slug — lowercase per phase10d.
+    /// Exact repository identity.
     pub repo: String,
-    /// Optional topic from the canonical taxonomy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Opt in to external TypeSafe candidate-only classification after commit.
+    /// False or omitted keeps capture local, even when provider credentials exist.
+    #[serde(default)]
+    pub classify: bool,
+    /// Legacy topic, also used as default title.
     pub topic: Option<String>,
-    /// Severity hint (`info` / `notable`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Legacy severity hint.
     pub severity: Option<String>,
+    /// Explicit short title.
+    pub title: Option<String>,
+    /// Create-only identity.
+    #[serde(alias = "id")]
+    pub memory_id: Option<String>,
+    /// Initial canonical status.
+    pub status: Option<MemoryStatus>,
+    /// Client-reported origin, never authority.
+    pub agent: Option<String>,
+    /// Client-reported session, if observed.
+    pub session_id: Option<String>,
+    /// Client-reported turn, if observed.
+    pub turn_id: Option<String>,
+    /// Caller-scoped stable write retry key.
+    pub retry_key: Option<String>,
+    /// Branch applicability.
+    pub branch: Option<String>,
+    /// Relative path applicability.
+    pub path: Option<String>,
+    /// Explicit all-prompts applicability.
+    #[serde(default)]
+    pub pinned: bool,
+    /// Original evidence references.
+    #[serde(default)]
+    pub sources: Vec<MemorySource>,
+    /// Original legacy source identity, if supplied.
+    pub event_id: Option<String>,
+    /// Scope revision observed by writer.
+    pub expected_revision: Option<u64>,
+    /// Explicit accepted same-scope predecessor.
+    pub supersedes: Option<String>,
+    /// Explicit global write, requiring authenticated administrator.
+    #[serde(default)]
+    pub global: bool,
+    /// Typed scope; repository identity must agree with `repo`.
+    pub scope: Option<MemoryScope>,
 }
 
-/// Outbound response shape — mirrors the spec-04 ingestion contract.
-#[derive(Debug, Clone, Serialize)]
-pub struct IngestResponse {
-    /// Server-stamped envelope id (ULID).
-    pub event_id: String,
-    /// SHA-256 of the body — lets the agent cite a stable handle.
-    pub content_hash: String,
-    /// RFC-3339 timestamp the envelope was accepted by ingestion.
-    pub indexed_at: String,
-}
-
-/// Phase10j — capture handler. Validates, builds the envelope, and
-/// forwards to `cortex-ingestion`.
+/// Commit locally before acknowledging; indexing availability is irrelevant.
 pub async fn handle_ingest(
     State(state): State<ApiState>,
+    headers: HeaderMap,
     Json(req): Json<IngestRequest>,
 ) -> Response {
-    // 1. Validate body.
-    let body_len = req.body.len();
-    if body_len == 0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "body_empty",
-                "message": "body must not be empty",
-            })),
-        )
-            .into_response();
-    }
-    if body_len > MAX_BODY_BYTES {
+    if req.body.len() > MAX_BODY_BYTES {
         return (
             StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({
-                "error": "body_too_large",
-                "max_bytes": MAX_BODY_BYTES,
-                "received": body_len,
-            })),
+            Json(json!({"error":"body_too_large","max_bytes":MAX_BODY_BYTES})),
         )
             .into_response();
     }
-
-    // 2. Validate kind.
-    let kind = req.kind.trim().to_ascii_lowercase();
-    if !matches!(kind.as_str(), "memory" | "knowledge" | "learning") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "unsupported_kind",
-                "message": "kind must be one of: memory, knowledge, learning",
-                "received": req.kind,
-            })),
-        )
-            .into_response();
-    }
-
-    // 3. Validate repo.
-    let repo = req.repo.trim();
-    if repo.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "repo_required",
-                "message": "repo must be a non-empty lowercase slug",
-            })),
-        )
-            .into_response();
-    }
-    if repo != repo.to_ascii_lowercase() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "error": "repo_not_lowercase",
-                "message": "repo must be lowercase per phase10d",
-                "received": repo,
-            })),
-        )
-            .into_response();
-    }
-
-    // 4. Build canonical envelope matching `cortex_core::events::Envelope`
-    // shape — every required wire-schema field must be present so the
-    // ingestion validator does not reject the body.
-    let event_id = cortex_core::event_id();
-    // The wire schema requires `sha256:<64-hex>` (see
-    // `cortex_core::validate`); the bare hex was rejected upstream.
-    let content_hash = format!("sha256:{}", sha256_hex(req.body.as_bytes()));
-    let now = chrono::Utc::now().to_rfc3339();
-    let session_id = cortex_core::event_id();
-    let context = json!({
-        "repo": repo,
-        "platform": std::env::consts::OS,
-    });
-    let payload = match kind.as_str() {
-        "memory" => json!({
-            "op": "write",
-            "memory_type": "project",
-            "name": req
-                .topic
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("capture"),
-            "body": req.body,
-        }),
-        "knowledge" => json!({
-            "knowledge_id": event_id.clone(),
-            "title": req
-                .topic
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("captured knowledge"),
-            "category": "pattern",
-            "body": req.body,
-        }),
-        "learning" => json!({
-            "learning_id": event_id.clone(),
-            "title": req
-                .topic
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("captured learning"),
-            "body": req.body,
-        }),
-        _ => unreachable!("validated above"),
+    let normalized_kind = req.kind.trim().to_ascii_lowercase();
+    let kind = match normalized_kind.as_str() {
+        "memory" => Kind::Memory,
+        "knowledge" => Kind::Knowledge,
+        "learning" => Kind::Learning,
+        "decision" => Kind::Decision,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error":"unsupported_kind"})),
+            )
+                .into_response()
+        }
     };
-    let envelope = json!({
-        "event_id": event_id,
-        "schema_version": "1",
-        "occurred_at": now,
-        "session_id": session_id,
-        "stream": "live",
-        // `tool` is restricted to the validator's allow-list; use the
-        // canonical "claude-code" sender for agent-curated captures.
-        "tool": "claude-code",
-        "kind": kind,
-        "context": context,
-        "payload": payload,
-        "content_hash": content_hash.clone(),
-    });
-
-    // 5. Forward to cortex-ingestion.
-    let upstream = state
-        .cfg
-        .ingestion
-        .ingestion_url
-        .clone()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_INGESTION_URL.to_string());
-    let url = format!("{}/v1/events", upstream.trim_end_matches('/'));
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
+    let global = req.global || matches!(req.scope, Some(MemoryScope::Global));
+    let caller = match authorize(&state, &headers, Some(&req.repo), global).await {
         Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "error": "client_build_failed",
-                    "message": e.to_string(),
-                })),
-            )
-                .into_response();
-        }
+        Err(r) => return r,
     };
-    let upstream_resp = match client.post(&url).json(&envelope).send().await {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({
-                    "error": "ingestion_unreachable",
-                    "url": url,
-                    "message": e.to_string(),
-                })),
-            )
-                .into_response();
-        }
-    };
-    let status = upstream_resp.status();
-    let upstream_body: Value = upstream_resp.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
+    if matches!(&req.scope, Some(MemoryScope::Repository(repo)) if repo != &req.repo)
+        || (req.global && matches!(req.scope, Some(MemoryScope::Repository(_))))
+    {
         return (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "error": "ingestion_returned_error",
-                "upstream_status": status.as_u16(),
-                "upstream_body": upstream_body,
-            })),
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"scope_mismatch"})),
         )
             .into_response();
     }
-
-    // 6. Return the synchronous receipt.
-    let resp = IngestResponse {
-        event_id,
-        content_hash,
-        indexed_at: now,
+    let Some(local) = &state.daily_memory else {
+        return unavailable();
     };
-    (StatusCode::ACCEPTED, Json(resp)).into_response()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
-    h.update(bytes);
-    let out = h.finalize();
-    let mut s = String::with_capacity(out.len() * 2);
-    for b in out {
-        s.push_str(&format!("{b:02x}"));
+    let reported = req.agent.is_some() || req.session_id.is_some() || req.turn_id.is_some();
+    let mut sources = req.sources;
+    if let Some(event_id) = req.event_id {
+        sources.push(MemorySource {
+            event_id,
+            kind: Some(kind),
+            reference: None,
+            content_hash: None,
+            revision: None,
+        });
     }
-    s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sha256_hex_matches_known_vector() {
-        // SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
-        let h = sha256_hex(b"abc");
-        assert_eq!(
-            h,
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-    }
-
-    #[test]
-    fn max_body_bytes_is_8kib() {
-        assert_eq!(MAX_BODY_BYTES, 8192);
+    let capture = MemoryCapture {
+        id: req.memory_id,
+        scope: if global {
+            MemoryScope::Global
+        } else {
+            MemoryScope::Repository(req.repo)
+        },
+        title: req
+            .title
+            .or(req.topic)
+            .unwrap_or_else(|| format!("Captured {normalized_kind}")),
+        body: req.body,
+        category: if kind == Kind::Decision {
+            MemoryCategory::Decision
+        } else {
+            MemoryCategory::Lesson
+        },
+        capture_kind: Some(kind),
+        status: req.status.unwrap_or(MemoryStatus::Accepted),
+        origin: MemoryOrigin {
+            agent: req.agent,
+            session_id: req.session_id,
+            turn_id: req.turn_id,
+            attribution: if reported {
+                OriginAttribution::ClientReported
+            } else {
+                OriginAttribution::Unknown
+            },
+        },
+        sources,
+        branch: req.branch,
+        path: req.path,
+        pinned: req.pinned,
+        retry: req.retry_key.map(|key| MemoryRetryKey { caller, key }),
+        expected_revision: req.expected_revision,
+        supersedes: req.supersedes,
+    };
+    let scope = capture.scope.clone();
+    match local
+        .run(move |store| store.capture_daily_memory(&capture))
+        .await
+    {
+        Ok(receipt) => {
+            let advice = if req.classify {
+                local.capture_advice(scope, receipt.clone()).await
+            } else {
+                crate::memory_advice::unavailable("not_requested")
+            };
+            (StatusCode::ACCEPTED, Json(json!({
+            "event_id":receipt.event_id,"content_hash":receipt.content_hash,"indexed_at":null,
+            "captured_at":receipt.captured_at,"memory_id":receipt.id,"id":receipt.id,"version":receipt.version,"scope_revision":receipt.scope_revision,
+            "durability":"local_committed","mirror_status":"not_attempted","index_complete":false,
+            "advice":advice
+        }))).into_response()
+        }
+        Err(response) => response,
     }
 }

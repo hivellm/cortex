@@ -17,9 +17,12 @@
 #![warn(missing_docs)]
 
 pub mod archive;
+pub mod archive_index;
 pub mod archive_purge;
+pub mod archive_tail;
 pub mod cas;
 pub mod collections;
+pub mod daily_memory;
 pub mod external_repos;
 pub mod fulltext;
 pub mod graph;

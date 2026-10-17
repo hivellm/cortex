@@ -685,6 +685,11 @@ impl Orchestrator {
         let mut seen_anchor: std::collections::HashSet<(String, String, String)> =
             std::collections::HashSet::new();
         fused.retain(|h| {
+            // Archive rows are distinct events, not duplicate code anchors.
+            // RRF already merges the same event across archive index aliases.
+            if h.doc_id.starts_with("archive|") {
+                return !h.text.trim().is_empty();
+            }
             let anchor = (
                 h.repo.clone().unwrap_or_default(),
                 h.path.clone().unwrap_or_default(),
