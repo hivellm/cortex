@@ -41,6 +41,7 @@ describe("buildFrame", () => {
       session_id: "s1",
       cwd: "/repos/cortex",
       payload: { prompt: "explain" },
+      client: "opencode",
     });
   });
 });

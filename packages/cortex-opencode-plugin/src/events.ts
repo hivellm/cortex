@@ -62,7 +62,11 @@ export function mapEvent(event: OpenCodeEvent, isSubagent = false): MappedFrame 
   }
 }
 
-/** Build the `HookFrame` JSON the daemon expects on `POST /hook`. */
+/**
+ * Build the `HookFrame` JSON the daemon expects on `POST /hook`.
+ * `client: "opencode"` labels the envelopes `tool = "opencode"`; a frame
+ * without it is treated as Claude Code (phase36).
+ */
 export function buildFrame(args: {
   kind: HookKind;
   sessionId: string;
@@ -74,5 +78,6 @@ export function buildFrame(args: {
     session_id: args.sessionId,
     cwd: args.cwd,
     payload: args.payload,
+    client: "opencode",
   };
 }

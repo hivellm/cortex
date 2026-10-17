@@ -26,7 +26,7 @@ Four historical numbering collisions were resolved on 2026-07-14 (`phase28_docs-
 | 14 | [Governance engine — enforcement, punishment, trust score](14-governance-engine.md) | 🟡 | 13, 10 | §5.4                  |
 | 15 | [Deep Analysis workflow](15-deep-analysis.md)                   |   🟡   | 11, 13            | §5.5                         |
 | 16 | [Dashboard — views and SSE wiring](16-dashboard.md)             |   🟡   | 11, 14            | §5.6                         |
-| 17 | [Additional adapters — Cursor, Codex, Gemini](17-additional-adapters.md) | 🟡 | 10           | §5.1                         |
+| 17 | [Additional adapters — Cursor, Codex, Gemini](17-additional-adapters.md) | 🟡 | 10           | §5.1; Codex → 46             |
 | 18 | [Claude Code plugin — MCP server + commands + skills](18-claude-code-plugin.md) | 🟢 | 10, 11, 12 | §5.1, §8         |
 | 19 | [Retention — decay & purge policy](19-retention.md)             |   🟢   | —                 | phase9a+11o+13a              |
 | 20 | [MCP tool surface registry](20-mcp-tool-surface.md)             |   🟢   | 11, 12, 16, 18    | §5.1, §8                     |
@@ -54,6 +54,7 @@ Four historical numbering collisions were resolved on 2026-07-14 (`phase28_docs-
 | 43 | [ACL admin API — CLI/HTTP/MCP surfaces](43-acl-admin-api.md)    |   🟢   | 41                | phase21 §6                   |
 | 44 | [Access audit & eval — audit envelopes, CI gates](44-access-audit-and-eval.md) | 🟢 | 42, 41 | phase21 §8-§9      |
 | 45 | [Graph communities — Leiden/Louvain detection + summaries](45-graph-communities.md) | 🟢 | 07, 11 | phase27b/27c       |
+| 46 | [Codex adapter — plugin + shared daemon](46-codex-adapter.md)   |   🟡   | 10, 12, 18, 23    | phase36; supersedes 17's Codex sections |
 
 ## Spec format
 

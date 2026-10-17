@@ -664,3 +664,198 @@ async fn hook_response_serializes_to_protocol_shape() {
         "snake_case field must not be emitted"
     );
 }
+
+// ── phase36: client identity + Codex responses ──────────────────────────────
+
+fn client_frame(client: &str, hook: &str, payload: Value) -> Value {
+    let mut frame = frame(hook, payload);
+    frame["client"] = json!(client);
+    frame
+}
+
+/// A `/v1/query` answer whose rendered bundle is far beyond Codex's budget.
+async fn large_memory_upstream() -> wiremock::MockServer {
+    let line = "fn keep_hook_delivery_bounded() -> Result<(), Error> { Ok(()) }";
+    let body = [line; 15].join("\n");
+    let snippets: Vec<Value> = (0..5)
+        .map(|n| {
+            json!({
+                "rank": n + 1,
+                "source": "vector",
+                "repo": "Vectorizer",
+                "path": format!("src/hook/path_{n}.rs"),
+                "symbol": "keep_hook_delivery_bounded",
+                "text": body,
+                "body_truncated": false,
+                "score": 0.9,
+                "why": "vector match",
+                "class_compartments": []
+            })
+        })
+        .collect();
+    let laws: Vec<Value> = (0..10)
+        .map(|n| {
+            json!({
+                "id": format!("LAW-{n:03}"),
+                "severity": "critical",
+                "title": format!("Law {n}: {}", "never block the prompt on memory I/O ".repeat(4))
+            })
+        })
+        .collect();
+    let decisions: Vec<Value> = (0..120)
+        .map(|n| {
+            json!({
+                "rank": n + 1,
+                "id": format!("DEC-{n:04}"),
+                "title": format!("Decision {n}: {}", "keep hook delivery bounded and fail-open ".repeat(3)),
+                "status": "accepted",
+                "ts": 1_777_000_000_000_i64,
+                "score": 0.9,
+                "links": []
+            })
+        })
+        .collect();
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/v1/query"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "intent": "pre_change_context",
+            "query_id": "01HX0DEMOQUERY0000000002",
+            "scope_resolved": { "repos": [], "topics": [] },
+            "results": {
+                "snippets": snippets,
+                "decisions": decisions,
+                "violations": [],
+                "graph_neighbors": [],
+                "similar_turns": []
+            },
+            "laws_active": laws,
+            "budget": { "used_ms": 12, "cap_ms": 600, "cache": "miss" },
+            "debug": { "lanes": {}, "errors": {} }
+        })))
+        .mount(&server)
+        .await;
+    server
+}
+
+#[tokio::test]
+async fn codex_user_prompt_gets_hook_event_name_and_context_clipped_to_codex_budget() {
+    use cortex_adapter_claude_code::dispatcher::{CODEX_CLIP_MARKER, CODEX_CONTEXT_BUDGET};
+    let upstream = large_memory_upstream().await;
+    let cfg = AdapterSection {
+        api_endpoint: upstream.uri(),
+        pre_thinking: cortex_adapter_claude_code::PreThinkingSection {
+            timeout_ms: 1000,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let (dispatcher, _publisher) = build_dispatcher(cfg);
+    let prompt = json!({ "prompt": "fix the bug", "turn_id": "turn-1" });
+
+    let claude = dispatch_inline(
+        frame("UserPromptSubmit", prompt.clone()),
+        dispatcher.clone(),
+    )
+    .await
+    .hook_specific_output
+    .expect("claude context");
+    assert!(
+        claude.additional_context.len() > CODEX_CONTEXT_BUDGET,
+        "fixture must exceed the Codex budget, got {}",
+        claude.additional_context.len()
+    );
+
+    let codex = dispatch_inline(
+        client_frame("codex", "UserPromptSubmit", prompt),
+        dispatcher,
+    )
+    .await;
+    let wire = serde_json::to_value(&codex).unwrap();
+    assert_eq!(
+        wire["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    let context = wire["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("codex additionalContext");
+    assert!(context.len() <= CODEX_CONTEXT_BUDGET, "{}", context.len());
+    assert!(context.ends_with(CODEX_CLIP_MARKER));
+    assert!(context.starts_with("<!-- cortex: pre_change_context"));
+    assert!(claude
+        .additional_context
+        .starts_with(context.strip_suffix(CODEX_CLIP_MARKER).unwrap()));
+    // Never a field Codex rejects.
+    for rejected in [
+        "continue",
+        "suppressOutput",
+        "decision",
+        "permissionDecision",
+    ] {
+        assert!(wire.get(rejected).is_none(), "{rejected}");
+    }
+}
+
+#[tokio::test]
+async fn codex_publish_only_hooks_reply_empty_json_and_publish_as_codex() {
+    let (dispatcher, publisher) = build_dispatcher(AdapterSection::default());
+    dispatch_inline(
+        client_frame("codex", "UserPromptSubmit", json!({ "prompt": "go" })),
+        dispatcher.clone(),
+    )
+    .await;
+    for (hook, payload) in [
+        (
+            "PostToolUse",
+            json!({"tool_name": "shell", "tool_use_id": "call_1", "tool_response": "ok"}),
+        ),
+        (
+            "SubagentStop",
+            json!({"agent_type": "explorer", "last_assistant_message": "done"}),
+        ),
+        (
+            "Stop",
+            json!({"stop_hook_active": false, "last_assistant_message": "done"}),
+        ),
+    ] {
+        let reply = dispatch_inline(client_frame("codex", hook, payload), dispatcher.clone()).await;
+        assert_eq!(serde_json::to_value(&reply).unwrap(), json!({}), "{hook}");
+    }
+    let snap = publisher.snapshot().await;
+    assert_eq!(snap.len(), 4);
+    for envelope in &snap {
+        assert_eq!(envelope.tool, "codex");
+        assert_eq!(envelope.context.ide.as_deref(), Some("codex"));
+        assert!(envelope.context.extras.contains_key("codex"));
+    }
+}
+
+#[tokio::test]
+async fn opencode_frames_are_labelled_opencode_and_unknown_clients_reply_empty() {
+    let (dispatcher, publisher) = build_dispatcher(AdapterSection::default());
+    dispatch_inline(
+        client_frame("opencode", "UserPromptSubmit", json!({ "prompt": "go" })),
+        dispatcher.clone(),
+    )
+    .await;
+    let snap = publisher.snapshot().await;
+    assert_eq!(snap.len(), 1);
+    assert_eq!(snap[0].tool, "opencode");
+    assert_eq!(snap[0].context.ide.as_deref(), Some("opencode"));
+    let turn = snap[0].context.extras["opencode"]["turn_id"]
+        .as_str()
+        .unwrap();
+    assert!(turn.starts_with("oc-turn-"), "{turn}");
+
+    let reply = dispatch_inline(
+        client_frame("gemini", "UserPromptSubmit", json!({ "prompt": "go" })),
+        dispatcher,
+    )
+    .await;
+    assert_eq!(serde_json::to_value(&reply).unwrap(), json!({}));
+    assert_eq!(
+        publisher.count().await,
+        1,
+        "an unknown client publishes nothing"
+    );
+}

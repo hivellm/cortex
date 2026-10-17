@@ -14,7 +14,7 @@ use cortex_api::active_work::ActiveTaskRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::events::{build_event, HookFrame, HookKind};
+use crate::events::{build_event, HookClient, HookFrame, HookKind};
 use crate::metrics::Metrics;
 use crate::publisher::Publisher;
 use crate::session::SessionManager;
@@ -245,7 +245,7 @@ impl Dispatcher {
             // cloning/redaction, transcript reads, and tool/event correlation.
             match kind {
                 HookKind::UserPromptSubmit => {
-                    self.sessions.open_turn(&session_id);
+                    self.sessions.open_turn(&session_id, frame.client);
                 }
                 HookKind::Stop => self.sessions.close_turn(&session_id),
                 _ => {}
@@ -293,7 +293,7 @@ impl Dispatcher {
                     .sync
                     .pre_thinking(&prompt, session_id, turn_id, frame.cwd.as_deref())
                     .await;
-                HookResponse::additional_context(result.bundle)
+                HookResponse::additional_context(fit_context(result.bundle, frame.client))
                     .with_memory_outcome(result.memory_outcome)
             }
             HookKind::PreToolUse => {
@@ -315,7 +315,7 @@ impl Dispatcher {
                     &work.tasks,
                     self.sync.bundle_budget().saturating_sub(bundle.len()),
                 ));
-                HookResponse::session_start_context(bundle)
+                HookResponse::session_start_context(fit_context(bundle, frame.client))
                     .with_memory_outcome(memory.memory_outcome)
             }
             _ => HookResponse::empty(),
@@ -338,6 +338,46 @@ async fn task_repo(cwd: Option<&str>) -> Option<String> {
     })
     .await
     .ok()?
+}
+
+/// Phase36 — byte budget for Codex's model-visible `additionalContext`.
+/// Codex shows about 2,500 tokens and replaces anything longer with a
+/// preview plus a temp file. Memory bundles carry ULIDs, hashes and paths
+/// that tokenize at roughly 2.5-3 bytes per token, so 6 KiB stays under
+/// the limit where a 4-bytes-per-token estimate (8 KiB) would not.
+pub const CODEX_CONTEXT_BUDGET: usize = 6 * 1024;
+
+/// Last line of a clipped Codex bundle.
+pub const CODEX_CLIP_MARKER: &str =
+    "<!-- cortex: memory clipped to fit the Codex hook context limit; cortex_memory_read returns the rest -->\n";
+
+/// Fit a context bundle to the client's limit. Claude Code and OpenCode
+/// already get `max_bundle_kb`; Codex is clipped at the last whole line
+/// that fits [`CODEX_CONTEXT_BUDGET`], followed by [`CODEX_CLIP_MARKER`].
+fn fit_context(bundle: String, client: HookClient) -> String {
+    if client == HookClient::Codex {
+        clip_bundle(bundle, CODEX_CONTEXT_BUDGET)
+    } else {
+        bundle
+    }
+}
+
+fn clip_bundle(mut bundle: String, budget: usize) -> String {
+    if bundle.len() <= budget {
+        return bundle;
+    }
+    // One byte for the newline that may have to precede the marker.
+    let mut end = budget.saturating_sub(CODEX_CLIP_MARKER.len() + 1);
+    while !bundle.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = bundle[..end].rfind('\n').map_or(end, |at| at + 1);
+    bundle.truncate(cut);
+    if !bundle.is_empty() && !bundle.ends_with('\n') {
+        bundle.push('\n');
+    }
+    bundle.push_str(CODEX_CLIP_MARKER);
+    bundle
 }
 
 fn read_string_field(value: &Value, key: &str) -> Option<String> {
@@ -395,4 +435,34 @@ fn render_active_work(tasks: &[ActiveTaskRow], budget: usize) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_context_is_clipped_at_a_line_boundary_with_a_marker() {
+        let line = "- [memory DEC-0042 v1] keep the hook path bounded and fail-open\n";
+        let bundle = line.repeat(CODEX_CONTEXT_BUDGET / line.len() * 3);
+        let clipped = fit_context(bundle.clone(), HookClient::Codex);
+        assert!(clipped.len() <= CODEX_CONTEXT_BUDGET, "{}", clipped.len());
+        assert!(clipped.ends_with(CODEX_CLIP_MARKER));
+        let kept = clipped.strip_suffix(CODEX_CLIP_MARKER).unwrap();
+        assert!(kept.ends_with('\n') && bundle.starts_with(kept));
+        assert_eq!(kept.len() % line.len(), 0, "only whole lines are kept");
+        // Other clients keep their max_bundle_kb budget; small bundles pass.
+        assert_eq!(fit_context(bundle.clone(), HookClient::ClaudeCode), bundle);
+        assert_eq!(fit_context(bundle.clone(), HookClient::OpenCode), bundle);
+        assert_eq!(fit_context(line.to_string(), HookClient::Codex), line);
+        assert_eq!(fit_context(String::new(), HookClient::Codex), "");
+    }
+
+    #[test]
+    fn clip_without_newlines_cuts_on_a_char_boundary() {
+        let bundle = "é".repeat(CODEX_CONTEXT_BUDGET);
+        let clipped = clip_bundle(bundle, CODEX_CONTEXT_BUDGET);
+        assert!(clipped.len() <= CODEX_CONTEXT_BUDGET);
+        assert!(clipped.ends_with(&format!("é\n{CODEX_CLIP_MARKER}")));
+    }
 }

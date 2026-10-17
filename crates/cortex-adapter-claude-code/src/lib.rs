@@ -32,7 +32,8 @@ pub use config::{
 pub use dispatcher::{Dispatcher, HookResponse};
 pub use error::AdapterError;
 pub use events::{
-    build_event, ClaudeCodeExtras, HookFrame, HookKind, TOOL_CLAUDE_CODE, TOOL_OPENCODE,
+    build_event, ClaudeCodeExtras, CodexExtras, HookClient, HookFrame, HookKind, TOOL_CLAUDE_CODE,
+    TOOL_CODEX, TOOL_OPENCODE,
 };
 pub use install::{
     install, install_with, uninstall, HookShim, InstallError, InstallOptions, InstallReport,

@@ -489,6 +489,7 @@ mod tests {
                 session_id: Some("publisher-fixture".into()),
                 cwd: None,
                 payload: json!({"prompt":prompt}),
+                client: Default::default(),
             },
             &SessionManager::new(),
             1,

@@ -56,9 +56,24 @@ Hooks send:
   "hook": "PreToolUse",
   "session_id": "cc-sess-<uuid>",          // from env or generated
   "cwd": "/path/to/repo",
-  "payload": { /* verbatim Claude Code hook JSON */ }
+  "payload": { /* verbatim Claude Code hook JSON */ },
+  "client": "claude-code"                  // phase36; optional
 }
 ```
+
+`client` (phase36) names the client that emitted the frame: `claude-code`,
+`codex` or `opencode`. A frame without it is `claude-code`, so older shims
+keep working. Any other value fails frame parsing, and the daemon replies `{}`
+and counts a parse error, so a session is never mislabelled. `cortex-hook`
+sets it from `--client <id>`. Without the flag, `adapter.hook_origin =
+"codex-plugin"` (env `CORTEX_HOOK_ORIGIN`) selects `codex` and anything else
+selects `claude-code`. The OpenCode plugin sends `opencode` on `POST /hook`.
+The client decides the envelope `tool`, `context.ide`, the `context.extras`
+key, the correlation-tag prefix and the Claude-only fallbacks (see
+§Envelope mapping). `cortex-hook` reads `CLAUDE_SESSION_ID` and the
+legacy-settings duplicate guard applies only for `claude-code`. Each line of
+`~/.cortex/hook-invocations.log` ends with `client=<id>`. Codex specifics are
+in [spec 46](46-codex-adapter.md).
 
 Daemon replies (must be printed to stdout unchanged by the hook script):
 
@@ -95,6 +110,16 @@ do not produce a published event:
 | `Notification`      | _drop_           | —                                 | No canonical kind; recorded only in adapter-side metrics.           |
 
 All published envelopes set `tool = "claude-code"`, `schema_version = "1"`, `stream = "live"`, `model = env CLAUDE_MODEL` when present, and a `context` block with `platform`, `cwd`, `repo` (best-effort resolution from `cwd`), and an `extras.claude_code` sub-object carrying the adapter-side correlation IDs (`turn_id`, `tool_call_id`, `tool_use_id`, `orphan`) so the indexing layer can reconstruct turn / tool-call lineage without polluting the canonical envelope.
+
+Phase36: the values above are the `claude-code` client's. The frame's `client` selects them:
+
+| `client`      | `tool` / `context.ide` | extras key    | tag prefixes          | `model` fallback | Stop `assistant_message`   |
+|---------------|------------------------|---------------|-----------------------|------------------|----------------------------|
+| `claude-code` | `claude-code`          | `claude_code` | `cc-turn-`, `cc-tc-`  | env `CLAUDE_MODEL` | transcript JSONL          |
+| `codex`       | `codex`                | `codex`       | `cx-turn-`, `cx-tc-`  | none             | payload `last_assistant_message` ([spec 46](46-codex-adapter.md)) |
+| `opencode`    | `opencode`             | `opencode`    | `oc-turn-`, `oc-tc-`  | none             | transcript JSONL, if given |
+
+Claude Code keeps the `cc-` prefixes, so correlation tags published before phase36 stay stable.
 
 #### Session metadata persistence (phase10i)
 

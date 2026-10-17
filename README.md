@@ -15,7 +15,7 @@ Cortex stores explicit decisions and verified lessons so coding agents can use t
 
 For routine agent work, start with the [daily runtime guide](docs/operations/daily-memory-runtime.md). Capture an accepted decision or verified lesson with `cortex_capture_memory`; recover applicable context with `cortex_memory_read` or `cortex_pre_thinking`. Corrections explicitly supersede an earlier decision using the observed revision.
 
-- Claude Code supports verified lifecycle delivery through its local adapter. Codex uses verified MCP reads; other harnesses have [documented capability limits](docs/analysis/daily-agent-memory-2026-10/09-client-contracts.md).
+- Claude Code supports verified lifecycle delivery through its local adapter. Codex uses verified MCP reads, and its plugin hooks share the same adapter path ([spec 46](docs/specs/46-codex-adapter.md)); other harnesses have [documented capability limits](docs/analysis/daily-agent-memory-2026-10/09-client-contracts.md).
 - Context carries source IDs and includes at most five memories within 1,536 bytes. Superseded, proposed and out-of-scope records stay out of ordinary advice.
 - Capture remains local by default. Optional `classify=true` requests bounded Jev advice for an authorized candidate; classification never changes its status, scope or authority.
 - Native agent memory files are preserved. Daily mode disables bulk publishing, archive replay and scheduled maintenance.
@@ -77,7 +77,14 @@ codex plugin marketplace add <path or git URL of this repository>
 codex plugin add cortex@hivellm-cortex
 ```
 
-Then open `/hooks` in Codex and trust the Cortex hooks. Codex runs plugin hooks only after you do. Codex hook delivery is not yet verified on Windows; the MCP tools work either way.
+Then open `/hooks` in Codex and trust the Cortex hooks. Codex runs plugin hooks only after you do, and every plugin update needs a new trust because the hash covers the plugin files. The hooks inject Cortex memory at session start and with each prompt, clipped to Codex's context preview, and record tool calls and replies under the `codex` client ([spec 46](docs/specs/46-codex-adapter.md)). On Windows, Codex runs a `.cmd` launcher that finds `cortex-hook` on PATH or in `~/.cortex/bin`.
+
+To stop Codex from asking before each Cortex MCP tool call, add this to `~/.codex/config.toml`:
+
+```toml
+[plugins."cortex@hivellm-cortex".mcp_servers.cortex]
+default_tools_approval_mode = "approve"
+```
 
 ### 4. Verify
 

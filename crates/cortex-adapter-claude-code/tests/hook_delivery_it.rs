@@ -728,3 +728,80 @@ async fn answering_endpoint_is_used_without_touching_lifecycle_state() {
     );
     task.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_client_flag_names_the_frame_and_ignores_claude_session_env() {
+    // Phase36: the Codex launcher passes `--client codex`. The frame names
+    // the client, keeps Codex's payload verbatim, and never adopts the
+    // CLAUDE_SESSION_ID a parent Claude Code session may have exported.
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let reply = json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "codex memory"}});
+    let (endpoint, captured, task) = peer(root.path(), Some(reply.clone())).await;
+    let payload = json!({
+        "session_id": "019a7c1e-codex-session",
+        "transcript_path": null,
+        "cwd": "/codex checkout",
+        "hook_event_name": "UserPromptSubmit",
+        "model": "gpt-5.5-codex",
+        "turn_id": "turn-1",
+        "prompt": "fix the bug"
+    });
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", false, 1500);
+    command.args(["--client", "codex"]);
+    assert_eq!(
+        invoke_command(command, payload.to_string().as_bytes()).await,
+        reply
+    );
+    let frame = captured.await.unwrap();
+    assert_eq!(frame["client"], "codex");
+    assert_eq!(frame["session_id"], "019a7c1e-codex-session");
+    assert_eq!(frame["cwd"], "/codex checkout");
+    assert_eq!(frame["payload"], payload);
+    task.abort();
+
+    // Without a payload session, a Codex frame stays anonymous rather than
+    // borrowing the stale Claude session from the environment.
+    let (endpoint, captured, task) = peer(root.path(), Some(json!({}))).await;
+    let mut command = hook_command(&home, &endpoint, "Stop", false, 1500);
+    command.args(["--client", "codex"]);
+    assert_eq!(
+        invoke_command(command, br#"{"last_assistant_message":"done"}"#).await,
+        json!({})
+    );
+    let frame = captured.await.unwrap();
+    assert_eq!(frame["client"], "codex");
+    assert_eq!(frame["session_id"], "");
+    task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn client_defaults_to_claude_code_and_codex_plugin_origin_selects_codex() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    for (origin, expected, session) in [
+        (None, "claude-code", "stale-env-session"),
+        (Some("codex-plugin"), "codex", ""),
+    ] {
+        let (endpoint, captured, task) = peer(root.path(), Some(json!({}))).await;
+        let mut command = hook_command(&home, &endpoint, "SubagentStop", false, 1500);
+        if let Some(origin) = origin {
+            command.env("CORTEX_HOOK_ORIGIN", origin);
+        }
+        assert_eq!(invoke_command(command, b"{}").await, json!({}));
+        let frame = captured.await.unwrap();
+        assert_eq!(frame["client"], expected, "{origin:?}");
+        assert_eq!(frame["session_id"], session, "{origin:?}");
+        task.abort();
+    }
+
+    // An unknown client id fails open before any I/O.
+    let (endpoint, mut captured, task) = peer(root.path(), Some(json!({}))).await;
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", false, 300);
+    command.args(["--client", "gemini"]);
+    assert_eq!(invoke_command(command, b"{}").await, json!({}));
+    assert!(captured.try_recv().is_err());
+    task.abort();
+}

@@ -1,0 +1,4 @@
+# Line endings for the hook launchers, whatever core.autocrlf says:
+# sh needs LF, cmd.exe batch label lookup needs CRLF.
+scripts/cortex-hook-launcher text eol=lf
+*.cmd text eol=crlf

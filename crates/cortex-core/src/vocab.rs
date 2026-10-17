@@ -8,6 +8,7 @@ use crate::events::Kind;
 /// Adapter identifiers allowed in [`crate::events::Envelope::tool`].
 pub const TOOL_IDS: &[&str] = &[
     "claude-code",
+    "opencode",
     "cursor",
     "codex",
     "gemini",

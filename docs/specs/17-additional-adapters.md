@@ -77,6 +77,8 @@ Blocking laws are **not** supported (no `PreToolUse`). Critical violations becom
 
 #### Codex CLI
 
+> **Superseded by [spec 46](46-codex-adapter.md) (phase36).** Codex CLI 0.162 has Claude-compatible hooks (`SessionStart`, `UserPromptSubmit`, `PostToolUse`, `Stop`, `SubagentStop`, …), not the `beforeCommand`/`onPrompt` API below. Cortex reuses the shared adapter daemon and `cortex-hook` through `packages/cortex-codex-plugin` with no `cortex-adapter-codex`. This section and §Codex CLI specifics are kept as history only.
+
 Codex has a plugin system with a programmatic pre-command hook. Good parity with Claude Code:
 
 | Source                    | Cortex kind                       |
@@ -159,6 +161,8 @@ Each per-tool crate is basically:
 - **Governance:** only observational. A reminder-only workflow: after a violation, the `_cortex_context.md` gets a `> ⚠️ LAW-… reminder` block for the next prompt.
 
 ### Codex CLI specifics
+
+> **Superseded by [spec 46](46-codex-adapter.md).** Kept as history only.
 
 - Plugin registered via `~/.codex/plugins.toml` → points at `cortex-adapter-codex`.
 - Hooks: `beforeCommand`, `afterCommand`, `onPrompt`, `onSessionStart`, `onSessionStop`. Same sync/async contract as Claude Code.

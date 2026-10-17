@@ -1,4 +1,5 @@
-//! Native Claude Code hook transport.
+//! Native hook transport for Claude Code, Codex and OpenCode. Each frame
+//! names its client (`--client`, else `adapter.hook_origin`).
 //!
 //! SessionStart, UserPromptSubmit and PreToolUse always await one JSON reply.
 //! Publish-only events may use --fire-forget. Input, frame and reply sizes are
@@ -11,6 +12,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use cortex_adapter_claude_code::events::HookClient;
 use cortex_adapter_claude_code::lifecycle::{ensure_started, should_autostart, StartDecision};
 
 use serde_json::{json, Value};
@@ -35,6 +37,8 @@ const EARLY_EXIT_PROBE: Duration = Duration::from_millis(150);
 struct Args {
     event: String,
     fire_forget: bool,
+    /// `--client`; `None` defers to `adapter.hook_origin`.
+    client: Option<HookClient>,
     #[cfg_attr(not(windows), allow(dead_code))]
     pipe: Option<String>,
     #[cfg_attr(windows, allow(dead_code))]
@@ -47,12 +51,17 @@ impl Args {
         let mut argv = argv.into_iter();
         let mut event = None;
         let mut fire_forget = false;
+        let mut client = None;
         let mut pipe = None;
         let mut sock = None;
         let mut timeout_ms = DEFAULT_TIMEOUT_MS;
         while let Some(arg) = argv.next() {
             match arg.as_str() {
                 "--fire-forget" => fire_forget = true,
+                "--client" => {
+                    let id = argv.next().ok_or("missing --client value")?;
+                    client = Some(HookClient::parse(&id).ok_or("unknown --client")?);
+                }
                 "--pipe" => pipe = Some(argv.next().ok_or("missing --pipe value")?),
                 "--sock" => sock = Some(argv.next().ok_or("missing --sock value")?),
                 "--timeout-ms" => {
@@ -92,6 +101,7 @@ impl Args {
         Ok(Self {
             event,
             fire_forget,
+            client,
             pipe,
             sock,
             timeout_ms,
@@ -101,10 +111,12 @@ impl Args {
 
 fn print_help() {
     println!(
-        "cortex-hook {} — Claude Code hook shim\n\n\
-         USAGE:\n  cortex-hook <event-name> [--fire-forget] [--pipe NAME] [--sock PATH] [--timeout-ms MS]\n\n\
+        "cortex-hook {} — Claude Code, Codex and OpenCode hook shim\n\n\
+         USAGE:\n  cortex-hook <event-name> [--client ID] [--fire-forget] [--pipe NAME] [--sock PATH] [--timeout-ms MS]\n\n\
          SessionStart, UserPromptSubmit and PreToolUse always wait for context or a decision.\n\
          --fire-forget applies only to publish-only events.\n\
+         --client is claude-code (default), codex or opencode; it labels the session.\n\
+         Without it, adapter.hook_origin = \"codex-plugin\" selects codex.\n\
          --timeout-ms is a total I/O budget, between 1 and {} ms.\n\n\
          CORTEX_ADAPTER_DISABLE=1 disables all hook I/O.\n\
          CORTEX_ADAPTER_PIPE / CORTEX_ADAPTER_SOCK override the local endpoint.\n\
@@ -154,7 +166,16 @@ fn main() {
         return;
     }
     let autostart_enabled = cfg.adapter.hook_autostart.unwrap_or(true);
-    let plugin_origin = cfg.adapter.hook_origin.as_deref() == Some("plugin");
+    let client = args.client.unwrap_or(
+        if cfg.adapter.hook_origin.as_deref() == Some("codex-plugin") {
+            HookClient::Codex
+        } else {
+            HookClient::ClaudeCode
+        },
+    );
+    // The legacy-settings duplicate guard concerns Claude Code only.
+    let plugin_origin =
+        client == HookClient::ClaudeCode && cfg.adapter.hook_origin.as_deref() == Some("plugin");
     args.pipe = args.pipe.or(cfg.adapter.adapter_pipe);
     args.sock = args.sock.or(cfg.adapter.adapter_sock);
     if plugin_origin {
@@ -181,12 +202,13 @@ fn main() {
     let frame = match blocking_until(io_deadline, move || {
         let input = read_bounded(std::io::stdin().lock()).ok()?;
         let cwd = std::env::current_dir().ok()?.display().to_string();
-        build_frame(
-            &event,
-            &input,
-            &std::env::var("CLAUDE_SESSION_ID").unwrap_or_default(),
-            &cwd,
-        )
+        // CLAUDE_SESSION_ID is Claude Code's environment; other clients
+        // must not inherit a stale value from a parent Claude session.
+        let env_session = match client {
+            HookClient::ClaudeCode => std::env::var("CLAUDE_SESSION_ID").unwrap_or_default(),
+            _ => String::new(),
+        };
+        build_frame(&event, &input, &env_session, &cwd, client)
     })
     .flatten()
     {
@@ -326,7 +348,13 @@ fn valid_session(value: &str) -> bool {
         && !value.chars().any(char::is_control)
 }
 
-fn build_frame(event: &str, input: &[u8], env_session: &str, process_cwd: &str) -> Option<Frame> {
+fn build_frame(
+    event: &str,
+    input: &[u8],
+    env_session: &str,
+    process_cwd: &str,
+    client: HookClient,
+) -> Option<Frame> {
     let payload: Value = if input.iter().all(u8::is_ascii_whitespace) {
         json!({})
     } else {
@@ -355,8 +383,14 @@ fn build_frame(event: &str, input: &[u8], env_session: &str, process_cwd: &str) 
     if cwd.len() > 32 * 1024 || cwd.chars().any(char::is_control) {
         return None;
     }
-    let mut line = json!({"hook": event, "session_id": session_id, "cwd": cwd, "payload": payload})
-        .to_string();
+    let mut line = json!({
+        "hook": event,
+        "session_id": session_id,
+        "cwd": cwd,
+        "payload": payload,
+        "client": client.as_str(),
+    })
+    .to_string();
     line.push('\n');
     (line.len() <= MAX_INPUT_BYTES).then_some(Frame { line, session_id })
 }
@@ -745,6 +779,7 @@ mod tests {
             payload.to_string().as_bytes(),
             "stale-env",
             "/wrong",
+            HookClient::ClaudeCode,
         )
         .unwrap();
         let value: Value = serde_json::from_str(&frame.line).unwrap();
@@ -752,17 +787,45 @@ mod tests {
         assert_eq!(value["session_id"], "actual-session");
         assert_eq!(value["cwd"], "/actual checkout");
         assert_eq!(value["payload"], payload);
-        let frame = build_frame("Stop", b"{}", "fallback-session", "/fallback").unwrap();
+        let claude = HookClient::ClaudeCode;
+        let frame = build_frame("Stop", b"{}", "fallback-session", "/fallback", claude).unwrap();
         assert_eq!(frame.session_id, "fallback-session");
-        assert!(build_frame("Stop", b"[]", "fallback", "/fallback").is_none());
-        assert!(build_frame("Stop", b"broken", "fallback", "/fallback").is_none());
+        assert!(build_frame("Stop", b"[]", "fallback", "/fallback", claude).is_none());
+        assert!(build_frame("Stop", b"broken", "fallback", "/fallback", claude).is_none());
         assert!(build_frame(
             "Stop",
             br#"{"session_id":42}"#,
             "wrong-session",
-            "/fallback"
+            "/fallback",
+            claude
         )
         .is_none());
+    }
+
+    #[test]
+    fn frame_names_its_client_and_unknown_client_flags_fail_open() {
+        let parse = |argv: &[&str]| Args::parse(argv.iter().map(|a| a.to_string()));
+        assert_eq!(parse(&["Stop"]).unwrap().client, None);
+        for (id, client) in [
+            ("claude-code", HookClient::ClaudeCode),
+            ("codex", HookClient::Codex),
+            ("opencode", HookClient::OpenCode),
+        ] {
+            assert_eq!(
+                parse(&["SubagentStop", "--client", id]).unwrap().client,
+                Some(client)
+            );
+            let frame = build_frame("Stop", b"{}", "", "/x", client).unwrap();
+            let value: Value = serde_json::from_str(&frame.line).unwrap();
+            assert_eq!(value["client"], id);
+        }
+        for argv in [
+            &["Stop", "--client"][..],
+            &["Stop", "--client", "gemini"][..],
+            &["Stop", "--client", "Codex"][..],
+        ] {
+            assert!(parse(argv).is_err(), "{argv:?}");
+        }
     }
 
     #[test]

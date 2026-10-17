@@ -23,7 +23,9 @@ path, token or environment block, and no repository `.mcp.json` is needed.
 3. **Plugin.** Run `claude plugin marketplace add <repo>`, then
    `claude plugin install cortex@hivellm-cortex`. For Codex, run
    `codex plugin marketplace add <repo>`, install `cortex`, and trust its hooks
-   in `/hooks`.
+   in `/hooks` (again after every plugin update). Codex hooks reach the same
+   adapter as client `codex` (spec 46). SessionStart and UserPromptSubmit
+   inject memory, and PostToolUse, Stop and SubagentStop are fire-and-forget.
 4. **Lifecycle.** The first synchronous hook that finds the adapter pipe absent
    starts `cortex-api` and `cortex-adapter-claude daemon` from the directory
    holding `cortex-hook`. A spawn lock and a 60 s backoff coordinate concurrent

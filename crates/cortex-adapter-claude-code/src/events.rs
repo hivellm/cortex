@@ -39,6 +39,70 @@ pub const TOOL_CLAUDE_CODE: &str = "claude-code";
 /// together.
 pub const TOOL_OPENCODE: &str = "opencode";
 
+/// Phase36 — `tool` value for Codex CLI hook frames. Canonical live-capture
+/// id from the envelope schema enum; the Claude archive classifier's
+/// `openai-codex` dotted kinds are a separate, archive-only vocabulary.
+pub const TOOL_CODEX: &str = "codex";
+
+/// Client that emitted a hook frame (phase36). Serialized on the wire as
+/// the envelope `tool` id. A frame without `client` is Claude Code, so
+/// older shims keep working; an unknown value fails frame parsing, which
+/// the daemon answers with `{}` instead of mislabelling the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum HookClient {
+    /// Claude Code (`claude-code`).
+    #[default]
+    #[serde(rename = "claude-code")]
+    ClaudeCode,
+    /// Codex CLI (`codex`).
+    #[serde(rename = "codex")]
+    Codex,
+    /// OpenCode (`opencode`).
+    #[serde(rename = "opencode")]
+    OpenCode,
+}
+
+impl HookClient {
+    /// Parse a wire / CLI client id. `None` for anything outside the
+    /// three supported ids.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            TOOL_CLAUDE_CODE => Some(Self::ClaudeCode),
+            TOOL_CODEX => Some(Self::Codex),
+            TOOL_OPENCODE => Some(Self::OpenCode),
+            _ => None,
+        }
+    }
+
+    /// Envelope `tool` id and `context.ide` value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => TOOL_CLAUDE_CODE,
+            Self::Codex => TOOL_CODEX,
+            Self::OpenCode => TOOL_OPENCODE,
+        }
+    }
+
+    /// Key of this client's correlation bag under `context.extras`.
+    pub fn extras_key(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude_code",
+            Self::Codex => "codex",
+            Self::OpenCode => "opencode",
+        }
+    }
+
+    /// Prefix of the turn / tool-call correlation tags. Claude keeps `cc`
+    /// so ids published before phase36 stay stable.
+    pub fn id_prefix(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "cc",
+            Self::Codex => "cx",
+            Self::OpenCode => "oc",
+        }
+    }
+}
+
 /// Coarse hook id Claude Code surfaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -107,9 +171,12 @@ pub struct HookFrame {
     /// Working directory at the time the hook fired.
     #[serde(default)]
     pub cwd: Option<String>,
-    /// Verbatim Claude Code hook JSON.
+    /// Verbatim client hook JSON.
     #[serde(default)]
     pub payload: Value,
+    /// Client that emitted the frame; absent means Claude Code.
+    #[serde(default)]
+    pub client: HookClient,
 }
 
 /// Adapter-side correlation IDs that ride along under
@@ -132,6 +199,32 @@ pub struct ClaudeCodeExtras {
     /// match Pre↔Post pairs when re-indexing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_use_id: Option<String>,
+}
+
+/// Phase36 — correlation bag for Codex frames, under
+/// `context.extras["codex"]`. The shared correlation tags (`cx-turn-…`,
+/// `cx-tc-…`) are flattened in beside the Codex-native identifiers read
+/// from the hook payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CodexExtras {
+    /// Cortex correlation tags, same fields as [`ClaudeCodeExtras`].
+    #[serde(flatten)]
+    pub correlation: ClaudeCodeExtras,
+    /// Codex's own `turn_id` from turn-scoped hook payloads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_turn_id: Option<String>,
+    /// `model` from the hook payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// SessionStart `source` (`startup`, `resume`, `clear`, `compact`, `fork`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// `permission_mode` from the hook payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    /// SubagentStop `agent_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -168,16 +261,16 @@ pub fn build_event(
 
     // Per-kind payload construction.
     let payload_value = match canonical_kind {
-        Kind::Turn => build_turn_payload(&redacted, hook),
-        Kind::ToolCall => build_tool_call_payload(&redacted),
-        Kind::AgentCall => build_agent_call_payload(&redacted),
+        Kind::Turn => build_turn_payload(&redacted, hook, frame.client),
+        Kind::ToolCall => build_tool_call_payload(&redacted, frame.client),
+        Kind::AgentCall => build_agent_call_payload(&redacted, frame.client),
         // The other canonical kinds aren't produced by Claude Code
         // hooks today; `publishes_as` above guards us from reaching
         // this branch.
         _ => return None,
     };
 
-    let context = build_context(frame, &extras);
+    let context = build_context(frame, &extras, &redacted);
     let occurred_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     let content_hash = canonical_sha256(&payload_value);
 
@@ -227,8 +320,13 @@ pub fn build_event(
         ingested_at: None,
         session_id,
         stream: Stream::Live,
-        tool: TOOL_CLAUDE_CODE.to_string(),
-        model: read_string_field(&redacted, "model").or_else(|| std::env::var("CLAUDE_MODEL").ok()),
+        tool: frame.client.as_str().to_string(),
+        // CLAUDE_MODEL belongs to Claude Code's environment only.
+        model: read_string_field(&redacted, "model").or_else(|| {
+            (frame.client == HookClient::ClaudeCode)
+                .then(|| std::env::var("CLAUDE_MODEL").ok())
+                .flatten()
+        }),
         kind: canonical_kind,
         context,
         payload: payload_value,
@@ -246,10 +344,11 @@ fn update_correlation(
     frame: &HookFrame,
     sessions: &SessionManager,
 ) -> ClaudeCodeExtras {
+    let client = frame.client;
     let mut extras = ClaudeCodeExtras::default();
     match hook {
         HookKind::UserPromptSubmit => {
-            extras.turn_id = Some(sessions.open_turn(session_id));
+            extras.turn_id = Some(sessions.open_turn(session_id, client));
         }
         HookKind::Stop => {
             extras.turn_id = sessions.current_turn(session_id);
@@ -262,7 +361,7 @@ fn update_correlation(
             }
             let tool_use_id = read_tool_use_id(&frame.payload);
             extras.tool_use_id = Some(tool_use_id.clone());
-            extras.tool_call_id = Some(sessions.open_tool_call(session_id, &tool_use_id));
+            extras.tool_call_id = Some(sessions.open_tool_call(session_id, &tool_use_id, client));
         }
         HookKind::PostToolUse => {
             extras.turn_id = sessions.current_turn(session_id);
@@ -274,8 +373,11 @@ fn update_correlation(
                     sessions.close_tool_call(session_id, &tool_use_id);
                 }
                 None => {
-                    extras.orphan = true;
-                    extras.tool_call_id = Some(sessions.open_tool_call(session_id, &tool_use_id));
+                    // The Codex plugin registers no PreToolUse, so a missing
+                    // slot is expected there; only a missing turn orphans it.
+                    extras.orphan = client != HookClient::Codex || extras.turn_id.is_none();
+                    extras.tool_call_id =
+                        Some(sessions.open_tool_call(session_id, &tool_use_id, client));
                     sessions.close_tool_call(session_id, &tool_use_id);
                 }
             }
@@ -287,7 +389,7 @@ fn update_correlation(
     extras
 }
 
-fn build_turn_payload(redacted: &Value, hook: HookKind) -> Value {
+fn build_turn_payload(redacted: &Value, hook: HookKind, client: HookClient) -> Value {
     let (user_message, assistant_message) = match hook {
         HookKind::UserPromptSubmit => {
             // The user's prompt is on the inbound hook payload. The
@@ -297,6 +399,14 @@ fn build_turn_payload(redacted: &Value, hook: HookKind) -> Value {
                 .or_else(|| read_string_field(redacted, "user_message"))
                 .unwrap_or_default();
             (user_message, None)
+        }
+        HookKind::Stop if client == HookClient::Codex => {
+            // Codex hands the reply over in the payload. Its
+            // `transcript_path` is nullable and its format is not a
+            // stable contract, so it is never read.
+            let assistant_message =
+                read_string_field(redacted, "last_assistant_message").filter(|s| !s.is_empty());
+            (String::new(), assistant_message)
         }
         HookKind::Stop => {
             // Claude Code's Stop hook payload carries `transcript_path`
@@ -376,7 +486,7 @@ fn read_last_assistant_text(path: &str) -> Option<String> {
     last_text
 }
 
-fn build_tool_call_payload(redacted: &Value) -> Value {
+fn build_tool_call_payload(redacted: &Value, client: HookClient) -> Value {
     let tool_name = read_string_field(redacted, "tool_name").unwrap_or_else(|| "unknown".into());
     // Claude Code's PostToolUse hook payload uses `tool_input` /
     // `tool_response` field names (not `input` / `output`); fall back
@@ -387,25 +497,47 @@ fn build_tool_call_payload(redacted: &Value) -> Value {
         .or_else(|| redacted.get("input"))
         .cloned()
         .unwrap_or(json!({}));
-    let input_obj = input.as_object().cloned().unwrap_or_default();
+    let input_obj = match input {
+        Value::Object(map) => map,
+        // Codex tool inputs need not be objects (apply_patch may send the
+        // raw patch text); keep them under `input` instead of dropping them.
+        Value::Null => serde_json::Map::new(),
+        other if client == HookClient::Codex => {
+            serde_json::Map::from_iter([("input".to_string(), other)])
+        }
+        _ => serde_json::Map::new(),
+    };
     let raw_output = redacted
         .get("tool_response")
         .or_else(|| redacted.get("output"))
         .or_else(|| redacted.get("response"));
-    let output = raw_output.map(|v| ToolCallOutput {
-        stdout: read_optional_string(v, "stdout"),
-        stderr: read_optional_string(v, "stderr"),
-        exit_code: v
-            .get("exit_code")
-            .and_then(|x| x.as_i64())
-            .map(|x| x as i32),
-        truncated: v
-            .get("truncated")
-            .and_then(|x| x.as_bool())
-            .unwrap_or(false),
-        cas_ref: read_optional_string(v, "cas_ref"),
-        size: v.get("size").and_then(|x| x.as_u64()),
-    });
+    let output = match raw_output {
+        // Codex documents no `tool_response` shape: text is the output,
+        // other non-object JSON is kept serialized, null means none.
+        Some(Value::Null) if client == HookClient::Codex => None,
+        Some(Value::String(text)) if client == HookClient::Codex => Some(ToolCallOutput {
+            stdout: Some(text.clone()),
+            ..ToolCallOutput::default()
+        }),
+        Some(other) if client == HookClient::Codex && !other.is_object() => Some(ToolCallOutput {
+            stdout: Some(other.to_string()),
+            ..ToolCallOutput::default()
+        }),
+        raw => raw.map(|v| ToolCallOutput {
+            stdout: read_optional_string(v, "stdout"),
+            stderr: read_optional_string(v, "stderr"),
+            exit_code: v
+                .get("exit_code")
+                .and_then(|x| x.as_i64())
+                .map(|x| x as i32),
+            truncated: v
+                .get("truncated")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false),
+            cas_ref: read_optional_string(v, "cas_ref"),
+            size: v.get("size").and_then(|x| x.as_u64()),
+        }),
+    };
     let exit_code_for_outcome = raw_output
         .and_then(|v| v.get("exit_code"))
         .and_then(|x| x.as_i64());
@@ -429,7 +561,10 @@ fn build_tool_call_payload(redacted: &Value) -> Value {
     // is intentionally skipped because its touched set requires
     // real shell parsing — `git status` doesn't touch a file the
     // way `Edit` does, and a wrong inference is worse than none.
-    let touched = infer_touched_artifacts(&tool_name, &input_obj);
+    let touched = match client {
+        HookClient::Codex => infer_codex_touched_artifacts(&tool_name, &input_obj),
+        _ => infer_touched_artifacts(&tool_name, &input_obj),
+    };
 
     let tc = ToolCall {
         tool_name,
@@ -478,7 +613,52 @@ fn infer_touched_artifacts(
         .unwrap_or_default()
 }
 
-fn build_agent_call_payload(redacted: &Value) -> Value {
+/// Phase36 — `touched[]` for Codex tools. Only `apply_patch` names its
+/// files: the patch text (a bare string, or `command` / `patch` / `input`
+/// in the input object) carries `*** Add File:`, `*** Update File:`,
+/// `*** Delete File:` and `*** Move to:` headers. Shell and MCP tools
+/// stay empty for the same reason Claude's Bash does.
+fn infer_codex_touched_artifacts(
+    tool_name: &str,
+    input: &serde_json::Map<String, Value>,
+) -> Vec<TouchedArtifact> {
+    if tool_name != "apply_patch" {
+        return Vec::new();
+    }
+    let Some(patch) = ["command", "patch", "input"]
+        .iter()
+        .find_map(|key| input.get(*key).and_then(Value::as_str))
+    else {
+        return Vec::new();
+    };
+    let mut touched: Vec<TouchedArtifact> = Vec::new();
+    for line in patch.lines() {
+        let entry = [
+            ("*** Add File: ", "file_create"),
+            ("*** Update File: ", "file_write"),
+            ("*** Delete File: ", "file_delete"),
+            ("*** Move to: ", "file_create"),
+        ]
+        .iter()
+        .find_map(|(header, kind)| {
+            line.strip_prefix(header)
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(|path| TouchedArtifact {
+                    kind: (*kind).to_string(),
+                    path: path.to_string(),
+                })
+        });
+        if let Some(entry) = entry {
+            if !touched.contains(&entry) {
+                touched.push(entry);
+            }
+        }
+    }
+    touched
+}
+
+fn build_agent_call_payload(redacted: &Value, client: HookClient) -> Value {
     let agent_type = read_string_field(redacted, "agent_type")
         .or_else(|| read_string_field(redacted, "subagent_type"))
         .unwrap_or_else(|| "unknown".into());
@@ -489,7 +669,15 @@ fn build_agent_call_payload(redacted: &Value) -> Value {
     let prompt = read_string_field(redacted, "prompt");
     let model = read_string_field(redacted, "model");
     let team_name = read_string_field(redacted, "team_name");
-    let result = redacted.get("result").cloned();
+    // Codex SubagentStop carries the sub-agent's reply as
+    // `last_assistant_message`; it is the call's result. The schema
+    // requires `result` to be an object, so the text keeps its field name.
+    let result = redacted.get("result").cloned().or_else(|| {
+        (client == HookClient::Codex)
+            .then(|| read_string_field(redacted, "last_assistant_message"))
+            .flatten()
+            .map(|text| json!({ "last_assistant_message": text }))
+    });
     let duration_ms = redacted.get("duration_ms").and_then(|v| v.as_u64());
     let outcome = read_string_field(redacted, "outcome").unwrap_or_else(|| "success".into());
 
@@ -507,16 +695,27 @@ fn build_agent_call_payload(redacted: &Value) -> Value {
     serde_json::to_value(&ac).unwrap_or(Value::Null)
 }
 
-fn build_context(frame: &HookFrame, extras: &ClaudeCodeExtras) -> Context {
+fn build_context(frame: &HookFrame, extras: &ClaudeCodeExtras, redacted: &Value) -> Context {
     let cwd = frame.cwd.clone();
     let repo = cwd.as_deref().and_then(repo_from_cwd);
     let user = std::env::var("USER")
         .ok()
         .or_else(|| std::env::var("USERNAME").ok());
+    let extras_value = match frame.client {
+        HookClient::Codex => serde_json::to_value(CodexExtras {
+            correlation: extras.clone(),
+            codex_turn_id: read_string_field(redacted, "turn_id"),
+            model: read_string_field(redacted, "model"),
+            source: read_string_field(redacted, "source"),
+            permission_mode: read_string_field(redacted, "permission_mode"),
+            agent_id: read_string_field(redacted, "agent_id"),
+        }),
+        _ => serde_json::to_value(extras),
+    };
     let mut bag = std::collections::BTreeMap::new();
     bag.insert(
-        "claude_code".to_string(),
-        serde_json::to_value(extras).unwrap_or(Value::Null),
+        frame.client.extras_key().to_string(),
+        extras_value.unwrap_or(Value::Null),
     );
 
     Context {
@@ -526,7 +725,7 @@ fn build_context(frame: &HookFrame, extras: &ClaudeCodeExtras) -> Context {
         cwd,
         user,
         platform: detect_platform().to_string(),
-        ide: Some("claude-code".to_string()),
+        ide: Some(frame.client.as_str().to_string()),
         extras: bag,
     }
 }
@@ -603,6 +802,7 @@ mod tests {
             session_id: Some("env-session-fixture".into()),
             cwd: Some("/repos/Vectorizer".into()),
             payload,
+            client: HookClient::ClaudeCode,
         }
     }
 
@@ -1015,5 +1215,330 @@ mod tests {
         .expect("SubagentStop must publish");
         let payload: cortex_core::events::AgentCall = serde_json::from_value(env.payload).unwrap();
         assert_eq!(payload.description, "Implement feature X");
+    }
+
+    // ── phase36: client identity + Codex payload mapping ─────────────────
+
+    /// Fields every Codex hook payload carries (learn.chatgpt.com/docs/hooks).
+    fn codex_payload(event: &str, specific: Value) -> Value {
+        let mut payload = json!({
+            "session_id": "019a7c1e-codex-session",
+            "transcript_path": null,
+            "cwd": "/repos/Vectorizer",
+            "hook_event_name": event,
+            "model": "gpt-5.5-codex",
+        });
+        if let (Some(base), Some(extra)) = (payload.as_object_mut(), specific.as_object()) {
+            base.extend(extra.clone());
+        }
+        payload
+    }
+
+    fn client_frame(client: HookClient, hook: &str, payload: Value) -> HookFrame {
+        HookFrame {
+            client,
+            ..frame(hook, payload)
+        }
+    }
+
+    fn codex_event(mgr: &SessionManager, hook: HookKind, specific: Value) -> Option<Envelope> {
+        let name = format!("{hook:?}");
+        let frame = client_frame(HookClient::Codex, &name, codex_payload(&name, specific));
+        build_event(hook, &frame, mgr, 42)
+    }
+
+    fn codex_extras(env: &Envelope) -> CodexExtras {
+        assert!(!env.context.extras.contains_key("claude_code"));
+        serde_json::from_value(env.context.extras["codex"].clone()).unwrap()
+    }
+
+    fn tool_call(mgr: &SessionManager, specific: Value) -> (ToolCall, CodexExtras) {
+        let env = codex_event(mgr, HookKind::PostToolUse, specific).expect("PostToolUse publishes");
+        cortex_core::validate_event(&serde_json::to_value(&env).unwrap()).unwrap();
+        let extras = codex_extras(&env);
+        (serde_json::from_value(env.payload).unwrap(), extras)
+    }
+
+    #[test]
+    fn frame_client_defaults_to_claude_code_round_trips_and_rejects_unknown_ids() {
+        let legacy: HookFrame =
+            serde_json::from_value(json!({"hook": "Stop", "payload": {}})).unwrap();
+        assert_eq!(legacy.client, HookClient::ClaudeCode);
+        for client in [
+            HookClient::ClaudeCode,
+            HookClient::Codex,
+            HookClient::OpenCode,
+        ] {
+            let wire = serde_json::to_value(client_frame(client, "Stop", json!({}))).unwrap();
+            assert_eq!(wire["client"], client.as_str());
+            assert_eq!(HookClient::parse(client.as_str()), Some(client));
+            let back: HookFrame = serde_json::from_value(wire).unwrap();
+            assert_eq!(back.client, client);
+        }
+        for unknown in [json!("gemini"), json!("Codex"), json!(""), json!(7)] {
+            let raw = json!({"hook": "Stop", "payload": {}, "client": unknown});
+            assert!(serde_json::from_value::<HookFrame>(raw).is_err());
+        }
+        assert_eq!(HookClient::parse("openai-codex"), None);
+    }
+
+    #[test]
+    fn tool_ide_extras_and_id_prefix_follow_the_client() {
+        for (client, extras_key, prefix) in [
+            (HookClient::ClaudeCode, "claude_code", "cc-turn-"),
+            (HookClient::Codex, "codex", "cx-turn-"),
+            (HookClient::OpenCode, "opencode", "oc-turn-"),
+        ] {
+            let mgr = SessionManager::new();
+            let frame = client_frame(client, "UserPromptSubmit", json!({"prompt": "hi"}));
+            let env = build_event(HookKind::UserPromptSubmit, &frame, &mgr, 42).unwrap();
+            assert_eq!(env.tool, client.as_str());
+            assert_eq!(env.context.ide.as_deref(), Some(client.as_str()));
+            assert_eq!(env.context.extras.len(), 1, "{client:?}");
+            let turn = env.context.extras[extras_key]["turn_id"].as_str().unwrap();
+            assert!(turn.starts_with(prefix), "{turn}");
+            cortex_core::validate_event(&serde_json::to_value(&env).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn codex_session_start_publishes_nothing_and_prompt_turn_carries_codex_ids() {
+        let mgr = SessionManager::new();
+        assert!(codex_event(&mgr, HookKind::SessionStart, json!({"source": "startup"})).is_none());
+        let env = codex_event(
+            &mgr,
+            HookKind::UserPromptSubmit,
+            json!({"turn_id": "turn-1", "permission_mode": "default", "prompt": "fix the bug"}),
+        )
+        .expect("UserPromptSubmit publishes");
+        assert_eq!(env.kind, Kind::Turn);
+        assert_eq!(env.tool, TOOL_CODEX);
+        assert_eq!(env.model.as_deref(), Some("gpt-5.5-codex"));
+        let turn: Turn = serde_json::from_value(env.payload.clone()).unwrap();
+        assert_eq!(turn.user_message, "fix the bug");
+        let extras = codex_extras(&env);
+        assert!(extras
+            .correlation
+            .turn_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("cx-turn-")));
+        assert_eq!(extras.codex_turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(extras.model.as_deref(), Some("gpt-5.5-codex"));
+        assert_eq!(extras.permission_mode.as_deref(), Some("default"));
+        cortex_core::validate_event(&serde_json::to_value(&env).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn codex_model_never_falls_back_to_claude_model_env() {
+        std::env::set_var("CLAUDE_MODEL", "claude-env-model");
+        let mgr = SessionManager::new();
+        let frame = client_frame(
+            HookClient::Codex,
+            "UserPromptSubmit",
+            json!({"prompt": "no model field"}),
+        );
+        let env = build_event(HookKind::UserPromptSubmit, &frame, &mgr, 42).unwrap();
+        assert_eq!(env.model, None);
+    }
+
+    #[test]
+    fn codex_post_tool_use_maps_string_object_and_other_tool_responses() {
+        let mgr = SessionManager::new();
+        codex_event(&mgr, HookKind::UserPromptSubmit, json!({"prompt": "go"}));
+        let (tc, extras) = tool_call(
+            &mgr,
+            json!({
+                "turn_id": "turn-1",
+                "tool_name": "shell",
+                "tool_use_id": "call_1",
+                "tool_input": {"command": ["bash", "-lc", "ls"]},
+                "tool_response": "file-a\nfile-b"
+            }),
+        );
+        assert_eq!(tc.tool_name, "shell");
+        assert_eq!(tc.input["command"][2], "ls");
+        let output = tc.output.expect("string response is output text");
+        assert_eq!(output.stdout.as_deref(), Some("file-a\nfile-b"));
+        assert_eq!(tc.outcome, "success");
+        assert!(tc.touched.is_empty(), "shell commands are not parsed");
+        // No PreToolUse in the Codex plugin: an open turn is enough.
+        assert!(!extras.correlation.orphan);
+        assert_eq!(extras.correlation.tool_use_id.as_deref(), Some("call_1"));
+        assert!(extras
+            .correlation
+            .tool_call_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("cx-tc-")));
+        assert_eq!(extras.codex_turn_id.as_deref(), Some("turn-1"));
+
+        let (tc, _) = tool_call(
+            &mgr,
+            json!({
+                "tool_name": "shell",
+                "tool_use_id": "call_2",
+                "tool_input": {"command": "false"},
+                "tool_response": {"stdout": "", "stderr": "boom", "exit_code": 2}
+            }),
+        );
+        let output = tc.output.expect("object response");
+        assert_eq!(output.stderr.as_deref(), Some("boom"));
+        assert_eq!(output.exit_code, Some(2));
+        assert_eq!(tc.outcome, "error");
+
+        let (tc, _) = tool_call(
+            &mgr,
+            json!({
+                "tool_name": "mcp__cortex__cortex_memory_read",
+                "tool_use_id": "call_3",
+                "tool_input": {"repo": "Cortex"},
+                "tool_response": [{"type": "text", "text": "saved"}]
+            }),
+        );
+        assert_eq!(
+            tc.output.and_then(|o| o.stdout).as_deref(),
+            Some(r#"[{"type":"text","text":"saved"}]"#)
+        );
+
+        let (tc, _) = tool_call(
+            &mgr,
+            json!({"tool_name": "shell", "tool_use_id": "call_4", "tool_response": null}),
+        );
+        assert!(tc.output.is_none());
+    }
+
+    #[test]
+    fn codex_post_tool_use_without_an_open_turn_is_orphaned() {
+        let mgr = SessionManager::new();
+        let (_, extras) = tool_call(
+            &mgr,
+            json!({"tool_name": "shell", "tool_use_id": "call_9", "tool_response": "x"}),
+        );
+        assert!(extras.correlation.orphan);
+    }
+
+    #[test]
+    fn codex_apply_patch_touches_every_patched_path() {
+        let patch = "*** Begin Patch\n\
+                     *** Add File: src/new.rs\n\
+                     +pub fn added() {}\n\
+                     *** Update File: src/lib.rs\n\
+                     *** Move to: src/renamed.rs\n\
+                     @@\n\
+                     -old\n\
+                     +new\n\
+                     *** Update File: src/lib.rs\n\
+                     *** Delete File: docs/old.md\r\n\
+                     *** End Patch\n";
+        let expected = vec![
+            ("file_create", "src/new.rs"),
+            ("file_write", "src/lib.rs"),
+            ("file_create", "src/renamed.rs"),
+            ("file_delete", "docs/old.md"),
+        ];
+        let mgr = SessionManager::new();
+        codex_event(&mgr, HookKind::UserPromptSubmit, json!({"prompt": "go"}));
+        for (index, input) in [json!({"command": patch}), json!(patch)]
+            .into_iter()
+            .enumerate()
+        {
+            let (tc, _) = tool_call(
+                &mgr,
+                json!({
+                    "tool_name": "apply_patch",
+                    "tool_use_id": format!("patch-{index}"),
+                    "tool_input": input,
+                    "tool_response": "Success. Updated the following files:"
+                }),
+            );
+            let touched: Vec<(&str, &str)> = tc
+                .touched
+                .iter()
+                .map(|t| (t.kind.as_str(), t.path.as_str()))
+                .collect();
+            assert_eq!(touched, expected, "input shape {index}");
+            assert!(
+                tc.input.is_object(),
+                "a bare-string input is kept as an object"
+            );
+        }
+        // The same tool name from Claude Code is not parsed as a patch.
+        let frame = frame(
+            "PostToolUse",
+            json!({"tool_name": "apply_patch", "tool_input": {"command": patch}}),
+        );
+        let env = build_event(HookKind::PostToolUse, &frame, &mgr, 42).unwrap();
+        let tc: ToolCall = serde_json::from_value(env.payload).unwrap();
+        assert!(tc.touched.is_empty());
+    }
+
+    #[test]
+    fn codex_stop_reads_last_assistant_message_and_never_the_transcript() {
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            transcript.path(),
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"from transcript"}]}}"#,
+        )
+        .unwrap();
+        let mgr = SessionManager::new();
+        let prompt = codex_event(&mgr, HookKind::UserPromptSubmit, json!({"prompt": "go"}))
+            .expect("UserPromptSubmit publishes");
+        let stop = codex_event(
+            &mgr,
+            HookKind::Stop,
+            json!({
+                "turn_id": "turn-1",
+                "stop_hook_active": false,
+                "last_assistant_message": "Done: tests pass.",
+                "transcript_path": transcript.path().to_string_lossy()
+            }),
+        )
+        .expect("Stop publishes");
+        let turn: Turn = serde_json::from_value(stop.payload.clone()).unwrap();
+        assert_eq!(turn.user_message, "");
+        assert_eq!(turn.assistant_message.as_deref(), Some("Done: tests pass."));
+        assert_eq!(
+            codex_extras(&prompt).correlation.turn_id,
+            codex_extras(&stop).correlation.turn_id
+        );
+        cortex_core::validate_event(&serde_json::to_value(&stop).unwrap()).unwrap();
+
+        // transcript_path null and no message: still a turn boundary.
+        let stop = codex_event(
+            &mgr,
+            HookKind::Stop,
+            json!({"stop_hook_active": true, "last_assistant_message": null}),
+        )
+        .expect("Stop publishes without a message");
+        let turn: Turn = serde_json::from_value(stop.payload).unwrap();
+        assert_eq!(turn.assistant_message, None);
+    }
+
+    #[test]
+    fn codex_subagent_stop_publishes_agent_call_with_the_reply_as_result() {
+        let mgr = SessionManager::new();
+        let env = codex_event(
+            &mgr,
+            HookKind::SubagentStop,
+            json!({
+                "turn_id": "turn-2",
+                "agent_id": "agent-7",
+                "agent_type": "explorer",
+                "agent_transcript_path": null,
+                "stop_hook_active": false,
+                "last_assistant_message": "Found 3 call sites."
+            }),
+        )
+        .expect("SubagentStop publishes");
+        assert_eq!(env.kind, Kind::AgentCall);
+        assert_eq!(env.tool, TOOL_CODEX);
+        let call: AgentCall = serde_json::from_value(env.payload.clone()).unwrap();
+        assert_eq!(call.agent_type, "explorer");
+        assert_eq!(call.description, "agent call");
+        assert_eq!(
+            call.result,
+            Some(json!({"last_assistant_message": "Found 3 call sites."}))
+        );
+        assert_eq!(codex_extras(&env).agent_id.as_deref(), Some("agent-7"));
+        cortex_core::validate_event(&serde_json::to_value(&env).unwrap()).unwrap();
     }
 }

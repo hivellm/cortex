@@ -54,8 +54,11 @@ fn cortex_home_path(name: &str) -> PathBuf {
 /// Format mirrors the legacy shim:
 ///
 /// ```text
-/// 2026-05-06T12:34:56.789Z UserPromptSubmit env_sid=<env> payload_sid=<payload> pid=<pid>
+/// 2026-05-06T12:34:56.789Z UserPromptSubmit env_sid=<env> payload_sid=<payload> pid=<pid> client=<client>
 /// ```
+///
+/// `client=` (phase36) is appended last so readers of the older
+/// prefix keep parsing.
 pub fn record_invocation(frame: &HookFrame, pid: u32) {
     let path = cortex_home_path("hook-invocations.log");
     let payload_sid = frame
@@ -65,12 +68,13 @@ pub fn record_invocation(frame: &HookFrame, pid: u32) {
         .unwrap_or("");
     let env_sid = frame.session_id.as_deref().unwrap_or("");
     let line = format!(
-        "{ts} {hook} env_sid={env} payload_sid={pid_sid} pid={pid}\n",
+        "{ts} {hook} env_sid={env} payload_sid={pid_sid} pid={pid} client={client}\n",
         ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
         hook = frame.hook,
         env = env_sid,
         pid_sid = payload_sid,
         pid = pid,
+        client = frame.client.as_str(),
     );
     append_with_rotate(&path, line.as_bytes());
 }
@@ -142,6 +146,7 @@ mod tests {
             session_id: Some(sid.to_string()),
             cwd: Some("/tmp".to_string()),
             payload: serde_json::json!({ "session_id": payload_sid }),
+            client: crate::events::HookClient::Codex,
         }
     }
 
@@ -192,7 +197,7 @@ mod tests {
         assert!(content.contains("UserPromptSubmit"));
         assert!(content.contains("env_sid=env-sid"));
         assert!(content.contains("payload_sid=payload-sid"));
-        assert!(content.contains("pid=42"));
+        assert!(content.contains("pid=42 client=codex"));
         assert_eq!(content.matches('\n').count(), 1);
     }
 

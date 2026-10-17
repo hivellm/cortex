@@ -12,6 +12,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::events::HookClient;
+
 /// Domain separator for the SHA-256 → ULID derivation. Bumping this
 /// would invalidate every previously-published `session_id` for the
 /// same Claude UUID, so do not change it without a migration plan.
@@ -133,9 +135,10 @@ impl SessionManager {
         SessionState::new(session_id)
     }
 
-    /// Open a fresh turn for `session_id` and return its id.
-    pub fn open_turn(&self, session_id: &str) -> String {
-        let turn_id = format!("cc-turn-{}", ulid::Ulid::new());
+    /// Open a fresh turn for `session_id` and return its id, tagged
+    /// with the client's prefix (`cc-turn-`, `cx-turn-`, `oc-turn-`).
+    pub fn open_turn(&self, session_id: &str, client: HookClient) -> String {
+        let turn_id = format!("{}-turn-{}", client.id_prefix(), ulid::Ulid::new());
         if let Ok(mut g) = self.sessions.lock() {
             let state = g
                 .entry(session_id.to_string())
@@ -201,9 +204,15 @@ impl SessionManager {
 
     /// Open a fresh tool-call slot anchored under `tool_use_id`. The
     /// returned id is what we stamp on the envelope; it joins
-    /// PreToolUse / PostToolUse together.
-    pub fn open_tool_call(&self, session_id: &str, tool_use_id: &str) -> String {
-        let tool_call_id = format!("cc-tc-{}", ulid::Ulid::new());
+    /// PreToolUse / PostToolUse together. Tagged with the client's
+    /// prefix (`cc-tc-`, `cx-tc-`, `oc-tc-`).
+    pub fn open_tool_call(
+        &self,
+        session_id: &str,
+        tool_use_id: &str,
+        client: HookClient,
+    ) -> String {
+        let tool_call_id = format!("{}-tc-{}", client.id_prefix(), ulid::Ulid::new());
         if let Ok(mut g) = self.sessions.lock() {
             let state = g
                 .entry(session_id.to_string())
@@ -295,8 +304,8 @@ mod tests {
         let mgr = SessionManager::new();
         let s = "s1";
         mgr.ensure(s);
-        let t1 = mgr.open_turn(s);
-        let t2 = mgr.open_turn(s);
+        let t1 = mgr.open_turn(s, HookClient::ClaudeCode);
+        let t2 = mgr.open_turn(s, HookClient::ClaudeCode);
         assert_ne!(t1, t2);
         assert_eq!(mgr.current_turn(s), Some(t2));
     }
@@ -305,7 +314,7 @@ mod tests {
     fn close_turn_clears_current() {
         let mgr = SessionManager::new();
         let s = "s2";
-        mgr.open_turn(s);
+        mgr.open_turn(s, HookClient::ClaudeCode);
         mgr.close_turn(s);
         assert!(mgr.current_turn(s).is_none());
     }
@@ -314,9 +323,24 @@ mod tests {
     fn tool_call_round_trip_through_lookup() {
         let mgr = SessionManager::new();
         let s = "s3";
-        let tc = mgr.open_tool_call(s, "tu-1");
+        let tc = mgr.open_tool_call(s, "tu-1", HookClient::ClaudeCode);
         assert_eq!(mgr.lookup_tool_call(s, "tu-1"), Some(tc.clone()));
         mgr.close_tool_call(s, "tu-1");
         assert!(mgr.lookup_tool_call(s, "tu-1").is_none());
+    }
+
+    #[test]
+    fn correlation_tags_carry_the_client_prefix_and_claude_keeps_cc() {
+        let mgr = SessionManager::new();
+        for (client, prefix) in [
+            (HookClient::ClaudeCode, "cc"),
+            (HookClient::Codex, "cx"),
+            (HookClient::OpenCode, "oc"),
+        ] {
+            let turn = mgr.open_turn("s4", client);
+            assert!(turn.starts_with(&format!("{prefix}-turn-")), "{turn}");
+            let call = mgr.open_tool_call("s4", "tu-1", client);
+            assert!(call.starts_with(&format!("{prefix}-tc-")), "{call}");
+        }
     }
 }

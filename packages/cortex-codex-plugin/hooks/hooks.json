@@ -6,7 +6,8 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" SessionStart",
-            "commandWindows": "cortex-hook SessionStart"
+            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" SessionStart",
+            "timeout": 5
           }
         ]
       }
@@ -17,18 +18,8 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" UserPromptSubmit",
-            "commandWindows": "cortex-hook UserPromptSubmit"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" PreToolUse",
-            "commandWindows": "cortex-hook PreToolUse"
+            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" UserPromptSubmit",
+            "timeout": 5
           }
         ]
       }
@@ -39,7 +30,8 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" PostToolUse",
-            "commandWindows": "cortex-hook PostToolUse --fire-forget"
+            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" PostToolUse",
+            "timeout": 5
           }
         ]
       }
@@ -50,7 +42,20 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" Stop",
-            "commandWindows": "cortex-hook Stop --fire-forget"
+            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" Stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" SubagentStop",
+            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" SubagentStop",
+            "timeout": 5
           }
         ]
       }

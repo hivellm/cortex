@@ -1,7 +1,8 @@
 //! Behavioral tests for the hook launchers that hand lifecycle events to
 //! `cortex-hook`: the Claude Code shims (`packages/cortex-claude-plugin/hooks/cortex-*.sh`,
 //! byte-identical to `crates/cortex-adapter-claude-code/hooks/`) and the Codex plugin
-//! launcher (`packages/cortex-codex-plugin/scripts/cortex-hook-launcher`).
+//! launchers (`packages/cortex-codex-plugin/scripts/cortex-hook-launcher` and, on
+//! Windows, `cortex-hook-launcher.cmd` run through `cmd.exe /C` as Codex does).
 //!
 //! `hook_drift.rs` only greps anchor strings. These tests run the real scripts under
 //! bash in a sandbox — `HOME`/`USERPROFILE` point at a tempdir, `PATH` holds only
@@ -49,14 +50,20 @@ const CLAUDE_SHIMS: &[(&str, &str, bool)] = &[
     ("cortex-notification.sh", "Notification", false),
 ];
 
-/// Codex plugin events: event, synchronous.
+/// Codex plugin events: event, synchronous. PreToolUse is not registered: the
+/// daemon answers it with `{}`, so it only added latency per tool call.
 const CODEX_EVENTS: &[(&str, bool)] = &[
     ("SessionStart", true),
     ("UserPromptSubmit", true),
-    ("PreToolUse", true),
     ("PostToolUse", false),
     ("Stop", false),
+    ("SubagentStop", false),
 ];
+
+/// Arguments the Codex launchers hand to cortex-hook.
+fn codex_args(event: &str, synchronous: bool) -> String {
+    format!("{} --client codex", shim_args(event, synchronous))
+}
 
 fn find_bash() -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os("CORTEX_TEST_BASH") {
@@ -565,7 +572,7 @@ fn should_pick_codex_discovery_tiers_in_order_and_fail_open_when_none_exist() {
     let launcher = codex_launcher();
 
     for &(event, synchronous) in CODEX_EVENTS {
-        let args = shim_args(event, synchronous);
+        let args = codex_args(event, synchronous);
         let run = sb.run(&launcher, &[event], &[]);
         let fields = assert_invoked(&run, "path", &args, &format!("codex {event}: PATH"));
         // Not "plugin": cortex-hook's Claude settings duplicate guard must not apply to Codex.
@@ -576,8 +583,13 @@ fn should_pick_codex_discovery_tiers_in_order_and_fail_open_when_none_exist() {
     }
 
     fs::rename(&path_bin, sb.root.join("path-parked")).expect("park path bin");
-    let run = sb.run(&launcher, &["PreToolUse"], &[]);
-    let fields = assert_invoked(&run, "home-bin", "PreToolUse", "codex: ~/.cortex/bin");
+    let run = sb.run(&launcher, &["UserPromptSubmit"], &[]);
+    let fields = assert_invoked(
+        &run,
+        "home-bin",
+        "UserPromptSubmit --client codex",
+        "codex: ~/.cortex/bin",
+    );
     assert_eq!(fields[2], "codex-plugin");
 
     fs::remove_file(&home_bin).expect("remove home bin");
@@ -586,13 +598,18 @@ fn should_pick_codex_discovery_tiers_in_order_and_fail_open_when_none_exist() {
     assert_invoked(
         &run,
         "home-exe",
-        "Stop --fire-forget",
+        "Stop --fire-forget --client codex",
         "codex: ~/.cortex/bin .exe",
     );
 
     fs::remove_file(sb.home.join(".cortex/bin/cortex-hook.exe")).expect("remove home exe");
     let run = sb.run(&launcher, &["SessionStart"], &[]);
-    assert_invoked(&run, "cargo-bin", "SessionStart", "codex: ~/.cargo/bin");
+    assert_invoked(
+        &run,
+        "cargo-bin",
+        "SessionStart --client codex",
+        "codex: ~/.cargo/bin",
+    );
 
     fs::remove_file(&cargo_bin).expect("remove cargo bin");
     for &(event, _) in CODEX_EVENTS {
@@ -610,7 +627,7 @@ fn should_fail_open_without_running_the_binary_when_the_codex_event_is_unknown()
     let launcher = codex_launcher();
     for args in [
         &[][..],
-        &["SubagentStop"][..],
+        &["PreToolUse"][..],
         &["Notification"][..],
         &["sessionstart"][..],
     ] {
@@ -657,7 +674,7 @@ fn should_declare_documented_codex_events_with_both_commands_when_reading_hooks_
     );
 
     let launcher_text = fs::read_to_string(codex_launcher()).expect("read codex launcher");
-    for &(event, synchronous) in CODEX_EVENTS {
+    for &(event, _) in CODEX_EVENTS {
         for hook in hook_entries(&hooks[event], "codex hooks.json", event) {
             assert_eq!(hook["type"], "command", "{event}: hook type");
             let command = hook["command"]
@@ -682,18 +699,62 @@ fn should_declare_documented_codex_events_with_both_commands_when_reading_hooks_
                 command.ends_with(&format!("\" {event}")),
                 "{event}: launcher must receive its own event name: {command}"
             );
-            // The launcher adds --fire-forget itself; commandWindows has to spell it out.
+            // Codex substitutes ${PLUGIN_ROOT} textually and runs this under
+            // `cmd.exe /C "<command>"`; the quoted script path survives cmd's
+            // outer-quote stripping (see the Windows tests below).
             assert_eq!(
                 windows,
-                format!("cortex-hook {}", shim_args(event, synchronous)),
+                format!("\"${{PLUGIN_ROOT}}\\scripts\\cortex-hook-launcher.cmd\" {event}"),
                 "{event}: commandWindows"
+            );
+            let timeout = hook["timeout"].as_u64().expect("timeout in seconds");
+            assert!(
+                (1..=5).contains(&timeout),
+                "{event}: cortex-hook is bounded at 1.5 s; timeout {timeout}"
             );
         }
     }
+    assert!(plugin.join("scripts/cortex-hook-launcher.cmd").is_file());
 
-    // The launcher's own sync/fire-forget split must match the same table.
-    assert!(launcher_text.contains("SessionStart | UserPromptSubmit | PreToolUse) flag=\"\" ;;"));
-    assert!(launcher_text.contains("PostToolUse | Stop) flag=\"--fire-forget\" ;;"));
+    // The launchers' own sync/fire-forget split must match the same table.
+    assert!(launcher_text.contains("SessionStart | UserPromptSubmit) flag=\"\" ;;"));
+    assert!(launcher_text.contains("PostToolUse | Stop | SubagentStop) flag=\"--fire-forget\" ;;"));
+    let cmd_text = fs::read_to_string(plugin.join("scripts/cortex-hook-launcher.cmd"))
+        .expect("read codex cmd launcher");
+    let fire_forget_at = cmd_text
+        .find("set \"FLAG=--fire-forget\"")
+        .expect("cmd launcher sets --fire-forget");
+    for &(event, synchronous) in CODEX_EVENTS {
+        let at = cmd_text
+            .find(&format!("if \"%EVENT%\"==\"{event}\" goto :resolve"))
+            .unwrap_or_else(|| panic!("cmd launcher must accept {event}"));
+        assert_eq!(at < fire_forget_at, synchronous, "{event}: cmd sync split");
+    }
+    assert_eq!(
+        cmd_text.matches("goto :resolve").count(),
+        CODEX_EVENTS.len()
+    );
+    assert!(
+        cmd_text.contains("\r\n") && !cmd_text.replace("\r\n", "").contains('\n'),
+        "cmd launcher must use CRLF line endings"
+    );
+}
+
+#[test]
+fn should_declare_the_documented_mcp_form_and_a_bumped_version_in_the_codex_plugin() {
+    let plugin = codex_plugin_dir();
+    let manifest = read_json(&plugin.join(".codex-plugin/plugin.json"));
+    assert_eq!(manifest["name"], "cortex");
+    // Codex caches installs per version; any plugin change needs a bump.
+    assert_eq!(manifest["version"], "0.3.0");
+    assert_eq!(manifest["mcpServers"], "./mcp.json");
+    let mcp = read_json(&plugin.join("mcp.json"));
+    assert_eq!(
+        mcp,
+        serde_json::json!({"mcpServers": {"cortex": {
+            "type": "stdio", "command": "cortex-mcp-server", "args": ["serve"]
+        }}})
+    );
 }
 
 #[test]
@@ -726,5 +787,268 @@ fn should_reference_existing_shims_for_matching_events_when_reading_claude_hooks
             body.contains(&format!("SYNCHRONOUS={flag}")),
             "{file}: SYNCHRONOUS"
         );
+    }
+}
+
+/// `cortex-hook-launcher.cmd`, run exactly as Codex runs `commandWindows`:
+/// `%COMSPEC% /C "<command>"` after textual `${PLUGIN_ROOT}` substitution.
+/// The fake `cortex-hook.exe` is a tiny program compiled with `rustc` that
+/// records `identity|argv|CORTEX_HOOK_ORIGIN|stdin` and prints `{"fake":…}`.
+#[cfg(windows)]
+mod windows_cmd_launcher {
+    use std::os::windows::process::CommandExt;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::OnceLock;
+    use std::{fs, io::Write};
+
+    use super::{codex_args, codex_plugin_dir, read_json, CODEX_EVENTS};
+
+    const FAKE_SOURCE: &str = r#"
+use std::io::{Read, Write};
+fn main() {
+    let identity = std::env::current_exe().ok()
+        .and_then(|exe| std::fs::read_to_string(exe.with_extension("identity")).ok())
+        .unwrap_or_default();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut stdin = String::new();
+    let _ = std::io::stdin().read_to_string(&mut stdin);
+    let origin = std::env::var("CORTEX_HOOK_ORIGIN").unwrap_or_default();
+    let record = std::env::var("CORTEX_FAKE_RECORD").expect("record path");
+    let mut file = std::fs::OpenOptions::new().create(true).append(true).open(record).expect("open");
+    writeln!(file, "{}|{}|{}|{}", identity.trim(), args.join(" "), origin, stdin.trim()).expect("write");
+    println!("{{\"fake\":\"{}\"}}", identity.trim());
+}
+"#;
+
+    /// Compiles the fake once per test binary; `None` (with a reason) when
+    /// `rustc` is unavailable.
+    fn fake_exe() -> Option<&'static Path> {
+        static FAKE: OnceLock<Option<PathBuf>> = OnceLock::new();
+        FAKE.get_or_init(|| {
+            let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("codex-cmd-launcher-fake");
+            fs::create_dir_all(&dir).ok()?;
+            let source = dir.join("fake_hook.rs");
+            fs::write(&source, FAKE_SOURCE).ok()?;
+            let exe = dir.join("fake_hook.exe");
+            let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+            let built = Command::new(rustc)
+                .args(["--edition", "2021", "-o"])
+                .arg(&exe)
+                .arg(&source)
+                .status()
+                .is_ok_and(|status| status.success());
+            built.then_some(exe)
+        })
+        .as_deref()
+    }
+
+    struct Cmd {
+        _tmp: tempfile::TempDir,
+        plugin_root: PathBuf,
+        home: PathBuf,
+        cwd: PathBuf,
+        path_dir: PathBuf,
+        record: PathBuf,
+        fake: &'static Path,
+    }
+
+    struct CmdRun {
+        code: Option<i32>,
+        stdout: String,
+        stderr: String,
+        record: Vec<String>,
+    }
+
+    impl Cmd {
+        fn new(test: &str) -> Option<Self> {
+            let Some(fake) = fake_exe() else {
+                eprintln!("skipping {test}: rustc could not build the fake cortex-hook.exe");
+                return None;
+            };
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let root = tmp.path().to_path_buf();
+            // Spaces prove the quoting survives cmd /C and the launcher.
+            let plugin_root = root.join("plugin root with space");
+            let home = root.join("home with space");
+            let cwd = root.join("checkout");
+            let path_dir = root.join("on path");
+            for dir in [&home, &cwd, &path_dir, &plugin_root.join("scripts")] {
+                fs::create_dir_all(dir).expect("create dir");
+            }
+            fs::copy(
+                codex_plugin_dir().join("scripts/cortex-hook-launcher.cmd"),
+                plugin_root.join("scripts/cortex-hook-launcher.cmd"),
+            )
+            .expect("copy launcher");
+            Some(Self {
+                record: root.join("record.log"),
+                _tmp: tmp,
+                plugin_root,
+                home,
+                cwd,
+                path_dir,
+                fake,
+            })
+        }
+
+        fn install(&self, dir: &Path, identity: &str) {
+            fs::create_dir_all(dir).expect("create fake dir");
+            fs::copy(self.fake, dir.join("cortex-hook.exe")).expect("copy fake");
+            fs::write(dir.join("cortex-hook.identity"), identity).expect("identity");
+        }
+
+        /// Runs `%COMSPEC% /C "<command>"` with a raw command line, as Codex does.
+        fn run(&self, command: &str, stdin: &[u8]) -> CmdRun {
+            let _ = fs::remove_file(&self.record);
+            let comspec = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
+            let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+            let system32 = Path::new(&system_root).join("System32");
+            let mut child = Command::new(comspec)
+                .raw_arg(format!("/C \"{command}\""))
+                .env_clear()
+                .env(
+                    "PATH",
+                    std::env::join_paths([&self.path_dir, &system32]).unwrap(),
+                )
+                .env("SystemRoot", &system_root)
+                .env("USERPROFILE", &self.home)
+                .env("CORTEX_FAKE_RECORD", &self.record)
+                .current_dir(&self.cwd)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn cmd.exe");
+            child
+                .stdin
+                .take()
+                .expect("stdin")
+                .write_all(stdin)
+                .expect("write stdin");
+            let output = child.wait_with_output().expect("wait for cmd.exe");
+            CmdRun {
+                code: output.status.code(),
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                record: fs::read_to_string(&self.record)
+                    .map(|text| text.lines().map(str::to_owned).collect())
+                    .unwrap_or_default(),
+            }
+        }
+
+        /// The `commandWindows` entry for `event`, with `${PLUGIN_ROOT}` substituted.
+        fn hook_command(&self, event: &str) -> String {
+            let hooks = read_json(&codex_plugin_dir().join("hooks/hooks.json"));
+            hooks["hooks"][event][0]["hooks"][0]["commandWindows"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{event}: commandWindows"))
+                .replace("${PLUGIN_ROOT}", &self.plugin_root.display().to_string())
+        }
+
+        fn launcher_command(&self, args: &str) -> String {
+            let launcher = self.plugin_root.join("scripts/cortex-hook-launcher.cmd");
+            format!("\"{}\" {args}", launcher.display())
+        }
+    }
+
+    const PAYLOAD: &[u8] = b"{\"session_id\":\"launcher-test\",\"prompt\":\"a & b | c > d\"}\n";
+
+    fn assert_cmd_invoked(run: &CmdRun, identity: &str, args: &str, context: &str) {
+        assert_eq!(run.code, Some(0), "{context}: stderr {}", run.stderr);
+        assert_eq!(run.stderr, "", "{context}: stderr");
+        assert_eq!(
+            run.stdout,
+            format!("{{\"fake\":\"{identity}\"}}\n"),
+            "{context}: only cortex-hook's reply may reach stdout"
+        );
+        let expected = format!(
+            "{identity}|{args}|codex-plugin|{}",
+            String::from_utf8_lossy(PAYLOAD).trim()
+        );
+        assert_eq!(run.record, vec![expected], "{context}");
+    }
+
+    fn assert_cmd_fail_open(run: &CmdRun, context: &str) {
+        assert_eq!(run.code, Some(0), "{context}: stderr {}", run.stderr);
+        assert_eq!(run.stdout, "{}\r\n", "{context}: stdout");
+        assert_eq!(run.stderr, "", "{context}: stderr");
+        assert!(run.record.is_empty(), "{context}: ran {:?}", run.record);
+    }
+
+    #[test]
+    fn should_run_every_command_windows_entry_through_cmd_quoting_with_a_spaced_plugin_root() {
+        let Some(sb) = Cmd::new("codex commandWindows under cmd /C") else {
+            return;
+        };
+        sb.install(&sb.path_dir, "path");
+        // A binary planted in the session's working directory is never used.
+        sb.install(&sb.cwd, "cwd");
+        for &(event, synchronous) in CODEX_EVENTS {
+            let run = sb.run(&sb.hook_command(event), PAYLOAD);
+            assert_cmd_invoked(
+                &run,
+                "path",
+                &codex_args(event, synchronous),
+                &format!("commandWindows {event}"),
+            );
+        }
+        // Codex may hand PLUGIN_ROOT over with forward slashes.
+        let forward = sb.hook_command("Stop").replace(
+            &sb.plugin_root.display().to_string(),
+            &sb.plugin_root.display().to_string().replace('\\', "/"),
+        );
+        let run = sb.run(&forward, PAYLOAD);
+        assert_cmd_invoked(
+            &run,
+            "path",
+            "Stop --fire-forget --client codex",
+            "forward slashes",
+        );
+    }
+
+    #[test]
+    fn should_prefer_path_then_fall_back_to_the_user_cortex_bin() {
+        let Some(sb) = Cmd::new("codex cmd discovery order") else {
+            return;
+        };
+        let home_bin = sb.home.join(".cortex").join("bin");
+        sb.install(&home_bin, "home-bin");
+        sb.install(&sb.path_dir, "path");
+        let run = sb.run(&sb.launcher_command("UserPromptSubmit"), PAYLOAD);
+        assert_cmd_invoked(
+            &run,
+            "path",
+            "UserPromptSubmit --client codex",
+            "PATH first",
+        );
+
+        fs::remove_file(sb.path_dir.join("cortex-hook.exe")).expect("remove PATH fake");
+        for &(event, synchronous) in CODEX_EVENTS {
+            let run = sb.run(&sb.launcher_command(event), PAYLOAD);
+            assert_cmd_invoked(
+                &run,
+                "home-bin",
+                &codex_args(event, synchronous),
+                &format!("{event}: %USERPROFILE%\\.cortex\\bin"),
+            );
+        }
+    }
+
+    #[test]
+    fn should_print_empty_json_and_drain_stdin_without_a_binary_or_for_unknown_events() {
+        let Some(sb) = Cmd::new("codex cmd fail-open") else {
+            return;
+        };
+        let large = [b"{\"prompt\":\"".as_slice(), &[b'x'; 1024 * 1024], b"\"}\n"].concat();
+        for &(event, _) in CODEX_EVENTS {
+            let run = sb.run(&sb.launcher_command(event), &large);
+            assert_cmd_fail_open(&run, &format!("{event}: nothing installed"));
+        }
+        sb.install(&sb.path_dir, "path");
+        for args in ["", "PreToolUse", "Notification", "sessionstart", "\"\""] {
+            let run = sb.run(&sb.launcher_command(args), PAYLOAD);
+            assert_cmd_fail_open(&run, &format!("launcher args {args:?}"));
+        }
     }
 }
