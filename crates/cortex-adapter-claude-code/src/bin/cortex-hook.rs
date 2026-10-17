@@ -9,7 +9,9 @@
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
+
+use cortex_adapter_claude_code::lifecycle::{ensure_started, should_autostart, StartDecision};
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -25,6 +27,9 @@ const MAX_NOTICE_MARKERS: usize = 4096;
 const PIPE_DEFAULT: &str = r"\\.\pipe\cortex-adapter-claude";
 const UNAVAILABLE_NOTICE: &str =
     "Cortex: local memory is unavailable. This prompt continues without saved Cortex memory.";
+const START_FAILED_PREFIX: &str = "Cortex: could not start local memory (";
+const RETRY_INTERVAL: Duration = Duration::from_millis(50);
+const EARLY_EXIT_PROBE: Duration = Duration::from_millis(150);
 
 #[derive(Debug)]
 struct Args {
@@ -180,27 +185,39 @@ fn main() {
             return;
         }
     };
-    let remaining = io_deadline.saturating_duration_since(Instant::now());
-    let response = if remaining.is_zero() {
-        None
-    } else {
+    let attempt = |rt: &tokio::runtime::Runtime| {
+        let remaining = io_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::ErrorKind::TimedOut);
+        }
         rt.block_on(async {
-            tokio::time::timeout(
+            match tokio::time::timeout(
                 remaining,
                 transport_round_trip(&args, frame.line.as_bytes()),
             )
             .await
-            .ok()
-            .and_then(Result::ok)
+            {
+                Ok(Ok(value)) => Ok(value),
+                Ok(Err(error)) => Err(error.kind()),
+                Err(_) => Err(io::ErrorKind::TimedOut),
+            }
         })
     };
-    let response = response.unwrap_or_else(|| {
-        if notice_event(&args.event) {
-            json!({"systemMessage": UNAVAILABLE_NOTICE})
-        } else {
-            json!({})
+    let response = match attempt(&rt) {
+        Ok(value) => value,
+        Err(kind)
+            if should_autostart(
+                &args.event,
+                explicit_endpoint(&args),
+                std::env::var("CORTEX_HOOK_AUTOSTART").ok().as_deref(),
+                kind,
+            ) =>
+        {
+            autostart_then_retry(&rt, &attempt, cfg.dashboard.api_bind.clone(), io_deadline)
         }
-    });
+        Err(_) if notice_event(&args.event) => json!({"systemMessage": UNAVAILABLE_NOTICE}),
+        Err(_) => json!({}),
+    };
     let response = filter_notice(
         &args.event,
         &frame.session_id,
@@ -405,6 +422,144 @@ fn state_dir() -> Option<PathBuf> {
         .or_else(|| home_dir().map(|home| home.join(".cortex/hook-notices-v1")))
 }
 
+fn is_hook_notice(message: &str) -> bool {
+    message == UNAVAILABLE_NOTICE || message.starts_with(START_FAILED_PREFIX)
+}
+
+fn start_failed_notice(reason: &str) -> String {
+    format!("{START_FAILED_PREFIX}{reason}). This prompt continues without saved Cortex memory.")
+}
+
+/// An endpoint other than the platform default belongs to a runtime this hook
+/// did not start (tests, side-by-side installs), so it is never autostarted.
+fn explicit_endpoint(args: &Args) -> bool {
+    #[cfg(windows)]
+    {
+        args.pipe
+            .as_deref()
+            .is_some_and(|pipe| !pipe.is_empty() && pipe != PIPE_DEFAULT)
+    }
+    #[cfg(unix)]
+    {
+        let default = home_dir().map(|home| home.join(".cortex/adapter-claude.sock"));
+        args.sock
+            .as_deref()
+            .is_some_and(|sock| !sock.is_empty() && Some(PathBuf::from(sock)) != default)
+    }
+}
+
+fn autostart_then_retry(
+    rt: &tokio::runtime::Runtime,
+    attempt: &impl Fn(&tokio::runtime::Runtime) -> Result<Value, io::ErrorKind>,
+    api_bind: String,
+    io_deadline: Instant,
+) -> Value {
+    let Some(directory) = cortex_config::cortex_home().map(|home| home.join("lifecycle")) else {
+        return json!({"systemMessage": start_failed_notice("no Cortex home directory")});
+    };
+    let decision = blocking_until(io_deadline, move || {
+        ensure_started(&directory, SystemTime::now(), || {
+            spawn_runtime(&directory, &api_bind)
+        })
+    });
+    match decision {
+        None => json!({}),
+        Some(StartDecision::Failed(reason)) => {
+            json!({"systemMessage": start_failed_notice(reason)})
+        }
+        Some(StartDecision::Spawned | StartDecision::Starting | StartDecision::Busy) => loop {
+            match attempt(rt) {
+                Ok(value) => break value,
+                Err(_) if Instant::now() + RETRY_INTERVAL >= io_deadline => break json!({}),
+                Err(_) => std::thread::sleep(RETRY_INTERVAL),
+            }
+        },
+    }
+}
+
+/// Launch `cortex-api` (unless its port already answers) and the adapter
+/// daemon from the directory holding this `cortex-hook`, detached from the
+/// hook's console and job, logging into the lifecycle directory. A child
+/// that exits within [`EARLY_EXIT_PROBE`] counts as a failed start.
+fn spawn_runtime(log_dir: &Path, api_bind: &str) -> Result<(), &'static str> {
+    let bin_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .ok_or("cannot locate cortex-hook")?;
+    let binary = |name: &str| bin_dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    let adapter = binary("cortex-adapter-claude");
+    let api = binary("cortex-api");
+    if !adapter.is_file() {
+        return Err("cortex-adapter-claude not found next to cortex-hook");
+    }
+    let mut children = Vec::new();
+    if !api_answers(api_bind) {
+        if !api.is_file() {
+            return Err("cortex-api not found next to cortex-hook");
+        }
+        children.push(launch(&api, &[], &log_dir.join("api.log"))?);
+    }
+    children.push(launch(&adapter, &["daemon"], &log_dir.join("adapter.log"))?);
+    std::thread::sleep(EARLY_EXIT_PROBE);
+    if children
+        .iter_mut()
+        .any(|child| !matches!(child.try_wait(), Ok(None)))
+    {
+        return Err("runtime exited immediately; see the lifecycle logs");
+    }
+    Ok(())
+}
+
+fn api_answers(api_bind: &str) -> bool {
+    let Ok(mut address) = api_bind.parse::<std::net::SocketAddr>() else {
+        return false;
+    };
+    if address.ip().is_unspecified() {
+        address.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+    }
+    std::net::TcpStream::connect_timeout(&address, Duration::from_millis(100)).is_ok()
+}
+
+fn launch(binary: &Path, args: &[&str], log: &Path) -> Result<std::process::Child, &'static str> {
+    let stdout = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .map_err(|_| "cannot open runtime log")?;
+    let stderr = stdout.try_clone().map_err(|_| "cannot open runtime log")?;
+    let mut command = std::process::Command::new(binary);
+    command
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    if let Some(parent) = log.parent().and_then(Path::parent) {
+        command.current_dir(parent);
+    }
+    detached_spawn(&mut command).map_err(|_| "cannot launch runtime process")
+}
+
+#[cfg(windows)]
+fn detached_spawn(command: &mut std::process::Command) -> io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    // Leave the client's job object when allowed so closing the session does
+    // not kill the runtime; jobs that forbid breakaway reject the flag.
+    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
+    command.spawn().or_else(|_| {
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        command.spawn()
+    })
+}
+
+#[cfg(unix)]
+fn detached_spawn(command: &mut std::process::Command) -> io::Result<std::process::Child> {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0).spawn()
+}
+
 fn notice_event(event: &str) -> bool {
     matches!(event, "SessionStart" | "UserPromptSubmit")
 }
@@ -416,7 +571,11 @@ fn filter_notice(
     directory: Option<&Path>,
     deadline: Instant,
 ) -> Value {
-    if response.get("systemMessage").and_then(Value::as_str) == Some(UNAVAILABLE_NOTICE) {
+    if response
+        .get("systemMessage")
+        .and_then(Value::as_str)
+        .is_some_and(is_hook_notice)
+    {
         let claimed = notice_event(event)
             && valid_session(session_id)
             && directory.is_some_and(|dir| {
@@ -662,6 +821,68 @@ mod tests {
             ),
             unrelated
         );
+    }
+
+    #[test]
+    fn start_failure_notice_is_shown_once_per_session_and_never_as_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("private-markers");
+        let notice = start_failed_notice("cortex-api not found next to cortex-hook");
+        let reply = json!({"systemMessage": notice});
+        let first = filter_notice(
+            "SessionStart",
+            "boot-session",
+            reply.clone(),
+            Some(&dir),
+            notice_deadline(),
+        );
+        assert_eq!(first["systemMessage"], notice);
+        assert!(first.get("hookSpecificOutput").is_none());
+        for event in ["UserPromptSubmit", "SessionStart"] {
+            assert!(filter_notice(
+                event,
+                "boot-session",
+                reply.clone(),
+                Some(&dir),
+                notice_deadline()
+            )
+            .get("systemMessage")
+            .is_none());
+        }
+        assert!(filter_notice(
+            "PreToolUse",
+            "other-session",
+            reply,
+            Some(&dir),
+            notice_deadline()
+        )
+        .get("systemMessage")
+        .is_none());
+    }
+
+    #[test]
+    fn only_the_default_endpoint_is_autostarted() {
+        let parse = |argv: &[&str]| Args::parse(argv.iter().map(|a| a.to_string())).unwrap();
+        assert!(!explicit_endpoint(&parse(&["SessionStart"])));
+        #[cfg(windows)]
+        {
+            assert!(!explicit_endpoint(&parse(&[
+                "SessionStart",
+                "--pipe",
+                PIPE_DEFAULT
+            ])));
+            assert!(explicit_endpoint(&parse(&[
+                "SessionStart",
+                "--pipe",
+                r"\\.\pipe\other"
+            ])));
+        }
+        #[cfg(unix)]
+        assert!(explicit_endpoint(&parse(&[
+            "SessionStart",
+            "--sock",
+            "/tmp/other.sock"
+        ])));
     }
 
     #[test]

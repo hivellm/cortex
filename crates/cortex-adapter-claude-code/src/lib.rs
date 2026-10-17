@@ -17,6 +17,7 @@ pub mod events;
 pub mod hook_log;
 pub mod install;
 pub mod ipc;
+pub mod lifecycle;
 pub mod metrics;
 pub mod publisher;
 pub mod session;
