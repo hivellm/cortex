@@ -5,8 +5,8 @@
 Cortex installs as a Claude Code or Codex plugin. No client file holds a Cortex
 path, token or environment block, and no repository `.mcp.json` is needed.
 
-1. **Binaries.** Build in release mode, then copy the four daily binaries into
-   `~/.cortex/bin` and add that directory to `PATH`:
+1. **Binaries.** Build in release mode, then copy the four daily binaries and
+   `cortex-ops` into `~/.cortex/bin` and add that directory to `PATH`:
    `cortex-ops install-binaries --from target/release`, then the same command with
    `--apply`. The installer verifies SHA-256, moves a running executable aside
    before replacing it, and writes `install-manifest.json`.
@@ -39,6 +39,19 @@ path, token or environment block, and no repository `.mcp.json` is needed.
    `hivellm-cortex` marketplace registration whose directory no longer exists.
    It writes verified backups and a record under `~/.cortex/migrations/`, which
    `--rollback <record>` restores byte-for-byte. No other file is touched.
+6. **Update.** `cortex-ops update` prints the plan; `--apply` runs it and stops
+   at the first failed step. It runs `git pull --ff-only` in the checkout
+   (skipped with `--no-pull`), builds the five binaries in release mode
+   (`$CARGO_TARGET_DIR/release` when set), and installs them as
+   `install-binaries` does. It then stops the `cortex-api` and
+   `cortex-adapter-claude` processes whose image lies in `~/.cortex/bin`, removes
+   stale asides, and refreshes installed plugins
+   (`claude plugin marketplace update hivellm-cortex`, `claude plugin update
+   cortex@hivellm-cortex`, `codex plugin add cortex@hivellm-cortex`). It never
+   touches `cortex-mcp-server`, `cortex-hook` or processes outside the bin dir,
+   and it does not start the runtime: the next synchronous hook does (ADR 040).
+   The checkout comes from `--source`, else from the build directory recorded in
+   `install-manifest.json`.
 
 The sections below describe the launcher-based runtime that preceded the
 plugin. Use the launcher when you need explicit process control.

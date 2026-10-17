@@ -48,7 +48,7 @@ $p = [Environment]::GetEnvironmentVariable('Path', 'User')
 export PATH="$HOME/.cortex/bin:$PATH"
 ```
 
-`target/release/cortex-ops doctor-install --build target/release` should then report all four binaries as `ok`. It flags missing, shadowed or stale binaries.
+`cortex-ops` is installed too, so in a new terminal it runs by name. `cortex-ops doctor-install --build target/release` should then report all five binaries as `ok`. It flags missing, shadowed or stale binaries.
 
 ### 2. Configure
 
@@ -82,6 +82,15 @@ Then open `/hooks` in Codex and trust the Cortex hooks. Codex runs plugin hooks 
 ### 4. Verify
 
 Start a new Claude Code session. Its first hook starts `cortex-api` and `cortex-adapter-claude`, with logs in `~/.cortex/lifecycle/`. You see a notice only if that start fails. Ask the agent to call `cortex_status`; it should report `runtime_profile: daily` with the API reachable.
+
+### Updating
+
+```bash
+cortex-ops update          # dry run: prints the plan
+cortex-ops update --apply  # pulls, builds, installs, stops the old runtime
+```
+
+`update --apply` runs `git pull --ff-only` in the checkout, builds the five binaries in release mode, and installs them into `~/.cortex/bin` as `install-binaries` does. It then stops the `cortex-api` and `cortex-adapter-claude` processes running from that directory, and the next hook starts the new ones. Running `cortex-mcp-server` processes switch on their client's next session. Finally it refreshes the Claude Code and Codex plugins when they are installed; restart Claude Code to load plugin changes. It stops at the first failed step. `--no-pull` builds the checkout as it is. `--source <checkout>` names the checkout when the install manifest does not record it, for example after an install from a relative `--from`.
 
 ### Upgrading from the absolute-path setup
 

@@ -101,6 +101,8 @@ mod timeline_backfill;
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
 mod turn_digest_live;
+#[path = "cortex-ops/update.rs"]
+mod update;
 #[path = "cortex-ops/watchdog.rs"]
 mod watchdog;
 
@@ -156,6 +158,21 @@ enum Command {
         /// Emit JSON instead of a table.
         #[arg(long)]
         json: bool,
+    },
+    /// Update the installed Cortex from its source checkout: git pull, release
+    /// build, install into the bin dir, stop the old runtime, refresh the
+    /// plugins (dry run unless `--apply`).
+    Update {
+        /// Run the update (default: print the plan only).
+        #[arg(long)]
+        apply: bool,
+        /// Cortex checkout to build (default: the workspace holding the build
+        /// directory recorded in `<bin dir>/install-manifest.json`).
+        #[arg(long)]
+        source: Option<PathBuf>,
+        /// Build the checkout as it is, without `git pull --ff-only`.
+        #[arg(long)]
+        no_pull: bool,
     },
     /// Emit the bootstrap plan (collections / Cypher / indexes / streams) as JSON.
     Plan {
@@ -1993,6 +2010,11 @@ fn run() -> ExitCode {
             build,
             json,
         } => install_bins::doctor_install(bin_dir, build, json),
+        Command::Update {
+            apply,
+            source,
+            no_pull,
+        } => update::update(source, no_pull, apply),
         Command::Plan { pretty, slice } => match plan::emit_plan(pretty, slice) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

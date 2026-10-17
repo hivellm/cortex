@@ -723,6 +723,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "synap-sdk",
+ "sysinfo",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

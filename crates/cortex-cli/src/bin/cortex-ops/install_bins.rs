@@ -19,11 +19,15 @@ use cortex_adapter_claude_code::legacy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-pub(super) const BINARIES: [&str; 4] = [
+/// Binaries `install-binaries` copies and `doctor-install` checks. `cortex-ops`
+/// is installed too so `cortex-ops update` runs from the bin dir while cargo
+/// rebuilds the copy under `target/`.
+pub(super) const BINARIES: [&str; 5] = [
     "cortex-api",
     "cortex-adapter-claude",
     "cortex-hook",
     "cortex-mcp-server",
+    "cortex-ops",
 ];
 const MANIFEST: &str = "install-manifest.json";
 
@@ -34,7 +38,8 @@ struct Manifest {
     binaries: BTreeMap<String, String>,
 }
 
-fn exe(name: &str) -> String {
+/// `name` with the platform executable suffix (`.exe` on Windows).
+pub(super) fn exe(name: &str) -> String {
     format!("{name}{}", std::env::consts::EXE_SUFFIX)
 }
 
@@ -50,6 +55,15 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(suffix);
     path.with_file_name(name)
+}
+
+/// The build directory recorded by the last `install-binaries --apply` into
+/// `bin_dir`, if its manifest is readable.
+pub(super) fn manifest_source(bin_dir: &Path) -> Option<PathBuf> {
+    let bytes = std::fs::read(bin_dir.join(MANIFEST)).ok()?;
+    serde_json::from_slice::<Manifest>(&bytes)
+        .ok()
+        .map(|manifest| manifest.source)
 }
 
 pub(super) fn default_bin_dir() -> Option<PathBuf> {
@@ -84,7 +98,14 @@ pub(super) fn install_binaries(apply: bool, from: PathBuf, to: Option<PathBuf>) 
     }
 }
 
-fn install(from: &Path, to: &Path, apply: bool, stamp: &str) -> Result<Vec<String>, String> {
+/// Install (or, without `apply`, plan) every binary from `from` into `to` and
+/// return one report line per binary.
+pub(super) fn install(
+    from: &Path,
+    to: &Path,
+    apply: bool,
+    stamp: &str,
+) -> Result<Vec<String>, String> {
     let mut hashes = BTreeMap::new();
     for name in BINARIES {
         let source = from.join(exe(name));
@@ -113,9 +134,12 @@ fn install(from: &Path, to: &Path, apply: bool, stamp: &str) -> Result<Vec<Strin
         lines.push(format!("installed: {} (sha256 {hash})", target.display()));
     }
     if apply {
+        // Absolute, so `cortex-ops update` can find the checkout from anywhere.
+        let source =
+            std::path::absolute(from).map_err(|e| format!("resolve {}: {e}", from.display()))?;
         let manifest = Manifest {
             version: 1,
-            source: from.to_path_buf(),
+            source,
             binaries: hashes,
         };
         let body = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
@@ -152,7 +176,9 @@ fn replace_binary(source: &Path, target: &Path, hash: &str, stamp: &str) -> Resu
     Ok(())
 }
 
-fn remove_stale_asides(dir: &Path) -> Vec<String> {
+/// Delete `<binary>.old-*` asides left by earlier installs, reporting the
+/// ones a running process still holds.
+pub(super) fn remove_stale_asides(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -173,7 +199,8 @@ fn remove_stale_asides(dir: &Path) -> Vec<String> {
     lines
 }
 
-fn path_dirs() -> Vec<PathBuf> {
+/// The directories listed in `PATH`, in order.
+pub(super) fn path_dirs() -> Vec<PathBuf> {
     std::env::var_os("PATH")
         .map(|value| std::env::split_paths(&value).collect())
         .unwrap_or_default()

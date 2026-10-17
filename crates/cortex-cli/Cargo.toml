@@ -55,6 +55,7 @@ tracing-subscriber = { workspace = true, features = ["json"] }
 flate2 = { workspace = true }
 cron = { workspace = true }
 rusqlite = { workspace = true }
+sysinfo = { workspace = true }
 
 vectorizer-sdk = { workspace = true }
 synap-sdk = { workspace = true }

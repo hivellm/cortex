@@ -1,5 +1,5 @@
-//! Phase35 §1.15 — `cortex-ops setup`, `install-binaries` and
-//! `doctor-install` driven through the built binary.
+//! Phase35 §1.15 — `cortex-ops setup`, `install-binaries`,
+//! `doctor-install` and `update` driven through the built binary.
 //!
 //! The unit tests next to each module cover the planning and copy logic;
 //! these cover the CLI contract: dry run unless `--apply`, Cortex home
@@ -14,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const BIN: &str = env!("CARGO_BIN_EXE_cortex-ops");
-const BINARIES: [&str; 4] = [
+const BINARIES: [&str; 5] = [
     "cortex-api",
     "cortex-adapter-claude",
     "cortex-hook",
     "cortex-mcp-server",
+    "cortex-ops",
 ];
 
 fn exe(name: &str) -> String {
@@ -369,7 +370,11 @@ fn should_exit_2_when_doctor_finds_missing_stale_or_double_install() {
     assert_eq!(output.status.code(), Some(2), "{text}");
     let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
     let statuses: Vec<_> = findings.iter().map(|f| f["status"].clone()).collect();
-    assert_eq!(statuses.iter().filter(|s| **s == "ok").count(), 4, "{text}");
+    assert_eq!(
+        statuses.iter().filter(|s| **s == "ok").count(),
+        BINARIES.len(),
+        "{text}"
+    );
     assert!(statuses.contains(&"double_install".into()), "{text}");
 }
 
@@ -408,4 +413,194 @@ fn should_resolve_binaries_through_path_with_empty_and_missing_entries() {
     assert_eq!(output.status.code(), Some(0), "{text}");
     let findings: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
     assert!(findings.iter().all(|f| f["status"] == "ok"), "{text}");
+}
+
+/// A Cortex checkout stand-in: a workspace `Cargo.toml` and nothing else.
+fn checkout(root: &Path) -> PathBuf {
+    let source = root.join("checkout");
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(
+        source.join("Cargo.toml"),
+        "[workspace]
+members = []
+",
+    )
+    .unwrap();
+    source
+}
+
+/// Every file under `dir`, relative, sorted.
+fn tree(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            files.push(path.strip_prefix(dir).unwrap().to_path_buf());
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn should_print_the_plan_and_change_nothing_when_update_runs_without_apply() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let home = sandbox.path().join("cortex-home");
+    let source = checkout(sandbox.path());
+    let empty = sandbox.path().join("empty-path");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut command = ops(
+        sandbox.path(),
+        &["update", "--source", s(&source), "--no-pull"],
+    );
+    command
+        .env("CORTEX_HOME", &home)
+        .env("PATH", &empty)
+        .env_remove("CARGO_TARGET_DIR");
+    let before = tree(sandbox.path());
+
+    let (output, text) = run(&mut command);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains(&format!("source checkout: {}", source.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("bin dir: {}", home.join("bin").display())),
+        "{text}"
+    );
+    assert!(text.contains("git pull skipped (--no-pull)"), "{text}");
+    let build = format!(
+        "cargo build --release{} (in {})",
+        BINARIES
+            .iter()
+            .map(|name| format!(" --bin {name}"))
+            .collect::<String>(),
+        source.display()
+    );
+    assert!(text.contains(&build), "{text}");
+    assert!(
+        text.contains(&source.join("target").join("release").display().to_string()),
+        "{text}"
+    );
+    assert!(text.contains("none running from the bin dir"), "{text}");
+    assert!(text.contains("claude: not on PATH; skipped"), "{text}");
+    assert!(text.contains("codex: not on PATH; skipped"), "{text}");
+    assert!(text.contains("ADR 040"), "{text}");
+    assert!(
+        text.contains("dry run: nothing changed; re-run with --apply to update"),
+        "{text}"
+    );
+    assert_eq!(tree(sandbox.path()), before, "{text}");
+    assert!(!home.exists());
+}
+
+#[test]
+fn should_show_git_pull_and_derive_source_from_manifest_when_update_runs_without_apply() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let home = sandbox.path().join("cortex-home");
+    let bin = home.join("bin");
+    let source = checkout(sandbox.path());
+    let release = source.join("target").join("release");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("install-manifest.json"),
+        serde_json::json!({"version": 1, "source": release, "binaries": {}}).to_string(),
+    )
+    .unwrap();
+    let empty = sandbox.path().join("empty-path");
+    std::fs::create_dir_all(&empty).unwrap();
+    let mut command = ops(sandbox.path(), &["update"]);
+    command
+        .env("CORTEX_HOME", &home)
+        .env("PATH", &empty)
+        .env_remove("CARGO_TARGET_DIR");
+    let before = tree(sandbox.path());
+
+    let (output, text) = run(&mut command);
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains(&format!("source checkout: {}", source.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("git -C {} pull --ff-only", source.display())),
+        "{text}"
+    );
+    assert_eq!(tree(sandbox.path()), before, "{text}");
+}
+
+#[test]
+fn should_fail_update_when_no_source_can_be_resolved() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let home = sandbox.path().join("cortex-home");
+    let (output, text) =
+        run(ops(sandbox.path(), &["update", "--no-pull"]).env("CORTEX_HOME", &home));
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("update: no install manifest"), "{text}");
+    assert!(text.contains("pass --source"), "{text}");
+
+    let not_a_workspace = sandbox.path().join("plain");
+    std::fs::create_dir_all(&not_a_workspace).unwrap();
+    let (output, text) = run(ops(
+        sandbox.path(),
+        &["update", "--source", s(&not_a_workspace), "--apply"],
+    )
+    .env("CORTEX_HOME", &home));
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("[workspace]"), "{text}");
+    assert!(!home.exists());
+}
+
+#[test]
+fn should_find_the_checkout_from_a_relative_install_when_update_runs_elsewhere() {
+    let sandbox = tempfile::tempdir().unwrap();
+    let home = sandbox.path().join("cortex-home");
+    let source = checkout(sandbox.path());
+    let release = source.join("target").join("release");
+    std::fs::create_dir_all(&release).unwrap();
+    for name in BINARIES {
+        std::fs::write(release.join(exe(name)), format!("{name}-a")).unwrap();
+    }
+
+    // Relative `--from`, resolved against the sandbox working directory.
+    let (output, text) = run(ops(
+        sandbox.path(),
+        &[
+            "install-binaries",
+            "--from",
+            "checkout/target/release",
+            "--apply",
+        ],
+    )
+    .env("CORTEX_HOME", &home));
+    assert!(output.status.success(), "{text}");
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(home.join("bin").join("install-manifest.json")).unwrap(),
+    )
+    .unwrap();
+    let recorded = PathBuf::from(manifest["source"].as_str().unwrap());
+    assert!(recorded.is_absolute(), "{recorded:?}");
+    assert_eq!(
+        recorded.canonicalize().unwrap(),
+        release.canonicalize().unwrap()
+    );
+
+    let elsewhere = sandbox.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let (output, text) = run(ops(sandbox.path(), &["update", "--no-pull"])
+        .current_dir(&elsewhere)
+        .env("CORTEX_HOME", &home)
+        .env("PATH", &elsewhere)
+        .env_remove("CARGO_TARGET_DIR"));
+    assert!(output.status.success(), "{text}");
+    assert!(
+        text.contains(&format!("source checkout: {}", source.display())),
+        "{text}"
+    );
+    assert!(text.contains("dry run: nothing changed"), "{text}");
 }
