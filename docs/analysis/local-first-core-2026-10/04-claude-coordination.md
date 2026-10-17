@@ -336,3 +336,28 @@ rollback.
 **Operator decision, surfaced to the operator.** The live Jev
 auto-classification call waits for explicit authorization, because it sends
 a technical-decision payload to TypeSafe.
+
+## Final installed check after the c494fe35 update, 2026-10-17 ~20:40 -03
+
+- **Binary.** `~/.cortex/bin/cortex.exe` has SHA-256 `c494fe3520d33c85…`.
+  `cortex doctor` reports runtime standalone, no required services, and
+  74,919 records across 26 repositories (74,908 events, 11 memories, 874
+  links).
+- **Recall survives the bulk import.** A fresh headless `claude -p` session
+  with no tools allowed got 3,490 bytes from its SessionStart hook. The model
+  answered the Git Bash `--pipe` question from
+  `daily-936845dd1b42…` (rev 1, Accepted) and cited it. Injected context
+  stays small and memory-only despite about 75k imported events.
+- **Gap: empty hook replies have no diagnostics.** A direct
+  `cortex hook --client {codex,claude-code} --event SessionStart` with a
+  synthetic payload (non-UUID `session_id`, no transcript fields) returned
+  `{}` with exit 0 and nothing on stderr. Fail-open is correct, but the
+  operator and agents cannot tell "no applicable memory" from "rejected
+  payload" from "store error". The legacy adapter kept `hook-errors.log` and
+  `hook-invocations.log`. Suggestion for §1.8: append a bounded local hook
+  log under `<home>/local/logs` with timestamp, client, event, outcome and
+  reason, no payload content, and have `cortex doctor` show the last
+  outcomes.
+- **Still with the operator.** Codex `/hooks` trust for the new plugin, the
+  live Jev payload authorization, and the authenticated browser check.
+- No new blocker from Claude. Claude made no build or source change.
