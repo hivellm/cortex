@@ -163,9 +163,60 @@
       "Bash(curl -s -m 15 -X POST http://localhost:17010/v1/events -H 'Content-Type: application/json' -d @probe_env361.json)",
       "Bash(python -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('embedder:', d.get\\('state'\\), '| jobs:', d.get\\('extras',{}\\).get\\('jobs_processed_total'\\)\\)\")",
       "Bash(python -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('state:',d.get\\('state'\\),'| jobs:',d.get\\('extras',{}\\).get\\('jobs_processed_total'\\)\\)\")",
-      "Bash(curl -s -m 15 -X POST http://localhost:17010/v1/events -H 'Content-Type: application/json' -d @probe_env361b.json)"
+      "Bash(curl -s -m 15 -X POST http://localhost:17010/v1/events -H 'Content-Type: application/json' -d @probe_env361b.json)",
+      "Bash(curl -sf -A cortex-check \"https://crates.io/api/v1/crates/synap-sdk\")",
+      "Bash(curl -sf \"https://hub.docker.com/v2/repositories/hivehub/synap/tags?page_size=10&ordering=last_updated\")",
+      "Bash(curl -s -m 15 -X POST http://localhost:17003/api/v1/command -H 'Content-Type: application/json' -d '{\"request_id\":\"g1\",\"command\":\"stream.get_or_create\",\"payload\":{\"room\":\"cortex.gen.probe\"}}')",
+      "Bash(curl -s -m 15 -X POST http://localhost:17003/api/v1/command -H 'Content-Type: application/json' -d '{\"request_id\":\"g2\",\"command\":\"stream.stats\",\"payload\":{\"room\":\"cortex.gen.probe\"}}')",
+      "Bash(tee /c/Users/Bolado/AppData/Local/Temp/claude/e--HiveLLM-Cortex/637ec1dd-d71d-4de8-a368-111e2b9c8338/scratchpad/check1.txt)",
+      "Bash(echo \"GATE1_EXIT:$?\")",
+      "Bash(echo \"GATE2_EXIT:$?\")",
+      "Bash(echo \"GATE3_EXIT:$?\")",
+      "Bash(rustfmt --edition 2021 'e:\\\\HiveLLM\\\\Cortex\\\\crates\\\\cortex-workers\\\\src\\\\graph\\\\worker.rs' 'e:\\\\HiveLLM\\\\Cortex\\\\crates\\\\cortex-workers\\\\src\\\\fulltext\\\\worker.rs' 'e:\\\\HiveLLM\\\\Cortex\\\\crates\\\\cortex-workers\\\\src\\\\embedder\\\\worker.rs' 'e:\\\\HiveLLM\\\\Cortex\\\\crates\\\\cortex-workers\\\\src\\\\classifier_worker\\\\worker.rs' 'e:\\\\HiveLLM\\\\Cortex\\\\crates\\\\cortex-workers\\\\tests\\\\synap_room_selfheal_it.rs')",
+      "Bash(echo \"GATE4_EXIT:$?\")",
+      "Bash(rustfmt --edition 2021 crates/cortex-workers/src/graph/worker.rs crates/cortex-workers/src/fulltext/worker.rs crates/cortex-workers/src/embedder/worker.rs crates/cortex-workers/src/classifier_worker/worker.rs crates/cortex-workers/tests/synap_room_selfheal_it.rs)",
+      "Bash(echo \"IT exit: $?\")",
+      "Bash(echo \"full suite exit: $?\")",
+      "Bash(curl -s -m 15 -X POST http://localhost:17010/v1/events -H 'Content-Type: application/json' -d @probe_gen1.json)",
+      "Bash(rustfmt --edition 2021 crates/cortex-workers/tests/synap_room_selfheal_it.rs crates/cortex-workers/src/graph/worker.rs crates/cortex-storage/src/metadata.rs)",
+      "Bash(echo \"full exit: $?\")",
+      "Bash(curl -s -m 20 -X POST http://localhost:17002/cypher -H 'Content-Type: application/json' -d '{\"query\":\"MATCH \\(n\\) WHERE n.id = '\\\\''__TRACKED_VAR__'\\\\'' RETURN labels\\(n\\) LIMIT 1\"}')",
+      "Bash(python -c \"import json,sys;d=json.load\\(sys.stdin\\);print\\('graph:',d.get\\('state'\\),'jobs=',d.get\\('extras',{}\\).get\\('jobs_processed_total'\\)\\)\")",
+      "Bash(xargs echo \"heal warns:\")",
+      "Bash(xargs echo \"flushes:\")",
+      "Bash(rustfmt --edition 2021 crates/cortex-workers/src/graph/worker.rs)",
+      "Bash(curl -s -m 10 -X POST http://localhost:17003/api/v1/command -H 'Content-Type: application/json' -d '{\"request_id\":\"s\",\"command\":\"stream.stats\",\"payload\":{\"room\":\"cortex.events.enriched\"}}')",
+      "Bash(python -c \"import json,sys;p=json.load\\(sys.stdin\\).get\\('payload'\\) or {};print\\('live enriched generation:', p.get\\('generation'\\)\\)\")"
     ],
-    "defaultMode": "acceptEdits"
+    "defaultMode": "acceptEdits",
+    "deny": [
+      "Bash(crontab *)",
+      "Bash(at *)",
+      "Bash(batch *)",
+      "Bash(systemctl *.timer*)",
+      "Bash(systemd-run *--on-*)",
+      "Bash(launchctl load *)",
+      "Bash(launchctl bootstrap *)",
+      "Bash(launchctl enable *)",
+      "Bash(launchctl submit *)",
+      "Bash(launchctl kickstart *)",
+      "Bash(schtasks *)",
+      "PowerShell(schtasks *)",
+      "PowerShell(Register-ScheduledTask *)",
+      "PowerShell(New-ScheduledTask *)",
+      "PowerShell(Set-ScheduledTask *)",
+      "PowerShell(Enable-ScheduledTask *)",
+      "PowerShell(Register-ScheduledJob *)",
+      "Edit(//etc/crontab)",
+      "Edit(//etc/cron*/**)",
+      "Edit(//etc/anacrontab)",
+      "Edit(//var/spool/cron/**)",
+      "Edit(//**/LaunchAgents/*.plist)",
+      "Edit(//**/LaunchDaemons/*.plist)",
+      "Edit(//etc/systemd/**/*.timer)",
+      "Edit(//usr/lib/systemd/**/*.timer)",
+      "Edit(~/.config/systemd/user/*.timer)"
+    ]
   },
   "hooks": {
     "PreToolUse": [
@@ -174,6 +225,12 @@
         "hooks": [
           {
             "type": "command",
+            "if": "Edit(**/.rulebook/tasks/**)",
+            "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/protect-task-scaffolding.sh"
+          },
+          {
+            "type": "command",
+            "if": "Write(**/.rulebook/tasks/**)",
             "command": "bash $CLAUDE_PROJECT_DIR/.claude/hooks/protect-task-scaffolding.sh"
           }
         ]

@@ -1,7 +1,7 @@
 {
-  "version": "7.0.0",
+  "version": "7.5.0",
   "installedAt": "2026-07-14T09:40:09.257Z",
-  "updatedAt": "2026-07-14T09:40:09.257Z",
+  "updatedAt": "2026-10-16T05:46:30.008Z",
   "projectId": "Cortex",
   "mode": "full",
   "features": {
@@ -23,6 +23,8 @@
     "cliResponse": 60000,
     "testRun": 120000
   },
+  "agentsMode": "lean",
+  "orchestration": "judgment",
   "skills": {
     "enabled": [
       "core/agent-automation",
@@ -58,8 +60,25 @@
       "core/rulebook",
       "core/tier1-prohibitions",
       "core/token-optimization",
-      "core/workspace"
+      "core/workspace",
+      "languages/rust",
+      "languages/cpp",
+      "core/karpathy-guidelines"
     ]
   },
-  "agentsMode": "lean"
+  "gitPushMode": "manual",
+  "languages": [
+    "rust",
+    "cpp"
+  ],
+  "modules": [],
+  "permissions": {
+    "autoApprove": true
+  },
+  "integrations": {
+    "typesafe": {
+      "enabled": true,
+      "askedAt": "2026-10-16T05:46:30.008Z"
+    }
+  }
 }
