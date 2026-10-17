@@ -495,6 +495,97 @@ fn init_tracing(verbose: bool) {
 mod tests {
     use super::*;
 
+    const PROBE_ENV: &str = "ADAPTER_CREDENTIAL_PROBE";
+    const SECRET: &str = "synthetic-adapter-credential-7c1d";
+
+    /// Child half of the credential test: a no-op in a normal run. When
+    /// re-executed with [`PROBE_ENV`] it runs the real daemon entry point,
+    /// which must stop at the broken credential before binding anything.
+    #[tokio::test]
+    async fn run_daemon_credential_probe_child() {
+        if std::env::var_os(PROBE_ENV).is_none() {
+            return;
+        }
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let bind = std::env::var("ADAPTER_CREDENTIAL_PROBE_BIND").unwrap();
+        let error = run_daemon(Some(&home.join("adapter.toml")), Some(&bind))
+            .await
+            .expect_err("a broken credential must stop the daemon");
+        println!("PROBE_ERROR {error:#}");
+        println!("PROBE_ERROR_DEBUG {error:?}");
+    }
+
+    #[test]
+    fn daemon_reads_home_token_file_and_hides_it_when_credential_is_broken() {
+        let home = tempfile::tempdir().unwrap();
+        let cortex_home = home.path().join("cortex home");
+        std::fs::create_dir_all(&cortex_home).unwrap();
+        // Oversized, so `load_client` must reject it; contents are the secret.
+        let token_file = cortex_home.join(cortex_config::API_TOKEN_FILE);
+        std::fs::write(&token_file, SECRET.repeat(4096 / SECRET.len() + 1)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&token_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let bind = if cfg!(windows) {
+            format!(r"\\.\pipe\cortex-adapter-probe-{}", std::process::id())
+        } else {
+            home.path().join("probe.sock").display().to_string()
+        };
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "tests::run_daemon_credential_probe_child",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("CORTEX_") {
+                command.env_remove(&key);
+            }
+        }
+        command
+            .env(PROBE_ENV, "1")
+            .env("ADAPTER_CREDENTIAL_PROBE_BIND", &bind)
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .env("CORTEX_HOME", &cortex_home)
+            .env("CORTEX_CONFIG_FILE", cortex_home.join("config.toml"))
+            .env("CORTEX_ADAPTER_ADMIN_PORT", "0")
+            .current_dir(home.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        // A regression that ignored the credential would start serving;
+        // never let that daemon outlive the test.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while child.try_wait().unwrap().is_none() {
+            if std::time::Instant::now() > deadline {
+                let _ = child.kill();
+                panic!("daemon kept running despite a broken credential");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let output = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(stdout.contains("1 passed"), "probe did not run: {stdout}");
+        let error = stdout
+            .lines()
+            .find_map(|line| line.split_once("PROBE_ERROR ").map(|(_, rest)| rest))
+            .unwrap_or_else(|| panic!("no PROBE_ERROR in {stdout}"));
+        assert!(
+            error.contains("load Cortex runtime configuration"),
+            "{error}"
+        );
+        assert!(error.contains(cortex_config::API_TOKEN_FILE), "{error}");
+        assert!(error.contains("larger than 4096 bytes"), "{error}");
+        assert!(!stdout.contains(SECRET), "token leaked: {stdout}");
+        assert!(!stderr.contains(SECRET), "token leaked: {stderr}");
+    }
+
     #[tokio::test]
     async fn daily_publisher_leaves_existing_wal_untouched_and_ignores_unavailable_path() {
         let directory = tempfile::tempdir().unwrap();

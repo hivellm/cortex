@@ -191,6 +191,123 @@ mod tests {
         assert!(error.to_string().contains("0600"));
     }
 
+    const PROBE_ENV: &str = "CREDENTIAL_LOAD_CLIENT_PROBE";
+    const PROBE_TEST: &str = "credential::tests::load_client_probe_child";
+
+    /// Child half of the `load_client_*` tests: a no-op in a normal run.
+    /// When re-executed with [`PROBE_ENV`], it runs the real
+    /// [`Config::load_client`] against the child's process environment and
+    /// reports the outcome on `PROBE_*` lines for the parent to assert.
+    #[test]
+    fn load_client_probe_child() {
+        if std::env::var_os(PROBE_ENV).is_none() {
+            return;
+        }
+        match Config::load_client() {
+            Ok(config) => {
+                println!(
+                    "PROBE_TOKEN {}",
+                    config.dashboard.api_token.as_deref().unwrap_or("<none>")
+                );
+                println!("PROBE_DEBUG {config:?}");
+            }
+            Err(error) => {
+                println!("PROBE_ERROR {error}");
+                println!("PROBE_ERROR_DEBUG {error:?}");
+            }
+        }
+    }
+
+    /// Re-execute this test binary so `load_client` reads a hermetic
+    /// environment: every inherited `CORTEX_*` variable is removed, the
+    /// Cortex home and config file point into `home`, and the parent's own
+    /// environment is never mutated.
+    fn load_client_in_child(home: &Path, env: &[(&str, &str)]) -> Vec<(String, String)> {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", PROBE_TEST, "--nocapture", "--test-threads=1"]);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("CORTEX_") {
+                command.env_remove(&key);
+            }
+        }
+        command
+            .env(PROBE_ENV, "1")
+            .env("CORTEX_HOME", home)
+            .env("CORTEX_CONFIG_FILE", home.join("config.toml"))
+            .env("HOME", home)
+            .env("USERPROFILE", home)
+            .current_dir(home);
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(output.status.success(), "child failed: {stdout}");
+        assert!(stdout.contains("1 passed"), "probe did not run: {stdout}");
+        stdout
+            .lines()
+            // libtest may print `test <name> ... ` before the first line.
+            .filter_map(|line| line.split_once("PROBE_").map(|(_, rest)| rest))
+            .filter_map(|line| line.split_once(' '))
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn probe_value<'a>(lines: &'a [(String, String)], key: &str) -> &'a str {
+        lines
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+            .unwrap_or_else(|| panic!("missing PROBE_{key} in {lines:?}"))
+    }
+
+    #[test]
+    fn load_client_reads_home_token_file_when_env_token_is_unset() {
+        let home = tempfile::tempdir().unwrap();
+        let lines = load_client_in_child(home.path(), &[]);
+        assert_eq!(probe_value(&lines, "TOKEN"), "<none>");
+
+        private_file(home.path(), format!("  {SECRET}\n").as_bytes());
+        let lines = load_client_in_child(home.path(), &[]);
+        assert_eq!(probe_value(&lines, "TOKEN"), SECRET);
+        let debug = probe_value(&lines, "DEBUG");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        assert!(!debug.contains(SECRET), "token leaked into Debug: {debug}");
+    }
+
+    #[test]
+    fn load_client_prefers_configured_token_over_home_token_file() {
+        let home = tempfile::tempdir().unwrap();
+        private_file(home.path(), SECRET.as_bytes());
+        let lines = load_client_in_child(home.path(), &[("CORTEX_API_TOKEN", "from-env")]);
+        assert_eq!(probe_value(&lines, "TOKEN"), "from-env");
+
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[dashboard]\napi_token = \"from-toml\"\n",
+        )
+        .unwrap();
+        let lines = load_client_in_child(home.path(), &[]);
+        assert_eq!(probe_value(&lines, "TOKEN"), "from-toml");
+    }
+
+    #[test]
+    fn load_client_error_names_path_but_never_token_when_file_is_broken() {
+        for body in [
+            SECRET.repeat(4096 / SECRET.len() + 1),
+            format!("{SECRET}\u{7}"),
+        ] {
+            let home = tempfile::tempdir().unwrap();
+            private_file(home.path(), body.as_bytes());
+            let lines = load_client_in_child(home.path(), &[]);
+            let display = probe_value(&lines, "ERROR");
+            let debug = probe_value(&lines, "ERROR_DEBUG");
+            assert!(display.contains(API_TOKEN_FILE), "{display}");
+            assert!(!display.contains(SECRET), "token leaked: {display}");
+            assert!(!debug.contains(SECRET), "token leaked: {debug}");
+        }
+    }
+
     #[test]
     fn debug_output_redacts_token() {
         let mut config = Config::default();

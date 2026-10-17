@@ -134,6 +134,15 @@ fn hook_command(
         ]);
         command
     };
+    // A test run launched from inside a Claude Code or Codex session must not
+    // leak that client's plugin origin or settings directory into the hook.
+    for leaked in [
+        "CLAUDE_PLUGIN_ROOT",
+        "CLAUDE_CONFIG_DIR",
+        "CORTEX_HOOK_ORIGIN",
+    ] {
+        command.env_remove(leaked);
+    }
     command
         .env("HOME", home)
         .env("USERPROFILE", home)
@@ -497,5 +506,225 @@ async fn packaged_plugin_skips_events_that_legacy_settings_hooks_deliver() {
         .env("CLAUDE_PLUGIN_ROOT", home.join("plugin root"));
     assert_eq!(invoke_command(command, payload.as_bytes()).await, reply);
     assert_eq!(captured.await.unwrap()["hook"], "UserPromptSubmit");
+    task.abort();
+}
+
+/// Every event `cortex-hook` accepts, as Claude Code settings hooks deliver it.
+const CAPTURED_EVENTS: [&str; 7] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "SubagentStop",
+    "Notification",
+];
+
+/// Settings in the shape `cortex-adapter-claude install` writes: the native
+/// binary when it is on PATH, otherwise the bash shim under ~/.claude/hooks.
+fn legacy_settings(home: &Path, events: &[&str]) -> Value {
+    let hooks: serde_json::Map<String, Value> = events
+        .iter()
+        .map(|event| {
+            let command = match *event {
+                "SubagentStop" => format!(
+                    "bash '{}/.claude/hooks/cortex-subagent-stop.sh'",
+                    home.display().to_string().replace('\\', "/")
+                ),
+                "PostToolUse" | "Stop" | "Notification" => {
+                    format!("cortex-hook {event} --fire-forget")
+                }
+                _ => format!("cortex-hook {event}"),
+            };
+            let group =
+                json!({"hooks": [{"type": "command", "command": command}], "owner": "cortex"});
+            (event.to_string(), json!([group]))
+        })
+        .collect();
+    json!({ "hooks": hooks })
+}
+
+fn claude_settings_dir(home: &Path, settings: &Value) -> PathBuf {
+    let dir = home.join(".claude");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("settings.json"), settings.to_string()).unwrap();
+    dir
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_origin_skips_every_event_a_legacy_settings_hook_delivers() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let settings = claude_settings_dir(&home, &legacy_settings(&home, &CAPTURED_EVENTS));
+    let reply = json!({});
+    let (endpoint, mut captured, task) = peer(root.path(), Some(reply.clone())).await;
+    let payload = json!({"session_id": "dup-session"}).to_string();
+    for event in CAPTURED_EVENTS {
+        let mut command = hook_command(&home, &endpoint, event, false, 1500);
+        command
+            .env("CLAUDE_CONFIG_DIR", &settings)
+            .env("CORTEX_HOOK_ORIGIN", "plugin");
+        assert_eq!(
+            invoke_command(command, payload.as_bytes()).await,
+            json!({}),
+            "{event}"
+        );
+        assert!(
+            captured.try_recv().is_err(),
+            "{event} delivered by legacy settings reached the daemon twice"
+        );
+    }
+
+    // The same plugin call is delivered once settings no longer list it.
+    claude_settings_dir(&home, &legacy_settings(&home, &["UserPromptSubmit"]));
+    let mut command = hook_command(&home, &endpoint, "Stop", false, 1500);
+    command
+        .env("CLAUDE_CONFIG_DIR", &settings)
+        .env("CORTEX_HOOK_ORIGIN", "plugin");
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, reply);
+    assert_eq!(captured.await.unwrap()["hook"], "Stop");
+    task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plugin_origin_skips_when_settings_cannot_be_read_within_budget() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let reply = json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "plugin path"}});
+    let (endpoint, mut captured, task) = peer(root.path(), Some(reply.clone())).await;
+    let payload = json!({"session_id": "unknown-session"}).to_string();
+
+    // A settings "file" whose read never completes: the guard cannot tell
+    // whether legacy hooks deliver the event, so it must skip.
+    #[cfg(windows)]
+    let (stalled_dir, _stall) = {
+        let dir = format!(r"\\.\pipe\cortex-hook-it-{}", ulid::Ulid::new());
+        let server = tokio::net::windows::named_pipe::ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(format!(r"{dir}\settings.json"))
+            .unwrap();
+        let stall = tokio::spawn(async move {
+            server.connect().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        (PathBuf::from(dir), stall)
+    };
+    #[cfg(unix)]
+    let (stalled_dir, _stall) = {
+        let dir = home.join("stalled-claude");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(Command::new("mkfifo")
+            .arg(dir.join("settings.json"))
+            .status()
+            .await
+            .unwrap()
+            .success());
+        (dir, ())
+    };
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", false, 300);
+    command
+        .env("CLAUDE_CONFIG_DIR", &stalled_dir)
+        .env("CORTEX_HOOK_ORIGIN", "plugin");
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, json!({}));
+    assert!(
+        captured.try_recv().is_err(),
+        "an unknown guard result must not deliver"
+    );
+
+    // Contrast: a settings file that is simply absent is a known "no".
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", false, 1500);
+    command
+        .env("CLAUDE_CONFIG_DIR", home.join("no claude settings"))
+        .env("CORTEX_HOOK_ORIGIN", "plugin");
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, reply);
+    assert_eq!(captured.await.unwrap()["hook"], "UserPromptSubmit");
+    task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn codex_plugin_origin_does_not_consult_claude_settings() {
+    // Intentional: the Codex launcher sets CORTEX_HOOK_ORIGIN=codex-plugin.
+    // Codex never runs ~/.claude/settings.json hooks, so a Claude legacy
+    // install must not suppress Codex delivery; only `plugin` is guarded.
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let settings = claude_settings_dir(&home, &legacy_settings(&home, &CAPTURED_EVENTS));
+    let reply = json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "codex path"}});
+    let (endpoint, captured, task) = peer(root.path(), Some(reply.clone())).await;
+    let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", false, 1500);
+    command
+        .env("CLAUDE_CONFIG_DIR", &settings)
+        .env("CORTEX_HOOK_ORIGIN", "codex-plugin");
+    let payload = json!({"session_id": "codex-session"}).to_string();
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, reply);
+    assert_eq!(captured.await.unwrap()["hook"], "UserPromptSubmit");
+    task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_hook_autostart_value_fails_open_without_notice() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = home(tmp.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let missing = missing_endpoint(tmp.path());
+    // Legacy `0` is valid: the hook reaches the transport and reports it.
+    let mut valid = hook_command(&home, &missing, "UserPromptSubmit", false, 200);
+    valid.env("CORTEX_HOOK_AUTOSTART", "0");
+    let payload = json!({"session_id": "autostart-session"}).to_string();
+    assert_eq!(
+        invoke_command(valid, payload.as_bytes()).await,
+        json!({"systemMessage": NOTICE})
+    );
+    // `yes` is an invalid hook configuration: fail open before any I/O.
+    let mut invalid = hook_command(&home, &missing, "UserPromptSubmit", false, 200);
+    invalid.env("CORTEX_HOOK_AUTOSTART", "yes");
+    let fresh = json!({"session_id": "autostart-session-2"}).to_string();
+    assert_eq!(invoke_command(invalid, fresh.as_bytes()).await, json!({}));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn answering_endpoint_is_used_without_touching_lifecycle_state() {
+    let root = tempfile::tempdir().unwrap();
+    let home = home(root.path());
+    std::fs::write(home.join("test-cortex.toml"), "").unwrap();
+    let cortex_home = home.join(".cortex");
+    std::fs::create_dir_all(&cortex_home).unwrap();
+    let expected = json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "running daemon"}});
+    // On Unix the default endpoint lives under HOME, so the test binds it
+    // hermetically and autostart would be eligible if the exchange failed.
+    // The Windows default pipe is machine-global, so an explicit one is used.
+    #[cfg(unix)]
+    let (endpoint, capture, task) = {
+        let path = cortex_home.join("adapter-claude.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let (send, receive) = oneshot::channel();
+        let reply = format!("{expected}\n").into_bytes();
+        let task = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            protocol_peer(stream, Some(reply), send).await;
+        });
+        let endpoint = Endpoint {
+            flag: "--sock",
+            env: "CORTEX_ADAPTER_SOCK",
+            address: path.display().to_string(),
+        };
+        (endpoint, receive, task)
+    };
+    #[cfg(windows)]
+    let (endpoint, capture, task) = peer(root.path(), Some(expected.clone())).await;
+    let mut command = hook_command(&home, &endpoint, "SessionStart", false, 1500);
+    command
+        .env("CORTEX_HOME", &cortex_home)
+        .env("CORTEX_HOOK_AUTOSTART", "1");
+    let payload = json!({"session_id": "running-session"}).to_string();
+    assert_eq!(invoke_command(command, payload.as_bytes()).await, expected);
+    assert_eq!(capture.await.unwrap()["hook"], "SessionStart");
+    assert!(
+        !cortex_home.join("lifecycle").exists(),
+        "a successful exchange must not consult or create spawn state"
+    );
     task.abort();
 }

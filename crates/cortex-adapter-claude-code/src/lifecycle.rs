@@ -294,6 +294,62 @@ mod tests {
     }
 
     #[test]
+    fn present_endpoint_failures_never_autostart_a_running_daemon() {
+        // A successful exchange never reaches `should_autostart`; these are
+        // the errors a daemon that exists but is slow, busy, restarting or
+        // owned by someone else produces. None of them may spawn a second
+        // runtime next to it.
+        let present = [
+            ErrorKind::TimedOut,
+            ErrorKind::WouldBlock,
+            ErrorKind::BrokenPipe,
+            ErrorKind::ConnectionReset,
+            ErrorKind::ConnectionAborted,
+            ErrorKind::UnexpectedEof,
+            ErrorKind::InvalidData,
+            ErrorKind::PermissionDenied,
+            ErrorKind::AddrInUse,
+            ErrorKind::Interrupted,
+            ErrorKind::Other,
+        ];
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "SubagentStop",
+            "Notification",
+        ] {
+            for error in present {
+                assert!(
+                    !should_autostart(event, false, true, error),
+                    "{event} {error:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn recent_successful_spawn_leaves_the_booting_runtime_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("lifecycle");
+        assert_eq!(
+            ensure_started(&dir, at(0), || Ok(())),
+            StartDecision::Spawned
+        );
+        let stamp = std::fs::read(dir.join(STAMP_FILE)).unwrap();
+        for second in [0, 1, 9] {
+            assert_eq!(
+                ensure_started(&dir, at(second), || panic!("runtime is booting")),
+                StartDecision::Starting
+            );
+        }
+        assert_eq!(std::fs::read(dir.join(STAMP_FILE)).unwrap(), stamp);
+        assert!(!dir.join(LOCK_FILE).exists());
+    }
+
+    #[test]
     fn autostart_only_for_absent_default_endpoint_on_synchronous_events() {
         for event in ["SessionStart", "UserPromptSubmit", "PreToolUse"] {
             assert!(should_autostart(event, false, true, ErrorKind::NotFound));

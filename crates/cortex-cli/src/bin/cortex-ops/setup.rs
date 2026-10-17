@@ -249,9 +249,14 @@ fn write_new(path: &Path, contents: &[u8], secret: bool) -> Result<(), String> {
     if secret {
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
     }
-    let result = options
+    // A failed open created nothing, so it must not remove `path`: in
+    // `backup` that is an earlier backup with the same stamp.
+    let mut file = options
         .open(path)
-        .and_then(|mut file| file.write_all(contents).and_then(|()| file.sync_all()))
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    let result = file
+        .write_all(contents)
+        .and_then(|()| file.sync_all())
         .map_err(|e| format!("write {}: {e}", path.display()))
         .and_then(|()| {
             if secret {
@@ -385,6 +390,129 @@ mod tests {
             let error = build_plan(&home, Some(&path)).unwrap_err();
             assert!(error.contains(needle), "{error}");
             assert!(!error.contains(SECRET));
+        }
+    }
+
+    fn source_with_token(dir: &Path, name: &str, token: &str) -> PathBuf {
+        let path = dir.join(name);
+        std::fs::write(
+            &path,
+            format!("[runtime]\nprofile = \"daily\"\n[dashboard]\napi_token = \"{token}\"\n"),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn should_back_up_existing_credential_when_token_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let old = source_with_token(dir.path(), "old.toml", "synthetic-old-token-1");
+        let new = source_with_token(dir.path(), "new.toml", "synthetic-new-token-2");
+        apply_plan(&build_plan(&home, Some(&old)).unwrap(), "s1").unwrap();
+
+        let plan = build_plan(&home, Some(&new)).unwrap();
+        assert_eq!(plan.config.action, Action::Unchanged);
+        assert_eq!(plan.credential.action, Action::Replace);
+        assert!(!format!("{plan:?}").contains("\"synthetic-new-token-2"));
+        apply_plan(&plan, "s2").unwrap();
+
+        let credential = home.join(cortex_config::API_TOKEN_FILE);
+        let backup = sibling(&credential, ".bak-s2");
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "synthetic-old-token-1\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&credential).unwrap(),
+            "synthetic-new-token-2\n"
+        );
+        assert!(!home.join("config.toml.bak-s2").exists());
+        assert!(!sibling(&credential, ".tmp").exists());
+    }
+
+    #[test]
+    fn should_keep_existing_credential_when_source_token_is_blank() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let first = source_with_token(dir.path(), "first.toml", "synthetic-kept-token");
+        apply_plan(&build_plan(&home, Some(&first)).unwrap(), "s1").unwrap();
+        let blank = source_with_token(dir.path(), "blank.toml", "   ");
+        let plan = build_plan(&home, Some(&blank)).unwrap();
+        assert_eq!(plan.credential.action, Action::Keep);
+        apply_plan(&plan, "s2").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.join(cortex_config::API_TOKEN_FILE)).unwrap(),
+            "synthetic-kept-token\n"
+        );
+    }
+
+    #[test]
+    fn should_reject_token_with_control_characters_without_echoing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctl.toml");
+        std::fs::write(&path, "[dashboard]\napi_token = \"synthetic\\u0007bell\"\n").unwrap();
+        let error = build_plan(&dir.path().join("home"), Some(&path)).unwrap_err();
+        assert!(error.contains("control characters"), "{error}");
+        assert!(!error.contains("synthetic"));
+    }
+
+    #[test]
+    fn should_fail_backup_and_keep_original_when_backup_path_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "current").unwrap();
+        std::fs::write(sibling(&path, ".bak-s"), "earlier backup").unwrap();
+        let error = backup(&path, "s", false).unwrap_err();
+        assert!(error.contains(".bak-s"), "{error}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "current");
+        assert_eq!(
+            std::fs::read_to_string(sibling(&path, ".bak-s")).unwrap(),
+            "earlier backup"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn should_make_credential_backup_user_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("api-token");
+        std::fs::write(&path, "synthetic-old-token\n").unwrap();
+        let target = backup(&path, "s", true).unwrap();
+        let mode = std::fs::metadata(target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o077, 0);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn should_restrict_secret_to_current_user_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("api-token");
+        write_new(&path, b"synthetic-acl-token\n", true).unwrap();
+        let backup_path = backup(&path, "s", true).unwrap();
+        let user = format!(
+            "{}\\{}",
+            std::env::var("USERDOMAIN").unwrap(),
+            std::env::var("USERNAME").unwrap()
+        )
+        .to_lowercase();
+        for file in [&path, &backup_path] {
+            let output = std::process::Command::new("icacls")
+                .arg(file)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let acl = String::from_utf8_lossy(&output.stdout).to_lowercase();
+            // icacls prints `<path> <first ACE>` then one ACE per line, then
+            // a localized summary line; keep the lines that carry an ACE.
+            let aces: Vec<&str> = acl
+                .lines()
+                .map(|line| line.trim_start_matches(&*file.display().to_string().to_lowercase()))
+                .map(str::trim)
+                .filter(|line| line.contains(":("))
+                .collect();
+            assert_eq!(aces, vec![format!("{user}:(f)")], "{acl}");
         }
     }
 

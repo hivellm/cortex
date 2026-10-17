@@ -93,6 +93,52 @@ mod tests {
     }
 
     #[test]
+    fn every_captured_event_installed_by_the_legacy_installer_is_detected() {
+        // The command shapes `cortex-adapter-claude install` writes: native
+        // binary (sync or --fire-forget) or the bash shim fallback.
+        let events = [
+            ("SessionStart", "cortex-hook SessionStart"),
+            ("UserPromptSubmit", "cortex-hook UserPromptSubmit"),
+            ("PreToolUse", "cortex-hook PreToolUse"),
+            ("PostToolUse", "cortex-hook PostToolUse --fire-forget"),
+            ("Stop", "bash 'C:/Users/me/.claude/hooks/cortex-stop.sh'"),
+            (
+                "SubagentStop",
+                "bash '/home/me/.claude/hooks/cortex-subagent-stop.sh'",
+            ),
+            ("Notification", "cortex-hook Notification --fire-forget"),
+        ];
+        let hooks: serde_json::Map<String, Value> = events
+            .iter()
+            .map(|(event, command)| {
+                let group = if matches!(*event, "PreToolUse" | "PostToolUse") {
+                    json!({"matcher": "*", "hooks": [{"type": "command", "command": command}], "owner": "cortex"})
+                } else {
+                    json!({"hooks": [{"type": "command", "command": command}], "owner": "cortex"})
+                };
+                (event.to_string(), json!([group]))
+            })
+            .collect();
+        let detected = legacy_events(&json!({ "hooks": hooks }));
+        for (event, _) in events {
+            assert!(detected.contains(event), "{event} not detected");
+        }
+        assert_eq!(detected.len(), events.len());
+    }
+
+    #[test]
+    fn packaged_plugin_hooks_for_every_event_are_not_legacy() {
+        // If the plugin's own hooks were merged into settings, they must
+        // never be mistaken for a legacy install and suppress themselves.
+        let plugin: Value = serde_json::from_str(include_str!(
+            "../../../packages/cortex-claude-plugin/hooks/hooks.json"
+        ))
+        .unwrap();
+        assert_eq!(plugin["hooks"].as_object().unwrap().len(), 7);
+        assert!(legacy_events(&plugin).is_empty());
+    }
+
+    #[test]
     fn unreadable_or_invalid_settings_have_no_legacy_events() {
         let dir = tempfile::tempdir().unwrap();
         assert!(read_legacy_events(&dir.path().join("absent.json")).is_empty());

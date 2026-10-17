@@ -1047,6 +1047,10 @@ mod tests {
         let unchanged = worker.poll(project).unwrap();
         assert_eq!(unchanged.bytes_read, 0);
         assert_eq!(unchanged.bytes_decoded, 0);
+        // Finish the discovery round that poll started: under load its time
+        // budget can leave the round open past the append, and that round
+        // already scanned the old partition.
+        assert_eq!(drain(&mut worker), 0);
         append(
             &path,
             &[event("second", "late event in old timestamp partition")],

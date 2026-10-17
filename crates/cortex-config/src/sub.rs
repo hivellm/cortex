@@ -1013,7 +1013,9 @@ pub struct AdapterConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_autostart: Option<bool>,
     /// Phase35 — who launched `cortex-hook`; `plugin` enables the legacy
-    /// settings duplicate guard. Env: `CORTEX_HOOK_ORIGIN`.
+    /// settings duplicate guard. Env: `CORTEX_HOOK_ORIGIN`, set per call by
+    /// the plugin shims; setting it in a config file would also make legacy
+    /// settings hooks skip their own events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_origin: Option<String>,
 }
@@ -1621,5 +1623,56 @@ mod tests_laws_config {
     fn empty_toml_keeps_the_default() {
         let cfg: LawsConfig = toml::from_str("").expect("parse");
         assert!(cfg.dir.is_none());
+    }
+}
+
+#[cfg(test)]
+mod tests_adapter_config {
+    use super::*;
+
+    #[test]
+    fn hook_autostart_and_origin_default_to_unset_and_are_not_serialized() {
+        let cfg: AdapterConfig = toml::from_str("").expect("parse");
+        assert_eq!(cfg.hook_autostart, None);
+        assert_eq!(cfg.hook_origin, None);
+        let s = toml::to_string(&cfg).expect("serialise");
+        assert!(!s.contains("hook_autostart"), "{s}");
+        assert!(!s.contains("hook_origin"), "{s}");
+    }
+
+    #[test]
+    fn hook_autostart_and_origin_round_trip_through_toml() {
+        let cfg: AdapterConfig =
+            toml::from_str("hook_autostart = false\nhook_origin = \"plugin\"\n").expect("parse");
+        assert_eq!(cfg.hook_autostart, Some(false));
+        assert_eq!(cfg.hook_origin.as_deref(), Some("plugin"));
+        let s = toml::to_string(&cfg).expect("serialise");
+        let back: AdapterConfig = toml::from_str(&s).expect("deserialise");
+        assert_eq!(cfg, back);
+        let json = serde_json::to_value(&cfg).expect("json");
+        assert_eq!(json["hook_autostart"], false);
+        assert_eq!(json["hook_origin"], "plugin");
+    }
+
+    #[test]
+    fn hook_env_names_map_to_adapter_fields_when_loaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = crate::Config::load_from(&tmp.path().join("absent.toml"), |name| match name {
+            "CORTEX_HOOK_AUTOSTART" => Some("false".into()),
+            "CORTEX_HOOK_ORIGIN" => Some("codex-plugin".into()),
+            _ => None,
+        })
+        .expect("load");
+        assert_eq!(cfg.adapter.hook_autostart, Some(false));
+        assert_eq!(cfg.adapter.hook_origin.as_deref(), Some("codex-plugin"));
+    }
+
+    #[test]
+    fn non_boolean_hook_autostart_is_rejected_when_loaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = crate::Config::load_from(&tmp.path().join("absent.toml"), |name| {
+            (name == "CORTEX_HOOK_AUTOSTART").then(|| "yes".into())
+        });
+        assert!(result.is_err());
     }
 }

@@ -285,8 +285,16 @@ fn blocking_until<T: Send + 'static>(
 }
 
 fn load_hook_config() -> io::Result<cortex_config::Config> {
-    let path = cortex_config::default_toml_path();
-    match std::fs::metadata(&path) {
+    load_hook_config_from(&cortex_config::default_toml_path(), |name| {
+        std::env::var(name).ok()
+    })
+}
+
+fn load_hook_config_from(
+    path: &Path,
+    env_lookup: impl Fn(&str) -> Option<String>,
+) -> io::Result<cortex_config::Config> {
+    match std::fs::metadata(path) {
         Ok(metadata) if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES => {
             return Err(invalid_data(
                 "hook configuration is not a bounded regular file",
@@ -295,10 +303,13 @@ fn load_hook_config() -> io::Result<cortex_config::Config> {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
         _ => {}
     }
-    cortex_config::Config::load_from(&path, |name| {
-        let value = std::env::var(name).ok()?;
+    cortex_config::Config::load_from(path, |name| {
+        let value = env_lookup(name)?;
         // Legacy hook scripts use 0/1, while typed configuration uses bools.
-        let boolean = matches!(name, "CORTEX_ADAPTER_DISABLE" | "CORTEX_HOOK_AUTOSTART");
+        let boolean = matches!(
+            name,
+            "CORTEX_ADAPTER_DISABLE" | "CORTEX_HOOK_AUTOSTART" | "CORTEX_HOOK_FORCE_FALLBACK"
+        );
         Some(match value.as_str() {
             "0" if boolean => "false".into(),
             "1" if boolean => "true".into(),
@@ -906,6 +917,78 @@ mod tests {
             "--sock",
             "/tmp/other.sock"
         ])));
+    }
+
+    fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        }
+    }
+
+    #[test]
+    fn legacy_zero_and_one_map_to_typed_booleans_for_autostart_and_disable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let absent = tmp.path().join("absent.toml");
+        let off = load_hook_config_from(
+            &absent,
+            env_of(&[
+                ("CORTEX_HOOK_AUTOSTART", "0"),
+                ("CORTEX_ADAPTER_DISABLE", "0"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(off.adapter.hook_autostart, Some(false));
+        assert!(!off.adapter.adapter_disable);
+        let on = load_hook_config_from(
+            &absent,
+            env_of(&[
+                ("CORTEX_HOOK_AUTOSTART", "1"),
+                ("CORTEX_ADAPTER_DISABLE", "1"),
+                ("CORTEX_HOOK_FORCE_FALLBACK", "1"),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(on.adapter.hook_autostart, Some(true));
+        assert!(on.adapter.adapter_disable);
+        assert!(on.adapter.hook_force_fallback);
+        let unset = load_hook_config_from(&absent, env_of(&[])).unwrap();
+        assert_eq!(unset.adapter.hook_autostart, None);
+    }
+
+    #[test]
+    fn invalid_hook_boolean_is_an_invalid_hook_configuration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let absent = tmp.path().join("absent.toml");
+        for name in ["CORTEX_HOOK_AUTOSTART", "CORTEX_ADAPTER_DISABLE"] {
+            let error =
+                load_hook_config_from(&absent, |key| (key == name).then(|| "yes".to_string()))
+                    .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(error.to_string(), "invalid hook configuration");
+        }
+    }
+
+    #[test]
+    fn toml_hook_autostart_false_disables_autostart_without_env() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        std::fs::write(&path, "[adapter]\nhook_autostart = false\n").unwrap();
+        let cfg = load_hook_config_from(&path, env_of(&[])).unwrap();
+        assert_eq!(cfg.adapter.hook_autostart, Some(false));
+        // main() resolves `None` to enabled; the TOML `false` must survive.
+        let autostart_enabled = cfg.adapter.hook_autostart.unwrap_or(true);
+        assert!(!should_autostart(
+            "SessionStart",
+            false,
+            autostart_enabled,
+            io::ErrorKind::NotFound
+        ));
+        // Env still overrides TOML.
+        let cfg = load_hook_config_from(&path, env_of(&[("CORTEX_HOOK_AUTOSTART", "1")])).unwrap();
+        assert_eq!(cfg.adapter.hook_autostart, Some(true));
     }
 
     #[test]

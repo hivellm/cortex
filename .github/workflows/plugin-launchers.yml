@@ -1,0 +1,72 @@
+name: Plugin launchers and migration
+
+# Phase35 — the hook launchers (Claude Code shims, Codex launcher) and the
+# client migration script live under paths that rust-ci.yml ignores
+# (`packages/cortex-claude-plugin/**`, `scripts/**`). This workflow runs
+# their behavioral tests whenever those files change, on Linux and on
+# Windows (Git Bash), so a shim-only or script-only change is still gated.
+
+on:
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - "packages/cortex-claude-plugin/**"
+      - "packages/cortex-codex-plugin/**"
+      - "crates/cortex-adapter-claude-code/hooks/**"
+      - "crates/cortex-mcp-server/tests/hook_*.rs"
+      - "scripts/activate_daily_memory_clients.py"
+      - "scripts/tests/**"
+      - ".github/workflows/plugin-launchers.yml"
+  push:
+    branches: [main, master, develop]
+    paths:
+      - "packages/cortex-claude-plugin/**"
+      - "packages/cortex-codex-plugin/**"
+      - "crates/cortex-adapter-claude-code/hooks/**"
+      - "crates/cortex-mcp-server/tests/hook_*.rs"
+      - "scripts/activate_daily_memory_clients.py"
+      - "scripts/tests/**"
+      - ".github/workflows/plugin-launchers.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-launchers-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  migration:
+    name: Migration unittest (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run migration tests
+        shell: bash
+        run: python -m unittest discover -s scripts/tests -p "test_*.py" -v
+
+  launchers:
+    name: Hook launcher tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: plugin-launchers-${{ matrix.os }}
+      - name: Run launcher and drift tests
+        shell: bash
+        run: cargo test -p cortex-mcp-server --locked --test hook_launcher --test hook_drift

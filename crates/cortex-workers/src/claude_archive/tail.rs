@@ -730,8 +730,13 @@ mod tests {
         assert_eq!(v["status"], "healthy");
     }
 
+    // These tests mutate process env that `Config::load` reads; serialise
+    // them so parallel tests never observe each other's values.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn resolve_health_bind_falls_back_to_default_when_unset() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prior = std::env::var_os("CORTEX_CLAUDE_ARCHIVE_BIND");
         std::env::remove_var("CORTEX_CLAUDE_ARCHIVE_BIND");
         let addr = resolve_health_bind().unwrap();
@@ -743,6 +748,7 @@ mod tests {
 
     #[test]
     fn resolve_health_bind_honours_env_override() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CORTEX_CLAUDE_ARCHIVE_BIND", "127.0.0.1:0");
         let addr = resolve_health_bind().unwrap();
         assert_eq!(addr.port(), 0);
@@ -751,6 +757,7 @@ mod tests {
 
     #[test]
     fn resolve_health_bind_surfaces_parse_error() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CORTEX_CLAUDE_ARCHIVE_BIND", "not-an-address");
         let err = resolve_health_bind().unwrap_err();
         assert!(format!("{err:#}").contains("parse"), "{err:#}");
@@ -759,6 +766,7 @@ mod tests {
 
     #[test]
     fn resolve_poll_interval_clamps_out_of_range_values() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CORTEX_CLAUDE_ARCHIVE_POLL_MS", "5");
         assert_eq!(resolve_poll_interval(), DEFAULT_POLL_INTERVAL);
         std::env::set_var("CORTEX_CLAUDE_ARCHIVE_POLL_MS", "999999");

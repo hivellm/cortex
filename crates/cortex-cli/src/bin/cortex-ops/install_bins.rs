@@ -137,8 +137,10 @@ fn replace_binary(source: &Path, target: &Path, hash: &str, stamp: &str) -> Resu
     let aside = sibling(target, &format!(".old-{stamp}"));
     let moved_aside = target.exists();
     if moved_aside {
-        std::fs::rename(target, &aside)
-            .map_err(|e| format!("move {} aside: {e}", target.display()))?;
+        std::fs::rename(target, &aside).map_err(|e| {
+            let _ = std::fs::remove_file(&staged);
+            format!("move {} aside: {e}", target.display())
+        })?;
     }
     if let Err(error) = std::fs::rename(&staged, target) {
         if moved_aside {
@@ -363,6 +365,135 @@ mod tests {
         let to = root.path().join("bin");
         assert!(install(&from, &to, true, "s").is_err());
         assert!(!to.exists());
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn should_keep_existing_binary_when_staged_copy_fails_sha256_verification() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.bin");
+        std::fs::write(&source, "new-bytes").unwrap();
+        let to = root.path().join("bin");
+        std::fs::create_dir_all(&to).unwrap();
+        let target = to.join(exe("cortex-hook"));
+        std::fs::write(&target, "old-bytes").unwrap();
+
+        let error = replace_binary(&source, &target, "0".repeat(64).as_str(), "s").unwrap_err();
+        assert!(error.contains("failed SHA-256 verification"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old-bytes");
+        assert_eq!(names(&to), vec![exe("cortex-hook")]);
+    }
+
+    #[test]
+    fn should_not_create_binary_when_sha256_verification_fails_on_fresh_install() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.bin");
+        std::fs::write(&source, "new-bytes").unwrap();
+        let to = root.path().join("bin");
+        std::fs::create_dir_all(&to).unwrap();
+        let target = to.join(exe("cortex-hook"));
+
+        assert!(replace_binary(&source, &target, "deadbeef", "s").is_err());
+        assert!(names(&to).is_empty());
+    }
+
+    #[test]
+    fn should_leave_target_intact_when_rename_aside_fails() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.bin");
+        std::fs::write(&source, "new-bytes").unwrap();
+        let hash = sha256_file(&source).unwrap();
+        let to = root.path().join("bin");
+        std::fs::create_dir_all(&to).unwrap();
+        let target = to.join(exe("cortex-hook"));
+        std::fs::write(&target, "old-bytes").unwrap();
+        // A non-empty directory at the aside path makes the rename fail on
+        // every platform.
+        let blocker = sibling(&target, ".old-s");
+        std::fs::create_dir_all(blocker.join("occupied")).unwrap();
+
+        let error = replace_binary(&source, &target, &hash, "s").unwrap_err();
+        assert!(error.contains("aside"), "{error}");
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "old-bytes");
+        assert!(!sibling(&target, ".new").exists());
+
+        // The next attempt with a free aside path succeeds.
+        replace_binary(&source, &target, &hash, "s2").unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new-bytes");
+        assert!(!sibling(&target, ".new").exists());
+        assert_eq!(
+            std::fs::read_to_string(sibling(&target, ".old-s2")).unwrap(),
+            "old-bytes"
+        );
+    }
+
+    #[test]
+    fn should_remove_only_own_stale_asides_and_report_undeletable_ones() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path();
+        let hook_aside = format!("{}.old-s1", exe("cortex-hook"));
+        let api_aside = format!("{}.old-s2", exe("cortex-api"));
+        let stuck = format!("{}.old-s3", exe("cortex-mcp-server"));
+        for name in [&hook_aside, &api_aside] {
+            std::fs::write(dir.join(name), "old").unwrap();
+        }
+        std::fs::write(dir.join("other-tool.exe.old-s1"), "foreign").unwrap();
+        std::fs::write(dir.join(exe("cortex-hook")), "current").unwrap();
+        std::fs::write(dir.join(format!("{}.bak", exe("cortex-hook"))), "bak").unwrap();
+        // A directory cannot be removed with remove_file, standing in for an
+        // aside that is still locked by a running process.
+        std::fs::create_dir_all(dir.join(&stuck)).unwrap();
+
+        let mut lines = remove_stale_asides(dir);
+        lines.sort();
+        assert_eq!(
+            lines,
+            vec![
+                format!("kept in use: {stuck}"),
+                format!("removed previous: {api_aside}"),
+                format!("removed previous: {hook_aside}"),
+            ]
+        );
+        let left = names(dir);
+        assert!(!left.contains(&hook_aside) && !left.contains(&api_aside));
+        assert!(left.contains(&stuck));
+        assert!(left.contains(&"other-tool.exe.old-s1".to_string()));
+        assert!(left.contains(&exe("cortex-hook")));
+    }
+
+    #[test]
+    fn should_return_no_lines_when_aside_dir_is_missing() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(remove_stale_asides(&root.path().join("absent")).is_empty());
+    }
+
+    #[test]
+    fn should_not_remove_stale_asides_during_dry_run() {
+        let root = tempfile::tempdir().unwrap();
+        let to = root.path().join("bin");
+        let first = build_dir(root.path(), "a");
+        install(&first, &to, true, "s1").unwrap();
+        let aside = to.join(format!("{}.old-s0", exe("cortex-hook")));
+        std::fs::write(&aside, "old").unwrap();
+        let second = build_dir(root.path(), "b");
+        let lines = install(&second, &to, false, "s2").unwrap();
+        assert!(aside.exists());
+        assert!(
+            lines.iter().all(|l| l.starts_with("replace: ")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(to.join(exe("cortex-hook"))).unwrap(),
+            "cortex-hook-a"
+        );
     }
 
     #[test]
