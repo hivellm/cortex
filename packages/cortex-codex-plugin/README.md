@@ -7,7 +7,7 @@ paths, tokens or environment blocks in `~/.codex/config.toml`.
 ## Install
 
 Install the binaries and the user configuration first, exactly as for Claude
-Code: `cortex-ops install-binaries --apply` and `cortex-ops setup --apply`
+Code: `cortex install --from target/release --apply` and `cortex setup --apply`
 (see `docs/operations/daily-memory-runtime.md`). Then:
 
 ```text

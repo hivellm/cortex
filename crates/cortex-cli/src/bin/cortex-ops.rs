@@ -53,8 +53,6 @@ mod graph_cmd;
 mod helpers;
 #[path = "cortex-ops/identity_coverage.rs"]
 mod identity_coverage;
-#[path = "cortex-ops/install_bins.rs"]
-mod install_bins;
 #[path = "cortex-ops/intent_stats.rs"]
 mod intent_stats;
 #[path = "cortex-ops/laws_reindex.rs"]
@@ -89,8 +87,6 @@ mod rollup;
 mod schedule_cmd;
 #[path = "cortex-ops/sessions_backfill.rs"]
 mod sessions_backfill;
-#[path = "cortex-ops/setup.rs"]
-mod setup;
 #[path = "cortex-ops/temporal_digest.rs"]
 mod temporal_digest;
 #[path = "cortex-ops/timeline.rs"]
@@ -101,8 +97,6 @@ mod timeline_backfill;
 mod tool_call_digest_live;
 #[path = "cortex-ops/turn_digest_live.rs"]
 mod turn_digest_live;
-#[path = "cortex-ops/update.rs"]
-mod update;
 #[path = "cortex-ops/watchdog.rs"]
 mod watchdog;
 
@@ -119,61 +113,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Phase35 — write `<Cortex home>/config.toml` and `api-token` (dry run
-    /// unless `--apply`), optionally migrating an existing runtime TOML.
-    Setup {
-        /// Write the planned files (default: print the plan only).
-        #[arg(long)]
-        apply: bool,
-        /// Existing runtime TOML to migrate, e.g.
-        /// `.cortex-state/daily-runtime/runtime.toml`.
-        #[arg(long)]
-        from: Option<PathBuf>,
-        /// Target Cortex home (default: `CORTEX_HOME`, else `~/.cortex`).
-        #[arg(long)]
-        home: Option<PathBuf>,
-    },
-    /// Phase35 — copy the daily runtime binaries from a release build into a
-    /// stable user directory (dry run unless `--apply`).
-    InstallBinaries {
-        /// Install the binaries (default: print the plan only).
-        #[arg(long)]
-        apply: bool,
-        /// Release build directory holding the binaries, e.g. `target/release`.
-        #[arg(long)]
-        from: PathBuf,
-        /// Destination directory (default: `<Cortex home>/bin`).
-        #[arg(long)]
-        to: Option<PathBuf>,
-    },
-    /// Phase35 — report daily runtime binaries that are missing from PATH,
-    /// shadowed by another PATH entry, or stale. Exit 2 on any finding.
-    DoctorInstall {
-        /// Installed binary directory (default: `<Cortex home>/bin`).
-        #[arg(long)]
-        bin_dir: Option<PathBuf>,
-        /// Optional build directory the installed binaries must match.
-        #[arg(long)]
-        build: Option<PathBuf>,
-        /// Emit JSON instead of a table.
-        #[arg(long)]
-        json: bool,
-    },
-    /// Update the installed Cortex from its source checkout: git pull, release
-    /// build, install into the bin dir, stop the old runtime, refresh the
-    /// plugins (dry run unless `--apply`).
-    Update {
-        /// Run the update (default: print the plan only).
-        #[arg(long)]
-        apply: bool,
-        /// Cortex checkout to build (default: the workspace holding the build
-        /// directory recorded in `<bin dir>/install-manifest.json`).
-        #[arg(long)]
-        source: Option<PathBuf>,
-        /// Build the checkout as it is, without `git pull --ff-only`.
-        #[arg(long)]
-        no_pull: bool,
-    },
     /// Emit the bootstrap plan (collections / Cypher / indexes / streams) as JSON.
     Plan {
         /// Pretty-print the JSON (default: compact).
@@ -2001,20 +1940,6 @@ fn main() -> ExitCode {
 fn run() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Command::Setup { apply, from, home } => setup::setup(apply, from, home),
-        Command::InstallBinaries { apply, from, to } => {
-            install_bins::install_binaries(apply, from, to)
-        }
-        Command::DoctorInstall {
-            bin_dir,
-            build,
-            json,
-        } => install_bins::doctor_install(bin_dir, build, json),
-        Command::Update {
-            apply,
-            source,
-            no_pull,
-        } => update::update(source, no_pull, apply),
         Command::Plan { pretty, slice } => match plan::emit_plan(pretty, slice) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {

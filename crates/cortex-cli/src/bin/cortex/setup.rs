@@ -1,4 +1,4 @@
-//! Phase35 §1.3 — `cortex-ops setup`: write the user runtime configuration
+//! Phase35 §1.3 — `cortex setup`: write the user runtime configuration
 //! (`<Cortex home>/config.toml`) and the API credential
 //! (`<Cortex home>/api-token`) so binaries need no client-supplied paths,
 //! environment blocks or tokens.
@@ -16,7 +16,7 @@ use std::process::ExitCode;
 
 use sha2::{Digest, Sha256};
 
-const CONFIG_HEADER: &str = "# Cortex user runtime configuration, written by `cortex-ops setup`.\n# The API token lives in the sibling `api-token` file, never here.\n";
+const CONFIG_HEADER: &str = "# Cortex user runtime configuration, written by `cortex setup`.\n# The API token lives in the sibling `api-token` file, never here.\n";
 const DEFAULT_API_URL: &str = "http://127.0.0.1:17000";
 
 #[derive(Debug, PartialEq, Eq)]

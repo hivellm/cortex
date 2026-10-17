@@ -1,7 +1,7 @@
 {
   "name": "cortex",
   "displayName": "Cortex",
-  "description": "Cortex daily memory for Claude Code. Hands each lifecycle event to the installed cortex-hook binary, which starts the local Cortex runtime on demand and returns saved memory context, and adds the daily Cortex MCP tools. Requires the Cortex binaries (cortex-hook, cortex-mcp-server, cortex-api, cortex-adapter-claude) installed with `cortex-ops install-binaries` and a user configuration written by `cortex-ops setup`. No telemetry; nothing leaves this machine.",
+  "description": "Cortex daily memory for Claude Code. Hands each lifecycle event to the installed cortex-hook binary, which starts the local Cortex runtime on demand and returns saved memory context, and adds the daily Cortex MCP tools. Requires the Cortex binaries (cortex-hook, cortex-mcp-server, cortex-api, cortex-adapter-claude) installed with `cortex install` and a user configuration written by `cortex setup`. No telemetry; nothing leaves this machine.",
   "version": "0.2.0",
   "author": {
     "name": "HiveLLM",

@@ -19,9 +19,9 @@ token or environment block.
    on `PATH`:
 
    ```powershell
-   cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops
-   target\release\cortex-ops install-binaries --from target\release          # dry run
-   target\release\cortex-ops install-binaries --from target\release --apply
+   cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex
+   target\release\cortex install --from target\release          # dry run
+   target\release\cortex install --from target\release --apply
    ```
 
 2. Write the user configuration and credential under `~/.cortex`. Run it as a
@@ -29,8 +29,8 @@ token or environment block.
    `dashboard.api_token` into `~/.cortex/api-token`:
 
    ```powershell
-   cortex-ops setup --from .cortex-state\daily-runtime\runtime.toml
-   cortex-ops setup --from .cortex-state\daily-runtime\runtime.toml --apply
+   cortex setup --from .cortex-state\daily-runtime\runtime.toml
+   cortex setup --from .cortex-state\daily-runtime\runtime.toml --apply
    ```
 
 3. Add the marketplace and install the plugin:
@@ -47,7 +47,7 @@ token or environment block.
 4. Start a new session. The first `SessionStart` starts the runtime when it
    is not already running. Nothing is registered with the OS.
 
-`cortex-ops doctor-install` reports a binary that is missing from `PATH`,
+`cortex doctor` reports a binary that is missing from `PATH`,
 shadowed by another `PATH` entry, or stale. It also reports a double install,
 where the plugin is enabled while legacy Cortex hooks remain in
 `~/.claude/settings.json`.

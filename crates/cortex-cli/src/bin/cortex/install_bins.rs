@@ -1,11 +1,14 @@
-//! Phase35 §1.4 — `cortex-ops install-binaries` and `cortex-ops doctor-install`.
+//! Phase35 §1.4 — `cortex install` and `cortex doctor`.
 //!
 //! The installer copies the daily runtime binaries from a release build into
 //! a stable user directory (default `<Cortex home>/bin`), verifying SHA-256
 //! after each copy and recording an `install-manifest.json`. A binary that is
 //! running cannot be overwritten on Windows, so an existing one is renamed
 //! aside first (renaming a running executable is allowed) and restored if the
-//! copy fails. Dry-run by default; `--apply` writes.
+//! copy fails. A binary the previous manifest recorded that is no longer
+//! installed (for example `cortex-ops`, whose install commands moved to
+//! `cortex`) is removed from the directory the same way. Dry-run by default;
+//! `--apply` writes.
 //!
 //! The doctor resolves each binary through `PATH` and reports one that is
 //! missing, shadowed by another directory earlier in `PATH`, or whose bytes
@@ -19,15 +22,15 @@ use cortex_adapter_claude_code::legacy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Binaries `install-binaries` copies and `doctor-install` checks. `cortex-ops`
-/// is installed too so `cortex-ops update` runs from the bin dir while cargo
-/// rebuilds the copy under `target/`.
+/// Binaries `cortex install` copies and `cortex doctor` checks. `cortex` is
+/// installed too so `cortex update` runs from the bin dir while cargo rebuilds
+/// the copy under `target/`.
 pub(super) const BINARIES: [&str; 5] = [
     "cortex-api",
     "cortex-adapter-claude",
     "cortex-hook",
     "cortex-mcp-server",
-    "cortex-ops",
+    "cortex",
 ];
 const MANIFEST: &str = "install-manifest.json";
 
@@ -36,6 +39,11 @@ struct Manifest {
     version: u32,
     source: PathBuf,
     binaries: BTreeMap<String, String>,
+    /// Binaries an earlier install recorded that are no longer installed but
+    /// still leave a file or an `.old-*` aside in the bin dir, so a later
+    /// install keeps cleaning them up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    retired: Vec<String>,
 }
 
 /// `name` with the platform executable suffix (`.exe` on Windows).
@@ -57,13 +65,41 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// The build directory recorded by the last `install-binaries --apply` into
+fn read_manifest(bin_dir: &Path) -> Option<Manifest> {
+    let bytes = std::fs::read(bin_dir.join(MANIFEST)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The build directory recorded by the last `cortex install --apply` into
 /// `bin_dir`, if its manifest is readable.
 pub(super) fn manifest_source(bin_dir: &Path) -> Option<PathBuf> {
-    let bytes = std::fs::read(bin_dir.join(MANIFEST)).ok()?;
-    serde_json::from_slice::<Manifest>(&bytes)
-        .ok()
-        .map(|manifest| manifest.source)
+    read_manifest(bin_dir).map(|manifest| manifest.source)
+}
+
+/// Whether `name` is a single plain file name, so joining it to the bin dir
+/// cannot leave that directory.
+fn is_plain_name(name: &str) -> bool {
+    let mut parts = Path::new(name).components();
+    let single = matches!(
+        (parts.next(), parts.next()),
+        (Some(std::path::Component::Normal(part)), None) if part == std::ffi::OsStr::new(name)
+    );
+    single && !name.contains(['/', '\\'])
+}
+
+/// Binaries `manifest` records (installed or retired) that are no longer in
+/// [`BINARIES`].
+fn obsolete_names(manifest: Option<&Manifest>) -> Vec<String> {
+    let Some(manifest) = manifest else {
+        return Vec::new();
+    };
+    let names: std::collections::BTreeSet<&String> = manifest
+        .binaries
+        .keys()
+        .chain(&manifest.retired)
+        .filter(|name| !BINARIES.contains(&name.as_str()) && is_plain_name(name))
+        .collect();
+    names.into_iter().cloned().collect()
 }
 
 pub(super) fn default_bin_dir() -> Option<PathBuf> {
@@ -72,7 +108,7 @@ pub(super) fn default_bin_dir() -> Option<PathBuf> {
 
 pub(super) fn install_binaries(apply: bool, from: PathBuf, to: Option<PathBuf>) -> ExitCode {
     let Some(to) = to.or_else(default_bin_dir) else {
-        eprintln!("install-binaries: no Cortex home; set CORTEX_HOME or pass --to");
+        eprintln!("install: no Cortex home; set CORTEX_HOME or pass --to");
         return ExitCode::FAILURE;
     };
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
@@ -92,20 +128,21 @@ pub(super) fn install_binaries(apply: bool, from: PathBuf, to: Option<PathBuf>) 
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("install-binaries: {error}");
+            eprintln!("install: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
 /// Install (or, without `apply`, plan) every binary from `from` into `to` and
-/// return one report line per binary.
+/// return one report line per binary, plus one per obsolete binary removed.
 pub(super) fn install(
     from: &Path,
     to: &Path,
     apply: bool,
     stamp: &str,
 ) -> Result<Vec<String>, String> {
+    let obsolete = obsolete_names(read_manifest(to).as_ref());
     let mut hashes = BTreeMap::new();
     for name in BINARIES {
         let source = from.join(exe(name));
@@ -133,14 +170,16 @@ pub(super) fn install(
         replace_binary(&source, &target, hash, stamp)?;
         lines.push(format!("installed: {} (sha256 {hash})", target.display()));
     }
+    let retired = remove_obsolete(to, &obsolete, apply, stamp, &mut lines);
     if apply {
-        // Absolute, so `cortex-ops update` can find the checkout from anywhere.
+        // Absolute, so `cortex update` can find the checkout from anywhere.
         let source =
             std::path::absolute(from).map_err(|e| format!("resolve {}: {e}", from.display()))?;
         let manifest = Manifest {
             version: 1,
             source,
             binaries: hashes,
+            retired,
         };
         let body = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
         std::fs::write(to.join(MANIFEST), body).map_err(|e| format!("write manifest: {e}"))?;
@@ -176,18 +215,73 @@ fn replace_binary(source: &Path, target: &Path, hash: &str, stamp: &str) -> Resu
     Ok(())
 }
 
+/// Remove each binary in `obsolete` (recorded by the previous install, no
+/// longer installed) from `dir`, adding one report line per file. A running
+/// binary is moved aside like a replaced one and left to the stale-aside
+/// cleanup. Without `apply` only `remove:` lines are planned. Returns the names
+/// that still leave a file or an aside in `dir`.
+fn remove_obsolete(
+    dir: &Path,
+    obsolete: &[String],
+    apply: bool,
+    stamp: &str,
+    lines: &mut Vec<String>,
+) -> Vec<String> {
+    let mut retired = Vec::new();
+    for name in obsolete {
+        let target = dir.join(exe(name));
+        if target.symlink_metadata().is_ok() {
+            if !apply {
+                lines.push(format!("remove: {}", target.display()));
+                continue;
+            }
+            let aside = sibling(&target, &format!(".old-{stamp}"));
+            match std::fs::rename(&target, &aside) {
+                Err(error) => lines.push(format!(
+                    "could not remove obsolete: {}: {error}",
+                    target.display()
+                )),
+                Ok(()) => match std::fs::remove_file(&aside) {
+                    Ok(()) => lines.push(format!("removed obsolete: {}", target.display())),
+                    Err(_) => lines.push(format!("moved aside, in use: {}", aside.display())),
+                },
+            }
+        }
+        if apply && leaves_file(dir, name) {
+            retired.push(name.clone());
+        }
+    }
+    retired
+}
+
+/// Whether `dir` still holds binary `name` or an `.old-*` aside of it.
+fn leaves_file(dir: &Path, name: &str) -> bool {
+    let aside = format!("{}.old-", exe(name));
+    dir.join(exe(name)).symlink_metadata().is_ok()
+        || std::fs::read_dir(dir).is_ok_and(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().starts_with(&aside))
+        })
+}
+
 /// Delete `<binary>.old-*` asides left by earlier installs, reporting the
-/// ones a running process still holds.
+/// ones a running process still holds. Asides of binaries the manifest in
+/// `dir` records as installed or retired count as ours too.
 pub(super) fn remove_stale_asides(dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
+    let prefixes: Vec<String> = BINARIES
+        .iter()
+        .map(|bin| (*bin).to_string())
+        .chain(obsolete_names(read_manifest(dir).as_ref()))
+        .map(|bin| format!("{}.old-", exe(&bin)))
+        .collect();
     let mut lines = Vec::new();
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        let ours = BINARIES
-            .iter()
-            .any(|bin| name.starts_with(&format!("{}.old-", exe(bin))));
+        let ours = prefixes.iter().any(|prefix| name.starts_with(prefix));
         if !ours {
             continue;
         }
@@ -232,9 +326,7 @@ struct Finding {
 }
 
 fn diagnose(bin_dir: &Path, path: &[PathBuf], build: Option<&Path>) -> Vec<Finding> {
-    let manifest: Option<Manifest> = std::fs::read(bin_dir.join(MANIFEST))
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let manifest = read_manifest(bin_dir);
     BINARIES
         .iter()
         .map(|&binary| {
@@ -277,7 +369,7 @@ pub(super) fn doctor_install(
     json: bool,
 ) -> ExitCode {
     let Some(bin_dir) = bin_dir.or_else(default_bin_dir) else {
-        eprintln!("doctor-install: no Cortex home; set CORTEX_HOME or pass --bin-dir");
+        eprintln!("doctor: no Cortex home; set CORTEX_HOME or pass --bin-dir");
         return ExitCode::FAILURE;
     };
     let mut findings = diagnose(&bin_dir, &path_dirs(), build.as_deref());
@@ -293,7 +385,7 @@ pub(super) fn doctor_install(
         match serde_json::to_string_pretty(&findings) {
             Ok(text) => println!("{text}"),
             Err(error) => {
-                eprintln!("doctor-install: {error}");
+                eprintln!("doctor: {error}");
                 return ExitCode::FAILURE;
             }
         }
@@ -521,6 +613,138 @@ mod tests {
             std::fs::read_to_string(to.join(exe("cortex-hook"))).unwrap(),
             "cortex-hook-a"
         );
+    }
+
+    /// Install build `a` into `<root>/bin`, then record `extra` in its
+    /// manifest as if an earlier install had put it there too.
+    fn installed_with_previous(root: &Path, extra: &str) -> (PathBuf, PathBuf) {
+        let to = root.join("bin");
+        let build = build_dir(root, "a");
+        install(&build, &to, true, "s0").unwrap();
+        let mut manifest = read_manifest(&to).unwrap();
+        manifest.binaries.insert(extra.to_string(), "0".repeat(64));
+        std::fs::write(
+            to.join(MANIFEST),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        (build, to)
+    }
+
+    #[test]
+    fn should_remove_binary_the_previous_manifest_lists_but_no_longer_installs() {
+        let root = tempfile::tempdir().unwrap();
+        let (build, to) = installed_with_previous(root.path(), "cortex-ops");
+        let obsolete = to.join(exe("cortex-ops"));
+        std::fs::write(&obsolete, "cortex-ops-old").unwrap();
+
+        let lines = install(&build, &to, true, "s1").unwrap();
+        assert!(
+            lines.contains(&format!("removed obsolete: {}", obsolete.display())),
+            "{lines:?}"
+        );
+        assert!(!obsolete.exists());
+        assert!(!names(&to).iter().any(|n| n.starts_with(&exe("cortex-ops"))));
+        let manifest = read_manifest(&to).unwrap();
+        assert!(!manifest.binaries.contains_key("cortex-ops"));
+        assert!(manifest.retired.is_empty());
+        for name in BINARIES {
+            assert!(to.join(exe(name)).exists());
+        }
+    }
+
+    #[test]
+    fn should_leave_files_the_previous_manifest_does_not_list() {
+        let root = tempfile::tempdir().unwrap();
+        let (build, to) = installed_with_previous(root.path(), "../outside");
+        let outside = root.path().join(exe("outside"));
+        std::fs::write(&outside, "foreign").unwrap();
+        let unlisted = to.join(exe("cortex-ops"));
+        std::fs::write(&unlisted, "not in the manifest").unwrap();
+        std::fs::write(to.join(exe("other-tool")), "foreign").unwrap();
+
+        let lines = install(&build, &to, true, "s1").unwrap();
+        assert!(
+            lines.iter().all(|l| l.starts_with("unchanged: ")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&unlisted).unwrap(),
+            "not in the manifest"
+        );
+        assert!(to.join(exe("other-tool")).exists());
+        assert!(outside.exists());
+    }
+
+    #[test]
+    fn should_only_report_obsolete_binary_during_dry_run() {
+        let root = tempfile::tempdir().unwrap();
+        let (build, to) = installed_with_previous(root.path(), "cortex-ops");
+        let obsolete = to.join(exe("cortex-ops"));
+        std::fs::write(&obsolete, "cortex-ops-old").unwrap();
+        let manifest_before = std::fs::read(to.join(MANIFEST)).unwrap();
+
+        let lines = install(&build, &to, false, "s1").unwrap();
+        assert!(
+            lines.contains(&format!("remove: {}", obsolete.display())),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&obsolete).unwrap(),
+            "cortex-ops-old"
+        );
+        assert_eq!(std::fs::read(to.join(MANIFEST)).unwrap(), manifest_before);
+    }
+
+    #[test]
+    fn should_move_an_undeletable_obsolete_binary_aside_and_clean_it_up_later() {
+        let root = tempfile::tempdir().unwrap();
+        let (build, to) = installed_with_previous(root.path(), "cortex-ops");
+        // A non-empty directory renames but cannot be removed with
+        // remove_file, standing in for a binary a running process holds.
+        let obsolete = to.join(exe("cortex-ops"));
+        std::fs::create_dir_all(obsolete.join("held")).unwrap();
+
+        let lines = install(&build, &to, true, "s1").unwrap();
+        let aside = sibling(&obsolete, ".old-s1");
+        assert!(
+            lines.contains(&format!("moved aside, in use: {}", aside.display())),
+            "{lines:?}"
+        );
+        assert!(!obsolete.exists());
+        assert!(aside.exists());
+        let manifest = read_manifest(&to).unwrap();
+        assert!(!manifest.binaries.contains_key("cortex-ops"));
+        assert_eq!(manifest.retired, vec!["cortex-ops".to_string()]);
+
+        // Still held: the next install reports it and keeps tracking it.
+        let lines = install(&build, &to, true, "s2").unwrap();
+        let aside_name = format!("{}.old-s1", exe("cortex-ops"));
+        assert!(
+            lines.contains(&format!("kept in use: {aside_name}")),
+            "{lines:?}"
+        );
+        assert_eq!(read_manifest(&to).unwrap().retired, vec!["cortex-ops"]);
+
+        // Once released, the stale-aside cleanup removes it and the name is
+        // dropped from the manifest.
+        std::fs::remove_dir_all(&aside).unwrap();
+        std::fs::write(&aside, "released").unwrap();
+        let lines = install(&build, &to, true, "s3").unwrap();
+        assert!(
+            lines.contains(&format!("removed previous: {aside_name}")),
+            "{lines:?}"
+        );
+        assert!(!aside.exists());
+        assert!(read_manifest(&to).unwrap().retired.is_empty());
+    }
+
+    #[test]
+    fn should_accept_only_plain_file_names_as_obsolete_binaries() {
+        assert!(is_plain_name("cortex-ops"));
+        for name in ["", ".", "..", "../x", "a/b", "a\\b", "/abs"] {
+            assert!(!is_plain_name(name), "{name}");
+        }
     }
 
     #[test]

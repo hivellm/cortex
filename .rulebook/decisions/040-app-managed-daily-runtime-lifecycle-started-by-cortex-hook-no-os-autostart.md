@@ -48,3 +48,7 @@ Starting depends on the binaries sitting next to `cortex-hook` (installed
 together by `cortex-ops install-binaries`) and on `~/.cortex/config.toml`
 written by `cortex-ops setup`. Reopening OS autostart needs an explicit operator
 decision that supersedes this record.
+
+**2026-10-17:** the install commands moved to the `cortex` binary.
+`cortex install` replaces `cortex-ops install-binaries` and `cortex setup`
+replaces `cortex-ops setup`; the decision above is unchanged.

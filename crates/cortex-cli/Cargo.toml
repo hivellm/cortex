@@ -15,6 +15,10 @@ name = "cortex-bootstrap"
 path = "src/bin/cortex-bootstrap.rs"
 
 [[bin]]
+name = "cortex"
+path = "src/bin/cortex.rs"
+
+[[bin]]
 name = "cortex-ops"
 path = "src/bin/cortex-ops.rs"
 

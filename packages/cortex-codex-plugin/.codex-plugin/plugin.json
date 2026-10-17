@@ -1,7 +1,7 @@
 {
   "name": "cortex",
   "version": "0.2.0",
-  "description": "Cortex daily memory for Codex: hands lifecycle events to the installed cortex-hook binary, which starts the local Cortex runtime on demand and returns saved memory context, and adds the daily Cortex MCP tools. Requires the Cortex binaries from `cortex-ops install-binaries` and `cortex-ops setup`. Codex runs the hooks only after you trust them in /hooks. No telemetry.",
+  "description": "Cortex daily memory for Codex: hands lifecycle events to the installed cortex-hook binary, which starts the local Cortex runtime on demand and returns saved memory context, and adds the daily Cortex MCP tools. Requires the Cortex binaries from `cortex install` and `cortex setup`. Codex runs the hooks only after you trust them in /hooks. No telemetry.",
   "author": {
     "name": "HiveLLM",
     "email": "hello@hivellm.org"

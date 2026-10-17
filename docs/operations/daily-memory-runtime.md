@@ -6,13 +6,14 @@ Cortex installs as a Claude Code or Codex plugin. No client file holds a Cortex
 path, token or environment block, and no repository `.mcp.json` is needed.
 
 1. **Binaries.** Build in release mode, then copy the four daily binaries and
-   `cortex-ops` into `~/.cortex/bin` and add that directory to `PATH`:
-   `cortex-ops install-binaries --from target/release`, then the same command with
-   `--apply`. The installer verifies SHA-256, moves a running executable aside
-   before replacing it, and writes `install-manifest.json`.
-   `cortex-ops doctor-install` reports missing, shadowed or stale binaries, and a
-   double install.
-2. **Configuration.** `cortex-ops setup --from <runtime.toml>`, then the same
+   `cortex` into `~/.cortex/bin` and add that directory to `PATH`:
+   `target/release/cortex install --from target/release`, then the same command
+   with `--apply`. The installer verifies SHA-256, moves a running executable aside
+   before replacing it, and writes `install-manifest.json`. It removes a binary
+   the previous manifest recorded that is no longer installed, such as an older
+   `cortex-ops` copy. `cortex doctor` reports missing, shadowed or stale
+   binaries, and a double install.
+2. **Configuration.** `cortex setup --from <runtime.toml>`, then the same
    command with `--apply`. It writes `~/.cortex/config.toml` and moves
    `dashboard.api_token` into `~/.cortex/api-token`, which is readable only by
    the user (`icacls` on Windows, mode 0600 elsewhere). Every changed file is
@@ -39,11 +40,11 @@ path, token or environment block, and no repository `.mcp.json` is needed.
    `hivellm-cortex` marketplace registration whose directory no longer exists.
    It writes verified backups and a record under `~/.cortex/migrations/`, which
    `--rollback <record>` restores byte-for-byte. No other file is touched.
-6. **Update.** `cortex-ops update` prints the plan; `--apply` runs it and stops
+6. **Update.** `cortex update` prints the plan; `--apply` runs it and stops
    at the first failed step. It runs `git pull --ff-only` in the checkout
    (skipped with `--no-pull`), builds the five binaries in release mode
    (`$CARGO_TARGET_DIR/release` when set), and installs them as
-   `install-binaries` does. It then stops the `cortex-api` and
+   `cortex install` does. It then stops the `cortex-api` and
    `cortex-adapter-claude` processes whose image lies in `~/.cortex/bin`, removes
    stale asides, and refreshes installed plugins
    (`claude plugin marketplace update hivellm-cortex`, `claude plugin update

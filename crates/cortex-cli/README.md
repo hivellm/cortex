@@ -16,6 +16,7 @@ is now `cortex_cli::bootstrap::Walker` — the public API is preserved.
 
 | Binary                    | Module          | Purpose                                                                                  |
 |---------------------------|-----------------|------------------------------------------------------------------------------------------|
+| `cortex`                  | `src/bin/cortex/` | Install and update the daily runtime: `setup`, `install`, `doctor`, `update` (dry run unless `--apply`). |
 | `cortex-bootstrap`        | `bootstrap`     | Walks the 17 Hive repos and republishes existing content on `cortex.events.bootstrap`.   |
 | `cortex-ops`              | `ops`           | Operator workflows: layout `plan`, cross-backend `doctor`, retention sweeps, seed jobs.  |
 | `cortex-relevance-eval`   | `relevance_eval`| Recall@k / MRR harness against `cortex-api` (phase6e / F-008).                           |

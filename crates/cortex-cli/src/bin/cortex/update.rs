@@ -1,11 +1,11 @@
-//! `cortex-ops update`: bring an installed Cortex up to the latest source.
+//! `cortex update`: bring an installed Cortex up to the latest source.
 //!
 //! Dry run by default: prints the source checkout and its HEAD, the git and
 //! cargo commands, the bin dir, the runtime processes that would be stopped and
 //! the plugin refresh commands, and changes nothing. `--apply` runs, in order
 //! and stopping at the first hard failure: `git pull --ff-only` (unless
 //! `--no-pull`), `cargo build --release` of the installed binaries, the
-//! `install-binaries` copy into the bin dir, a stop of the old `cortex-api` /
+//! `cortex install` copy into the bin dir, a stop of the old `cortex-api` /
 //! `cortex-adapter-claude` running from the bin dir, the stale-aside cleanup
 //! and a best-effort Claude Code / Codex plugin refresh.
 //!
@@ -153,7 +153,7 @@ struct Report {
     plugins: Vec<String>,
 }
 
-/// Entry point for `cortex-ops update`.
+/// Entry point for `cortex update`.
 pub(super) fn update(source: Option<PathBuf>, no_pull: bool, apply: bool) -> ExitCode {
     let Some(bin_dir) = install_bins::default_bin_dir() else {
         eprintln!("update: no Cortex home; set CORTEX_HOME");
@@ -1129,7 +1129,7 @@ mod tests {
         );
         assert_eq!(
             build_cmd(source).to_string(),
-            "cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops (in my checkout)"
+            "cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex (in my checkout)"
         );
     }
 

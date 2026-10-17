@@ -30,9 +30,9 @@ You need Rust 1.80+ and the Claude Code or Codex CLI. On Windows the hooks run u
 ### 1. Build and install the binaries
 
 ```bash
-cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-ops
-target/release/cortex-ops install-binaries --from target/release          # dry run: lists what would change
-target/release/cortex-ops install-binaries --from target/release --apply  # copies into ~/.cortex/bin
+cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex
+target/release/cortex install --from target/release          # dry run: lists what would change
+target/release/cortex install --from target/release --apply  # copies into ~/.cortex/bin
 ```
 
 The installer verifies SHA-256 and moves a running executable aside before replacing it. Next, put `~/.cortex/bin` **first** on your PATH. Older copies elsewhere on PATH, such as `cargo install` binaries in `~/.cargo/bin`, would otherwise run first, and the hooks would use an outdated `cortex-hook`.
@@ -48,13 +48,13 @@ $p = [Environment]::GetEnvironmentVariable('Path', 'User')
 export PATH="$HOME/.cortex/bin:$PATH"
 ```
 
-`cortex-ops` is installed too, so in a new terminal it runs by name. `cortex-ops doctor-install --build target/release` should then report all five binaries as `ok`. It flags missing, shadowed or stale binaries.
+`cortex` is installed too, so in a new terminal it runs by name. `cortex doctor --build target/release` should then report all five binaries as `ok`. It flags missing, shadowed or stale binaries.
 
 ### 2. Configure
 
 ```bash
-target/release/cortex-ops setup           # dry run
-target/release/cortex-ops setup --apply   # writes ~/.cortex/config.toml
+cortex setup           # dry run
+cortex setup --apply   # writes ~/.cortex/config.toml
 ```
 
 The file selects the daily profile. To migrate an existing runtime file, pass `--from <runtime.toml>`. Its `dashboard.api_token` moves to `~/.cortex/api-token`, which only your user can read. Changed files are backed up first, and running setup again changes nothing. `CORTEX_HOME` moves the whole directory.
@@ -86,11 +86,11 @@ Start a new Claude Code session. Its first hook starts `cortex-api` and `cortex-
 ### Updating
 
 ```bash
-cortex-ops update          # dry run: prints the plan
-cortex-ops update --apply  # pulls, builds, installs, stops the old runtime
+cortex update          # dry run: prints the plan
+cortex update --apply  # pulls, builds, installs, stops the old runtime
 ```
 
-`update --apply` runs `git pull --ff-only` in the checkout, builds the five binaries in release mode, and installs them into `~/.cortex/bin` as `install-binaries` does. It then stops the `cortex-api` and `cortex-adapter-claude` processes running from that directory, and the next hook starts the new ones. Running `cortex-mcp-server` processes switch on their client's next session. Finally it refreshes the Claude Code and Codex plugins when they are installed; restart Claude Code to load plugin changes. It stops at the first failed step. `--no-pull` builds the checkout as it is. `--source <checkout>` names the checkout when the install manifest does not record it, for example after an install from a relative `--from`.
+`update --apply` runs `git pull --ff-only` in the checkout, builds the five binaries in release mode, and installs them into `~/.cortex/bin` as `cortex install` does. It then stops the `cortex-api` and `cortex-adapter-claude` processes running from that directory, and the next hook starts the new ones. Running `cortex-mcp-server` processes switch on their client's next session. Finally it refreshes the Claude Code and Codex plugins when they are installed; restart Claude Code to load plugin changes. It stops at the first failed step. `--no-pull` builds the checkout as it is. `--source <checkout>` names the checkout when the install manifest does not record it, for example after an install from a relative `--from`. An install also removes from `~/.cortex/bin` any binary the previous install recorded that Cortex no longer installs, such as the `cortex-ops` copy from installs made before these commands moved to `cortex`.
 
 ### Upgrading from the absolute-path setup
 
@@ -101,7 +101,7 @@ python scripts/activate_daily_memory_clients.py --write-manifest m.json         
 python scripts/activate_daily_memory_clients.py --apply --expected-manifest m.json
 ```
 
-Verified backups and a rollback record go to `~/.cortex/migrations/`, and `--rollback <record>` restores the files byte for byte. Until you migrate, the plugin skips events the old hooks already deliver, and `doctor-install` reports the double install.
+Verified backups and a rollback record go to `~/.cortex/migrations/`, and `--rollback <record>` restores the files byte for byte. Until you migrate, the plugin skips events the old hooks already deliver, and `cortex doctor` reports the double install.
 
 ### Options and removal
 
@@ -195,7 +195,7 @@ crates/
 ├── cortex-mcp-server/           # stdio MCP bridge to cortex-api / pre-thinking
 ├── cortex-adapter-claude-code/  # Claude Code hook shim + capture daemon
 ├── cortex-adapter-opencode/     # OpenCode adapter
-├── cortex-cli/                  # cortex-bootstrap · cortex-ops (doctor) · cortex-relevance-eval
+├── cortex-cli/                  # cortex (setup/install/update) · cortex-bootstrap · cortex-ops (doctor) · cortex-relevance-eval
 ├── cortex-eval/                 # Golden-set eval harness (regression gate)
 ├── cortex-health/               # Shared health-report types + aggregator
 └── cortex-build/                # Build-time version stamp (git sha, build ts, dirty flag)
