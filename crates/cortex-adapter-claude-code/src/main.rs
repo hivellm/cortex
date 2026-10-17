@@ -126,7 +126,8 @@ async fn run_daemon(
     let cfg = load_config(&cfg_path)
         .with_context(|| format!("load adapter config from {}", cfg_path.display()))?;
     let adapter = cfg.adapter;
-    let typed_cfg = cortex_config::Config::load().context("load Cortex runtime configuration")?;
+    let typed_cfg =
+        cortex_config::Config::load_client().context("load Cortex runtime configuration")?;
 
     let metrics = Arc::new(Metrics::new());
     let wal_path = home_dir().join(".cortex").join("overflow.wal");

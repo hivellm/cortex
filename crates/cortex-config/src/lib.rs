@@ -51,6 +51,7 @@
 
 mod audit;
 mod config;
+mod credential;
 mod env_map;
 mod load;
 mod runtime;
@@ -58,6 +59,7 @@ mod sub;
 
 pub use audit::{audit, EnvVarUsage};
 pub use config::{Config, ConfigError, SCHEMA_VERSION};
+pub use credential::{api_token_path, API_TOKEN_FILE};
 pub use env_map::{env_name_for, KNOWN_ENV_NAMES};
 pub use load::{cortex_home, default_toml_path};
 pub use runtime::{RuntimeConfig, RuntimeProfile};

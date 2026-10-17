@@ -61,7 +61,7 @@ async fn main() -> std::io::Result<()> {
 
     match cli.cmd {
         Cmd::Serve => {
-            let config = cortex_config::Config::load().map_err(std::io::Error::other)?;
+            let config = cortex_config::Config::load_client().map_err(std::io::Error::other)?;
             let profile = config.runtime.profile;
             let registry = ToolRegistry::for_profile(profile);
             let context = tool_context(cli.api_url, config);

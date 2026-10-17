@@ -166,6 +166,15 @@ pub enum ConfigError {
     /// the operator can pin / downgrade.
     #[error("unsupported schema_version: {0:?} (this build only handles {SCHEMA_VERSION:?})")]
     UnsupportedSchemaVersion(String),
+    /// The user API credential file exists but cannot be used. Carries the
+    /// path and a fixed reason, never the file contents.
+    #[error("credential {path}: {reason}", path = path.display())]
+    Credential {
+        /// Credential file path.
+        path: std::path::PathBuf,
+        /// Why the file was rejected.
+        reason: &'static str,
+    },
 }
 
 impl Config {

@@ -533,7 +533,7 @@ impl Default for IngestionConfig {
 // -------------------------------------------------------------
 
 /// Dashboard / cortex-api surface knobs.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct DashboardConfig {
     /// API bind address. Env: `CORTEX_API_BIND`.
     #[serde(default = "default_api_bind")]
@@ -623,6 +623,30 @@ fn default_refresh_secs() -> u64 {
 }
 fn default_true() -> bool {
     true
+}
+
+impl std::fmt::Debug for DashboardConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DashboardConfig")
+            .field("api_bind", &self.api_bind)
+            .field("synap_url", &self.synap_url)
+            .field("archive_refresh_secs", &self.archive_refresh_secs)
+            .field("meili_refresh_secs", &self.meili_refresh_secs)
+            .field("api_keys_db", &self.api_keys_db)
+            .field("watch", &self.watch)
+            .field("memory_tail", &self.memory_tail)
+            .field("coverage_slugs", &self.coverage_slugs)
+            .field("coverage_slugs_only", &self.coverage_slugs_only)
+            .field("rrf_alpha", &self.rrf_alpha)
+            .field("rrf_k", &self.rrf_k)
+            .field("query_rewriter", &self.query_rewriter)
+            .field("rewriter_model", &self.rewriter_model)
+            .field("rewriter_timeout_ms", &self.rewriter_timeout_ms)
+            .field("relevance_config_path", &self.relevance_config_path)
+            .field("api_token", &self.api_token.as_ref().map(|_| "<redacted>"))
+            .field("api_url", &self.api_url)
+            .finish()
+    }
 }
 
 impl Default for DashboardConfig {
