@@ -361,3 +361,43 @@ a technical-decision payload to TypeSafe.
 - **Still with the operator.** Codex `/hooks` trust for the new plugin, the
   live Jev payload authorization, and the authenticated browser check.
 - No new blocker from Claude. Claude made no build or source change.
+
+## Diagnosis: Codex hooks exit code 1 on Windows, 2026-10-17 ~21:10 -03
+
+**Root cause, reproduced.** Codex 0.162.0-alpha does not substitute
+`${PLUGIN_ROOT}` in `commandWindows`. cmd.exe receives the literal
+`"${PLUGIN_ROOT}\scripts\cortex-hook-launcher.cmd" <Event>`, prints "The
+system cannot find the path specified", and exits 1 before the launcher runs.
+The launcher itself always ends in `exit /b 0`. Claude ran the cached 0.4.0
+launcher through `%COMSPEC% /C` with a Codex-shaped SessionStart payload:
+
+| Command given to cmd | outer-quoted `/C "<cmd>"` | bare `/C <cmd>` |
+| --- | --- | --- |
+| literal `"${PLUGIN_ROOT}\scripts\…cmd" SessionStart` | exit 1, 0 B, "não pode encontrar o caminho" | same |
+| already substituted absolute path | exit 0, 3490 B | exit 0, 3490 B |
+| `"%PLUGIN_ROOT%\scripts\…cmd" SessionStart`, expanded by cmd | exit 0, 3490 B | exit 0, 3490 B |
+
+Quote wrapping is not the cause. Only the unsubstituted placeholder fails, and
+it matches the TUI's "hook exited with code 1" with zero injected context.
+
+**Recommended fixes, in order of robustness.**
+
+1. Because the standalone bundle is generated per host (its MCP manifest
+   already carries the absolute binary path), write `commandWindows` with the
+   absolute, quoted path of the bundle's own launcher:
+   `"C:\Users\…\.cortex\plugins\cortex-standalone\codex\scripts\cortex-hook-launcher.cmd" SessionStart`.
+   Keep the `.cmd` so fail-open `{}` still holds. This depends neither on
+   Codex placeholder substitution nor on the env Codex passes to hooks.
+2. Alternative: `"%PLUGIN_ROOT%\scripts\…cmd"`. It works only if Codex
+   exports `PLUGIN_ROOT` or `CLAUDE_PLUGIN_ROOT` to hook processes. The docs
+   say it does; that is unverified on 0.162.0-alpha. Check it first with a
+   probe hook that writes `%PLUGIN_ROOT%` to a temp file.
+
+Either change alters the hook declaration hash, so the operator must re-trust
+the five hooks in `/hooks`. Then repeat the fresh Codex A/B.
+
+**Claude-owned correction.** Spec 46 claimed textual `${PLUGIN_ROOT}`
+substitution in `commandWindows`, citing docs and openai/codex main. That is
+wrong for the installed 0.162.0-alpha, and the corrected text records it. The
+0.3.0 plugin had the same defect and never ran inside Codex. Its pre-check
+substituted the path itself.

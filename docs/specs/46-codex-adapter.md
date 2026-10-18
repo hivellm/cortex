@@ -158,9 +158,21 @@ change bumps `version` (now `0.3.0`). The package `.gitattributes` pins
 
 ### Windows execution
 
-Codex runs `commandWindows` as `%COMSPEC% /C "<command>"` after substituting
-`${PLUGIN_ROOT}` (and `${PLUGIN_DATA}`, `${CLAUDE_PLUGIN_ROOT}`, …) into the
-text. The full command line is
+Codex runs `commandWindows` as `%COMSPEC% /C "<command>"`.
+
+> **Correction (2026-10-17).** The installed codex-cli 0.162.0-alpha does
+> **not** substitute `${PLUGIN_ROOT}` in `commandWindows`, contrary to the
+> docs and openai/codex main. cmd.exe receives the literal placeholder and
+> exits 1 ("The system cannot find the path specified") before the launcher
+> runs, so Codex reports "hook exited with code 1" and injects nothing.
+> Reproduction is in `docs/analysis/local-first-core-2026-10/04-claude-coordination.md`.
+> A Windows command must not depend on that substitution. Write the absolute
+> launcher path when the bundle is generated for the host, or use
+> `%PLUGIN_ROOT%`, which cmd itself expands, once Codex is verified to export
+> it to hooks. The text below describes the intended form, with `<root>`
+> already resolved.
+
+The full command line is
 `cmd.exe /C ""<root>\scripts\cortex-hook-launcher.cmd" <Event>"`. It has
 more than two quotes, so cmd strips only the first and last one, and the
 quoted script path survives a `<root>` that contains spaces. Forward
