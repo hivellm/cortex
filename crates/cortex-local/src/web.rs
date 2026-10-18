@@ -1,0 +1,320 @@
+//! Loopback-only browser transport. No provider credentials or filesystem operations cross this API.
+use crate::{
+    classification::{ClassificationQueue, DEFAULT_MODEL},
+    Authority, CaptureRequest, GraphQuery, LocalError, LocalStore, RecordKind, Result,
+    RevisionRequest, SearchQuery, Source, TypedLink,
+};
+use axum::{
+    extract::{DefaultBodyLimit, Request, State},
+    http::{header, HeaderValue, StatusCode},
+    middleware::{self, Next},
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct WebState {
+    store: LocalStore,
+    host: String,
+    origin: String,
+    token: Arc<str>,
+}
+
+/// Build the same authenticated router used by `serve`; the caller must bind loopback.
+pub fn router(store: LocalStore, port: u16, token: String) -> Result<Router> {
+    if port == 0 || token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(LocalError::Invalid(
+            "invalid local web configuration".into(),
+        ));
+    }
+    let host = format!("127.0.0.1:{port}");
+    let state = WebState {
+        store,
+        origin: format!("http://{host}"),
+        host,
+        token: token.into(),
+    };
+    Ok(Router::new()
+        .route("/", get(|| async { Html(include_str!("web/index.html")) }))
+        .route(
+            "/favicon.svg",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "image/svg+xml")],
+                    include_str!("web/favicon.svg"),
+                )
+            }),
+        )
+        .route(
+            "/app.js",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
+                    include_str!("web/app.js"),
+                )
+            }),
+        )
+        .route(
+            "/app.css",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+                    include_str!("web/app.css"),
+                )
+            }),
+        )
+        .route("/api/recent", post(recent))
+        .route("/api/search", post(search))
+        .route("/api/get", post(record))
+        .route("/api/graph", post(graph))
+        .route("/api/status", post(status))
+        .route("/api/capture", post(capture))
+        .route("/api/revise", post(revise))
+        .route("/api/queue", post(queue))
+        .route("/api/enqueue", post(enqueue))
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .with_state(state))
+}
+
+/// Print a one-session bootstrap URL to stderr; the fragment is never sent over HTTP.
+pub async fn serve(store: LocalStore, port: u16, repository: Option<String>) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
+    let port = listener.local_addr()?.port();
+    let mut random = [0_u8; 32];
+    getrandom::getrandom(&mut random)
+        .map_err(|_| LocalError::Invalid("OS randomness unavailable".into()))?;
+    let token: String = random.iter().map(|byte| format!("{byte:02x}")).collect();
+    let app = router(store, port, token.clone())?;
+    let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}/"))
+        .map_err(|_| LocalError::Invalid("invalid local web address".into()))?;
+    url.query_pairs_mut().append_pair("token", &token);
+    if let Some(repository) = repository {
+        crate::files::validate_scope(&repository)?;
+        url.query_pairs_mut().append_pair("repository", &repository);
+    }
+    let fragment = url.query().map(str::to_owned);
+    url.set_query(None);
+    url.set_fragment(fragment.as_deref());
+    eprintln!("Cortex local: {url}");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
+    Ok(())
+}
+
+fn matches_token(actual: &[u8], expected: &[u8]) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .fold(0_u8, |diff, (a, b)| diff | (a ^ b))
+            == 0
+}
+
+async fn guard(State(state): State<WebState>, request: Request, next: Next) -> Response {
+    let headers = request.headers();
+    let host_ok = headers.get_all(header::HOST).iter().count() == 1
+        && headers
+            .get(header::HOST)
+            .is_some_and(|value| value.as_bytes() == state.host.as_bytes());
+    let origin = headers.get(header::ORIGIN);
+    let origin_ok = headers.get_all(header::ORIGIN).iter().count() <= 1
+        && origin.map_or(true, |value| value.as_bytes() == state.origin.as_bytes());
+    let api = request.uri().path().starts_with("/api/");
+    let authorized = headers.get_all(header::AUTHORIZATION).iter().count() == 1
+        && headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.as_bytes().strip_prefix(b"Bearer "))
+            .is_some_and(|value| matches_token(value, state.token.as_bytes()));
+    let mut response = if !host_ok || !origin_ok || (api && origin.is_none()) {
+        failure(
+            StatusCode::FORBIDDEN,
+            "Local host and same-origin request required",
+        )
+    } else if api && !authorized {
+        failure(
+            StatusCode::UNAUTHORIZED,
+            "Open the startup URL to connect this tab",
+        )
+    } else if api && request.method() != axum::http::Method::POST {
+        failure(StatusCode::METHOD_NOT_ALLOWED, "Use a JSON POST request")
+    } else {
+        next.run(request).await
+    };
+    for (key, value) in [
+        ("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+        ("x-content-type-options", "nosniff"),
+        ("cache-control", "no-store"),
+        ("referrer-policy", "no-referrer"),
+        ("x-frame-options", "DENY"),
+        ("cross-origin-resource-policy", "same-origin"),
+    ] {
+        response.headers_mut().insert(key, HeaderValue::from_static(value));
+    }
+    response
+}
+
+fn failure(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({"error": message}))).into_response()
+}
+
+async fn work<T: serde::Serialize + Send + 'static>(
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Response {
+    match tokio::task::spawn_blocking(operation).await {
+        Ok(Ok(value)) => Json(value).into_response(),
+        Ok(Err(LocalError::Invalid(_))) => {
+            failure(StatusCode::BAD_REQUEST, "Invalid record or query")
+        }
+        Ok(Err(LocalError::Conflict(_))) => {
+            failure(StatusCode::CONFLICT, "Record changed; reload before saving")
+        }
+        Ok(Err(LocalError::NotFound(_))) => {
+            failure(StatusCode::NOT_FOUND, "Record not found in this repository")
+        }
+        _ => failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Local operation failed; inspect the store with the CLI",
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Scope {
+    repository: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Recent {
+    repository: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
+    #[serde(default)]
+    include_inactive: bool,
+}
+fn default_limit() -> usize {
+    30
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GetRecord {
+    repository: String,
+    id: String,
+    revision: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Revise {
+    repository: String,
+    id: String,
+    expected_revision: u64,
+    request: RevisionRequest,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Enqueue {
+    repository: String,
+    id: String,
+    model: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Capture {
+    repository: String,
+    title: String,
+    body: String,
+    #[serde(default)]
+    kind: RecordKind,
+    #[serde(default)]
+    authority: Authority,
+    #[serde(default)]
+    links: Vec<TypedLink>,
+    #[serde(default)]
+    metadata: Value,
+}
+
+async fn recent(State(state): State<WebState>, Json(query): Json<Recent>) -> Response {
+    work(move || {
+        state
+            .store
+            .recent(&query.repository, query.limit, query.include_inactive)
+    })
+    .await
+}
+async fn search(State(state): State<WebState>, Json(query): Json<SearchQuery>) -> Response {
+    work(move || state.store.search(query)).await
+}
+async fn record(State(state): State<WebState>, Json(query): Json<GetRecord>) -> Response {
+    work(move || {
+        let record = match query.revision {
+            Some(revision) => state
+                .store
+                .get_revision(&query.repository, &query.id, revision)?,
+            None => state.store.get(&query.repository, &query.id)?,
+        };
+        record.ok_or_else(|| LocalError::NotFound(query.id))
+    })
+    .await
+}
+async fn graph(State(state): State<WebState>, Json(query): Json<GraphQuery>) -> Response {
+    work(move || state.store.graph(query)).await
+}
+async fn status(State(state): State<WebState>, Json(query): Json<Scope>) -> Response {
+    work(move || {
+        crate::files::validate_scope(&query.repository)?;
+        state.store.status(Some(&query.repository))
+    })
+    .await
+}
+async fn capture(State(state): State<WebState>, Json(query): Json<Capture>) -> Response {
+    work(move || {
+        state.store.capture(CaptureRequest {
+            repository: query.repository,
+            title: query.title,
+            body: query.body,
+            kind: query.kind,
+            authority: query.authority,
+            source: Source {
+                kind: "local_web".into(),
+                locator: "user".into(),
+                ..Source::default()
+            },
+            links: query.links,
+            metadata: query.metadata,
+            ..CaptureRequest::default()
+        })
+    })
+    .await
+}
+async fn revise(State(state): State<WebState>, Json(query): Json<Revise>) -> Response {
+    work(move || {
+        state.store.revise(
+            &query.repository,
+            &query.id,
+            query.expected_revision,
+            query.request,
+        )
+    })
+    .await
+}
+async fn queue(State(state): State<WebState>, Json(query): Json<Recent>) -> Response {
+    work(move || ClassificationQueue::new(state.store).list(&query.repository, query.limit)).await
+}
+async fn enqueue(State(state): State<WebState>, Json(query): Json<Enqueue>) -> Response {
+    work(move || {
+        ClassificationQueue::new(state.store).enqueue(
+            &query.repository,
+            &query.id,
+            query.model.as_deref().unwrap_or(DEFAULT_MODEL),
+        )
+    })
+    .await
+}

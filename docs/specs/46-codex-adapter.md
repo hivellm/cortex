@@ -2,6 +2,13 @@
 
 > **Status:** 🟡 Implemented, live acceptance pending (phase36 §1.7) · **Owner:** Core team · **Depends on:** 10, 12, 18, 23
 
+> **Historical scope:** This specification describes the shared-daemon adapter.
+> The default standalone plugin now invokes `cortex hook` and `cortex mcp`
+> directly; it does not require that daemon. Standalone installed acceptance
+> passed after the Windows PowerShell launcher correction and per-hook trust
+> renewal. See the [current runtime guide](../operations/local-first-memory.md)
+> and [acceptance evidence](../analysis/local-first-core-2026-10/05-implementation-evidence.md).
+
 ## Goal
 
 Give Codex CLI sessions Cortex memory and capture them under their own

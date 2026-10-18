@@ -1,0 +1,36 @@
+[package]
+name = "cortex-local"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Standalone Cortex: canonical local memory, history, indexes and links."
+
+[[bin]]
+name = "cortex"
+path = "src/main.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+cortex-storage = { path = "../cortex-storage" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+ulid = { workspace = true }
+rusqlite = { workspace = true }
+tempfile = { workspace = true }
+fs2 = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { workspace = true }
+regex = { workspace = true }
+clap = { workspace = true }
+toml = { workspace = true }
+axum = { workspace = true }
+getrandom = "0.2"
+
+[dev-dependencies]
+zstd = { workspace = true }
+tower = { version = "0.5", features = ["util"] }

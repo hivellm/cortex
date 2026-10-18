@@ -1,16 +1,46 @@
 # Proposal: phase32_feedback-loop-into-ranking
 
 ## Why
-The Cortex MCP surface already exposes `cortex_feedback_record` (record post-thinking helpful/unhelpful feedback) and `cortex_feedback_signals` (list recorded feedback), backed by the `pre_thinking_feedback` SQLite table (`crates/cortex-storage/src/metadata.rs`, phase14f/phase19 §3.2). Direct inspection of the ranking code during this task's planning confirmed the gap precisely: `crates/cortex-api/src/search/fusion.rs` (RRF fusion, `FusionConfig`/`rrf_fuse`) and `crates/cortex-api/src/search/strategies.rs` (intent -> plan/lane composition) contain **zero references** to `pre_thinking_feedback`, `helpful`, or `query_id` anywhere. `FusionConfig` already has several precedented per-hit multipliers — `cross_repo_boost`, `same_session_boost`/`cohort_session_boost`, `outcome_multiplier` — each keyed on a field in `LaneHit.extras` (`repo`, `session_id`, `outcome`), but none of them read from recorded feedback. The loop is half-wired: signals go in, nothing reads them back out. `docs/analysis/cortex/11-platform-vision-analysis.md` §D4 independently flags this same gap ("Feedback loop: thumbs up/down on query results -> training signal"). Closing it is the difference between Cortex's ranking staying static forever and it measurably improving from real usage.
+Recorded feedback should support measurable retrieval improvements without
+misattributing a negative bundle verdict to every result. The old plan depended
+on service lanes and RRF fusion that the approved standalone core replaces.
+Its source schema was bundle-level and lacked repository/lane attribution;
+absence of a citation is not proof that a record was unhelpful.
 
 ## What Changes
-1. **Document the current state precisely** (no code changes): the `pre_thinking_feedback` schema is `query_id (PK), intent, helpful, files_cited, rating, free_text, implicit_score, recorded_at` (`apply_phase14f_schema` in `crates/cortex-storage/src/metadata.rs`) — it is **bundle-level, not lane-level**: there is no column identifying which lane (vector/keyword/graph) contributed the hits a `helpful`/`unhelpful` verdict is about. This is the actual blocker to a naive "just read `helpful` into fusion" implementation and must be solved explicitly, not glossed over.
-2. **Design the lane-attribution + weight mechanism**: since a bundle-level signal cannot be credited to one lane without knowing which lane(s) supplied which hits at query time, persist a minimal per-`query_id` lane-composition record (which `doc_id`s came from which `extras["source"]` lane) so a later `helpful: false` signal can be attributed to the lane(s) whose hits are absent from `files_cited`. From that attribution, maintain a decayed `(intent, lane) -> weight multiplier` table, bounded (e.g. `[0.5, 1.5]`) so a handful of signals can never zero out a lane, following the exact code shape `FusionConfig`'s existing `cross_repo_boost` / `outcome_multiplier` already use.
-3. **Implement behind a feature flag**: a new `FeedbackLoopConfig` (mirrors the existing `RerankerConfig`/`CORTEX_RERANKER_*` fail-open, env-var-gated shape), default OFF; extend `FusionConfig` with the per-(intent, lane) multiplier applied inside `rrf_fuse`, keyed on `hit.extras["source"]`; wire the orchestrator to load the current weight table into the per-request `FusionConfig` at the same call site it already builds the recency-lambda / cross-repo / session-cohesion config (`crates/cortex-api/src/search/orchestrator.rs`, immediately before its `rrf_fuse` call).
-4. **Make the effect measurable**: reference (do not duplicate) `phase28_retrieval-eval-gate-live` — once that eval gate is live, extend its report with a feedback-loop-on-vs-off comparison; until then, surface the current per-(intent, lane) weight multipliers through `cortex_query_explain`'s existing `fusion_math` projection (which already reports `rrf_k, alpha, recency_decay_lambda, drops[]`) so the effect is inspectable before the full eval gate exists.
+Keep this task ID, replace its unstarted implementation scope with local,
+provenance-backed feedback and an optional bounded ranking experiment.
+Execution requires completed `phase36_local-first-core`,
+`phase28_retrieval-eval-gate-live` and `phase31_pre-thinking-audit-trail`.
+Do not start this follow-up merely because its phase number is lower.
+
+- Persist feedback as canonical local records, scoped to exact repository,
+  query/delivery identity and, when explicitly identified, record ID/revision.
+- Validate that the referenced delivery and record belong to the same scope.
+  Bundle-level feedback remains bundle-level; unmatched legacy feedback is
+  inspectable but ineligible for ranking updates.
+- Preserve explicit helpful/unhelpful/unknown judgments and source attribution.
+  Heuristic correlations, missing citations and Jev labels cannot become
+  explicit feedback or change source authority.
+- Add an optional deterministic adjustment with documented sample threshold,
+  decay and bounds. Replaying the same feedback must not amplify its weight.
+  Keep adjustment disabled by default, explain contributions and allow rollback
+  to baseline without deleting feedback or modifying canonical memories.
+- Evaluate enabled versus disabled ranking on the locked local corpus before
+  recommending enablement. Report improvements and regressions honestly;
+  inconclusive or harmful results leave the default disabled.
+
+## Historical Context
+The original, unstarted plan remains at commit
+`2ba3d2f502f3f3955166ac272ae5d8b28c2aea05` under this same task path.
+Review: [backlog disposition](../../../docs/analysis/local-first-core-2026-10/02-backlog-review.md).
+No service-lane weighting, trust-score engine or background worker is carried
+forward as a requirement.
 
 ## Impact
-- Affected specs: 11 (`docs/specs/11-query-api.md`, fusion/RRF section — referenced, not modified by this delta); new delta module `retrieval` added by this task.
-- Affected code: `crates/cortex-api/src/search/fusion.rs` (new `FusionConfig` field + multiplier), `crates/cortex-api/src/search/orchestrator.rs` (per-request weight lookup + `query_explain` projection), `crates/cortex-api/src/search/strategies.rs` / lane-request plumbing (only if lane composition needs capturing at plan time rather than at fusion time), `crates/cortex-storage` (new lane-composition + weight-table persistence), `crates/cortex-config` (new `FeedbackLoopConfig`).
-- Breaking change: NO — additive and feature-flagged; default OFF reproduces today's static-weight behavior exactly.
-- User benefit: closes the half-wired feedback loop — `cortex_feedback_record` signals start measurably shaping future ranking instead of being written and never read.
+- Affected specs: task-local `retrieval` delta for the standalone engine.
+- Affected code: local canonical records/index, retrieval explanation and
+  CLI/MCP/embedded GUI feedback surfaces delivered by phase36.
+- Compatibility: disabled mode preserves baseline result identity/order/scores.
+- User benefit: inspectable evidence for ranking changes without automatic
+  promotion, suppression or punishment of memories.

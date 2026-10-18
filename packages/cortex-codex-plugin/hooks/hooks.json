@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" SessionStart",
-            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" SessionStart",
+            "commandWindows": "cmd.exe /d /c call \"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" SessionStart",
             "timeout": 5
           }
         ]
@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" UserPromptSubmit",
-            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" UserPromptSubmit",
+            "commandWindows": "cmd.exe /d /c call \"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" UserPromptSubmit",
             "timeout": 5
           }
         ]
@@ -30,7 +30,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" PostToolUse",
-            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" PostToolUse",
+            "commandWindows": "cmd.exe /d /c call \"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" PostToolUse",
             "timeout": 5
           }
         ]
@@ -42,7 +42,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" Stop",
-            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" Stop",
+            "commandWindows": "cmd.exe /d /c call \"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" Stop",
             "timeout": 5
           }
         ]
@@ -54,7 +54,7 @@
           {
             "type": "command",
             "command": "sh \"${PLUGIN_ROOT}/scripts/cortex-hook-launcher\" SubagentStop",
-            "commandWindows": "\"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" SubagentStop",
+            "commandWindows": "cmd.exe /d /c call \"${PLUGIN_ROOT}\\scripts\\cortex-hook-launcher.cmd\" SubagentStop",
             "timeout": 5
           }
         ]

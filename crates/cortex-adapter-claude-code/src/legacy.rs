@@ -134,8 +134,19 @@ mod tests {
             "../../../packages/cortex-claude-plugin/hooks/hooks.json"
         ))
         .unwrap();
-        assert_eq!(plugin["hooks"].as_object().unwrap().len(), 7);
+        assert_eq!(plugin["hooks"].as_object().unwrap().len(), 5);
         assert!(legacy_events(&plugin).is_empty());
+        // Retained legacy plugin layouts registered two more events. Their
+        // plugin-root ownership must remain distinguishable from settings hooks.
+        let mut legacy_plugin = plugin.clone();
+        for (event, file) in [
+            ("PreToolUse", "cortex-pre-tool.sh"),
+            ("Notification", "cortex-notification.sh"),
+        ] {
+            legacy_plugin["hooks"][event] = json!([{"hooks":[{"type":"command","command":format!("bash \"${{CLAUDE_PLUGIN_ROOT}}/hooks/{file}\"")}]}]);
+        }
+        assert_eq!(legacy_plugin["hooks"].as_object().unwrap().len(), 7);
+        assert!(legacy_events(&legacy_plugin).is_empty());
     }
 
     #[test]

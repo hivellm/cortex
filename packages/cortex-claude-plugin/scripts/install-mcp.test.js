@@ -16,11 +16,11 @@ function printedEntry(apiUrl) {
   return JSON.parse(result.stdout);
 }
 
-test("installer default API matches packaged MCP configuration", () => {
+test("installer standalone command matches packaged MCP configuration", () => {
   const packaged = JSON.parse(fs.readFileSync(path.join(__dirname, "../.mcp.json"), "utf8"));
-  assert.equal(printedEntry("").env.CORTEX_API_URL, packaged.mcpServers.cortex.env.CORTEX_API_URL);
+  assert.deepEqual(printedEntry(""), packaged.mcpServers.cortex);
 });
 
-test("installer preserves explicit local API override", () => {
-  assert.equal(printedEntry("http://127.0.0.1:18000").env.CORTEX_API_URL, "http://127.0.0.1:18000");
+test("standalone entry ignores legacy daemon configuration", () => {
+  assert.deepEqual(printedEntry("http://127.0.0.1:18000"), { type: "stdio", command: "cortex", args: ["mcp"] });
 });

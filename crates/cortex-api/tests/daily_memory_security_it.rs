@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 fn app(path: &Path) -> (Router, IssuedKey, IssuedKey) {
+    // Isolate authentication assertions from first-open schema bootstrap.
+    drop(MetadataStore::open(path).unwrap());
     let keys = Arc::new(ApiKeyStore::open_in_memory().unwrap());
     let first = keys
         .issue_with_role("memory", "first", Some("reader"))
@@ -88,6 +90,30 @@ async fn post(app: &Router, uri: &str, token: Option<&str>, body: Value) -> (Sta
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+// Security assertions exercise real HTTP/SQLite without benchmarking host I/O.
+// Keep paused Tokio time from auto-advancing while blocking SQLite work runs.
+async fn post_with_frozen_deadline(
+    app: &Router,
+    uri: &str,
+    token: Option<&str>,
+    body: Value,
+) -> (StatusCode, Value) {
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let request = post(app, uri, token, body);
+    tokio::pin!(request);
+    loop {
+        assert!(
+            std::time::Instant::now() < limit,
+            "security fixture request stalled"
+        );
+        tokio::select! {
+            biased;
+            response = &mut request => return response,
+            _ = tokio::task::yield_now() => {}
+        }
+    }
+}
+
 #[tokio::test]
 async fn authenticated_scope_cannot_be_broadened_by_agent_or_adapter_claims() {
     let temp = tempfile::tempdir().unwrap();
@@ -131,12 +157,12 @@ async fn authenticated_scope_cannot_be_broadened_by_agent_or_adapter_claims() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn receipt_feedback_belongs_to_authenticated_caller_even_with_shared_adapter() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("metadata.sqlite");
     let (app, first, second) = app(&path);
-    let (status, response) = post(
+    let (status, response) = post_with_frozen_deadline(
         &app,
         "/v1/ingest",
         Some(&first.cleartext),
@@ -144,7 +170,7 @@ async fn receipt_feedback_belongs_to_authenticated_caller_even_with_shared_adapt
     )
     .await;
     assert!(status.is_success(), "{status}: {response}");
-    let (status, delivery) = post(
+    let (status, delivery) = post_with_frozen_deadline(
         &app,
         "/v1/memory/query",
         Some(&first.cleartext),
@@ -155,7 +181,7 @@ async fn receipt_feedback_belongs_to_authenticated_caller_even_with_shared_adapt
     let query_id = delivery["query_id"].as_str().unwrap();
     assert_eq!(delivery["memories"][0]["id"], "feedback-memory");
     let body = json!({"query_id":query_id,"helpful":false,"caller":first.id,"agent":"admin"});
-    let (status, response) = post(
+    let (status, response) = post_with_frozen_deadline(
         &app,
         "/v1/pre-thinking/feedback",
         Some(&second.cleartext),
@@ -165,7 +191,7 @@ async fn receipt_feedback_belongs_to_authenticated_caller_even_with_shared_adapt
     assert_eq!(status, StatusCode::FORBIDDEN, "{response}");
     let store = MetadataStore::open(&path).unwrap();
     assert!(store.pre_thinking_feedback(query_id).unwrap().is_none());
-    let (status, response) = post(
+    let (status, response) = post_with_frozen_deadline(
         &app,
         "/v1/pre-thinking/feedback",
         Some(&first.cleartext),
@@ -180,7 +206,7 @@ async fn receipt_feedback_belongs_to_authenticated_caller_even_with_shared_adapt
         .unwrap();
     assert_eq!(receipt.request.memories[0].id, "feedback-memory");
     assert_eq!(receipt.request.memories[0].version, 1);
-    let (status, response) = post(
+    let (status, response) = post_with_frozen_deadline(
         &app,
         "/v1/feedback/list",
         Some(&second.cleartext),
@@ -190,14 +216,15 @@ async fn receipt_feedback_belongs_to_authenticated_caller_even_with_shared_adapt
     assert_eq!(status, StatusCode::FORBIDDEN, "{response}");
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn retry_namespace_uses_authenticated_identity_not_shared_agent_label() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("metadata.sqlite");
     let (app, first, second) = app(&path);
     let body = json!({"kind":"learning","repo":"repo","body":"retryguard persists independently","agent":"shared-agent","retry_key":"same-client-retry"});
     for key in [&first, &first, &second] {
-        let (status, response) = post(&app, "/v1/ingest", Some(&key.cleartext), body.clone()).await;
+        let (status, response) =
+            post_with_frozen_deadline(&app, "/v1/ingest", Some(&key.cleartext), body.clone()).await;
         assert!(status.is_success(), "{status}: {response}");
     }
     let store = MetadataStore::open(&path).unwrap();
@@ -231,6 +258,7 @@ async fn production_builder_wires_separate_key_store_and_respects_local_auth_mod
                 .to_string_lossy()
                 .into_owned(),
         );
+        drop(MetadataStore::open(Path::new(cfg.ingestion.metadata_db.as_ref().unwrap())).unwrap());
         cfg.access_control.enabled = enabled;
         cfg.access_control.default_level = 0;
         let router = cortex_api::http::build_router_with_auth_and_cfg(

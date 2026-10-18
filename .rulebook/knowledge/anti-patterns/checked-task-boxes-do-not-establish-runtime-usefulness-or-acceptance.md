@@ -1,0 +1,8 @@
+# Checked task boxes do not establish runtime usefulness or acceptance
+
+**Category**: quality
+**Tags**: analysis:local-first-core-2026-10, backlog, acceptance, retrieval
+
+## Description
+
+The 2026-10-17 open-backlog review found that phase28_retrieval-eval-gate-live had 20/20 checked but retained failed p95 (+2122 ms) and phantom-link (0.50) gates, while populated graph queries scored 0/6 and 0/5 in phase29. Preserve these as historical observations, never current measurements. Scope: Cortex repository. Source: docs/analysis/local-first-core-2026-10/02-backlog-review.md and Git baseline 2ba3d2f502f3f3955166ac272ae5d8b28c2aea05. User authorized retirement of obsolete task definitions; 15 removed, 3 adapted to standalone prerequisites, 2 phase36 tasks preserved. Prepared deliveries, counts and correlated actions do not prove model use. Do not execute retired service-stack backlog.

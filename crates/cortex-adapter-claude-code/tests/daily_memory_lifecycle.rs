@@ -1,4 +1,4 @@
-//! Actual daemon, packaged hook, native shim, HTTP API and durable SQLite.
+//! Actual daemon, legacy_adapter hook, native shim, HTTP API and durable SQLite.
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, RwLock};
@@ -39,8 +39,7 @@ async fn hook(
     session: &str,
     prompt: &str,
 ) -> Value {
-    let package =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/cortex-claude-plugin/hooks");
+    let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("hooks");
     let script = if event == "SessionStart" {
         "cortex-session-start.sh"
     } else {
@@ -61,7 +60,7 @@ async fn hook(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("packaged hook requires Bash");
+    let mut child = command.spawn().expect("legacy_adapter hook requires Bash");
     let input = json!({"session_id": session, "cwd": repo, "prompt": prompt, "source":"startup"});
     child
         .stdin
@@ -83,7 +82,7 @@ async fn hook(
 }
 
 #[tokio::test]
-async fn packaged_lifecycle_returns_pinned_memory_and_corrected_prompt_from_real_daemon() {
+async fn legacy_adapter_lifecycle_returns_pinned_memory_and_corrected_prompt_from_real_daemon() {
     let directory = tempfile::tempdir().unwrap();
     let home = directory.path();
     let repo = home.join("project");

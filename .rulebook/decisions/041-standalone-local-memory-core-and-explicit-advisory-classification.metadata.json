@@ -1,0 +1,11 @@
+{
+  "id": 41,
+  "slug": "standalone-local-memory-core-and-explicit-advisory-classification",
+  "title": "Standalone local memory core and explicit advisory classification",
+  "status": "accepted",
+  "date": "2026-10-18",
+  "relatedTasks": [
+    "phase36_local-first-core"
+  ],
+  "supersededBy": null
+}

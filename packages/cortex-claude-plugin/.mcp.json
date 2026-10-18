@@ -1,11 +1,10 @@
 {
   "mcpServers": {
     "cortex": {
-      "command": "cortex-mcp-server",
+      "type": "stdio",
+      "command": "cortex",
       "args": [
-        "serve",
-        "--api-url",
-        "${user_config.api_url}"
+        "mcp"
       ]
     }
   }

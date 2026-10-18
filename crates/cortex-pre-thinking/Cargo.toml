@@ -29,6 +29,7 @@ toml = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 cortex-core = { path = "../cortex-core" }
 cortex-config = { path = "../cortex-config" }
 axum = { workspace = true }

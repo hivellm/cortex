@@ -1,4 +1,4 @@
-//! Execute the compiled native hook and packaged Bash shims over local IPC.
+//! Execute the compiled native hook and legacy_adapter Bash shims over local IPC.
 //! Peers are hermetic protocol fixtures; this does not claim an installed
 //! user daemon or a model consumed context. No production API is contacted.
 
@@ -103,14 +103,14 @@ fn hook_command(
     home: &Path,
     endpoint: &Endpoint,
     event: &str,
-    packaged: bool,
+    legacy_adapter: bool,
     timeout_ms: u64,
 ) -> Command {
-    let mut command = if packaged {
+    let mut command = if legacy_adapter {
         let file = match event {
             "SessionStart" => "cortex-session-start.sh",
             "UserPromptSubmit" => "cortex-user-prompt.sh",
-            _ => panic!("unsupported packaged test event"),
+            _ => panic!("unsupported legacy_adapter test event"),
         };
         #[cfg(windows)]
         let bash = "C:/Program Files/Git/bin/bash.exe";
@@ -119,7 +119,7 @@ fn hook_command(
         let mut command = Command::new(bash);
         command.arg(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../packages/cortex-claude-plugin/hooks")
+                .join("hooks")
                 .join(file),
         );
         command
@@ -168,11 +168,11 @@ async fn invoke(
     endpoint: &Endpoint,
     event: &str,
     payload: &[u8],
-    packaged: bool,
+    legacy_adapter: bool,
     timeout_ms: u64,
 ) -> Value {
     invoke_command(
-        hook_command(home, endpoint, event, packaged, timeout_ms),
+        hook_command(home, endpoint, event, legacy_adapter, timeout_ms),
         payload,
     )
     .await
@@ -241,12 +241,12 @@ async fn native_invalid_oversized_and_non_file_configuration_fail_open() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn packaged_legacy_disable_zero_preserves_configured_endpoint() {
+async fn legacy_adapter_legacy_disable_zero_preserves_configured_endpoint() {
     let tmp = tempfile::tempdir().unwrap();
     let home = home(tmp.path());
     let expected = json!({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit", "additionalContext":"native context"}});
     let (endpoint, capture, task) = peer(tmp.path(), Some(expected.clone())).await;
-    // The packaged shim supplies no endpoint flags: only typed configuration
+    // The legacy_adapter shim supplies no endpoint flags: only typed configuration
     // can preserve this environment override while normalizing legacy zero.
     let mut command = hook_command(&home, &endpoint, "UserPromptSubmit", true, 1500);
     command.env("CORTEX_ADAPTER_DISABLE", "0");
@@ -287,7 +287,7 @@ async fn native_fifo_configuration_cannot_block_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn packaged_session_start_delivers_exact_context_and_payload_identity_without_eof() {
+async fn legacy_adapter_session_start_delivers_exact_context_and_payload_identity_without_eof() {
     let tmp = tempfile::tempdir().unwrap();
     let home = home(tmp.path());
     let expected = json!({"hookSpecificOutput":{"hookEventName":"SessionStart", "additionalContext":"[memory ADR-42 v2 event correction-42]\nUse compare-and-swap.\n"}});
@@ -442,7 +442,7 @@ async fn native_read_timeout_bad_input_and_size_limit_never_block_prompt() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_stdin_timeout_and_packaged_missing_binary_return_empty_success() {
+async fn native_stdin_timeout_and_legacy_adapter_missing_binary_return_empty_success() {
     let tmp = tempfile::tempdir().unwrap();
     let home = home(tmp.path());
     let missing = missing_endpoint(tmp.path());
@@ -474,7 +474,7 @@ async fn native_stdin_timeout_and_packaged_missing_binary_return_empty_success()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn packaged_plugin_skips_events_that_legacy_settings_hooks_deliver() {
+async fn legacy_adapter_plugin_skips_events_that_legacy_settings_hooks_deliver() {
     let root = tempfile::tempdir().unwrap();
     let home = home(root.path());
     std::fs::write(home.join("test-cortex.toml"), "").unwrap();

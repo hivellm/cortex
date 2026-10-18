@@ -20,6 +20,32 @@ use cortex_pre_thinking::{
 
 struct CannedQuery(QueryResponse);
 
+// ACL assertions must not depend on the host meeting the production I/O deadline.
+// Keep virtual time frozen while real blocking scope/format work completes.
+async fn with_frozen_deadlines<F: std::future::Future>(work: F) -> F::Output {
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    tokio::pin!(work);
+    loop {
+        assert!(std::time::Instant::now() < limit, "ACL fixture stalled");
+        tokio::select! {
+            biased;
+            output = &mut work => return output,
+            _ = tokio::task::yield_now() => {}
+        }
+    }
+}
+
+fn repository() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join(".git")).unwrap();
+    std::fs::write(
+        root.path().join("cortex.toml"),
+        "[cortex]\nid = 'acl-fixture'\n",
+    )
+    .unwrap();
+    root
+}
+
 #[async_trait]
 impl QueryFn for CannedQuery {
     async fn query(&self, _req: QueryRequest) -> Option<QueryResponse> {
@@ -91,9 +117,10 @@ fn input<'a>(cwd: &'a std::path::Path, principal: Option<Principal>) -> PreThink
 
 /// Phase21 §5.6 — a principal with clearance=1 must only see `public`
 /// (level=0) and `internal` (level=1) snippets in the bundle.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn bundle_filter_drops_snippets_above_clearance() {
-    let cwd = std::env::temp_dir();
+    let repository = repository();
+    let cwd = repository.path();
     let snippets = vec![
         snippet_at("public-doc", 0, &[]),
         snippet_at("internal-doc", 1, &[]),
@@ -107,14 +134,18 @@ async fn bundle_filter_drops_snippets_above_clearance() {
         compartment_grants: vec![],
         roles: vec![],
     };
-    let out = run_with_breaker(
-        &input(&cwd, Some(principal)),
+    let out = with_frozen_deadlines(run_with_breaker(
+        &input(cwd, Some(principal)),
         query_fn,
         Arc::new(Metrics::new()),
         Arc::new(Breaker::new()),
-    )
+    ))
     .await;
-    assert!(!out.fail_open, "must not be fail-open");
+    assert!(
+        !out.fail_open,
+        "unexpected pipeline failure: {}",
+        out.bundle
+    );
     assert!(
         out.bundle.contains("public-doc"),
         "public must be in bundle; got: {:?}",
@@ -136,9 +167,10 @@ async fn bundle_filter_drops_snippets_above_clearance() {
 
 /// Phase21 §5.6 — a principal without a required compartment grant must not
 /// see compartment-gated snippets even when level is within clearance.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn bundle_filter_drops_snippets_with_missing_compartment() {
-    let cwd = std::env::temp_dir();
+    let repository = repository();
+    let cwd = repository.path();
     let snippets = vec![
         snippet_at("no-compart", 1, &[]),
         snippet_at("financial-doc", 1, &["financial"]),
@@ -151,14 +183,18 @@ async fn bundle_filter_drops_snippets_with_missing_compartment() {
         compartment_grants: vec!["financial".into()],
         roles: vec![],
     };
-    let out = run_with_breaker(
-        &input(&cwd, Some(principal)),
+    let out = with_frozen_deadlines(run_with_breaker(
+        &input(cwd, Some(principal)),
         query_fn,
         Arc::new(Metrics::new()),
         Arc::new(Breaker::new()),
-    )
+    ))
     .await;
-    assert!(!out.fail_open);
+    assert!(
+        !out.fail_open,
+        "unexpected pipeline failure: {}",
+        out.bundle
+    );
     assert!(out.bundle.contains("no-compart"), "unclassified must pass");
     assert!(
         out.bundle.contains("financial-doc"),
@@ -169,22 +205,27 @@ async fn bundle_filter_drops_snippets_with_missing_compartment() {
 
 /// Phase21 §5.6 — when no principal is supplied all snippets pass through
 /// (backward compat — callers that don't set principal see full bundle).
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn no_principal_passes_all_snippets_through() {
-    let cwd = std::env::temp_dir();
+    let repository = repository();
+    let cwd = repository.path();
     let snippets = vec![
         snippet_at("public-doc", 0, &[]),
         snippet_at("restricted-doc", 3, &["security"]),
     ];
     let query_fn = Arc::new(CannedQuery(response_with(snippets)));
-    let out = run_with_breaker(
-        &input(&cwd, None),
+    let out = with_frozen_deadlines(run_with_breaker(
+        &input(cwd, None),
         query_fn,
         Arc::new(Metrics::new()),
         Arc::new(Breaker::new()),
-    )
+    ))
     .await;
-    assert!(!out.fail_open);
+    assert!(
+        !out.fail_open,
+        "unexpected pipeline failure: {}",
+        out.bundle
+    );
     assert!(
         out.bundle.contains("public-doc"),
         "public must pass without principal"

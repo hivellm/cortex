@@ -87,6 +87,7 @@ ts-export = ["dep:ts-rs"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
 wiremock = "0.6"
 # archive_loader tests replay real archive records through the importer.
 cortex-workers = { path = "../cortex-workers", features = ["claude-archive"] }

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Cortex / Local memory</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="/" aria-label="Cortex home"><span class="brand-mark" aria-hidden="true"></span>Cortex</a>
+    <span class="edition">Local memory</span>
+    <span id="connection" role="status">Connecting</span>
+  </header>
+  <main>
+    <section class="workspace-bar" aria-label="Workspace">
+      <div><h1>A working memory.</h1><p>Keep decisions, trace their sources, find what connects.</p></div>
+      <form id="scope-form"><label for="repository">Repository</label><div class="field-action"><input id="repository" name="repository" placeholder="Exact repository ID" required maxlength="256"><button type="submit">Open</button></div></form>
+    </section>
+    <p id="notice" role="status" aria-live="polite" hidden></p>
+    <div class="workspace">
+      <aside class="library" aria-label="Memory library">
+        <div class="section-top"><h2>Memories</h2><button id="new-memory" class="primary" type="button">Capture</button></div>
+        <form id="search-form"><label class="sr-only" for="search">Search memories</label><input id="search" type="search" placeholder="Search this repository"><button type="submit">Search</button></form>
+        <div class="list-options"><label><input id="include-inactive" type="checkbox"> Include inactive</label><button id="refresh" class="quiet" type="button">Recent</button></div>
+        <p id="library-summary" class="muted"></p>
+        <div id="results" class="results" aria-live="polite"></div>
+        <div class="scope-summary" id="scope-summary"></div>
+      </aside>
+      <section class="reader" aria-label="Selected memory">
+        <div id="empty" class="empty"><div class="memory-symbol" aria-hidden="true"></div><h2>Make room for what matters.</h2><p>Select a memory to read its history and connections, or capture a decision worth keeping.</p></div>
+        <article id="detail" hidden>
+          <div class="record-context"><span id="record-kind"></span><span id="record-authority"></span><span id="record-revision"></span></div>
+          <h2 id="record-title"></h2>
+          <p id="record-id" class="muted record-id"></p>
+          <div class="record-actions"><button id="edit-memory" type="button">Revise</button><button id="enqueue" class="quiet" type="button">Queue classification</button></div>
+          <p class="hint">Classification is advisory. Queueing stays local; processing starts from the CLI.</p>
+          <nav class="tabs" aria-label="Memory views">
+            <button type="button" data-tab="content" aria-pressed="true">Content</button>
+            <button type="button" data-tab="source" aria-pressed="false">Source</button>
+            <button type="button" data-tab="history" aria-pressed="false">History</button>
+            <button type="button" data-tab="connections" aria-pressed="false">Connections</button>
+          </nav>
+          <section id="panel-content"><div id="record-body" class="prose"></div><h3>Advisory metadata</h3><pre id="record-metadata"></pre></section>
+          <section id="panel-source" hidden><h3>Original source</h3><p class="hint">Source locations are shown as text. Opening a memory does not read or run its source.</p><pre id="record-source"></pre><h3>Integrity</h3><dl id="record-integrity"></dl></section>
+          <section id="panel-history" hidden><div class="history-controls"><label for="history-revision">Revision</label><input type="number" min="1" id="history-revision"><button id="load-revision" type="button">Read revision</button></div><p id="history-meta" class="muted"></p><h3 id="history-title"></h3><div id="history-body" class="prose"></div><details><summary>Revision evidence</summary><pre id="history-evidence"></pre></details></section>
+          <section id="panel-connections" hidden><p class="hint">Connections stay within this repository. Select a node to read its memory.</p><svg id="graph" viewBox="0 0 680 420" role="img" aria-label="Related memories"></svg><p id="graph-summary" class="muted"></p><ul id="graph-links"></ul></section>
+        </article>
+      </section>
+    </div>
+    <section class="queue-section" aria-labelledby="queue-heading"><div class="section-top"><h2 id="queue-heading">Classification queue</h2><button id="refresh-queue" class="quiet" type="button">Refresh queue</button></div><p class="hint">Suggestions never change a memory's authority. No external service is called from this page.</p><div id="queue-list"></div></section>
+  </main>
+  <dialog id="editor"><form id="editor-form"><div class="section-top"><h2 id="editor-title">Capture memory</h2><button id="close-editor" type="button" class="quiet" aria-label="Close editor">Close</button></div><label for="title">Title</label><input id="title" required maxlength="4096"><div class="editor-selects"><div><label for="kind">Kind</label><select id="kind"><option value="note">Note</option><option value="decision">Decision</option><option value="lesson">Lesson</option><option value="preference">Preference</option></select></div><div><label for="authority">Authority</label><select id="authority"><option value="observation">Observation</option><option value="proposed">Proposed</option><option value="accepted">Accepted</option><option value="deprecated">Deprecated</option><option value="superseded">Superseded</option></select></div></div><label for="body">Memory</label><textarea id="body" rows="9" required maxlength="1048576"></textarea><div class="section-top"><h3>Connections</h3><button id="add-link" type="button" class="quiet">Add connection</button></div><div id="editor-links"></div><p id="editor-error" role="alert" hidden></p><div class="editor-footer"><p id="editor-context" class="muted"></p><button id="save-memory" class="primary" type="submit">Save memory</button></div></form></dialog>
+</body>
+</html>

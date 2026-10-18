@@ -1,5 +1,6 @@
 [package]
 name = "cortex-cli"
+autobins = false
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -15,7 +16,7 @@ name = "cortex-bootstrap"
 path = "src/bin/cortex-bootstrap.rs"
 
 [[bin]]
-name = "cortex"
+name = "cortex-legacy"
 path = "src/bin/cortex.rs"
 
 [[bin]]

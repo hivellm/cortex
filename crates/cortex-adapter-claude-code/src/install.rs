@@ -426,17 +426,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn packaged_context_shims_match_installed_sources_and_wait_for_native_response() {
+    fn legacy_context_shims_match_installed_sources_and_standalone_uses_local_command() {
         for (event, source) in [
             (
                 "SessionStart",
-                include_str!(
-                    "../../../packages/cortex-claude-plugin/hooks/cortex-session-start.sh"
-                ),
+                include_str!("../hooks/cortex-session-start.sh"),
             ),
             (
                 "UserPromptSubmit",
-                include_str!("../../../packages/cortex-claude-plugin/hooks/cortex-user-prompt.sh"),
+                include_str!("../hooks/cortex-user-prompt.sh"),
             ),
         ] {
             let shim = HOOK_SHIMS
@@ -446,12 +444,20 @@ mod tests {
             assert!(!shim.fire_forget);
             assert_eq!(
                 shim.sh_source, source,
-                "packaged and installed {event} shims drifted"
+                "canonical legacy and installed {event} shims drifted"
             );
             assert!(source.contains("SYNCHRONOUS=1"));
             assert!(source.contains("exec \"$BIN\" \"$EVENT\""));
             assert!(!source.contains("exec \"$BIN\" \"$EVENT\" --fire-forget"));
             assert!(!source.contains("nc -U") || !source.contains("INPUT="));
+        }
+        for standalone in [
+            include_str!("../../../packages/cortex-claude-plugin/hooks/cortex-session-start.sh"),
+            include_str!("../../../packages/cortex-claude-plugin/hooks/cortex-user-prompt.sh"),
+        ] {
+            assert!(standalone.contains("hook --client claude-code --event"));
+            assert!(!standalone.contains("command -v cortex-hook"));
+            assert!(!standalone.contains("--fire-forget"));
         }
     }
 

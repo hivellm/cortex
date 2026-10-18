@@ -1,5 +1,11 @@
 # Daily-memory runtime on Windows
 
+> Legacy multi-process runtime reference. The default standalone runtime now uses
+> the [local memory operations guide](local-first-memory.md). Commands below
+> describe the older installer/API/adapter stack and are retained for selective
+> recovery; do not apply them to standalone `cortex` or overwrite its `local/`
+> history when restoring legacy components.
+
 ## Self-contained install (phase35)
 
 Cortex installs as a Claude Code or Codex plugin. No client file holds a Cortex

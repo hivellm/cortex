@@ -1,37 +1,6 @@
 ---
-description: List active laws in the current scope (repo + optional topics).
-argument-hint: [topic ...]
+description: Inspect stored rule evidence; no enforcement service.
+argument-hint: <topic>
 ---
 
-Call the `cortex_query` MCP tool with `intent=law_check`:
-
-```jsonc
-{
-  "intent": "law_check",
-  "query": "{{ARGS}}",
-  "scope": {
-    "repo": "<repo from cwd>",
-    "topics": [{{ARGS_AS_TOPIC_LIST_OR_EMPTY}}]
-  },
-  "include": ["violations"],
-  "budget_ms": 300
-}
-```
-
-Render the response in this exact shape:
-
-```text
-Active laws · {{REPO}}
-  · LAW-007 (critical · block) — Never bypass pre-commit hooks
-  · LAW-012 (notable · observe) — HNSW recall benchmarks must run before merge
-  ...
-
-Recent violations (last 7d):
-  · VIO-... (LAW-007, critical) — <message> · <observed_in>
-  · ...
-```
-
-If `laws_active` is empty, render `No laws codified for this
-scope yet.` and stop.
-
-If `violations` is empty, omit the section entirely.
+The standalone core has no law registry or enforcement endpoint. Read the current repository instructions first. Use `cortex_search` with the exact repository ID and literal topic words to find recorded decisions; use `cortex_get` to inspect authority and source. Report each result as memory evidence, not an active enforced law. Do not call legacy cortex_laws tools or manufacture audit results. Current user instructions and repository rules remain authoritative.

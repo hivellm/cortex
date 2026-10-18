@@ -16,6 +16,7 @@ use zstd::stream::raw::{Decoder, Operation};
 
 const BUFFER_BYTES: usize = 32 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
+const MAX_EXPLICIT_LINE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Durable position immediately after committed complete NDJSON lines.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +36,7 @@ pub struct TailLimits {
     pub max_decoded_bytes: usize,
     /// Maximum complete lines handled, including restart replay.
     pub max_lines: usize,
-    /// Hard ceiling remains one MiB, even if the caller requests more.
+    /// Clamped to the reader's ceiling: one MiB by default, explicitly at most four MiB.
     pub max_line_bytes: usize,
     /// Cooperative elapsed-time budget between bounded operations.
     pub max_duration: Duration,
@@ -87,6 +88,10 @@ pub struct TailBatch {
     pub eof: bool,
     /// EOF is inside a frame or incomplete line; this is not corruption.
     pub partial: bool,
+    /// EOF may follow a flushed but unfinished zstd frame, even with no pending line.
+    pub frame_open: bool,
+    /// Decoded bytes in the next line, not yet terminated or committed.
+    pub pending_line_bytes: usize,
     /// Restart replay has not yet reached the durable line ordinal.
     pub replaying: bool,
     /// Fatal source error; complete lines preceding it remain committable.
@@ -109,12 +114,29 @@ pub struct TailReader {
     replay_remaining: u64,
     checkpoint: TailCheckpoint,
     error: Option<TailError>,
+    line_ceiling: usize,
 }
 
 impl TailReader {
     /// Open a regular file at a frame-safe checkpoint. Source identity and
     /// truncation/replacement detection belong to the manifest coordinator.
     pub fn open(path: &Path, checkpoint: TailCheckpoint) -> io::Result<Self> {
+        Self::open_with_line_limit(path, checkpoint, MAX_LINE_BYTES)
+    }
+
+    /// Explicit migration opt-in. Ordinary live consumers retain their one-MiB
+    /// ceiling through `open`; this constructor permits at most four MiB.
+    pub fn open_with_line_limit(
+        path: &Path,
+        checkpoint: TailCheckpoint,
+        line_ceiling: usize,
+    ) -> io::Result<Self> {
+        if !(1..=MAX_EXPLICIT_LINE_BYTES).contains(&line_ceiling) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "archive line ceiling must be 1..4194304 bytes",
+            ));
+        }
         let mut file = File::open(path)?;
         let metadata = file.metadata()?;
         if !metadata.is_file() || checkpoint.frame_start > metadata.len() {
@@ -143,6 +165,7 @@ impl TailReader {
             replay_remaining: checkpoint.line_ordinal,
             checkpoint,
             error: None,
+            line_ceiling,
         })
     }
 
@@ -154,7 +177,7 @@ impl TailReader {
         let started = Instant::now();
         let mut batch = TailBatch::default();
         let mut lines_processed = 0;
-        let line_limit = limits.max_line_bytes.min(MAX_LINE_BYTES);
+        let line_limit = limits.max_line_bytes.min(self.line_ceiling);
         if self.line.len() > line_limit {
             self.error = Some(TailError::LineTooLong { limit: line_limit });
         }
@@ -253,6 +276,8 @@ impl TailReader {
         batch.checkpoint = self.checkpoint;
         batch.lines_processed = lines_processed;
         batch.partial = self.frame_open || !self.line.is_empty() || self.replay_remaining > 0;
+        batch.frame_open = self.frame_open;
+        batch.pending_line_bytes = self.line.len();
         batch.replaying = self.replay_remaining > 0;
         batch.error = self.error.clone();
         batch
@@ -294,6 +319,8 @@ mod tests {
             all.bytes_decoded += batch.bytes_decoded;
             all.eof = batch.eof;
             all.partial = batch.partial;
+            all.frame_open = batch.frame_open;
+            all.pending_line_bytes = batch.pending_line_bytes;
             all.replaying = batch.replaying;
             all.error = batch.error;
             if all.eof || all.error.is_some() {
@@ -314,6 +341,8 @@ mod tests {
         let first = drain(&mut reader);
         assert_eq!(first.lines, vec![b"first".to_vec()]);
         assert!(first.partial);
+        assert!(first.frame_open);
+        assert_eq!(first.pending_line_bytes, 0);
         assert_eq!(
             first.checkpoint,
             TailCheckpoint {
@@ -423,6 +452,7 @@ mod tests {
         let partial = drain(&mut reader);
         assert!(partial.lines.is_empty());
         assert!(partial.partial && partial.error.is_none());
+        assert_eq!(partial.pending_line_bytes, b"unfinished".len());
         assert_eq!(partial.checkpoint, TailCheckpoint::default());
         writer.write_all(b"\n").unwrap();
         writer.finish().unwrap();
@@ -461,6 +491,58 @@ mod tests {
         let repeat = reader.poll(limits);
         assert!(repeat.lines.is_empty());
         assert_eq!((repeat.bytes_read, repeat.bytes_decoded), (0, 0));
+    }
+
+    #[test]
+    fn migration_line_limit_is_explicit_and_resumes_legacy_blocked_checkpoint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("large.parquet");
+        let large = vec![b'x'; 2 * 1024 * 1024];
+        let mut contents = b"first\n".to_vec();
+        contents.extend(&large);
+        contents.extend(b"\nafter\n");
+        closed(&path, &contents);
+        let limits = TailLimits {
+            max_line_bytes: 4 * 1024 * 1024,
+            ..TailLimits::default()
+        };
+        let mut old = TailReader::open(&path, TailCheckpoint::default()).unwrap();
+        let mut checkpoint = TailCheckpoint::default();
+        let mut failed = false;
+        for _ in 0..100 {
+            let batch = old.poll(limits);
+            checkpoint = batch.checkpoint;
+            if let Some(error) = batch.error {
+                assert_eq!(
+                    error,
+                    TailError::LineTooLong {
+                        limit: MAX_LINE_BYTES
+                    }
+                );
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed);
+        assert_eq!(checkpoint.line_ordinal, 1);
+        let mut migration =
+            TailReader::open_with_line_limit(&path, checkpoint, 4 * 1024 * 1024).unwrap();
+        let mut recovered = Vec::new();
+        let mut finished = false;
+        for _ in 0..100 {
+            let batch = migration.poll(limits);
+            assert!(batch.error.is_none());
+            recovered.extend(batch.lines);
+            if batch.eof {
+                assert!(!batch.partial);
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished);
+        assert_eq!(recovered, vec![large, b"after".to_vec()]);
+        assert!(TailReader::open_with_line_limit(&path, checkpoint, 0).is_err());
+        assert!(TailReader::open_with_line_limit(&path, checkpoint, 4 * 1024 * 1024 + 1).is_err());
     }
 
     #[test]

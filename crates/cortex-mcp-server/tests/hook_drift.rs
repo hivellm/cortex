@@ -1,13 +1,4 @@
-//! Drift guard — the hook shims under `packages/cortex-claude-plugin/hooks/` must
-//! stay byte-identical to the canonical sources under
-//! `crates/cortex-adapter-claude-code/hooks/`.
-//!
-//! Both trees ship the same scripts. Spec 18 + spec 10 want a single
-//! source of truth so a fix to one path can't silently leave the
-//! other one stale. This test fails the build the moment they
-//! diverge — the only way to land a hook change is to update both
-//! trees in the same commit.
-
+//! Separate contract guards for standalone plugin wiring and retained legacy adapter shims.
 use std::fs;
 use std::path::PathBuf;
 
@@ -21,55 +12,37 @@ fn workspace_root() -> PathBuf {
 }
 
 #[test]
-fn plugin_hook_shims_match_adapter_canonical_sources() {
+fn standalone_plugins_register_only_local_supported_events() {
     let root = workspace_root();
-    let adapter_dir = root.join("crates/cortex-adapter-claude-code/hooks");
-    let plugin_dir = root.join("packages/cortex-claude-plugin/hooks");
-
-    let mut canonical: Vec<String> = fs::read_dir(&adapter_dir)
-        .expect("adapter hooks dir exists")
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| {
-            name.starts_with("cortex-") && (name.ends_with(".sh") || name.ends_with(".ps1"))
-        })
-        .collect();
-    canonical.sort();
-    assert!(
-        !canonical.is_empty(),
-        "no canonical hook shims found under {}",
-        adapter_dir.display()
-    );
-
-    for name in &canonical {
-        let lhs = fs::read(adapter_dir.join(name))
-            .unwrap_or_else(|e| panic!("read {} canonical: {e}", name));
-        let rhs_path = plugin_dir.join(name);
-        let rhs = fs::read(&rhs_path).unwrap_or_else(|e| {
-            panic!(
-                "plugin shim missing or unreadable at {}: {e}",
-                rhs_path.display()
-            )
-        });
+    let expected = std::collections::BTreeSet::from([
+        "SessionStart",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop",
+        "SubagentStop",
+    ]);
+    for plugin in ["cortex-claude-plugin", "cortex-codex-plugin"] {
+        let base = root.join("packages").join(plugin);
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(base.join("hooks/hooks.json")).unwrap()).unwrap();
+        let actual: std::collections::BTreeSet<&str> = value["hooks"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(expected, actual);
+        let mcp = if plugin.contains("codex") {
+            "mcp.json"
+        } else {
+            ".mcp.json"
+        };
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read(base.join(mcp)).unwrap()).unwrap();
+        assert_eq!(config["mcpServers"]["cortex"]["command"], "cortex");
         assert_eq!(
-            lhs, rhs,
-            "drift between adapter and plugin hook shim: {name}"
-        );
-    }
-
-    // Reverse direction: plugin must not ship shims the adapter doesn't.
-    let plugin_shims: Vec<String> = fs::read_dir(&plugin_dir)
-        .expect("plugin hooks dir exists")
-        .flatten()
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| {
-            name.starts_with("cortex-") && (name.ends_with(".sh") || name.ends_with(".ps1"))
-        })
-        .collect();
-    for name in &plugin_shims {
-        assert!(
-            canonical.contains(name),
-            "plugin ships extra shim `{name}` with no canonical counterpart"
+            config["mcpServers"]["cortex"]["args"],
+            serde_json::json!(["mcp"])
         );
     }
 }
@@ -92,10 +65,8 @@ fn plugin_hook_shims_match_adapter_canonical_sources() {
 #[test]
 fn hook_shims_carry_cortex_hook_bin_preference_branch() {
     let root = workspace_root();
-    let dirs = [
-        root.join("packages/cortex-claude-plugin/hooks"),
-        root.join("crates/cortex-adapter-claude-code/hooks"),
-    ];
+    // Legacy adapter remains independently supported; standalone plugins no longer share its runtime.
+    let dirs = [root.join("crates/cortex-adapter-claude-code/hooks")];
 
     // Every shim MUST contain these lookup anchors and a quoted native exec.
     // A regression dropping the BIN branch (the 14977d4 incident) must fail CI

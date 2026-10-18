@@ -239,18 +239,52 @@ async fn always_none_query_fn_returns_empty_with_fail_open() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn deterministic_byte_for_byte_output_across_runs() {
     let canned = Arc::new(CannedQuery::new(populated_response("DETERMINISTIC")));
     let metrics = Arc::new(Metrics::new());
-    let cwd = std::env::temp_dir();
-    let a = run(
-        &input_for("refactor hnsw_search", &cwd),
-        canned.clone(),
-        metrics.clone(),
+    let repository = tempfile::tempdir().unwrap();
+    let cwd = repository.path();
+    std::fs::create_dir(cwd.join(".git")).unwrap();
+    std::fs::write(
+        cwd.join("cortex.toml"),
+        "[cortex]\nid='determinism-fixture'\n",
     )
-    .await;
-    let b = run(&input_for("refactor hnsw_search", &cwd), canned, metrics).await;
+    .unwrap();
+    let work = async {
+        let a = run(
+            &input_for("refactor hnsw_search", cwd),
+            canned.clone(),
+            metrics.clone(),
+        )
+        .await;
+        let b = run(
+            &input_for("refactor hnsw_search", cwd),
+            canned.clone(),
+            metrics,
+        )
+        .await;
+        (a, b)
+    };
+    // Exercise real scope/format I/O without turning this content assertion into
+    // a scheduler benchmark. A wall-clock guard still catches stalled work.
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    tokio::pin!(work);
+    let (a, b) = loop {
+        assert!(
+            std::time::Instant::now() < limit,
+            "determinism fixture stalled"
+        );
+        tokio::select! {
+            biased;
+            output = &mut work => break output,
+            _ = tokio::task::yield_now() => {}
+        }
+    };
+    assert!(!a.fail_open, "first run failed: {}", a.bundle);
+    assert!(!b.fail_open, "second run failed: {}", b.bundle);
+    assert!(a.bundle.contains("query_id=DETERMINISTIC"));
+    assert_eq!(canned.captured().await.len(), 2);
     assert_eq!(a.bundle, b.bundle);
 }
 

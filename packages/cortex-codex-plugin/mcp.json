@@ -2,9 +2,9 @@
   "mcpServers": {
     "cortex": {
       "type": "stdio",
-      "command": "cortex-mcp-server",
+      "command": "cortex",
       "args": [
-        "serve"
+        "mcp"
       ]
     }
   }

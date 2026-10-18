@@ -289,7 +289,9 @@ fn git(source: &Path, args: &[&str]) -> Cmd {
 }
 
 fn build_cmd(source: &Path) -> Cmd {
-    let mut cmd = Cmd::new("cargo", &["build", "--release"]);
+    // Standalone is the workspace default member; legacy update must select
+    // its cross-package binaries explicitly instead of inheriting that default.
+    let mut cmd = Cmd::new("cargo", &["build", "--release", "--workspace"]);
     for name in BINARIES {
         cmd.args.push("--bin".into());
         cmd.args.push(name.into());
@@ -1129,7 +1131,7 @@ mod tests {
         );
         assert_eq!(
             build_cmd(source).to_string(),
-            "cargo build --release --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex (in my checkout)"
+            "cargo build --release --workspace --bin cortex-api --bin cortex-adapter-claude --bin cortex-hook --bin cortex-mcp-server --bin cortex-legacy (in my checkout)"
         );
     }
 

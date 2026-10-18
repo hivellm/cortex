@@ -1,44 +1,24 @@
 #!/bin/sh
-# Cortex Codex plugin hook launcher. Usage: cortex-hook-launcher <Event>
-#
-# Hands one Codex lifecycle event to the installed cortex-hook binary with
-# --client codex; cortex-hook owns bounded I/O, on-demand runtime start and
-# the once-per-session notice. Without a binary, or for an unknown event, it
-# drains stdin, prints an empty JSON reply and exits 0. The Windows twin is
-# cortex-hook-launcher.cmd.
+# Local Cortex lifecycle transport. Missing or failed binaries fail open.
 event="${1:-}"
-
 case "$event" in
-    SessionStart | UserPromptSubmit) flag="" ;;
-    PostToolUse | Stop | SubagentStop) flag="--fire-forget" ;;
-    *)
-        cat >/dev/null
-        printf '{}\n'
-        exit 0
-        ;;
+    SessionStart|UserPromptSubmit|PostToolUse|Stop|SubagentStop) ;;
+    *) cat >/dev/null; printf '{}\n'; exit 0 ;;
 esac
-
 bin=""
-if command -v cortex-hook >/dev/null 2>&1; then
-    bin=$(command -v cortex-hook)
+if command -v cortex >/dev/null 2>&1; then
+    bin=$(command -v cortex)
 else
-    for candidate in "${HOME:-}/.cortex/bin/cortex-hook" "${HOME:-}/.cortex/bin/cortex-hook.exe" \
-        "${HOME:-}/.cargo/bin/cortex-hook"; do
-        if [ -f "$candidate" ]; then
-            bin="$candidate"
-            break
-        fi
+    for candidate in "${CORTEX_HOME:-}/bin/cortex" "${CORTEX_HOME:-}/bin/cortex.exe" \
+        "${USERPROFILE:-${HOME:-}}/.cortex/bin/cortex" "${USERPROFILE:-${HOME:-}}/.cortex/bin/cortex.exe"; do
+        case "$candidate" in /bin/*) continue ;; esac
+        if [ -f "$candidate" ]; then bin="$candidate"; break; fi
     done
 fi
-if [ -z "$bin" ]; then
-    cat >/dev/null
+if [ -z "$bin" ]; then cat >/dev/null; printf '{}\n'; exit 0; fi
+if reply=$("$bin" hook --client codex --event "$event" 2>/dev/null) && [ -n "$reply" ]; then
+    printf '%s\n' "$reply"
+else
     printf '{}\n'
-    exit 0
 fi
-
-# --client codex needs cortex-hook from phase36 on (older builds reject it and
-# answer {}). The origin repeats the identity for adapter.hook_origin readers.
-CORTEX_HOOK_ORIGIN=codex-plugin
-export CORTEX_HOOK_ORIGIN
-# shellcheck disable=SC2086
-exec "$bin" "$event" $flag --client codex
+exit 0

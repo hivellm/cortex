@@ -16,8 +16,6 @@ on:
       - ".github/workflows/codespell.yml"
       - ".github/workflows/version-coherence.yml"
       - ".github/workflows/dashboard-grep-gate.yml"
-      - "packages/cortex-claude-plugin/**"
-      - "scripts/**"
   pull_request:
     branches: [main, master, develop]
     paths-ignore:
@@ -27,8 +25,6 @@ on:
       - ".github/workflows/codespell.yml"
       - ".github/workflows/version-coherence.yml"
       - ".github/workflows/dashboard-grep-gate.yml"
-      - "packages/cortex-claude-plugin/**"
-      - "scripts/**"
 
 permissions:
   contents: read
@@ -43,6 +39,29 @@ env:
   RUSTFLAGS: "-D warnings"
 
 jobs:
+  standalone:
+    name: Standalone (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: standalone-${{ matrix.os }}
+      - name: Check standalone targets
+        run: cargo check -p cortex-local --all-targets --all-features --locked
+      - name: Lint standalone targets
+        run: cargo clippy -p cortex-local --all-targets --all-features --locked -- -D warnings
+      - name: Test standalone without services
+        run: cargo test -p cortex-local --all-features --locked
+
   # ---------------------------------------------------------------
   # fmt — cheap, runs first to fail fast on style regressions
   # ---------------------------------------------------------------

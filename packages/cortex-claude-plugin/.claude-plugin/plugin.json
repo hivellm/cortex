@@ -1,8 +1,8 @@
 {
   "name": "cortex",
   "displayName": "Cortex",
-  "description": "Cortex daily memory for Claude Code. Hands each lifecycle event to the installed cortex-hook binary, which starts the local Cortex runtime on demand and returns saved memory context, and adds the daily Cortex MCP tools. Requires the Cortex binaries (cortex-hook, cortex-mcp-server, cortex-api, cortex-adapter-claude) installed with `cortex install` and a user configuration written by `cortex setup`. No telemetry; nothing leaves this machine.",
-  "version": "0.2.0",
+  "description": "Cortex local memory: one standalone cortex executable for offline capture, cited recall and MCP. Install with cortex install. Classification is optional and explicit; hooks never call a provider.",
+  "version": "0.4.0",
   "author": {
     "name": "HiveLLM",
     "email": "hello@hivellm.org"
@@ -10,19 +10,10 @@
   "homepage": "https://github.com/hivellm/cortex",
   "repository": "https://github.com/hivellm/cortex",
   "license": "Apache-2.0",
-  "keywords": ["memory", "mcp", "hooks", "context"],
-  "userConfig": {
-    "bin_dir": {
-      "type": "string",
-      "title": "Cortex binary directory",
-      "description": "Absolute path of the directory holding cortex-hook, only needed when it is neither on PATH nor in ~/.cortex/bin. A relative path is ignored.",
-      "default": ""
-    },
-    "api_url": {
-      "type": "string",
-      "title": "Cortex API URL",
-      "description": "Base URL of the local Cortex API. Leave empty to use dashboard.api_url from ~/.cortex/config.toml (http://127.0.0.1:17000 by default).",
-      "default": ""
-    }
-  }
+  "keywords": [
+    "memory",
+    "mcp",
+    "hooks",
+    "context"
+  ]
 }

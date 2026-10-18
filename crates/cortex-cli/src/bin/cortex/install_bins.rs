@@ -22,15 +22,15 @@ use cortex_adapter_claude_code::legacy;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Binaries `cortex install` copies and `cortex doctor` checks. `cortex` is
-/// installed too so `cortex update` runs from the bin dir while cargo rebuilds
+/// Binaries `cortex-legacy install` copies and its doctor checks. The legacy
+/// operator remains separate from standalone `cortex` while cargo rebuilds
 /// the copy under `target/`.
 pub(super) const BINARIES: [&str; 5] = [
     "cortex-api",
     "cortex-adapter-claude",
     "cortex-hook",
     "cortex-mcp-server",
-    "cortex",
+    "cortex-legacy",
 ];
 const MANIFEST: &str = "install-manifest.json";
 
@@ -93,11 +93,15 @@ fn obsolete_names(manifest: Option<&Manifest>) -> Vec<String> {
     let Some(manifest) = manifest else {
         return Vec::new();
     };
+    // Older manifests owned `cortex`; that name now belongs to the standalone
+    // runtime, including its recovery copies, and must never be retired here.
     let names: std::collections::BTreeSet<&String> = manifest
         .binaries
         .keys()
         .chain(&manifest.retired)
-        .filter(|name| !BINARIES.contains(&name.as_str()) && is_plain_name(name))
+        .filter(|name| {
+            name.as_str() != "cortex" && !BINARIES.contains(&name.as_str()) && is_plain_name(name)
+        })
         .collect();
     names.into_iter().cloned().collect()
 }
@@ -629,6 +633,36 @@ mod tests {
         )
         .unwrap();
         (build, to)
+    }
+
+    #[test]
+    fn legacy_install_and_cleanup_preserve_standalone_from_old_manifests() {
+        let root = tempfile::tempdir().unwrap();
+        let (build, to) = installed_with_previous(root.path(), "cortex");
+        let standalone = to.join(exe("cortex"));
+        let recovery = to.join(format!("{}.old-previous", exe("cortex")));
+        std::fs::write(&standalone, b"standalone runtime").unwrap();
+        std::fs::write(&recovery, b"standalone recovery copy").unwrap();
+        let mut manifest = read_manifest(&to).unwrap();
+        manifest.retired.push("cortex".into());
+        std::fs::write(to.join(MANIFEST), serde_json::to_vec(&manifest).unwrap()).unwrap();
+        assert!(obsolete_names(Some(&manifest)).is_empty());
+        remove_stale_asides(&to);
+        install(&build, &to, true, "upgrade").unwrap();
+        remove_stale_asides(&to);
+        assert_eq!(std::fs::read(&standalone).unwrap(), b"standalone runtime");
+        assert_eq!(
+            std::fs::read(&recovery).unwrap(),
+            b"standalone recovery copy"
+        );
+        assert_eq!(
+            std::fs::read(to.join(exe("cortex-legacy"))).unwrap(),
+            b"cortex-legacy-a"
+        );
+        let installed = read_manifest(&to).unwrap();
+        assert!(!installed.binaries.contains_key("cortex"));
+        assert!(!installed.retired.iter().any(|name| name == "cortex"));
+        assert!(installed.binaries.contains_key("cortex-legacy"));
     }
 
     #[test]

@@ -34,6 +34,8 @@ fn config(database: &Path) -> cortex_config::Config {
     cfg
 }
 fn app(database: &Path) -> Router {
+    // Isolate cache assertions from first-open schema bootstrap.
+    drop(MetadataStore::open(database).unwrap());
     cortex_api::http::build_router_with_auth_and_cfg(
         Arc::new(service()),
         None,
@@ -385,16 +387,45 @@ async fn global_revision_and_explicit_opt_in_invalidate_only_eligible_cache_entr
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cache_evicts_after_256_successful_distinct_contexts() {
+    // This verifies cache eviction, not the host's SQLite I/O latency. Keep
+    // virtual time frozen without auto-advance while each real request runs.
+    async fn read_with_frozen_deadline(app: &Router, body: Value) -> Value {
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let request = read(app, body);
+        tokio::pin!(request);
+        loop {
+            assert!(
+                std::time::Instant::now() < limit,
+                "cache eviction fixture request stalled"
+            );
+            tokio::select! {
+                biased;
+                response = &mut request => return response,
+                _ = tokio::task::yield_now() => {}
+            }
+        }
+    }
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
     let app = app(&database);
-    assert_eq!(read(&app, query()).await["cache_hit"], false);
+    assert_eq!(
+        read_with_frozen_deadline(&app, query()).await["cache_hit"],
+        false
+    );
     for i in 0..256 {
-        let response = read(&app, json!({"repo":"repo","query":format!("distinct{i}")})).await;
+        let response =
+            read_with_frozen_deadline(&app, json!({"repo":"repo","query":format!("distinct{i}")}))
+                .await;
         assert_eq!(response["cache_hit"], false);
     }
-    assert_eq!(read(&app, query()).await["cache_hit"], false);
-    assert_eq!(read(&app, query()).await["cache_hit"], true);
+    assert_eq!(
+        read_with_frozen_deadline(&app, query()).await["cache_hit"],
+        false
+    );
+    assert_eq!(
+        read_with_frozen_deadline(&app, query()).await["cache_hit"],
+        true
+    );
 }

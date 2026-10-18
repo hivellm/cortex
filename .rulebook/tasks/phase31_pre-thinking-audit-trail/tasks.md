@@ -1,10 +1,25 @@
-## 1. Durable audit trail
-- [ ] 1.1 Persist, for every `cortex_pre_thinking` call: `query_id`, a summary of the assembled bundle's sections/content (extend `count_sections()` in `crates/cortex-pre-thinking/src/formatter.rs`, which already returns non-zero per-section counts — the durable record needs at least this plus enough per-item identifiers to be useful), and the timestamp
-- [ ] 1.2 Where determinable from the session's subsequent turns (tool calls, file edits, decisions recorded), link the `query_id` to the downstream action(s) that followed it in the same session — a best-effort heuristic (e.g. "next N tool calls in this session after this query_id") is an acceptable first version
-- [ ] 1.3 Expose the persisted trail in a new or extended dashboard view so an operator can browse "what did Cortex tell the agent, and what did the agent do next?"
-- [ ] 1.4 Define and compute a "bundle utilization" heuristic (did any file/decision/law cited in the bundle get referenced again in the following turns?) and surface it as a metric
+## 1. Contract and canonical persistence
 
-## 2. Tail (mandatory — enforced by rulebook v5.3.0)
-- [ ] 2.1 Update or create documentation covering the implementation — specifically `docs/specs/12-pre-thinking-injection.md`, describing the durable trail contract (retention beyond the in-memory ring buffer) and the new dashboard view
-- [ ] 2.2 Write tests covering the new behavior (persistence beyond 1024 entries, query_id lookup, downstream-turn linking heuristic, utilization metric computation)
-- [ ] 2.3 Run tests and confirm they pass
+- [ ] 1.1 Confirm phase36_local-first-core is complete before implementation; define bounded audit records, exact scope, query/delivery IDs, memory revision/hash/source references, observed attribution, errors and latency.
+- [ ] 1.2 Define evidence labels and proof criteria: prepared delivery, observed related action, explicitly evidenced use and unknown; temporal correlation never proves consumption.
+- [ ] 1.3 Implement immutable canonical records, idempotent observation appends and rebuildable SQLite indexing using standalone locking/publication; test restart, concurrent writes and interrupted index updates.
+- [ ] 1.4 Add reindex recovery and validation; test retained working index on invalid canonical input and preserved exact historical memory references.
+- [ ] 1.5 Define explicit bounded retention/query controls with dry-run impact; test that no automatic operation deletes canonical audit or source data and no retention action cascades into memories/imports.
+
+## 2. Capture and evidence linkage
+
+- [ ] 2.1 Record actual standalone recall/hook preparation outcomes, bounded summaries, exact delivered revisions, measured latency and failures; never fabricate session/turn IDs or record credentials.
+- [ ] 2.2 Link independently observed follow-up actions within exact scope, recording method, attribution and uncertainty; test cross-scope rejection, absent identifiers, retries and ambiguous temporal matches.
+- [ ] 2.3 Implement evidence-class metrics with denominators and unknown/error counts; test that prepared receipts and adjacent actions cannot count as explicitly evidenced use.
+
+## 3. Inspectability and acceptance
+
+- [ ] 3.1 Expose bounded CLI and MCP audit inspection through the local engine; test lookup and metrics with HTTP server stopped and no external services.
+- [ ] 3.2 Add embedded GUI audit inspection showing revisions, sources, actions, evidence labels, errors and latency; enforce scope and render imported text safely.
+- [ ] 3.3 Validate a real local capture/recall and observed follow-up, then restart and reindex; report only evidence actually observed and verify original source hashes unchanged.
+
+## 4. Mandatory tail
+
+- [ ] 4.1 Update or create documentation covering the implementation: architecture, CLI/MCP/GUI, audit specification and CHANGELOG with evidence and retention limits.
+- [ ] 4.2 Write tests covering the new behavior: persistence, reconstruction, scope, attribution, evidence classification, retention and standalone surfaces.
+- [ ] 4.3 Run tests and confirm they pass, plus formatting, type-check, strict lint and required full suite; obtain independent review and record results before archival.

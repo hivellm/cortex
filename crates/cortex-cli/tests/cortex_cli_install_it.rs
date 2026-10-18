@@ -13,13 +13,13 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_cortex");
+const BIN: &str = env!("CARGO_BIN_EXE_cortex-legacy");
 const BINARIES: [&str; 5] = [
     "cortex-api",
     "cortex-adapter-claude",
     "cortex-hook",
     "cortex-mcp-server",
-    "cortex",
+    "cortex-legacy",
 ];
 
 fn exe(name: &str) -> String {
@@ -460,7 +460,7 @@ fn should_print_the_plan_and_change_nothing_when_update_runs_without_apply() {
     );
     assert!(text.contains("git pull skipped (--no-pull)"), "{text}");
     let build = format!(
-        "cargo build --release{} (in {})",
+        "cargo build --release --workspace{} (in {})",
         BINARIES
             .iter()
             .map(|name| format!(" --bin {name}"))
