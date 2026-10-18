@@ -425,3 +425,10 @@ final installed smoke SHA-256 is
 `ec535e3d635d06e702eb9b4fc5e4d0c31fbd9bde70a4920e048f99699da88db7`.
 Independent review confirmed both reports and the complete Python result match
 this record. No additional provider request was made.
+
+Implementation checkpoint: `1590e03`. The accepted task is archived at
+`.rulebook/archive/2026-10-18-phase28_retrieval-eval-gate-live/`; its reviewed
+requirements are preserved as `.rulebook/specs/eval/spec.md`. Rulebook moved the
+task but did not emit that live spec, so the archive tail copied the accepted
+requirements unchanged. All twenty-seven machine-specific reports/logs remain
+in the verified backup across three batch manifests, including failed runs.
