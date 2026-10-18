@@ -181,8 +181,8 @@ export function RetentionView() {
     queryFn: () => api.retentionState(),
     refetchInterval: 10_000,
   });
-  const sweeps = sweepsQ.data ?? [];
-  const schedules = stateQ.data?.next_runs ?? [];
+  const sweeps = useMemo(() => sweepsQ.data ?? [], [sweepsQ.data]);
+  const schedules = useMemo(() => stateQ.data?.next_runs ?? [], [stateQ.data?.next_runs]);
   const cards = useMemo(
     () => projectCards(sweeps, schedules),
     [sweeps, schedules],

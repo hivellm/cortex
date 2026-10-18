@@ -571,6 +571,17 @@ impl LocalStore {
         self.with_connection(|connection| index::search(connection, query, false))
     }
 
+    pub fn repositories(&self) -> Result<crate::dashboard::RepositoryInventory> {
+        self.with_connection(|connection| crate::dashboard::repositories(connection))
+    }
+
+    pub fn browse(
+        &self,
+        query: crate::dashboard::BrowseQuery,
+    ) -> Result<crate::dashboard::BrowsePage> {
+        self.with_connection(|connection| crate::dashboard::browse(connection, query))
+    }
+
     pub fn search_with_feedback(
         &self,
         query: SearchQuery,

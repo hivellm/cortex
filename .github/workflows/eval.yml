@@ -44,7 +44,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: local-eval-${{ matrix.os }}
-      - name: Build standalone release
+      - name: Prepare embedded dashboard
+        uses: ./.github/actions/setup-dashboard
+      - name: Build embedded dashboard and standalone release
         run: cargo build --release --locked -p cortex-local --bin cortex
       - name: Check typed classification offline
         run: cargo test --locked -p cortex-local --test classification_eval

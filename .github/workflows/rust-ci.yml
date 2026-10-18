@@ -55,7 +55,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: standalone-${{ matrix.os }}
-      - name: Check standalone targets
+      - name: Prepare embedded dashboard
+        uses: ./.github/actions/setup-dashboard
+      - name: Check standalone targets and embedded dashboard
         run: cargo check -p cortex-local --all-targets --all-features --locked
       - name: Lint standalone targets
         run: cargo clippy -p cortex-local --all-targets --all-features --locked -- -D warnings
@@ -96,6 +98,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-ci
+      - uses: ./.github/actions/setup-dashboard
       - run: cargo clippy --workspace --all-targets --no-deps
 
   # ---------------------------------------------------------------
@@ -114,6 +117,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rust-ci
+      - uses: ./.github/actions/setup-dashboard
       - run: cargo test --workspace --no-fail-fast --locked
 
   # ---------------------------------------------------------------

@@ -3,6 +3,7 @@
 
 pub mod audit;
 pub mod classification;
+pub mod dashboard;
 pub mod feedback;
 pub mod feedback_import;
 pub mod files;
@@ -22,6 +23,7 @@ pub mod upgrade;
 pub mod web;
 
 pub use audit::*;
+pub use dashboard::{BrowsePage, BrowseQuery, RepositoryInventory, RepositorySummary};
 pub use feedback::{
     FeedbackEligibility, FeedbackEntry, FeedbackEvidence, FeedbackJudgment, FeedbackListPage,
     FeedbackListQuery, FeedbackRecord, FeedbackRequest, FeedbackSource, FeedbackWriteOutcome,

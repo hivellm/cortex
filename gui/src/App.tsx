@@ -1,3 +1,4 @@
+import { LocalApp } from "./local/LocalApp";
 import { useCallback, useMemo, useState } from "react";
 
 import { Header } from "./shell/Header";
@@ -31,6 +32,9 @@ import type { Filters } from "./lib/api";
 import { useDashboardStream } from "./lib/useDashboardStream";
 
 export function App() {
+  if (document.querySelector<HTMLMetaElement>('meta[name="cortex-runtime"]')?.content === "standalone") {
+    return <TweaksProvider><LocalApp /></TweaksProvider>;
+  }
   return (
     <ConnectionsProvider>
       <ApiResolverBinding>

@@ -148,7 +148,7 @@ export function TasksView() {
 
   const list: TaskListResponse | undefined = listQ.data;
 
-  const allRows = list?.tasks ?? [];
+  const allRows = useMemo(() => list?.tasks ?? [], [list?.tasks]);
 
   const repoOptions = useMemo(() => {
     const set = new Set<string>();

@@ -39,7 +39,7 @@ export function MemoryView() {
     refetchIntervalInBackground: true,
   });
 
-  const all = data ?? [];
+  const all = useMemo(() => data ?? [], [data]);
   const filtered = useMemo(() => {
     if (!activeKind) return all;
     return all.filter((m) => m.kind === activeKind);

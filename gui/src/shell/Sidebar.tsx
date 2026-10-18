@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Icon, type IconName } from "../atoms/Icon";
@@ -41,7 +42,7 @@ type CountKey =
   | "classifications"
   | "tasks";
 
-const NAV: NavItem[] = [
+export const NAV: NavItem[] = [
   { id: "timeline", label: "Live timeline", icon: "timeline" },
   { id: "conversations", label: "Conversations", icon: "memory", countSource: "conversations" },
   { id: "memory", label: "Memory", icon: "memory", countSource: "events" },
@@ -188,7 +189,7 @@ export function Sidebar({ view, setView }: SidebarProps) {
   const sparkVisible = epm.some((v) => v > 0);
 
   return (
-    <aside className="sidebar">
+    <SidebarFrame>
       <div className="sidebar__group-label">Workspace</div>
       {sparkVisible ? (
         <div
@@ -303,7 +304,7 @@ export function Sidebar({ view, setView }: SidebarProps) {
       )}
 
       <SidebarFooter />
-    </aside>
+    </SidebarFrame>
   );
 }
 
@@ -405,4 +406,8 @@ function SessionItem({
       </span>
     </button>
   );
+}
+
+export function SidebarFrame({ children }: { children: ReactNode }) {
+  return <aside className="sidebar">{children}</aside>;
 }

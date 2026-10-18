@@ -6,11 +6,13 @@ All normal evaluation inputs are public fictional fixtures. Runners create tempo
 
 ## Run the offline gate
 
-Use Python 3.13 and the repository Rust toolchain. Build/dependency acquisition may need network access; the evaluation itself requires no Docker, application HTTP service, provider key or external model. Classification contract tests start an ephemeral loopback HTTP fixture.
+Use Python 3.13, the repository Rust toolchain, Node.js 22.12+ and pnpm 10. Cargo builds the embedded dashboard from locked GUI dependencies; see [source build requirements](local-first-memory.md#build-install-and-verify). Node.js is a build dependency, not an installed runtime dependency. Build/dependency acquisition may need network access; the evaluation itself requires no Docker, application HTTP service, provider key or external model. Classification contract tests start an ephemeral loopback HTTP fixture.
 
 From the repository root, using the default Cargo target directory:
 
 ```powershell
+$env:ELECTRON_SKIP_BINARY_DOWNLOAD = "1"
+pnpm --dir gui install --frozen-lockfile
 cargo build --release --locked -p cortex-local --bin cortex
 $env:CORTEX_EVAL_BINARY = (Resolve-Path target/release/cortex.exe).Path
 python -W error::ResourceWarning -m unittest discover -s scripts/tests -p "test_*eval*.py"
@@ -21,6 +23,7 @@ python scripts/gate_local_memory.py --binary "$env:CORTEX_EVAL_BINARY" --report 
 POSIX shell equivalent:
 
 ```bash
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm --dir gui install --frozen-lockfile
 cargo build --release --locked -p cortex-local --bin cortex
 export CORTEX_EVAL_BINARY="$PWD/target/release/cortex"
 python -W error::ResourceWarning -m unittest discover -s scripts/tests -p 'test_*eval*.py'
@@ -199,6 +202,34 @@ recorded as an observation without external classification. Preservation verifie
 unchanged. Sixteen previously truncated source frames remain incomplete. Previous
 installation backup: `install-01M56YQKJCXNZH0SEZVJ6M2WKW`. Sealed evidence:
 `C:/Users/Bolado/.cortex/backups/phase32-feedback-f30b1593/evidence`.
+
+## Existing dashboard acceptance (phase37)
+
+The standalone executable now embeds the existing React dashboard, preserving
+its shared shell, visual tokens and component patterns. Final release and installed
+SHA-256: `150bfec3917c58718fa0a5a4b9c82e621912df1c3146d58e7cb45459d81e0207`.
+Desktop 1360x900 and mobile 390x844 checks pass, including pagination reset and
+startup-token renewal after server restart with sessionStorage available or blocked.
+Earlier comprehensive acceptance covers both themes, capture/revision, exact
+history, graphs, queue, audit, feedback and scope isolation. Fixture tokens are
+invalidated and no external classification was requested.
+
+Final Windows gates pass format, workspace all-target/all-feature check, strict
+Clippy, 4,329 Rust tests across 276 targets (nine pre-existing ignored), both GUI
+typechecks, ESLint, 89 GUI tests, generated contract parity and legacy renderer
+build. Python runs 171 cases: 170 pass and one Windows symlink check skips.
+Fourteen installed smoke checks verify eighteen tools and schema 3. Fresh offline
+contract and feedback evaluations pass; natural-language readiness remains false
+and no quality or productivity gain is claimed. Remote CI is unobserved.
+
+All 1,662 original canonical files and 33 installed plugin files remain unchanged.
+The archive recheck verifies 69,634 files and 319,238,316 bytes unchanged. Real
+inventory contains 106,963 records/revisions across 37 repositories, including
+17 memories and 106,946 events. Previous executable backup:
+`install-01M57HSE9MKHJ70X1WV0YK0P2G`. Evidence and checksum manifest:
+`C:/Users/Bolado/.cortex/backups/phase37-dashboard-150bfec3/evidence`.
+Doctor reports no required services; Jev credentials are absent from the validation
+process. Active-client reload and model consumption remain unobserved.
 
 ## Classification: offline versus live
 

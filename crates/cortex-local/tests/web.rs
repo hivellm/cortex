@@ -302,15 +302,115 @@ impl App {
 }
 
 #[tokio::test]
-async fn assets_are_local_hardened_and_never_embed_authentication_or_html_sinks() {
+async fn dashboard_inventory_and_browse_preserve_core_parity_and_cursor_scope() {
     let app = App::new().await;
-    for path in ["/", "/app.js", "/app.css", "/favicon.svg", "/missing"] {
+    app.capture("First dashboard decision").await;
+    app.capture("Second dashboard decision").await;
+    app.json("capture", json!({"repository":"cortex","title":"Other exact scope","body":"Foreign decision","kind":"decision","authority":"accepted"})).await;
+
+    let inventory = app.json("repositories", json!({})).await;
+    assert_eq!(
+        inventory,
+        serde_json::to_value(app.store.repositories().unwrap()).unwrap()
+    );
+    assert_eq!(inventory["repositories"][0]["repository"], "Cortex");
+    assert_eq!(inventory["repositories"][0]["records"], 2);
+    assert_eq!(inventory["repositories"][1]["repository"], "cortex");
+    assert_eq!(inventory["repositories"][1]["records"], 1);
+
+    let mut request = json!({"repository":"Cortex","kind":"decision","limit":1});
+    let first = app.json("browse", request.clone()).await;
+    let core = app
+        .store
+        .browse(serde_json::from_value(request.clone()).unwrap())
+        .unwrap();
+    assert_eq!(first, serde_json::to_value(core).unwrap());
+    assert_eq!(first["records"].as_array().unwrap().len(), 1);
+    let cursor = first["next_cursor"].as_str().unwrap();
+    request["cursor"] = json!(cursor);
+    let second = app.json("browse", request.clone()).await;
+    let core = app
+        .store
+        .browse(serde_json::from_value(request.clone()).unwrap())
+        .unwrap();
+    assert_eq!(second, serde_json::to_value(core).unwrap());
+    assert_eq!(second["records"].as_array().unwrap().len(), 1);
+    assert_ne!(first["records"][0]["id"], second["records"][0]["id"]);
+    assert!(second["next_cursor"].is_null());
+    for page in [&first, &second] {
+        assert_eq!(page["records"][0]["repository"], "Cortex");
+        assert_eq!(page["records"][0]["kind"], "decision");
+    }
+    let foreign = app
+        .json("browse", json!({"repository":"cortex","kind":"decision"}))
+        .await;
+    assert_eq!(foreign["records"].as_array().unwrap().len(), 1);
+    assert_eq!(foreign["records"][0]["title"], "Other exact scope");
+    assert!(app
+        .json("browse", json!({"repository":"Cortex","kind":"event"}))
+        .await["records"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    for (field, value) in [
+        ("repository", json!("cortex")),
+        ("kind", json!("event")),
+        ("include_inactive", json!(true)),
+        ("cursor", json!("malformed")),
+    ] {
+        let mut invalid = request.clone();
+        invalid[field] = value;
+        assert_eq!(
+            app.post("browse", invalid).await.status(),
+            StatusCode::BAD_REQUEST,
+            "{field}"
+        );
+    }
+    request["unknown"] = json!(true);
+    assert_eq!(
+        app.post("browse", request).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.post("repositories", json!({"repository":"Cortex"}))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn dashboard_assets_are_embedded_local_and_hardened() {
+    let app = App::new().await;
+    let html = app
+        .client
+        .get(&app.url)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(html.contains("name=\"cortex-runtime\" content=\"standalone\""));
+    assert!(html.contains("id=\"root\""));
+    let pattern = regex::Regex::new(r#"(?:src|href)="(/assets/[^\"]+)""#).unwrap();
+    let mut paths = vec!["/".to_owned(), "/favicon.svg".to_owned()];
+    paths.extend(
+        pattern
+            .captures_iter(&html)
+            .map(|capture| capture[1].to_owned()),
+    );
+    assert!(paths.iter().any(|path| path.ends_with(".js")));
+    assert!(paths.iter().any(|path| path.ends_with(".css")));
+    for path in &paths {
         let response = app
             .client
             .get(format!("{}{path}", app.url))
             .send()
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
         assert_eq!(response.headers()["cache-control"], "no-store");
         assert_eq!(response.headers()["x-content-type-options"], "nosniff");
         assert_eq!(response.headers()["referrer-policy"], "no-referrer");
@@ -319,21 +419,53 @@ async fn assets_are_local_hardened_and_never_embed_authentication_or_html_sinks(
             .to_str()
             .unwrap();
         assert!(csp.contains("frame-ancestors 'none'"));
-        assert!(!csp.contains("unsafe-inline"));
+        assert!(csp.contains("script-src 'self';"));
+        assert!(csp.contains("style-src-attr 'unsafe-inline';"));
+        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+        let content_type = response.headers()["content-type"].to_str().unwrap();
+        if path.ends_with(".js") {
+            assert_eq!(content_type, "text/javascript; charset=utf-8");
+        }
+        if path.ends_with(".css") {
+            assert_eq!(content_type, "text/css; charset=utf-8");
+        }
         assert!(response
             .headers()
             .get("access-control-allow-origin")
             .is_none());
         let body = response.text().await.unwrap();
         assert!(!body.contains(TOKEN));
-        assert!(!body.contains("innerHTML"));
-        assert!(!body.contains("insertAdjacentHTML"));
-        assert!(!body.contains("eval("));
-        if path == "/app.js" {
-            assert!(body.contains("textContent"));
-            assert!(body.contains("history.replaceState"));
-            assert!(body.contains("sessionStorage"));
-        }
+        assert!(!body.is_empty());
+        let head = app
+            .client
+            .head(format!("{}{path}", app.url))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(head.status(), StatusCode::OK);
+        assert_eq!(
+            head.headers()["content-length"].to_str().unwrap(),
+            body.len().to_string()
+        );
+        assert!(head.bytes().await.unwrap().is_empty());
+    }
+    for path in [
+        "/missing",
+        "/assets/missing.js",
+        "/assets/%2e%2e/Cargo.toml",
+        "/app.js",
+        "/app.css",
+    ] {
+        assert_eq!(
+            app.client
+                .get(format!("{}{path}", app.url))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
     }
     assert!(web::router(app.store.clone(), 0, TOKEN.into()).is_err());
     assert!(web::router(app.store.clone(), 1234, "weak".into()).is_err());
@@ -344,6 +476,8 @@ async fn host_origin_and_bearer_are_required_before_every_api_operation() {
     let app = App::new().await;
     let body = json!({"repository":"Cortex"});
     for endpoint in [
+        "repositories",
+        "browse",
         "recent",
         "search",
         "get",
@@ -356,6 +490,9 @@ async fn host_origin_and_bearer_are_required_before_every_api_operation() {
         "audit/list",
         "audit/get",
         "audit/metrics",
+        "feedback/record",
+        "feedback/get",
+        "feedback/list",
     ] {
         let response = app
             .client
@@ -510,6 +647,15 @@ async fn revisions_conflicts_history_graph_and_immutable_events_use_shared_engin
 #[tokio::test]
 async fn queue_is_explicit_local_and_cannot_import_repair_or_drain() {
     let app = App::new().await;
+    assert_eq!(
+        app.post(
+            "queue",
+            json!({"repository":"Cortex","include_inactive":true})
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
     let record = app.capture("Queue subject").await;
     assert_eq!(
         app.json("queue", json!({"repository":"Cortex"})).await["jobs"],

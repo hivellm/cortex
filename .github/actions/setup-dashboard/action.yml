@@ -1,0 +1,16 @@
+name: Prepare embedded dashboard
+description: Install locked renderer dependencies used by the standalone Cargo build
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+    - uses: pnpm/action-setup@v4
+      with:
+        version: "10"
+    - name: Install renderer dependencies
+      shell: bash
+      env:
+        ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      run: pnpm --dir gui install --frozen-lockfile

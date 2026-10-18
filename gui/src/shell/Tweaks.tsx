@@ -20,9 +20,10 @@ import { useConnKey } from "../lib/connections/useConnKey";
 type TweaksProps = {
   open: boolean;
   onClose: () => void;
+  local?: boolean;
 };
 
-export function Tweaks({ open, onClose }: TweaksProps) {
+export function Tweaks({ open, onClose, local = false }: TweaksProps) {
   const { tweaks, setTweak, reset } = useTweaks();
 
   // ESC closes the drawer regardless of focus location, mirroring
@@ -36,14 +37,6 @@ export function Tweaks({ open, onClose }: TweaksProps) {
     return () => document.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
-  const connKey = useConnKey();
-  const statusQ = useQuery({
-    queryKey: [connKey, "status"],
-    queryFn: () => api.status(),
-    refetchInterval: open ? 5000 : false,
-    enabled: open,
-    retry: 0,
-  });
 
   return (
     <>
@@ -159,28 +152,7 @@ export function Tweaks({ open, onClose }: TweaksProps) {
           </Section>
 
           <Section label="About">
-            {statusQ.isError ? (
-              <div className="muted" style={{ fontSize: 11.5 }}>
-                cortex-api unreachable.
-              </div>
-            ) : statusQ.isLoading || !statusQ.data ? (
-              <div className="muted" style={{ fontSize: 11.5 }}>
-                connecting…
-              </div>
-            ) : (
-              <dl className="kv-list">
-                <dt>service</dt>
-                <dd className="mono">{statusQ.data.service}</dd>
-                <dt>version</dt>
-                <dd className="mono">{statusQ.data.version}</dd>
-                <dt>pid</dt>
-                <dd className="mono tabular">{statusQ.data.pid}</dd>
-                <dt>uptime</dt>
-                <dd className="mono tabular">
-                  {Math.round(statusQ.data.uptime_ms / 1000)}s
-                </dd>
-              </dl>
-            )}
+            {local ? <dl className="kv-list"><dt>service</dt><dd className="mono">cortex-local</dd><dt>storage</dt><dd>Local files</dd></dl> : <LegacyAbout open={open} />}
           </Section>
 
           <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
@@ -230,4 +202,40 @@ function RadioChip({
       <span>{label}</span>
     </label>
   );
+}
+
+function LegacyAbout({ open }: { open: boolean }) {
+  const connKey = useConnKey();
+  const statusQ = useQuery({
+    queryKey: [connKey, "status"],
+    queryFn: () => api.status(),
+    refetchInterval: open ? 5000 : false,
+    enabled: open,
+    retry: 0,
+  });
+
+  return <>
+            {statusQ.isError ? (
+              <div className="muted" style={{ fontSize: 11.5 }}>
+                cortex-api unreachable.
+              </div>
+            ) : statusQ.isLoading || !statusQ.data ? (
+              <div className="muted" style={{ fontSize: 11.5 }}>
+                connecting…
+              </div>
+            ) : (
+              <dl className="kv-list">
+                <dt>service</dt>
+                <dd className="mono">{statusQ.data.service}</dd>
+                <dt>version</dt>
+                <dd className="mono">{statusQ.data.version}</dd>
+                <dt>pid</dt>
+                <dd className="mono tabular">{statusQ.data.pid}</dd>
+                <dt>uptime</dt>
+                <dd className="mono tabular">
+                  {Math.round(statusQ.data.uptime_ms / 1000)}s
+                </dd>
+              </dl>
+            )}
+  </>;
 }

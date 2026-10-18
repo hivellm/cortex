@@ -1,0 +1,41 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { App } from "../App";
+import { bootstrapLocalSession } from "./api";
+
+vi.mock("../lib/connections", () => ({ ConnectionsProvider: () => { throw new Error("legacy provider mounted"); } }));
+vi.mock("../lib/useDashboardStream", () => ({ useDashboardStream: () => { throw new Error("legacy SSE mounted"); } }));
+vi.mock("../views/Graph", () => ({ GraphView: () => null }));
+vi.mock("./LocalWorkspace", () => ({ LocalWorkspace: ({ repository, view, searchText, onSearch }: { repository: string; view: string; searchText: string; onSearch: (text: string) => void }) => <><div data-testid="workspace">{repository}|{view}|{searchText}</div><input key={view} aria-label="Workspace filter" defaultValue="" /><button onClick={() => onSearch("decision query")}>Search within view</button></> }));
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); document.head.innerHTML = ""; sessionStorage.clear(); });
+
+it("reuses dashboard shell without legacy provider, stream, or endpoints; resets search on exact scope change", async () => {
+  document.head.innerHTML = '<meta name="cortex-runtime" content="standalone">';
+  history.replaceState(null, "", `/#token=${"a".repeat(64)}&repository=Cortex`); bootstrapLocalSession();
+  const fetcher = vi.fn(async (url: string) => ({ ok: true, json: async () => url === "/api/repositories" ? { repositories: [{ repository: "Cortex", records: 4 }, { repository: "cortex", records: 1 }] } : {} }));
+  vi.stubGlobal("fetch", fetcher);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const { container } = render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
+  await waitFor(() => expect(screen.getByText("connected")).toBeTruthy());
+  expect(container.querySelector(".header .brand-name")?.textContent).toBe("Cortex");
+  expect(container.querySelector(".sidebar .nav-item.is-active")?.textContent).toBe("Live timeline");
+  fireEvent.change(screen.getByLabelText("Search current repository"), { target: { value: "architecture" } });
+  fireEvent.click(screen.getByText("Search", { selector: "button" }));
+  expect(screen.getByTestId("workspace").textContent).toBe("Cortex|memory|architecture");
+  fireEvent.change(screen.getByLabelText("Exact repository"), { target: { value: "cortex" } });
+  expect(screen.getByTestId("workspace").textContent).toBe("cortex|memory|");
+  fireEvent.click(screen.getByText("Decisions", { exact: true }));
+  fireEvent.change(screen.getByLabelText("Workspace filter"), { target: { value: "active filter" } });
+  fireEvent.click(screen.getByText("Search within view"));
+  expect(screen.getByTestId("workspace").textContent).toBe("cortex|decisions|decision query");
+  expect(screen.getByLabelText("Workspace filter")).toHaveValue("active filter");
+  fireEvent.click(screen.getByLabelText("Open tweaks panel"));
+  expect(screen.getByText("Tweaks", { exact: true })).toBeTruthy();
+  fireEvent.click(screen.getByText("Light", { exact: true }));
+  expect(document.documentElement.dataset.theme).toBe("light");
+  fireEvent.click(screen.getByText("Dark", { exact: true }));
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  expect(fetcher.mock.calls.every(([url]) => url.startsWith("/api/"))).toBe(true);
+  client.clear();
+});

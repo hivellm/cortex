@@ -31,7 +31,7 @@ export function DecisionsView() {
     refetchIntervalInBackground: true,
   });
 
-  const rowsRaw = data ?? [];
+  const rowsRaw = useMemo(() => data ?? [], [data]);
   const active = rowsRaw.filter((d) => d.status === "active").length;
   const superseded = rowsRaw.filter((d) => d.status === "superseded").length;
   const withRationale = rowsRaw.filter((d) => !!d.rationale).length;

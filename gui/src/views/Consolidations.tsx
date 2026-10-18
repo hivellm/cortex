@@ -7,8 +7,7 @@ import { Tag } from "../atoms/Tag";
 import { api, type ConsolidationRow, type ConsolidatorHealthReport, type GrainHealth } from "../lib/api";
 import { useConnKey } from "../lib/connections/useConnKey";
 
-const GRAINS = ["", "session", "topic", "decision_trace"] as const;
-type Grain = (typeof GRAINS)[number];
+type Grain = "" | "session" | "topic" | "decision_trace";
 
 export function ConsolidationsView() {
   const [repoFilter, setRepoFilter] = useState<string>("");
@@ -45,7 +44,7 @@ export function ConsolidationsView() {
   });
 
   const rows = data?.rows ?? [];
-  const allRowsList = allRows?.rows ?? [];
+  const allRowsList = useMemo(() => allRows?.rows ?? [], [allRows?.rows]);
 
   const repoOptions = useMemo(() => {
     const set = new Set<string>();

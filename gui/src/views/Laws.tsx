@@ -22,7 +22,7 @@ export function LawsView() {
     refetchIntervalInBackground: true,
   });
 
-  const lawsRaw = lawsQ.data ?? [];
+  const lawsRaw = useMemo(() => lawsQ.data ?? [], [lawsQ.data]);
   const violations = violationsQ.data ?? [];
   const trustQ = useQuery({
     queryKey: [connKey, "trust"],

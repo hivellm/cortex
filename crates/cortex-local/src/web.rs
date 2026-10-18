@@ -8,13 +8,17 @@ use axum::{
     extract::{DefaultBodyLimit, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::{self, Next},
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+
+mod dashboard_assets {
+    include!(concat!(env!("OUT_DIR"), "/dashboard_assets.rs"));
+}
 
 #[derive(Clone)]
 struct WebState {
@@ -39,34 +43,10 @@ pub fn router(store: LocalStore, port: u16, token: String) -> Result<Router> {
         token: token.into(),
     };
     Ok(Router::new()
-        .route("/", get(|| async { Html(include_str!("web/index.html")) }))
-        .route(
-            "/favicon.svg",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "image/svg+xml")],
-                    include_str!("web/favicon.svg"),
-                )
-            }),
-        )
-        .route(
-            "/app.js",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/javascript; charset=utf-8")],
-                    include_str!("web/app.js"),
-                )
-            }),
-        )
-        .route(
-            "/app.css",
-            get(|| async {
-                (
-                    [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
-                    include_str!("web/app.css"),
-                )
-            }),
-        )
+        .route("/", get(asset))
+        .fallback(asset)
+        .route("/api/repositories", post(repositories))
+        .route("/api/browse", post(browse))
         .route("/api/recent", post(recent))
         .route("/api/search", post(search))
         .route("/api/get", post(record))
@@ -85,6 +65,23 @@ pub fn router(store: LocalStore, port: u16, token: String) -> Result<Router> {
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state))
+}
+
+async fn asset(request: Request) -> Response {
+    if request.method() != axum::http::Method::GET && request.method() != axum::http::Method::HEAD {
+        return failure(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Use GET for dashboard assets",
+        );
+    }
+    match dashboard_assets::ASSETS
+        .iter()
+        .find(|(path, _, _)| *path == request.uri().path())
+    {
+        // The HTTP server strips HEAD bodies while retaining the GET length.
+        Some((_, mime, bytes)) => ([(header::CONTENT_TYPE, *mime)], *bytes).into_response(),
+        None => failure(StatusCode::NOT_FOUND, "Dashboard asset not found"),
+    }
 }
 
 /// Print a one-session bootstrap URL to stderr; the fragment is never sent over HTTP.
@@ -155,7 +152,7 @@ async fn guard(State(state): State<WebState>, request: Request, next: Next) -> R
         next.run(request).await
     };
     for (key, value) in [
-        ("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
+        ("content-security-policy", "default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"),
         ("x-content-type-options", "nosniff"),
         ("cache-control", "no-store"),
         ("referrer-policy", "no-referrer"),
@@ -199,12 +196,33 @@ struct Scope {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct InventoryRequest {}
+
+async fn repositories(
+    State(state): State<WebState>,
+    Json(_query): Json<InventoryRequest>,
+) -> Response {
+    work(move || state.store.repositories()).await
+}
+
+async fn browse(State(state): State<WebState>, Json(query): Json<crate::BrowseQuery>) -> Response {
+    work(move || state.store.browse(query)).await
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Recent {
     repository: String,
     #[serde(default = "default_limit")]
     limit: usize,
     #[serde(default)]
     include_inactive: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueueRequest {
+    repository: String,
+    #[serde(default = "default_limit")]
+    limit: usize,
 }
 fn default_limit() -> usize {
     30
@@ -395,7 +413,7 @@ async fn revise(State(state): State<WebState>, Json(query): Json<Revise>) -> Res
     })
     .await
 }
-async fn queue(State(state): State<WebState>, Json(query): Json<Recent>) -> Response {
+async fn queue(State(state): State<WebState>, Json(query): Json<QueueRequest>) -> Response {
     work(move || ClassificationQueue::new(state.store).list(&query.repository, query.limit)).await
 }
 async fn enqueue(State(state): State<WebState>, Json(query): Json<Enqueue>) -> Response {

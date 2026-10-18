@@ -6,6 +6,8 @@ The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/
 
 ## [Unreleased] — 0.1.0-alpha
 
+- **phase37 dashboard reuse.** The standalone executable embeds the existing React dashboard layout (Header, Sidebar, Tweaks and shared CSS), with mobile icon navigation and authenticated local history, memory, graph, classification, audit and feedback views. Exact repository counts and bounded cursor browsing replace sampled inventory. Source builds now require Node.js 22.12+ and locked pnpm 10 dependencies; Cargo builds the renderer automatically. Installed runtime remains one executable without Node.js or Docker. GUI lint is restored with TypeScript and React Hooks checks.
+
 > The default runtime is now one standalone `cortex` executable with local files and an embedded web GUI. Older entries below describe the retained legacy service stack; use the [local runtime guide](docs/operations/local-first-memory.md) for current installation and operation.
 
 ### Added

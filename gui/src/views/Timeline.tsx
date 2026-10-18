@@ -334,14 +334,14 @@ export function TimelineView() {
   const { filters, setFilter, clearFilters } = useFilters();
 
   const queryClient = useQueryClient();
-  const queryKey = [
+  const queryKey = useMemo(() => [
     connKey,
     "timeline-recent",
     filters.session_id ?? "",
     (filters.repo ?? []).join("|"),
     filters.kind ?? "",
     filters.content_hash ?? "",
-  ] as const;
+  ] as const, [connKey, filters.session_id, filters.repo, filters.kind, filters.content_hash]);
   const { data, isLoading, error } = useQuery({
     // Initial backfill — TanStack Query owns the cached snapshot;
     // the SSE hook below appends live envelopes onto it. We keep a
@@ -419,7 +419,7 @@ export function TimelineView() {
     queryFn: () => api.overview(),
     refetchInterval: live ? 5000 : false,
   });
-  const events = data ?? [];
+  const events = useMemo(() => data ?? [], [data]);
 
   // Backend now ships an `events_per_min` series in the overview
   // payload (20 minute buckets). We feed that to the Sparkline; the

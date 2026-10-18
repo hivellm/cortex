@@ -71,7 +71,7 @@ export function ProducersView() {
         </thead>
         <tbody>
           {data.rows.map((r) => (
-            <tr key={`${r.producer_name}​${r.scope}`}>
+            <tr key={`${r.producer_name}\u200b${r.scope}`}>
               <td style={{ fontFamily: "var(--font-mono)" }}>{r.producer_name}</td>
               <td style={{ fontFamily: "var(--font-mono)" }}>{r.scope}</td>
               <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>

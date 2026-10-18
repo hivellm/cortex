@@ -68,7 +68,9 @@ jobs:
       - name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
 
-      - name: Build workspace (release)
+      - name: Prepare embedded dashboard
+        uses: ./.github/actions/setup-dashboard
+      - name: Build workspace and embedded dashboard (release)
         run: cargo build --release --workspace --bins
 
       # Boot the stack. Each runner gets an isolated CORTEX_HOME so

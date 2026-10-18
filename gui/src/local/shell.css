@@ -1,0 +1,27 @@
+.local-dashboard .main { min-width: 0; }
+.local-dashboard .local-repository { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-2); color: var(--fg-1); font: inherit; }
+.local-dashboard .local-shell-message { padding: 8px 12px; overflow-wrap: anywhere; }
+.local-dashboard .local-runtime { color: var(--fg-3); white-space: nowrap; font-size: 11px; }
+.local-dashboard .local-mobile-repository { display: none; }
+.local-dashboard .local-desktop-repositories { display: contents; }
+@media (max-width: 760px) {
+  .local-dashboard .app { grid-template-columns: 52px minmax(0, 1fr); grid-template-rows: 88px minmax(0, 1fr); }
+  .local-dashboard .header { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 28px 28px; padding: 12px; gap: 8px; height: 88px; min-height: 0; }
+  .local-dashboard .header__brand { width: auto; height: auto; min-width: 0; padding: 0; border: 0; }
+  .local-dashboard .header__right { grid-column: 2; grid-row: 1; margin-left: 0; }
+  .local-dashboard .header__search { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; max-width: none; margin: 0; }
+  .local-dashboard .header__search input { min-width: 0; }
+  .local-dashboard .local-runtime, .local-dashboard .local-polling { display: none; }
+  .local-dashboard .main { min-height: 0; padding: 0; }
+  .local-dashboard .main > .view { padding: 16px 12px 40px; }
+  .local-dashboard .sidebar { padding: 8px 4px; }
+  .local-dashboard .sidebar > .nav-item { min-height: 40px; justify-content: center; padding: 8px; }
+  .local-dashboard .sidebar > .nav-item .nav-icon { width: auto; }
+  .local-dashboard .sidebar .nav-label, .local-dashboard .sidebar .sidebar__group-label,
+  .local-dashboard .local-desktop-repositories, .local-dashboard .sidebar .repo-name,
+  .local-dashboard .sidebar .repo-meta { display: none; }
+  .local-dashboard .sidebar__footer { padding-inline: 0; }
+  .local-dashboard .sidebar .repo-pill { justify-content: center; padding: 8px; }
+  .local-dashboard .local-mobile-repository { display: grid; gap: 5px; padding: 12px 12px 0; color: var(--fg-3); font-size: 10px; font-family: var(--font-mono); }
+  .local-dashboard .local-mobile-repository select { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--fg-1); font: inherit; font-size: 12px; }
+}

@@ -5,7 +5,7 @@
 
 **Local, cited memory for coding agents.**
 
-Cortex preserves decisions, lessons and historical events so agents can recover their sources across sessions. The default product is one Rust executable, `cortex`, with local storage, eighteen MCP tools, lifecycle hooks and an embedded browser interface. No daemon, Docker, GPU, Node.js build or external database is required.
+Cortex preserves decisions, lessons and historical events so agents can recover their sources across sessions. The default product is one Rust executable, `cortex`, with local storage, eighteen MCP tools, lifecycle hooks and an embedded browser interface. The installed executable requires no daemon, Docker, GPU, Node.js or external database. Building from source requires Node.js and pnpm to compile the existing dashboard into that executable.
 
 Canonical memories are immutable Markdown revisions; raw events live in immutable NDJSON segments. SQLite FTS5, current-record projections and typed relationships are derived indexes that can be rebuilt. Imported events remain observations: importing or classifying them does not promote them into accepted advice.
 
@@ -20,14 +20,15 @@ revision judgments locally. Optional search reranking is off by default and
 cannot recover missing matches. Declared actors are not authenticated votes;
 imported legacy feedback stays unattributed and cannot rank memories. Initial
 evaluation shows changed ordering for one development query, with no Recall/MRR
-gain. Final phase32 installation and full-suite acceptance pass: 4,324 Rust tests
+gain. Phase32 acceptance recorded on 2026-10-18, before the dashboard reuse change: 4,324 Rust tests
 and 170 Python tests pass, with nine Rust ignores and one Windows Python skip.
 Both plugin caches verify 0.4.2; active-client reload and model consumption remain
 unobserved.
 
-Build from this checkout with the repository's Rust toolchain:
+Build from this checkout with the repository's Rust toolchain, Node.js 22.12+ and pnpm 10. Cargo automatically builds and embeds the renderer from `gui/`; no separate frontend server is installed:
 
 ```bash
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm --dir gui install --frozen-lockfile
 cargo build -p cortex-local --bin cortex --release --locked
 target/release/cortex install
 ```
@@ -63,7 +64,7 @@ cortex --repository Cortex search "immutable revisions"
 cortex --repository Cortex serve
 ```
 
-`serve` starts only the embedded loopback web interface, on port 17200 by default. Open the token-bearing URL printed by that process. The UI supports search, capture, revisions, historical sources, typed connections and classification queue inspection. No separate frontend build is needed. Treat its session token as a credential; privileged browser extensions can observe browser content and URLs.
+`serve` starts only the embedded loopback web interface, on port 17200 by default. Open the token-bearing URL printed by that process. The embedded renderer reuses the existing `gui/` Header, Sidebar, Tweaks and CSS, with an icon rail on mobile. Exact repository inventory and cursor pagination expose local history, memories and decisions; search, capture, revisions, graph links, classification queue, audit and feedback use local APIs. Legacy service views are not called. Cargo builds the frontend automatically when compiling source; the installed executable already contains its assets. The startup fragment is cleared before React mounts and its token stays in tab session storage. Treat its session token as a credential; privileged browser extensions can observe browser content and URLs.
 
 CLI commands also cover `get`, `recent`, `revise`, `graph`, historical `import`, `reindex` and explicit `reindex --repair`. Revisions require the expected prior revision. Import preserves original source bytes and repository identities; missing historical scope needs an explicit mapping. Repair retains forensic copies instead of discarding canonical data. Consult command `--help` and the [operations guide](docs/operations/local-first-memory.md) for payloads and recovery steps.
 
@@ -86,7 +87,7 @@ Capture stays local. Optional Jev classification requires explicitly queued cand
 
 ## Update
 
-Build the desired source revision, then supply that executable to the installed CLI:
+Install the locked GUI dependencies as shown above, build the desired source revision, then supply that executable to the installed CLI:
 
 ```bash
 cargo build -p cortex-local --bin cortex --release --locked
@@ -125,7 +126,7 @@ cargo test -p cortex-local --all-features --locked
 | `packages/cortex-codex-plugin/` | Codex plugin assets |
 | `crates/cortex-cli/` | Legacy operator executable `cortex-legacy` and legacy utilities |
 | `crates/cortex-api/`, `crates/cortex-workers/` | Optional legacy service pipeline |
-| `gui/` | Legacy Electron dashboard |
+| `gui/` | Shared dashboard layout and renderer; embedded standalone mode and retained legacy Electron mode |
 
 Cargo does not automatically reclaim old build artifacts. See [Rust target hygiene](docs/rust-target-hygiene.md) for bounded local maintenance.
 

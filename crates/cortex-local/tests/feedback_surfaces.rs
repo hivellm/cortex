@@ -390,16 +390,6 @@ async fn feedback_web_requires_auth_preserves_literals_and_rejects_forged_proven
         .await
         .unwrap();
     assert_eq!(list["entries"][0], fetched);
-    let script = client
-        .get(format!("{base}/app.js"))
-        .send()
-        .await
-        .unwrap()
-        .text()
-        .await
-        .unwrap();
-    assert!(script.contains("feedbackState.target !== target"));
-    assert!(!script.contains("innerHTML") && !script.contains("insertAdjacentHTML"));
     task.abort();
     let _ = task.await;
 }

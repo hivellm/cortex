@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Icon } from "../atoms/Icon";
@@ -55,16 +56,7 @@ export function Header({
       : "offline";
 
   return (
-    <header className="header">
-      <div className="header__brand">
-        <span className="brand-mark" />
-        <span className="header__brand-text" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-          <span className="brand-name">Cortex</span>
-          <span className="brand-version mono">v{version}</span>
-        </span>
-      </div>
-      <HeaderSearch />
-      <div className="header__right">
+    <HeaderFrame version={version} search={<HeaderSearch />}>
         <ConnectionSwitcher onManage={onJumpToConnections} />
         <button
           type="button"
@@ -120,7 +112,24 @@ export function Header({
         >
           <Icon name="settings" size={15} />
         </button>
+    </HeaderFrame>
+  );
+}
+
+export function HeaderFrame({ version, search, children }: {
+  version: string; search: ReactNode; children: ReactNode;
+}) {
+  return (
+    <header className="header">
+      <div className="header__brand">
+        <span className="brand-mark" />
+        <span className="header__brand-text" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+          <span className="brand-name">Cortex</span>
+          <span className="brand-version mono">v{version}</span>
+        </span>
       </div>
+      {search}
+      <div className="header__right">{children}</div>
     </header>
   );
 }

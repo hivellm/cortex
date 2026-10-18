@@ -12,13 +12,49 @@ Do not mix its install/setup commands with this executable.
 The [local evaluation guide](local-memory-evaluation.md) covers reproducible
 offline checks, measured retrieval limits and installed-surface verification.
 
+## Embedded dashboard
+
+`cortex --repository Cortex serve` starts the loopback dashboard on port 17200
+by default. Open the URL printed by that process. The renderer reuses `gui/`'s
+Header, Sidebar, Tweaks, typography, color tokens and CSS. Narrow screens retain
+navigation through an icon rail. This is the existing dashboard layout adapted
+to local data, not a second visual design.
+
+The startup URL carries a per-process bearer token in its fragment. Bootstrap
+clears that fragment before mounting React and keeps the token in tab session
+storage for refreshes. API requests require the expected Host, same Origin and
+bearer token. A new server process requires its new startup URL. Do not share
+that URL or token.
+
+Repository inventory counts all current records, including inactive records,
+and typed links for each exact case-sensitive scope. It is not a sample-derived
+total or a count of every historical revision. Timeline, memory and decisions
+browse the current projection with bounded cursor pages ordered by update time
+and ID; filters bind each cursor. Source payloads remain inspectable. Search,
+capture, revisions, graph, advisory classification queue, audit and explicit
+feedback use the standalone API. Default browsing excludes inactive or
+inapplicable records; enabling inactive browsing explains differences from the
+inventory totals. Concurrent writes can change later pages; pagination does not
+claim a frozen snapshot across requests.
+
+Standalone navigation does not call legacy `/v1/dashboard` services or start the
+old stack. Classification queue actions do not contact Jev. Feedback reranking
+remains opt-in and does not establish retrieval gains or model consumption.
+
 ## Build, install and verify
 
 These PowerShell examples use the default home. Substitute an explicit path
 consistently for a custom home. On Unix, use the executable without `.exe` and
 the corresponding home-directory syntax.
 
+Source builds require the repository Rust toolchain, Node.js 22.12+ and pnpm 10.
+Cargo invokes the `gui/` renderer build and embeds its assets. The installed
+executable needs neither Node.js nor Electron, a frontend server or Docker.
+Skip the optional Electron binary download when preparing standalone builds:
+
 ```powershell
+$env:ELECTRON_SKIP_BINARY_DOWNLOAD = "1"
+pnpm --dir gui install --frozen-lockfile
 cargo build --release --locked -p cortex-local --bin cortex
 & .\target\release\cortex.exe build-info
 & .\target\release\cortex.exe --home "$env:USERPROFILE\.cortex" install

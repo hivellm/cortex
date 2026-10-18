@@ -1,9 +1,55 @@
 # Cortex GUI
 
-Desktop dashboard for Cortex. Electron 33 + Vite 5 + React 18 + TypeScript.
-Renderer talks to `cortex-api` over HTTP — no IPC bridge for application
-data, only the tiny `window.cortex` surface for desktop integrations
-(open-external, build id).
+Shared dashboard renderer for Cortex: React 19, Vite 7 and TypeScript, with
+retained Electron 39 desktop support. The standalone `cortex serve` executable
+embeds this renderer and serves local APIs. Legacy Electron mode still talks to
+`cortex-api` over HTTP; its `window.cortex` bridge covers desktop integrations
+(open-external, build id), not application data.
+
+## Standalone build and runtime
+
+From the repository root, with the repository Rust toolchain, Node.js 22.12+
+and pnpm 10:
+
+```bash
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm --dir gui install --frozen-lockfile
+cargo build --release --locked -p cortex-local --bin cortex
+target/release/cortex --repository Cortex serve
+```
+
+In PowerShell, set `$env:ELECTRON_SKIP_BINARY_DOWNLOAD = "1"` before `pnpm`;
+use `target/release/cortex.exe`. Cargo invokes `scripts/build-standalone.mjs`,
+builds into its own `OUT_DIR`, and embeds the generated assets. No generated
+`dist/` files need committing. The installed executable needs no Node.js,
+Electron binary, frontend server or Docker.
+
+Standalone mode shares `HeaderFrame`, `SidebarFrame`, `Tweaks`, atoms and
+`styles.css` with the existing dashboard. `src/local/` supplies local API/state
+integration and view bodies; mobile navigation uses an icon rail. The build
+injects the standalone runtime marker. Legacy routes and services are not
+requested in this mode.
+
+Open the token-bearing URL printed by `serve`. Bootstrap removes its fragment
+before React mounts and retains the per-process token in tab session storage.
+The server checks Host, Origin and bearer authorization on local API requests.
+Repository selection is exact and case-sensitive. Inventory reports complete
+current-record and link counts, while record pages use bounded, filter-bound
+cursors. Timeline, memory, decisions, graph, classifications, health, audit and
+feedback render local store data. Capture, revisions and source inspection
+remain available. Queueing classification does not call Jev; feedback ranking
+starts disabled.
+
+Run renderer checks from `gui/`:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm test
+```
+
+ESLint applies JavaScript and TypeScript recommended checks, browser/Node
+scopes and React Hooks rules. Warnings fail the gate; type checking remains a
+separate compiler check.
 
 ## Layout
 
@@ -40,14 +86,14 @@ The `assets/` tree at sibling-level (`gui/assets/`) is the design source —
 read-only reference. Production code under `src/` ports the visual
 language but does not import from `assets/`.
 
-## Develop
+## Legacy Electron development
 
 ```bash
 # Backend running on 127.0.0.1:17000 with archive seed:
 CORTEX_ARCHIVE_ROOT=~/.cortex/archive cargo run -p cortex-api
 
 # In gui/:
-pnpm install
+pnpm install --frozen-lockfile
 pnpm dev               # vite + electron, reload on file change
 ```
 
@@ -56,16 +102,17 @@ it once `wait-on tcp:5173` clears. The Vite dev proxy forwards `/v1/*`
 to `http://127.0.0.1:17000`, so fetch() calls in the renderer resolve
 without CORS.
 
-## Build
+## Legacy Electron build
 
 ```bash
 pnpm build             # vite build → dist/, tsc → dist-electron/
 pnpm start             # run the packaged Electron app
 ```
 
-## Status
+## Legacy service views
 
-All seven views wired to live `cortex-api` data:
+The following describes the retained service-backed Electron mode, not the
+standalone local routes or their acceptance results:
 
 | View              | Endpoint                            | Notes                                                                 |
 |-------------------|-------------------------------------|-----------------------------------------------------------------------|
@@ -122,7 +169,6 @@ The atoms map 1:1 to `gui/assets/atoms.jsx` (the design source). Production code
 ### Not yet wired
 
 - **SSE / WebSocket** for the timeline (still polls every 5s).
-- **Tweaks panel** (theme/accent/density) from the design reference.
 - **Decision supersession chain** — the renderer (`SupersedeChain`)
   ships and renders gracefully when the backend includes
   `chain: [{id, title, state}]` on a `DecisionRow`. Phase2h adds the
@@ -130,5 +176,3 @@ The atoms map 1:1 to `gui/assets/atoms.jsx` (the design source). Production code
 - **Trust matrix** — the renderer (`TrustGrid`) is wired against
   `/v1/dashboard/trust` with the design's `oklch` ramp, but the
   endpoint stays empty until spec-14 derivation lands.
-- Tool-call **heatmap** — the data shape exists; the renderer is on
-  the Tool Analytics view's TODO.
