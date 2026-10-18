@@ -158,7 +158,7 @@ change bumps `version` (now `0.3.0`). The package `.gitattributes` pins
 
 ### Windows execution
 
-Codex runs `commandWindows` as `%COMSPEC% /C "<command>"`.
+Codex 0.162.0-alpha.17.2 runs `commandWindows` as `pwsh.exe -NoProfile -Command "<command>"` (see the correction below).
 
 > **Correction (2026-10-17, revised).** The installed codex-cli 0.162.0-alpha.17.2
 > runs `commandWindows` through `pwsh.exe -NoProfile -Command`, not
