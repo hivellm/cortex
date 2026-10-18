@@ -6,7 +6,7 @@ eligibility for the rewritten follow-ups. Their new checklists start unchecked.
 
 | Work | Execution prerequisite | Required outcome |
 | --- | --- | --- |
-| `phase36_local-first-core` | Existing approved checklist | Durable file core, historical import, advisory Jev, CLI/MCP/hooks/embedded GUI, installed acceptance and full quality gates. |
+| `phase36_local-first-core` | Completed and archived on 2026-10-18 | Accepted in `49d5f63`: durable file core, historical import, advisory Jev, CLI/MCP/hooks/embedded GUI, installed acceptance and full quality gates. |
 | `phase36_codex-adapter` | Its own concurrent checklist | Correct observed Codex payload/client contracts. Coordinate these contracts with standalone wiring without reintroducing a mandatory daemon. This cleanup does not reschedule that session. |
 | `phase28_retrieval-eval-gate-live` | Completed local core | Reproducible local corpus and quality/latency/provenance gates; installed read-only smoke. |
 | `phase31_pre-thinking-audit-trail` | Completed local core | Canonical evidence distinguishing delivery from observed use, inspectable after restart/reindex. |

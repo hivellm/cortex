@@ -635,3 +635,8 @@ requested. ADR 041, the rewritten standalone README and the operational
 migration/recovery guide complete the documentation contract. Independent
 documentation review corrected the queue/checkpoint file formats and limited
 manual retry to failed classification jobs; no further blocker remained.
+
+Implementation checkpoint: `49d5f63`. Rulebook archived the completed task to
+`.rulebook/archive/2026-10-18-phase36_local-first-core/`. Its reviewed requirements
+are also preserved as the current `.rulebook/specs/local-core/spec.md` contract;
+the archive operation itself moved the task but did not emit that live spec.

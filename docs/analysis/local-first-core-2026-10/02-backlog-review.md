@@ -5,7 +5,7 @@ of the two new phase36 tasks to protect concurrent work. The operator requested
 review and explicitly authorized deleting old tasks that no longer make sense.
 
 Architecture reference: [01-architecture.md](01-architecture.md) and
-`.rulebook/tasks/phase36_local-first-core/design.md`. The approved target replaces
+`.rulebook/archive/2026-10-18-phase36_local-first-core/design.md`. The approved target replaces
 mandatory Docker, service workers and remote indexes with one local executable,
 canonical files, SQLite indexes and simple graph links. This cleanup changes
 task definitions and analysis records, not runtime data or legacy code.
