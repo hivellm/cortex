@@ -85,6 +85,8 @@ On Windows, supply `target/release/cortex.exe`. Update validates the candidate's
 
 ## Verified behavior and limits
 
+The [reproducible evaluation guide](docs/operations/local-memory-evaluation.md) reports development Recall@5 0.8625 and held-out natural-language Recall@5 0.0. A green offline contract/non-regression gate does not establish natural-language readiness or general productivity gains.
+
 [Implementation and installed acceptance evidence](docs/analysis/local-first-core-2026-10/05-implementation-evidence.md) records 128 standalone tests and 4,100 legacy tests passing, with nine pre-existing ignored legacy checks/examples. Check, formatting and strict clippy also passed. Earlier failures and fixture corrections remain recorded rather than replaced by the passing totals.
 
 Fresh Claude and Codex sessions answered two historical questions using the expected memory IDs and revisions with no retrieval tools. Corresponding controls answered "sem fonte". Codex's valid control disabled all hooks for one invocation; a plugin-disable attempt that left hooks active was excluded. This demonstrates observed use of those two memories, not general productivity gains or broad retrieval quality.

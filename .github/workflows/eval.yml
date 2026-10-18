@@ -1,128 +1,71 @@
-name: eval
+name: Standalone Evaluation
 
-# Phase14c golden-set harness, reconciled by phase28
-# (retrieval-eval-gate-live): the fixtures in
-# `crates/cortex-eval/tests/golden/` are real (27-row multi-intent
-# retrieval, 26-row all-kinds classification, live-harvested
-# consolidation/mcp rows, synthetic access_control matrix) and the
-# floors in `cortex-eval` are re-derived from the re-locked
-# 2026-07-14 baseline (`crates/cortex-eval/baselines/cdc-baseline-v1.json`).
-#
-# NIGHTLY runs only the suites whose data prerequisites this CI stack
-# can genuinely satisfy: `access_control` (pure predicate matrix, no
-# stack at all) and `classification` (needs only the classifier
-# worker, booted below). The other three suites (retrieval /
-# consolidation / mcp_search) measure recall against the maintainer's
-# LIVE corpus — turns, consolidations, and event ULIDs that exist only
-# in the developer stack and cannot be reproduced from a bare checkout
-# — so they stay on `workflow_dispatch` and are exercised locally per
-# the golden README's curation cadence. Scheduling them here would
-# just recreate the red-nightly inbox flood this workflow's history
-# warns about.
-
+# Frozen public corpus. Runtime evaluation needs no services or provider secrets.
+# Historical service-stack evidence remains in Git history and legacy fixtures.
 on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
   workflow_dispatch:
-  schedule:
-    # Nightly at 03:17 UTC — offset from the top of the hour to dodge
-    # the GitHub cron thundering herd.
-    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: local-eval-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  eval:
-    name: cortex-eval ${{ matrix.suite }}
-    runs-on: ubuntu-latest
+  offline:
+    name: Local evaluation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        # On the nightly schedule, run only the CI-satisfiable suites
-        # (see the header comment); manual dispatch runs all five.
-        # (job-level `if` cannot see `matrix.*`, hence the conditional
-        # matrix expression.)
-        suite: ${{ github.event_name == 'schedule' && fromJSON('["classification","access_control"]') || fromJSON('["retrieval","consolidation","classification","mcp_search","access_control"]') }}
-    services:
-      synap:
-        image: hivehub/synap:1.0.0
-        ports: ["15500:15500"]
-      meilisearch:
-        image: getmeili/meilisearch:v1.10
-        env:
-          MEILI_MASTER_KEY: cortex-dev-master-key
-          MEILI_ENV: development
-        ports: ["7700:7700"]
+        include:
+          - os: ubuntu-latest
+            executable: cortex
+          - os: windows-latest
+            executable: cortex.exe
+    defaults:
+      run:
+        shell: bash
     env:
-      CORTEX_GIT_SHA: ${{ github.sha }}
-      MEILI_MASTER_KEY: cortex-dev-master-key
+      CORTEX_EVAL_BINARY: ${{ github.workspace }}/target/release/${{ matrix.executable }}
+      CARGO_TERM_COLOR: always
     steps:
-      - uses: actions/checkout@v4
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-      - name: Build cortex-eval
-        run: cargo build --release -p cortex-eval
-      - name: Start cortex-api stack
-        if: matrix.suite != 'access_control' && matrix.suite != 'classification'
-        run: |
-          cargo run --release -p cortex-api -- --bind 0.0.0.0:17000 &
-          # Wait for cortex-api health endpoint
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:17000/v1/status >/dev/null; then break; fi
-            sleep 1
-          done
-      - name: Start classifier worker (classification suite)
-        if: matrix.suite == 'classification'
-        env:
-          CORTEX_CLASSIFIER_MODE: static
-          CORTEX_CLASSIFIER_SYNAP_URL: http://127.0.0.1:15500
-        run: |
-          cargo run --release -p cortex-workers --bin classifier-worker &
-          # Wait for the admin listener (hosts POST /v1/classify).
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:17021/healthz >/dev/null; then break; fi
-            sleep 1
-          done
-      - name: Fetch baseline (from main branch artifact)
-        id: baseline
-        continue-on-error: true
-        uses: dawidd6/action-download-artifact@v6
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: eval-baseline-${{ matrix.suite }}
-          branch: main
-          workflow: eval.yml
-          path: baseline/
-      - name: Run suite (with regression gate when baseline present)
+          shared-key: local-eval-${{ matrix.os }}
+      - name: Build standalone release
+        run: cargo build --release --locked -p cortex-local --bin cortex
+      - name: Check typed classification offline
+        run: cargo test --locked -p cortex-local --test classification_eval
+      - name: Install pinned Python lint tool
+        run: python -m pip install ruff==0.14.3
+      - name: Lint evaluation scripts
         run: |
-          BASELINE_FLAG=""
-          if [ -f "baseline/${{ matrix.suite }}.json" ]; then
-            BASELINE_FLAG="--baseline baseline/${{ matrix.suite }}.json"
-            echo "Comparing against main baseline."
-          else
-            echo "No baseline available — running advisory mode (acceptance floor only)."
-          fi
-          ./target/release/cortex-eval \
-            --suite ${{ matrix.suite }} \
-            --golden crates/cortex-eval/tests/golden/${{ matrix.suite }}.csv \
-            --output json \
-            $BASELINE_FLAG \
-            > report.json
-      - name: Upload report as baseline (main only)
-        if: github.ref == 'refs/heads/main'
+          python -m ruff check scripts/evaluate_local_memory.py scripts/evaluate_local_latency.py scripts/evaluate_jev_live.py scripts/gate_local_memory.py scripts/generate_local_eval_fixtures.py scripts/local_eval_transport.py scripts/smoke_installed_local.py scripts/tests/test_*eval*.py
+          python -m ruff format --check scripts/evaluate_local_memory.py scripts/evaluate_local_latency.py scripts/evaluate_jev_live.py scripts/gate_local_memory.py scripts/generate_local_eval_fixtures.py scripts/local_eval_transport.py scripts/smoke_installed_local.py scripts/tests/test_*eval*.py
+      - name: Test evaluation contracts with real standalone binary
+        run: python -W error::ResourceWarning -m unittest discover -s scripts/tests -p "test_*eval*.py"
+      - name: Run fresh offline contract and non-regression gate
+        run: |
+          python scripts/gate_local_memory.py \
+            --binary "$CORTEX_EVAL_BINARY" \
+            --report scripts/eval-ci-report.json
+      - name: Preserve passing and failed evaluation evidence
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: eval-baseline-${{ matrix.suite }}
-          path: report.json
+          name: local-eval-${{ matrix.os }}-${{ github.run_attempt }}
+          path: scripts/eval-ci-report.json
+          if-no-files-found: warn
           retention-days: 90
-      - name: Upload report (PR diagnostics)
-        if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
-        with:
-          name: eval-pr-${{ matrix.suite }}
-          path: report.json
-          retention-days: 14

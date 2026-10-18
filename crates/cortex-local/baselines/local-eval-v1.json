@@ -1,0 +1,536 @@
+{
+  "schema_version": 1,
+  "id": "standalone-local-eval-v1",
+  "created_at": "2026-10-18",
+  "gate_scope": "Frozen-corpus contract and non-regression only; not semantic recall or observed model-use acceptance.",
+  "baseline_binary_sha256": "ce68013c14018cdd1df45878f29a2e5750590d6aefca1c33b82f68f023fedb8f",
+  "required_build": {
+    "runtime": "standalone",
+    "release": true,
+    "install_protocol": 1,
+    "required_services": []
+  },
+  "fixture_manifest_sha256": "a661af9be17b6148a19b65fd5568f4787c6b3681d24e2caa3c08005a47b90734",
+  "fixture_hashes": {
+    "corpus.json": "dd4c38d60a66f36004aa440a68279adb1043dd72c0723caeef13b510c0ad1521",
+    "daily.ndjson": "c85ebabd28a2b03865e29b5f7709a3d31c0b43421c1e457260f70d6a5c33661e",
+    "events.ndjson": "3ae0e73e535627589fd502b8be24b46c26fb61c33137d9647f4774a15c6d1ac4",
+    "events.ndjson.zst": "f448dec5bbb47dcdaffcf5999950b02f43254a60cea504f2f83babcdc75f325b",
+    "graph.json": "ddbdc1a7280f7d89f5d96a6dbb7a41fab39802c18609b43b56b5bcdf0a2652ac"
+  },
+  "stable_projection_sha256": "87f19e03c31848e09eb283a9c25f05a67c0d35287ada192ae5b9023891c0a543",
+  "expected_record_count": 30,
+  "scope_check_names": [
+    "cli-status:Atlas",
+    "cli-search:Atlas:offline desktop notes",
+    "cli-search:Atlas:export",
+    "cli-status:atlas",
+    "cli-search:atlas:offline desktop notes",
+    "cli-search:atlas:export",
+    "cli-status:AtlasLab",
+    "cli-search:AtlasLab:offline desktop notes",
+    "cli-search:AtlasLab:export",
+    "cli-status:AtlasProduction",
+    "cli-search:AtlasProduction:offline desktop notes",
+    "cli-search:AtlasProduction:export",
+    "mcp-search:0:Atlas:offline desktop notes",
+    "mcp-search:0:Atlas:export",
+    "mcp-status:0:Atlas",
+    "mcp-foreign-get:0:Atlas",
+    "mcp-foreign-graph:0:Atlas",
+    "mcp-recall:0:Atlas",
+    "mcp-search:0:atlas:offline desktop notes",
+    "mcp-search:0:atlas:export",
+    "mcp-status:0:atlas",
+    "mcp-foreign-get:0:atlas",
+    "mcp-foreign-graph:0:atlas",
+    "mcp-recall:0:atlas",
+    "mcp-search:0:AtlasLab:offline desktop notes",
+    "mcp-search:0:AtlasLab:export",
+    "mcp-status:0:AtlasLab",
+    "mcp-foreign-get:0:AtlasLab",
+    "mcp-foreign-graph:0:AtlasLab",
+    "mcp-recall:0:AtlasLab",
+    "mcp-search:0:AtlasProduction:offline desktop notes",
+    "mcp-search:0:AtlasProduction:export",
+    "mcp-status:0:AtlasProduction",
+    "mcp-foreign-get:0:AtlasProduction",
+    "mcp-foreign-graph:0:AtlasProduction",
+    "mcp-recall:0:AtlasProduction",
+    "mcp-search:1:Atlas:offline desktop notes",
+    "mcp-search:1:Atlas:export",
+    "mcp-status:1:Atlas",
+    "mcp-foreign-get:1:Atlas",
+    "mcp-foreign-graph:1:Atlas",
+    "mcp-recall:1:Atlas",
+    "mcp-search:1:atlas:offline desktop notes",
+    "mcp-search:1:atlas:export",
+    "mcp-status:1:atlas",
+    "mcp-foreign-get:1:atlas",
+    "mcp-foreign-graph:1:atlas",
+    "mcp-recall:1:atlas",
+    "mcp-search:1:AtlasLab:offline desktop notes",
+    "mcp-search:1:AtlasLab:export",
+    "mcp-status:1:AtlasLab",
+    "mcp-foreign-get:1:AtlasLab",
+    "mcp-foreign-graph:1:AtlasLab",
+    "mcp-recall:1:AtlasLab",
+    "mcp-search:1:AtlasProduction:offline desktop notes",
+    "mcp-search:1:AtlasProduction:export",
+    "mcp-status:1:AtlasProduction",
+    "mcp-foreign-get:1:AtlasProduction",
+    "mcp-foreign-graph:1:AtlasProduction",
+    "mcp-recall:1:AtlasProduction",
+    "mcp-ranking-and-same-id-perturbation"
+  ],
+  "graph_check_names": [
+    "frozen-g01-cli",
+    "frozen-g01-mcp",
+    "frozen-g02-cli",
+    "frozen-g02-mcp",
+    "frozen-g03-cli",
+    "frozen-g03-mcp",
+    "historical-event-export-discussion",
+    "historical-event-export-check",
+    "historical-event-timeout-discussion",
+    "historical-event-restore-test",
+    "historical-event-lab-export",
+    "historical-event-lower-export",
+    "historical-event-dialog-review",
+    "historical-event-auth-tests",
+    "depth-0-cli",
+    "depth-0-mcp",
+    "depth-1-cli",
+    "depth-1-mcp",
+    "depth-2-cli",
+    "depth-2-mcp",
+    "depth-3-cli",
+    "depth-3-mcp",
+    "depth-4-cli",
+    "depth-4-mcp",
+    "depth-5-cli",
+    "depth-5-mcp",
+    "reverse-orientation-cli",
+    "reverse-orientation-mcp",
+    "truncation-1-cli",
+    "truncation-1-mcp",
+    "truncation-2-cli",
+    "truncation-2-mcp",
+    "depth-zero-is-not-truncated-cli",
+    "depth-zero-is-not-truncated-mcp",
+    "empty-root-graph-control-inactive-cli",
+    "empty-root-graph-control-inactive-mcp",
+    "empty-root-graph-absent-local-cli",
+    "empty-root-graph-absent-local-mcp",
+    "empty-root-graph-foreign-only-cli",
+    "empty-root-graph-foreign-only-mcp",
+    "dangling-and-inactive-targets-cli",
+    "dangling-and-inactive-targets-mcp",
+    "cli-limit-200",
+    "bounds-cli-6-10",
+    "bounds-cli-1-0",
+    "bounds-cli-1-201",
+    "bounds-mcp-6-10",
+    "bounds-mcp-1-0",
+    "bounds-mcp-1-101"
+  ],
+  "query_floors": [
+    {
+      "id": "d01",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "offline desktop notes",
+      "empty": false,
+      "expected_keys": [
+        "atlas-storage"
+      ],
+      "expected_ids": [
+        "daily-fdab88fa8ab761420f640dd061d1863691674928c77be9eecebe924152d24200"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d02",
+      "split": "development",
+      "repository": "atlas",
+      "text": "offline desktop notes",
+      "empty": false,
+      "expected_keys": [
+        "lower-storage"
+      ],
+      "expected_ids": [
+        "daily-347b116305fb67f893a37341fa6638f2f8a294dacef4913f31373c8978d2bb8e"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d03",
+      "split": "development",
+      "repository": "AtlasLab",
+      "text": "offline desktop notes",
+      "empty": false,
+      "expected_keys": [
+        "atlaslab-storage"
+      ],
+      "expected_ids": [
+        "daily-cc8ec87e554d29e87c963c5a51b2884634ad4e37890cb86a35f028581fbdcfc0"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d04",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "connection cleanup deadline",
+      "empty": false,
+      "expected_keys": [
+        "atlas-timeout-fix",
+        "event-timeout-discussion"
+      ],
+      "expected_ids": [
+        "daily-df451a45fcfcb50de2a0098e1ecd0fcc51252852f600fb822f9ec05e9eb4c02f",
+        "archive-13ca88359338227574bb704f3aa3ed0639c25e803bfdf6b970faa7e0a296b358"
+      ],
+      "recall_at_5": 0.5,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d05",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "export",
+      "empty": false,
+      "expected_keys": [
+        "atlas-export-atomic",
+        "atlas-export-verify",
+        "event-export-discussion",
+        "event-export-check",
+        "graph-report",
+        "graph-log",
+        "graph-test",
+        "graph-unrelated"
+      ],
+      "expected_ids": [
+        "daily-18469c85af5cf6cd84c719072290ed164feec82c9fc70ed2f5847ddc53e45e08",
+        "daily-5a154f6fe6311153f83a15db55e530b353fb97cfc9b34d72824c6d8f2d1f400f",
+        "archive-5f95af933f0181f90cec27577dd7b2d913e9aee2540c6f5317dd5206d9fdeba7",
+        "archive-54ee69a4eeb525817dcd814c276f4c1b8bb31cc011789efb66aab2f7595d95ed",
+        "graph-report",
+        "graph-log",
+        "graph-test",
+        "graph-unrelated"
+      ],
+      "recall_at_5": 0.625,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d06",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "refresh token rotation",
+      "empty": false,
+      "expected_keys": [
+        "atlas-auth",
+        "event-auth-tests"
+      ],
+      "expected_ids": [
+        "daily-bfe72d78b0e9cbad1d5543a8c70c1ef65945817001cd498cabf4203c5f7f34eb",
+        "archive-2a308649efa81c3e1bc8fe90f01a35a378876d7c4f1721f425f839d9ee079c24"
+      ],
+      "recall_at_5": 0.5,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d07",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "Restoration verification",
+      "empty": false,
+      "expected_keys": [
+        "event-restore-test"
+      ],
+      "expected_ids": [
+        "archive-662cb6c82325367922500b06ccf0341eecfcafdb7c0064ffd5bff4141c109906"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d08",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "Proposed semantic search",
+      "empty": false,
+      "expected_keys": [
+        "atlas-search-proposal"
+      ],
+      "expected_ids": [
+        "daily-f13ca6a04bb72603f49a7cef326e17f60032ea8160d88e5fc3cebd33c16a01e4"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d09",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "orbital telescope calibration",
+      "empty": true,
+      "expected_keys": [],
+      "expected_ids": [],
+      "recall_at_5": null,
+      "reciprocal_rank_at_10": null
+    },
+    {
+      "id": "d10",
+      "split": "development",
+      "repository": "AtlasProduction",
+      "text": "offline desktop notes",
+      "empty": true,
+      "expected_keys": [],
+      "expected_ids": [],
+      "recall_at_5": null,
+      "reciprocal_rank_at_10": null
+    },
+    {
+      "id": "d11",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "activity pagination",
+      "empty": false,
+      "expected_keys": [
+        "atlas-pagination"
+      ],
+      "expected_ids": [
+        "daily-113c4d4dd1c30acd882ae7e22e8fc3ebd40abd1743faef180fa70302d95caa7c"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "d12",
+      "split": "development",
+      "repository": "Atlas",
+      "text": "April export last rows",
+      "empty": false,
+      "expected_keys": [
+        "event-export-discussion"
+      ],
+      "expected_ids": [
+        "archive-5f95af933f0181f90cec27577dd7b2d913e9aee2540c6f5317dd5206d9fdeba7"
+      ],
+      "recall_at_5": 1.0,
+      "reciprocal_rank_at_10": 1.0
+    },
+    {
+      "id": "h01",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "Why can our notes still be searched on a laptop without internet?",
+      "empty": false,
+      "expected_keys": [
+        "atlas-storage"
+      ],
+      "expected_ids": [
+        "daily-fdab88fa8ab761420f640dd061d1863691674928c77be9eecebe924152d24200"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h02",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "Should we raise all production timeouts to fix slow database tests?",
+      "empty": false,
+      "expected_keys": [
+        "atlas-timeout-fix",
+        "event-timeout-discussion"
+      ],
+      "expected_ids": [
+        "daily-df451a45fcfcb50de2a0098e1ecd0fcc51252852f600fb822f9ec05e9eb4c02f",
+        "archive-13ca88359338227574bb704f3aa3ed0639c25e803bfdf6b970faa7e0a296b358"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h03",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "How do we prevent partially published exports and check that every byte survived?",
+      "empty": false,
+      "expected_keys": [
+        "atlas-export-atomic",
+        "atlas-export-verify",
+        "event-export-discussion",
+        "event-export-check"
+      ],
+      "expected_ids": [
+        "daily-18469c85af5cf6cd84c719072290ed164feec82c9fc70ed2f5847ddc53e45e08",
+        "daily-5a154f6fe6311153f83a15db55e530b353fb97cfc9b34d72824c6d8f2d1f400f",
+        "archive-5f95af933f0181f90cec27577dd7b2d913e9aee2540c6f5317dd5206d9fdeba7",
+        "archive-54ee69a4eeb525817dcd814c276f4c1b8bb31cc011789efb66aab2f7595d95ed"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h04",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "Which backup check recovered 42 notes without losing attachments?",
+      "empty": false,
+      "expected_keys": [
+        "event-restore-test"
+      ],
+      "expected_ids": [
+        "archive-662cb6c82325367922500b06ccf0341eecfcafdb7c0064ffd5bff4141c109906"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h05",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "What should happen if someone presents a refresh token for the second time?",
+      "empty": false,
+      "expected_keys": [
+        "atlas-auth",
+        "event-auth-tests"
+      ],
+      "expected_ids": [
+        "daily-bfe72d78b0e9cbad1d5543a8c70c1ef65945817001cd498cabf4203c5f7f34eb",
+        "archive-2a308649efa81c3e1bc8fe90f01a35a378876d7c4f1721f425f839d9ee079c24"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h06",
+      "split": "held_out",
+      "repository": "AtlasLab",
+      "text": "What is the laboratory exception for refresh token rotation?",
+      "empty": false,
+      "expected_keys": [
+        "atlaslab-auth"
+      ],
+      "expected_ids": [
+        "daily-99146d63fe7b7f9f725f330d1bf2ce6d1f3c19e012b01b437d77b3c6fafc4674"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h07",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "How can someone dismiss a dialog without a mouse and regain focus?",
+      "empty": false,
+      "expected_keys": [
+        "atlas-accessibility",
+        "event-dialog-review"
+      ],
+      "expected_ids": [
+        "daily-078109c1a2afc11fcda7ca8b8861014a59512100617602a3b18e0d8fcdff28e3",
+        "archive-833070dd05a5b2fa38f6ef03482732a75e50ff251975177caf83e14f6004646e"
+      ],
+      "recall_at_5": 0.0,
+      "reciprocal_rank_at_10": 0
+    },
+    {
+      "id": "h08",
+      "split": "held_out",
+      "repository": "Atlas",
+      "text": "What was the approved price of the multilingual embedding provider?",
+      "empty": true,
+      "expected_keys": [],
+      "expected_ids": [],
+      "recall_at_5": null,
+      "reciprocal_rank_at_10": null
+    }
+  ],
+  "split_floors": {
+    "development": {
+      "answerable_queries": 10,
+      "empty_queries": 2,
+      "recall_at_5": 0.8625,
+      "mrr_at_10": 1.0,
+      "empty_queries_without_hits": 2,
+      "integrity_failed_queries": 0,
+      "integrity_ok": true
+    },
+    "held_out": {
+      "answerable_queries": 7,
+      "empty_queries": 1,
+      "recall_at_5": 0.0,
+      "mrr_at_10": 0.0,
+      "empty_queries_without_hits": 1,
+      "integrity_failed_queries": 0,
+      "integrity_ok": true
+    },
+    "all": {
+      "answerable_queries": 17,
+      "empty_queries": 3,
+      "recall_at_5": 0.5073529411764706,
+      "mrr_at_10": 0.5882352941176471,
+      "empty_queries_without_hits": 3,
+      "integrity_failed_queries": 0,
+      "integrity_ok": true
+    }
+  },
+  "quality_policy": "No loss against any frozen query or aggregate. Existing seven natural-language held-out misses have zero baseline credit; this cannot establish natural-language readiness. Three empty expectations must remain correct. No labels or queries changed after observation.",
+  "natural_language_readiness": {
+    "split": "held_out",
+    "recall_at_5_min": 0.5,
+    "mrr_at_10_min": 0.5,
+    "required_for_non_regression_gate": false,
+    "rationale": "An initial target of at least half the relevant evidence and reciprocal-rank credit, kept separate from the current literal-AND baseline. Current zero result explicitly reports not ready; green non-regression does not satisfy this target."
+  },
+  "latency": {
+    "min_samples": 20,
+    "concurrency": 1,
+    "series": {
+      "cli_new_process_warmed_store": {
+        "p95_max_ns": 2000000000,
+        "observed_p50_ns": 26583900,
+        "observed_p95_ns": 34089900
+      },
+      "mcp_new_process_first_request": {
+        "p95_max_ns": 2000000000,
+        "observed_p50_ns": 24894200,
+        "observed_p95_ns": 26115400
+      },
+      "mcp_persistent_after_warmup": {
+        "p95_max_ns": 500000000,
+        "observed_p50_ns": 3852600,
+        "observed_p95_ns": 4467000
+      },
+      "hook_SessionStart_new_process_warmed_store": {
+        "p95_max_ns": 2000000000,
+        "observed_p50_ns": 29575300,
+        "observed_p95_ns": 38637000
+      },
+      "hook_UserPromptSubmit_new_process_warmed_store": {
+        "p95_max_ns": 2000000000,
+        "observed_p50_ns": 53160600,
+        "observed_p95_ns": 55020000
+      }
+    },
+    "environment": {
+      "os": "Windows-11-10.0.26200-SP0",
+      "machine": null,
+      "processor": "AMD Ryzen 9 7950X3D 16-Core Processor",
+      "processor_identifier": "AMD64 Family 25 Model 97 Stepping 2",
+      "logical_cpus": 32,
+      "python": "3.13.9",
+      "hardware_note": "CPU model/architecture only; null means unavailable. No hostname or device serial collected."
+    },
+    "rationale": "Broad small-corpus responsiveness guard for heterogeneous CI, chosen before enforcement: at most 2s process-start/hook p95 and 0.5s persistent MCP p95. These are not a local-baseline ratio, engine-only SLO, production-scale benchmark or inherited legacy threshold. Every attempted sample must succeed; setup/cleanup errors fail."
+  },
+  "change_policy": "Reviewed explicit policy changes only, with rationale and retained previous evidence; no automatic baseline upload or threshold relaxation."
+}

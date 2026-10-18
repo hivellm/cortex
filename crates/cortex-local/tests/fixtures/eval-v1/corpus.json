@@ -1,0 +1,720 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "memories": [
+    {
+      "key": "atlas-storage",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Embedded storage for desktop notes",
+      "body": "Use SQLite for offline desktop notes. A single local file keeps deployment small and lets searches work without a server.",
+      "source_id": "fiction:atlas-storage",
+      "supersedes_key": "atlas-storage-old"
+    },
+    {
+      "key": "atlas-storage-old",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "superseded",
+      "title": "Retired server storage choice",
+      "body": "Use PostgreSQL for desktop notes. This earlier decision was replaced because field laptops must work offline.",
+      "source_id": "fiction:atlas-storage-old"
+    },
+    {
+      "key": "atlas-sync-proposal",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "proposed",
+      "title": "Proposed cloud synchronization",
+      "body": "Consider uploading desktop notes to a hosted PostgreSQL service for team synchronization. This proposal has not been accepted.",
+      "source_id": "fiction:atlas-sync-proposal"
+    },
+    {
+      "key": "atlas-timeout-old",
+      "repository": "Atlas",
+      "kind": "lesson",
+      "authority": "superseded",
+      "title": "Retired blanket timeout increase",
+      "body": "Increase every request timeout to five seconds when database tests fail. This diagnosis ignored connection cleanup.",
+      "source_id": "fiction:atlas-timeout-old"
+    },
+    {
+      "key": "atlas-timeout-fix",
+      "repository": "Atlas",
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Database timeout correction",
+      "body": "Slow connection cleanup can consume the request deadline after a successful query. Measure cleanup separately and keep production deadlines unchanged; control time only in semantic tests.",
+      "source_id": "fiction:atlas-timeout-fix",
+      "supersedes_key": "atlas-timeout-old"
+    },
+    {
+      "key": "atlas-export-atomic",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Atomic export publication",
+      "body": "Write export content to a temporary file and rename it after flushing. Readers must never observe a half-written export.",
+      "source_id": "fiction:atlas-export-atomic"
+    },
+    {
+      "key": "atlas-export-verify",
+      "repository": "Atlas",
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Verify export checksums",
+      "body": "Compare SHA-256 checksums before and after moving an export. A successful copy command alone does not establish that all bytes arrived.",
+      "source_id": "fiction:atlas-export-verify"
+    },
+    {
+      "key": "atlas-auth",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Refresh token rotation",
+      "body": "Rotate refresh tokens after each use and revoke the token family when a consumed token is reused. Keep access tokens short lived.",
+      "source_id": "fiction:atlas-auth"
+    },
+    {
+      "key": "atlas-pagination",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Stable activity pagination",
+      "body": "Order activity pages by timestamp and record ID. Equal timestamps require a deterministic tie breaker so records are not skipped between pages.",
+      "source_id": "fiction:atlas-pagination"
+    },
+    {
+      "key": "atlas-logging",
+      "repository": "Atlas",
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Credentials in request logs",
+      "body": "Redact authorization headers and password fields before writing request logs. Log status codes and request IDs instead of credential values.",
+      "source_id": "fiction:atlas-logging"
+    },
+    {
+      "key": "atlas-accessibility",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Keyboard navigation for dialogs",
+      "body": "Every dialog must support keyboard focus, Escape to dismiss, and focus restoration to its opener. Visible focus rings must remain enabled.",
+      "source_id": "fiction:atlas-accessibility"
+    },
+    {
+      "key": "atlas-backup",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Backup retention policy",
+      "body": "Keep seven daily backups and four weekly backups. Verify restoration on a disposable directory before declaring a backup healthy.",
+      "source_id": "fiction:atlas-backup"
+    },
+    {
+      "key": "atlaslab-storage",
+      "repository": "AtlasLab",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Embedded storage for desktop notes",
+      "body": "Use SQLite for offline desktop notes in AtlasLab. Laboratory devices have their own retention rules and never share production records.",
+      "source_id": "fiction:atlaslab-storage"
+    },
+    {
+      "key": "lower-storage",
+      "repository": "atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Embedded storage for desktop notes",
+      "body": "Use SQLite for offline desktop notes in lowercase atlas. This separate demonstration repository has no production ownership.",
+      "source_id": "fiction:lower-storage"
+    },
+    {
+      "key": "atlaslab-auth",
+      "repository": "AtlasLab",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Refresh token rotation",
+      "body": "Do not rotate refresh tokens in the disposable AtlasLab benchmark. This experimental exception is not approved for Atlas.",
+      "source_id": "fiction:atlaslab-auth"
+    },
+    {
+      "key": "lower-export",
+      "repository": "atlas",
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Verify export checksums",
+      "body": "The lowercase atlas tutorial verifies export checksums with SHA-256. Its files are examples, not Atlas release artifacts.",
+      "source_id": "fiction:lower-export"
+    },
+    {
+      "key": "atlas-search-proposal",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "proposed",
+      "title": "Proposed semantic search",
+      "body": "Evaluate multilingual embeddings for semantic search next quarter. No provider or deployment budget has been approved.",
+      "source_id": "fiction:atlas-search-proposal"
+    },
+    {
+      "key": "atlas-cache",
+      "repository": "Atlas",
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Bounded thumbnail cache",
+      "body": "Keep the thumbnail cache below 128 entries and evict the least recently used item. This cache does not store authentication tokens.",
+      "source_id": "fiction:atlas-cache"
+    }
+  ],
+  "events": [
+    {
+      "event_id": "event-export-discussion",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-Atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "turn",
+      "context": {
+        "repo": "Atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "user_message": "Why did the April 2025 export lose its last rows?",
+        "assistant_message": "The writer replaced the destination before flushing. We agreed to publish through a flushed temporary file."
+      }
+    },
+    {
+      "event_id": "event-export-check",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-Atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "tool_call",
+      "context": {
+        "repo": "Atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "tool_name": "shell",
+        "input": {
+          "command": "sha256sum release-export.json"
+        },
+        "output": {
+          "stdout": "release-export.json checksum matched the staging export; 240 rows verified.",
+          "exit_code": 0,
+          "truncated": false
+        },
+        "outcome": "success",
+        "duration_ms": 12
+      }
+    },
+    {
+      "event_id": "event-timeout-discussion",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-Atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "turn",
+      "context": {
+        "repo": "Atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "user_message": "Did a longer deadline solve the database stall?",
+        "assistant_message": "No. Cleanup after the successful query took 310 milliseconds. We kept the production deadline and corrected the test clock."
+      }
+    },
+    {
+      "event_id": "event-restore-test",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-Atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "tool_call",
+      "context": {
+        "repo": "Atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "tool_name": "shell",
+        "input": {
+          "command": "atlas-backup verify --scratch fixture-restore"
+        },
+        "output": {
+          "stdout": "Restoration verification passed: 42 notes recovered, zero missing attachments.",
+          "exit_code": 0,
+          "truncated": false
+        },
+        "outcome": "success",
+        "duration_ms": 12
+      }
+    },
+    {
+      "event_id": "event-lab-export",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-AtlasLab",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "turn",
+      "context": {
+        "repo": "AtlasLab",
+        "platform": "linux"
+      },
+      "payload": {
+        "user_message": "Why did the April 2025 export lose its last rows?",
+        "assistant_message": "A laboratory fixture deliberately omitted its final rows. No production export was changed."
+      }
+    },
+    {
+      "event_id": "event-lower-export",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "tool_call",
+      "context": {
+        "repo": "atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "tool_name": "shell",
+        "input": {
+          "command": "sha256sum release-export.json"
+        },
+        "output": {
+          "stdout": "Tutorial export checksum matched; 3 rows verified.",
+          "exit_code": 0,
+          "truncated": false
+        },
+        "outcome": "success",
+        "duration_ms": 12
+      }
+    },
+    {
+      "event_id": "event-dialog-review",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-Atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "turn",
+      "context": {
+        "repo": "Atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "user_message": "Can a keyboard user close the settings dialog?",
+        "assistant_message": "Escape dismissed the dialog, then focus returned to the settings button. The visible focus ring remained."
+      }
+    },
+    {
+      "event_id": "event-auth-tests",
+      "schema_version": "1",
+      "occurred_at": "2026-02-03T10:00:00Z",
+      "session_id": "fiction-session-Atlas",
+      "stream": "live",
+      "tool": "claude-code",
+      "kind": "tool_call",
+      "context": {
+        "repo": "Atlas",
+        "platform": "linux"
+      },
+      "payload": {
+        "tool_name": "shell",
+        "input": {
+          "command": "cargo test refresh_token_reuse"
+        },
+        "output": {
+          "stdout": "refresh_token_reuse revokes the token family: passed; rotating refresh tokens: passed.",
+          "exit_code": 0,
+          "truncated": false
+        },
+        "outcome": "success",
+        "duration_ms": 12
+      }
+    }
+  ],
+  "graph_records": [
+    {
+      "id": "graph-report",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Export incident report",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-report",
+        "source_id": "graph-report",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": null,
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [
+        {
+          "target_id": "graph-log",
+          "relation": "derived_from"
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "id": "graph-log",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Export writer log",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-log",
+        "source_id": "graph-log",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": null,
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [
+        {
+          "target_id": "graph-test",
+          "relation": "supports"
+        }
+      ],
+      "metadata": {}
+    },
+    {
+      "id": "graph-test",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Export flush regression test",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-test",
+        "source_id": "graph-test",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": null,
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [],
+      "metadata": {}
+    },
+    {
+      "id": "graph-unrelated",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Unrelated export style review",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-unrelated",
+        "source_id": "graph-unrelated",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": null,
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [],
+      "metadata": {}
+    }
+  ],
+  "queries": [
+    {
+      "id": "d01",
+      "split": "development",
+      "intent": "accepted_decision",
+      "repository": "Atlas",
+      "text": "offline desktop notes",
+      "expected_keys": [
+        "atlas-storage"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d02",
+      "split": "development",
+      "intent": "scope_isolation",
+      "repository": "atlas",
+      "text": "offline desktop notes",
+      "expected_keys": [
+        "lower-storage"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d03",
+      "split": "development",
+      "intent": "scope_isolation",
+      "repository": "AtlasLab",
+      "text": "offline desktop notes",
+      "expected_keys": [
+        "atlaslab-storage"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d04",
+      "split": "development",
+      "intent": "correction",
+      "repository": "Atlas",
+      "text": "connection cleanup deadline",
+      "expected_keys": [
+        "atlas-timeout-fix",
+        "event-timeout-discussion"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d05",
+      "split": "development",
+      "intent": "multiple_relevant",
+      "repository": "Atlas",
+      "text": "export",
+      "expected_keys": [
+        "atlas-export-atomic",
+        "atlas-export-verify",
+        "event-export-discussion",
+        "event-export-check",
+        "graph-report",
+        "graph-log",
+        "graph-test",
+        "graph-unrelated"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d06",
+      "split": "development",
+      "intent": "accepted_decision",
+      "repository": "Atlas",
+      "text": "refresh token rotation",
+      "expected_keys": [
+        "atlas-auth",
+        "event-auth-tests"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d07",
+      "split": "development",
+      "intent": "historical_tool",
+      "repository": "Atlas",
+      "text": "Restoration verification",
+      "expected_keys": [
+        "event-restore-test"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d08",
+      "split": "development",
+      "intent": "proposal_lookup",
+      "repository": "Atlas",
+      "text": "Proposed semantic search",
+      "expected_keys": [
+        "atlas-search-proposal"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d09",
+      "split": "development",
+      "intent": "empty",
+      "repository": "Atlas",
+      "text": "orbital telescope calibration",
+      "expected_keys": [],
+      "empty": true
+    },
+    {
+      "id": "d10",
+      "split": "development",
+      "intent": "empty_scope",
+      "repository": "AtlasProduction",
+      "text": "offline desktop notes",
+      "expected_keys": [],
+      "empty": true
+    },
+    {
+      "id": "d11",
+      "split": "development",
+      "intent": "accepted_decision",
+      "repository": "Atlas",
+      "text": "activity pagination",
+      "expected_keys": [
+        "atlas-pagination"
+      ],
+      "empty": false
+    },
+    {
+      "id": "d12",
+      "split": "development",
+      "intent": "historical_turn",
+      "repository": "Atlas",
+      "text": "April export last rows",
+      "expected_keys": [
+        "event-export-discussion"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h01",
+      "split": "held_out",
+      "intent": "natural_language",
+      "repository": "Atlas",
+      "text": "Why can our notes still be searched on a laptop without internet?",
+      "expected_keys": [
+        "atlas-storage"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h02",
+      "split": "held_out",
+      "intent": "natural_language_correction",
+      "repository": "Atlas",
+      "text": "Should we raise all production timeouts to fix slow database tests?",
+      "expected_keys": [
+        "atlas-timeout-fix",
+        "event-timeout-discussion"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h03",
+      "split": "held_out",
+      "intent": "multiple_relevant",
+      "repository": "Atlas",
+      "text": "How do we prevent partially published exports and check that every byte survived?",
+      "expected_keys": [
+        "atlas-export-atomic",
+        "atlas-export-verify",
+        "event-export-discussion",
+        "event-export-check"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h04",
+      "split": "held_out",
+      "intent": "historical_tool",
+      "repository": "Atlas",
+      "text": "Which backup check recovered 42 notes without losing attachments?",
+      "expected_keys": [
+        "event-restore-test"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h05",
+      "split": "held_out",
+      "intent": "natural_language",
+      "repository": "Atlas",
+      "text": "What should happen if someone presents a refresh token for the second time?",
+      "expected_keys": [
+        "atlas-auth",
+        "event-auth-tests"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h06",
+      "split": "held_out",
+      "intent": "scope_isolation",
+      "repository": "AtlasLab",
+      "text": "What is the laboratory exception for refresh token rotation?",
+      "expected_keys": [
+        "atlaslab-auth"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h07",
+      "split": "held_out",
+      "intent": "natural_language",
+      "repository": "Atlas",
+      "text": "How can someone dismiss a dialog without a mouse and regain focus?",
+      "expected_keys": [
+        "atlas-accessibility",
+        "event-dialog-review"
+      ],
+      "empty": false
+    },
+    {
+      "id": "h08",
+      "split": "held_out",
+      "intent": "empty",
+      "repository": "Atlas",
+      "text": "What was the approved price of the multilingual embedding provider?",
+      "expected_keys": [],
+      "empty": true
+    }
+  ],
+  "graph_queries": [
+    {
+      "id": "g01",
+      "repository": "Atlas",
+      "root_key": "graph-report",
+      "depth": 1,
+      "limit": 20,
+      "expected_nodes": [
+        "graph-report",
+        "graph-log"
+      ],
+      "expected_edges": [
+        {
+          "from": "graph-report",
+          "to": "graph-log",
+          "relation": "derived_from"
+        }
+      ]
+    },
+    {
+      "id": "g02",
+      "repository": "Atlas",
+      "root_key": "graph-report",
+      "depth": 2,
+      "limit": 20,
+      "expected_nodes": [
+        "graph-report",
+        "graph-log",
+        "graph-test"
+      ],
+      "expected_edges": [
+        {
+          "from": "graph-report",
+          "to": "graph-log",
+          "relation": "derived_from"
+        },
+        {
+          "from": "graph-log",
+          "to": "graph-test",
+          "relation": "supports"
+        }
+      ]
+    },
+    {
+      "id": "g03",
+      "repository": "atlas",
+      "root_key": "graph-report",
+      "depth": 2,
+      "limit": 20,
+      "expected_nodes": [],
+      "expected_edges": []
+    }
+  ]
+}

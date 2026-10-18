@@ -1,0 +1,1255 @@
+{
+  "schema_version": 1,
+  "namespace": "local-eval-v1",
+  "generator": {
+    "zstandard": "0.25.0",
+    "compression_level": 3
+  },
+  "files": {
+    "corpus.json": "dd4c38d60a66f36004aa440a68279adb1043dd72c0723caeef13b510c0ad1521",
+    "daily.ndjson": "c85ebabd28a2b03865e29b5f7709a3d31c0b43421c1e457260f70d6a5c33661e",
+    "events.ndjson": "3ae0e73e535627589fd502b8be24b46c26fb61c33137d9647f4774a15c6d1ac4",
+    "events.ndjson.zst": "f448dec5bbb47dcdaffcf5999950b02f43254a60cea504f2f83babcdc75f325b",
+    "graph.json": "ddbdc1a7280f7d89f5d96a6dbb7a41fab39802c18609b43b56b5bcdf0a2652ac"
+  },
+  "records": {
+    "atlas-storage": {
+      "id": "daily-fdab88fa8ab761420f640dd061d1863691674928c77be9eecebe924152d24200",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Embedded storage for desktop notes",
+      "body": "Use SQLite for offline desktop notes. A single local file keeps deployment small and lets searches work without a server.",
+      "links": [
+        {
+          "target_id": "daily-9ae79c52181bdaf8b80325995b87e07409b60ae011a5f982a21f4bfb8fd2aa27",
+          "relation": "supersedes"
+        }
+      ],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-storage",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "b6314c5e6d341caf4637d6bde93c51522d7b1574c973299196ab728741bf3c35",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-storage",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-storage",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-storage",
+              "title": "Embedded storage for desktop notes",
+              "status": "accepted",
+              "body": "Use SQLite for offline desktop notes. A single local file keeps deployment small and lets searches work without a server.",
+              "supersedes": "fiction:atlas-storage-old",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-storage\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Use SQLite for offline desktop notes. A single local file keeps deployment small and lets searches work without a server.\",\"decision_id\":\"fiction:atlas-storage\",\"status\":\"accepted\",\"supersedes\":\"fiction:atlas-storage-old\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Embedded storage for desktop notes\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "954e878804f36c594053d3888f19b7a91577add62a564c97ff51c3b82945c4ce",
+      "payload_hash": "sha256:c33a58085ef6d61df49be7cb901218d9855a22fd4003ad01cabf3db9c9e000e2"
+    },
+    "atlas-storage-old": {
+      "id": "daily-9ae79c52181bdaf8b80325995b87e07409b60ae011a5f982a21f4bfb8fd2aa27",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "superseded",
+      "title": "Retired server storage choice",
+      "body": "Use PostgreSQL for desktop notes. This earlier decision was replaced because field laptops must work offline.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-storage-old",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "d8ffbe07c7f19838f0103dab18b9de5885ac045496e1d7f0f9e7b4902b7c00e6",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-storage-old",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-storage-old",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-storage-old",
+              "title": "Retired server storage choice",
+              "status": "superseded",
+              "body": "Use PostgreSQL for desktop notes. This earlier decision was replaced because field laptops must work offline.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-storage-old\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Use PostgreSQL for desktop notes. This earlier decision was replaced because field laptops must work offline.\",\"decision_id\":\"fiction:atlas-storage-old\",\"status\":\"superseded\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Retired server storage choice\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "ee4acacd15517e2205b215063e3878634a255af97babbdf458833e15dda49ad2",
+      "payload_hash": "sha256:ab2b78633579632e6b357be19bb2d4eff3ccf1c98784fc53c9c2218ae6d4a2d8"
+    },
+    "atlas-sync-proposal": {
+      "id": "daily-126bf860e5d414dfed04a6b031ee87add031100894ad3466b5e9e39f2cec48b5",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "proposed",
+      "title": "Proposed cloud synchronization",
+      "body": "Consider uploading desktop notes to a hosted PostgreSQL service for team synchronization. This proposal has not been accepted.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-sync-proposal",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "ad4850a23cbceffb8d0367d730def27e98510b0bcd037d07b1d5335d5c4e0360",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-sync-proposal",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-sync-proposal",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-sync-proposal",
+              "title": "Proposed cloud synchronization",
+              "status": "proposed",
+              "body": "Consider uploading desktop notes to a hosted PostgreSQL service for team synchronization. This proposal has not been accepted.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-sync-proposal\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Consider uploading desktop notes to a hosted PostgreSQL service for team synchronization. This proposal has not been accepted.\",\"decision_id\":\"fiction:atlas-sync-proposal\",\"status\":\"proposed\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Proposed cloud synchronization\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "ab112ff72912d8e7a24a5846c12b63382c246345ea27e469200e8efeadd45cc6",
+      "payload_hash": "sha256:75530a677cf634b2fcca6474c2a5435e1aa645fa32228b26d3fc9b6dfc307ede"
+    },
+    "atlas-timeout-old": {
+      "id": "daily-1fdaa02ffce887e7951070dbff70fbbece3d7a89f145be6f7b6f82f93099e3ee",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "lesson",
+      "authority": "superseded",
+      "title": "Retired blanket timeout increase",
+      "body": "Increase every request timeout to five seconds when database tests fail. This diagnosis ignored connection cleanup.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-timeout-old",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "65458629c3ec69e9e0467e37cd3e604cd4b6f0c2e9c6cdb93342eb438dc13947",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-timeout-old",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-timeout-old",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-timeout-old",
+              "title": "Retired blanket timeout increase",
+              "status": "superseded",
+              "body": "Increase every request timeout to five seconds when database tests fail. This diagnosis ignored connection cleanup.",
+              "tags": [
+                "daily-memory",
+                "lesson"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-timeout-old\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Increase every request timeout to five seconds when database tests fail. This diagnosis ignored connection cleanup.\",\"decision_id\":\"fiction:atlas-timeout-old\",\"status\":\"superseded\",\"tags\":[\"daily-memory\",\"lesson\"],\"title\":\"Retired blanket timeout increase\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "25e8008bd98919a14e362582114c31883f6a68ac9e971909790a26e30c0556f7",
+      "payload_hash": "sha256:9bc433fae11b27efb0c1b151fb0f6c795fff37d5046a5a4dc0a025ce866df273"
+    },
+    "atlas-timeout-fix": {
+      "id": "daily-df451a45fcfcb50de2a0098e1ecd0fcc51252852f600fb822f9ec05e9eb4c02f",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Database timeout correction",
+      "body": "Slow connection cleanup can consume the request deadline after a successful query. Measure cleanup separately and keep production deadlines unchanged; control time only in semantic tests.",
+      "links": [
+        {
+          "target_id": "daily-1fdaa02ffce887e7951070dbff70fbbece3d7a89f145be6f7b6f82f93099e3ee",
+          "relation": "supersedes"
+        }
+      ],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-timeout-fix",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "788c7f51b585a0d9fdf70d0bc54daf6b021135d963df418b31fbab23c21dcc2b",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-timeout-fix",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-timeout-fix",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-timeout-fix",
+              "title": "Database timeout correction",
+              "status": "accepted",
+              "body": "Slow connection cleanup can consume the request deadline after a successful query. Measure cleanup separately and keep production deadlines unchanged; control time only in semantic tests.",
+              "supersedes": "fiction:atlas-timeout-old",
+              "tags": [
+                "daily-memory",
+                "lesson"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-timeout-fix\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Slow connection cleanup can consume the request deadline after a successful query. Measure cleanup separately and keep production deadlines unchanged; control time only in semantic tests.\",\"decision_id\":\"fiction:atlas-timeout-fix\",\"status\":\"accepted\",\"supersedes\":\"fiction:atlas-timeout-old\",\"tags\":[\"daily-memory\",\"lesson\"],\"title\":\"Database timeout correction\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "ec79b346eb9a8e1726fa1fb8c9b1a9672fd265653a0eb19d163d4f2dc3a04acb",
+      "payload_hash": "sha256:cbaa17f35be5f4e5da63fb2d686ec1d75c953ffc0886fef222c54d3f534cfd7c"
+    },
+    "atlas-export-atomic": {
+      "id": "daily-18469c85af5cf6cd84c719072290ed164feec82c9fc70ed2f5847ddc53e45e08",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Atomic export publication",
+      "body": "Write export content to a temporary file and rename it after flushing. Readers must never observe a half-written export.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-export-atomic",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "fc508f71d726c7764b716419ddc53aa7aaa8361f3a805498a4c1c52fe10b5d1a",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-export-atomic",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-export-atomic",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-export-atomic",
+              "title": "Atomic export publication",
+              "status": "accepted",
+              "body": "Write export content to a temporary file and rename it after flushing. Readers must never observe a half-written export.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-export-atomic\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Write export content to a temporary file and rename it after flushing. Readers must never observe a half-written export.\",\"decision_id\":\"fiction:atlas-export-atomic\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Atomic export publication\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "30efa2c91f82032af805826af8496722b5bd24c73594e6698fc83b49b5f9130b",
+      "payload_hash": "sha256:0a1e71084bd04fd7aa0ec755596731a68425432d254651972f2288ff08bf8f7d"
+    },
+    "atlas-export-verify": {
+      "id": "daily-5a154f6fe6311153f83a15db55e530b353fb97cfc9b34d72824c6d8f2d1f400f",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Verify export checksums",
+      "body": "Compare SHA-256 checksums before and after moving an export. A successful copy command alone does not establish that all bytes arrived.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-export-verify",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "1202615125ad4e05122c4813285bde4bdc84660e12d5e7d6b9ff7d5112b91741",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-export-verify",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-export-verify",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-export-verify",
+              "title": "Verify export checksums",
+              "status": "accepted",
+              "body": "Compare SHA-256 checksums before and after moving an export. A successful copy command alone does not establish that all bytes arrived.",
+              "tags": [
+                "daily-memory",
+                "lesson"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-export-verify\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Compare SHA-256 checksums before and after moving an export. A successful copy command alone does not establish that all bytes arrived.\",\"decision_id\":\"fiction:atlas-export-verify\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"lesson\"],\"title\":\"Verify export checksums\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "dcb5338281ffdcb3e9af3eac83cf5b3c1ceb60d10349ba310838fae6a5803209",
+      "payload_hash": "sha256:550fa322e54977c2961059f5108a1841c5cf9e2a973b6c067342e04ca0d51d33"
+    },
+    "atlas-auth": {
+      "id": "daily-bfe72d78b0e9cbad1d5543a8c70c1ef65945817001cd498cabf4203c5f7f34eb",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Refresh token rotation",
+      "body": "Rotate refresh tokens after each use and revoke the token family when a consumed token is reused. Keep access tokens short lived.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-auth",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "866a243cd7a47987ab14ea770eb8d853f3489eaf8a65f868a1ddccae85cf00a1",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-auth",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-auth",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-auth",
+              "title": "Refresh token rotation",
+              "status": "accepted",
+              "body": "Rotate refresh tokens after each use and revoke the token family when a consumed token is reused. Keep access tokens short lived.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-auth\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Rotate refresh tokens after each use and revoke the token family when a consumed token is reused. Keep access tokens short lived.\",\"decision_id\":\"fiction:atlas-auth\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Refresh token rotation\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "4904efd8a897c399b973ed26c95654306e068ef45e4d392ec768500cf3c1fdbd",
+      "payload_hash": "sha256:b8298a7bfe3d571c2e0ab53717a02c1c33d2ce6ed297066b1635aba520c8ee3c"
+    },
+    "atlas-pagination": {
+      "id": "daily-113c4d4dd1c30acd882ae7e22e8fc3ebd40abd1743faef180fa70302d95caa7c",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Stable activity pagination",
+      "body": "Order activity pages by timestamp and record ID. Equal timestamps require a deterministic tie breaker so records are not skipped between pages.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-pagination",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "8aefb6f07aed45c7a455a6dad79ef763c2616228684e2498a644312ec66ad1bc",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-pagination",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-pagination",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-pagination",
+              "title": "Stable activity pagination",
+              "status": "accepted",
+              "body": "Order activity pages by timestamp and record ID. Equal timestamps require a deterministic tie breaker so records are not skipped between pages.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-pagination\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Order activity pages by timestamp and record ID. Equal timestamps require a deterministic tie breaker so records are not skipped between pages.\",\"decision_id\":\"fiction:atlas-pagination\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Stable activity pagination\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "a9f974362268b9257255d9cfab1934f7866ab48ca333c6dded1605319e617f49",
+      "payload_hash": "sha256:438254726d6936bf7e1898edb7cfc6760d9e1a78b77030719578da832597422c"
+    },
+    "atlas-logging": {
+      "id": "daily-72a5d29e7af6572b0b9bdc6559c9219a167699900aeff6163d60ba23c400526f",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Credentials in request logs",
+      "body": "Redact authorization headers and password fields before writing request logs. Log status codes and request IDs instead of credential values.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-logging",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "eb97b7ce167a1cf6e5b50f5abc1521997c1bf8d77c328717e5c320cc780c02cd",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-logging",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-logging",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-logging",
+              "title": "Credentials in request logs",
+              "status": "accepted",
+              "body": "Redact authorization headers and password fields before writing request logs. Log status codes and request IDs instead of credential values.",
+              "tags": [
+                "daily-memory",
+                "lesson"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-logging\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Redact authorization headers and password fields before writing request logs. Log status codes and request IDs instead of credential values.\",\"decision_id\":\"fiction:atlas-logging\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"lesson\"],\"title\":\"Credentials in request logs\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "f0bb273c601b7c03bfada9c25ba7a9ba78b608792658fb40f6976dcc403a24c6",
+      "payload_hash": "sha256:626f8b6ba9c7f1e6673d1b77577527131d3a5847cbfd70ca3550fb8c6996b4d4"
+    },
+    "atlas-accessibility": {
+      "id": "daily-078109c1a2afc11fcda7ca8b8861014a59512100617602a3b18e0d8fcdff28e3",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Keyboard navigation for dialogs",
+      "body": "Every dialog must support keyboard focus, Escape to dismiss, and focus restoration to its opener. Visible focus rings must remain enabled.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-accessibility",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "ae8cd23b8053e71b02593c64bde6a5b494ec7794b089d74e35669ff6097610a9",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-accessibility",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-accessibility",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-accessibility",
+              "title": "Keyboard navigation for dialogs",
+              "status": "accepted",
+              "body": "Every dialog must support keyboard focus, Escape to dismiss, and focus restoration to its opener. Visible focus rings must remain enabled.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-accessibility\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Every dialog must support keyboard focus, Escape to dismiss, and focus restoration to its opener. Visible focus rings must remain enabled.\",\"decision_id\":\"fiction:atlas-accessibility\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Keyboard navigation for dialogs\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "d5c4771033aeb222afb944ff188ecb863f9064a050d8ece726f8671119178e84",
+      "payload_hash": "sha256:089e8b5c2cc3e6b7a75e2ec12a50c994c50d86cf7ba96cc76378d498b009c165"
+    },
+    "atlas-backup": {
+      "id": "daily-18ba02507ee53e8991b610f7340e5f98f0d32274c7aa2d469563301b3bbde33e",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Backup retention policy",
+      "body": "Keep seven daily backups and four weekly backups. Verify restoration on a disposable directory before declaring a backup healthy.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-backup",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "d066fde5cbcaec17588c7911cf8a6d44856d38564f2d5c76224927052e769d83",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-backup",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-backup",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-backup",
+              "title": "Backup retention policy",
+              "status": "accepted",
+              "body": "Keep seven daily backups and four weekly backups. Verify restoration on a disposable directory before declaring a backup healthy.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-backup\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Keep seven daily backups and four weekly backups. Verify restoration on a disposable directory before declaring a backup healthy.\",\"decision_id\":\"fiction:atlas-backup\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Backup retention policy\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "ef3bfa865295194f8044914bc81f9dc855462d5eac96fc06eb0e30552dac709d",
+      "payload_hash": "sha256:a0889153ccb8e27cf27aa340c1fcd7171beed141173ef1ceac51390c4fb30f47"
+    },
+    "atlaslab-storage": {
+      "id": "daily-cc8ec87e554d29e87c963c5a51b2884634ad4e37890cb86a35f028581fbdcfc0",
+      "repository": "AtlasLab",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Embedded storage for desktop notes",
+      "body": "Use SQLite for offline desktop notes in AtlasLab. Laboratory devices have their own retention rules and never share production records.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlaslab-storage",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "423eceff750dd8393adcf135ed99537ba7a3088a1a387b37047f966fe8828596",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:AtlasLab",
+          "original_id": "fiction:atlaslab-storage",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlaslab-storage",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlaslab-storage",
+              "title": "Embedded storage for desktop notes",
+              "status": "accepted",
+              "body": "Use SQLite for offline desktop notes in AtlasLab. Laboratory devices have their own retention rules and never share production records.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlaslab-storage\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Use SQLite for offline desktop notes in AtlasLab. Laboratory devices have their own retention rules and never share production records.\",\"decision_id\":\"fiction:atlaslab-storage\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Embedded storage for desktop notes\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "48d4d8e7c40a5a4f26866a09a6a43963620fde6217bccaa6a20d37f680e069ac",
+      "payload_hash": "sha256:0a089dfee19f74e76b625043a1cc40f687bd2298b97a13f5c1f24ef421562d63"
+    },
+    "lower-storage": {
+      "id": "daily-347b116305fb67f893a37341fa6638f2f8a294dacef4913f31373c8978d2bb8e",
+      "repository": "atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Embedded storage for desktop notes",
+      "body": "Use SQLite for offline desktop notes in lowercase atlas. This separate demonstration repository has no production ownership.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:lower-storage",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "fc8d01171e1dfa531e798e2d083d35fed7388e99e46b64ba47bdef2831983ccf",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:atlas",
+          "original_id": "fiction:lower-storage",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:lower-storage",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:lower-storage",
+              "title": "Embedded storage for desktop notes",
+              "status": "accepted",
+              "body": "Use SQLite for offline desktop notes in lowercase atlas. This separate demonstration repository has no production ownership.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:lower-storage\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Use SQLite for offline desktop notes in lowercase atlas. This separate demonstration repository has no production ownership.\",\"decision_id\":\"fiction:lower-storage\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Embedded storage for desktop notes\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "1d1d2648f6a95d7f73d0bdde7f207ae92ad971a25164a9b378ebfc1edb1414ae",
+      "payload_hash": "sha256:26e6e69876a052d16e7bf287698727ecedd45d0b3b58738cd535b67b4e511009"
+    },
+    "atlaslab-auth": {
+      "id": "daily-99146d63fe7b7f9f725f330d1bf2ce6d1f3c19e012b01b437d77b3c6fafc4674",
+      "repository": "AtlasLab",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Refresh token rotation",
+      "body": "Do not rotate refresh tokens in the disposable AtlasLab benchmark. This experimental exception is not approved for Atlas.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlaslab-auth",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "25a71e34168da36b25b85667858865526a68097efa5a42741921121ea5319256",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:AtlasLab",
+          "original_id": "fiction:atlaslab-auth",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlaslab-auth",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlaslab-auth",
+              "title": "Refresh token rotation",
+              "status": "accepted",
+              "body": "Do not rotate refresh tokens in the disposable AtlasLab benchmark. This experimental exception is not approved for Atlas.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlaslab-auth\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Do not rotate refresh tokens in the disposable AtlasLab benchmark. This experimental exception is not approved for Atlas.\",\"decision_id\":\"fiction:atlaslab-auth\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Refresh token rotation\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "6aa018113b56afb61eb9c0c9673aba464548f5d7f02bbd379a1f3fd697daa863",
+      "payload_hash": "sha256:90f0d4e7bb8d3d8c5e4de78f87e5187895e2293df7b695b693794632f8fa536a"
+    },
+    "lower-export": {
+      "id": "daily-c4200ffccb9170c978dea35026ca5a2b515c9218a9db165120256e3db87d85c8",
+      "repository": "atlas",
+      "revision": 1,
+      "kind": "lesson",
+      "authority": "accepted",
+      "title": "Verify export checksums",
+      "body": "The lowercase atlas tutorial verifies export checksums with SHA-256. Its files are examples, not Atlas release artifacts.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:lower-export",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "25c71956ba00428886e1514111828eec4a19c5342b164e11becbb3e6e5b8f236",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:atlas",
+          "original_id": "fiction:lower-export",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:lower-export",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:lower-export",
+              "title": "Verify export checksums",
+              "status": "accepted",
+              "body": "The lowercase atlas tutorial verifies export checksums with SHA-256. Its files are examples, not Atlas release artifacts.",
+              "tags": [
+                "daily-memory",
+                "lesson"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:lower-export\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"The lowercase atlas tutorial verifies export checksums with SHA-256. Its files are examples, not Atlas release artifacts.\",\"decision_id\":\"fiction:lower-export\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"lesson\"],\"title\":\"Verify export checksums\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "8822c6b6fd5ba463e81b6a5fd19596bb32884c7f32965a872203a58b8bcec3c0",
+      "payload_hash": "sha256:62fba85e574f6fe69339760883bff54e13c49a4b5ac3b62808fd8fb05de565ba"
+    },
+    "atlas-search-proposal": {
+      "id": "daily-f13ca6a04bb72603f49a7cef326e17f60032ea8160d88e5fc3cebd33c16a01e4",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "proposed",
+      "title": "Proposed semantic search",
+      "body": "Evaluate multilingual embeddings for semantic search next quarter. No provider or deployment budget has been approved.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-search-proposal",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "fa40d3f06439da1b06af1ddba8d467a86a3f17cb93dc6cb83a84ad737681fa1e",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-search-proposal",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-search-proposal",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-search-proposal",
+              "title": "Proposed semantic search",
+              "status": "proposed",
+              "body": "Evaluate multilingual embeddings for semantic search next quarter. No provider or deployment budget has been approved.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-search-proposal\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Evaluate multilingual embeddings for semantic search next quarter. No provider or deployment budget has been approved.\",\"decision_id\":\"fiction:atlas-search-proposal\",\"status\":\"proposed\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Proposed semantic search\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "2e2b404ad9ee052fd8533b18a5d6907693a63d4ef7284a31a4bfb98cfd976fdb",
+      "payload_hash": "sha256:7371cce949c862b3e1a9f3daf2e051118d50ddccec8fa8e80516e0bfa324e640"
+    },
+    "atlas-cache": {
+      "id": "daily-5930777057bc8e7a6b45325c76b623a684891d43f7837b27928b504c694342fe",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "decision",
+      "authority": "accepted",
+      "title": "Bounded thumbnail cache",
+      "body": "Keep the thumbnail cache below 128 entries and evict the least recently used item. This cache does not store authentication tokens.",
+      "links": [],
+      "source_file": "daily.sqlite",
+      "source": {
+        "kind": "daily-sqlite",
+        "source_id": "fixture-evidence:atlas-cache",
+        "captured_at": "2026-02-03T09:00:00Z",
+        "source_hash": "31833f3228427f3c78ad931425d3ee9b4f03ad16636783b1b57b77ec23611b31",
+        "payload": {
+          "namespace": "local-eval-v1",
+          "original_scope": "repo:Atlas",
+          "original_id": "fiction:atlas-cache",
+          "initial_evidence": {
+            "event_id": "fixture-evidence:atlas-cache",
+            "kind": "decision",
+            "version": 1,
+            "payload": {
+              "decision_id": "fiction:atlas-cache",
+              "title": "Bounded thumbnail cache",
+              "status": "accepted",
+              "body": "Keep the thumbnail cache below 128 entries and evict the least recently used item. This cache does not store authentication tokens.",
+              "tags": [
+                "daily-memory",
+                "decision"
+              ]
+            },
+            "origin": {
+              "attribution": "unknown"
+            },
+            "sources": [],
+            "occurred_at": "2026-02-03T09:00:00Z",
+            "stale": false
+          },
+          "initial_evidence_raw": "{\"event_id\":\"fixture-evidence:atlas-cache\",\"kind\":\"decision\",\"occurred_at\":\"2026-02-03T09:00:00Z\",\"origin\":{\"attribution\":\"unknown\"},\"payload\":{\"body\":\"Keep the thumbnail cache below 128 entries and evict the least recently used item. This cache does not store authentication tokens.\",\"decision_id\":\"fiction:atlas-cache\",\"status\":\"accepted\",\"tags\":[\"daily-memory\",\"decision\"],\"title\":\"Bounded thumbnail cache\"},\"sources\":[],\"stale\":false,\"version\":1}"
+        }
+      },
+      "snapshot_sha256": "335bd6fe622a39500572908984f35a258cecbaa3b079f85d924c025c8741577e",
+      "payload_hash": "sha256:7acf974f41b244a76dcfadbcadeb8bf8c2e5444c5fb4e08e897a4749df0ec49b"
+    },
+    "event-export-discussion": {
+      "id": "archive-5f95af933f0181f90cec27577dd7b2d913e9aee2540c6f5317dd5206d9fdeba7",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "turn: event-export-discussion",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 1,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-export-discussion",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "1fa59317ad0aaa60522a1f3836d61beb38936a68fae148774748e46d6e57ef94",
+        "payload": {
+          "event_id": "event-export-discussion",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-Atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "turn",
+          "context": {
+            "repo": "Atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "user_message": "Why did the April 2025 export lose its last rows?",
+            "assistant_message": "The writer replaced the destination before flushing. We agreed to publish through a flushed temporary file."
+          }
+        }
+      }
+    },
+    "event-export-check": {
+      "id": "archive-54ee69a4eeb525817dcd814c276f4c1b8bb31cc011789efb66aab2f7595d95ed",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "tool_call: event-export-check",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 2,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-export-check",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "11434f378432a5f190ee2c083bf16c2c71d1709702ee796a87c49b6599bd84bd",
+        "payload": {
+          "event_id": "event-export-check",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-Atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "tool_call",
+          "context": {
+            "repo": "Atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "tool_name": "shell",
+            "input": {
+              "command": "sha256sum release-export.json"
+            },
+            "output": {
+              "stdout": "release-export.json checksum matched the staging export; 240 rows verified.",
+              "exit_code": 0,
+              "truncated": false
+            },
+            "outcome": "success",
+            "duration_ms": 12
+          }
+        }
+      }
+    },
+    "event-timeout-discussion": {
+      "id": "archive-13ca88359338227574bb704f3aa3ed0639c25e803bfdf6b970faa7e0a296b358",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "turn: event-timeout-discussion",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 3,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-timeout-discussion",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "e768038f78c4161dde8a92941574554c93a3913ecf7589759aa20d438da3f9f5",
+        "payload": {
+          "event_id": "event-timeout-discussion",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-Atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "turn",
+          "context": {
+            "repo": "Atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "user_message": "Did a longer deadline solve the database stall?",
+            "assistant_message": "No. Cleanup after the successful query took 310 milliseconds. We kept the production deadline and corrected the test clock."
+          }
+        }
+      }
+    },
+    "event-restore-test": {
+      "id": "archive-662cb6c82325367922500b06ccf0341eecfcafdb7c0064ffd5bff4141c109906",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "tool_call: event-restore-test",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 4,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-restore-test",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "bc91bf8a449b308f00e253c8652087c075589eec23b2eb763b800f2d48a1743c",
+        "payload": {
+          "event_id": "event-restore-test",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-Atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "tool_call",
+          "context": {
+            "repo": "Atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "tool_name": "shell",
+            "input": {
+              "command": "atlas-backup verify --scratch fixture-restore"
+            },
+            "output": {
+              "stdout": "Restoration verification passed: 42 notes recovered, zero missing attachments.",
+              "exit_code": 0,
+              "truncated": false
+            },
+            "outcome": "success",
+            "duration_ms": 12
+          }
+        }
+      }
+    },
+    "event-lab-export": {
+      "id": "archive-42e1b22255017f9ef7a99f01825bca50f6670efc07a9fbf813c4cb57c3b2f041",
+      "repository": "AtlasLab",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "turn: event-lab-export",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 5,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-lab-export",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "dd990bc2c96125c4e2417d39f7b981734833b2853f9eb1afecdf9182cdc2916e",
+        "payload": {
+          "event_id": "event-lab-export",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-AtlasLab",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "turn",
+          "context": {
+            "repo": "AtlasLab",
+            "platform": "linux"
+          },
+          "payload": {
+            "user_message": "Why did the April 2025 export lose its last rows?",
+            "assistant_message": "A laboratory fixture deliberately omitted its final rows. No production export was changed."
+          }
+        }
+      }
+    },
+    "event-lower-export": {
+      "id": "archive-d35ec6a15d82eb2971f9bc627070160c7f86c8fbded430703ef575e349da91cd",
+      "repository": "atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "tool_call: event-lower-export",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 6,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-lower-export",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "f49909217037d3f5237323c9bf690649eaab8f2e5288bef19d9e909598deb098",
+        "payload": {
+          "event_id": "event-lower-export",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "tool_call",
+          "context": {
+            "repo": "atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "tool_name": "shell",
+            "input": {
+              "command": "sha256sum release-export.json"
+            },
+            "output": {
+              "stdout": "Tutorial export checksum matched; 3 rows verified.",
+              "exit_code": 0,
+              "truncated": false
+            },
+            "outcome": "success",
+            "duration_ms": 12
+          }
+        }
+      }
+    },
+    "event-dialog-review": {
+      "id": "archive-833070dd05a5b2fa38f6ef03482732a75e50ff251975177caf83e14f6004646e",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "turn: event-dialog-review",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 7,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-dialog-review",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "df2f4696db97c8d651201417106e26a31687699619793b5e760d6426f9939ee9",
+        "payload": {
+          "event_id": "event-dialog-review",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-Atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "turn",
+          "context": {
+            "repo": "Atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "user_message": "Can a keyboard user close the settings dialog?",
+            "assistant_message": "Escape dismissed the dialog, then focus returned to the settings button. The visible focus ring remained."
+          }
+        }
+      }
+    },
+    "event-auth-tests": {
+      "id": "archive-2a308649efa81c3e1bc8fe90f01a35a378876d7c4f1721f425f839d9ee079c24",
+      "repository": "Atlas",
+      "revision": 1,
+      "kind": "event",
+      "authority": "observation",
+      "title": "tool_call: event-auth-tests",
+      "links": [],
+      "source_file": "archive/events.ndjson.zst",
+      "source_line": 8,
+      "source": {
+        "kind": "legacy_archive",
+        "source_id": "event-auth-tests",
+        "captured_at": "2026-02-03T10:00:00Z",
+        "source_hash": "6e5a4168e91b3fdf4598048ecbb9ff12bddb47c6389816adffec4c2adcfb5a4a",
+        "payload": {
+          "event_id": "event-auth-tests",
+          "schema_version": "1",
+          "occurred_at": "2026-02-03T10:00:00Z",
+          "session_id": "fiction-session-Atlas",
+          "stream": "live",
+          "tool": "claude-code",
+          "kind": "tool_call",
+          "context": {
+            "repo": "Atlas",
+            "platform": "linux"
+          },
+          "payload": {
+            "tool_name": "shell",
+            "input": {
+              "command": "cargo test refresh_token_reuse"
+            },
+            "output": {
+              "stdout": "refresh_token_reuse revokes the token family: passed; rotating refresh tokens: passed.",
+              "exit_code": 0,
+              "truncated": false
+            },
+            "outcome": "success",
+            "duration_ms": 12
+          }
+        }
+      }
+    },
+    "graph-report": {
+      "id": "graph-report",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Export incident report",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-report",
+        "source_id": "graph-report",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": "ad5af251e5004a63e857b6c98342302e2cf2f5053778faf7b622f88720c799be",
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [
+        {
+          "target_id": "graph-log",
+          "relation": "derived_from"
+        }
+      ],
+      "revision": 1
+    },
+    "graph-log": {
+      "id": "graph-log",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Export writer log",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-log",
+        "source_id": "graph-log",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": "f6780d2276ac291326bcd869d8a38be5f56e8bec5affbe8833d5347ee3d77569",
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [
+        {
+          "target_id": "graph-test",
+          "relation": "supports"
+        }
+      ],
+      "revision": 1
+    },
+    "graph-test": {
+      "id": "graph-test",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Export flush regression test",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-test",
+        "source_id": "graph-test",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": "b191175b3c9f431c98cdf0ef507e5684034f1aeb0ae2d41408ae57a2d1aa45cb",
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [],
+      "revision": 1
+    },
+    "graph-unrelated": {
+      "id": "graph-unrelated",
+      "repository": "Atlas",
+      "kind": "note",
+      "authority": "observation",
+      "title": "Unrelated export style review",
+      "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+      "source": {
+        "kind": "fixture",
+        "locator": "fiction://eval-v1/graph-unrelated",
+        "source_id": "graph-unrelated",
+        "captured_at": "2026-02-03T11:00:00Z",
+        "source_hash": "6203f010be01217df44635f173f48956932ca18ae4a489384388fb6590b02f3b",
+        "payload": {
+          "fictional": true
+        }
+      },
+      "links": [],
+      "revision": 1
+    }
+  }
+}

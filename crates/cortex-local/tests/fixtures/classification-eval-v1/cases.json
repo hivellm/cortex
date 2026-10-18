@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "license": "CC0-1.0",
+  "cases": [
+    {
+      "id": "chosen-store",
+      "repository": "FictionalClassification",
+      "title": "chosen store",
+      "body": "We chose SQLite for the offline notebook.",
+      "authority": "accepted",
+      "expected_category": "decision",
+      "synthetic_response": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 13,
+          "output_tokens": 5
+        },
+        "answers": {
+          "category": {
+            "type": "choice",
+            "choice": "unknown",
+            "probabilities": {
+              "decision": 0.05,
+              "lesson": 0.05,
+              "preference": 0.05,
+              "fact": 0.05,
+              "transient": 0.05,
+              "unknown": 0.75
+            },
+            "confidence": 0.65
+          },
+          "durable": {
+            "type": "noul",
+            "noul": 0.8
+          }
+        }
+      }
+    },
+    {
+      "id": "verified-lesson",
+      "repository": "FictionalClassification",
+      "title": "verified lesson",
+      "body": "A missing flush caused the export loss; the regression test reproduced it.",
+      "authority": "accepted",
+      "expected_category": "lesson",
+      "synthetic_response": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 13,
+          "output_tokens": 5
+        },
+        "answers": {
+          "category": {
+            "type": "choice",
+            "choice": "decision",
+            "probabilities": {
+              "decision": 0.75,
+              "lesson": 0.05,
+              "preference": 0.05,
+              "fact": 0.05,
+              "transient": 0.05,
+              "unknown": 0.05
+            },
+            "confidence": 0.65
+          },
+          "durable": {
+            "type": "noul",
+            "noul": 0.8
+          }
+        }
+      }
+    },
+    {
+      "id": "visual-preference",
+      "repository": "FictionalClassification",
+      "title": "visual preference",
+      "body": "Prefer compact spacing in the fictional notebook settings.",
+      "authority": "proposed",
+      "expected_category": "preference",
+      "synthetic_response": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 13,
+          "output_tokens": 5
+        },
+        "answers": {
+          "category": {
+            "type": "choice",
+            "choice": "preference",
+            "probabilities": {
+              "decision": 0.05,
+              "lesson": 0.05,
+              "preference": 0.75,
+              "fact": 0.05,
+              "transient": 0.05,
+              "unknown": 0.05
+            },
+            "confidence": 0.65
+          },
+          "durable": {
+            "type": "noul",
+            "noul": 0.8
+          }
+        }
+      }
+    },
+    {
+      "id": "fixed-fact",
+      "repository": "FictionalClassification",
+      "title": "fixed fact",
+      "body": "The fictional archive format has version number three.",
+      "authority": "observation",
+      "expected_category": "fact",
+      "synthetic_response": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 13,
+          "output_tokens": 5
+        },
+        "answers": {
+          "category": {
+            "type": "choice",
+            "choice": "fact",
+            "probabilities": {
+              "decision": 0.05,
+              "lesson": 0.05,
+              "preference": 0.05,
+              "fact": 0.75,
+              "transient": 0.05,
+              "unknown": 0.05
+            },
+            "confidence": 0.65
+          },
+          "durable": {
+            "type": "noul",
+            "noul": 0.8
+          }
+        }
+      }
+    },
+    {
+      "id": "temporary-progress",
+      "repository": "FictionalClassification",
+      "title": "temporary progress",
+      "body": "The current test build is halfway complete.",
+      "authority": "observation",
+      "expected_category": "transient",
+      "synthetic_response": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 13,
+          "output_tokens": 5
+        },
+        "answers": {
+          "category": {
+            "type": "choice",
+            "choice": "transient",
+            "probabilities": {
+              "decision": 0.05,
+              "lesson": 0.05,
+              "preference": 0.05,
+              "fact": 0.05,
+              "transient": 0.75,
+              "unknown": 0.05
+            },
+            "confidence": 0.65
+          },
+          "durable": {
+            "type": "noul",
+            "noul": 0.1
+          }
+        }
+      }
+    },
+    {
+      "id": "insufficient-context",
+      "repository": "FictionalClassification",
+      "title": "insufficient context",
+      "body": "That thing was different this time.",
+      "authority": "observation",
+      "expected_category": "unknown",
+      "synthetic_response": {
+        "model": "jev-1.13.0",
+        "usage": {
+          "input_tokens": 13,
+          "output_tokens": 5
+        },
+        "answers": {
+          "category": {
+            "type": "choice",
+            "choice": "unknown",
+            "probabilities": {
+              "decision": 0.05,
+              "lesson": 0.05,
+              "preference": 0.05,
+              "fact": 0.05,
+              "transient": 0.05,
+              "unknown": 0.75
+            },
+            "confidence": 0.65
+          },
+          "durable": {
+            "type": "noul",
+            "noul": 0.8
+          }
+        }
+      }
+    }
+  ]
+}

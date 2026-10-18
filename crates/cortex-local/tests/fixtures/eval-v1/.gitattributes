@@ -1,0 +1,4 @@
+*.json text eol=lf
+*.ndjson text eol=lf
+*.md text eol=lf
+*.zst binary

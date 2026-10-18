@@ -9,6 +9,8 @@ when the new executable is installed.
 
 The [legacy runtime guide](daily-memory-runtime.md) describes the older stack.
 Do not mix its install/setup commands with this executable.
+The [local evaluation guide](local-memory-evaluation.md) covers reproducible
+offline checks, measured retrieval limits and installed-surface verification.
 
 ## Build, install and verify
 
@@ -135,7 +137,7 @@ records under `records/`; raw events use bounded NDJSON (`.jsonl`) segments
 under `segments/`. `index.sqlite3` is a derived search/history/graph projection.
 The archive-import ledger uses `archive-import.sqlite3`; daily checkpoints use
 `import-state/daily-<hash>.json`. Classification jobs use JSON files under
-`classification/<repository-hash>/`.
+`classification/jobs/<repository-hash>/`.
 Back up the whole home to retain canonical data, ledgers, queue state, installed
 artifacts and rollback backups. Quiesce clients and other writers before making
 a filesystem backup; copying a live SQLite file alone is not a consistent backup.

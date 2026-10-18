@@ -3,7 +3,7 @@
 ## Scope reset and prerequisite
 
 This task ID is retained, but its scope is reset on 2026-10-17 to evaluate the
-standalone engine approved in `.rulebook/tasks/phase36_local-first-core/design.md`.
+standalone engine approved in `.rulebook/archive/2026-10-18-phase36_local-first-core/design.md`.
 Implementation MUST wait until `phase36_local-first-core` is complete. This
 does not alter that task's order or the concurrent Codex adapter task.
 

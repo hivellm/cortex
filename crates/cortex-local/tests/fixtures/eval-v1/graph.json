@@ -1,0 +1,92 @@
+[
+  {
+    "id": "graph-report",
+    "repository": "Atlas",
+    "kind": "note",
+    "authority": "observation",
+    "title": "Export incident report",
+    "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+    "source": {
+      "kind": "fixture",
+      "locator": "fiction://eval-v1/graph-report",
+      "source_id": "graph-report",
+      "captured_at": "2026-02-03T11:00:00Z",
+      "source_hash": "ad5af251e5004a63e857b6c98342302e2cf2f5053778faf7b622f88720c799be",
+      "payload": {
+        "fictional": true
+      }
+    },
+    "links": [
+      {
+        "target_id": "graph-log",
+        "relation": "derived_from"
+      }
+    ],
+    "metadata": {}
+  },
+  {
+    "id": "graph-log",
+    "repository": "Atlas",
+    "kind": "note",
+    "authority": "observation",
+    "title": "Export writer log",
+    "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+    "source": {
+      "kind": "fixture",
+      "locator": "fiction://eval-v1/graph-log",
+      "source_id": "graph-log",
+      "captured_at": "2026-02-03T11:00:00Z",
+      "source_hash": "f6780d2276ac291326bcd869d8a38be5f56e8bec5affbe8833d5347ee3d77569",
+      "payload": {
+        "fictional": true
+      }
+    },
+    "links": [
+      {
+        "target_id": "graph-test",
+        "relation": "supports"
+      }
+    ],
+    "metadata": {}
+  },
+  {
+    "id": "graph-test",
+    "repository": "Atlas",
+    "kind": "note",
+    "authority": "observation",
+    "title": "Export flush regression test",
+    "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+    "source": {
+      "kind": "fixture",
+      "locator": "fiction://eval-v1/graph-test",
+      "source_id": "graph-test",
+      "captured_at": "2026-02-03T11:00:00Z",
+      "source_hash": "b191175b3c9f431c98cdf0ef507e5684034f1aeb0ae2d41408ae57a2d1aa45cb",
+      "payload": {
+        "fictional": true
+      }
+    },
+    "links": [],
+    "metadata": {}
+  },
+  {
+    "id": "graph-unrelated",
+    "repository": "Atlas",
+    "kind": "note",
+    "authority": "observation",
+    "title": "Unrelated export style review",
+    "body": "Fictional export investigation evidence; relationships are explicit, not inferred.",
+    "source": {
+      "kind": "fixture",
+      "locator": "fiction://eval-v1/graph-unrelated",
+      "source_id": "graph-unrelated",
+      "captured_at": "2026-02-03T11:00:00Z",
+      "source_hash": "6203f010be01217df44635f173f48956932ca18ae4a489384388fb6590b02f3b",
+      "payload": {
+        "fictional": true
+      }
+    },
+    "links": [],
+    "metadata": {}
+  }
+]
