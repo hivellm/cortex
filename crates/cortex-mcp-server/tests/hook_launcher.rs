@@ -716,7 +716,7 @@ fn should_declare_the_documented_mcp_form_and_a_bumped_version_in_the_codex_plug
     let manifest = read_json(&plugin.join(".codex-plugin/plugin.json"));
     assert_eq!(manifest["name"], "cortex");
     // Codex caches installs per version; any plugin change needs a bump.
-    assert_eq!(manifest["version"], "0.4.1");
+    assert_eq!(manifest["version"], "0.4.2");
     assert_eq!(manifest["mcpServers"], "./mcp.json");
     let mcp = read_json(&plugin.join("mcp.json"));
     assert_eq!(

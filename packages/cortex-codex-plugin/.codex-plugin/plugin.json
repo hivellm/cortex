@@ -1,6 +1,6 @@
 {
   "name": "cortex",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Cortex local memory: one standalone cortex executable for offline capture, cited recall and MCP. Install with cortex install. Classification is optional and explicit; hooks never call a provider.",
   "author": {
     "name": "HiveLLM",

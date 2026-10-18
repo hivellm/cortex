@@ -79,6 +79,9 @@ pub fn router(store: LocalStore, port: u16, token: String) -> Result<Router> {
         .route("/api/audit/list", post(audit_list))
         .route("/api/audit/get", post(audit_get))
         .route("/api/audit/metrics", post(audit_metrics))
+        .route("/api/feedback/record", post(feedback_record))
+        .route("/api/feedback/get", post(feedback_get))
+        .route("/api/feedback/list", post(feedback_list))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state))
@@ -224,6 +227,28 @@ async fn audit_list(State(state): State<WebState>, Json(query): Json<AuditListQu
     work(move || state.store.list_audit(query)).await
 }
 
+async fn feedback_record(
+    State(state): State<WebState>,
+    Json(request): Json<crate::feedback::FeedbackRequest>,
+) -> Response {
+    work(move || state.store.record_feedback(request)).await
+}
+async fn feedback_get(State(state): State<WebState>, Json(query): Json<GetAudit>) -> Response {
+    work(move || {
+        state
+            .store
+            .get_feedback(&query.repository, &query.id)?
+            .ok_or(LocalError::NotFound(query.id))
+    })
+    .await
+}
+async fn feedback_list(
+    State(state): State<WebState>,
+    Json(query): Json<crate::feedback::FeedbackListQuery>,
+) -> Response {
+    work(move || state.store.list_feedback(query)).await
+}
+
 async fn audit_get(State(state): State<WebState>, Json(query): Json<GetAudit>) -> Response {
     work(move || {
         state
@@ -279,8 +304,43 @@ async fn recent(State(state): State<WebState>, Json(query): Json<Recent>) -> Res
     })
     .await
 }
-async fn search(State(state): State<WebState>, Json(query): Json<SearchQuery>) -> Response {
-    work(move || state.store.search(query)).await
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebSearch {
+    repository: String,
+    text: String,
+    limit: usize,
+    #[serde(default)]
+    include_inactive: bool,
+    #[serde(default)]
+    feedback: bool,
+    #[serde(default, deserialize_with = "present_search_time")]
+    as_of: Option<String>,
+}
+fn present_search_time<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+async fn search(State(state): State<WebState>, Json(query): Json<WebSearch>) -> Response {
+    work(move || {
+        if !query.feedback && query.as_of.is_some() {
+            return Err(LocalError::Invalid("as_of requires feedback=true".into()));
+        }
+        state.store.search_with_feedback(
+            SearchQuery {
+                repository: query.repository,
+                text: query.text,
+                limit: query.limit,
+                include_inactive: query.include_inactive,
+            },
+            crate::RankingOptions {
+                enabled: query.feedback,
+                as_of: query.as_of,
+            },
+        )
+    })
+    .await
 }
 async fn record(State(state): State<WebState>, Json(query): Json<GetRecord>) -> Response {
     work(move || {

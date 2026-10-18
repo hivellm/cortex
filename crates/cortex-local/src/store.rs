@@ -19,6 +19,106 @@ pub struct LocalStore {
 }
 
 impl LocalStore {
+    pub fn record_feedback(
+        &self,
+        request: crate::feedback::FeedbackRequest,
+    ) -> Result<crate::feedback::FeedbackWriteOutcome> {
+        self.write_feedback(request, None)
+    }
+
+    pub(crate) fn import_feedback(
+        &self,
+        request: crate::feedback::FeedbackRequest,
+        legacy: serde_json::Value,
+    ) -> Result<crate::feedback::FeedbackWriteOutcome> {
+        crate::feedback::validate_legacy_request(&request, &legacy)?;
+        self.write_feedback(request, Some(legacy))
+    }
+
+    fn write_feedback(
+        &self,
+        request: crate::feedback::FeedbackRequest,
+        legacy: Option<serde_json::Value>,
+    ) -> Result<crate::feedback::FeedbackWriteOutcome> {
+        self.with_connection(|connection| {
+            crate::feedback::validate_mode(&request, legacy.as_ref())?;
+            if let Some(existing) =
+                crate::feedback::get(connection, &request.repository, &request.id)?
+            {
+                if existing.request != request || existing.legacy != legacy {
+                    return Err(LocalError::Conflict(
+                        "feedback ID already has different content".into(),
+                    ));
+                }
+                let context = crate::feedback::EligibilityContext::load(
+                    connection,
+                    &existing.request.repository,
+                )?;
+                return Ok(crate::feedback::FeedbackWriteOutcome {
+                    entry: context.entry(existing)?,
+                    created: false,
+                });
+            }
+            let candidate = crate::feedback::make(connection, request, legacy)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            self.begin_write()?;
+            files::publish(
+                &self.root,
+                &crate::feedback::path(&self.root, &candidate),
+                &files::canonical(&candidate)?,
+            )?;
+            crate::feedback::project(&transaction, &candidate)?;
+            let context = crate::feedback::EligibilityContext::load(
+                &transaction,
+                &candidate.request.repository,
+            )?;
+            let entry = context.entry(candidate)?;
+            transaction.commit()?;
+            self.finish_write()?;
+            Ok(crate::feedback::FeedbackWriteOutcome {
+                entry,
+                created: true,
+            })
+        })
+    }
+
+    pub fn get_feedback(
+        &self,
+        repository: &str,
+        id: &str,
+    ) -> Result<Option<crate::feedback::FeedbackEntry>> {
+        files::validate_scope(repository)?;
+        crate::audit::bounded_id(id)?;
+        self.with_connection(|connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let result = if let Some(record) = crate::feedback::get(&transaction, repository, id)? {
+                Some(
+                    crate::feedback::EligibilityContext::load(&transaction, repository)?
+                        .entry(record)?,
+                )
+            } else {
+                None
+            };
+            transaction.commit()?;
+            Ok(result)
+        })
+    }
+
+    pub fn list_feedback(
+        &self,
+        query: crate::feedback::FeedbackListQuery,
+    ) -> Result<crate::feedback::FeedbackListPage> {
+        self.with_connection(|connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let page = crate::feedback::list(&transaction, &query)?;
+            transaction.commit()?;
+            Ok(page)
+        })
+    }
+
     pub fn append_audit(
         &self,
         request: crate::audit::AuditRequest,
@@ -190,7 +290,7 @@ impl LocalStore {
             &self.root.join("store.lock"),
             Some(&self.root.join("pending")),
             self.lock_timeout,
-            2,
+            3,
         )
     }
 
@@ -469,6 +569,23 @@ impl LocalStore {
 
     pub fn search(&self, query: SearchQuery) -> Result<Vec<SearchHit>> {
         self.with_connection(|connection| index::search(connection, query, false))
+    }
+
+    pub fn search_with_feedback(
+        &self,
+        query: SearchQuery,
+        options: crate::ranking::RankingOptions,
+    ) -> Result<Vec<SearchHit>> {
+        if !options.enabled {
+            return self.search(query);
+        }
+        self.with_connection(|connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let hits = crate::ranking::search(&transaction, query, options)?;
+            transaction.commit()?;
+            Ok(hits)
+        })
     }
 
     pub fn search_memories(&self, query: SearchQuery) -> Result<Vec<SearchHit>> {

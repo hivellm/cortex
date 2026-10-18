@@ -5,7 +5,7 @@
 
 **Local, cited memory for coding agents.**
 
-Cortex preserves decisions, lessons and historical events so agents can recover their sources across sessions. The default product is one Rust executable, `cortex`, with local storage, fifteen MCP tools, lifecycle hooks and an embedded browser interface. No daemon, Docker, GPU, Node.js build or external database is required.
+Cortex preserves decisions, lessons and historical events so agents can recover their sources across sessions. The default product is one Rust executable, `cortex`, with local storage, eighteen MCP tools, lifecycle hooks and an embedded browser interface. No daemon, Docker, GPU, Node.js build or external database is required.
 
 Canonical memories are immutable Markdown revisions; raw events live in immutable NDJSON segments. SQLite FTS5, current-record projections and typed relationships are derived indexes that can be rebuilt. Imported events remain observations: importing or classifying them does not promote them into accepted advice.
 
@@ -14,6 +14,16 @@ Start with the [local-first memory guide](docs/operations/local-first-memory.md)
 [Audit inspection](docs/operations/local-first-memory.md#audit-evidence-and-retention) preserves preparation receipts, exact historical references and observed actions in local files. CLI, MCP and GUI distinguish prepared context, related actions, captured citation evidence and unknown attribution. These counts do not establish causal use or productivity. The [frozen retrieval evaluation](docs/operations/local-memory-evaluation.md) still reports seven answerable natural-language misses and readiness=false.
 
 ## Install
+
+[Declared feedback](docs/operations/local-feedback.md) records exact delivery and
+revision judgments locally. Optional search reranking is off by default and
+cannot recover missing matches. Declared actors are not authenticated votes;
+imported legacy feedback stays unattributed and cannot rank memories. Initial
+evaluation shows changed ordering for one development query, with no Recall/MRR
+gain. Final phase32 installation and full-suite acceptance pass: 4,324 Rust tests
+and 170 Python tests pass, with nine Rust ignores and one Windows Python skip.
+Both plugin caches verify 0.4.2; active-client reload and model consumption remain
+unobserved.
 
 Build from this checkout with the repository's Rust toolchain:
 

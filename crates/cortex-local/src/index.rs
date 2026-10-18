@@ -38,7 +38,7 @@ pub(crate) fn connect_existing(root: &Path, timeout: Duration) -> Result<Connect
 
 pub(crate) fn validate_schema(connection: &Connection) -> Result<()> {
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version != 2 {
+    if version != 3 {
         return Err(LocalError::Invalid(
             "hook index schema unavailable; run reindex --repair".into(),
         ));
@@ -50,6 +50,7 @@ pub(crate) fn validate_schema(connection: &Connection) -> Result<()> {
         "SELECT repository,source_id,target_id,relation FROM edges LIMIT 0",
         "SELECT repository,id,recorded_at,record FROM audit_records LIMIT 0",
         "SELECT repository,delivery_id FROM audit_archived LIMIT 0",
+        "SELECT repository,id,recorded_at,record FROM feedback_records LIMIT 0",
     ] {
         connection.prepare(query)?;
     }
@@ -88,15 +89,15 @@ pub(crate) fn connect(
     let connection = Connection::open(path)?;
     connection.busy_timeout(busy_timeout.min(Duration::from_secs(30)))?;
     let version: u32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version > 2 {
+    if version > 3 {
         return Err(LocalError::Invalid(format!(
-            "index schema {version} is newer than supported schema 2"
+            "index schema {version} is newer than supported schema 3"
         )));
     }
     let tables: i64 = connection.query_row(
-        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('revisions','current_records','record_fts','edges','audit_records','audit_archived')",
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('revisions','current_records','record_fts','edges','audit_records','audit_archived','feedback_records')",
         [], |row| row.get(0))?;
-    let uninitialized = version < 2 || tables != 6;
+    let uninitialized = version < 3 || tables != 7;
     if uninitialized {
         before_initialize()?;
     }
@@ -125,7 +126,11 @@ pub(crate) fn connect(
         CREATE INDEX IF NOT EXISTS audit_scope_time ON audit_records(repository,recorded_at,id);
         CREATE TABLE IF NOT EXISTS audit_archived (
           repository TEXT NOT NULL, delivery_id TEXT NOT NULL,
-          PRIMARY KEY(repository,delivery_id));",
+          PRIMARY KEY(repository,delivery_id));
+        CREATE TABLE IF NOT EXISTS feedback_records (
+          repository TEXT NOT NULL, id TEXT NOT NULL, recorded_at TEXT NOT NULL,
+          record TEXT NOT NULL, PRIMARY KEY(repository,id));
+        CREATE INDEX IF NOT EXISTS feedback_scope_time ON feedback_records(repository,recorded_at,id);",
         )?;
     }
     Ok((connection, uninitialized))
@@ -295,6 +300,7 @@ pub(crate) fn search(
         Ok(SearchHit {
             record: serde_json::from_str(&json)?,
             score,
+            feedback: None,
         })
     })
     .collect()
@@ -330,11 +336,12 @@ pub(crate) fn status(connection: &Connection, repository: Option<&str>) -> Resul
 pub(crate) fn rebuild(root: &Path, connection: &mut Connection) -> Result<ReindexReport> {
     let transaction =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    transaction.execute_batch("DELETE FROM record_fts; DELETE FROM edges; DELETE FROM current_records; DELETE FROM revisions; DELETE FROM audit_records; DELETE FROM audit_archived;")?;
+    transaction.execute_batch("DELETE FROM record_fts; DELETE FROM edges; DELETE FROM current_records; DELETE FROM revisions; DELETE FROM audit_records; DELETE FROM audit_archived; DELETE FROM feedback_records;")?;
     let files = files::visit_records(root, |record| project(&transaction, &record))?;
     validate_chains(&transaction)?;
     crate::audit::rebuild(root, &transaction)?;
-    transaction.pragma_update(None, "user_version", 2)?;
+    crate::feedback::rebuild(root, &transaction)?;
+    transaction.pragma_update(None, "user_version", 3)?;
     let state = status(&transaction, None)?;
     let dangling_links = transaction.query_row(
         "SELECT count(*) FROM edges e WHERE NOT EXISTS(SELECT 1 FROM current_records c WHERE c.repository=e.repository AND c.id=e.target_id)",

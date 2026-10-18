@@ -2,6 +2,8 @@
 const $ = (id) => document.getElementById(id);
 const state = { repository: "", records: [], selected: null, editing: null, generation: 0, selection: 0 };
 const auditState = { generation: 0, selection: 0, source: 0, cursors: [null], page: 0, next: null };
+const feedbackState = { generation: 0, selection: 0, cursors: [null], page: 0, next: null, target: null };
+const searchFeedback = new Map();
 const parameters = new URLSearchParams(location.hash.slice(1));
 const bootstrap = parameters.get("token");
 state.repository = parameters.get("repository") || "";
@@ -55,8 +57,14 @@ async function refresh() {
   const repository = state.repository;
   const query = $("search").value.trim();
   const data = { repository, limit: 100, include_inactive: $("include-inactive").checked };
-  const rows = query ? (await api("search", { ...data, text: query })).map((hit) => hit.record) : await api("recent", data);
+  const searchRequest = { ...data, text: query };
+  if ($("feedback-ranking").checked) searchRequest.feedback = true;
+  const hits = query ? await api("search", searchRequest) : null;
+  const rows = hits ? hits.map((hit) => hit.record) : await api("recent", data);
   if (generation !== state.generation) return;
+  searchFeedback.clear();
+  for (const hit of hits || []) { if (hit.feedback) searchFeedback.set(hit.record.id, hit.feedback); }
+  renderSearchFeedback();
   state.records = rows;
   renderResults();
   $("library-summary").textContent = `${rows.length === 100 ? "Showing up to " : ""}${rows.length} ${query ? "matches" : "recent memories"}`;
@@ -65,6 +73,74 @@ async function refresh() {
   $("scope-summary").textContent = `${counts.memories} memories / ${counts.events} events / ${counts.revisions} revisions`;
   await refreshQueue();
   if (generation === state.generation) await refreshAudit(true);
+  if (generation === state.generation) await refreshFeedback(true);
+}
+function resetFeedback() {
+  feedbackState.generation += 1; feedbackState.selection += 1;
+  feedbackState.cursors = [null]; feedbackState.page = 0; feedbackState.next = null; feedbackState.target = null;
+  $("feedback-list").replaceChildren(); $("feedback-detail").textContent = "Select feedback to inspect its provenance and eligibility.";
+  $("feedback-form").reset(); $("feedback-form").hidden = true; $("feedback-error").hidden = true;
+  $("feedback-page").textContent = ""; $("feedback-back").disabled = true; $("feedback-next").disabled = true;
+}
+async function refreshFeedback(reset = false) {
+  if (reset) resetFeedback();
+  const generation = ++feedbackState.generation, repository = state.repository;
+  const current = () => repository === state.repository && generation === feedbackState.generation;
+  $("feedback-back").disabled = true; $("feedback-next").disabled = true;
+  try {
+    const page = await api("feedback/list", { repository, limit: 20, cursor: feedbackState.cursors[feedbackState.page] });
+    if (!current()) return;
+    const list = $("feedback-list"); list.replaceChildren();
+    for (const entry of page.entries) {
+      const request = entry.record.request, button = element("button", undefined, "result"); button.type = "button";
+      button.append(element("span", `${request.judgment} / ${request.evidence}`, "result-title"));
+      button.append(element("span", `${entry.eligibility} / ${request.repository}`, "result-context"));
+      button.append(element("span", request.id, "record-id"));
+      button.addEventListener("click", () => selectFeedback(request.id)); list.append(button);
+    }
+    if (!page.entries.length) list.append(element("p", "No feedback in this exact repository. Imported legacy rows are visible only in legacy-feedback-unattributed.", "muted"));
+    feedbackState.next = page.next_cursor;
+    $("feedback-page").textContent = `Page ${feedbackState.page + 1} / ${page.entries.length} records`;
+    $("feedback-back").disabled = feedbackState.page === 0; $("feedback-next").disabled = !page.next_cursor;
+  } catch (error) { if (current()) { $("feedback-error").textContent = error.message; $("feedback-error").hidden = false; } }
+}
+async function selectFeedback(id) {
+  const repository = state.repository, selection = ++feedbackState.selection;
+  try {
+    const entry = await api("feedback/get", { repository, id });
+    if (repository !== state.repository || selection !== feedbackState.selection) return;
+    $("feedback-detail").textContent = pretty(entry);
+  } catch (error) { if (repository === state.repository && selection === feedbackState.selection) { $("feedback-error").textContent = error.message; $("feedback-error").hidden = false; } }
+}
+function feedbackButton(delivery, reference) {
+  const button = element("button", reference ? "Judge exact delivered record" : "Judge delivered bundle"); button.type = "button";
+  button.addEventListener("click", () => {
+    if (delivery.repository !== state.repository) return;
+    feedbackState.target = { repository: delivery.repository, query_id: delivery.payload.content.query_id, delivery_id: delivery.id, reference };
+    $("feedback-form").reset(); $("feedback-form").hidden = false; $("feedback-id").value = `feedback-${crypto.randomUUID()}`;
+    $("feedback-target").textContent = reference ? `${reference.id} / revision ${reference.revision} / ${reference.content_sha256}` : `Bundle ${delivery.id}; bundle judgments are not record-specific ranking evidence.`;
+    $("feedback-form").scrollIntoView({ block: "nearest" });
+  });
+  return button;
+}
+async function saveFeedback(event) {
+  event.preventDefault();
+  const target = feedbackState.target; if (!target || target.repository !== state.repository) return;
+  const request = { id: $("feedback-id").value, repository: target.repository,
+    query_id: target.query_id, delivery_id: target.delivery_id,
+    source: { kind: $("feedback-kind").value, reference: $("feedback-source").value, actor: $("feedback-actor").value },
+    evidence: "explicit", judgment: $("feedback-judgment").value };
+  if (target.reference) request.reference = target.reference;
+  if ($("feedback-comment").value) request.comment = $("feedback-comment").value;
+  $("feedback-save").disabled = true; $("feedback-error").hidden = true;
+  try {
+    const result = await api("feedback/record", request);
+    if (feedbackState.target !== target || target.repository !== state.repository) return;
+    $("feedback-detail").textContent = pretty(result.entry); $("feedback-form").hidden = true;
+    feedbackState.target = null; feedbackState.page = 0; feedbackState.cursors = [null];
+    await refreshFeedback();
+  } catch (error) { if (feedbackState.target === target && target.repository === state.repository) { $("feedback-error").textContent = error.message; $("feedback-error").hidden = false; } }
+  finally { $("feedback-save").disabled = false; }
 }
 function resetAudit() {
   auditState.generation += 1; auditState.selection += 1; auditState.source += 1;
@@ -119,6 +195,7 @@ async function selectAudit(id) {
     detail.append(element("p", `${record.recorded_at} / ${record.payload.type}`, "muted"));
     const summary = { id: record.id, repository, content_sha256: record.content_sha256, verification: record.verification, ...payload };
     detail.append(element("pre", pretty(summary)));
+    if (record.payload.type === "delivery") detail.append(feedbackButton(record, null));
     if (payload.delivery_id) {
       const button = element("button", "Inspect linked delivery"); button.type = "button";
       button.addEventListener("click", () => selectAudit(payload.delivery_id)); detail.append(button);
@@ -130,6 +207,7 @@ async function selectAudit(id) {
       block.append(element("h3", `${reference.id} / revision ${reference.revision}`), element("pre", pretty(reference)));
       const button = element("button", payload.event === reference ? "Read exact action revision" : "Read exact source revision"); button.type = "button";
       button.addEventListener("click", () => readAuditSource(reference, selection)); block.append(button); detail.append(block);
+      if (record.payload.type === "delivery") block.append(feedbackButton(record, reference));
     }
   } catch (error) { if (current()) detail.replaceChildren(element("p", error.message, "error")); }
 }
@@ -157,9 +235,16 @@ function renderResults() {
     button.append(element("span", record.title || "Untitled memory", "result-title"));
     button.append(element("span", `${record.kind} / ${record.authority} / v${record.revision}`, "result-context"));
     button.append(element("span", record.body, "result-excerpt"));
+    const explanation = searchFeedback.get(record.id);
+    if (explanation) button.append(element("span", `${explanation.reason}: ${explanation.baseline_score.toFixed(4)} + ${explanation.adjustment.toFixed(4)} = ${explanation.final_score.toFixed(4)}; ${explanation.samples} declared query groups`, "result-context"));
     button.addEventListener("click", run(() => select(record.id)));
     container.append(button);
   }
+}
+function renderSearchFeedback() {
+  const explanation = state.selected ? searchFeedback.get(state.selected.id) : null;
+  $("search-feedback").hidden = !explanation;
+  $("search-feedback").textContent = explanation ? `Declared feedback search explanation (not independent votes or consumption)\n${pretty(explanation)}` : "";
 }
 async function select(id) {
   const selection = ++state.selection;
@@ -167,6 +252,7 @@ async function select(id) {
   const record = await api("get", { repository, id });
   if (repository !== state.repository || selection !== state.selection) return;
   state.selected = record;
+  renderSearchFeedback();
   $("empty").hidden = true; $("detail").hidden = false;
   $("record-title").textContent = record.title;
   $("record-body").textContent = record.body;
@@ -301,18 +387,25 @@ $("scope-form").addEventListener("submit", run(async () => {
   try { sessionStorage.setItem("cortex-repository", repository); } catch (_) { /* Selection still works without persistence. */ }
   state.selection += 1;
   resetAudit();
+  resetFeedback();
+  searchFeedback.clear(); $("feedback-ranking").checked = false; renderSearchFeedback();
   $("results").replaceChildren(); $("queue-list").replaceChildren(); $("scope-summary").textContent = ""; $("library-summary").textContent = "";
   $("search").value = ""; notice(""); await refresh();
 }));
 $("search-form").addEventListener("submit", run(refresh));
 $("refresh").addEventListener("click", run(async () => { $("search").value = ""; await refresh(); }));
 $("include-inactive").addEventListener("change", run(refresh));
+$("feedback-ranking").addEventListener("change", run(refresh));
 $("refresh-queue").addEventListener("click", run(refreshQueue));
 $("audit-refresh").addEventListener("click", () => refreshAudit(true));
 $("audit-kind").addEventListener("change", () => refreshAudit(true));
 $("audit-archived").addEventListener("change", () => refreshAudit(true));
 $("audit-next").addEventListener("click", () => { if (auditState.next) { auditState.cursors[++auditState.page] = auditState.next; refreshAudit(); } });
 $("audit-back").addEventListener("click", () => { if (auditState.page > 0) { auditState.page -= 1; refreshAudit(); } });
+$("feedback-refresh").addEventListener("click", () => refreshFeedback(true));
+$("feedback-next").addEventListener("click", () => { if (feedbackState.next) { feedbackState.cursors[++feedbackState.page] = feedbackState.next; refreshFeedback(); } });
+$("feedback-back").addEventListener("click", () => { if (feedbackState.page > 0) { feedbackState.page -= 1; refreshFeedback(); } });
+$("feedback-form").addEventListener("submit", saveFeedback);
 $("new-memory").addEventListener("click", () => openEditor(null));
 $("edit-memory").addEventListener("click", () => { if (state.selected) openEditor(state.selected); });
 $("close-editor").addEventListener("click", () => $("editor").close());

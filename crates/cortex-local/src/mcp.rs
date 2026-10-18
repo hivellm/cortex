@@ -11,6 +11,9 @@ use std::{
 
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 const TOOLS: &[(&str, &str)] = &[
+    ("cortex_feedback_record", "Record immutable declared feedback grounded in an exact scoped delivery."),
+    ("cortex_feedback_get", "Read exact scoped feedback and derived eligibility."),
+    ("cortex_feedback_list", "List bounded scoped feedback; declared actors do not prove independent votes or consumption."),
     ("cortex_audit_list", "List bounded scoped audit evidence."),
     ("cortex_audit_get", "Read one exact scoped audit record."),
     (
@@ -88,9 +91,18 @@ pub fn descriptors() -> Value {
             "source":{},"links":{"type":"array"},"metadata":{},
             "expected_revision":{"type":"integer","minimum":1},"model":{"type":"string"},
             "after":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},
-            "include_archived":{"type":"boolean"},"cutoff":{"type":"string"},"apply":{"type":"boolean","default":false}
+            "include_archived":{"type":"boolean"},"cutoff":{"type":"string"},"apply":{"type":"boolean","default":false},
+            "evidence":{"enum":["explicit","inferred"]},"judgment":{"enum":["helpful","unhelpful","unknown"]},
+            "query_id":{"type":"string"},"delivery_id":{"type":"string"},
+            "reference":{"type":"object"},"comment":{"type":"string"},
+            "feedback":{"type":"boolean","default":false},"as_of":{"type":"string"}
         });
         match *name {
+            "cortex_feedback_record" => {
+                properties["source"] = json!({"type":"object","properties":{"kind":{"type":"string"},"reference":{"type":"string"},"actor":{"type":"string"}},"required":["kind","reference","actor"],"additionalProperties":false});
+                properties["reference"] = json!({"type":"object","properties":{"repository":{"type":"string"},"id":{"type":"string"},"revision":{"type":"integer","minimum":1},"content_sha256":{"type":"string"},"source_kind":{"type":"string"},"source_sha256":{"type":"string"},"body_clipped":{"type":"boolean"}},"required":["repository","id","revision","content_sha256","source_kind","source_sha256","body_clipped"],"additionalProperties":false});
+            }
+            "cortex_feedback_list" => properties["limit"]["default"] = json!(20),
             "cortex_audit_list" => {
                 properties["kind"] = json!({"enum":["delivery","observation","archive_control"]});
                 properties["limit"]["default"] = json!(20);
@@ -103,6 +115,8 @@ pub fn descriptors() -> Value {
             _ => {}
         }
         let required = match *name {
+            "cortex_feedback_record" => vec!["id","source","evidence","judgment","query_id","delivery_id"],
+            "cortex_feedback_get" => vec!["id"],
             "cortex_audit_get" => vec!["id"],
             "cortex_audit_retain" => vec!["cutoff"],
             "cortex_get" | "cortex_graph" | "cortex_classification_enqueue" => vec!["id"],
@@ -119,6 +133,18 @@ pub fn descriptors() -> Value {
 fn allowed(name: &str) -> Vec<&'static str> {
     let mut fields = vec!["repository", "repo", "cwd", "scope"];
     fields.extend(match name {
+        "cortex_feedback_record" => vec![
+            "id",
+            "source",
+            "evidence",
+            "judgment",
+            "query_id",
+            "delivery_id",
+            "reference",
+            "comment",
+        ],
+        "cortex_feedback_get" => vec!["id"],
+        "cortex_feedback_list" => vec!["limit", "cursor"],
         "cortex_audit_list" => vec![
             "limit",
             "after",
@@ -130,7 +156,14 @@ fn allowed(name: &str) -> Vec<&'static str> {
         "cortex_audit_get" => vec!["id"],
         "cortex_audit_metrics" => vec!["limit", "after", "before", "include_archived"],
         "cortex_audit_retain" => vec!["cutoff", "limit", "apply"],
-        "cortex_search" | "cortex_query" => vec!["query", "text", "limit", "include_inactive"],
+        "cortex_search" | "cortex_query" => vec![
+            "query",
+            "text",
+            "limit",
+            "include_inactive",
+            "feedback",
+            "as_of",
+        ],
         "cortex_get" => vec!["id", "revision"],
         "cortex_capture_memory" => vec![
             "id",
@@ -263,7 +296,7 @@ pub fn call(
     }
     let repository = repository(&args, default_repository)?;
     let (default_limit, maximum_limit) = match name {
-        "cortex_audit_list" => (20, 100),
+        "cortex_audit_list" | "cortex_feedback_list" => (20, 100),
         "cortex_audit_metrics" => (10000, 10000),
         "cortex_audit_retain" => (100, 100),
         _ => (5, 100),
@@ -286,6 +319,41 @@ pub fn call(
     }
     let query = query.unwrap_or("");
     match name {
+        "cortex_feedback_record" => {
+            let mut request = args.clone();
+            let object = request
+                .as_object_mut()
+                .ok_or_else(|| invalid("arguments must be object"))?;
+            for alias in ["repo", "cwd", "scope"] {
+                object.remove(alias);
+            }
+            object.insert("repository".into(), json!(repository));
+            for key in ["id", "query_id", "delivery_id"] {
+                text(&request, key)?;
+            }
+            if request.get("comment").is_some() {
+                text(&request, "comment")?;
+            }
+            if request
+                .get("reference")
+                .is_some_and(|value| !value.is_object())
+            {
+                return Err(invalid("reference must be object"));
+            }
+            Ok(serde_json::to_value(
+                store.record_feedback(serde_json::from_value(request)?)?,
+            )?)
+        }
+        "cortex_feedback_get" => Ok(serde_json::to_value(
+            store.get_feedback(&repository, text(&args, "id")?)?,
+        )?),
+        "cortex_feedback_list" => Ok(serde_json::to_value(store.list_feedback(
+            crate::feedback::FeedbackListQuery {
+                repository,
+                limit,
+                cursor: optional_text(&args, "cursor")?,
+            },
+        )?)?),
         "cortex_audit_list" => Ok(serde_json::to_value(
             store.list_audit(crate::audit::AuditListQuery {
                 repository,
@@ -340,12 +408,20 @@ pub fn call(
                     .ok_or_else(|| invalid("include_inactive must be boolean"))?,
                 None => false,
             };
-            Ok(serde_json::to_value(store.search(SearchQuery {
-                repository,
-                text: query.into(),
-                limit,
-                include_inactive,
-            })?)?)
+            let enabled = boolean(&args, "feedback")?;
+            let as_of = optional_text(&args, "as_of")?;
+            if !enabled && as_of.is_some() {
+                return Err(invalid("as_of requires feedback=true"));
+            }
+            Ok(serde_json::to_value(store.search_with_feedback(
+                SearchQuery {
+                    repository,
+                    text: query.into(),
+                    limit,
+                    include_inactive,
+                },
+                RankingOptions { enabled, as_of },
+            )?)?)
         }
         "cortex_memory_read" | "cortex_pre_thinking" => {
             let budget = number(&args, "budget_bytes", 6144, 6144)? as usize;

@@ -21,6 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs/operations/local-first-memory.md"
 DISPATCH = ROOT / "crates/cortex-local/src/mcp.rs"
 TOOLS = {
+    "cortex_feedback_record",
+    "cortex_feedback_get",
+    "cortex_feedback_list",
     "cortex_audit_list",
     "cortex_audit_get",
     "cortex_audit_metrics",
@@ -38,6 +41,7 @@ TOOLS = {
     "cortex_classification_jobs",
 }
 READONLY = TOOLS - {
+    "cortex_feedback_record",
     "cortex_audit_retain",
     "cortex_capture_memory",
     "cortex_revise",
@@ -59,11 +63,13 @@ def tool_contract(document, source):
         name for arm in arms for name in re.findall(r'"(cortex_[a-z_]+)"', arm)
     ]
     evaluation.require(
-        len(documented) == len(set(documented)) == 15 and set(documented) == TOOLS,
+        len(documented) == len(set(documented)) == len(TOOLS)
+        and set(documented) == TOOLS,
         "Documented toolset differs",
     )
     evaluation.require(
-        len(implemented) == len(set(implemented)) == 15 and set(implemented) == TOOLS,
+        len(implemented) == len(set(implemented)) == len(TOOLS)
+        and set(implemented) == TOOLS,
         "Dispatch toolset differs",
     )
     return {"documented": sorted(documented), "implemented": sorted(implemented)}
@@ -75,7 +81,7 @@ def tool_names(descriptors):
     )
     names = [item["name"] for item in descriptors]
     evaluation.require(
-        len(names) == len(set(names)) == 15 and set(names) == TOOLS,
+        len(names) == len(set(names)) == len(TOOLS) and set(names) == TOOLS,
         "Advertised toolset differs",
     )
     return sorted(names)
@@ -84,7 +90,7 @@ def tool_names(descriptors):
 def canonical_snapshot(home):
     local = home / "local"
     result = {}
-    for subtree in ("records", "segments"):
+    for subtree in ("records", "segments", "feedback"):
         for path in sorted((local / subtree).rglob("*")):
             evaluation.require(not path.is_symlink(), "Canonical symlink unexpected")
             if path.is_file():
@@ -211,6 +217,19 @@ def evaluate(installed_binary, reference_binary, report_path):
                             equal(
                                 call("cortex_status", {"repository": repository}),
                                 expected_status,
+                            )
+                            equal(
+                                call(
+                                    "cortex_feedback_list", {"repository": repository}
+                                ),
+                                {"entries": [], "next_cursor": None},
+                            )
+                            equal(
+                                call(
+                                    "cortex_feedback_get",
+                                    {"repository": repository, "id": "absent-feedback"},
+                                ),
+                                None,
                             )
                             hits = cli.run(
                                 "--repository",

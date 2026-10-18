@@ -40,6 +40,8 @@ Events cannot be revised. Links remain in the exact repository.
 Available tools:
 
 - `cortex_search` / `cortex_query`: local literal search; query or text, limit 1..100.
+  Optional feedback=true opts into bounded declared-feedback reranking; UTC as_of
+  requires that flag. Omission/false restores baseline. Recall/hooks stay baseline.
 - `cortex_get`: ID, optional historical revision.
 - `cortex_capture_memory`: source-backed explicit capture.
 - `cortex_revise`: immutable memory revision with optimistic concurrency.
@@ -70,7 +72,28 @@ attribution remains unknown; never invent native identifiers to create a link.
 The citation ratio uses sampled prepared deliveries as denominator; observations
 whose delivery falls outside the sample are reported separately.
 
-These fifteen tool names are the whole standalone surface (aliases included).
+- `cortex_feedback_record`: stable caller ID, exact repository/query_id/delivery_id,
+  required source kind/reference/actor, explicit or inferred evidence and helpful,
+  unhelpful or unknown judgment. Optional reference must copy the exact rendered
+  revision/hash/source/clipping fields. Optional comment is at most 4096 UTF-8 bytes.
+  Identical retries return the original; changed requests conflict.
+- `cortex_feedback_get`: exact scoped ID with derived eligibility.
+- `cortex_feedback_list`: limit 1..100 (default 20), optional pagination cursor.
+  Reserved legacy-feedback-unattributed scope is inspectable only when explicitly
+  selected; online recording cannot create legacy evidence.
+
+Declared actors are provenance, not authenticated independent voters. Bundle,
+unknown, inferred and legacy judgments never rank records. Enabled search groups
+exact query/record revision/hash evidence; duplicate actor/feedback IDs cannot
+amplify a group, conflicting judgments exclude it. Policy requires three groups
+and weight 1.5, with 30-day decay and adjustment bounded to 0.25. It reranks only
+100 baseline candidates and reads at most 10000 feedback/delivery records each;
+overflow returns baseline with evidence_limit. Inspect each hit's feedback
+explanation. No missing match, memory authority or source is changed. Feedback
+eligibility and captured citations do not prove consumption or productivity.
+Legacy import is CLI-only, source-preserving and permanently excluded from ranking.
+
+These eighteen tool names are the whole standalone surface (aliases included).
 Do not call legacy law, compliance-audit, enrichment, code-index, branch, file-scope or
 session tools. Accepted memory remains subordinate to current user instructions
 and repository rules. Report unavailable tools and continue useful local work.

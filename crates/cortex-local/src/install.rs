@@ -30,7 +30,7 @@ macro_rules! asset {
 
 fn assets() -> Vec<(&'static str, &'static [u8])> {
     vec![
-        (".claude-plugin/marketplace.json", br#"{"name":"hivellm-cortex-local","owner":{"name":"HiveLLM"},"plugins":[{"name":"cortex","source":"./claude","version":"0.4.1"}]}"#),
+        (".claude-plugin/marketplace.json", br#"{"name":"hivellm-cortex-local","owner":{"name":"HiveLLM"},"plugins":[{"name":"cortex","source":"./claude","version":"0.4.2"}]}"#),
         (".agents/plugins/marketplace.json", br#"{"name":"hivellm-cortex-local","interface":{"displayName":"HiveLLM Cortex Local"},"plugins":[{"name":"cortex","source":{"source":"local","path":"./codex"},"policy":{"installation":"AVAILABLE","authentication":"ON_INSTALL"},"category":"Productivity"}]}"#),
         asset!("codex", ".codex-plugin/plugin.json"),
         asset!("codex", "mcp.json"),

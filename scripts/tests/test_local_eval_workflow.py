@@ -124,7 +124,9 @@ def validate_workflow(text):
                 not re.search(r"python\s+scripts/evaluate_jev_live\.py", command),
                 "live provider runner must never execute in CI",
             )
-            runs.append(shlex.split(command))
+            runs.extend(
+                shlex.split(line) for line in command.splitlines() if line.strip()
+            )
     require(
         [
             "cargo",
@@ -186,14 +188,43 @@ def validate_workflow(text):
         ],
         "gate must use fresh reports and default frozen policy",
     )
+    feedback = [
+        command
+        for command in runs
+        if command[:2] == ["python", "scripts/evaluate_local_feedback.py"]
+    ]
+    require(
+        feedback
+        == [
+            [
+                "python",
+                "scripts/evaluate_local_feedback.py",
+                "--binary",
+                "$CORTEX_EVAL_BINARY",
+                "--output",
+                "scripts/feedback-eval-ci-report.json",
+            ]
+        ],
+        "exactly one fresh feedback evaluation with real release binary required",
+    )
+    for prefix in (
+        ["python", "-m", "ruff", "check"],
+        ["python", "-m", "ruff", "format", "--check"],
+    ):
+        commands = [command for command in runs if command[: len(prefix)] == prefix]
+        require(
+            len(commands) == 1 and "scripts/evaluate_local_feedback.py" in commands[0],
+            "feedback harness lint coverage missing",
+        )
     require(len(artifacts) == 1, "one evidence artifact upload required")
     artifact = artifacts[0]
     require(
         "        if: always()" in artifact, "failed evidence upload must always run"
     )
     require(
-        "          path: scripts/eval-ci-report.json" in artifact,
-        "artifact path differs from gate output",
+        "          path: |\n            scripts/eval-ci-report.json\n            scripts/feedback-eval-ci-report.json"
+        in artifact,
+        "artifact paths must preserve gate and feedback output",
     )
     require(
         "${{ matrix.os }}" in artifact and "${{ github.run_attempt }}" in artifact,
@@ -208,6 +239,41 @@ class WorkflowTests(unittest.TestCase):
 
     def test_committed_workflow_uses_real_release_and_fresh_offline_gate(self):
         validate_workflow(self.workflow)
+
+    def test_feedback_evaluation_cannot_be_removed_or_use_another_binary(self):
+        marker = "      - name: Run offline synthetic feedback evaluation\n"
+        start = self.workflow.index(marker)
+        end = self.workflow.index("      - name: Preserve", start)
+        block = self.workflow[start:end]
+        for replacement in (
+            "",
+            block.replace('"$CORTEX_EVAL_BINARY"', '"other-cortex"'),
+            block.replace("scripts/feedback-eval-ci-report.json", "old-report.json"),
+        ):
+            with (
+                self.subTest(replacement=replacement),
+                self.assertRaisesRegex(AssertionError, "feedback evaluation"),
+            ):
+                validate_workflow(
+                    self.workflow[:start] + replacement + self.workflow[end:]
+                )
+
+    def test_feedback_report_must_be_preserved_even_on_failure(self):
+        with self.assertRaisesRegex(AssertionError, "artifact paths"):
+            validate_workflow(
+                self.workflow.replace(
+                    "            scripts/feedback-eval-ci-report.json\n", ""
+                )
+            )
+
+    def test_feedback_lint_cannot_be_omitted(self):
+        with self.assertRaisesRegex(AssertionError, "lint coverage"):
+            validate_workflow(
+                self.workflow.replace(
+                    "scripts/evaluate_local_feedback.py scripts/evaluate_local_latency.py",
+                    "scripts/evaluate_local_latency.py",
+                )
+            )
 
     def test_schedules_services_credentials_and_allow_failure_rejected(self):
         for injection in (

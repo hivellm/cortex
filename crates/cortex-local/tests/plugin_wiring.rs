@@ -229,7 +229,7 @@ fn skills_only_advertise_implemented_mcp_names_and_matching_version() {
     ] {
         let root = workspace().join("packages").join(plugin);
         let value: Value = serde_json::from_slice(&fs::read(root.join(manifest)).unwrap()).unwrap();
-        assert_eq!(value["version"], "0.4.1");
+        assert_eq!(value["version"], "0.4.2");
         let skill = fs::read_to_string(root.join("skills/cortex-memory/SKILL.md")).unwrap();
         for token in skill
             .split('`')

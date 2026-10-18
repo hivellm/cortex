@@ -35,6 +35,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Inspect or record immutable feedback; import preserves unattributed legacy rows.
+    Feedback {
+        #[command(subcommand)]
+        action: FeedbackCommand,
+    },
     /// Count local records. --all explicitly includes every repository.
     Status {
         #[arg(long)]
@@ -73,6 +78,11 @@ enum Command {
         limit: usize,
         #[arg(long)]
         include_inactive: bool,
+        /// Opt into bounded local declared-feedback reranking for this search only.
+        #[arg(long)]
+        feedback: bool,
+        #[arg(long, requires = "feedback")]
+        as_of: Option<String>,
     },
     Recent {
         #[arg(long, default_value_t = 20)]
@@ -151,6 +161,32 @@ enum Command {
     Update {
         #[arg(long)]
         binary: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum FeedbackCommand {
+    Record {
+        #[arg(long)]
+        input: PathBuf,
+    },
+    List {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    Get {
+        id: String,
+    },
+    Import {
+        source: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value_t = 10000)]
+        max_records: usize,
+        #[arg(long)]
+        cursor: Option<String>,
     },
 }
 
@@ -287,7 +323,13 @@ async fn run(cli: Cli) -> Result<()> {
     if matches!(cli.command, Command::Reindex { repair: true }) {
         return print(&LocalStore::repair(&root)?);
     }
-    let dry_run = matches!(cli.command, Command::Import { dry_run: true, .. });
+    let dry_run = matches!(
+        cli.command,
+        Command::Import { dry_run: true, .. }
+            | Command::Feedback {
+                action: FeedbackCommand::Import { dry_run: true, .. }
+            }
+    );
     let temporary = if dry_run {
         match std::fs::symlink_metadata(&root) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -309,6 +351,42 @@ async fn run(cli: Cli) -> Result<()> {
     let cwd = std::env::current_dir()?;
     let scope = || runtime::resolve_repository(&cwd, cli.repository.as_deref());
     match cli.command {
+        Command::Feedback { action } => match action {
+            FeedbackCommand::Record { input } => {
+                let request: cortex_local::feedback::FeedbackRequest =
+                    serde_json::from_value(runtime::read_json(&input, 64 * 1024)?)?;
+                if request.repository != scope()? {
+                    return Err(invalid(
+                        "feedback repository differs from exact selected scope",
+                    ));
+                }
+                print(&store.record_feedback(request)?)
+            }
+            FeedbackCommand::List { limit, cursor } => print(&store.list_feedback(
+                cortex_local::feedback::FeedbackListQuery {
+                    repository: scope()?,
+                    limit,
+                    cursor,
+                },
+            )?),
+            FeedbackCommand::Get { id } => print(
+                &store
+                    .get_feedback(&scope()?, &id)?
+                    .ok_or(LocalError::NotFound(id))?,
+            ),
+            FeedbackCommand::Import {
+                source,
+                dry_run,
+                max_records,
+                cursor,
+            } => print(&cortex_local::feedback_import::import_feedback_page(
+                &store,
+                &source,
+                dry_run,
+                max_records,
+                cursor.as_deref(),
+            )?),
+        },
         Command::Status { all } => {
             if all && cli.repository.is_some() {
                 return Err(invalid("--all conflicts with --repository"));
@@ -382,12 +460,20 @@ async fn run(cli: Cli) -> Result<()> {
             text,
             limit,
             include_inactive,
-        } => print(&store.search(SearchQuery {
-            repository: scope()?,
-            text,
-            limit,
-            include_inactive,
-        })?),
+            feedback,
+            as_of,
+        } => print(&store.search_with_feedback(
+            SearchQuery {
+                repository: scope()?,
+                text,
+                limit,
+                include_inactive,
+            },
+            cortex_local::RankingOptions {
+                enabled: feedback,
+                as_of,
+            },
+        )?),
         Command::Recent {
             limit,
             include_inactive,

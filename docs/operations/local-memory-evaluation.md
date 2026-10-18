@@ -102,7 +102,7 @@ python scripts/smoke_installed_local.py --installed-binary "$env:USERPROFILE/.co
 python scripts/smoke_installed_local.py --installed-binary "$HOME/.cortex/bin/cortex" --reference-binary target/release/cortex --report scripts/installed-smoke-report.json
 ```
 
-Setup creates only a new fictional temporary home. The current smoke compares fifteen advertised/implemented/documented tools and exercises eleven source-preserving tools, plus explicit retention preview without apply. Recall and SessionStart may publish local audit receipts. Original memory records/segments, queue JSON and source bytes must remain identical; audit publication is separate from those sources. Derived SQLite/lock bytes are excluded because readers may modify them. A reference build and installed executable must match before interpreting results.
+Setup creates only a new fictional temporary home. The current smoke compares eighteen advertised/implemented/documented tools and exercises thirteen source-preserving tools, plus explicit retention preview without apply. Recall and SessionStart may publish local audit receipts. Original memory records/segments, queue JSON and source bytes must remain identical; audit publication is separate from those sources. Derived SQLite/lock bytes are excluded because readers may modify them. A reference build and installed executable must match before interpreting results.
 
 The historical phase28 CE680 acceptance exercised eleven tools, eight read-only operations and fourteen passing checks before audit receipts were added. Its SessionStart path did not write receipts. Those results remain evidence for that binary, not a claim that an older installed executable already provides phase31 tools or that an active client loaded a new plugin.
 
@@ -144,12 +144,61 @@ The task design preserves detailed counts, corrections and review evidence.
 
 Frozen corpus, judgments and policy remain unchanged. Seven answerable held-out
 natural-language questions still return zero and `natural_language_ready=false`.
-Current real-home inspection is also limited: exact repository `Cortex` contains
+Historical phase31 real-home inspection was also limited: exact repository `Cortex` contained
 26 records/revisions (16 events, ten memories, one link), but audit matching_records
 is zero, without prepared-delivery or captured-citation evidence. The whole-home
 106,960 records across 37 repositories is a separate inventory. Neither that
 inventory nor fixture/direct-adapter acceptance establishes actual-client
 consumption or causal productivity from the new audit feature.
+
+## Feedback ranking evaluation
+
+The [local feedback guide](local-feedback.md) documents schema 3, eighteen MCP
+tools, capture/import contracts and fixed opt-in policy. The current installed
+smoke contract expects eighteen tools and thirteen source-preserving operations;
+the fifteen-tool results above remain historical phase31 evidence.
+
+Final phase32 installed-release evaluation compares
+disabled/enabled search with the frozen corpus and policy unchanged. It captures
+36 fictional feedback records from development questions only. Only development
+query d05 changes ordering; Recall@5/MRR@10 remain 0.8625/1, with no quality gain.
+All seven answerable held-out natural-language questions still return zero and
+readiness remains false. Held-out labels are never used to generate feedback or
+tune policy. Rollback disables the per-search flag and preserves evidence.
+
+Actual historical metadata contains zero feedback rows, distinct from the
+106,930 historical events recovered earlier. Imported unknown rows, declared
+samples and fixture ranking changes are not independent human votes or measured
+productivity. Final release GUI passes capture, opt-in ranking, rollback, literal
+rendering and scope reset on desktop 1360x900 and mobile 390x844 (375 CSS-pixel
+width), without horizontal overflow. Server stopped; temporary token is invalid.
+
+Accepted release and installed SHA-256:
+`f30b1593cbeb252530df75e29796c4d7fd6d67ceb99d92831bfbd1c4ff86bc41`.
+Five paired trials per query give median latency 3.38 ms disabled / 3.62 ms
+enabled and nearest-rank p95 4.49 / 4.94 ms across 100 MCP samples per mode.
+Timings describe this environment, not a general performance claim. All 95
+evaluation canonical files remain unchanged after search, rollback and reindex.
+
+Final workspace gates pass 4,324 Rust tests, zero failures and nine ignored
+across 275 targets, serially outside the sandbox. Check, format and strict clippy
+pass. Python runs 171 cases: 170 pass and one Windows symlink check skips. An
+initial stale fifteen-tool expectation was corrected before the full successful
+rerun. Fourteen installed smoke checks pass with thirteen read-only operations
+and eighteen tools. Both plugin caches verify 0.4.2; seven hook files remain
+unchanged. Active-client reload and model consumption are unobserved. Serial
+success does not establish parallel stability.
+
+Final real home contains 106,962 records/revisions: 106,946 events and sixteen
+memories across 37 repositories, with 1,812 links. Exact `Cortex` scope contains
+28 records/revisions: sixteen events, twelve memories and one link. One prepared
+audit delivery, zero observations and zero feedback are present. These totals
+include additive local lesson `phase32-feedback-ranking-has-no-proven-quality-gain@1`,
+recorded as an observation without external classification. Preservation verifies
+1,659 original canonical files and 69,634 archive files (319,238,316 bytes)
+unchanged. Sixteen previously truncated source frames remain incomplete. Previous
+installation backup: `install-01M56YQKJCXNZH0SEZVJ6M2WKW`. Sealed evidence:
+`C:/Users/Bolado/.cortex/backups/phase32-feedback-f30b1593/evidence`.
 
 ## Classification: offline versus live
 

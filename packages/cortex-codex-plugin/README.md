@@ -1,6 +1,6 @@
 # Cortex for Codex
 
-Version 0.4.1 uses one standalone `cortex` executable. Memory capture, search,
+Version 0.4.2 uses one standalone `cortex` executable. Memory capture, search,
 graph, revisions, MCP and lifecycle hooks run locally without a daemon, Docker,
 a provider key or an API URL. Classification is optional and explicit.
 
@@ -28,10 +28,15 @@ Scope matching is exact and case sensitive. Raw lifecycle observations do not
 become accepted decisions automatically. Context includes source, authority,
 record ID, revision and hash; delivery is not proof of model use or benefit.
 
-The memory skill describes the fifteen supported MCP names. Old law-enforcement,
+The memory skill describes the eighteen supported MCP names. Old law-enforcement,
 compliance-audit and code-index endpoints are not part of this standalone core.
 
-Version 0.4.1 adds skill guidance for local audit list/get/metrics/retention.
+Version 0.4.2 adds declared feedback record/get/list and optional search ranking
+guidance alongside local audit list/get/metrics/retention. Ranking is off by
+default; omit feedback or set it false to restore baseline. Declared actors are
+not authenticated votes; legacy unknown rows never rank memories. Recall/hooks
+remain baseline. Source-preserving legacy import is CLI-only; schema 3 is prepared
+by normal store open, not hooks or dry-run inspection.
 Audit inspection preserves exact historical references and separates prepared
 context, related actions, captured citation evidence and unknown attribution.
 It does not claim causal model use or productivity. Retention previews by

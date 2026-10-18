@@ -26,6 +26,8 @@
         <div class="section-top"><h2>Memories</h2><button id="new-memory" class="primary" type="button">Capture</button></div>
         <form id="search-form"><label class="sr-only" for="search">Search memories</label><input id="search" type="search" placeholder="Search this repository"><button type="submit">Search</button></form>
         <div class="list-options"><label><input id="include-inactive" type="checkbox"> Include inactive</label><button id="refresh" class="quiet" type="button">Recent</button></div>
+        <label class="hint"><input id="feedback-ranking" type="checkbox"> Use declared feedback for this search</label>
+        <p class="hint">Off by default. Turning it off restores baseline search. Feedback cannot recover missing matches or prove independent votes.</p>
         <p id="library-summary" class="muted"></p>
         <div id="results" class="results" aria-live="polite"></div>
         <div class="scope-summary" id="scope-summary"></div>
@@ -36,6 +38,7 @@
           <div class="record-context"><span id="record-kind"></span><span id="record-authority"></span><span id="record-revision"></span></div>
           <h2 id="record-title"></h2>
           <p id="record-id" class="muted record-id"></p>
+          <pre id="search-feedback" hidden></pre>
           <div class="record-actions"><button id="edit-memory" type="button">Revise</button><button id="enqueue" class="quiet" type="button">Queue classification</button></div>
           <p class="hint">Classification is advisory. Queueing stays local; processing starts from the CLI.</p>
           <nav class="tabs" aria-label="Memory views">
@@ -61,6 +64,21 @@
       <p id="audit-denominator" class="hint"></p>
       <div class="audit-workspace"><div><div id="audit-list" class="results" aria-label="Audit records"></div><div class="audit-pagination"><button id="audit-back" type="button" disabled>Back</button><span id="audit-page" class="muted"></span><button id="audit-next" type="button" disabled>Next</button></div></div><article id="audit-detail" aria-label="Selected audit evidence"><p class="muted">Select an audit record to inspect exact evidence.</p></article></div>
       <section id="audit-source-panel" hidden aria-labelledby="audit-source-title"><h3 id="audit-source-title">Exact historical source</h3><pre id="audit-source"></pre></section>
+    </section>
+    <section class="audit-section" aria-labelledby="feedback-heading">
+      <div class="section-top"><h2 id="feedback-heading">Declared feedback</h2><button id="feedback-refresh" type="button" class="quiet">Refresh feedback</button></div>
+      <p class="hint">Select a delivery in Audit inspection to record a bundle or exact-record judgment. Actors are declared provenance, not authenticated votes. Unknown, inferred and imported feedback do not establish consumption.</p>
+      <p id="feedback-error" role="status" hidden></p>
+      <div class="audit-workspace"><div><div id="feedback-list" class="results" aria-label="Feedback records"></div><div class="audit-pagination"><button id="feedback-back" type="button" disabled>Back</button><span id="feedback-page" class="muted"></span><button id="feedback-next" type="button" disabled>Next</button></div></div><article><pre id="feedback-detail">Select feedback to inspect its provenance and eligibility.</pre></article></div>
+      <form id="feedback-form" hidden>
+        <h3>Record an explicit judgment</h3><p id="feedback-target" class="hint"></p>
+        <div class="editor-selects"><div><label for="feedback-id">Stable feedback ID</label><input id="feedback-id" required maxlength="256"></div><div><label for="feedback-judgment">Judgment</label><select id="feedback-judgment"><option value="unknown">Unknown</option><option value="helpful">Helpful</option><option value="unhelpful">Unhelpful</option></select></div></div>
+        <div class="editor-selects"><div><label for="feedback-actor">Declared actor</label><input id="feedback-actor" required maxlength="256" placeholder="Your declared identity"></div><div><label for="feedback-kind">Source kind</label><input id="feedback-kind" required maxlength="128" value="local_web"></div></div>
+        <label for="feedback-source">Source reference</label><input id="feedback-source" required maxlength="2048" placeholder="Where this judgment was stated">
+        <label for="feedback-comment">Comment (optional, up to 4096 UTF-8 bytes)</label><textarea id="feedback-comment" rows="3" maxlength="4096"></textarea>
+        <p class="hint">Saving records your explicit declaration only. Eligibility is derived from exact evidence; it does not prove independent human votes or model use.</p>
+        <button id="feedback-save" type="submit">Save feedback</button>
+      </form>
     </section>
   </main>
   <dialog id="editor"><form id="editor-form"><div class="section-top"><h2 id="editor-title">Capture memory</h2><button id="close-editor" type="button" class="quiet" aria-label="Close editor">Close</button></div><label for="title">Title</label><input id="title" required maxlength="4096"><div class="editor-selects"><div><label for="kind">Kind</label><select id="kind"><option value="note">Note</option><option value="decision">Decision</option><option value="lesson">Lesson</option><option value="preference">Preference</option></select></div><div><label for="authority">Authority</label><select id="authority"><option value="observation">Observation</option><option value="proposed">Proposed</option><option value="accepted">Accepted</option><option value="deprecated">Deprecated</option><option value="superseded">Superseded</option></select></div></div><label for="body">Memory</label><textarea id="body" rows="9" required maxlength="1048576"></textarea><div class="section-top"><h3>Connections</h3><button id="add-link" type="button" class="quiet">Add connection</button></div><div id="editor-links"></div><p id="editor-error" role="alert" hidden></p><div class="editor-footer"><p id="editor-context" class="muted"></p><button id="save-memory" class="primary" type="submit">Save memory</button></div></form></dialog>

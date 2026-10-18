@@ -12,7 +12,7 @@
       "name": "cortex",
       "source": "./packages/cortex-claude-plugin",
       "description": "Offline local capture and cited recall through cortex hook and cortex mcp. No daemon required.",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "repository": "https://github.com/hivellm/cortex",
       "homepage": "https://github.com/hivellm/cortex"
     }

@@ -165,6 +165,8 @@ pub struct SearchQuery {
 pub struct SearchHit {
     pub record: Record,
     pub score: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feedback: Option<crate::ranking::FeedbackExplanation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

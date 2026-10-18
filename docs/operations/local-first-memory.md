@@ -46,16 +46,17 @@ The installer publishes the local marketplace at
 `<home>/plugins/cortex-standalone`, with `claude/` and `codex/` subdirectories.
 Its marketplace name is `hivellm-cortex-local`.
 
-The phase31 bundle is version 0.4.1. It documents all fifteen tools, including
-audit inspection; hook definitions are unchanged from 0.4.0. Refresh the client
-plugin cache after installing the matching binary/bundle. A version change alone
-does not prove that an already running client loaded the updated skills.
+Accepted phase32 bundle 0.4.2 exposes eighteen tools. Both Claude and Codex
+caches verify that version; seven hook files remain identical. Cache refresh
+does not establish active-client reload or model consumption. Restart active
+clients before checking those behaviors.
 
-The phase31 acceptance installation uses release SHA-256
-`3959770ba6cd594664993c210f1741f6bee203b93f5060b86693114d1e09ccaf`.
-Its schema-2 upgrade preserves the previous CE680 binary in installation backup
-`install-01M56Q4H7H711SGH205ZHRGC8N`. At this checkpoint, Claude/Codex caches are
-updated to 0.4.1; restart active clients before validating that they load it.
+Installed release SHA-256:
+`f30b1593cbeb252530df75e29796c4d7fd6d67ceb99d92831bfbd1c4ff86bc41`.
+Schema 3 is verified. Previous phase31 installation is preserved in backup
+`install-01M56YQKJCXNZH0SEZVJ6M2WKW`. Historical phase31 release SHA-256 was
+`3959770ba6cd594664993c210f1741f6bee203b93f5060b86693114d1e09ccaf`;
+its earlier schema-2 upgrade backup remains `install-01M56Q4H7H711SGH205ZHRGC8N`.
 
 ```powershell
 claude plugin marketplace add "$env:USERPROFILE\.cortex\plugins\cortex-standalone"
@@ -122,7 +123,7 @@ automatic memory recall. Pre-thinking/memory-read context is capped at 6 KiB
 and includes identities, revisions, authority and source citations. No result
 is automatically promoted to an accepted decision.
 
-The fifteen implemented MCP tools are:
+The eighteen implemented MCP tools are:
 
 | Tool | Operation |
 | --- | --- |
@@ -141,9 +142,20 @@ The fifteen implemented MCP tools are:
 | `cortex_audit_get` | Exact scoped audit ID, including archived evidence |
 | `cortex_audit_metrics` | Scoped evidence denominators; limit 1..10000 (default 10000), UTC after/before and include_archived |
 | `cortex_audit_retain` | Required UTC cutoff; limit 1..100 (default 100), preview unless apply=true; archives visibility without deleting canonical sources |
+| `cortex_feedback_record` | Immutable caller-ID judgment with source kind/reference/declared actor and exact query/delivery; optional exact record reference |
+| `cortex_feedback_get` | Exact scoped feedback ID with derived eligibility |
+| `cortex_feedback_list` | Scoped feedback pages; limit 1..100 (default 20) and cursor, including reserved legacy scope only when explicitly selected |
 
 Use `cortex mcp --list-tools` for current input schemas. Legacy code-index,
 law-enforcement and compliance-audit endpoints are not part of this surface.
+
+Search/query additionally accept optional `feedback=true` and UTC `as_of`;
+`as_of` requires the flag. CLI equivalents are `search --feedback --as-of`.
+Omitting or disabling the flag returns baseline scores/order without feedback
+fields. Recall and hooks remain baseline. See [local feedback](local-feedback.md)
+for exact policy, capture, legacy import and rollback. Phase32 installed smoke
+passes fourteen checks with thirteen read-only operations and eighteen tools.
+Installation/cache verification does not establish active-client use.
 
 ## Audit evidence and retention
 
@@ -215,6 +227,11 @@ prepares the store. Back up canonical audit files with the rest of the home;
 index-only backups cannot reconstruct missing receipts. Reindex validates audit
 references against exact retained historical revisions and preserves a working
 index when canonical input is invalid.
+
+Phase32 adds canonical feedback JSON under `local/feedback/` and schema 3's
+rebuildable projection. Normal open upgrades the prior index; hooks and import
+dry-runs do not migrate it. Preserve feedback files with the whole home backup.
+Feedback never rewrites memory authority, source, audit evidence or revisions.
 
 Files are plaintext, not encrypted by Cortex. Redaction is best effort and is
 not a complete secret scanner. Historical imports intentionally preserve full
