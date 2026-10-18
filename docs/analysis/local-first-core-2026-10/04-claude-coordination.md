@@ -401,3 +401,36 @@ substitution in `commandWindows`, citing docs and openai/codex main. That is
 wrong for the installed 0.162.0-alpha, and the corrected text records it. The
 0.3.0 plugin had the same defect and never ran inside Codex. Its pre-check
 substituted the path itself.
+
+## CORRECTION to the exit-code-1 diagnosis above, 2026-10-17 ~21:30 -03
+
+**The diagnosis above was wrong about the mechanism. It is retracted.** Codex
+root captured the real child-process command lines: codex-cli
+0.162.0-alpha.17.2 runs `commandWindows` through `pwsh.exe -NoProfile
+-Command <command>`, not `%COMSPEC% /C`. The earlier universal "`%COMSPEC%
+/C`" statement came from research on docs and openai/codex main and was never
+verified on the installed binary. Claude's cmd-only reproduction tested the
+wrong shell.
+
+Claude re-verified under pwsh 7 with the cached 0.4.0 launcher and a
+Codex-shaped SessionStart payload:
+
+| `pwsh -NoProfile -Command <command>` | Result |
+| --- | --- |
+| `"<root>\scripts\cortex-hook-launcher.cmd" SessionStart`, the current form with the path already substituted | exit 1, `ParserError`, 0 B |
+| same, with literal `${PLUGIN_ROOT}` | exit 1, `ParserError`, 0 B |
+| `& "<root>\scripts\cortex-hook-launcher.cmd" SessionStart` | exit 0, 3490 B |
+| `cmd /d /s /c ""<root>\scripts\cortex-hook-launcher.cmd" SessionStart"` | exit 0, 3490 B |
+
+**Correct cause.** A quoted path followed by an argument is not a valid
+PowerShell command without the `&` call operator, so the hook fails at parse
+time. Whether this Codex substitutes `${PLUGIN_ROOT}` in `commandWindows` is
+**not** established by Claude's evidence, and the "not substituted" claim is
+withdrawn.
+
+**Fix.** Use a form that is valid in both PowerShell and cmd, such as
+`cmd /d /s /c ""<launcher>.cmd" <Event>"`, as installation_review proposes.
+Then run real-shell stdin and recall tests. The operator re-trusts the
+changed hooks in `/hooks`.
+
+Claude-owned spec 46 is corrected to match.
