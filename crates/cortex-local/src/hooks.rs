@@ -34,39 +34,74 @@ fn attempt(root: &Path, client: &str, event: Option<&str>, mut input: Value) -> 
     }
     let repository = crate::runtime::resolve_repository(Path::new(cwd), None)?;
     let store = LocalStore::open_for_hook(root, Duration::from_millis(150))?;
+    let identity_fields = [
+        "session_id",
+        "turn_id",
+        "event_id",
+        "tool_use_id",
+        "agent_id",
+    ];
+    let observed_ids: Vec<_> = identity_fields
+        .iter()
+        .map(|key| (*key, input.get(*key).cloned()))
+        .collect();
     redact(&mut input)?;
+    // Redaction placeholders cannot become native identity or join unrelated turns.
+    let mut actor_unverifiable = false;
+    for (key, original) in observed_ids {
+        let valid = input.get(key).and_then(Value::as_str).is_some_and(|value| {
+            original.as_ref() == input.get(key)
+                && !value.contains("[REDACTED:")
+                && crate::audit::bounded_id(value).is_ok()
+        });
+        if !valid {
+            actor_unverifiable |=
+                key == "agent_id" && original.as_ref().is_some_and(|value| !value.is_null());
+            input.as_object_mut().ok_or_else(invalid)?.remove(key);
+        }
+    }
+    if actor_unverifiable {
+        // An invalid child identity must not become the parent's absent agent ID.
+        input.as_object_mut().ok_or_else(invalid)?.remove("turn_id");
+    }
     let mut response = json!({});
     if event == "SessionStart" || event == "UserPromptSubmit" {
-        let mut records = Vec::new();
-        if event == "UserPromptSubmit" {
-            let query = input["prompt"]
+        let mut query = if event == "UserPromptSubmit" {
+            input["prompt"]
                 .as_str()
                 .unwrap_or("")
                 .split_whitespace()
                 .take(24)
                 .collect::<Vec<_>>()
-                .join(" ");
-            if !query.is_empty() && query.len() <= 4096 {
-                records = store
-                    .search_memories(SearchQuery {
-                        repository: repository.clone(),
-                        text: query,
-                        limit: 10,
-                        include_inactive: false,
-                    })?
-                    .into_iter()
-                    .map(|hit| hit.record)
-                    .filter(|record| record.kind != RecordKind::Event)
-                    .collect();
-            }
+                .join(" ")
+        } else {
+            String::new()
+        };
+        if query.len() > 4096 {
+            query.clear();
         }
-        for record in store.recent_memories(&repository, 10, false)? {
-            if !records.iter().any(|old| old.id == record.id) && records.len() < 10 {
-                records.push(record);
-            }
-        }
-        if !records.is_empty() {
-            response = json!({"hookSpecificOutput":{"hookEventName":event,"additionalContext":crate::mcp::context(&records,6144)}});
+        let origin = match (client, event.as_str()) {
+            ("claude-code", "SessionStart") => AuditOrigin::ClaudeSessionStart,
+            ("claude-code", _) => AuditOrigin::ClaudeUserPromptSubmit,
+            ("codex", "SessionStart") => AuditOrigin::CodexSessionStart,
+            ("codex", _) => AuditOrigin::CodexUserPromptSubmit,
+            ("opencode", "SessionStart") => AuditOrigin::OpenCodeSessionStart,
+            _ => AuditOrigin::OpenCodeUserPromptSubmit,
+        };
+        let prepared = crate::recall::prepare(
+            &store,
+            crate::recall::RecallRequest {
+                repository: repository.clone(),
+                query,
+                limit: 10,
+                budget_bytes: 6144,
+                origin,
+                attribution: observed_attribution(client, &input),
+                fallback_recent: true,
+            },
+        )?;
+        if prepared.selected_count > 0 && !prepared.context.is_empty() {
+            response = json!({"hookSpecificOutput":{"hookEventName":event,"additionalContext":prepared.context}});
         }
     }
     if event != "SessionStart" {
@@ -83,9 +118,20 @@ fn attempt(root: &Path, client: &str, event: Option<&str>, mut input: Value) -> 
         })
         .unwrap_or_default();
         let mut metadata = json!({"client":client,"event":event});
-        for key in ["session_id", "turn_id", "agent_id", "agent_type"] {
+        for key in [
+            "session_id",
+            "turn_id",
+            "agent_id",
+            "agent_type",
+            "event_id",
+        ] {
             if let Some(value) = input.get(key).filter(|value| value.is_string()) {
                 metadata[key] = value.clone();
+            }
+        }
+        if metadata.get("event_id").is_none() {
+            if let Some(id) = input.get("tool_use_id").filter(|value| value.is_string()) {
+                metadata["event_id"] = id.clone();
             }
         }
         if event == "PostToolUse"
@@ -135,18 +181,20 @@ fn attempt(root: &Path, client: &str, event: Option<&str>, mut input: Value) -> 
                 .as_str()
                 .is_some_and(|id| !id.is_empty())
         {
-            let identity = serde_json::to_vec(&json!([
-                client,
-                event,
-                repository,
-                input["session_id"],
-                native_id
-            ]))?;
+            let mut identity = json!([client, event, repository, input["session_id"], native_id]);
+            if event == "Stop" && input.get("event_id").is_none() {
+                // A blocked stop may run again in the same turn with a new answer.
+                identity.as_array_mut().unwrap().extend([
+                    input["agent_id"].clone(),
+                    json!(format!("{:x}", Sha256::digest(body.as_bytes()))),
+                ]);
+            }
+            let identity = serde_json::to_vec(&identity)?;
             format!("hook-{:x}", Sha256::digest(&identity))
         } else {
             format!("hook-{}", ulid::Ulid::new())
         };
-        store.capture(CaptureRequest {
+        let capture = store.capture(CaptureRequest {
             id: Some(id.clone()),
             repository,
             kind: RecordKind::Event,
@@ -162,9 +210,30 @@ fn attempt(root: &Path, client: &str, event: Option<&str>, mut input: Value) -> 
             },
             metadata,
             ..Default::default()
-        })?;
+        });
+        // A later event-capture failure cannot retract already prepared context.
+        if event != "UserPromptSubmit" {
+            let captured = capture?;
+            store.observe_event(&captured.record)?;
+        }
     }
     Ok(response)
+}
+
+fn observed_attribution(client: &str, input: &Value) -> AuditAttribution {
+    fn id(input: &Value, key: &str) -> Option<String> {
+        input[key]
+            .as_str()
+            .filter(|value| crate::audit::bounded_id(value).is_ok())
+            .map(str::to_owned)
+    }
+    AuditAttribution {
+        client: Some(client.into()),
+        session_id: id(input, "session_id"),
+        turn_id: id(input, "turn_id"),
+        event_id: id(input, "event_id").or_else(|| id(input, "tool_use_id")),
+        agent_id: id(input, "agent_id"),
+    }
 }
 
 fn redact(value: &mut Value) -> Result<()> {

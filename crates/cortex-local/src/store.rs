@@ -19,6 +19,117 @@ pub struct LocalStore {
 }
 
 impl LocalStore {
+    pub fn append_audit(
+        &self,
+        request: crate::audit::AuditRequest,
+    ) -> Result<crate::audit::AuditWriteOutcome> {
+        self.with_connection(|connection| self.append_audit_locked(connection, request))
+    }
+
+    fn append_audit_locked(
+        &self,
+        connection: &mut Connection,
+        request: crate::audit::AuditRequest,
+    ) -> Result<crate::audit::AuditWriteOutcome> {
+        let candidate = crate::audit::make(connection, request)?;
+        if let Some(existing) = crate::audit::get(connection, &candidate.repository, &candidate.id)?
+        {
+            if existing.payload != candidate.payload {
+                return Err(LocalError::Conflict(
+                    "audit ID already has different content".into(),
+                ));
+            }
+            return Ok(crate::audit::AuditWriteOutcome {
+                record: existing,
+                created: false,
+            });
+        }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        self.begin_write()?;
+        files::publish(
+            &self.root,
+            &crate::audit::path(&self.root, &candidate),
+            &files::canonical(&candidate)?,
+        )?;
+        crate::audit::project(&transaction, &candidate)?;
+        transaction.commit()?;
+        self.finish_write()?;
+        Ok(crate::audit::AuditWriteOutcome {
+            record: candidate,
+            created: true,
+        })
+    }
+
+    pub fn list_audit(
+        &self,
+        query: crate::audit::AuditListQuery,
+    ) -> Result<crate::audit::AuditListPage> {
+        self.with_connection(|connection| crate::audit::list(connection, &query))
+    }
+
+    pub fn observe_event(&self, event: &Record) -> Result<crate::audit::AuditWriteOutcome> {
+        self.with_connection(|connection| {
+            let (id, reference) = crate::audit::observation_identity(connection, event)?;
+            if let Some(existing) = crate::audit::get(connection, &event.repository, &id)? {
+                if !matches!(&existing.payload, crate::audit::AuditPayload::Observation(observation) if observation.event.as_ref() == Some(&reference)) {
+                    return Err(LocalError::Conflict("automatic observation identity is already occupied".into()));
+                }
+                return Ok(crate::audit::AuditWriteOutcome {record:existing,created:false});
+            }
+            let request = crate::audit::observation_request(connection,event,id,reference)?;
+            self.append_audit_locked(connection,request)
+        })
+    }
+
+    pub fn audit_metrics(
+        &self,
+        query: crate::audit::AuditMetricsQuery,
+    ) -> Result<crate::audit::AuditMetrics> {
+        self.with_connection(|connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let metrics = crate::audit::metrics(&transaction, &query)?;
+            transaction.commit()?;
+            Ok(metrics)
+        })
+    }
+
+    pub fn retain_audit(
+        &self,
+        request: crate::audit::AuditRetentionRequest,
+    ) -> Result<crate::audit::AuditRetentionOutcome> {
+        self.with_connection(|connection| {
+            let mut outcome = crate::audit::retention_plan(connection, &request)?;
+            if request.apply && !outcome.delivery_ids.is_empty() {
+                let write = self.append_audit_locked(
+                    connection,
+                    crate::audit::AuditRequest {
+                        id: None,
+                        repository: request.repository,
+                        payload: crate::audit::AuditPayload::ArchiveControl(
+                            crate::audit::ArchiveControlDraft {
+                                delivery_ids: outcome.delivery_ids.clone(),
+                                cutoff: request.cutoff,
+                            },
+                        ),
+                    },
+                )?;
+                outcome.control = Some(write.record);
+            }
+            Ok(outcome)
+        })
+    }
+
+    pub fn get_audit(
+        &self,
+        repository: &str,
+        id: &str,
+    ) -> Result<Option<crate::audit::AuditRecord>> {
+        files::validate_scope(repository)?;
+        crate::audit::bounded_id(id)?;
+        self.with_connection(|connection| crate::audit::get(connection, repository, id))
+    }
+
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         Self::open_with_lock_timeout(root, Duration::from_secs(30))
     }
@@ -79,6 +190,7 @@ impl LocalStore {
             &self.root.join("store.lock"),
             Some(&self.root.join("pending")),
             self.lock_timeout,
+            2,
         )
     }
 

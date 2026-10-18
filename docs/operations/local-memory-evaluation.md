@@ -102,7 +102,54 @@ python scripts/smoke_installed_local.py --installed-binary "$env:USERPROFILE/.co
 python scripts/smoke_installed_local.py --installed-binary "$HOME/.cortex/bin/cortex" --reference-binary target/release/cortex --report scripts/installed-smoke-report.json
 ```
 
-Setup creates only a new fictional temporary home. The read phase compares all eleven advertised tool names and exercises eight read-only tools through persistent MCP, CLI and scoped recall. Mutation tools are inspected rather than called. SessionStart is the only smoke hook; UserPromptSubmit writes events and is measured separately. Original canonical records/segments, queue JSON and source bytes must remain identical. Derived SQLite/lock bytes are excluded because readers may modify them. Fourteen checks passed for the accepted installed CE680 release; this is not a probe of the operator's real store or proof that an active client loaded its plugin.
+Setup creates only a new fictional temporary home. The current smoke compares fifteen advertised/implemented/documented tools and exercises eleven source-preserving tools, plus explicit retention preview without apply. Recall and SessionStart may publish local audit receipts. Original memory records/segments, queue JSON and source bytes must remain identical; audit publication is separate from those sources. Derived SQLite/lock bytes are excluded because readers may modify them. A reference build and installed executable must match before interpreting results.
+
+The historical phase28 CE680 acceptance exercised eleven tools, eight read-only operations and fourteen passing checks before audit receipts were added. Its SessionStart path did not write receipts. Those results remain evidence for that binary, not a claim that an older installed executable already provides phase31 tools or that an active client loaded a new plugin.
+
+Phase31 final acceptance passes on installed release `3959770b`. The elevated
+full workspace all-feature run exits 0 across 263 targets: 4,280 tests pass,
+none fail and nine pre-existing checks/examples are ignored (180 standalone,
+4,100 legacy). It uses `--test-threads=1`; all tests and internal concurrency
+exercises remain enabled, but this does not prove default parallel stability.
+Formatting, type-check, strict clippy and Ruff pass. Python runs 162 cases with
+real CLI/MCP integration and strict ResourceWarning handling: 161 pass and one
+Windows symlink-privilege case is skipped. The parser and aggregate final
+acceptance report pass.
+
+Desktop 1440x1000 and mobile 390x844 GUI acceptance verifies captured-citation
+labels, exact revision 1 after revision 2 exists, literal imported markup without
+injected DOM, and no horizontal overflow. The temporary server is stopped, port
+16464 closed and token invalidated; no test-target or Cargo process remains.
+Installed smoke passes fourteen checks over fifteen tools in an isolated home.
+Runtime acceptance preserves four canonical files through restart/reindex, with
+an actual CLI follow-up captured through the direct adapter remaining unknown
+without native attribution. Historical CLI/MCP checks preserve the May 5/May 9
+events and matching graph results. Plugin caches contain 0.4.1; active clients
+still need restarting, and fixture acceptance is not proof of client reload.
+
+Preservation verifies all 1,657 canonical files and 69,634 archive files
+(319,238,316 bytes) with unchanged hashes. Evidence has been moved to
+`C:/Users/Bolado/.cortex/backups/phase31-audit-3959770b/evidence/`: 198 files,
+51 directories and 6,902,784 bytes, verified by before/after manifests with
+matching sizes and hashes. Failed runs and temporary acceptance helpers remain
+in that backup alongside successful reports.
+
+Earlier attempts remain failures: missing plugin documentation/version checks,
+legacy Bash timeout, a Windows SQLite sidecar snapshot race, retention-canary
+orphan, sandbox token ACL denial and cache HTTP 503 responses. Test-only
+corrections preserve source assertions and production deadlines. Isolated
+reruns did not establish causes for the intermittent retention/cache failures;
+the passing serial gate is not evidence that default parallel timing is fixed.
+The task design preserves detailed counts, corrections and review evidence.
+
+Frozen corpus, judgments and policy remain unchanged. Seven answerable held-out
+natural-language questions still return zero and `natural_language_ready=false`.
+Current real-home inspection is also limited: exact repository `Cortex` contains
+26 records/revisions (16 events, ten memories, one link), but audit matching_records
+is zero, without prepared-delivery or captured-citation evidence. The whole-home
+106,960 records across 37 repositories is a separate inventory. Neither that
+inventory nor fixture/direct-adapter acceptance establishes actual-client
+consumption or causal productivity from the new audit feature.
 
 ## Classification: offline versus live
 

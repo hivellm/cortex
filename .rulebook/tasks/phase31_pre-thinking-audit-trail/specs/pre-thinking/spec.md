@@ -31,18 +31,19 @@ And retains the working index without claiming successful reconstruction.
 
 ### Requirement: Delivery and use evidence remain distinct
 
-Audit SHALL expose prepared delivery, observed related action, explicitly
-evidenced use and unknown as distinct evidence labels with supporting references.
-Temporal correlation SHALL NOT imply consumption or compliance. Explicit use
-claims SHALL identify their evidence and attribution; self-reported use SHALL
+Audit SHALL expose prepared delivery, observed related action, captured citation
+and unknown as distinct evidence labels with supporting references.
+Temporal correlation SHALL NOT imply consumption or compliance. A captured
+citation SHALL prove only that the exact reference appears in the retained Stop
+message, not its causal source or correct application. Self-reported use SHALL
 not be presented as independently verified action compliance.
 
 #### Scenario: Adjacent action supplies correlation only
 
 Given a prepared delivery and a later tool action in the same observed session
 When only their temporal order links the two
-Then the audit may show an observed related action with its correlation method
-And SHALL NOT report explicitly evidenced use.
+Then the audit SHALL retain unknown linkage
+And SHALL NOT report captured citation.
 
 #### Scenario: Missing identifiers remain unknown
 
@@ -56,7 +57,7 @@ And Cortex invents neither identifiers nor links to another session.
 Given recall or context preparation fails
 When Cortex records the attempt
 Then its error and measured latency remain inspectable
-And it is not counted as successful prepared delivery or evidenced use.
+And it is not counted as successful prepared delivery or captured citation.
 
 ### Requirement: Scope applies to all audit surfaces and links
 
@@ -111,3 +112,61 @@ Given an explicitly authorized audit retention operation
 When it applies its documented bounds
 Then original memories and imported source data remain unchanged
 And subsequent inspection never misrepresents removed evidence as available.
+
+### Requirement: Implemented transport and storage contract is bounded
+
+Audit canonical JSON SHALL remain separate under `local/audit/`, bounded to
+64 KiB per record, with schema-2 rebuildable SQLite projection. Normal store
+open and doctor MAY upgrade valid schema 1; hooks SHALL NOT migrate or recover.
+Reconstruction SHALL validate exact historical references without replacing
+them with current revisions. Backup guidance SHALL include audit canonical files.
+
+Recall acknowledgments SHALL contain `repository`, `context`, `query_id`,
+`delivery_id`, `audit_persisted` and `delivery_consumption`. Generated query and
+delivery IDs SHALL NOT be represented as native session or turn identifiers.
+Failed persistence SHALL remain visible as false with a null delivery ID;
+returned context SHALL NOT imply successful persistence or consumption.
+
+CLI `audit list/get/metrics/retain` and MCP `cortex_audit_list/get/metrics/retain`
+SHALL share the engine's exact scope, validation and limits. Lists SHALL default
+to 20 with a 100-record maximum and bounded pagination. Metrics SHALL default
+to and permit at most 10,000 sampled records, with UTC window/archive filters,
+matching/sample/omitted counts and explicit truncation. Citation ratios SHALL
+use sampled prepared deliveries as denominator and expose unavailable rates
+and delivery references outside the sample.
+
+#### Scenario: Exact citation evidence has a narrow meaning
+
+Given a canonical Stop observation contains an exact delivered revision/hash citation
+When the engine independently validates that citation and supporting references
+Then it may label captured citation with canonical-event-citation verification
+And SHALL NOT infer causal influence, tool-action compliance or productivity.
+
+#### Scenario: Attribution identifies the canonical action and actor
+
+Given an observation names a delivery and a retained lifecycle action
+When their optional agent identities differ, including one-sided absence
+Then it SHALL NOT label a related action or captured citation
+And any supplied action event ID SHALL match the canonical action's event ID.
+
+#### Scenario: Redacted identity cannot establish a native link
+
+Given a hook's supplied native identifier is invalid or changed by redaction
+When Cortex records its delivery or action
+Then that identifier SHALL remain absent
+And an invalid supplied agent identity SHALL prevent turn linkage to a parent.
+
+#### Scenario: Archival retains all canonical data
+
+Given an operator previews bounded retention and explicitly applies it
+When an archive-control record changes default audit visibility
+Then audit files, memories, event segments and original imports remain intact
+And exact lookup and include-archived inspection retain access
+And the operation SHALL NOT claim disk reclamation.
+
+#### Scenario: GUI source inspection cannot drift to the latest revision
+
+Given a displayed audit reference names revision 1 with an exact content hash
+When the user opens that source after revision 2 exists
+Then the GUI requests revision 1 and verifies its scope, ID, revision and hash
+And scope changes invalidate pending responses and clear prior selection.

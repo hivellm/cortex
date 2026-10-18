@@ -1,4 +1,4 @@
-"""Read-only installed-runtime smoke after isolated public-fixture construction."""
+"""Source-preserving installed smoke with isolated fixtures and audit receipts."""
 
 from datetime import datetime, timezone
 import argparse
@@ -21,6 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DOCS = ROOT / "docs/operations/local-first-memory.md"
 DISPATCH = ROOT / "crates/cortex-local/src/mcp.rs"
 TOOLS = {
+    "cortex_audit_list",
+    "cortex_audit_get",
+    "cortex_audit_metrics",
+    "cortex_audit_retain",
     "cortex_search",
     "cortex_query",
     "cortex_get",
@@ -34,6 +38,7 @@ TOOLS = {
     "cortex_classification_jobs",
 }
 READONLY = TOOLS - {
+    "cortex_audit_retain",
     "cortex_capture_memory",
     "cortex_revise",
     "cortex_classification_enqueue",
@@ -46,19 +51,19 @@ def tool_contract(document, source):
     documented = re.findall(r"(?m)^\| `(cortex_[a-z_]+)` \|", document)
     body = (
         source.split("pub fn call(", 1)[1]
-        .split("match name {", 1)[1]
-        .split("pub(crate) fn context", 1)[0]
+        .split("pub fn run(", 1)[0]
+        .rsplit("match name {", 1)[1]
     )
     arms = re.findall(r'(?m)^\s*((?:"cortex_[a-z_]+"(?:\s*\|\s*)?)+)\s*=>', body)
     implemented = [
         name for arm in arms for name in re.findall(r'"(cortex_[a-z_]+)"', arm)
     ]
     evaluation.require(
-        len(documented) == len(set(documented)) == 11 and set(documented) == TOOLS,
+        len(documented) == len(set(documented)) == 15 and set(documented) == TOOLS,
         "Documented toolset differs",
     )
     evaluation.require(
-        len(implemented) == len(set(implemented)) == 11 and set(implemented) == TOOLS,
+        len(implemented) == len(set(implemented)) == 15 and set(implemented) == TOOLS,
         "Dispatch toolset differs",
     )
     return {"documented": sorted(documented), "implemented": sorted(implemented)}
@@ -70,7 +75,7 @@ def tool_names(descriptors):
     )
     names = [item["name"] for item in descriptors]
     evaluation.require(
-        len(names) == len(set(names)) == 11 and set(names) == TOOLS,
+        len(names) == len(set(names)) == 15 and set(names) == TOOLS,
         "Advertised toolset differs",
     )
     return sorted(names)
@@ -111,7 +116,7 @@ def evaluate(installed_binary, reference_binary, report_path):
         "passed": False,
         "checks": [],
         "delivery_consumption": "not_observed",
-        "scope": "Installed runtime with explicit temporary home. Fixture construction writes only that home; subsequent eight tools and SessionStart are read-only. No real memory store, provider or client-consumption claim.",
+        "scope": "Installed runtime with explicit temporary home. Source-preserving tools, retention preview and SessionStart preserve memory sources and classification jobs; recall may publish local audit receipts. No real memory store, provider or client-consumption claim.",
         "source_paths": {"documentation": str(DOCS), "dispatch": str(DISPATCH)},
         "snapshot_scope": "Canonical records/segments and queue JSON plus source fixture bytes; derived SQLite files and lock files excluded because opening readers may change them.",
     }
@@ -242,12 +247,65 @@ def evaluate(installed_binary, reference_binary, report_path):
                                 "delivery_consumption": "not_observed",
                             }
                             for name in ("cortex_memory_read", "cortex_pre_thinking"):
-                                equal(
+                                evaluation.validate_recall_response(
                                     call(
                                         name, {"repository": repository, "query": QUERY}
                                     ),
                                     expected_context,
                                 )
+                            page = call("cortex_audit_list", {"repository": repository})
+                            evaluation.require(
+                                bool(page["entries"]), "Recall receipts missing"
+                            )
+                            for entry in page["entries"]:
+                                record = entry["record"]
+                                equal(record["repository"], repository)
+                                equal(
+                                    call(
+                                        "cortex_audit_get",
+                                        {"repository": repository, "id": record["id"]},
+                                    ),
+                                    record,
+                                )
+                            metrics = call(
+                                "cortex_audit_metrics", {"repository": repository}
+                            )
+                            evaluation.require(
+                                metrics["deliveries"]["attempts"] >= 2,
+                                "Recall denominator missing",
+                            )
+                            preview = mcp.call(
+                                "cortex_audit_retain",
+                                {
+                                    "repository": repository,
+                                    "cutoff": "2100-01-01T00:00:00Z",
+                                },
+                            )
+                            evaluation.require(
+                                preview["control"] is None,
+                                "Retention preview mutated archive state",
+                            )
+                            evaluation.require(
+                                preview["canonical_files_retained"] is True,
+                                "Retention preview lost sources",
+                            )
+                            equal(
+                                call("cortex_audit_list", {"repository": repository}),
+                                page,
+                            )
+                            foreign_scope = (
+                                "Atlas" if repository != "Atlas" else "atlas"
+                            )
+                            equal(
+                                call(
+                                    "cortex_audit_get",
+                                    {
+                                        "repository": foreign_scope,
+                                        "id": page["entries"][0]["record"]["id"],
+                                    },
+                                ),
+                                None,
+                            )
                             own = next(
                                 (
                                     r

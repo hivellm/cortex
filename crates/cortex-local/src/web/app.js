@@ -1,6 +1,7 @@
 "use strict";
 const $ = (id) => document.getElementById(id);
 const state = { repository: "", records: [], selected: null, editing: null, generation: 0, selection: 0 };
+const auditState = { generation: 0, selection: 0, source: 0, cursors: [null], page: 0, next: null };
 const parameters = new URLSearchParams(location.hash.slice(1));
 const bootstrap = parameters.get("token");
 state.repository = parameters.get("repository") || "";
@@ -63,6 +64,86 @@ async function refresh() {
   if (generation !== state.generation) return;
   $("scope-summary").textContent = `${counts.memories} memories / ${counts.events} events / ${counts.revisions} revisions`;
   await refreshQueue();
+  if (generation === state.generation) await refreshAudit(true);
+}
+function resetAudit() {
+  auditState.generation += 1; auditState.selection += 1; auditState.source += 1;
+  auditState.cursors = [null]; auditState.page = 0; auditState.next = null;
+  for (const id of ["audit-list", "audit-metrics", "audit-detail"]) $(id).replaceChildren();
+  $("audit-source-panel").hidden = true; $("audit-source").textContent = "";
+  $("audit-denominator").textContent = ""; $("audit-page").textContent = "";
+  $("audit-error").hidden = true; $("audit-back").disabled = true; $("audit-next").disabled = true;
+}
+async function refreshAudit(reset = false) {
+  if (reset) resetAudit();
+  const generation = ++auditState.generation, repository = state.repository;
+  const current = () => generation === auditState.generation && repository === state.repository;
+  const filters = { repository, include_archived: $("audit-archived").checked };
+  const query = { ...filters, limit: 20, cursor: auditState.cursors[auditState.page] };
+  if ($("audit-kind").value) query.kind = $("audit-kind").value;
+  $("audit-next").disabled = true; $("audit-back").disabled = true;
+  $("audit-error").hidden = true;
+  try {
+    const [page, metrics] = await Promise.all([api("audit/list", query), api("audit/metrics", { ...filters, limit: 10000 })]);
+    if (!current()) return;
+    const list = $("audit-list"); list.replaceChildren();
+    for (const entry of page.entries) {
+      const record = entry.record, button = element("button", undefined, "result"); button.type = "button";
+      button.append(element("span", record.evidence_label.replaceAll("_", " "), "result-title"));
+      button.append(element("span", `${record.recorded_at} / ${record.payload.type}${entry.archived ? " / archived" : ""}`, "result-context"));
+      button.append(element("span", record.id, "record-id"));
+      button.addEventListener("click", () => selectAudit(record.id)); list.append(button);
+    }
+    if (!page.entries.length) list.append(element("p", "No audit evidence in this view.", "muted"));
+    const cards = $("audit-metrics"); cards.replaceChildren();
+    for (const [label, value] of [["Prepared deliveries", metrics.deliveries.prepared], ["Related actions", metrics.observations.related], ["Exact citation evidence", metrics.observations.captured_citations], ["Unknown deliveries / actions", `${metrics.deliveries.unknown} / ${metrics.observations.unknown}`], ["Preparation errors", metrics.deliveries.errors], ["Empty deliveries", metrics.deliveries.empty]]) {
+      const card = element("div"); card.append(element("strong", String(value)), element("span", label)); cards.append(card);
+    }
+    $("audit-denominator").textContent = `All kinds in this repository and archive filter: ${metrics.sampled_records} sampled / ${metrics.matching_records} matching / ${metrics.omitted_records} omitted; truncated: ${metrics.truncated}. Delivery attempts: ${metrics.deliveries.attempts}; actions: ${metrics.observations.total}. Captured citations, not causal use: ${metrics.prepared_deliveries_with_citation} prepared deliveries with citations / ${metrics.deliveries.prepared} prepared deliveries; rate ${metrics.citation_delivery_rate === null ? "unavailable" : (metrics.citation_delivery_rate * 100).toFixed(1) + "%"}. Citation observations with delivery outside sample: ${metrics.citation_observations_with_delivery_outside_sample}.`;
+    auditState.next = page.next_cursor;
+    $("audit-page").textContent = `Page ${auditState.page + 1} / ${page.entries.length} records`;
+    $("audit-back").disabled = auditState.page === 0; $("audit-next").disabled = !page.next_cursor;
+  } catch (error) { if (current()) { $("audit-error").textContent = error.message; $("audit-error").hidden = false; } }
+}
+async function selectAudit(id) {
+  const repository = state.repository, selection = ++auditState.selection;
+  auditState.source += 1; $("audit-source-panel").hidden = true; $("audit-source").textContent = "";
+  const current = () => repository === state.repository && selection === auditState.selection;
+  const detail = $("audit-detail"); detail.replaceChildren(element("p", "Loading evidence...", "muted"));
+  try {
+    const record = await api("audit/get", { repository, id });
+    if (!current()) return;
+    if (!record || record.repository !== repository) throw new Error("Audit record unavailable in this repository.");
+    const payload = record.payload.content;
+    detail.replaceChildren(element("h3", record.evidence_label.replaceAll("_", " ")));
+    detail.append(element("p", `${record.recorded_at} / ${record.payload.type}`, "muted"));
+    const summary = { id: record.id, repository, content_sha256: record.content_sha256, verification: record.verification, ...payload };
+    detail.append(element("pre", pretty(summary)));
+    if (payload.delivery_id) {
+      const button = element("button", "Inspect linked delivery"); button.type = "button";
+      button.addEventListener("click", () => selectAudit(payload.delivery_id)); detail.append(button);
+    }
+    const references = [...(payload.references || []), ...(payload.evidence || [])];
+    if (payload.event) references.unshift(payload.event);
+    for (const reference of references) {
+      const block = element("div", undefined, "audit-reference");
+      block.append(element("h3", `${reference.id} / revision ${reference.revision}`), element("pre", pretty(reference)));
+      const button = element("button", payload.event === reference ? "Read exact action revision" : "Read exact source revision"); button.type = "button";
+      button.addEventListener("click", () => readAuditSource(reference, selection)); block.append(button); detail.append(block);
+    }
+  } catch (error) { if (current()) detail.replaceChildren(element("p", error.message, "error")); }
+}
+async function readAuditSource(reference, selection) {
+  const repository = state.repository, source = ++auditState.source;
+  const current = () => repository === state.repository && selection === auditState.selection && source === auditState.source;
+  $("audit-source-panel").hidden = false; $("audit-source").textContent = "Loading exact historical revision...";
+  try {
+    if (reference.repository !== repository) throw new Error("Source scope differs from current repository.");
+    const record = await api("get", { repository, id: reference.id, revision: reference.revision });
+    if (!current()) return;
+    if (!record || record.repository !== repository || record.id !== reference.id || record.revision !== reference.revision || record.content_sha256 !== reference.content_sha256) throw new Error("Historical source does not match audit reference.");
+    $("audit-source").textContent = pretty(record);
+  } catch (error) { if (current()) $("audit-source").textContent = error.message; }
 }
 function renderResults() {
   const container = $("results"); container.replaceChildren();
@@ -219,6 +300,7 @@ $("scope-form").addEventListener("submit", run(async () => {
   state.repository = repository; state.selected = null; state.records = []; $("detail").hidden = true; $("empty").hidden = false;
   try { sessionStorage.setItem("cortex-repository", repository); } catch (_) { /* Selection still works without persistence. */ }
   state.selection += 1;
+  resetAudit();
   $("results").replaceChildren(); $("queue-list").replaceChildren(); $("scope-summary").textContent = ""; $("library-summary").textContent = "";
   $("search").value = ""; notice(""); await refresh();
 }));
@@ -226,6 +308,11 @@ $("search-form").addEventListener("submit", run(refresh));
 $("refresh").addEventListener("click", run(async () => { $("search").value = ""; await refresh(); }));
 $("include-inactive").addEventListener("change", run(refresh));
 $("refresh-queue").addEventListener("click", run(refreshQueue));
+$("audit-refresh").addEventListener("click", () => refreshAudit(true));
+$("audit-kind").addEventListener("change", () => refreshAudit(true));
+$("audit-archived").addEventListener("change", () => refreshAudit(true));
+$("audit-next").addEventListener("click", () => { if (auditState.next) { auditState.cursors[++auditState.page] = auditState.next; refreshAudit(); } });
+$("audit-back").addEventListener("click", () => { if (auditState.page > 0) { auditState.page -= 1; refreshAudit(); } });
 $("new-memory").addEventListener("click", () => openEditor(null));
 $("edit-memory").addEventListener("click", () => { if (state.selected) openEditor(state.selected); });
 $("close-editor").addEventListener("click", () => $("editor").close());

@@ -183,8 +183,8 @@ async fn retention_canary_full_pipeline() {
     );
     assert_eq!(
         archive.tmp_orphans, 0,
-        "no .tmp orphans should remain after rollup ({} found)",
-        archive.tmp_orphans
+        "no .tmp orphans should remain after rollup ({} found): {:?}",
+        archive.tmp_orphans, archive.tmp_details
     );
     assert_eq!(
         archive.corrupted_outside_quarantine, 0,
@@ -410,10 +410,13 @@ async fn drive_retention<'a>(ctx: DriveCtx<'a>) -> DriveReport {
         for p in &plans {
             match g {
                 Granularity::ThreeYearDrop => {
-                    let _ = apply_three_year_drop(ctx.archive_path, p);
+                    apply_three_year_drop(ctx.archive_path, p).unwrap_or_else(|error| {
+                        panic!("three-year drop failed for {p:?}: {error}")
+                    });
                 }
                 _ => {
-                    let _ = compact_partition(ctx.archive_path, p);
+                    compact_partition(ctx.archive_path, p)
+                        .unwrap_or_else(|error| panic!("compaction failed for {p:?}: {error}"));
                 }
             }
         }
@@ -664,6 +667,7 @@ fn seed_metadata(metadata: &MetadataStore, now: DateTime<Utc>) {
 struct ArchiveScan {
     has_quarantine: bool,
     tmp_orphans: u32,
+    tmp_details: Vec<String>,
     corrupted_outside_quarantine: u32,
 }
 
@@ -696,6 +700,11 @@ fn scan_archive_tree(events_root: &std::path::Path) -> ArchiveScan {
                 .to_lowercase();
             if name.ends_with(".tmp") {
                 out.tmp_orphans += 1;
+                out.tmp_details.push(format!(
+                    "{}; quarantine={in_quarantine}; metadata={:?}",
+                    path.display(),
+                    std::fs::symlink_metadata(&path)
+                ));
             }
             if name.contains(".corrupted") && !in_quarantine {
                 out.corrupted_outside_quarantine += 1;

@@ -5,11 +5,13 @@
 
 **Local, cited memory for coding agents.**
 
-Cortex preserves decisions, lessons and historical events so agents can recover their sources across sessions. The default product is one Rust executable, `cortex`, with local storage, eleven MCP tools, lifecycle hooks and an embedded browser interface. No daemon, Docker, GPU, Node.js build or external database is required.
+Cortex preserves decisions, lessons and historical events so agents can recover their sources across sessions. The default product is one Rust executable, `cortex`, with local storage, fifteen MCP tools, lifecycle hooks and an embedded browser interface. No daemon, Docker, GPU, Node.js build or external database is required.
 
 Canonical memories are immutable Markdown revisions; raw events live in immutable NDJSON segments. SQLite FTS5, current-record projections and typed relationships are derived indexes that can be rebuilt. Imported events remain observations: importing or classifying them does not promote them into accepted advice.
 
 Start with the [local-first memory guide](docs/operations/local-first-memory.md). The older service-based runtime remains available as an explicitly optional legacy system.
+
+[Audit inspection](docs/operations/local-first-memory.md#audit-evidence-and-retention) preserves preparation receipts, exact historical references and observed actions in local files. CLI, MCP and GUI distinguish prepared context, related actions, captured citation evidence and unknown attribution. These counts do not establish causal use or productivity. The [frozen retrieval evaluation](docs/operations/local-memory-evaluation.md) still reports seven answerable natural-language misses and readiness=false.
 
 ## Install
 

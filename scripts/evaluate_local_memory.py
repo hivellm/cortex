@@ -816,6 +816,30 @@ def validate_scope_hits(hits, repository, manifest, sources):
             require(link["target_id"] in known, "foreign link target")
 
 
+def validate_recall_response(result, expected):
+    fields = {
+        "repository",
+        "context",
+        "query_id",
+        "delivery_id",
+        "audit_persisted",
+        "delivery_consumption",
+    }
+    require(type(result) is dict and set(result) == fields, "invalid recall envelope")
+    require(result["audit_persisted"] is True, "recall audit was not persisted")
+    for key in ("query_id", "delivery_id"):
+        require(
+            isinstance(result[key], str) and bool(result[key].strip()),
+            "invalid recall " + key,
+        )
+    require(result["query_id"] != result["delivery_id"], "recall IDs must differ")
+    require(
+        {key: result[key] for key in ("repository", "context", "delivery_consumption")}
+        == expected,
+        "recall context/provenance differs from scoped evidence",
+    )
+
+
 def expected_recall_context(hits):
     context = "Cortex local evidence (advisory; source authority unchanged):\n"
     records = [h["record"] for h in hits if h["record"]["kind"] != "event"][:5]
@@ -948,7 +972,7 @@ def evaluate_scope(cli, fixtures, sources, session_factory=None):
                                 "query": "offline desktop notes",
                             },
                         )
-                        equality(
+                        validate_recall_response(
                             result,
                             {
                                 "repository": repository,
@@ -957,7 +981,6 @@ def evaluate_scope(cli, fixtures, sources, session_factory=None):
                                 ),
                                 "delivery_consumption": "not_observed",
                             },
-                            "recall context/provenance differs from scoped evidence",
                         )
 
                     check(f"mcp-recall:{round_number}:{repository}", recall)

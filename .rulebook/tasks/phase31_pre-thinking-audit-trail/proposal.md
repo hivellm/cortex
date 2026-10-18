@@ -3,7 +3,7 @@
 ## Scope and execution prerequisite
 
 Adapted on 2026-10-17 to the approved standalone architecture in
-`.rulebook/tasks/phase36_local-first-core/design.md`.
+`.rulebook/archive/2026-10-18-phase36_local-first-core/design.md`.
 Execute this task only after `phase36_local-first-core` is complete.
 Preserve this task ID; its former full-stack implementation plan is superseded.
 
@@ -31,7 +31,7 @@ Docker workers, governance engine or model trust scores.
   origin, session and turn attribution; unavailable identifiers remain absent.
   Do not copy credentials or unbounded prompt/tool payloads.
 - Keep delivery and use evidence separate. Expose `prepared_delivery`,
-  `observed_related_action`, `explicitly_evidenced_use` and `unknown`
+  `observed_related_action`, `captured_citation` and `unknown`
   with supporting references and attribution. These are evidence labels, not an
   automatic progression: temporal adjacency supports correlation only.
 - Persist follow-up observations append-only. Link only within authorized scope;

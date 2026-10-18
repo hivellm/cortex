@@ -3,8 +3,9 @@ use clap::{Parser, Subcommand};
 use cortex_local::{
     classification::{queue::DrainOptions, ClassificationQueue, Provider, DEFAULT_MODEL},
     import::{import_archive, import_daily, ImportOptions},
-    runtime, Authority, CaptureRequest, GraphQuery, LocalError, LocalStore, RecordKind, Result,
-    RevisionRequest, SearchQuery, Source,
+    runtime, AuditKind, AuditListQuery, AuditMetricsQuery, AuditRetentionRequest, Authority,
+    CaptureRequest, GraphQuery, LocalError, LocalStore, RecordKind, Result, RevisionRequest,
+    SearchQuery, Source,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -116,6 +117,11 @@ enum Command {
         #[command(subcommand)]
         action: ClassificationCommand,
     },
+    /// Inspect local delivery, action and citation evidence or preview archival.
+    Audit {
+        #[command(subcommand)]
+        action: AuditCommand,
+    },
     /// Run the embedded web interface on loopback; no other service is needed.
     Serve {
         #[arg(long, default_value_t = 17200)]
@@ -145,6 +151,46 @@ enum Command {
     Update {
         #[arg(long)]
         binary: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuditCommand {
+    List {
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long)]
+        before: Option<String>,
+        #[arg(long, value_parser=["delivery", "observation", "archive_control"])]
+        kind: Option<String>,
+        #[arg(long)]
+        cursor: Option<String>,
+        #[arg(long)]
+        include_archived: bool,
+    },
+    Get {
+        id: String,
+    },
+    Metrics {
+        #[arg(long, default_value_t = 10_000)]
+        limit: usize,
+        #[arg(long)]
+        after: Option<String>,
+        #[arg(long)]
+        before: Option<String>,
+        #[arg(long)]
+        include_archived: bool,
+    },
+    /// Preview affected audit families; --apply preserves files and archives visibility.
+    Retain {
+        #[arg(long)]
+        cutoff: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        apply: bool,
     },
 }
 
@@ -392,6 +438,62 @@ async fn run(cli: Cli) -> Result<()> {
             print(&report)
         }
         Command::Reindex { .. } => print(&store.reindex()?),
+        Command::Audit { action } => {
+            let repository = scope()?;
+            match action {
+                AuditCommand::List {
+                    limit,
+                    after,
+                    before,
+                    kind,
+                    cursor,
+                    include_archived,
+                } => {
+                    let kind = kind.map(|kind| match kind.as_str() {
+                        "delivery" => AuditKind::Delivery,
+                        "observation" => AuditKind::Observation,
+                        _ => AuditKind::ArchiveControl,
+                    });
+                    print(&store.list_audit(AuditListQuery {
+                        repository,
+                        limit,
+                        after,
+                        before,
+                        kind,
+                        cursor,
+                        include_archived,
+                    })?)
+                }
+                AuditCommand::Get { id } => {
+                    let record = store
+                        .get_audit(&repository, &id)?
+                        .ok_or_else(|| LocalError::NotFound(id))?;
+                    print(&record)
+                }
+                AuditCommand::Metrics {
+                    limit,
+                    after,
+                    before,
+                    include_archived,
+                } => print(&store.audit_metrics(AuditMetricsQuery {
+                    repository,
+                    after,
+                    before,
+                    include_archived,
+                    limit,
+                })?),
+                AuditCommand::Retain {
+                    cutoff,
+                    limit,
+                    apply,
+                } => print(&store.retain_audit(AuditRetentionRequest {
+                    repository,
+                    cutoff,
+                    limit,
+                    apply,
+                })?),
+            }
+        }
         Command::Classify { action } => {
             let repository = scope()?;
             let queue = ClassificationQueue::new(store);

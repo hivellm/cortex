@@ -52,6 +52,16 @@
       </section>
     </div>
     <section class="queue-section" aria-labelledby="queue-heading"><div class="section-top"><h2 id="queue-heading">Classification queue</h2><button id="refresh-queue" class="quiet" type="button">Refresh queue</button></div><p class="hint">Suggestions never change a memory's authority. No external service is called from this page.</p><div id="queue-list"></div></section>
+    <section class="audit-section" aria-labelledby="audit-heading">
+      <div class="section-top"><h2 id="audit-heading">Audit inspection</h2><button id="audit-refresh" type="button" class="quiet">Refresh audit</button></div>
+      <p class="hint">Preparation records show what Cortex prepared. Captured citations, not causal use. Missing native identifiers stay unknown.</p>
+      <div class="audit-filters"><div><label for="audit-kind">Evidence kind</label><select id="audit-kind"><option value="">All kinds</option><option value="delivery">Delivery</option><option value="observation">Observation</option><option value="archive_control">Archive control</option></select></div><label><input id="audit-archived" type="checkbox"> Include archived</label></div>
+      <p id="audit-error" role="status" hidden></p>
+      <div id="audit-metrics" class="audit-metrics" aria-live="polite"></div>
+      <p id="audit-denominator" class="hint"></p>
+      <div class="audit-workspace"><div><div id="audit-list" class="results" aria-label="Audit records"></div><div class="audit-pagination"><button id="audit-back" type="button" disabled>Back</button><span id="audit-page" class="muted"></span><button id="audit-next" type="button" disabled>Next</button></div></div><article id="audit-detail" aria-label="Selected audit evidence"><p class="muted">Select an audit record to inspect exact evidence.</p></article></div>
+      <section id="audit-source-panel" hidden aria-labelledby="audit-source-title"><h3 id="audit-source-title">Exact historical source</h3><pre id="audit-source"></pre></section>
+    </section>
   </main>
   <dialog id="editor"><form id="editor-form"><div class="section-top"><h2 id="editor-title">Capture memory</h2><button id="close-editor" type="button" class="quiet" aria-label="Close editor">Close</button></div><label for="title">Title</label><input id="title" required maxlength="4096"><div class="editor-selects"><div><label for="kind">Kind</label><select id="kind"><option value="note">Note</option><option value="decision">Decision</option><option value="lesson">Lesson</option><option value="preference">Preference</option></select></div><div><label for="authority">Authority</label><select id="authority"><option value="observation">Observation</option><option value="proposed">Proposed</option><option value="accepted">Accepted</option><option value="deprecated">Deprecated</option><option value="superseded">Superseded</option></select></div></div><label for="body">Memory</label><textarea id="body" rows="9" required maxlength="1048576"></textarea><div class="section-top"><h3>Connections</h3><button id="add-link" type="button" class="quiet">Add connection</button></div><div id="editor-links"></div><p id="editor-error" role="alert" hidden></p><div class="editor-footer"><p id="editor-context" class="muted"></p><button id="save-memory" class="primary" type="submit">Save memory</button></div></form></dialog>
 </body>

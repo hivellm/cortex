@@ -46,6 +46,17 @@ The installer publishes the local marketplace at
 `<home>/plugins/cortex-standalone`, with `claude/` and `codex/` subdirectories.
 Its marketplace name is `hivellm-cortex-local`.
 
+The phase31 bundle is version 0.4.1. It documents all fifteen tools, including
+audit inspection; hook definitions are unchanged from 0.4.0. Refresh the client
+plugin cache after installing the matching binary/bundle. A version change alone
+does not prove that an already running client loaded the updated skills.
+
+The phase31 acceptance installation uses release SHA-256
+`3959770ba6cd594664993c210f1741f6bee203b93f5060b86693114d1e09ccaf`.
+Its schema-2 upgrade preserves the previous CE680 binary in installation backup
+`install-01M56Q4H7H711SGH205ZHRGC8N`. At this checkpoint, Claude/Codex caches are
+updated to 0.4.1; restart active clients before validating that they load it.
+
 ```powershell
 claude plugin marketplace add "$env:USERPROFILE\.cortex\plugins\cortex-standalone"
 claude plugin install cortex@hivellm-cortex-local --scope user
@@ -111,7 +122,7 @@ automatic memory recall. Pre-thinking/memory-read context is capped at 6 KiB
 and includes identities, revisions, authority and source citations. No result
 is automatically promoted to an accepted decision.
 
-The eleven implemented MCP tools are:
+The fifteen implemented MCP tools are:
 
 | Tool | Operation |
 | --- | --- |
@@ -126,9 +137,62 @@ The eleven implemented MCP tools are:
 | `cortex_memory_read` | Bounded cited memory context |
 | `cortex_classification_enqueue` | Local advisory queue admission |
 | `cortex_classification_jobs` | Scoped advisory job inventory |
+| `cortex_audit_list` | Scoped audit records; limit 1..100 (default 20), UTC after/before, kind, cursor and include_archived |
+| `cortex_audit_get` | Exact scoped audit ID, including archived evidence |
+| `cortex_audit_metrics` | Scoped evidence denominators; limit 1..10000 (default 10000), UTC after/before and include_archived |
+| `cortex_audit_retain` | Required UTC cutoff; limit 1..100 (default 100), preview unless apply=true; archives visibility without deleting canonical sources |
 
 Use `cortex mcp --list-tools` for current input schemas. Legacy code-index,
 law-enforcement and compliance-audit endpoints are not part of this surface.
+
+## Audit evidence and retention
+
+Recall returns six fields: `repository`, `context`, `query_id`, `delivery_id`,
+`audit_persisted` and `delivery_consumption`. A successful receipt has a local
+query ID, a distinct delivery ID and `audit_persisted=true`. If persistence
+fails, context can still be returned with a null delivery ID and false status.
+`delivery_consumption` remains `not_observed`. These local IDs are not native
+session/turn IDs. Native attribution is stored only when supplied; credentials
+are not an attribution mechanism. Receipts bind the rendered citations to exact
+memory revisions, content/source hashes and clipping status; selection alone
+does not mean a memory appeared in the bounded context.
+
+```powershell
+cortex --repository Cortex audit list --limit 20 --kind delivery
+cortex --repository Cortex audit get AUDIT_ID
+cortex --repository Cortex audit metrics --limit 10000
+cortex --repository Cortex audit list --after 2026-10-01T00:00:00Z --before 2026-11-01T00:00:00Z --include-archived
+cortex --repository Cortex audit retain --cutoff 2026-10-01T00:00:00Z --limit 100
+# After reviewing the preview, explicitly archive visibility:
+cortex --repository Cortex audit retain --cutoff 2026-10-01T00:00:00Z --limit 100 --apply
+```
+
+List pages contain at most 100 entries (default 20), with an opaque `next_cursor`
+for the next request. Metrics sample at most 10,000 matching records, reporting
+matching, sampled and omitted counts, truncation, delivery attempts/prepared/
+empty/error/unknown counts, action classes and measured latency. UTC windows
+and archived visibility restrict their denominator. The citation rate is
+prepared deliveries with captured citations divided by sampled prepared
+deliveries; a missing denominator yields null. Observations whose delivery lies
+outside the sample are reported separately. GUI metrics cover all kinds in the
+current repository/archive view, even when its list uses a kind filter.
+
+`prepared_delivery` records preparation, not confirmed model consumption.
+`observed_related_action` requires supported linkage, such as matching observed
+native session and turn; temporal adjacency alone does not establish use.
+`captured_citation` is narrowly verified canonical Stop-event citation
+evidence: an exact delivered revision/hash citation is captured in the final
+answer. It does not prove that the memory caused a decision, that a tool action
+complied with it, or that productivity improved. Self-reported use, ambiguous
+matches and missing attribution remain unknown unless independent supported
+evidence establishes the link. Method, verification and uncertainty remain
+inspectable alongside labels.
+
+Retention previews affected delivery families and references without writing.
+Explicit apply appends an immutable archive-control record; it does not delete
+audit files, memories, events, imports or backups and does not reclaim disk.
+Archived evidence remains available through exact get and include-archived
+inspection. No background schedule applies retention.
 
 ## Files, backups and recovery
 
@@ -141,6 +205,16 @@ The archive-import ledger uses `archive-import.sqlite3`; daily checkpoints use
 Back up the whole home to retain canonical data, ledgers, queue state, installed
 artifacts and rollback backups. Quiesce clients and other writers before making
 a filesystem backup; copying a live SQLite file alone is not a consistent backup.
+
+Audit records are bounded immutable JSON under `local/audit/`, separate from
+memory revisions, event segments and classification jobs. Each record is limited
+to 64 KiB. Schema 2 adds their rebuildable SQLite projection. Normal store open
+(including `doctor`) upgrades a valid schema-1 index; lifecycle hooks never
+perform migration or recovery and fail open until an explicit normal open
+prepares the store. Back up canonical audit files with the rest of the home;
+index-only backups cannot reconstruct missing receipts. Reindex validates audit
+references against exact retained historical revisions and preserves a working
+index when canonical input is invalid.
 
 Files are plaintext, not encrypted by Cortex. Redaction is best effort and is
 not a complete secret scanner. Historical imports intentionally preserve full
@@ -248,6 +322,12 @@ Stop the serving process when finished. Its token is process-scoped; stopping
 the process closes the port and invalidates that session. The UI supports local
 record/history/source inspection, capture/revision and graph navigation. Its
 classification queue actions do not implicitly drain jobs to a provider.
+
+The Audit inspection section offers bounded pages, kind/archive filters,
+evidence-class metrics, receipt details and linked deliveries. Source/action
+buttons read the exact historical revision named by the audit reference, not
+the current revision. IDs, hashes, attribution and imported source text render
+as text; changing repository invalidates pending audit responses and selection.
 
 ## Update and rollback
 

@@ -4,6 +4,249 @@ use serde_json::{json, Value};
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+#[tokio::test]
+async fn audit_routes_preserve_core_parity_and_historical_literal_evidence() {
+    let app = App::new().await;
+    let dangerous = "<script>alert('audit')</script>";
+    let original = app.capture(dangerous).await;
+    let prepared=cortex_local::mcp::call(&app.store,"cortex_pre_thinking",json!({"repository":"Cortex","attribution":{"client":"codex","session_id":"s","turn_id":"t"}}),None).unwrap();
+    let id = prepared["delivery_id"].as_str().unwrap();
+    let receipt = app.store.get_audit("Cortex", id).unwrap().unwrap();
+    let event = app
+        .store
+        .capture(CaptureRequest {
+            id: Some("literal-stop".into()),
+            repository: "Cortex".into(),
+            kind: RecordKind::Event,
+            body: format!(
+                "{dangerous} [{}@1 {}]",
+                original["id"].as_str().unwrap(),
+                original["content_sha256"].as_str().unwrap()
+            ),
+            source: cortex_local::Source {
+                kind: "lifecycle_hook".into(),
+                ..Default::default()
+            },
+            metadata: json!({"event":"Stop","client":"codex","session_id":"s","turn_id":"t"}),
+            ..Default::default()
+        })
+        .unwrap()
+        .record;
+    let observed = app.store.observe_event(&event).unwrap().record;
+    app.store
+        .revise(
+            "Cortex",
+            original["id"].as_str().unwrap(),
+            1,
+            cortex_local::RevisionRequest {
+                title: "revised".into(),
+                body: "new body".into(),
+                authority: Authority::Accepted,
+                links: Vec::new(),
+                metadata: Value::Null,
+            },
+        )
+        .unwrap();
+    let list_args = json!({"repository":"Cortex","limit":20});
+    let expected = app
+        .store
+        .list_audit(serde_json::from_value(list_args.clone()).unwrap())
+        .unwrap();
+    assert_eq!(
+        app.json("audit/list", list_args).await,
+        serde_json::to_value(expected).unwrap()
+    );
+    assert_eq!(
+        app.json("audit/get", json!({"repository":"Cortex","id":id}))
+            .await,
+        serde_json::to_value(&receipt).unwrap()
+    );
+    let observation = app
+        .json("audit/get", json!({"repository":"Cortex","id":observed.id}))
+        .await;
+    assert_eq!(observation["evidence_label"], "captured_citation");
+    assert_eq!(
+        observation["payload"]["content"]["evidence"][0]["revision"],
+        1
+    );
+    let metrics_args = json!({"repository":"Cortex","limit":10000});
+    let expected = app
+        .store
+        .audit_metrics(serde_json::from_value(metrics_args.clone()).unwrap())
+        .unwrap();
+    assert_eq!(
+        app.json("audit/metrics", metrics_args).await,
+        serde_json::to_value(expected).unwrap()
+    );
+    let response = app
+        .post(
+            "get",
+            json!({"repository":"Cortex","id":event.id,"revision":1}),
+        )
+        .await;
+    assert!(response.headers()["content-type"]
+        .to_str()
+        .unwrap()
+        .starts_with("application/json"));
+    assert!(response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("script-src 'self'"));
+    let body: Value = response.json().await.unwrap();
+    assert_eq!(body["body"], event.body);
+    let historical = app
+        .json(
+            "get",
+            json!({"repository":"Cortex","id":original["id"],"revision":1}),
+        )
+        .await;
+    assert_eq!(historical["title"], dangerous);
+    assert_eq!(historical["content_sha256"], original["content_sha256"]);
+}
+
+#[tokio::test]
+async fn audit_routes_enforce_exact_scope_bounds_and_strict_json() {
+    let app = App::new().await;
+    let prepared = cortex_local::mcp::call(
+        &app.store,
+        "cortex_pre_thinking",
+        json!({"repository":"Cortex"}),
+        None,
+    )
+    .unwrap();
+    let id = prepared["delivery_id"].as_str().unwrap();
+    assert_eq!(
+        app.post("audit/get", json!({"repository":"cortex","id":id}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.post("audit/get", json!({"repository":"Cortex","id":"missing"}))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(app
+        .json("audit/list", json!({"repository":"cortex","limit":20}))
+        .await["entries"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        app.json(
+            "audit/metrics",
+            json!({"repository":"cortex","limit":10000})
+        )
+        .await["matching_records"],
+        0
+    );
+    for (endpoint, args, status) in [
+        (
+            "audit/list",
+            json!({"repository":"Cortex","limit":0}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "audit/list",
+            json!({"repository":"Cortex","limit":101}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "audit/list",
+            json!({"repository":"Cortex","limit":20,"before":"bad"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "audit/list",
+            json!({"repository":"cortex","limit":20,"cursor":id}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "audit/metrics",
+            json!({"repository":"Cortex","limit":10001}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "audit/metrics",
+            json!({"repository":"","limit":10}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            "audit/get",
+            json!({"repository":"Cortex","id":id,"revision":1}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "audit/list",
+            json!({"repository":"Cortex","limit":20,"extra":true}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "audit/metrics",
+            json!({"repository":"Cortex","limit":20,"extra":true}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            "audit/list",
+            json!({"limit":20}),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ] {
+        assert_eq!(
+            app.post(endpoint, args).await.status(),
+            status,
+            "{endpoint}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_audit_route_requires_same_origin_host_and_bearer() {
+    let app = App::new().await;
+    for endpoint in ["audit/list", "audit/get", "audit/metrics"] {
+        for (host, origin, token, status) in [
+            (
+                None,
+                Some(app.url.as_str()),
+                Some("wrong"),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (None, None, Some(TOKEN), StatusCode::FORBIDDEN),
+            (
+                None,
+                Some("https://foreign.invalid"),
+                Some(TOKEN),
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some("foreign.invalid"),
+                Some(app.url.as_str()),
+                Some(TOKEN),
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut request = app.client.post(format!("{}/api/{endpoint}", app.url));
+            if let Some(host) = host {
+                request = request.header("Host", host);
+            }
+            if let Some(origin) = origin {
+                request = request.header("Origin", origin);
+            }
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            let response = request
+                .json(&json!({"repository":"Cortex"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status, "{endpoint}");
+            assert_eq!(response.headers()["cache-control"], "no-store");
+        }
+    }
+}
+
 struct App {
     _home: tempfile::TempDir,
     store: LocalStore,
@@ -101,7 +344,18 @@ async fn host_origin_and_bearer_are_required_before_every_api_operation() {
     let app = App::new().await;
     let body = json!({"repository":"Cortex"});
     for endpoint in [
-        "recent", "search", "get", "graph", "status", "capture", "revise", "queue", "enqueue",
+        "recent",
+        "search",
+        "get",
+        "graph",
+        "status",
+        "capture",
+        "revise",
+        "queue",
+        "enqueue",
+        "audit/list",
+        "audit/get",
+        "audit/metrics",
     ] {
         let response = app
             .client

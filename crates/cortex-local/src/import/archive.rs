@@ -783,6 +783,7 @@ fn open_readonly_ledger(
         &root.join("archive-import.lock"),
         None,
         Duration::from_secs(30),
+        1,
     )?;
     let mapping: Option<String> = snapshot
         .connection()

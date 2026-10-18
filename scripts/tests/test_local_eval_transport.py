@@ -157,7 +157,17 @@ class RealMcpTests(unittest.TestCase):
             with transport.CortexMcp(
                 os.environ["CORTEX_EVAL_BINARY"], Path(scratch) / "home"
             ) as client:
-                self.assertEqual(len(client.list_tools()["tools"]), 11)
+                tool_names = [tool["name"] for tool in client.list_tools()["tools"]]
+                self.assertEqual(len(tool_names), 15)
+                self.assertEqual(len(set(tool_names)), 15)
+                self.assertTrue(
+                    {
+                        "cortex_audit_list",
+                        "cortex_audit_get",
+                        "cortex_audit_metrics",
+                        "cortex_audit_retain",
+                    }.issubset(tool_names)
+                )
                 captured = client.call(
                     "cortex_capture_memory",
                     {

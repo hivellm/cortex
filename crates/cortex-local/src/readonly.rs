@@ -17,6 +17,7 @@ impl ReadonlyDatabase {
         lock_path: &Path,
         pending: Option<&Path>,
         timeout: Duration,
+        expected_version: u32,
     ) -> Result<Self> {
         files::ensure_no_symlinks(lock_path)?;
         let lock = File::open(lock_path)?;
@@ -72,9 +73,9 @@ impl ReadonlyDatabase {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version != 1 {
+        if version != i64::from(expected_version) {
             return Err(LocalError::Invalid(format!(
-                "unsupported read-only database schema {version}"
+                "unsupported read-only database schema {version}; expected {expected_version}"
             )));
         }
         Ok(Self {

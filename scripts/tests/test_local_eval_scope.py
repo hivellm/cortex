@@ -8,6 +8,61 @@ from scripts import evaluate_local_memory as evaluation
 from scripts.tests import test_local_eval_scoring_adversarial as evidence_helpers
 
 
+class RecallEnvelopeTests(unittest.TestCase):
+    def setUp(self):
+        self.expected = {
+            "repository": "Atlas",
+            "context": "Exact cited content\n",
+            "delivery_consumption": "not_observed",
+        }
+        self.response = dict(
+            self.expected,
+            query_id="local-query",
+            delivery_id="local-delivery",
+            audit_persisted=True,
+        )
+
+    def test_healthy_receipt_preserves_exact_evidence(self):
+        evaluation.validate_recall_response(self.response, self.expected)
+
+    def test_missing_or_extra_fields_rejected(self):
+        for key in self.response:
+            with self.subTest(missing=key):
+                candidate = dict(self.response)
+                del candidate[key]
+                with self.assertRaises(evaluation.EvaluationError):
+                    evaluation.validate_recall_response(candidate, self.expected)
+        with self.assertRaises(evaluation.EvaluationError):
+            evaluation.validate_recall_response(
+                dict(self.response, session_id="invented"), self.expected
+            )
+
+    def test_invalid_ids_or_unpersisted_receipts_rejected(self):
+        for key, values in (
+            ("query_id", (None, 1, True, "", " ", "local-delivery")),
+            ("delivery_id", (None, 1, True, "", " ", "local-query")),
+            ("audit_persisted", (False, None, 1, "true")),
+        ):
+            for value in values:
+                with self.subTest(key=key, value=value):
+                    with self.assertRaises(evaluation.EvaluationError):
+                        evaluation.validate_recall_response(
+                            dict(self.response, **{key: value}), self.expected
+                        )
+
+    def test_receipt_cannot_mask_changed_scope_context_or_consumption(self):
+        for key, value in (
+            ("repository", "atlas"),
+            ("context", "Exact cited content"),
+            ("delivery_consumption", "observed"),
+        ):
+            with self.subTest(key=key):
+                with self.assertRaises(evaluation.EvaluationError):
+                    evaluation.validate_recall_response(
+                        dict(self.response, **{key: value}), self.expected
+                    )
+
+
 class ScopeTests(unittest.TestCase):
     def setUp(self):
         self.evidence = evidence_helpers.AdversarialScoringTests()
@@ -228,6 +283,9 @@ class ScopeTests(unittest.TestCase):
                     return {
                         "repository": repository,
                         "context": context,
+                        "query_id": "local-query-fixture",
+                        "delivery_id": "local-delivery-fixture",
+                        "audit_persisted": True,
                         "delivery_consumption": "not_observed",
                     }
                 raise AssertionError(tool)

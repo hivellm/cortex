@@ -12,7 +12,7 @@
       "name": "cortex",
       "source": "./",
       "description": "Standalone Cortex local capture and cited recall using cortex hook and cortex mcp.",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "repository": "https://github.com/hivellm/cortex",
       "homepage": "https://github.com/hivellm/cortex"
     }

@@ -11,6 +11,16 @@ use std::{
 
 const MAX_FRAME: usize = 4 * 1024 * 1024;
 const TOOLS: &[(&str, &str)] = &[
+    ("cortex_audit_list", "List bounded scoped audit evidence."),
+    ("cortex_audit_get", "Read one exact scoped audit record."),
+    (
+        "cortex_audit_metrics",
+        "Inspect bounded evidence metrics and denominators.",
+    ),
+    (
+        "cortex_audit_retain",
+        "Preview or explicitly archive audit deliveries without deleting sources.",
+    ),
     (
         "cortex_search",
         "Search scoped local records; returns identities and provenance.",
@@ -69,15 +79,32 @@ pub fn descriptors() -> Value {
             "limit":{"type":"integer","minimum":1,"maximum":100},
             "include_inactive":{"type":"boolean"},"depth":{"type":"integer","minimum":0,"maximum":5},
             "budget_bytes":{"type":"integer","minimum":256,"maximum":6144},
+            "attribution":{"type":"object","properties":{"client":{"type":"string","maxLength":256},"session_id":{"type":"string","maxLength":256},"turn_id":{"type":"string","maxLength":256},"event_id":{"type":"string","maxLength":256},"agent_id":{"type":"string","maxLength":256}},"additionalProperties":false},
             "title":{"type":"string"},"body":{"type":"string"},
             "kind":{"enum":["decision","lesson","preference","note"]},
             "category":{"enum":["decision","lesson","preference","note"]},
             "authority":{"enum":["observation","proposed","accepted","deprecated","superseded"]},
             "status":{"enum":["observation","proposed","accepted","deprecated","superseded"]},
             "source":{},"links":{"type":"array"},"metadata":{},
-            "expected_revision":{"type":"integer","minimum":1},"model":{"type":"string"}
+            "expected_revision":{"type":"integer","minimum":1},"model":{"type":"string"},
+            "after":{"type":"string"},"before":{"type":"string"},"cursor":{"type":"string"},
+            "include_archived":{"type":"boolean"},"cutoff":{"type":"string"},"apply":{"type":"boolean","default":false}
         });
+        match *name {
+            "cortex_audit_list" => {
+                properties["kind"] = json!({"enum":["delivery","observation","archive_control"]});
+                properties["limit"]["default"] = json!(20);
+            }
+            "cortex_audit_metrics" => {
+                properties["limit"]["maximum"] = json!(10000);
+                properties["limit"]["default"] = json!(10000);
+            }
+            "cortex_audit_retain" => properties["limit"]["default"] = json!(100),
+            _ => {}
+        }
         let required = match *name {
+            "cortex_audit_get" => vec!["id"],
+            "cortex_audit_retain" => vec!["cutoff"],
             "cortex_get" | "cortex_graph" | "cortex_classification_enqueue" => vec!["id"],
             "cortex_capture_memory" => vec!["title","body","source"],
             "cortex_revise" => vec!["id","expected_revision","title","body","authority"],
@@ -92,6 +119,17 @@ pub fn descriptors() -> Value {
 fn allowed(name: &str) -> Vec<&'static str> {
     let mut fields = vec!["repository", "repo", "cwd", "scope"];
     fields.extend(match name {
+        "cortex_audit_list" => vec![
+            "limit",
+            "after",
+            "before",
+            "kind",
+            "cursor",
+            "include_archived",
+        ],
+        "cortex_audit_get" => vec!["id"],
+        "cortex_audit_metrics" => vec!["limit", "after", "before", "include_archived"],
+        "cortex_audit_retain" => vec!["cutoff", "limit", "apply"],
         "cortex_search" | "cortex_query" => vec!["query", "text", "limit", "include_inactive"],
         "cortex_get" => vec!["id", "revision"],
         "cortex_capture_memory" => vec![
@@ -117,7 +155,15 @@ fn allowed(name: &str) -> Vec<&'static str> {
         ],
         "cortex_graph" => vec!["id", "depth", "limit"],
         "cortex_pre_thinking" | "cortex_memory_read" => {
-            vec!["query", "text", "task", "prompt", "limit", "budget_bytes"]
+            vec![
+                "query",
+                "text",
+                "task",
+                "prompt",
+                "limit",
+                "budget_bytes",
+                "attribution",
+            ]
         }
         "cortex_classification_enqueue" => vec!["id", "model"],
         "cortex_classification_jobs" => vec!["limit"],
@@ -142,6 +188,16 @@ fn number(args: &Value, key: &str, default: u64, max: u64) -> Result<u64> {
         return Err(invalid("numeric argument exceeds limit"));
     }
     Ok(value)
+}
+fn optional_text(args: &Value, key: &str) -> Result<Option<String>> {
+    args.get(key)
+        .map(|_| text(args, key).map(str::to_owned))
+        .transpose()
+}
+fn boolean(args: &Value, key: &str) -> Result<bool> {
+    args.get(key).map_or(Ok(false), |value| {
+        value.as_bool().ok_or_else(|| invalid("expected boolean"))
+    })
 }
 fn repository(args: &Value, default: Option<&str>) -> Result<String> {
     let mut chosen: Option<&str> = None;
@@ -206,7 +262,13 @@ pub fn call(
         return Err(invalid("unsupported tool argument"));
     }
     let repository = repository(&args, default_repository)?;
-    let limit = number(&args, "limit", 5, 100)? as usize;
+    let (default_limit, maximum_limit) = match name {
+        "cortex_audit_list" => (20, 100),
+        "cortex_audit_metrics" => (10000, 10000),
+        "cortex_audit_retain" => (100, 100),
+        _ => (5, 100),
+    };
+    let limit = number(&args, "limit", default_limit, maximum_limit)? as usize;
     let mut query = None;
     for key in ["query", "text", "task", "prompt"] {
         if let Some(value) = args.get(key) {
@@ -224,6 +286,43 @@ pub fn call(
     }
     let query = query.unwrap_or("");
     match name {
+        "cortex_audit_list" => Ok(serde_json::to_value(
+            store.list_audit(crate::audit::AuditListQuery {
+                repository,
+                limit,
+                after: optional_text(&args, "after")?,
+                before: optional_text(&args, "before")?,
+                kind: args
+                    .get("kind")
+                    .map(|_| {
+                        text(&args, "kind")
+                            .and_then(|value| Ok(serde_json::from_value(json!(value))?))
+                    })
+                    .transpose()?,
+                cursor: optional_text(&args, "cursor")?,
+                include_archived: boolean(&args, "include_archived")?,
+            })?,
+        )?),
+        "cortex_audit_get" => Ok(serde_json::to_value(
+            store.get_audit(&repository, text(&args, "id")?)?,
+        )?),
+        "cortex_audit_metrics" => Ok(serde_json::to_value(store.audit_metrics(
+            crate::audit::AuditMetricsQuery {
+                repository,
+                limit,
+                after: optional_text(&args, "after")?,
+                before: optional_text(&args, "before")?,
+                include_archived: boolean(&args, "include_archived")?,
+            },
+        )?)?),
+        "cortex_audit_retain" => Ok(serde_json::to_value(store.retain_audit(
+            crate::audit::AuditRetentionRequest {
+                repository,
+                limit,
+                cutoff: text(&args, "cutoff")?.into(),
+                apply: boolean(&args, "apply")?,
+            },
+        )?)?),
         "cortex_status" => Ok(serde_json::to_value(store.status(Some(&repository))?)?),
         "cortex_get" => Ok(serde_json::to_value(if args.get("revision").is_some() {
             store.get_revision(
@@ -249,28 +348,22 @@ pub fn call(
             })?)?)
         }
         "cortex_memory_read" | "cortex_pre_thinking" => {
-            let records = if query.trim().is_empty() {
-                store.recent_memories(&repository, limit, false)?
-            } else {
-                store
-                    .search_memories(SearchQuery {
-                        repository: repository.clone(),
-                        text: query.into(),
-                        limit,
-                        include_inactive: false,
-                    })?
-                    .into_iter()
-                    .map(|hit| hit.record)
-                    .collect()
-            };
             let budget = number(&args, "budget_bytes", 6144, 6144)? as usize;
-            if budget < 256 {
-                return Err(invalid("context budget must be 256..6144"));
-            }
-            let context = context(&records, budget);
-            Ok(
-                json!({"repository":repository,"context":context,"delivery_consumption":"not_observed"}),
-            )
+            let attribution =
+                serde_json::from_value(args.get("attribution").cloned().unwrap_or(json!({})))?;
+            crate::audit::attribution(&attribution)?;
+            Ok(serde_json::to_value(crate::recall::prepare(
+                store,
+                crate::recall::RecallRequest {
+                    repository,
+                    query: query.into(),
+                    limit,
+                    budget_bytes: budget,
+                    origin: AuditOrigin::Mcp,
+                    attribution,
+                    fallback_recent: false,
+                },
+            )?)?)
         }
         "cortex_capture_memory" => {
             for (left, right) in [("kind", "category"), ("authority", "status")] {
@@ -360,35 +453,6 @@ pub fn call(
         )?),
         _ => Err(invalid("unknown local tool")),
     }
-}
-
-pub(crate) fn context(records: &[Record], budget: usize) -> String {
-    let mut out = String::from("Cortex local evidence (advisory; source authority unchanged):\n");
-    let marker = "<!-- cortex: memory clipped; cortex_memory_read returns more -->\n";
-    for record in records {
-        let citation = format!(
-            "[{}@{} {}] {} | repository={} authority={:?} source={}\n",
-            record.id,
-            record.revision,
-            record.content_sha256,
-            record.title.replace(['\r', '\n'], " "),
-            record.repository,
-            record.authority,
-            record.source.locator.replace(['\r', '\n'], " ")
-        );
-        for line in std::iter::once(citation.as_str()).chain(record.body.split_inclusive('\n')) {
-            let extra = usize::from(!line.ends_with('\n'));
-            if out.len() + line.len() + extra + marker.len() > budget {
-                out.push_str(marker);
-                return out;
-            }
-            out.push_str(line);
-            if extra != 0 {
-                out.push('\n');
-            }
-        }
-    }
-    out
 }
 
 pub fn run(store: LocalStore, default_repository: Option<String>) -> Result<()> {

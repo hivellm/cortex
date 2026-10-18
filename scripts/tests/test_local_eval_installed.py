@@ -14,7 +14,7 @@ class InstalledSmokeTests(unittest.TestCase):
     def test_documented_tools_match_actual_dispatch_not_advertisement_constant(self):
         result = smoke.tool_contract(smoke.DOCS.read_text(), smoke.DISPATCH.read_text())
         self.assertEqual(set(result["implemented"]), smoke.TOOLS)
-        self.assertEqual(len(result["documented"]), 11)
+        self.assertEqual(len(result["documented"]), 15)
 
     def test_missing_dispatch_arm_rejected_even_with_tools_constant_intact(self):
         source = smoke.DISPATCH.read_text()
@@ -71,13 +71,14 @@ class InstalledSmokeTests(unittest.TestCase):
             self.assertEqual(installed.read_bytes(), b"first")
             self.assertEqual(reference.read_bytes(), b"second")
 
-    def test_readonly_set_excludes_all_three_mutating_tools(self):
-        self.assertEqual(len(smoke.READONLY), 8)
+    def test_readonly_set_excludes_all_four_mutating_tools(self):
+        self.assertEqual(len(smoke.READONLY), 11)
         self.assertTrue(
             {
                 "cortex_capture_memory",
                 "cortex_revise",
                 "cortex_classification_enqueue",
+                "cortex_audit_retain",
             }.isdisjoint(smoke.READONLY)
         )
 

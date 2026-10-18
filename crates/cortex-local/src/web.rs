@@ -1,8 +1,8 @@
 //! Loopback-only browser transport. No provider credentials or filesystem operations cross this API.
 use crate::{
     classification::{ClassificationQueue, DEFAULT_MODEL},
-    Authority, CaptureRequest, GraphQuery, LocalError, LocalStore, RecordKind, Result,
-    RevisionRequest, SearchQuery, Source, TypedLink,
+    AuditListQuery, AuditMetricsQuery, Authority, CaptureRequest, GraphQuery, LocalError,
+    LocalStore, RecordKind, Result, RevisionRequest, SearchQuery, Source, TypedLink,
 };
 use axum::{
     extract::{DefaultBodyLimit, Request, State},
@@ -76,6 +76,9 @@ pub fn router(store: LocalStore, port: u16, token: String) -> Result<Router> {
         .route("/api/revise", post(revise))
         .route("/api/queue", post(queue))
         .route("/api/enqueue", post(enqueue))
+        .route("/api/audit/list", post(audit_list))
+        .route("/api/audit/get", post(audit_get))
+        .route("/api/audit/metrics", post(audit_metrics))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state))
@@ -209,6 +212,33 @@ struct GetRecord {
     repository: String,
     id: String,
     revision: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GetAudit {
+    repository: String,
+    id: String,
+}
+
+async fn audit_list(State(state): State<WebState>, Json(query): Json<AuditListQuery>) -> Response {
+    work(move || state.store.list_audit(query)).await
+}
+
+async fn audit_get(State(state): State<WebState>, Json(query): Json<GetAudit>) -> Response {
+    work(move || {
+        state
+            .store
+            .get_audit(&query.repository, &query.id)?
+            .ok_or(LocalError::NotFound(query.id))
+    })
+    .await
+}
+
+async fn audit_metrics(
+    State(state): State<WebState>,
+    Json(query): Json<AuditMetricsQuery>,
+) -> Response {
+    work(move || state.store.audit_metrics(query)).await
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

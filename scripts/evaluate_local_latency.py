@@ -379,7 +379,7 @@ def measure_latency(binary, fixtures, built, samples=20):
         "query": QUERY,
         "timing_scope": "Evaluator-observed wall time, including subprocess polling, transport/thread overhead, JSON decoding and semantic/provenance validation; not internal engine timing. MCP cold includes spawn, initialize and first tool request; teardown excluded. CLI and direct hooks spawn a process every sample on an already prepared/warmed store. Import, build, baseline and warmup excluded.",
         "cold_definition": "Fresh process only; OS/filesystem caches are not evicted or claimed cold.",
-        "hook_scope": "Direct cortex hook only; no launcher or client scheduling. UserPromptSubmit includes local event publication; SessionStart is read-only. Prepared context does not prove model consumption.",
+        "hook_scope": "Direct cortex hook only; no launcher or client scheduling. UserPromptSubmit includes local event publication; both hooks may publish local audit receipts while preserving existing memory sources. Prepared context does not prove model consumption.",
         "deadlines": {
             "cli_or_hook_seconds": TIMEOUT,
             "mcp_seconds_per_initialize_or_tool_phase": TIMEOUT,

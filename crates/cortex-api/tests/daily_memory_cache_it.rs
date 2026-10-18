@@ -51,22 +51,43 @@ async fn post(app: &Router, token: Option<&str>, uri: &str, body: Value) -> (Sta
     if let Some(token) = token {
         builder = builder.header("authorization", format!("Bearer {token}"));
     }
-    let response = app
-        .clone()
-        .oneshot(
-            builder
-                .body(Body::from(serde_json::to_vec(&body).unwrap()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    let operation = async {
+        let response = app
+            .clone()
+            .oneshot(
+                builder
+                    .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    };
+    // Cache semantics use real SQLite/auth paths, but not host scheduling deadlines.
+    // A ready polling branch prevents paused Tokio time from auto-advancing.
+    let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    tokio::pin!(operation);
+    loop {
+        assert!(
+            std::time::Instant::now() < limit,
+            "cache fixture stalled: POST {uri}, body={body}"
+        );
+        tokio::select! {
+            biased;
+            response = &mut operation => return response,
+            _ = tokio::task::yield_now() => {}
+        }
+    }
 }
 async fn read(app: &Router, body: Value) -> Value {
-    let (status, response) = post(app, None, "/v1/memory/query", body).await;
-    assert_eq!(status, StatusCode::OK, "{response}");
+    let (status, response) = post(app, None, "/v1/memory/query", body.clone()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "POST /v1/memory/query body={body}; response={response}"
+    );
     response
 }
 fn query() -> Value {
@@ -130,7 +151,7 @@ fn authenticated(database: &Path) -> AuthApp {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cache_hit_reuses_only_context_and_persists_a_fresh_receipt() {
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
@@ -165,7 +186,7 @@ async fn cache_hit_reuses_only_context_and_persists_a_fresh_receipt() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn correction_restart_and_stale_evidence_invalidate_cached_context_immediately() {
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
@@ -203,7 +224,7 @@ async fn correction_restart_and_stale_evidence_invalidate_cached_context_immedia
     assert_eq!(read(&running, query()).await["cache_hit"], true);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn cache_keys_keep_branch_path_repo_prompt_limit_and_budget_isolated() {
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
@@ -253,7 +274,7 @@ async fn cache_keys_keep_branch_path_repo_prompt_limit_and_budget_isolated() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn authenticated_caller_cache_isolation_and_revocation_precede_every_hit() {
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
@@ -292,7 +313,7 @@ async fn authenticated_caller_cache_isolation_and_revocation_precede_every_hit()
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn global_revision_and_explicit_opt_in_invalidate_only_eligible_cache_entries() {
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
@@ -389,43 +410,14 @@ async fn global_revision_and_explicit_opt_in_invalidate_only_eligible_cache_entr
 
 #[tokio::test(start_paused = true)]
 async fn cache_evicts_after_256_successful_distinct_contexts() {
-    // This verifies cache eviction, not the host's SQLite I/O latency. Keep
-    // virtual time frozen without auto-advance while each real request runs.
-    async fn read_with_frozen_deadline(app: &Router, body: Value) -> Value {
-        let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let request = read(app, body);
-        tokio::pin!(request);
-        loop {
-            assert!(
-                std::time::Instant::now() < limit,
-                "cache eviction fixture request stalled"
-            );
-            tokio::select! {
-                biased;
-                response = &mut request => return response,
-                _ = tokio::task::yield_now() => {}
-            }
-        }
-    }
     let temp = tempfile::tempdir().unwrap();
     let database = temp.path().join("metadata.sqlite");
     let app = app(&database);
-    assert_eq!(
-        read_with_frozen_deadline(&app, query()).await["cache_hit"],
-        false
-    );
+    assert_eq!(read(&app, query()).await["cache_hit"], false);
     for i in 0..256 {
-        let response =
-            read_with_frozen_deadline(&app, json!({"repo":"repo","query":format!("distinct{i}")}))
-                .await;
+        let response = read(&app, json!({"repo":"repo","query":format!("distinct{i}")})).await;
         assert_eq!(response["cache_hit"], false);
     }
-    assert_eq!(
-        read_with_frozen_deadline(&app, query()).await["cache_hit"],
-        false
-    );
-    assert_eq!(
-        read_with_frozen_deadline(&app, query()).await["cache_hit"],
-        true
-    );
+    assert_eq!(read(&app, query()).await["cache_hit"], false);
+    assert_eq!(read(&app, query()).await["cache_hit"], true);
 }
