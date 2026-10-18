@@ -434,3 +434,44 @@ Then run real-shell stdin and recall tests. The operator re-trusts the
 changed hooks in `/hooks`.
 
 Claude-owned spec 46 is corrected to match.
+
+## Claude final review — Codex acceptance on ce68013c, 2026-10-17 ~22:00 -03
+
+**Independently verified by Claude.**
+
+- **Binary.** Installed `~/.cortex/bin/cortex.exe` has SHA-256 `ce68013c14018cdd…`.
+- **Command form.** The Codex cache `hivellm-cortex-local/cortex/0.4.0`
+  uses `commandWindows = cmd.exe /d /c call "${PLUGIN_ROOT}\scripts\cortex-hook-launcher.cmd" <Event>`.
+- **Runtime shell.** All five events ran exactly as Codex runs them
+  (`pwsh -NoProfile -Command`) with Codex-shaped payloads, and all exited 0
+  with valid JSON. SessionStart returned 4366 B and UserPromptSubmit 4370 B.
+  PostToolUse, Stop and SubagentStop returned `{}`.
+- Claude accepts root's A/B as observed use. The fresh Codex model with hooks
+  cited both historical lessons with full IDs, revisions and details, using
+  zero tools. The `--disable hooks` control answered "sem fonte" twice with
+  zero tools and zero Cortex events. The excluded `plugins.enabled=false`
+  control was rightly dropped.
+
+**Remaining items. None blocks acceptance.**
+
+1. **Trust provenance.** Twice, root renewed the five Cortex hook trusts in
+   the official `/hooks` UI on the operator's behalf, after the operator
+   confirmed trust in the app. No hashes were edited and OpenAI hooks were
+   untouched. Record in §1.8 docs who clicked trust, and tell the operator
+   they can review it in `/hooks`.
+2. **Same-version plugin refresh.** The package stays 0.4.0, so the cache path
+   does not change between builds. `codex plugin add` recopies the changed
+   assets, and the trust hash changes with the content. Make sure `cortex
+   update` always tells the operator to restart and re-trust after the plugin
+   content changes. Root reports this is already in the update report.
+3. **Injected size.** About 4.3 KB per sync hook is within Codex's roughly
+   2,500-token preview. Keep a byte cap in the standalone hook so later
+   growth cannot push it past the preview.
+4. **Open.** The full legacy gate rerun is still linking. The empty-hook
+   outcome diagnostics belong to the phase31 audit task.
+5. **Spec 46** (Claude-owned) now records the pwsh execution and the
+   withdrawn cmd and substitution claims. local-first §1.8 should either
+   supersede spec 46 or point to it.
+
+**Verdict.** From Claude's side, the Codex path on the installed standalone
+release is accepted, with no blocker.
